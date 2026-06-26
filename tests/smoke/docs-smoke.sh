@@ -23,7 +23,7 @@ grep -q ".claude-credentials.json" README.md || { echo "README missing credentia
 grep -q "ephemeral" README.md || { echo "README missing ephemeral state note"; exit 1; }
 grep -q "skill-creator" README.md || { echo "README missing skill-creator plugin note"; exit 1; }
 grep -q "code-simplifier" README.md || { echo "README missing code-simplifier plugin note"; exit 1; }
-grep -q "github" README.md || { echo "README missing github plugin note"; exit 1; }
+grep -q "GitHub MCP server" README.md || { echo "README missing github (GitHub MCP server) plugin note"; exit 1; }
 grep -q '~/.config/gh' README.md || { echo "README missing gh config mount note"; exit 1; }
 grep -q "read-only" README.md || { echo "README missing read-only note for gh mount"; exit 1; }
 
