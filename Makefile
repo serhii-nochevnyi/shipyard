@@ -20,7 +20,7 @@ HOME_CACHE_DIR ?= $(CURDIR)/.cache-home
 REPO ?=
 WORKSPACE_SUBDIR ?=
 
-.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image bootstrap-atlassian-oauth run-docker up claude shell clone deploy-k8s test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime
+.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image bootstrap-atlassian-oauth run-docker up dev claude shell clone deploy-k8s test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime
 
 build-base: sync-ssh-config
 	docker build -f Dockerfile.base -t $(BASE_IMAGE) \
@@ -71,6 +71,9 @@ up:
 	HOME_CACHE_DIR="$(HOME_CACHE_DIR)" \
 	CLAUDE_CREDENTIALS_FILE="$(CURDIR)/.claude-credentials.json" \
 	docker compose up -d
+
+dev:
+	./scripts/dev.sh
 
 claude: up
 	docker compose exec dev claude
