@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-This repo packages a **remote GitHub Copilot CLI dev environment** as a Docker image, runnable locally via Compose or deployable to Kubernetes. It does not contain application code — it is infrastructure that bakes a toolchain, the Copilot CLI, two Copilot plugins, and default MCP/LSP server configs into a reproducible container.
+This repo packages a **remote Claude Code dev environment** as a Docker image, runnable locally via Compose or deployable to Kubernetes. It does not contain application code — it is infrastructure that bakes a toolchain, the Claude Code CLI, two Claude Code plugins (gsd-core and andrej-karpathy-skills), and default MCP server configs into a reproducible container.
 
 The `workspace/` directory is the mount point users do their actual work in at runtime; it is intentionally empty in the repo.
 
@@ -13,15 +13,15 @@ The `workspace/` directory is the mount point users do their actual work in at r
 All workflows go through the `Makefile`. The image is built in two stages — base then overlay — and you almost always need both before running:
 
 ```bash
-make build-base        # Dockerfile.base: OS, Node, Go, kubectl, helm, copilot CLI, MCP/LSP tooling
-make build-dev-image   # Dockerfile: overlay that installs the two Copilot plugins
+make build-base        # Dockerfile.base: OS, Node, Go, kubectl, helm, Claude Code CLI, context7-mcp, typescript-language-server
+make build-dev-image   # Dockerfile: overlay that installs gsd-core + registers karpathy + dev-lsp plugins
 make run-docker        # docker compose run --rm dev  (drops you into /workspace)
 make deploy-k8s        # kubectl apply of k8s/*.yaml (manifests not yet in repo)
 ```
 
-`make build-base` runs `sync-ssh-config` first (stages only `config`, `known_hosts`, `known_hosts2` from `~/.ssh` — never private keys). `make build-dev-image` runs `sync-plugin` + `sync-karpathy-skills` first to stage plugin sources into `.build/`.
+`make build-base` runs `sync-ssh-config` first (stages only `config`, `known_hosts`, `known_hosts2` from `~/.ssh` — never private keys). `make build-dev-image` runs `sync-karpathy-skills` first to stage the andrej-karpathy-skills plugin source into `.build/`.
 
-Before first run, copy `.env.example` to `.env`. Key vars: `DEV_COPILOT_SOURCE`, `DEV_COPILOT_INSTALL_CMD` (leave empty to use the default marketplace install), `MCP_OAUTH_DIR`, `SSH_AUTH_SOCK`, `GITHUB_TOKEN`/`GH_TOKEN`.
+Before first run, copy `.env.example` to `.env`. Key vars: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token` on the host), `CLAUDE_CREDENTIALS_FILE` (default `./.claude-credentials.json`, holds remote-MCP OAuth), `SSH_AUTH_SOCK`, `GITHUB_TOKEN`/`GH_TOKEN`, `GSD_CORE_VERSION` (optional pin override).
 
 ## Tests
 
@@ -32,7 +32,6 @@ make test-base          # base image contents
 make test-overlay       # overlay image / plugin install
 make test-runtime       # full compose runtime
 make test-mcp-runtime   # MCP server config at runtime
-make test-k8s           # k8s manifest validity
 make test-docs          # README + .env.example invariants
 make test-ssh-sync      # sync-local-ssh-config.sh behavior
 ```
@@ -41,13 +40,19 @@ make test-ssh-sync      # sync-local-ssh-config.sh behavior
 
 ## Architecture
 
-**Two-layer image, separated by change frequency.** `Dockerfile.base` (`remote-copilot-base:test`) installs the slow-moving, pinned toolchain — versions are `ARG`s at the top (Node, Go, kubectl, helm, Copilot CLI with SHA256-verified installer, context7-mcp, typescript-language-server). Every downloaded binary is checksum-verified. `Dockerfile` (`remote-copilot:test`) is a thin overlay over the base that only installs the two Copilot plugins; iterate here when changing plugins, not the base.
+**Two-layer image, separated by change frequency.** `Dockerfile.base` (`remote-copilot-base:test`) installs the slow-moving, pinned toolchain — versions are `ARG`s at the top (Node, Go, kubectl, helm, Claude Code CLI via npm `@anthropic-ai/claude-code`, context7-mcp binary, typescript-language-server). Every downloaded binary is checksum-verified. `Dockerfile` (`remote-copilot:test`) is a thin overlay over the base that installs gsd-core and registers the remaining plugins; iterate here when changing plugins, not the base.
 
-**Plugins are staged, not fetched at build time.** `scripts/sync-dev-copilot.sh` rsyncs a *local* checkout (`DEV_COPILOT_SOURCE`, default `/Volumes/KINGSTON/PhpstormProjects/dev-copilot`) into `.build/dev-copilot/`, and `scripts/sync-karpathy-skills.sh` clones the `andrej-karpathy-skills` repo at a **pinned commit** (`KARPATHY_SKILLS_REF`) into `.build/karpathy-skills/`. Both validate that `.claude-plugin/{plugin,marketplace}.json` exist before the build proceeds. The Dockerfile then copies these staged dirs in and runs `install-dev-copilot.sh` / `install-karpathy-skills.sh` (which call `copilot plugin marketplace add` + `copilot plugin install`).
+**Base image installs Claude Code via npm.** The base image runs `npm install -g @anthropic-ai/claude-code@<version>` with a pinned version controlled by the `CLAUDE_CODE_VERSION` build arg.
 
-**Runtime config is merged non-destructively by the entrypoint.** `scripts/entrypoint.sh` is the container ENTRYPOINT. On every start it `jq`-merges baked defaults (`config/mcp-config.default.json`, `config/lsp-config.default.json` → copied to `/usr/local/share/remote-copilot/`) into the user's `~/.copilot/{mcp-config,lsp-config}.json` using `(.existing // default)` semantics — so it adds the default `atlassian-rovo` + `context7` MCP servers and `typescript` LSP server **only if absent**, never clobbering user customizations. When editing defaults, change both `config/*.default.json` and the inline `jq` filter in `entrypoint.sh`; they must agree.
+**Overlay image installs gsd-core and registers plugins.** The overlay runs `npx --yes @opengsd/gsd-core@<version> --claude --global --profile=full` during build, which writes Claude Code plugin configuration under `~/.claude`. The andrej-karpathy-skills plugin is staged via `scripts/sync-karpathy-skills.sh` (clones at a pinned commit `KARPATHY_SKILLS_REF`) into `.build/karpathy-skills/` and registered with `claude plugin`. The `dev-lsp` plugin is registered from `config/claude-lsp-plugin/` and supplies TypeScript LSP configuration (`.lsp.json`) to Claude Code.
 
-**Atlassian OAuth is bootstrapped host-side, persisted selectively.** Browser-based OAuth can't happen inside the headless container, so `scripts/bootstrap-atlassian-rovo-oauth.sh` runs the host's `copilot` CLI to authenticate, then copies *only* the Atlassian Rovo OAuth state (matched by `serverUrl`) into `./.copilot-mcp-oauth/`. That dir is the only piece of Copilot state Compose bind-mounts persistently (`docker-compose.yml`); the rest of `~/.copilot` is ephemeral and the host's full `~/.copilot` is never mounted. The script refuses to run inside the container (`/.dockerenv` / `HOME=/home/dev` guard).
+**Runtime config is merged non-destructively by the entrypoint.** `scripts/entrypoint.sh` is the container ENTRYPOINT. On every start it `jq`-merges baked MCP defaults into `~/.claude.json` using `(.existing // default)` semantics — adding the `atlassian-rovo` (HTTP) and `context7` (stdio, baked binary) MCP servers only if absent, never clobbering user customizations.
+
+**Auth via CLAUDE_CODE_OAUTH_TOKEN.** The `CLAUDE_CODE_OAUTH_TOKEN` environment variable is the Claude Code subscription OAuth token, generated on the host via `claude setup-token` and passed into the container via `.env`. No host `~/.claude` directory is mounted.
+
+**Persistence via single-file credentials mount.** Only `/home/dev/.claude/.credentials.json` is bind-mounted (from the host path in `CLAUDE_CREDENTIALS_FILE`, default `./.claude-credentials.json`). This file holds remote-MCP OAuth state (e.g. Atlassian Rovo tokens). Everything else under `~/.claude` is baked into the image or generated at startup and is ephemeral.
+
+**Atlassian OAuth is bootstrapped in-container.** Because macOS stores OAuth tokens in the system Keychain (not a portable file), the browser-based Atlassian Rovo login must run inside the container via `make bootstrap-atlassian-oauth`. The host's full `~/.claude` is never mounted; the OAuth result is captured into the bind-mounted `.claude-credentials.json`.
 
 **Runtime user is `dev` (uid 1000), home `/home/dev`, workdir `/workspace`.** Git identity and defaults are baked into `/home/dev/.gitconfig` at base-build time via `ARG`s.
 
