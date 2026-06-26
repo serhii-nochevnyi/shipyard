@@ -9,6 +9,7 @@ DEV_COPILOT_SOURCE_REV ?= $(shell git -C "$(DEV_COPILOT_SOURCE)" rev-parse --sho
 KARPATHY_SKILLS_REPO ?= https://github.com/multica-ai/andrej-karpathy-skills
 KARPATHY_SKILLS_REF ?= 2c606141936f1eeef17fa3043a72095b4765b9c2
 KARPATHY_SKILLS_STAGING ?= .build/karpathy-skills
+CLAUDE_CODE_VERSION ?= 2.1.193
 CONTEXT7_MCP_VERSION ?= 2.2.5
 TYPESCRIPT_LANGUAGE_SERVER_VERSION ?= 5.2.0
 TYPESCRIPT_VERSION ?= 6.0.3
@@ -25,6 +26,7 @@ build-base: sync-ssh-config
 	docker build -f Dockerfile.base -t $(BASE_IMAGE) \
 	  --build-arg GIT_USER_NAME='$(GIT_USER_NAME)' \
 	  --build-arg GIT_USER_EMAIL='$(GIT_USER_EMAIL)' \
+	  --build-arg CLAUDE_CODE_VERSION='$(CLAUDE_CODE_VERSION)' \
 	  --build-arg CONTEXT7_MCP_VERSION='$(CONTEXT7_MCP_VERSION)' \
 	  --build-arg TYPESCRIPT_LANGUAGE_SERVER_VERSION='$(TYPESCRIPT_LANGUAGE_SERVER_VERSION)' \
 	  --build-arg TYPESCRIPT_VERSION='$(TYPESCRIPT_VERSION)' \

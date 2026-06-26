@@ -12,7 +12,7 @@ docker run --rm \
   -v "$PWD/.build/ssh-config:/tmp/expected-ssh:ro" \
   remote-copilot-base:test bash -lc '
   set -euo pipefail
-  for cmd in bash curl git gh gzip helm jq kubectl make node pnpm python3 rsync ssh sudo tar unzip xz yarn zip copilot go; do
+  for cmd in bash curl git gh gzip helm jq kubectl make node pnpm python3 rsync ssh sudo tar unzip xz yarn zip claude go; do
     command -v "$cmd" >/dev/null
   done
 
@@ -48,19 +48,10 @@ docker run --rm \
   jq -e ".mcpServers[\"atlassian-rovo\"].url == \"https://mcp.atlassian.com/v1/mcp\"" /usr/local/share/remote-copilot/mcp-config.default.json >/dev/null
   jq -e ".mcpServers[\"context7\"].command == \"context7-mcp\"" /usr/local/share/remote-copilot/mcp-config.default.json >/dev/null
   jq -e ".mcpServers[\"context7\"].args == []" /usr/local/share/remote-copilot/mcp-config.default.json >/dev/null
-  test -f /usr/local/share/remote-copilot/lsp-config.default.json
   command -v typescript-language-server >/dev/null
   command -v tsc >/dev/null
   [[ "$(typescript-language-server --version)" == "5.2.0" ]]
   [[ "$(tsc --version)" == "Version 6.0.3" ]]
-  jq -e ".lspServers[\"typescript\"].command == \"typescript-language-server\"" /usr/local/share/remote-copilot/lsp-config.default.json >/dev/null
-  jq -e ".lspServers[\"typescript\"].args == [\"--stdio\"]" /usr/local/share/remote-copilot/lsp-config.default.json >/dev/null
-  jq -e ".lspServers[\"typescript\"].fileExtensions == {
-    \".ts\": \"typescript\",
-    \".tsx\": \"typescript\",
-    \".js\": \"typescript\",
-    \".jsx\": \"typescript\"
-  }" /usr/local/share/remote-copilot/lsp-config.default.json >/dev/null
 
   [[ "$(pnpm --version)" == "10.10.0" ]]
   [[ "$(yarn --version)" == "1.22.22" ]]
@@ -68,7 +59,8 @@ docker run --rm \
   [[ "$(go version)" == go\ version\ go1.26.3* ]]
   [[ "$(kubectl version --client -o json | python3 -c '"'"'import json, sys; print(json.load(sys.stdin)["clientVersion"]["gitVersion"])'"'"')" == "v1.30.10" ]]
   [[ "$(helm version --short | sed "s/+.*//")" == "v3.17.3" ]]
-  [[ "$(copilot --version)" == *"1.0.44"* ]]
+  command -v claude >/dev/null
+  [[ "$(claude --version)" == *"2.1.193"* ]]
 '
 
 echo "base image smoke passed"
