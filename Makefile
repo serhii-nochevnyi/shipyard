@@ -17,7 +17,7 @@ GIT_USER_EMAIL ?= nochevnyi.serhii@airslate.com
 WORKSPACE_DIR ?= $(CURDIR)/workspace
 HOME_CACHE_DIR ?= $(CURDIR)/.cache-home
 
-.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image bootstrap-atlassian-oauth run-docker deploy-k8s test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime
+.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image bootstrap-atlassian-oauth run-docker up deploy-k8s test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime
 
 build-base: sync-ssh-config
 	docker build -f Dockerfile.base -t $(BASE_IMAGE) \
@@ -58,6 +58,16 @@ run-docker:
 	HOME_CACHE_DIR="$(HOME_CACHE_DIR)" \
 	CLAUDE_CREDENTIALS_FILE="$(CURDIR)/.claude-credentials.json" \
 	docker compose run --rm dev
+
+up:
+	mkdir -p "$(WORKSPACE_DIR)" "$(HOME_CACHE_DIR)"
+	touch "$(CURDIR)/.claude-credentials.json"
+	BASE_IMAGE=$(BASE_IMAGE) \
+	DEV_IMAGE=$(DEV_IMAGE) \
+	WORKSPACE_DIR="$(WORKSPACE_DIR)" \
+	HOME_CACHE_DIR="$(HOME_CACHE_DIR)" \
+	CLAUDE_CREDENTIALS_FILE="$(CURDIR)/.claude-credentials.json" \
+	docker compose up -d
 
 deploy-k8s:
 	kubectl apply -f k8s/configmap.yaml

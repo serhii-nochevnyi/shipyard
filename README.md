@@ -94,16 +94,30 @@ overwriting user customizations.
 ## Atlassian OAuth
 
 Because macOS stores OAuth tokens in the Keychain (not a portable file), Atlassian
-Rovo authentication must run inside the container. To complete the Atlassian browser
-login, run:
+Rovo authentication must run inside the container. The documented flow is:
 
-```bash
-make bootstrap-atlassian-oauth
+1. Copy `.env.example` to `.env` and set `CLAUDE_CODE_OAUTH_TOKEN`.
+2. Start a persistent container: `make up`
+3. Run the bootstrap: `make bootstrap-atlassian-oauth`
+
+`make up` creates `.claude-credentials.json` on the host (if it does not already
+exist) before starting the container with `docker compose up -d`, preventing Docker
+from silently creating a directory mount in its place.
+
+`make bootstrap-atlassian-oauth` runs `scripts/bootstrap-atlassian-rovo-oauth.sh`
+on the host. That script `docker exec`s into the running `dev` container and
+executes:
+
+```
+claude -p "Use the atlassian-rovo MCP server…" \
+  --mcp-config '{"mcpServers":{"atlassian-rovo":{"type":"http","url":"..."}}}' \
+  --permission-mode bypassPermissions \
+  --output-format text
 ```
 
-This executes an in-container interactive login via `claude mcp add-json` (or the
-equivalent entrypoint hook) so that Atlassian Rovo OAuth state is stored in
-`/home/dev/.claude/.credentials.json` inside the container.
+The OAuth browser flow runs inside the container so credentials land in
+`/home/dev/.claude/.credentials.json`, which is bind-mounted from the host file
+`.claude-credentials.json` — persisting across container restarts.
 
 ## Persistence
 

@@ -26,7 +26,7 @@ fi
 cd "$REPO_ROOT"
 cid="$(docker compose ps -q "$SERVICE" || true)"
 if [[ -z "$cid" ]]; then
-  echo "dev container is not running; start it first (e.g. docker compose up -d)" >&2
+  echo "dev container is not running; start it first with: make up" >&2
   exit 1
 fi
 
