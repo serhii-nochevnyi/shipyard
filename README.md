@@ -105,19 +105,27 @@ exist) before starting the container with `docker compose up -d`, preventing Doc
 from silently creating a directory mount in its place.
 
 `make bootstrap-atlassian-oauth` runs `scripts/bootstrap-atlassian-rovo-oauth.sh`
-on the host. That script `docker exec`s into the running `dev` container and
+on the host. That script `docker exec -it`s into the running `dev` container and
 executes:
 
 ```
-claude -p "Use the atlassian-rovo MCP server…" \
-  --mcp-config '{"mcpServers":{"atlassian-rovo":{"type":"http","url":"..."}}}' \
-  --permission-mode bypassPermissions \
-  --output-format text
+claude mcp login atlassian-rovo --no-browser
 ```
 
-The OAuth browser flow runs inside the container so credentials land in
-`/home/dev/.claude/.credentials.json`, which is bind-mounted from the host file
-`.claude-credentials.json` — persisting across container restarts.
+A remote MCP server authenticates over an OAuth loopback callback that the host
+browser cannot reach inside a container, so a headless `claude -p` flow can never
+receive the authorization code. `claude mcp login --no-browser` (Claude Code
+>= 2.1.191) instead prints the authorization URL and waits. The flow is:
+
+1. Open the printed URL in your host browser and approve access.
+2. The browser tries to redirect to `http://localhost:<port>/callback` and shows a
+   connection error — this is expected (the callback server is inside the container).
+3. Copy the full redirect URL from the address bar and paste it back at the prompt.
+
+Credentials then land in `/home/dev/.claude/.credentials.json`, which is bind-mounted
+from the host file `.claude-credentials.json` — persisting across container restarts.
+(If a half-finished attempt blocks a retry, run
+`docker compose exec dev claude mcp logout atlassian-rovo` first.)
 
 ## Persistence
 

@@ -11,7 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 SERVICE="${DEV_SERVICE:-dev}"
-SERVER_URL="https://mcp.atlassian.com/v1/mcp"
+SERVER_NAME="${ATLASSIAN_SERVER_NAME:-atlassian-rovo}"
 
 if [[ -f /.dockerenv ]] || [[ "${HOME:-}" == "/home/dev" ]]; then
   echo "run this script on the host, not inside the container" >&2
@@ -30,15 +30,25 @@ if [[ -z "$cid" ]]; then
   exit 1
 fi
 
-echo "Launching in-container Claude session for Atlassian Rovo OAuth..."
-echo "Complete the printed browser URL when prompted; credentials persist to ./.claude-credentials.json"
+# MCP remote-server OAuth uses a loopback callback the host browser cannot reach
+# inside a container, so a plain `claude -p` flow can never receive the code.
+# `claude mcp login --no-browser` (Claude Code >= 2.1.191) instead PRINTS the
+# authorization URL and waits for you to paste the full redirect URL back.
+# Run interactively (-it) so that paste prompt is reachable. The `atlassian-rovo`
+# server is already registered in ~/.claude.json by the container entrypoint.
+echo "Starting interactive Atlassian Rovo (${SERVER_NAME}) OAuth inside the container."
+echo
+echo "  1. Claude will print an authorization URL — open it in your host browser."
+echo "  2. Approve access. Your browser will try to redirect to http://localhost:<port>/callback"
+echo "     and show a connection error — that is expected."
+echo "  3. Copy the FULL redirect URL from the browser address bar and paste it back"
+echo "     at the prompt here."
+echo
+echo "Credentials then land in ~/.claude/.credentials.json (persisted to ./.claude-credentials.json)."
+echo "If a previous half-finished attempt blocks you, run: docker compose exec ${SERVICE} claude mcp logout ${SERVER_NAME}"
+echo
 
-docker exec -it "$cid" bash -lc '
-  set -euo pipefail
-  claude -p "Use the atlassian-rovo MCP server. If authentication is required, complete the OAuth flow, then reply exactly: atlassian-rovo authenticated." \
-    --mcp-config '"'"'{"mcpServers":{"atlassian-rovo":{"type":"http","url":"'"$SERVER_URL"'"}}}'"'"' \
-    --permission-mode bypassPermissions \
-    --output-format text
-'
+docker exec -it "$cid" claude mcp login "$SERVER_NAME" --no-browser
 
-echo "If authentication completed, ~/.claude/.credentials.json now holds Atlassian Rovo OAuth state (persisted on the host)."
+echo
+echo "Done. Verify with: docker compose exec ${SERVICE} claude mcp list"
