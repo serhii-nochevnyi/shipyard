@@ -1,0 +1,11 @@
+# Build staging
+.build/
+
+# Runtime mount targets / local state
+workspace/
+.cache-home/
+.claude-credentials.json
+.copilot-mcp-oauth/
+
+# OS cruft
+.DS_Store

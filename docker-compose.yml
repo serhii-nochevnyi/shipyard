@@ -1,0 +1,24 @@
+services:
+  dev:
+    image: ${DEV_IMAGE:-remote-copilot:test}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-remote-copilot-base:test}
+        DEV_COPILOT_DIR: ${DEV_COPILOT_DIR:-.build/dev-copilot}
+        DEV_COPILOT_INSTALL_CMD: ${DEV_COPILOT_INSTALL_CMD:-}
+        DEV_COPILOT_SOURCE_REV: ${DEV_COPILOT_SOURCE_REV:-local-dev}
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+      SSH_AUTH_SOCK: ${SSH_AUTH_SOCK:-}
+    volumes:
+      - ${WORKSPACE_DIR:-./workspace}:/workspace
+      - ${HOME_CACHE_DIR:-./.cache-home}:/home/dev/.cache
+      - ${MCP_OAUTH_DIR:-./.copilot-mcp-oauth}:/home/dev/.copilot/mcp-oauth-config
+      - ${HOME}/.ssh:/home/dev/.ssh:ro
+      - ${PWD}:${PWD}
