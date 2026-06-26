@@ -51,10 +51,12 @@ bootstrap-atlassian-oauth:
 
 run-docker:
 	mkdir -p "$(WORKSPACE_DIR)" "$(HOME_CACHE_DIR)"
+	touch "$(CURDIR)/.claude-credentials.json"
 	BASE_IMAGE=$(BASE_IMAGE) \
 	DEV_IMAGE=$(DEV_IMAGE) \
 	WORKSPACE_DIR="$(WORKSPACE_DIR)" \
 	HOME_CACHE_DIR="$(HOME_CACHE_DIR)" \
+	CLAUDE_CREDENTIALS_FILE="$(CURDIR)/.claude-credentials.json" \
 	docker compose run --rm dev
 
 deploy-k8s:

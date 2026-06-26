@@ -6,19 +6,19 @@ services:
       dockerfile: Dockerfile
       args:
         BASE_IMAGE: ${BASE_IMAGE:-remote-copilot-base:test}
-        DEV_COPILOT_DIR: ${DEV_COPILOT_DIR:-.build/dev-copilot}
-        DEV_COPILOT_INSTALL_CMD: ${DEV_COPILOT_INSTALL_CMD:-}
-        DEV_COPILOT_SOURCE_REV: ${DEV_COPILOT_SOURCE_REV:-local-dev}
+        KARPATHY_SKILLS_DIR: ${KARPATHY_SKILLS_DIR:-.build/karpathy-skills}
+        GSD_CORE_VERSION: ${GSD_CORE_VERSION:-}
     working_dir: /workspace
     stdin_open: true
     tty: true
     environment:
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GH_TOKEN: ${GH_TOKEN:-}
       SSH_AUTH_SOCK: ${SSH_AUTH_SOCK:-}
     volumes:
       - ${WORKSPACE_DIR:-./workspace}:/workspace
       - ${HOME_CACHE_DIR:-./.cache-home}:/home/dev/.cache
-      - ${MCP_OAUTH_DIR:-./.copilot-mcp-oauth}:/home/dev/.copilot/mcp-oauth-config
+      - ${CLAUDE_CREDENTIALS_FILE:-./.claude-credentials.json}:/home/dev/.claude/.credentials.json
       - ${HOME}/.ssh:/home/dev/.ssh:ro
       - ${PWD}:${PWD}
