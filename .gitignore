@@ -1,3 +1,6 @@
+# Local env (may hold secrets)
+.env
+
 # Build staging
 .build/
 

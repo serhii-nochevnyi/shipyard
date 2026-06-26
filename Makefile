@@ -17,7 +17,10 @@ GIT_USER_EMAIL ?= nochevnyi.serhii@airslate.com
 WORKSPACE_DIR ?= $(CURDIR)/workspace
 HOME_CACHE_DIR ?= $(CURDIR)/.cache-home
 
-.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image bootstrap-atlassian-oauth run-docker up deploy-k8s test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime
+REPO ?=
+WORKSPACE_SUBDIR ?=
+
+.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image bootstrap-atlassian-oauth run-docker up claude shell clone deploy-k8s test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime
 
 build-base: sync-ssh-config
 	docker build -f Dockerfile.base -t $(BASE_IMAGE) \
@@ -68,6 +71,16 @@ up:
 	HOME_CACHE_DIR="$(HOME_CACHE_DIR)" \
 	CLAUDE_CREDENTIALS_FILE="$(CURDIR)/.claude-credentials.json" \
 	docker compose up -d
+
+claude: up
+	docker compose exec dev claude
+
+shell: up
+	docker compose exec dev bash
+
+clone: up
+	@test -n "$(REPO)" || { echo "usage: make clone REPO=<git-url> [WORKSPACE_SUBDIR=name]"; exit 1; }
+	docker compose exec dev bash -lc 'cd /workspace && git clone "$(REPO)" $(WORKSPACE_SUBDIR)'
 
 deploy-k8s:
 	kubectl apply -f k8s/configmap.yaml
