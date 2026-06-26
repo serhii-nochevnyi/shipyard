@@ -1,28 +1,26 @@
 ARG BASE_IMAGE=remote-copilot-base:test
 FROM ${BASE_IMAGE}
 
-ARG DEV_COPILOT_DIR=.build/dev-copilot
 ARG KARPATHY_SKILLS_DIR=.build/karpathy-skills
-ARG DEV_COPILOT_INSTALL_CMD=
-ARG DEV_COPILOT_SOURCE_REV=local-dev
+ARG GSD_CORE_VERSION=1.6.0
 
 USER root
 
-COPY scripts/install-dev-copilot.sh /usr/local/bin/install-dev-copilot.sh
+COPY scripts/install-claude-plugins.sh /usr/local/bin/install-claude-plugins.sh
 COPY scripts/install-karpathy-skills.sh /usr/local/bin/install-karpathy-skills.sh
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY ${DEV_COPILOT_DIR}/ /opt/dev-copilot/
 COPY ${KARPATHY_SKILLS_DIR}/ /opt/karpathy-skills/
+COPY config/claude-lsp-plugin/ /opt/claude-lsp/
 
-RUN chmod +x /usr/local/bin/install-dev-copilot.sh /usr/local/bin/install-karpathy-skills.sh /usr/local/bin/entrypoint.sh && \
-    mkdir -p /usr/local/share/dev-copilot && \
-    printf '%s\n' "$DEV_COPILOT_SOURCE_REV" > /usr/local/share/dev-copilot/source-rev && \
-    chown -R dev:dev /opt/dev-copilot /opt/karpathy-skills /usr/local/share/dev-copilot
+RUN chmod +x /usr/local/bin/install-claude-plugins.sh /usr/local/bin/install-karpathy-skills.sh /usr/local/bin/entrypoint.sh && \
+    chown -R dev:dev /opt/karpathy-skills /opt/claude-lsp
 
 USER dev
 
-RUN DEV_COPILOT_INSTALL_CMD="$DEV_COPILOT_INSTALL_CMD" /usr/local/bin/install-dev-copilot.sh /opt/dev-copilot
-RUN /usr/local/bin/install-karpathy-skills.sh /opt/karpathy-skills
+# gsd-core: non-interactive, --claude --global writes under /home/dev/.claude
+RUN npx --yes "@opengsd/gsd-core@${GSD_CORE_VERSION}" --claude --global --profile=full
+
+RUN /usr/local/bin/install-claude-plugins.sh /opt/karpathy-skills /opt/claude-lsp
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]
