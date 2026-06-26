@@ -19,6 +19,7 @@ HOME_CACHE_DIR ?= $(CURDIR)/.cache-home
 
 REPO ?=
 WORKSPACE_SUBDIR ?=
+DIR ?=
 
 .PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image bootstrap-atlassian-oauth run-docker up dev claude shell clone deploy-k8s test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime
 
@@ -78,10 +79,10 @@ dev:
 	./scripts/dev.sh
 
 claude: up
-	docker compose exec dev claude --dangerously-skip-permissions
+	docker compose exec dev bash -lc 'cd "/workspace/$(DIR)" 2>/dev/null || cd /workspace; exec claude --dangerously-skip-permissions'
 
 shell: up
-	docker compose exec dev bash
+	docker compose exec dev bash -lc 'cd "/workspace/$(DIR)" 2>/dev/null || cd /workspace; exec bash'
 
 clone: up
 	@test -n "$(REPO)" || { echo "usage: make clone REPO=<git-url> [WORKSPACE_SUBDIR=name]"; exit 1; }

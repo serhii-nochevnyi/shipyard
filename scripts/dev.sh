@@ -79,18 +79,54 @@ if [[ -n "${mcpname:-}" ]]; then
   dexec claude mcp login "$mcpname" --no-browser || true
 fi
 
-# 6. clone a repo into /workspace
-read -rp "Clone a git repo into /workspace? Enter URL (blank to skip): " repo || repo=""
-if [[ -n "${repo:-}" ]]; then
-  dexec bash -lc "cd /workspace && git clone '$repo'" || echo "  (clone failed — check the URL / SSH access)"
-fi
+# 6. choose the project to work in: clone a new repo, or pick an existing one in /workspace.
+PROJECT_DIR="/workspace"
+existing="$(docker compose exec -T "$SERVICE" bash -lc 'cd /workspace 2>/dev/null && ls -d */ 2>/dev/null | sed "s#/\$##"' 2>/dev/null | tr -d "\r" || true)"
 
-# 7. attach
+echo
+echo "Project to work in:"
+declare -a projects=()
+if [[ -n "$existing" ]]; then
+  n=0
+  while IFS= read -r d; do
+    [[ -z "$d" ]] && continue
+    n=$((n + 1)); projects[n]="$d"
+    echo "  $n) $d   (existing in /workspace)"
+  done <<< "$existing"
+fi
+echo "  c) clone a new repo"
+echo "  s) skip — work in /workspace"
+read -rp "Choose: " sel || sel="s"
+case "${sel:-s}" in
+  c|C)
+    read -rp "  Git URL: " repo || repo=""
+    if [[ -n "${repo:-}" ]]; then
+      name="$(basename "$repo")"; name="${name%.git}"
+      if docker compose exec -T "$SERVICE" bash -lc "cd /workspace && git clone '$repo'"; then
+        PROJECT_DIR="/workspace/$name"
+        echo "  cloned -> $PROJECT_DIR"
+      else
+        echo "  (clone failed — check the URL / SSH access); staying in /workspace"
+      fi
+    fi
+    ;;
+  ''|s|S) PROJECT_DIR="/workspace" ;;
+  *)
+    if [[ -n "${projects[$sel]:-}" ]]; then
+      PROJECT_DIR="/workspace/${projects[$sel]}"
+    else
+      echo "  invalid choice; staying in /workspace"
+    fi
+    ;;
+esac
+echo "  working dir: $PROJECT_DIR"
+
+# 7. attach — starts inside the chosen project directory
 echo
 echo "What next?  1) claude   2) shell   3) leave running"
 read -rp "Choose [1/2/3]: " choice || choice="3"
 case "${choice:-3}" in
-  1) dexec claude --dangerously-skip-permissions ;;
-  2) dexec bash ;;
-  *) echo "Container left running. Attach later with: make claude | make shell" ;;
+  1) dexec bash -lc "cd '$PROJECT_DIR' && exec claude --dangerously-skip-permissions" ;;
+  2) dexec bash -lc "cd '$PROJECT_DIR' && exec bash" ;;
+  *) echo "Container left running (work dir: $PROJECT_DIR). Attach later with: make claude | make shell" ;;
 esac

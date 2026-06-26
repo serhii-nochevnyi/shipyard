@@ -8,9 +8,10 @@ make dev
 
 `make dev` runs the guided launcher (`scripts/dev.sh`): it creates `.env` if
 missing, builds the images if needed, starts the container, and then asks in turn
-whether to log in to Claude, authenticate MCP servers (e.g. Atlassian Rovo), clone
-a repo into `/workspace`, and finally attach a `claude` or `bash` session. Each step
-is skipped if already done, so it is safe to re-run.
+whether to log in to Claude, authenticate MCP servers (e.g. Atlassian Rovo), and
+which project to work in — clone a new repo into `/workspace` or pick an existing
+one there. It finally attaches a `claude` or `bash` session **inside that project
+directory**. Each step is skipped if already done, so it is safe to re-run.
 
 Inside this isolated container, Claude is launched with
 `claude --dangerously-skip-permissions` (via `make claude` and the launcher's
@@ -22,8 +23,8 @@ Individual targets if you prefer to drive it yourself:
 | Command | Does |
 |---|---|
 | `make up` | start the persistent container (`docker compose up -d`) |
-| `make claude` | attach a `claude --dangerously-skip-permissions` session in the running container |
-| `make shell` | attach a `bash` shell in the running container |
+| `make claude [DIR=subdir]` | attach a `claude --dangerously-skip-permissions` session (in `/workspace/subdir` if `DIR` is given) |
+| `make shell [DIR=subdir]` | attach a `bash` shell (in `/workspace/subdir` if `DIR` is given) |
 | `make clone REPO=<git-url>` | clone a repo into `/workspace` (set `WORKSPACE_SUBDIR=name` to rename) |
 | `make bootstrap-atlassian-oauth` | authenticate the Atlassian Rovo MCP server |
 | `make run-docker` | one-off ephemeral session (`docker compose run --rm`) |
