@@ -4,50 +4,41 @@ set -euo pipefail
 [[ -f Dockerfile ]] || { echo "missing Dockerfile"; exit 1; }
 [[ -f Makefile ]] || { echo "missing Makefile"; exit 1; }
 
-mkdir -p workspace .cache-home .copilot-mcp-oauth
-DEV_COPILOT_INSTALL_CMD="${DEV_COPILOT_INSTALL_CMD:-}" make build-base sync-plugin build-dev-image >/dev/null
+make build-base sync-karpathy-skills build-dev-image >/dev/null
 
 docker run --rm remote-copilot:test bash -lc '
   set -euo pipefail
-  test -f "$HOME/.copilot/mcp-config.json"
-  jq -e ".mcpServers[\"atlassian-rovo\"].url == \"https://mcp.atlassian.com/v1/mcp\"" "$HOME/.copilot/mcp-config.json" >/dev/null
-  jq -e ".mcpServers[\"context7\"].command == \"context7-mcp\"" "$HOME/.copilot/mcp-config.json" >/dev/null
-  jq -e ".mcpServers[\"context7\"].args == []" "$HOME/.copilot/mcp-config.json" >/dev/null
-  mcp_list="$(copilot mcp list)"
-  grep -q "atlassian-rovo" <<<"$mcp_list"
-  grep -q "context7" <<<"$mcp_list"
+  test -f "$HOME/.claude.json"
+  jq -e ".mcpServers[\"atlassian-rovo\"].url == \"https://mcp.atlassian.com/v1/mcp\"" "$HOME/.claude.json" >/dev/null
+  jq -e ".mcpServers[\"atlassian-rovo\"].type == \"http\"" "$HOME/.claude.json" >/dev/null
+  jq -e ".mcpServers[\"context7\"].command == \"context7-mcp\"" "$HOME/.claude.json" >/dev/null
+  jq -e ".mcpServers[\"context7\"].type == \"stdio\"" "$HOME/.claude.json" >/dev/null
+  jq -e ".mcpServers[\"context7\"].args == []" "$HOME/.claude.json" >/dev/null
 '
 
 docker run --rm --entrypoint bash remote-copilot:test -lc '
   set -euo pipefail
-  mkdir -p "$HOME/.copilot"
-  cat > "$HOME/.copilot/mcp-config.json" <<'"'"'EOF'"'"'
+  cat > "$HOME/.claude.json" <<'"'"'EOF'"'"'
 {
   "mcpServers": {
-    "existing": {
-      "type": "http",
-      "url": "https://example.com/mcp",
-      "tools": ["*"]
-    }
+    "existing": { "type": "http", "url": "https://example.com/mcp" }
   }
 }
 EOF
   /usr/local/bin/entrypoint.sh bash -lc '"'"'
     set -euo pipefail
-    jq -e ".mcpServers[\"existing\"].url == \"https://example.com/mcp\"" "$HOME/.copilot/mcp-config.json" >/dev/null
-    jq -e ".mcpServers[\"atlassian-rovo\"].url == \"https://mcp.atlassian.com/v1/mcp\"" "$HOME/.copilot/mcp-config.json" >/dev/null
-    jq -e ".mcpServers[\"context7\"].command == \"context7-mcp\"" "$HOME/.copilot/mcp-config.json" >/dev/null
-    jq -e ".mcpServers[\"context7\"].args == []" "$HOME/.copilot/mcp-config.json" >/dev/null
+    jq -e ".mcpServers[\"existing\"].url == \"https://example.com/mcp\"" "$HOME/.claude.json" >/dev/null
+    jq -e ".mcpServers[\"atlassian-rovo\"].url == \"https://mcp.atlassian.com/v1/mcp\"" "$HOME/.claude.json" >/dev/null
+    jq -e ".mcpServers[\"context7\"].command == \"context7-mcp\"" "$HOME/.claude.json" >/dev/null
   '"'"'
 '
 
 if docker run --rm --entrypoint bash remote-copilot:test -lc '
   set -euo pipefail
-  mkdir -p "$HOME/.copilot"
-  printf "{broken-json\n" > "$HOME/.copilot/mcp-config.json"
+  printf "{broken-json\n" > "$HOME/.claude.json"
   /usr/local/bin/entrypoint.sh true
 '; then
-  echo "expected invalid mcp-config.json to fail"
+  echo "expected invalid .claude.json to fail"
   exit 1
 fi
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 mkdir -p /workspace
-mkdir -p "$HOME/.cache" "$HOME/.local/share" "$HOME/.config" "$HOME/.copilot"
+mkdir -p "$HOME/.cache" "$HOME/.local/share" "$HOME/.config" "$HOME/.claude"
 
 merge_default_json() {
   local default_config="$1"
@@ -26,34 +26,18 @@ merge_default_json() {
 }
 
 default_mcp_config="/usr/local/share/remote-copilot/mcp-config.default.json"
-user_mcp_config="$HOME/.copilot/mcp-config.json"
-default_lsp_config="/usr/local/share/remote-copilot/lsp-config.default.json"
-user_lsp_config="$HOME/.copilot/lsp-config.json"
+user_mcp_config="$HOME/.claude.json"
 
 merge_default_json "$default_mcp_config" "$user_mcp_config" '
   .mcpServers |= (. // {}) |
   .mcpServers["atlassian-rovo"] = (.mcpServers["atlassian-rovo"] // {
     type: "http",
-    url: "https://mcp.atlassian.com/v1/mcp",
-    tools: ["*"]
+    url: "https://mcp.atlassian.com/v1/mcp"
   }) |
   .mcpServers["context7"] = (.mcpServers["context7"] // {
+    type: "stdio",
     command: "context7-mcp",
     args: []
-  })
-'
-
-merge_default_json "$default_lsp_config" "$user_lsp_config" '
-  .lspServers |= (. // {}) |
-  .lspServers["typescript"] = (.lspServers["typescript"] // {
-    command: "typescript-language-server",
-    args: ["--stdio"],
-    fileExtensions: {
-      ".ts": "typescript",
-      ".tsx": "typescript",
-      ".js": "typescript",
-      ".jsx": "typescript"
-    }
   })
 '
 
