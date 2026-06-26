@@ -1,0 +1,13 @@
+{
+  "name": "dev-lsp-marketplace",
+  "owner": { "name": "airslate" },
+  "plugins": [
+    {
+      "name": "dev-lsp",
+      "source": "./",
+      "description": "TypeScript/JavaScript LSP wiring for Claude Code dev container",
+      "version": "1.0.0",
+      "author": { "name": "airslate" }
+    }
+  ]
+}

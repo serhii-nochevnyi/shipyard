@@ -1,0 +1,7 @@
+{
+  "name": "dev-lsp",
+  "description": "TypeScript/JavaScript LSP wiring for Claude Code dev container",
+  "version": "1.0.0",
+  "author": { "name": "airslate" },
+  "license": "MIT"
+}
