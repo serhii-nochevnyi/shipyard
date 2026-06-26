@@ -57,8 +57,11 @@ The overlay image installs the following during build:
   gsd-core is NOT installed from the Claude Code marketplace; it is installed via npx.
 - **andrej-karpathy-skills** — a Claude Code plugin staged from a pinned Git ref
   (`2c606141936f1eeef17fa3043a72095b4765b9c2`) and registered with `claude plugin`.
-- **dev-lsp** — a local Claude Code plugin (from `config/claude-lsp-plugin/`)
-  that configures TypeScript LSP support inside Claude Code.
+- **skill-creator**, **code-simplifier**, **github** (GitHub MCP server), and
+  **typescript-lsp** — installed from the official `claude-plugins-official` marketplace
+  (`anthropics/claude-plugins-official`). Plugin versions are pinned by the marketplace's
+  GitHub ref at clone time. The `typescript-lsp` plugin wires `typescript-language-server`
+  (already in the base image) into Claude Code, covering `.ts`, `.tsx`, `.js`, and `.jsx`.
 
 The base image bakes in:
 
@@ -91,6 +94,8 @@ make run-docker
 The container starts in `/workspace`. If you want a host bind mount there, keep the `WORKSPACE_DIR` volume enabled in `docker-compose.yml`.
 
 The Compose runtime mounts the host user's `~/.ssh` directory read-only at `/home/dev/.ssh`, so SSH Git access can use your existing host keys inside the container.
+
+The host `~/.config/gh` directory is mounted read-only at `/home/dev/.config/gh`, so the GitHub CLI (`gh`) can use your existing host authentication inside the container. `make up` and `make run-docker` create `~/.config/gh` on the host if it does not exist (preventing Docker from creating a root-owned directory in its place). The `GITHUB_TOKEN` / `GH_TOKEN` environment variables are also forwarded into the container for token-based access.
 
 If `SSH_AUTH_SOCK` is set on the host, Compose forwards that environment variable into the container. The agent socket itself is not bind-mounted by default; if you need agent-based auth instead of key files, add a matching bind mount in a local Compose override or run the image directly:
 
@@ -168,17 +173,20 @@ The host's full `~/.claude` is never mounted.
 ## LSP Support
 
 TypeScript/JavaScript LSP support is provided by `typescript-language-server`
-(shipped in the base image) and wired into Claude Code via the `dev-lsp` plugin
-(`config/claude-lsp-plugin/`). This covers `.ts`, `.tsx`, `.js`, and `.jsx` files.
+(shipped in the base image) and wired into Claude Code via the official `typescript-lsp`
+plugin from `claude-plugins-official`. This covers `.ts`, `.tsx`, `.js`, and `.jsx` files.
 
-The LSP plugin is registered during the overlay build and loaded when Claude Code
-starts an interactive session.
+The plugin is installed from the official marketplace during the overlay build and loaded
+when Claude Code starts an interactive session.
 
 ## Plugins
 
-- **gsd-core** (`@opengsd/gsd-core`) — Claude Code delivery plugin with full profile.
+- **gsd-core** (`@opengsd/gsd-core`) — Claude Code delivery plugin with full profile, installed via npx.
 - **andrej-karpathy-skills** — staged from pinned commit, registered via `claude plugin`.
-- **dev-lsp** — local plugin supplying TypeScript LSP config to Claude Code.
+- **skill-creator** — from `claude-plugins-official`; helps create new Claude Code skills.
+- **code-simplifier** — from `claude-plugins-official`; reviews and simplifies code.
+- **github** — from `claude-plugins-official`; the official GitHub MCP server plugin.
+- **typescript-lsp** — from `claude-plugins-official`; TypeScript/JS LSP via `typescript-language-server`.
 
 ## Deploy to Kubernetes
 

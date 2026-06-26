@@ -4,7 +4,7 @@ set -euo pipefail
 [[ -f docker-compose.yml ]] || { echo "missing docker-compose.yml"; exit 1; }
 [[ -f Makefile ]] || { echo "missing Makefile"; exit 1; }
 
-mkdir -p workspace .cache-home
+mkdir -p workspace .cache-home "$HOME/.config/gh"
 touch .claude-credentials.json
 repo_path="$(pwd)"
 trap 'docker compose down >/dev/null 2>&1 || true' EXIT
@@ -32,8 +32,10 @@ docker compose run --rm dev bash -lc '
   test -d "$HOME/.cache"
   test -f "$HOME/.claude.json"
   command -v claude >/dev/null
-  jq -e ".enabledPlugins[\"andrej-karpathy-skills@karpathy-skills\"] == true" "$HOME/.claude/settings.json" >/dev/null
-  jq -e ".enabledPlugins[\"dev-lsp@dev-lsp-marketplace\"] == true" "$HOME/.claude/settings.json" >/dev/null
+  # all five plugins appear in installed_plugins.json
+  for p in andrej-karpathy-skills@karpathy-skills skill-creator@claude-plugins-official code-simplifier@claude-plugins-official github@claude-plugins-official typescript-lsp@claude-plugins-official; do
+    jq -e --arg p "$p" ".plugins[\$p]" "$HOME/.claude/plugins/installed_plugins.json" >/dev/null
+  done
   # The whole point of the single-file mount: dev (uid 1000) must be able to WRITE it,
   # else remote-MCP OAuth is silently lost on restart.
   test -f "$HOME/.claude/.credentials.json"
@@ -52,6 +54,7 @@ cid="$(docker compose ps -q dev)"
 test -n "$cid"
 docker exec -w "$repo_path" "$cid" bash -lc 'set -euo pipefail; pwd' | grep -qx "$repo_path"
 docker inspect "$cid" --format '{{json .Mounts}}' | jq -e 'map(select(.Destination == "/home/dev/.ssh" and .RW == false)) | length == 1' >/dev/null
+docker inspect "$cid" --format '{{json .Mounts}}' | jq -e 'map(select(.Destination == "/home/dev/.config/gh" and .RW == false)) | length == 1' >/dev/null
 docker inspect "$cid" --format '{{json .Mounts}}' | jq -e 'map(select(.Destination == "/home/dev/.claude/.credentials.json" and .RW == true)) | length == 1' >/dev/null
 docker inspect "$cid" --format '{{json .Mounts}}' | jq -e 'map(select(.Destination == "/home/dev/.claude")) | length == 0' >/dev/null
 

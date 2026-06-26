@@ -21,6 +21,11 @@ grep -q "host user's \`~/.ssh\` directory read-only" README.md || { echo "README
 grep -q "make bootstrap-atlassian-oauth" README.md || { echo "README missing bootstrap-atlassian-oauth flow"; exit 1; }
 grep -q ".claude-credentials.json" README.md || { echo "README missing credentials persistence note"; exit 1; }
 grep -q "ephemeral" README.md || { echo "README missing ephemeral state note"; exit 1; }
+grep -q "skill-creator" README.md || { echo "README missing skill-creator plugin note"; exit 1; }
+grep -q "code-simplifier" README.md || { echo "README missing code-simplifier plugin note"; exit 1; }
+grep -q "github" README.md || { echo "README missing github plugin note"; exit 1; }
+grep -q '~/.config/gh' README.md || { echo "README missing gh config mount note"; exit 1; }
+grep -q "read-only" README.md || { echo "README missing read-only note for gh mount"; exit 1; }
 
 grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' .env.example || { echo ".env.example missing CLAUDE_CODE_OAUTH_TOKEN"; exit 1; }
 grep -q '^CLAUDE_CREDENTIALS_FILE=' .env.example || { echo ".env.example missing CLAUDE_CREDENTIALS_FILE"; exit 1; }

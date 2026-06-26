@@ -14,7 +14,7 @@ All workflows go through the `Makefile`. The image is built in two stages — ba
 
 ```bash
 make build-base        # Dockerfile.base: OS, Node, Go, kubectl, helm, Claude Code CLI, context7-mcp, typescript-language-server
-make build-dev-image   # Dockerfile: overlay that installs gsd-core + registers karpathy + dev-lsp plugins
+make build-dev-image   # Dockerfile: overlay that installs gsd-core + registers karpathy + official plugins (skill-creator, code-simplifier, github, typescript-lsp)
 make run-docker        # docker compose run --rm dev  (drops you into /workspace)
 make deploy-k8s        # kubectl apply of k8s/*.yaml (manifests not yet in repo)
 ```
@@ -44,7 +44,7 @@ make test-ssh-sync      # sync-local-ssh-config.sh behavior
 
 **Base image installs Claude Code via npm.** The base image runs `npm install -g @anthropic-ai/claude-code@<version>` with a pinned version controlled by the `CLAUDE_CODE_VERSION` build arg.
 
-**Overlay image installs gsd-core and registers plugins.** The overlay runs `npx --yes @opengsd/gsd-core@<version> --claude --global --profile=full` during build, which writes Claude Code plugin configuration under `~/.claude`. The andrej-karpathy-skills plugin is staged via `scripts/sync-karpathy-skills.sh` (clones at a pinned commit `KARPATHY_SKILLS_REF`) into `.build/karpathy-skills/` and registered with `claude plugin`. The `dev-lsp` plugin is registered from `config/claude-lsp-plugin/` and supplies TypeScript LSP configuration (`.lsp.json`) to Claude Code.
+**Overlay image installs gsd-core and registers plugins.** The overlay runs `npx --yes @opengsd/gsd-core@<version> --claude --global --profile=full` during build, which writes Claude Code plugin configuration under `~/.claude`. The andrej-karpathy-skills plugin is staged via `scripts/sync-karpathy-skills.sh` (clones at a pinned commit `KARPATHY_SKILLS_REF`) into `.build/karpathy-skills/` and registered with `claude plugin`. Four additional plugins are installed from the official `claude-plugins-official` marketplace (`anthropics/claude-plugins-official`): `skill-creator`, `code-simplifier`, `github` (GitHub MCP server), and `typescript-lsp` (TypeScript/JS LSP via `typescript-language-server`). Plugin versions from the official marketplace are pinned by the marketplace's GitHub ref at clone time. The `host ~/.config/gh` directory is mounted read-only into the container at `/home/dev/.config/gh` so the GitHub CLI (`gh`) can use host authentication.
 
 **Runtime config is merged non-destructively by the entrypoint.** `scripts/entrypoint.sh` is the container ENTRYPOINT. On every start it `jq`-merges baked MCP defaults into `~/.claude.json` using `(.existing // default)` semantics — adding the `atlassian-rovo` (HTTP) and `context7` (stdio, baked binary) MCP servers only if absent, never clobbering user customizations.
 

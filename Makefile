@@ -54,6 +54,7 @@ bootstrap-atlassian-oauth:
 
 run-docker:
 	mkdir -p "$(WORKSPACE_DIR)" "$(HOME_CACHE_DIR)"
+	mkdir -p "$(HOME)/.config/gh"
 	touch "$(CURDIR)/.claude-credentials.json"
 	BASE_IMAGE=$(BASE_IMAGE) \
 	DEV_IMAGE=$(DEV_IMAGE) \
@@ -64,6 +65,7 @@ run-docker:
 
 up:
 	mkdir -p "$(WORKSPACE_DIR)" "$(HOME_CACHE_DIR)"
+	mkdir -p "$(HOME)/.config/gh"
 	touch "$(CURDIR)/.claude-credentials.json"
 	BASE_IMAGE=$(BASE_IMAGE) \
 	DEV_IMAGE=$(DEV_IMAGE) \

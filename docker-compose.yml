@@ -21,4 +21,5 @@ services:
       - ${HOME_CACHE_DIR:-./.cache-home}:/home/dev/.cache
       - ${CLAUDE_CREDENTIALS_FILE:-./.claude-credentials.json}:/home/dev/.claude/.credentials.json
       - ${HOME}/.ssh:/home/dev/.ssh:ro
+      - ${HOME}/.config/gh:/home/dev/.config/gh:ro
       - ${PWD}:${PWD}
