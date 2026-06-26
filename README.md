@@ -12,12 +12,17 @@ whether to log in to Claude, authenticate MCP servers (e.g. Atlassian Rovo), clo
 a repo into `/workspace`, and finally attach a `claude` or `bash` session. Each step
 is skipped if already done, so it is safe to re-run.
 
+Inside this isolated container, Claude is launched with
+`claude --dangerously-skip-permissions` (via `make claude` and the launcher's
+"claude" option) so it runs without per-action permission prompts. Use it only in
+this throwaway container, never against your host shell.
+
 Individual targets if you prefer to drive it yourself:
 
 | Command | Does |
 |---|---|
 | `make up` | start the persistent container (`docker compose up -d`) |
-| `make claude` | attach a `claude` session in the running container |
+| `make claude` | attach a `claude --dangerously-skip-permissions` session in the running container |
 | `make shell` | attach a `bash` shell in the running container |
 | `make clone REPO=<git-url>` | clone a repo into `/workspace` (set `WORKSPACE_SUBDIR=name` to rename) |
 | `make bootstrap-atlassian-oauth` | authenticate the Atlassian Rovo MCP server |

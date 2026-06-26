@@ -78,7 +78,7 @@ dev:
 	./scripts/dev.sh
 
 claude: up
-	docker compose exec dev claude
+	docker compose exec dev claude --dangerously-skip-permissions
 
 shell: up
 	docker compose exec dev bash

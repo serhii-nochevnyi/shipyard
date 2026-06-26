@@ -90,7 +90,7 @@ echo
 echo "What next?  1) claude   2) shell   3) leave running"
 read -rp "Choose [1/2/3]: " choice || choice="3"
 case "${choice:-3}" in
-  1) dexec claude ;;
+  1) dexec claude --dangerously-skip-permissions ;;
   2) dexec bash ;;
   *) echo "Container left running. Attach later with: make claude | make shell" ;;
 esac
