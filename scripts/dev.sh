@@ -65,7 +65,7 @@ claude_authed() {
 if claude_authed; then
   echo "Claude auth: present ✓"
 elif ask "Claude is not authenticated — log in now (opens claude; type /login, then /exit)?"; then
-  dexec claude || true
+  dexec claude --dangerously-skip-permissions || true
 fi
 
 # 5. MCP servers (remote ones use --no-browser: open the printed URL on the host,

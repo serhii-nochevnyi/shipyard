@@ -38,7 +38,15 @@ merge_default_json "$default_mcp_config" "$user_mcp_config" '
     type: "stdio",
     command: "context7-mcp",
     args: []
-  })
+  }) |
+  # ~/.claude.json is ephemeral (recreated with the container), so one-time
+  # acceptances would be re-asked on every recreation. Pre-seed them:
+  # bypass-permissions acceptance + trust for the /workspace root.
+  .bypassPermissionsModeAccepted = (.bypassPermissionsModeAccepted // true) |
+  .projects |= (. // {}) |
+  .projects["/workspace"] |= ((. // {}) |
+    .hasTrustDialogAccepted = (.hasTrustDialogAccepted // true) |
+    .hasCompletedProjectOnboarding = (.hasCompletedProjectOnboarding // true))
 '
 
 if [[ ! -w /workspace ]]; then

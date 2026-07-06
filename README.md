@@ -13,10 +13,14 @@ which project to work in — clone a new repo into `/workspace` or pick an exist
 one there. It finally attaches a `claude` or `bash` session **inside that project
 directory**. Each step is skipped if already done, so it is safe to re-run.
 
-Inside this isolated container, Claude is launched with
-`claude --dangerously-skip-permissions` (via `make claude` and the launcher's
-"claude" option) so it runs without per-action permission prompts. Use it only in
-this throwaway container, never against your host shell.
+Inside this isolated container, Claude always runs without per-action permission
+prompts: the image bakes `permissions.defaultMode: "bypassPermissions"` into
+`~/.claude/settings.json`, and the entrypoint pre-seeds the one-time bypass
+acceptance and `/workspace` trust into the (ephemeral) `~/.claude.json`. So a
+bare `claude` from any shell behaves the same as
+`claude --dangerously-skip-permissions` (which `make claude` and the launcher's
+"claude" option still pass explicitly). Use this only in the throwaway
+container, never against your host shell.
 
 Individual targets if you prefer to drive it yourself:
 

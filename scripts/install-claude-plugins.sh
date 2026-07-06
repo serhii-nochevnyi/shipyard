@@ -44,6 +44,12 @@ settings="$HOME/.claude/settings.json"
 jq empty "$settings"
 tmp="$(mktemp)"
 jq '
+  # Container-wide bypass: every claude session in this container runs without
+  # per-tool permission prompts, no matter how it was launched (make claude,
+  # dev.sh login step, bare `claude` from a shell). Non-destructive: an
+  # explicit user defaultMode wins.
+  .permissions |= (. // {}) |
+  .permissions.defaultMode = (.permissions.defaultMode // "bypassPermissions") |
   .enabledPlugins |= (. // {}) |
   .enabledPlugins["andrej-karpathy-skills@karpathy-skills"] = true |
   .enabledPlugins["pipeline@delivery-pipeline"] = true |
