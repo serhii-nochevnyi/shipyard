@@ -9,9 +9,11 @@ USER root
 COPY scripts/install-claude-plugins.sh /usr/local/bin/install-claude-plugins.sh
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY ${KARPATHY_SKILLS_DIR}/ /opt/karpathy-skills/
+COPY plugins/delivery-pipeline/ /opt/delivery-pipeline/
 
-RUN chmod +x /usr/local/bin/install-claude-plugins.sh /usr/local/bin/entrypoint.sh && \
-    chown -R dev:dev /opt/karpathy-skills
+RUN chmod +x /usr/local/bin/install-claude-plugins.sh /usr/local/bin/entrypoint.sh \
+      /opt/delivery-pipeline/scripts/*.sh /opt/delivery-pipeline/scripts/*.cjs && \
+    chown -R dev:dev /opt/karpathy-skills /opt/delivery-pipeline
 
 USER dev
 

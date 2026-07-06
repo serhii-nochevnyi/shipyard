@@ -63,6 +63,11 @@ The overlay image installs the following during build:
   gsd-core is NOT installed from the Claude Code marketplace; it is installed via npx.
 - **andrej-karpathy-skills** — a Claude Code plugin staged from a pinned Git ref
   (`2c606141936f1eeef17fa3043a72095b4765b9c2`) and registered with `claude plugin`.
+- **pipeline** (delivery-pipeline) — an in-repo Claude Code plugin (`plugins/delivery-pipeline/`)
+  implementing the multilevel delivery pipeline from `docs/gsd_multilevel_delivery_pipeline.md`:
+  `/pipeline:investigate` (deep investigation → ADR), `/pipeline:decompose` (ADR → ticket DAG),
+  `/pipeline:deliver` (per-ticket worktree → PR babysat to green with CodeRabbit/Copilot
+  reviewer re-initialization).
 - **skill-creator**, **code-simplifier**, **github** (GitHub MCP server), and
   **typescript-lsp** — installed from the official `claude-plugins-official` marketplace
   (`anthropics/claude-plugins-official`). Plugin versions are pinned by the marketplace's
@@ -189,6 +194,9 @@ when Claude Code starts an interactive session.
 
 - **gsd-core** (`@opengsd/gsd-core`) — Claude Code delivery plugin with full profile, installed via npx.
 - **andrej-karpathy-skills** — staged from pinned commit, registered via `claude plugin`.
+- **pipeline** — in-repo (`plugins/delivery-pipeline/`); investigation → ticket DAG →
+  per-ticket worktree/PR delivery. Commands: `/pipeline:investigate`, `/pipeline:decompose`,
+  `/pipeline:deliver`.
 - **skill-creator** — from `claude-plugins-official`; helps create new Claude Code skills.
 - **code-simplifier** — from `claude-plugins-official`; reviews and simplifies code.
 - **github** — from `claude-plugins-official`; the official GitHub MCP server plugin.

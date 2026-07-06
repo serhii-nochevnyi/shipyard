@@ -5,6 +5,13 @@ set -euo pipefail
 [[ -f scripts/sync-karpathy-skills.sh ]] || { echo "missing scripts/sync-karpathy-skills.sh"; exit 1; }
 [[ -f scripts/install-claude-plugins.sh ]] || { echo "missing scripts/install-claude-plugins.sh"; exit 1; }
 [[ -f scripts/entrypoint.sh ]] || { echo "missing scripts/entrypoint.sh"; exit 1; }
+[[ -f plugins/delivery-pipeline/.claude-plugin/plugin.json ]] || { echo "missing delivery-pipeline plugin.json"; exit 1; }
+[[ -f plugins/delivery-pipeline/.claude-plugin/marketplace.json ]] || { echo "missing delivery-pipeline marketplace.json"; exit 1; }
+for f in commands/investigate.md commands/decompose.md commands/deliver.md \
+         scripts/validate-graph.cjs scripts/state-sync.cjs scripts/reviewers.cjs \
+         scripts/validate-inv.cjs scripts/ticket-worktree.sh; do
+  [[ -f "plugins/delivery-pipeline/$f" ]] || { echo "missing delivery-pipeline $f"; exit 1; }
+done
 [[ ! -d config/claude-lsp-plugin ]] || { echo "config/claude-lsp-plugin should be gone"; exit 1; }
 [[ ! -f scripts/sync-dev-copilot.sh ]] || { echo "sync-dev-copilot.sh should be gone"; exit 1; }
 [[ ! -f scripts/install-dev-copilot.sh ]] || { echo "install-dev-copilot.sh should be gone"; exit 1; }
@@ -23,6 +30,9 @@ docker build -f Dockerfile -t remote-copilot:test \
 docker run --rm remote-copilot:test bash -lc '
   set -euo pipefail
   test -d /opt/karpathy-skills
+  test -d /opt/delivery-pipeline
+  test -x /opt/delivery-pipeline/scripts/validate-graph.cjs
+  test -x /opt/delivery-pipeline/scripts/ticket-worktree.sh
   test -x /usr/local/bin/install-claude-plugins.sh
   command -v claude >/dev/null
   # gsd-core landed under ~/.claude
@@ -30,8 +40,8 @@ docker run --rm remote-copilot:test bash -lc '
   ls -A "$HOME/.claude" | grep -q .
   # official marketplace is registered
   jq -e ".\"claude-plugins-official\"" "$HOME/.claude/plugins/known_marketplaces.json" >/dev/null
-  # all five plugins appear in installed_plugins.json
-  for p in andrej-karpathy-skills@karpathy-skills skill-creator@claude-plugins-official code-simplifier@claude-plugins-official github@claude-plugins-official typescript-lsp@claude-plugins-official; do
+  # all six plugins appear in installed_plugins.json
+  for p in andrej-karpathy-skills@karpathy-skills pipeline@delivery-pipeline skill-creator@claude-plugins-official code-simplifier@claude-plugins-official github@claude-plugins-official typescript-lsp@claude-plugins-official; do
     jq -e --arg p "$p" ".plugins[\$p]" "$HOME/.claude/plugins/installed_plugins.json" >/dev/null
   done
 '
