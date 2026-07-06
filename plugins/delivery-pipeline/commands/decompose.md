@@ -38,13 +38,16 @@ frontmatter планів; `graph/tickets.yaml` — генерований view.
 {
   "model_profile": "balanced",
   "models": { "planning": "opus", "research": "sonnet", "verification": "sonnet" },
-  "model_overrides": { "gsd-planner": "claude-fable-5" }
+  "model_overrides": {
+    "gsd-planner": "claude-fable-5",
+    "gsd-executor": "claude-opus-4-8[1m]"
+  }
 }
 ```
 
 (`models.*` приймає лише tier-аліаси opus/sonnet/haiku; повні ID — тільки
 через `model_overrides` per-agent. Планувальник — найважча роль декомпозиції,
-тому саме він піднятий до fable через override.)
+тому піднятий до Fable через override; executor — Opus 4.8 з 1M контекстом.)
 
 ## Step 1 — Уточнити режим
 

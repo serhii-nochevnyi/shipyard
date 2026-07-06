@@ -27,15 +27,16 @@ Sonnet 5.
 ```text
 integrator     → claude-fable-5  (емерджентні порушення, найдорожчі помилки)
 arch-review    → claude-fable-5  (вердикт проти ADR — судження)
-executor       → opus            (основна кодова робота за контрактом)
-review-fix     → opus            (верифікація чужих claim'ів + правки)
-ci-fix         → opus            (діагностика падінь)
+executor       → opus[1m]        (основна кодова робота за контрактом)
+review-fix     → opus[1m]        (верифікація чужих claim'ів + правки)
+ci-fix         → opus[1m]        (діагностика падінь)
 drift-check    → sonnet          (механічна звірка контракту з кодом)
 ```
 
 Точні ID: Fable 5 = `claude-fable-5` (передавай повний ID — tier-аліаса може
-не бути); аліаси `opus`/`sonnet` резолвляться в найновіші моделі ярусу
-(зараз `claude-opus-4-8` і `claude-sonnet-5`).
+не бути); Opus-ярус — Opus 4.8 з 1M контекстом: аліас `opus[1m]`
+(повна форма `claude-opus-4-8[1m]`); `sonnet` резолвиться в найновіший
+Sonnet (зараз `claude-sonnet-5`).
 
 Override: якщо в `.planning/config.json` є блок `pipeline.models`
 (`{"pipeline": {"models": {"drift-check": "opus", ...}}}`) — його значення
@@ -93,7 +94,7 @@ merged:   T-01-03
 1. `base` = origin/main, якщо залежності merged; інакше гілка найглибшої
    незмердженої залежності.
 2. `ticket-worktree.sh create <T> <branch з tickets.json> <base>`.
-3. Запусти executor-агента (Agent tool, `model: opus`) У WORKTREE з контрактом:
+3. Запусти executor-агента (Agent tool, `model: opus[1m]`) У WORKTREE з контрактом:
    повний текст плану тікета + Context reads + правило "працюй ТІЛЬКИ в
    межах files_modified; коміть атомарно з префіксом (T): ...; прожени
    Verification commands до зеленого локально".
@@ -115,7 +116,7 @@ merged:   T-01-03
 ```text
 loop:
   a. state-sync.cjs → checks цього PR
-     failing → ci-fix агент у worktree тікета (`model: opus`)
+     failing → ci-fix агент у worktree тікета (`model: opus[1m]`)
        (промпт ${CLAUDE_PLUGIN_ROOT}/references/ci-fix.md + контракт + лог
         падіння: gh run view --log-failed)
        'escalate' від агента → status blocked, до людини
@@ -123,7 +124,7 @@ loop:
      pending → почекай завершення checks (gh pr checks <pr> --watch), потім знову a
 
   b. reviewers.cjs unresolved <pr>
-     є треди → review-fix агент у worktree (`model: opus`)
+     є треди → review-fix агент у worktree (`model: opus[1m]`)
        (промпт ${CLAUDE_PLUGIN_ROOT}/references/review-fix.md + JSON тредів)
        агент або править (push → крок d), або відповідає reply на невалідні
        (без push → познач треди опрацьованими, знову b)

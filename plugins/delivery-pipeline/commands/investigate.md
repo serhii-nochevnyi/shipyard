@@ -48,7 +48,7 @@ allowed-tools:
    лінії: system state / alternatives / constraints / risks+unknowns.
    Моделі (політика: важке → opus, легке → sonnet; override —
    `pipeline.models` у `.planning/config.json`):
-   - alternatives+prior-art → `model: opus` (проєктування опцій — важка лінія)
+   - alternatives+prior-art → `model: opus[1m]` (проєктування опцій — важка лінія)
    - system state, constraints, risks+unknowns → `model: sonnet` (збирання фактів)
    Кожному передай problem statement і шлях до INV-директорії. Їхні результати
    внеси в RESEARCH.md, OPTIONS.md, RISKS.md, OPEN-QUESTIONS.md.

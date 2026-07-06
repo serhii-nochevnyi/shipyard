@@ -473,9 +473,9 @@ Sonnet 5  drift-check, research:system-    — механічна звірка �
 ```
 
 Точні model ID (звірено з каталогом моделей): Fable 5 = `claude-fable-5`
-(у спавнах передається повним ID), Opus 4.8 = `claude-opus-4-8`,
-Sonnet 5 = `claude-sonnet-5` (для двох останніх скіли використовують
-аліаси `opus`/`sonnet`, які резолвляться в найновішу модель ярусу).
+(у спавнах передається повним ID); Opus-ярус — **Opus 4.8 з 1M контекстом**:
+аліас `opus[1m]`, повна форма `claude-opus-4-8[1m]`; Sonnet 5 =
+`claude-sonnet-5` (скіли використовують аліас `sonnet`).
 
 Скіли передають `model` при кожному спавні агента. Override — блок
 `pipeline.models` у `.planning/config.json` (tier-аліаси або повні model ID).
