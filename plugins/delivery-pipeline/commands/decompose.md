@@ -27,6 +27,24 @@ frontmatter планів; `graph/tickets.yaml` — генерований view.
 3. Нема жодного ADR → скажи, що спершу `/pipeline:investigate`, і зупинись.
 4. Кілька кандидатів → AskUserQuestion: який ADR (або кілька в одну фазу).
 
+## Step 0.5 — Моделі GSD-агентів
+
+Декомпозицію виконують GSD-агенти — їхні моделі регламентуються НЕ цим скілом,
+а `.planning/config.json`. Перевір і, якщо відсутнє, запропонуй додати
+(політика проєкту: найважче → fable, важке → opus, легке → sonnet):
+
+```json
+{
+  "model_profile": "balanced",
+  "models": { "planning": "opus", "research": "sonnet", "verification": "sonnet" },
+  "model_overrides": { "gsd-planner": "claude-fable-5" }
+}
+```
+
+(`models.*` приймає лише tier-аліаси opus/sonnet/haiku; повні ID — тільки
+через `model_overrides` per-agent. Планувальник — найважча роль декомпозиції,
+тому саме він піднятий до fable через override.)
+
 ## Step 1 — Уточнити режим
 
 Одне питання (AskUserQuestion), з рекомендацією за типом роботи:

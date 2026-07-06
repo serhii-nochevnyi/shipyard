@@ -459,6 +459,27 @@ scope не доведений до зеленого або не заблоков
 
 ---
 
+## 7.5. Політика моделей
+
+Три яруси: **найважче судження → Fable, важка робота → Opus, легка механіка →
+Sonnet.** Розкладка агентів конвеєра:
+
+```text
+fable   integrator, arch-review          — судження з найдорожчими помилками
+opus    executor, review-fix, ci-fix,    — кодова робота, діагностика,
+        research:alternatives              проєктування опцій
+sonnet  drift-check, research:system-    — механічна звірка і збирання фактів
+        state/constraints/risks
+```
+
+Скіли передають `model` при кожному спавні агента. Override — блок
+`pipeline.models` у `.planning/config.json` (tier-аліаси або повні model ID).
+
+GSD-агенти декомпозиції регламентуються власним механізмом GSD
+(`model_profile` / `models` / `model_overrides` у тому ж config.json);
+рекомендація: `models.planning: opus` + `model_overrides.gsd-planner:
+claude-fable-5` — планувальник є найважчою роллю декомпозиції.
+
 ## 8. Gates (підсумкова таблиця)
 
 ```text

@@ -19,6 +19,23 @@ allowed-tools:
 стан. Стан живе в GitHub і `.planning/graph/` — сесію можна вбити будь-коли
 і перезапустити `/pipeline:deliver` без втрат.
 
+## Моделі агентів (обов'язково передавай `model` при кожному спавні)
+
+Політика: найважче судження → fable, важка робота → opus, легка механіка → sonnet.
+
+```text
+integrator     → fable   (емерджентні порушення, найдорожчі помилки)
+arch-review    → fable   (вердикт проти ADR — судження)
+executor       → opus    (основна кодова робота за контрактом)
+review-fix     → opus    (верифікація чужих claim'ів + правки)
+ci-fix         → opus    (діагностика падінь)
+drift-check    → sonnet  (механічна звірка контракту з кодом)
+```
+
+Override: якщо в `.planning/config.json` є блок `pipeline.models`
+(`{"pipeline": {"models": {"drift-check": "opus", ...}}}`) — його значення
+мають пріоритет; допускаються tier-аліаси (fable/opus/sonnet) і повні model ID.
+
 Скрипти (детермінований шар — НЕ імпровізуй git/gh руками там, де є скрипт):
 
 ```text
@@ -58,8 +75,8 @@ merged:   T-01-03
 
 Для кожного тікета зі scope, чий план старший за останній merge в main
 (або якщо минуло >2 днів від генерації) — запусти ПАРАЛЕЛЬНО drift-check
-агентів (промпт: `${CLAUDE_PLUGIN_ROOT}/references/drift-check.md` + контракт
-тікета). `drifted` → тікет виключається зі scope, позначається needs-replan,
+агентів (`model: sonnet`; промпт: `${CLAUDE_PLUGIN_ROOT}/references/drift-check.md`
++ контракт тікета). `drifted` → тікет виключається зі scope, позначається needs-replan,
 користувачу — підсумок дрейфу і направлення в /pipeline:decompose. НЕ виконуй
 дрейфнутий тікет наосліп.
 
@@ -71,7 +88,7 @@ merged:   T-01-03
 1. `base` = origin/main, якщо залежності merged; інакше гілка найглибшої
    незмердженої залежності.
 2. `ticket-worktree.sh create <T> <branch з tickets.json> <base>`.
-3. Запусти executor-агента (Agent tool) У WORKTREE з контрактом:
+3. Запусти executor-агента (Agent tool, `model: opus`) У WORKTREE з контрактом:
    повний текст плану тікета + Context reads + правило "працюй ТІЛЬКИ в
    межах files_modified; коміть атомарно з префіксом (T): ...; прожени
    Verification commands до зеленого локально".
@@ -93,7 +110,7 @@ merged:   T-01-03
 ```text
 loop:
   a. state-sync.cjs → checks цього PR
-     failing → ci-fix агент у worktree тікета
+     failing → ci-fix агент у worktree тікета (`model: opus`)
        (промпт ${CLAUDE_PLUGIN_ROOT}/references/ci-fix.md + контракт + лог
         падіння: gh run view --log-failed)
        'escalate' від агента → status blocked, до людини
@@ -101,12 +118,12 @@ loop:
      pending → почекай завершення checks (gh pr checks <pr> --watch), потім знову a
 
   b. reviewers.cjs unresolved <pr>
-     є треди → review-fix агент у worktree
+     є треди → review-fix агент у worktree (`model: opus`)
        (промпт ${CLAUDE_PLUGIN_ROOT}/references/review-fix.md + JSON тредів)
        агент або править (push → крок d), або відповідає reply на невалідні
        (без push → познач треди опрацьованими, знову b)
 
-  c. arch-review агент
+  c. arch-review агент (`model: fable`)
      (промпт ${CLAUDE_PLUGIN_ROOT}/references/arch-review.md + gh pr diff +
       .planning/architecture/)
      violation    → fix у worktree → push → крок d
@@ -133,6 +150,7 @@ scope → повертайся у Step 3 для них.
    людину (апруви high-risk, merge).
 2. Якщо це були ОСТАННІ тікети фази (всі тікети фази merged) → запропонуй
    integrator-прогін: агент за `${CLAUDE_PLUGIN_ROOT}/references/integrator.md`
+   (`model: fable`)
    → `INTEGRATION.md`; `needs-fix` → fix-тікети як нові плани → /pipeline:decompose
    Step 4 → наступний /pipeline:deliver.
 3. Приберися: `ticket-worktree.sh remove <T>` для merged тікетів.
