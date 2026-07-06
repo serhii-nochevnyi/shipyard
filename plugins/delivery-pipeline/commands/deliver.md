@@ -21,16 +21,21 @@ allowed-tools:
 
 ## Моделі агентів (обов'язково передавай `model` при кожному спавні)
 
-Політика: найважче судження → fable, важка робота → opus, легка механіка → sonnet.
+Політика: найважче судження → Fable 5, важка робота → Opus 4.8, легка механіка →
+Sonnet 5.
 
 ```text
-integrator     → fable   (емерджентні порушення, найдорожчі помилки)
-arch-review    → fable   (вердикт проти ADR — судження)
-executor       → opus    (основна кодова робота за контрактом)
-review-fix     → opus    (верифікація чужих claim'ів + правки)
-ci-fix         → opus    (діагностика падінь)
-drift-check    → sonnet  (механічна звірка контракту з кодом)
+integrator     → claude-fable-5  (емерджентні порушення, найдорожчі помилки)
+arch-review    → claude-fable-5  (вердикт проти ADR — судження)
+executor       → opus            (основна кодова робота за контрактом)
+review-fix     → opus            (верифікація чужих claim'ів + правки)
+ci-fix         → opus            (діагностика падінь)
+drift-check    → sonnet          (механічна звірка контракту з кодом)
 ```
+
+Точні ID: Fable 5 = `claude-fable-5` (передавай повний ID — tier-аліаса може
+не бути); аліаси `opus`/`sonnet` резолвляться в найновіші моделі ярусу
+(зараз `claude-opus-4-8` і `claude-sonnet-5`).
 
 Override: якщо в `.planning/config.json` є блок `pipeline.models`
 (`{"pipeline": {"models": {"drift-check": "opus", ...}}}`) — його значення
@@ -123,7 +128,7 @@ loop:
        агент або править (push → крок d), або відповідає reply на невалідні
        (без push → познач треди опрацьованими, знову b)
 
-  c. arch-review агент (`model: fable`)
+  c. arch-review агент (`model: claude-fable-5`)
      (промпт ${CLAUDE_PLUGIN_ROOT}/references/arch-review.md + gh pr diff +
       .planning/architecture/)
      violation    → fix у worktree → push → крок d
@@ -150,7 +155,7 @@ scope → повертайся у Step 3 для них.
    людину (апруви high-risk, merge).
 2. Якщо це були ОСТАННІ тікети фази (всі тікети фази merged) → запропонуй
    integrator-прогін: агент за `${CLAUDE_PLUGIN_ROOT}/references/integrator.md`
-   (`model: fable`)
+   (`model: claude-fable-5`)
    → `INTEGRATION.md`; `needs-fix` → fix-тікети як нові плани → /pipeline:decompose
    Step 4 → наступний /pipeline:deliver.
 3. Приберися: `ticket-worktree.sh remove <T>` для merged тікетів.

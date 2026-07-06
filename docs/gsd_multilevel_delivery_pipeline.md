@@ -465,12 +465,17 @@ scope не доведений до зеленого або не заблоков
 Sonnet.** Розкладка агентів конвеєра:
 
 ```text
-fable   integrator, arch-review          — судження з найдорожчими помилками
-opus    executor, review-fix, ci-fix,    — кодова робота, діагностика,
-        research:alternatives              проєктування опцій
-sonnet  drift-check, research:system-    — механічна звірка і збирання фактів
-        state/constraints/risks
+Fable 5   integrator, arch-review          — судження з найдорожчими помилками
+Opus 4.8  executor, review-fix, ci-fix,    — кодова робота, діагностика,
+          research:alternatives              проєктування опцій
+Sonnet 5  drift-check, research:system-    — механічна звірка і збирання фактів
+          state/constraints/risks
 ```
+
+Точні model ID (звірено з каталогом моделей): Fable 5 = `claude-fable-5`
+(у спавнах передається повним ID), Opus 4.8 = `claude-opus-4-8`,
+Sonnet 5 = `claude-sonnet-5` (для двох останніх скіли використовують
+аліаси `opus`/`sonnet`, які резолвляться в найновішу модель ярусу).
 
 Скіли передають `model` при кожному спавні агента. Override — блок
 `pipeline.models` у `.planning/config.json` (tier-аліаси або повні model ID).
