@@ -33,6 +33,44 @@ Individual targets if you prefer to drive it yourself:
 | `make bootstrap-atlassian-oauth` | authenticate the Atlassian Rovo MCP server |
 | `make run-docker` | one-off ephemeral session (`docker compose run --rm`) |
 
+## Delivery workflow
+
+The main way to work in this container is the baked-in **delivery pipeline**
+(the `pipeline` plugin): a full cycle from a raw problem to a set of green PRs.
+Inside a `claude` session in your project directory:
+
+```text
+/pipeline:investigate "тема або проблема"
+```
+
+Deep investigation: an intake interview refines the problem, parallel research
+agents draft options/constraints/risks, then you close open questions and lock
+decisions in a dialog. Re-run `/pipeline:investigate` anytime — it picks up the
+open investigation from its artifacts. When all questions are closed it
+generates an ADR package (Gate 1 — the only fully human gate).
+
+```text
+/pipeline:decompose
+```
+
+Finds undecomposed ADRs, runs the GSD planning chain under the hood, stamps
+tickets with branches/risk, validates the dependency graph (Gate 2 — automatic),
+and shows you the ticket set for approval.
+
+```text
+/pipeline:deliver
+```
+
+Cold-starts from live GitHub state, shows a ticket board (ready / blocked /
+pr-open / merged), lets you pick the scope to take on, then runs each ticket in
+its own git worktree to its own PR and babysits every PR to green: CI fixes,
+review-comment handling, architecture conformance, with CodeRabbit/Copilot
+re-review after every push. It only comes back to you for high-risk approvals,
+escalations, and merges. Gaps of days between the three stages are fine — each
+command re-derives its state from artifacts and GitHub, not from the chat.
+
+Full specification: `docs/gsd_multilevel_delivery_pipeline.md`.
+
 ## Prerequisites
 
 - Docker with Compose support
