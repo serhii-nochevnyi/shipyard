@@ -19,6 +19,13 @@ allowed-tools:
 Тікет = GSD-план + `delivery:` блок у frontmatter. Залежності живуть у
 frontmatter планів; `graph/tickets.yaml` — генерований view.
 
+**ЄДИНЕ джерело правди — файли `.planning/phases/<N>-*/<N>-<M>-PLAN.md`.**
+Jira/GitHub issues, ROLLOUT.md, списки в чаті — НЕ тікети конвеєра, а
+щонайбільше експортні проєкції. Декомпозиція без матеріалізованих PLAN-файлів
+не існує: /pipeline:deliver читає тільки їх. Оголошувати Gate 2 пройденим на
+підставі будь-яких інших артефактів ЗАБОРОНЕНО — Gate 2 це виключно
+exit 0 від validate-graph.cjs.
+
 ## Step 0 — Знайти вхід
 
 1. Прочитай `.planning/architecture/` — список `ADR-*.md`.
@@ -63,7 +70,29 @@ frontmatter планів; `graph/tickets.yaml` — генерований view.
 2. Виконай `/gsd:plan-phase <N> --ingest <adr-шляхи> [--tdd|--mvp]`
    (через Skill tool, якщо GSD-команди доступні як скіли, інакше підкажи
    користувачу запустити і дочекайся).
-3. Виконай `/gsd:plan-review-convergence <N> --all --max-cycles 3`.
+3. **Перевір матеріалізацію**: `ls .planning/phases/<N>-*/*-PLAN.md` — файли
+   МАЮТЬ існувати. Якщо GSD-ланцюг недоступний або не створив файли —
+   НЕ підміняй їх Jira-тікетами: створи PLAN.md-файли сам, по одному на
+   тікет, за шаблоном:
+
+   ```markdown
+   ---
+   phase: <NN>
+   plan: <MM>
+   title: "<назва тікета>"
+   type: implementation
+   depends_on: [<T-...>]
+   files_modified: [<глоби>]
+   delivery:
+     ticket: T-<NN>-<MM>
+     risk: low|medium|high
+     human_checkpoint: false
+   ---
+   ## Goal / ## Context (Reads) / ## Scope / ## Out of scope /
+   ## Acceptance criteria / ## Test strategy / ## Verification commands
+   ```
+4. Виконай `/gsd:plan-review-convergence <N> --all --max-cycles 3`
+   (якщо доступний; пропуск конвергенції — це TUNE, пропуск файлів — BLOCK).
 
 ## Step 3 — Delivery-розширення frontmatter
 
@@ -90,6 +119,10 @@ delivery:
 змісту плану.
 
 ## Step 4 — Gate 2
+
+Gate 2 — це МЕХАНІЧНА перевірка, не судження. Пройдено тоді й лише тоді, коли
+`validate-graph.cjs` завершився з exit 0 і `.planning/graph/tickets.json`
+свіжозаписаний. Не рапортуй успіх декомпозиції без цього.
 
 1. `node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-graph.cjs`
 2. Помилки (цикл, конфлікт по файлах, high-risk без checkpoint) → виправ

@@ -55,6 +55,22 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|list> 
 
 1. `validate-graph.cjs` — граф проти поточного стану планів; помилки → стоп,
    покажи їх (можливо, щось змерджено повз конвеєр — направ у /pipeline:decompose).
+
+   **Кейс «декомпозиція не матеріалізована»** (немає `.planning/phases/` або
+   жодного `*-PLAN.md`): це означає, що попередня декомпозиція закрила Gate 2
+   неправомірно (наприклад, підмінила плани Jira-тікетами). Дії:
+   a. чесно повідом користувачу: PLAN-файлів немає, delivery стартувати ні з чого;
+      покажи, що знайдено натомість (Jira-тікети, ROLLOUT.md тощо);
+   b. якщо тікети існують у зовнішньому трекері (Jira/GitHub issues) —
+      запропонуй ІМПОРТ: агент читає кожен зовнішній тікет і матеріалізує
+      його як `.planning/phases/<N>-*/<N>-<M>-PLAN.md` за шаблоном декомпозиції
+      (frontmatter: phase/plan/title/depends_on/files_modified + delivery-блок;
+      тіло: Goal/Context/Scope/Out of scope/Acceptance criteria/Test strategy/
+      Verification commands). Чого немає в Jira (depends_on, files_modified) —
+      виведи зі змісту або допитай користувача. Після імпорту — знову
+      validate-graph (справжній Gate 2) і далі звичайний потік;
+   c. якщо зовнішніх тікетів немає — направ у /pipeline:decompose.
+   НІКОЛИ не конструюй tickets.json руками в обхід validate-graph.
 2. `state-sync.cjs` — перебудувати delivery-state з фактичного GitHub
    (локальний файл — лише кеш).
 3. Покажи ДОШКУ з stdout state-sync + tickets.json:
