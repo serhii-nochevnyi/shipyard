@@ -94,6 +94,9 @@ merged:   T-01-03
 1. `base` = origin/main, якщо залежності merged; інакше гілка найглибшої
    незмердженої залежності.
 2. `ticket-worktree.sh create <T> <branch з tickets.json> <base>`.
+   Ім'я гілки береться ТІЛЬКИ з tickets.json (канонічний формат
+   `ticket/<ID>-<slug-з-назви-тікета>`, вже санітизований validate-graph'ом) —
+   не конструюй його вручну.
 3. Запусти executor-агента (Agent tool, `model: opus[1m]`) У WORKTREE з контрактом:
    повний текст плану тікета + Context reads + правило "працюй ТІЛЬКИ в
    межах files_modified; коміть атомарно з префіксом (T): ...; прожени

@@ -105,6 +105,31 @@ function pad(n) {
   return s.length >= 2 ? s : '0' + s;
 }
 
+// Branch naming: ticket/<ID>-<slug(title)>. The slug is the ticket title with
+// all punctuation/symbols stripped: lowercase, Cyrillic transliterated,
+// every run of non-[a-z0-9] collapsed to a single "-", trimmed, max 40 chars.
+const TRANSLIT = {
+  а: 'a', б: 'b', в: 'v', г: 'h', ґ: 'g', д: 'd', е: 'e', є: 'ie', ж: 'zh',
+  з: 'z', и: 'y', і: 'i', ї: 'i', й: 'i', к: 'k', л: 'l', м: 'm', н: 'n',
+  о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'kh', ц: 'ts',
+  ч: 'ch', ш: 'sh', щ: 'shch', ь: '', ю: 'iu', я: 'ia', ы: 'y', э: 'e',
+  ё: 'e', ъ: '',
+};
+function slugify(title, max = 40) {
+  const lat = String(title).toLowerCase().split('')
+    .map((c) => (c in TRANSLIT ? TRANSLIT[c] : c)).join('');
+  return lat
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, max)
+    .replace(/-+$/g, '');
+}
+function branchFor(id, title) {
+  const slug = slugify(title);
+  return slug ? `ticket/${id}-${slug}` : `ticket/${id}`;
+}
+const BRANCH_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9._/-]*[a-zA-Z0-9])?$/;
+
 // --- collect plans ---
 if (!fs.existsSync(PHASES_DIR)) fail(`missing ${path.relative(ROOT, PHASES_DIR)} — run decomposition first`);
 
@@ -132,18 +157,24 @@ for (const file of planFiles.sort()) {
   if (tickets[id]) { errors.push(`${rel}: duplicate ticket id ${id} (also in ${tickets[id].file})`); continue; }
   const deps = (Array.isArray(fm.depends_on) ? fm.depends_on : [])
     .map((d) => normTicketId(d, null));
+  const title = typeof fm.title === 'string' ? fm.title : base;
   tickets[id] = {
     id,
     file: rel,
-    title: typeof fm.title === 'string' ? fm.title : base,
+    title,
     phase: String(fm.phase ?? fPhase),
     type: fm.type ?? 'implementation',
     depends_on: deps,
     files: Array.isArray(fm.files_modified) ? fm.files_modified.map(String) : [],
     risk: String(delivery.risk ?? 'medium'),
     human_checkpoint: delivery.human_checkpoint === true,
-    branch: delivery.branch || `ticket/${id}`,
+    // default branch is derived from the ticket title (sanitized); an explicit
+    // delivery.branch wins but must be a valid git ref chunk
+    branch: delivery.branch || branchFor(id, title),
   };
+  if (delivery.branch && (!BRANCH_RE.test(delivery.branch) || String(delivery.branch).includes('..'))) {
+    errors.push(`${id}: delivery.branch "${delivery.branch}" contains invalid characters — expected form: ${branchFor(id, title)}`);
+  }
 }
 
 // --- referential integrity ---
