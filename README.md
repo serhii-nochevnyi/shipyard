@@ -153,14 +153,14 @@ The Compose runtime mounts the host user's `~/.ssh` directory read-only at `/hom
 
 The host `~/.config/gh` directory is mounted read-only at `/home/dev/.config/gh`, so the GitHub CLI (`gh`) can use your existing host authentication inside the container. `make up` and `make run-docker` create `~/.config/gh` on the host if it does not exist (preventing Docker from creating a root-owned directory in its place). The `GITHUB_TOKEN` / `GH_TOKEN` environment variables are also forwarded into the container for token-based access.
 
-If `SSH_AUTH_SOCK` is set on the host, Compose forwards that environment variable into the container. The agent socket itself is not bind-mounted by default; if you need agent-based auth instead of key files, add a matching bind mount in a local Compose override or run the image directly:
-
-```bash
-docker run --rm -it \
-  -e SSH_AUTH_SOCK \
-  -v "$SSH_AUTH_SOCK:$SSH_AUTH_SOCK" \
-  claude-shipyard:test
-```
+The host SSH agent is forwarded into the container by default: Compose binds
+the agent socket to `/run/host-services/ssh-auth.sock` inside the container and
+sets `SSH_AUTH_SOCK` to that path. On macOS, Docker Desktop proxies the host
+agent at that magic path automatically — passphrase-protected keys and
+certificate-based setups (e.g. Teleport) work without copying anything into the
+container. On a Linux host, point the bind at your real agent socket by setting
+`SSH_AUTH_SOCK_HOST=$SSH_AUTH_SOCK` in `.env`. Verify from inside the container
+with `ssh-add -l`.
 
 ## MCP Servers
 

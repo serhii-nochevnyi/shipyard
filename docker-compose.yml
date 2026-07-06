@@ -19,11 +19,15 @@ services:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GH_TOKEN: ${GH_TOKEN:-}
-      SSH_AUTH_SOCK: ${SSH_AUTH_SOCK:-}
+      # Fixed in-container path; the host agent is proxied via the bind below.
+      SSH_AUTH_SOCK: /run/host-services/ssh-auth.sock
     volumes:
       - ${WORKSPACE_DIR:-./workspace}:/workspace
       - ${HOME_CACHE_DIR:-./.cache-home}:/home/dev/.cache
       - ${CLAUDE_CREDENTIALS_FILE:-./.claude-credentials.json}:/home/dev/.claude/.credentials.json
       - ${HOME}/.ssh:/home/dev/.ssh:ro
       - ${HOME}/.config/gh:/home/dev/.config/gh:ro
+      # SSH agent forwarding. macOS Docker Desktop proxies the host agent at
+      # this magic path; on a Linux host set SSH_AUTH_SOCK_HOST=$SSH_AUTH_SOCK.
+      - ${SSH_AUTH_SOCK_HOST:-/run/host-services/ssh-auth.sock}:/run/host-services/ssh-auth.sock
       - ${PWD}:${PWD}

@@ -31,7 +31,8 @@ grep -q "read-only" README.md || { echo "README missing read-only note for gh mo
 
 grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' .env.example || { echo ".env.example missing CLAUDE_CODE_OAUTH_TOKEN"; exit 1; }
 grep -q '^CLAUDE_CREDENTIALS_FILE=' .env.example || { echo ".env.example missing CLAUDE_CREDENTIALS_FILE"; exit 1; }
-grep -q '^SSH_AUTH_SOCK=' .env.example || { echo ".env.example missing SSH_AUTH_SOCK"; exit 1; }
+grep -q '^SSH_AUTH_SOCK_HOST=' .env.example || { echo ".env.example missing SSH_AUTH_SOCK_HOST"; exit 1; }
+grep -q 'host-services/ssh-auth.sock' README.md || { echo "README missing ssh-agent forwarding note"; exit 1; }
 
 if grep -q 'DEV_COPILOT' .env.example; then
   echo ".env.example should not contain DEV_COPILOT vars"
