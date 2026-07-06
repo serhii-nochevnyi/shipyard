@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
-BASE_IMAGE ?= remote-copilot-base:test
-DEV_IMAGE ?= remote-copilot:test
+BASE_IMAGE ?= claude-shipyard-base:test
+DEV_IMAGE ?= claude-shipyard:test
 GSD_CORE_VERSION ?= 1.6.1
 KARPATHY_SKILLS_REPO ?= https://github.com/multica-ai/andrej-karpathy-skills
 KARPATHY_SKILLS_REF ?= 2c606141936f1eeef17fa3043a72095b4765b9c2

@@ -6,7 +6,7 @@ set -euo pipefail
 
 make build-base sync-karpathy-skills build-dev-image >/dev/null
 
-docker run --rm remote-copilot:test bash -lc '
+docker run --rm claude-shipyard:test bash -lc '
   set -euo pipefail
   test -f "$HOME/.claude.json"
   jq -e ".mcpServers[\"atlassian-rovo\"].url == \"https://mcp.atlassian.com/v1/mcp\"" "$HOME/.claude.json" >/dev/null
@@ -16,7 +16,7 @@ docker run --rm remote-copilot:test bash -lc '
   jq -e ".mcpServers[\"context7\"].args == []" "$HOME/.claude.json" >/dev/null
 '
 
-docker run --rm --entrypoint bash remote-copilot:test -lc '
+docker run --rm --entrypoint bash claude-shipyard:test -lc '
   set -euo pipefail
   cat > "$HOME/.claude.json" <<'"'"'EOF'"'"'
 {
@@ -33,7 +33,7 @@ EOF
   '"'"'
 '
 
-if docker run --rm --entrypoint bash remote-copilot:test -lc '
+if docker run --rm --entrypoint bash claude-shipyard:test -lc '
   set -euo pipefail
   printf "{broken-json\n" > "$HOME/.claude.json"
   /usr/local/bin/entrypoint.sh true

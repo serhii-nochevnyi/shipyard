@@ -20,8 +20,8 @@ fi
 
 make build-base sync-karpathy-skills build-dev-image >/dev/null
 
-DEV_IMAGE=remote-copilot:test \
-BASE_IMAGE=remote-copilot-base:test \
+DEV_IMAGE=claude-shipyard:test \
+BASE_IMAGE=claude-shipyard-base:test \
 WORKSPACE_DIR="$(pwd)/workspace" \
 HOME_CACHE_DIR="$(pwd)/.cache-home" \
 CLAUDE_CREDENTIALS_FILE="$(pwd)/.claude-credentials.json" \
@@ -43,8 +43,8 @@ docker compose run --rm dev bash -lc '
 '
 
 docker compose down >/dev/null 2>&1 || true
-DEV_IMAGE=remote-copilot:test \
-BASE_IMAGE=remote-copilot-base:test \
+DEV_IMAGE=claude-shipyard:test \
+BASE_IMAGE=claude-shipyard-base:test \
 WORKSPACE_DIR="$(pwd)/workspace" \
 HOME_CACHE_DIR="$(pwd)/.cache-home" \
 CLAUDE_CREDENTIALS_FILE="$(pwd)/.claude-credentials.json" \
@@ -58,8 +58,7 @@ docker inspect "$cid" --format '{{json .Mounts}}' | jq -e 'map(select(.Destinati
 docker inspect "$cid" --format '{{json .Mounts}}' | jq -e 'map(select(.Destination == "/home/dev/.claude/.credentials.json" and .RW == true)) | length == 1' >/dev/null
 docker inspect "$cid" --format '{{json .Mounts}}' | jq -e 'map(select(.Destination == "/home/dev/.claude")) | length == 0' >/dev/null
 
-# Narrow checks: the image tags `remote-copilot[-base]:test` are intentionally kept,
-# so do NOT grep the bare substring "copilot". Assert the removed artifacts are gone.
+# Narrow checks: assert the removed artifacts are gone without grepping broad substrings.
 for pat in 'COPILOT_' 'DEV_COPILOT' '\.copilot' 'mcp-oauth-config'; do
   if grep -qE "$pat" docker-compose.yml; then
     echo "docker-compose.yml should not mention $pat"

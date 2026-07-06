@@ -21,13 +21,13 @@ KARPATHY_SKILLS_REPO="${KARPATHY_SKILLS_REPO:-https://github.com/multica-ai/andr
 KARPATHY_SKILLS_REF="${KARPATHY_SKILLS_REF:-2c606141936f1eeef17fa3043a72095b4765b9c2}" \
 ./scripts/sync-karpathy-skills.sh .build/karpathy-skills
 
-docker build -f Dockerfile.base -t remote-copilot-base:test .
-docker build -f Dockerfile -t remote-copilot:test \
-  --build-arg BASE_IMAGE=remote-copilot-base:test \
+docker build -f Dockerfile.base -t claude-shipyard-base:test .
+docker build -f Dockerfile -t claude-shipyard:test \
+  --build-arg BASE_IMAGE=claude-shipyard-base:test \
   --build-arg KARPATHY_SKILLS_DIR=.build/karpathy-skills \
   .
 
-docker run --rm remote-copilot:test bash -lc '
+docker run --rm claude-shipyard:test bash -lc '
   set -euo pipefail
   test -d /opt/karpathy-skills
   test -d /opt/delivery-pipeline

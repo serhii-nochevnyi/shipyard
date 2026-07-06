@@ -1,4 +1,7 @@
-# Remote Claude Code Dev Environment
+# Claude Shipyard
+
+A remote Claude Code dev environment: an isolated Docker shipyard where Claude
+takes a problem all the way to a set of green PRs.
 
 ## Quick start
 
@@ -156,7 +159,7 @@ If `SSH_AUTH_SOCK` is set on the host, Compose forwards that environment variabl
 docker run --rm -it \
   -e SSH_AUTH_SOCK \
   -v "$SSH_AUTH_SOCK:$SSH_AUTH_SOCK" \
-  remote-copilot:test
+  claude-shipyard:test
 ```
 
 ## MCP Servers

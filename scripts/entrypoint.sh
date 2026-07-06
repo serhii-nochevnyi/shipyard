@@ -25,7 +25,7 @@ merge_default_json() {
   mv "$tmp_config" "$user_config"
 }
 
-default_mcp_config="/usr/local/share/remote-copilot/mcp-config.default.json"
+default_mcp_config="/usr/local/share/claude-shipyard/mcp-config.default.json"
 user_mcp_config="$HOME/.claude.json"
 
 merge_default_json "$default_mcp_config" "$user_mcp_config" '

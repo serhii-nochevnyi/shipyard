@@ -37,7 +37,7 @@ if grep -q 'DEV_COPILOT' .env.example; then
   echo ".env.example should not contain DEV_COPILOT vars"
   exit 1
 fi
-# The image tag `remote-copilot:test` may legitimately appear in a `docker run`
+# The image tag `claude-shipyard:test` may legitimately appear in a `docker run`
 # example, so assert the removed artifacts are gone rather than the bare substring.
 for pat in 'dev-copilot' 'copilot plugin' '\.copilot' 'COPILOT_'; do
   if grep -qE "$pat" README.md; then

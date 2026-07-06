@@ -13,7 +13,7 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 SERVICE="${DEV_SERVICE:-dev}"
-DEV_IMAGE="${DEV_IMAGE:-remote-copilot:test}"
+DEV_IMAGE="${DEV_IMAGE:-claude-shipyard:test}"
 CRED_FILE="${CLAUDE_CREDENTIALS_FILE:-$REPO_ROOT/.claude-credentials.json}"
 
 die() { echo "error: $*" >&2; exit 1; }

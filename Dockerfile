@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=remote-copilot-base:test
+ARG BASE_IMAGE=claude-shipyard-base:test
 FROM ${BASE_IMAGE}
 
 ARG KARPATHY_SKILLS_DIR=.build/karpathy-skills

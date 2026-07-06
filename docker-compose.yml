@@ -1,11 +1,15 @@
+# Pin the compose project name so container/volume names do not depend on the
+# checkout directory name.
+name: claude-shipyard
+
 services:
   dev:
-    image: ${DEV_IMAGE:-remote-copilot:test}
+    image: ${DEV_IMAGE:-claude-shipyard:test}
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        BASE_IMAGE: ${BASE_IMAGE:-remote-copilot-base:test}
+        BASE_IMAGE: ${BASE_IMAGE:-claude-shipyard-base:test}
         KARPATHY_SKILLS_DIR: ${KARPATHY_SKILLS_DIR:-.build/karpathy-skills}
         GSD_CORE_VERSION: ${GSD_CORE_VERSION:-1.6.0}
     working_dir: /workspace

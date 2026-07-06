@@ -8,9 +8,15 @@ fi
 
 LOCAL_SSH_DIR="${LOCAL_SSH_DIR:-$HOME/.ssh}" make build-base >/dev/null
 
+# The image is built via `make build-base`, so the expected version is the
+# Makefile pin (or its env override) — never a hardcoded literal here.
+EXPECTED_CLAUDE_VERSION="${CLAUDE_CODE_VERSION:-$(sed -n 's/^CLAUDE_CODE_VERSION ?= //p' Makefile)}"
+[[ -n "$EXPECTED_CLAUDE_VERSION" ]] || { echo "cannot resolve CLAUDE_CODE_VERSION pin"; exit 1; }
+
 docker run --rm \
+  -e EXPECTED_CLAUDE_VERSION="$EXPECTED_CLAUDE_VERSION" \
   -v "$PWD/.build/ssh-config:/tmp/expected-ssh:ro" \
-  remote-copilot-base:test bash -lc '
+  claude-shipyard-base:test bash -lc '
   set -euo pipefail
   for cmd in bash curl git gh gzip helm jq kubectl make node pnpm python3 rsync ssh sudo tar unzip xz yarn zip claude go; do
     command -v "$cmd" >/dev/null
@@ -43,11 +49,11 @@ docker run --rm \
     test ! -e "$HOME/.ssh/$forbidden"
   done
 
-  test -f /usr/local/share/remote-copilot/mcp-config.default.json
+  test -f /usr/local/share/claude-shipyard/mcp-config.default.json
   command -v context7-mcp >/dev/null
-  jq -e ".mcpServers[\"atlassian-rovo\"].url == \"https://mcp.atlassian.com/v1/mcp\"" /usr/local/share/remote-copilot/mcp-config.default.json >/dev/null
-  jq -e ".mcpServers[\"context7\"].command == \"context7-mcp\"" /usr/local/share/remote-copilot/mcp-config.default.json >/dev/null
-  jq -e ".mcpServers[\"context7\"].args == []" /usr/local/share/remote-copilot/mcp-config.default.json >/dev/null
+  jq -e ".mcpServers[\"atlassian-rovo\"].url == \"https://mcp.atlassian.com/v1/mcp\"" /usr/local/share/claude-shipyard/mcp-config.default.json >/dev/null
+  jq -e ".mcpServers[\"context7\"].command == \"context7-mcp\"" /usr/local/share/claude-shipyard/mcp-config.default.json >/dev/null
+  jq -e ".mcpServers[\"context7\"].args == []" /usr/local/share/claude-shipyard/mcp-config.default.json >/dev/null
   command -v typescript-language-server >/dev/null
   command -v tsc >/dev/null
   [[ "$(typescript-language-server --version)" == "5.2.0" ]]
@@ -60,7 +66,7 @@ docker run --rm \
   [[ "$(kubectl version --client -o json | python3 -c '"'"'import json, sys; print(json.load(sys.stdin)["clientVersion"]["gitVersion"])'"'"')" == "v1.30.10" ]]
   [[ "$(helm version --short | sed "s/+.*//")" == "v3.17.3" ]]
   command -v claude >/dev/null
-  [[ "$(claude --version)" == *"2.1.193"* ]]
+  [[ "$(claude --version)" == *"$EXPECTED_CLAUDE_VERSION"* ]]
 '
 
 echo "base image smoke passed"

@@ -30,7 +30,7 @@ ARG NODE_VERSION=24.15.0
 ARG GO_VERSION=1.26.3
 ARG KUBECTL_VERSION=v1.30.10
 ARG HELM_VERSION=v3.17.3
-ARG CLAUDE_CODE_VERSION=2.1.193
+ARG CLAUDE_CODE_VERSION=2.1.200
 ARG CONTEXT7_MCP_VERSION=2.2.5
 ARG TYPESCRIPT_LANGUAGE_SERVER_VERSION=5.2.0
 ARG TYPESCRIPT_VERSION=6.0.3
@@ -38,7 +38,6 @@ ARG GIT_USER_NAME="Nochevnyi Serhii"
 ARG GIT_USER_EMAIL="nochevnyi.serhii@airslate.com"
 
 COPY .build/ssh-config/ /tmp/ssh-config/
-COPY config/mcp-config.default.json /usr/local/share/remote-copilot/mcp-config.default.json
 
 RUN set -eux; \
   arch="$(dpkg --print-architecture)"; \
@@ -103,6 +102,9 @@ RUN userdel -r ubuntu || true \
   && chown -R dev:dev /workspace /home/dev \
   && chmod 700 /home/dev/.ssh \
   && rm -rf /tmp/ssh-config
+
+# Late COPY on purpose: config tweaks must not invalidate the toolchain layer above.
+COPY config/mcp-config.default.json /usr/local/share/claude-shipyard/mcp-config.default.json
 
 ENV HOME=/home/dev \
     SHELL=/bin/bash \

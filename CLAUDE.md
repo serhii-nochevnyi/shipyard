@@ -40,7 +40,7 @@ make test-ssh-sync      # sync-local-ssh-config.sh behavior
 
 ## Architecture
 
-**Two-layer image, separated by change frequency.** `Dockerfile.base` (`remote-copilot-base:test`) installs the slow-moving, pinned toolchain — versions are `ARG`s at the top (Node, Go, kubectl, helm, Claude Code CLI via npm `@anthropic-ai/claude-code`, context7-mcp binary, typescript-language-server). Every downloaded binary is checksum-verified. `Dockerfile` (`remote-copilot:test`) is a thin overlay over the base that installs gsd-core and registers the remaining plugins; iterate here when changing plugins, not the base.
+**Two-layer image, separated by change frequency.** `Dockerfile.base` (`claude-shipyard-base:test`) installs the slow-moving, pinned toolchain — versions are `ARG`s at the top (Node, Go, kubectl, helm, Claude Code CLI via npm `@anthropic-ai/claude-code`, context7-mcp binary, typescript-language-server). Every downloaded binary is checksum-verified. `Dockerfile` (`claude-shipyard:test`) is a thin overlay over the base that installs gsd-core and registers the remaining plugins; iterate here when changing plugins, not the base.
 
 **Base image installs Claude Code via npm.** The base image runs `npm install -g @anthropic-ai/claude-code@<version>` with a pinned version controlled by the `CLAUDE_CODE_VERSION` build arg.
 
