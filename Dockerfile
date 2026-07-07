@@ -10,10 +10,16 @@ COPY scripts/install-claude-plugins.sh /usr/local/bin/install-claude-plugins.sh
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY ${KARPATHY_SKILLS_DIR}/ /opt/karpathy-skills/
 COPY plugins/delivery-pipeline/ /opt/delivery-pipeline/
+COPY capabilities/delivery-pipeline/ /opt/delivery-capability/delivery-pipeline/
 
-RUN chmod +x /usr/local/bin/install-claude-plugins.sh /usr/local/bin/entrypoint.sh \
-      /opt/delivery-pipeline/scripts/*.sh /opt/delivery-pipeline/scripts/*.cjs && \
-    chown -R dev:dev /opt/karpathy-skills /opt/delivery-pipeline
+# The GSD capability bundles its own copy of the validator so the gate is
+# self-contained after `gsd capability install` copies the folder away.
+RUN cp /opt/delivery-pipeline/scripts/validate-graph.cjs \
+       /opt/delivery-capability/delivery-pipeline/checks/validate-graph.cjs && \
+    chmod +x /usr/local/bin/install-claude-plugins.sh /usr/local/bin/entrypoint.sh \
+      /opt/delivery-pipeline/scripts/*.sh /opt/delivery-pipeline/scripts/*.cjs \
+      /opt/delivery-capability/delivery-pipeline/checks/*.cjs && \
+    chown -R dev:dev /opt/karpathy-skills /opt/delivery-pipeline /opt/delivery-capability
 
 USER dev
 

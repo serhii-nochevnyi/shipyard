@@ -12,6 +12,8 @@ for f in commands/investigate.md commands/decompose.md commands/deliver.md \
          scripts/validate-inv.cjs scripts/ticket-worktree.sh; do
   [[ -f "plugins/delivery-pipeline/$f" ]] || { echo "missing delivery-pipeline $f"; exit 1; }
 done
+[[ -f capabilities/delivery-pipeline/capability.json ]] || { echo "missing delivery-pipeline capability.json"; exit 1; }
+[[ -f capabilities/delivery-pipeline/checks/graph-gate.cjs ]] || { echo "missing capability graph-gate.cjs"; exit 1; }
 [[ ! -d config/claude-lsp-plugin ]] || { echo "config/claude-lsp-plugin should be gone"; exit 1; }
 [[ ! -f scripts/sync-dev-copilot.sh ]] || { echo "sync-dev-copilot.sh should be gone"; exit 1; }
 [[ ! -f scripts/install-dev-copilot.sh ]] || { echo "install-dev-copilot.sh should be gone"; exit 1; }
@@ -44,6 +46,9 @@ docker run --rm claude-shipyard:test bash -lc '
   for p in andrej-karpathy-skills@karpathy-skills pipeline@delivery-pipeline skill-creator@claude-plugins-official code-simplifier@claude-plugins-official github@claude-plugins-official typescript-lsp@claude-plugins-official; do
     jq -e --arg p "$p" ".plugins[\$p]" "$HOME/.claude/plugins/installed_plugins.json" >/dev/null
   done
+  # the delivery-pipeline GSD capability is installed and its gate check is runnable
+  node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" capability list --json \
+    | jq -e ".[] | select(.id == \"delivery-pipeline\")" >/dev/null
 '
 
 echo "overlay image smoke passed"

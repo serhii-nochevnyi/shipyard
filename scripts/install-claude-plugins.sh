@@ -31,6 +31,16 @@ pg 600 claude plugin marketplace add anthropics/claude-plugins-official
 # marketplace's GitHub ref at clone time; no separate version pin is fabricated here.
 pg 300 claude plugin install andrej-karpathy-skills@karpathy-skills
 pg 300 claude plugin install pipeline@delivery-pipeline
+
+# Register the delivery-pipeline GSD capability (global scope — no per-project
+# consent needed). Its blocking plan:post gate runs the ticket-graph validator,
+# making Gate 2 a mechanical part of the GSD loop.
+GSD_TOOLS="$HOME/.claude/gsd-core/bin/gsd-tools.cjs"
+if [[ -f "$GSD_TOOLS" && -d /opt/delivery-capability/delivery-pipeline ]]; then
+  pg 120 node "$GSD_TOOLS" capability install /opt/delivery-capability/delivery-pipeline --scope global --yes
+else
+  echo "WARNING: gsd-tools or capability dir missing; delivery-pipeline capability not installed" >&2
+fi
 pg 300 claude plugin install skill-creator@claude-plugins-official
 pg 300 claude plugin install code-simplifier@claude-plugins-official
 pg 300 claude plugin install github@claude-plugins-official

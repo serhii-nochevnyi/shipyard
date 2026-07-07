@@ -622,13 +622,19 @@ GitHub, ADR-конформанс і integrator лишаються унікаль
 - конфіг-булеани типу `workflow.code_review` стали capability-owned — скіли
   не читають їх напряму.
 
+- **capability `delivery-pipeline`** (`capabilities/delivery-pipeline/`,
+  ставиться в образ на global scope): fail-closed gate `command-exit-zero` →
+  `validate-graph.cjs` на `plan:post`, blocking. Gate 2 тепер — механічна
+  частина GSD-циклу: планування фізично не завершиться без матеріалізованих
+  валідних PLAN-файлів (перевірено: без планів gate повертає block:true,
+  з валідними — block:false). Вимикач — федеративний конфіг-ключ
+  `delivery_pipeline.graph_gate`. Нюанс rc.4: `runtimeCompat.supported`
+  приймає лише `["*"]` (конкретний id `claude` не проходить крос-валідацію).
+
 **Roadmap подальшої адаптації (за пріоритетом):**
 
-1. **Capability-пакування надбудови** — перепакувати плагін у GSD capability
-   (`capability.json`) з fail-closed gate'ами: `command-exit-zero` →
-   `validate-graph.cjs` на `plan:post` (механічний Gate 2, який агент не може
-   «закрити словами») і ship:pre-gate для arch-conform. 12 канонічних точок
-   loop-host contract.
+1. **Розширення capability** — ship:pre gate (arch-conform як agentVerdict —
+   advisory; `phase uat-passed` як blocking query-gate).
 2. **Схуднути validate-graph до дельти** — DAG/wave/файлові конфлікти вже
    перевіряє plan-checker (Dim 3/5); лишити branch naming, risk policy,
    tickets.json; frontmatter читати через `gsd-tools frontmatter get`.

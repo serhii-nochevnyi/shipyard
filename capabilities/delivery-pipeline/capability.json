@@ -1,0 +1,40 @@
+{
+  "id": "delivery-pipeline",
+  "role": "feature",
+  "version": "0.2.0",
+  "title": "Delivery pipeline loop gates",
+  "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: a blocking plan:post gate runs the ticket-graph validator (Gate 2), so a decomposition without materialized, valid PLAN files cannot pass planning.",
+  "tier": "full",
+  "requires": [],
+  "engines": { "gsd": ">=1.7.0-rc.1 <2.0.0" },
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
+  "author": { "name": "Nochevnyi Serhii" },
+  "keywords": ["delivery", "tickets", "graph", "gate"],
+  "skills": [],
+  "agents": [],
+  "hooks": [],
+  "config": {
+    "delivery_pipeline.graph_gate": {
+      "type": "boolean",
+      "default": true,
+      "description": "Run the delivery-pipeline ticket-graph validator as a blocking plan:post gate (mechanical Gate 2)."
+    }
+  },
+  "steps": [],
+  "contributions": [],
+  "gates": [
+    {
+      "point": "plan:post",
+      "check": {
+        "predicate": {
+          "kind": "command-exit-zero",
+          "command": "node \"${GSD_CAP_DIR}/checks/graph-gate.cjs\"",
+          "timeout": 60
+        }
+      },
+      "blocking": true,
+      "onError": "halt",
+      "when": "delivery_pipeline.graph_gate"
+    }
+  ]
+}
