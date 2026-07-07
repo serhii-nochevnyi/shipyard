@@ -50,6 +50,10 @@ exit 0 від validate-graph.cjs.
     "gsd-executor": "claude-opus-4-8[1m]"
   },
   "context_window": 1000000,
+  "agent_skills": {
+    "gsd-planner": ["global:pipeline:delivery-rules"],
+    "gsd-executor": ["global:pipeline:delivery-rules"]
+  },
   "ship": {
     "pr_body_sections": [
       { "heading": "Acceptance Criteria", "enabled": true,

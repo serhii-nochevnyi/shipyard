@@ -1,7 +1,7 @@
 {
   "id": "delivery-pipeline",
   "role": "feature",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "title": "Delivery pipeline loop gates",
   "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: a blocking plan:post gate runs the ticket-graph validator (Gate 2), so a decomposition without materialized, valid PLAN files cannot pass planning.",
   "tier": "full",
@@ -23,6 +23,11 @@
       "type": "boolean",
       "default": true,
       "description": "Block ship until the phase has verification evidence (fail-closed `phase uat-passed` predicate at ship:pre)."
+    },
+    "delivery_pipeline.arch_verdict": {
+      "type": "boolean",
+      "default": true,
+      "description": "Advisory ship:pre agent verdict: check the phase's changes against locked ADR decisions in .planning/architecture/ and surface violations before shipping."
     }
   },
   "steps": [],
@@ -53,6 +58,17 @@
       "blocking": true,
       "onError": "halt",
       "when": "delivery_pipeline.uat_gate"
+    },
+    {
+      "point": "ship:pre",
+      "check": {
+        "agentVerdict": {
+          "prompt": "Architecture conformance (advisory). If .planning/architecture/ contains no ADR-*.md, verdict: pass. Otherwise: extract locked decisions and scope fences from every ADR (plus INTERFACES.md/DATA-MODEL.md when present), diff the phase's implemented changes (merge-base..HEAD), and judge conformance only against recorded decisions — style and bugs belong to other reviewers. Report each violation as file:line + the violated ADR section + minimal remediation direction. If the code is right and a decision no longer fits reality, say adr-outdated and name the decision — changing it is the human's call. Never block; this verdict is advisory context for the ship decision."
+        }
+      },
+      "blocking": false,
+      "onError": "skip",
+      "when": "delivery_pipeline.arch_verdict"
     }
   ]
 }

@@ -163,6 +163,9 @@ loop:
      adr-outdated → status blocked, ескалація людині (рішення міняти — не твоє)
      conform      → перевір критерії зеленого:
        всі checks passed ∧ unresolved=0 ∧ arch conform
+       → зафіксуй вердикти в PR body трейлером (переживає squash-merge):
+         допиши останнім рядком body через gh pr edit <pr> --body:
+         gate_status: arch-review=conform, drift-check=<fresh|skipped>, checks=green
        → gh pr ready <pr> (зняти draft)
        → human_checkpoint? повідом людину і чекай апруву : status green, ВИХІД
 

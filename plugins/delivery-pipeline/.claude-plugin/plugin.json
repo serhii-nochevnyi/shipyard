@@ -1,7 +1,7 @@
 {
   "name": "pipeline",
   "description": "Artifact-driven delivery pipeline on top of GSD: deep investigation, ticket decomposition with a dependency graph, and per-ticket worktree->PR delivery babysat to green (CI + CodeRabbit/Copilot re-review). See docs/gsd_multilevel_delivery_pipeline.md.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Nochevnyi Serhii"
   },
@@ -10,5 +10,6 @@
     "./commands/investigate.md",
     "./commands/decompose.md",
     "./commands/deliver.md"
-  ]
+  ],
+  "skills": ["./skills/delivery-rules"]
 }

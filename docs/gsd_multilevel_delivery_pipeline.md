@@ -643,14 +643,20 @@ GitHub, ADR-конформанс і integrator лишаються унікаль
   імпорт-потік (Jira → PLAN.md у deliver) не проходить через plan-checker,
   тож самостійна повна перевірка DAG лишається потрібною.
 
-**Roadmap подальшої адаптації (за пріоритетом):**
+- **arch-conform agentVerdict** (capability v0.4.0): advisory-gate на
+  ship:pre — LLM-оцінка відповідності змін фази locked-рішенням ADR
+  (blocking заборонено контрактом для недетермінованих перевірок; вимикач
+  `delivery_pipeline.arch_verdict`).
+- **`agent_skills` injection**: скіл `pipeline:delivery-rules`
+  (правила frontmatter/delivery-блоку/branch naming/scope-дисципліни)
+  інжектиться в gsd-planner і gsd-executor через
+  `agent_skills: {"gsd-planner": ["global:pipeline:delivery-rules"], ...}`
+  у рекомендованому конфізі.
+- **Трейлер `gate_status:`** — deliver фіксує вердикти в PR body останнім
+  рядком (`gate_status: arch-review=…, drift-check=…, checks=green`);
+  переживає squash-merge, читається пост-фактум.
 
-1. **arch-conform як agentVerdict** на ship:pre (advisory — LLM-оцінки не
-   можуть блокувати за контрактом gate'ів).
-2. **`agent_skills` injection** — авторський скіл із правилами конвеєра для
-   gsd-planner/gsd-executor (`global:pipeline:<skill>`).
-3. **Конвенція git-трейлерів `gate_status:`** для вердиктів
-   arch-review/drift у комітах (несе через squash-merge).
+Roadmap 1.7 закрито повністю.
 
 ## 11. Короткий висновок
 
