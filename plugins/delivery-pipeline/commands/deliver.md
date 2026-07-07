@@ -109,21 +109,25 @@ merged:   T-01-03
 
 1. `base` = origin/main, якщо залежності merged; інакше гілка найглибшої
    незмердженої залежності.
-2. `ticket-worktree.sh create <T> <branch з tickets.json> <base>`.
+2. Preflight (GSD 1.7): якщо доступний gsd-tools —
+   `node ~/.claude/gsd-core/bin/gsd-tools.cjs worktree base-check` —
+   ловить розбіжність HEAD із fork-base до створення worktree
+   (відсутність gsd-tools — не помилка, пропусти).
+3. `ticket-worktree.sh create <T> <branch з tickets.json> <base>`.
    Ім'я гілки береться ТІЛЬКИ з tickets.json (канонічний формат
    `ticket/<ID>-<slug-з-назви-тікета>`, вже санітизований validate-graph'ом) —
    не конструюй його вручну.
-3. Запусти executor-агента (Agent tool, `model: opus[1m]`) У WORKTREE з контрактом:
+4. Запусти executor-агента (Agent tool, `model: opus[1m]`) У WORKTREE з контрактом:
    повний текст плану тікета + Context reads + правило "працюй ТІЛЬКИ в
    межах files_modified; коміть атомарно з префіксом (T): ...; прожени
    Verification commands до зеленого локально".
-4. Після виконавця: push гілки,
+5. Після виконавця: push гілки,
    `gh pr create --base <base-branch|main> --head <branch> --draft
    --title "<T>: <title>" --body <PR body за шаблоном>`.
    PR body: Problem / Scope / Ticket / Dependency slice / Test evidence /
    Rollout-Rollback (для risky).
-5. Одразу перший `reviewers.cjs reinit <pr>`.
-6. Онови delivery-state (`state-sync.cjs`).
+6. Одразу перший `reviewers.cjs reinit <pr>`.
+7. Онови delivery-state (`state-sync.cjs`).
 
 Незалежні тікети запускай ПАРАЛЕЛЬНО (кілька Agent в одному повідомленні).
 Конфлікти по файлах виключені Gate 2.

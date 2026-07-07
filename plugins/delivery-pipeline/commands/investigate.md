@@ -33,9 +33,9 @@ allowed-tools:
 ## Step 1 — Старт нового INV
 
 1. Preconditions:
-   - `.planning/` існує (інакше запропонуй `/gsd:new-project` і зупинись);
+   - `.planning/` існує (інакше запропонуй `/gsd-new-project` і зупинись);
    - карта кодової бази: якщо нема `.planning/codebase/`, запусти
-     `/gsd:map-codebase` або попередь, що research працюватиме без карти.
+     `/gsd-map-codebase` або попередь, що research працюватиме без карти.
 2. Обери номер: наступний вільний `INV-NNN`, slug з 2–4 слів теми.
 3. Створи `.planning/investigations/INV-NNN-slug/`, скопіювавши ВСІ шаблони з
    `${CLAUDE_PLUGIN_ROOT}/templates/inv/`.
@@ -65,7 +65,7 @@ allowed-tools:
 - КОЖНЕ прийняте положення ОДРАЗУ пиши в DECISIONS.md за форматом шаблону
   (## рішення / **Чому** / **Що відкинули** / **Scope fence**). Познач
   відповідне питання `- [x]` з посиланням.
-- Гіпотези, що потребують перевірки кодом — пропонуй `/gsd:spike "<ідея>"`.
+- Гіпотези, що потребують перевірки кодом — пропонуй `/gsd-spike "<ідея>"`.
 - Питання без досяжної відповіді — переноси в RISKS.md з mitigation
   (за згодою користувача) і закривай.
 
@@ -76,7 +76,7 @@ allowed-tools:
 1. `node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-inv.cjs <INV-dir>` — має бути OK.
 2. Згенеруй ADR-пакет у `.planning/architecture/`:
    - `ADR-NNN-<slug>.md` — з DECISIONS.md, у форматі, який parse-ить
-     `/gsd:plan-phase --ingest` (Nygard: Status/Context/Decision/Consequences;
+     `/gsd-plan-phase --ingest` (Nygard: Status/Context/Decision/Consequences;
      кожне locked decision — явна секція, scope fences — окремим блоком);
    - за наявності матеріалу: INTERFACES.md, DATA-MODEL.md, ROLLOUT.md.
 3. Додай в PROBLEM.md frontmatter `status: closed` + дату і посилання на ADR.

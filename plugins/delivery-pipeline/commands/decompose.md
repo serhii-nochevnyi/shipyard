@@ -48,9 +48,13 @@ exit 0 від validate-graph.cjs.
   "model_overrides": {
     "gsd-planner": "claude-fable-5",
     "gsd-executor": "claude-opus-4-8[1m]"
-  }
+  },
+  "context_window": 1000000
 }
 ```
+
+(`context_window: 1000000` — GSD 1.7 вмикає adaptive-context збагачення для
+1M-моделей, узгоджено з opus[1m]-політикою конвеєра.)
 
 (`models.*` приймає лише tier-аліаси opus/sonnet/haiku; повні ID — тільки
 через `model_overrides` per-agent. Планувальник — найважча роль декомпозиції,
@@ -67,7 +71,7 @@ exit 0 від validate-graph.cjs.
 ## Step 2 — GSD-ланцюг
 
 1. Обери номер фази: наступний вільний (або аргумент користувача).
-2. Виконай `/gsd:plan-phase <N> --ingest <adr-шляхи> [--tdd|--mvp]`
+2. Виконай `/gsd-plan-phase <N> --ingest <adr-шляхи> [--tdd|--mvp]`
    (через Skill tool, якщо GSD-команди доступні як скіли, інакше підкажи
    користувачу запустити і дочекайся).
 3. **Перевір матеріалізацію**: `ls .planning/phases/<N>-*/*-PLAN.md` — файли
@@ -81,8 +85,13 @@ exit 0 від validate-graph.cjs.
    plan: <MM>
    title: "<назва тікета>"
    type: implementation
+   wave: <N>                    # 1 + max(wave залежностей); без залежностей = 1
    depends_on: [<T-...>]
    files_modified: [<глоби>]
+   requirements: [<REQ-ids>]    # ОБОВ'ЯЗКОВЕ в GSD 1.7: id вимог із ROADMAP.md;
+                                # порожній масив = BLOCKER у plan-checker.
+                                # Немає ROADMAP-вимог (імпорт із Jira) — створи
+                                # REQ-запис у ROADMAP або постав id Jira-тікета
    delivery:
      ticket: T-<NN>-<MM>
      risk: low|medium|high
@@ -91,7 +100,7 @@ exit 0 від validate-graph.cjs.
    ## Goal / ## Context (Reads) / ## Scope / ## Out of scope /
    ## Acceptance criteria / ## Test strategy / ## Verification commands
    ```
-4. Виконай `/gsd:plan-review-convergence <N> --all --max-cycles 3`
+4. Виконай `/gsd-plan-review-convergence <N> --all --max-cycles 3`
    (якщо доступний; пропуск конвергенції — це TUNE, пропуск файлів — BLOCK).
 
 ## Step 3 — Delivery-розширення frontmatter

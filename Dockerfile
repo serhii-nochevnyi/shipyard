@@ -2,7 +2,7 @@ ARG BASE_IMAGE=claude-shipyard-base:test
 FROM ${BASE_IMAGE}
 
 ARG KARPATHY_SKILLS_DIR=.build/karpathy-skills
-ARG GSD_CORE_VERSION=1.6.0
+ARG GSD_CORE_VERSION=1.7.0-rc.4
 
 USER root
 

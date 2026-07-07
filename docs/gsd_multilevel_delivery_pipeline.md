@@ -1,7 +1,8 @@
 # Багаторівневий delivery-конвеєр на базі GSD
 
-> Версія 2. Переписано під фактичні можливості gsd-core 1.6.x (команди і флаги звірені
-> з вмістом пакета `@opengsd/gsd-core@1.6.0`) та під цільовий сценарій:
+> Версія 3. Актуальний пін: `@opengsd/gsd-core@1.7.0-rc.4` (команди і флаги
+> звірені з пакетом і документацією next; статус адаптації — розділ 10.5).
+> Цільовий сценарій:
 > **глибокий investigation → декомпозиція на тікети із залежностями → реалізація
 > кожного тікета в окремому git worktree → PR на тікет → автоматичне доведення PR
 > до зеленого стану з переініціалізацією рев'юверів (CodeRabbit, Copilot).**
@@ -32,17 +33,17 @@ GSD не треба дублювати. Звірена межа:
 
 | Потреба | GSD 1.6 з коробки | Будуємо самі |
 |---|---|---|
-| Ideation / раннє мислення | `/gsd:explore` (Socratic ideation) | — |
-| Дослідження з експериментом | `/gsd:spike` → `.planning/spikes/SPIKE-NNN/` | Investigation package (шаблони INV) |
-| Карта кодової бази | `/gsd:map-codebase` (architecture/conventions/concerns) | — |
-| Knowledge graph | `/gsd:graphify` (opt-in у `.planning/config.json`) | — |
-| Інжест ADR у планування | `/gsd:plan-phase --ingest <adr>` (парсить locked decisions + scope fences) | ADR-пакет як вихід investigation |
+| Ideation / раннє мислення | `/gsd-explore` (Socratic ideation) | — |
+| Дослідження з експериментом | `/gsd-spike` → `.planning/spikes/SPIKE-NNN/` | Investigation package (шаблони INV) |
+| Карта кодової бази | `/gsd-map-codebase` (architecture/conventions/concerns) | — |
+| Knowledge graph | `/gsd-graphify` (opt-in у `.planning/config.json`) | — |
+| Інжест ADR у планування | `/gsd-plan-phase --ingest <adr>` (парсить locked decisions + scope fences) | ADR-пакет як вихід investigation |
 | Плани із залежностями | frontmatter планів: `phase, plan, type, wave, depends_on, files_modified` | Валідатор графа + генерація `tickets.yaml` як view |
-| Ревʼю якості планів | `/gsd:plan-review-convergence <phase> --all --max-cycles N` | — |
-| Паралельне виконання у worktrees | `/gsd:execute-phase` (waves, `Agent(isolation="worktree")`) — але **merge в одну гілку** | **Delivery-контур: PR на тікет** (розділ 5) |
-| Чиста PR-гілка без `.planning/` | `/gsd:pr-branch` | Використовуємо як утиліту в delivery |
-| UAT | `/gsd:verify-work` (conversational UAT) | Mechanical verification живе в CI + babysit loop |
-| PR / ship | `/gsd:ship <phase>` — один PR на phase | **PR-per-ticket + babysit до зеленого** |
+| Ревʼю якості планів | `/gsd-plan-review-convergence <phase> --all --max-cycles N` | — |
+| Паралельне виконання у worktrees | `/gsd-execute-phase` (waves, `Agent(isolation="worktree")`) — але **merge в одну гілку** | **Delivery-контур: PR на тікет** (розділ 5) |
+| Чиста PR-гілка без `.planning/` | `/gsd-pr-branch` | Використовуємо як утиліту в delivery |
+| UAT | `/gsd-verify-work` (conversational UAT) | Mechanical verification живе в CI + babysit loop |
+| PR / ship | `/gsd-ship <phase>` — один PR на phase | **PR-per-ticket + babysit до зеленого** |
 | Ведення рев'ю-циклу | — | **Reviewer re-init + fix loop (CodeRabbit/Copilot)** |
 
 Висновок той самий, що і в v1, але з точнішою межею:
@@ -132,14 +133,14 @@ Investigation — самостійна точка входу. Інтерфейс
 ```
 
 **Вхід може бути будь-якої зрілості**: сира ідея, баг/інцидент, епік із Jira,
-PRD. Для зовсім сирої ідеї скіл спершу запропонує `/gsd:explore` (Socratic
+PRD. Для зовсім сирої ідеї скіл спершу запропонує `/gsd-explore` (Socratic
 ideation) — його вихід стає problem statement.
 
 **Що робить старт нового INV:**
 
 ```text
-1. Preconditions: .planning/ ініціалізований (/gsd:new-project),
-   карта кодової бази існує і свіжа (/gsd:map-codebase) — інакше виконує
+1. Preconditions: .planning/ ініціалізований (/gsd-new-project),
+   карта кодової бази існує і свіжа (/gsd-map-codebase) — інакше виконує
 2. Створює .planning/investigations/INV-NNN-slug/ зі скелетом усіх артефактів
 3. Intake-інтервʼю: агент ставить питання, яких бракує для PROBLEM.md
    (для кого, поточний pain, success criteria, що поза scope) —
@@ -165,8 +166,8 @@ read-only довідником.
 
 ```text
 Problem statement
-  → дослідження кодової бази     (/gsd:map-codebase, якщо ще нема)
-  → дослідження теми             (research-агенти, за потреби /gsd:spike для
+  → дослідження кодової бази     (/gsd-map-codebase, якщо ще нема)
+  → дослідження теми             (research-агенти, за потреби /gsd-spike для
                                   experiential-перевірки гіпотез кодом-чернеткою)
   → OPTIONS.md з trade-offs
   → DECISIONS.md                 (прийняті положення: що обрали, що відкинули, чому)
@@ -211,8 +212,8 @@ DECISIONS.md      — locked decisions; кожне: рішення / чому / 
    (або кілька ADR в одну фазу)
 2. уточнює режим: --tdd? --mvp? (з рекомендацією за типом роботи)
 3. запускає ланцюг GSD-командами під капотом:
-   /gsd:plan-phase N --ingest <adr> [--tdd|--mvp]
-   /gsd:plan-review-convergence N --all --max-cycles 3
+   /gsd-plan-phase N --ingest <adr> [--tdd|--mvp]
+   /gsd-plan-review-convergence N --all --max-cycles 3
    scripts/validate-graph          # Gate 2 + генерація tickets.yaml
 4. показує підсумок: тікети, DAG, waves, high-risk → ви апрувите
    або кажете "T-03 розбий" — і ланцюг повторюється точково
@@ -279,8 +280,8 @@ Jira/GitHub issues — опційна **експортна проєкція** (�
 
 ## 6. Контур 3 — Delivery: worktree → PR → зелений стан
 
-Це окремий механізм (оркестратор), який замінює `/gsd:execute-phase` +
-`/gsd:ship` для режиму «PR на тікет». Нативний execute-phase лишається
+Це окремий механізм (оркестратор), який замінює `/gsd-execute-phase` +
+`/gsd-ship` для режиму «PR на тікет». Нативний execute-phase лишається
 доступним для внутрішніх/низькоризикових phase, де досить одного PR на phase.
 
 **Delivery — самостійна точка входу.** Контури 1–3 не є одним безперервним
@@ -325,7 +326,7 @@ Merged-залежності завжди вважаються задоволен
    контракт ще відповідає кодовій базі (файли з Context існують, інтерфейси
    не змінилися, scope не перекритий чужими змінами). Дрейф → тікет
    позначається needs-replan і НЕ виконується наосліп; повертається в
-   контур 2 (/gsd:plan-phase точково)
+   контур 2 (/gsd-plan-phase точково)
 ```
 
 ### 6.1. Модель виконання
@@ -526,13 +527,13 @@ Dependency slice, Test evidence, Rollout/Rollback).
 
 ```bash
 # 0. Init (одноразово)
-/gsd:new-project
-/gsd:map-codebase
+/gsd-new-project
+/gsd-map-codebase
 
 # 1. Deep investigation (контур 1) — окрема точка входу
 /investigate "тема/проблема"
 #    intake-інтервʼю → research fan-out → ітеративний діалог
-#    гіпотези, що потребують перевірки кодом: /gsd:spike "<ідея>"
+#    гіпотези, що потребують перевірки кодом: /gsd-spike "<ідея>"
 /investigate            # наступна сесія: скіл сам підхопить відкритий INV
 #    коли питання вичерпані, скіл пропонує закриття:
 #    результат: DECISIONS.md + architecture/ADR-001.md          [Gate 1: human]
@@ -601,6 +602,44 @@ Dependency slice, Test evidence, Rollout/Rollback).
 ci-fix/review-fix. `(опційно)` Jira/GitHub exporter: tickets.yaml → issues.
 
 ---
+
+## 10.5. Реорієнтація на GSD 1.7 (пін: 1.7.0-rc.4)
+
+Конвеєр переорієнтовано з 1.6.x на 1.7. Ключовий факт з ревізії документації
+next: GSD свідомо зупиняється на створенні PR (non-goals: no tracker
+integration, no auto-PR-loop, no auto-merge) — babysit-цикл, resync стану з
+GitHub, ADR-конформанс і integrator лишаються унікальною цінністю надбудови.
+
+**Вже враховано в конвеєрі:**
+
+- `requirements[]` — обов'язкове поле frontmatter (порожнє = BLOCKER
+  plan-checker'а): шаблон у /pipeline:decompose доповнено, validate-graph
+  попереджає;
+- `wave` у шаблоні самостійного авторства планів;
+- preflight `gsd-tools worktree base-check` перед створенням ticket-worktree;
+- `context_window: 1000000` у рекомендованому конфізі (adaptive-context для
+  1M-моделей, узгоджено з opus[1m]);
+- конфіг-булеани типу `workflow.code_review` стали capability-owned — скіли
+  не читають їх напряму.
+
+**Roadmap подальшої адаптації (за пріоритетом):**
+
+1. **Capability-пакування надбудови** — перепакувати плагін у GSD capability
+   (`capability.json`) з fail-closed gate'ами: `command-exit-zero` →
+   `validate-graph.cjs` на `plan:post` (механічний Gate 2, який агент не може
+   «закрити словами») і ship:pre-gate для arch-conform. 12 канонічних точок
+   loop-host contract.
+2. **Схуднути validate-graph до дельти** — DAG/wave/файлові конфлікти вже
+   перевіряє plan-checker (Dim 3/5); лишити branch naming, risk policy,
+   tickets.json; frontmatter читати через `gsd-tools frontmatter get`.
+3. **PR body через `ship.pr_body_sections`** — ticket-id/risk/ADR-посилання
+   як декларативні секції; конвенція git-трейлерів `gate_status:` для
+   вердиктів arch-review/drift.
+4. **Pre-PR рев'ю адаптерами GSD** — `/gsd-review --coderabbit --opencode`
+   до пушу (дешевше за цикл на PR-ботах).
+5. **`agent_skills` injection** — правила конвеєра в gsd-planner/executor
+   через `global:pipeline:<skill>` без форку агентів.
+6. **`phase uat-passed`** як додатковий механічний merge-gate у deliver.
 
 ## 11. Короткий висновок
 

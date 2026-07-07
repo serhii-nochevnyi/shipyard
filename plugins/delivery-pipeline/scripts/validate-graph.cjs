@@ -145,6 +145,7 @@ if (planFiles.length === 0) fail('no *-PLAN.md files under .planning/phases/');
 
 const tickets = {};
 const errors = [];
+const warnings = [];
 
 for (const file of planFiles.sort()) {
   const rel = path.relative(ROOT, file);
@@ -174,6 +175,11 @@ for (const file of planFiles.sort()) {
   };
   if (delivery.branch && (!BRANCH_RE.test(delivery.branch) || String(delivery.branch).includes('..'))) {
     errors.push(`${id}: delivery.branch "${delivery.branch}" contains invalid characters — expected form: ${branchFor(id, title)}`);
+  }
+  // GSD 1.7: `requirements` is mandatory in plan frontmatter (empty = BLOCKER
+  // in the plan-checker). Warn here so imported plans surface it before GSD does.
+  if (!Array.isArray(fm.requirements) || fm.requirements.length === 0) {
+    warnings.push(`${id}: frontmatter has no requirements[] — GSD 1.7 plan-checker treats this as a BLOCKER`);
   }
 }
 
@@ -305,4 +311,5 @@ for (const [id, t] of Object.entries(view.tickets)) {
 fs.writeFileSync(path.join(GRAPH_DIR, 'tickets.yaml'), yaml.join('\n') + '\n');
 
 console.log(`validate-graph: OK — ${order.length} ticket(s), ${Math.max(...Object.values(depth))} wave(s)`);
+for (const w of warnings) console.log(`  warning: ${w}`);
 console.log(`wrote .planning/graph/tickets.json and tickets.yaml`);

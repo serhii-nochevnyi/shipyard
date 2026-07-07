@@ -7,7 +7,7 @@ sections. Drafts are inputs to the human dialog, not final documents.
 ## Line 1 — system state (→ RESEARCH.md "Поточний стан")
 Map how the affected part of the system works TODAY: entry points, data flow,
 key modules, existing tests, known warts. Cite file paths. Use
-`.planning/codebase/` maps if present (`/gsd:map-codebase` output) instead of
+`.planning/codebase/` maps if present (`/gsd-map-codebase` output) instead of
 re-discovering.
 
 ## Line 2 — alternatives & prior art (→ OPTIONS.md draft)
@@ -31,6 +31,6 @@ unknowns into prose.
 ## Shared rules
 - Read-only: no code changes, no scaffolding.
 - If a hypothesis needs empirical validation by throwaway code, do not do it —
-  recommend a `/gsd:spike "<idea>"` instead and list it in the draft.
+  recommend a `/gsd-spike "<idea>"` instead and list it in the draft.
 - Every claim about the codebase carries a file path; every external claim
   carries a source.
