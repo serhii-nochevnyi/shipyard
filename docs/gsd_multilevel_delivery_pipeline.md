@@ -631,21 +631,26 @@ GitHub, ADR-конформанс і integrator лишаються унікаль
   `delivery_pipeline.graph_gate`. Нюанс rc.4: `runtimeCompat.supported`
   приймає лише `["*"]` (конкретний id `claude` не проходить крос-валідацію).
 
+- **ship:pre gate** (capability v0.3.0): blocking `command-exit-zero` →
+  `uat-gate.cjs ${PHASE_NUMBER}` обгортає fail-closed предикат
+  `phase uat-passed` — /gsd-ship не пройде без verification evidence
+  (вимикач: `delivery_pipeline.uat_gate`). Без фази в контексті — skip.
+- **`ship.pr_body_sections`** засіяно в рекомендований конфіг decompose
+  (Acceptance Criteria + Risks & Dependencies з PLAN.md).
+- **Pre-push рев'ю** — опційний крок 4b у deliver
+  (`/gsd-code-review --fix` / `/gsd-review --coderabbit --opencode`).
+- validate-graph свідомо НЕ схуднутий до дельти над plan-checker:
+  імпорт-потік (Jira → PLAN.md у deliver) не проходить через plan-checker,
+  тож самостійна повна перевірка DAG лишається потрібною.
+
 **Roadmap подальшої адаптації (за пріоритетом):**
 
-1. **Розширення capability** — ship:pre gate (arch-conform як agentVerdict —
-   advisory; `phase uat-passed` як blocking query-gate).
-2. **Схуднути validate-graph до дельти** — DAG/wave/файлові конфлікти вже
-   перевіряє plan-checker (Dim 3/5); лишити branch naming, risk policy,
-   tickets.json; frontmatter читати через `gsd-tools frontmatter get`.
-3. **PR body через `ship.pr_body_sections`** — ticket-id/risk/ADR-посилання
-   як декларативні секції; конвенція git-трейлерів `gate_status:` для
-   вердиктів arch-review/drift.
-4. **Pre-PR рев'ю адаптерами GSD** — `/gsd-review --coderabbit --opencode`
-   до пушу (дешевше за цикл на PR-ботах).
-5. **`agent_skills` injection** — правила конвеєра в gsd-planner/executor
-   через `global:pipeline:<skill>` без форку агентів.
-6. **`phase uat-passed`** як додатковий механічний merge-gate у deliver.
+1. **arch-conform як agentVerdict** на ship:pre (advisory — LLM-оцінки не
+   можуть блокувати за контрактом gate'ів).
+2. **`agent_skills` injection** — авторський скіл із правилами конвеєра для
+   gsd-planner/gsd-executor (`global:pipeline:<skill>`).
+3. **Конвенція git-трейлерів `gate_status:`** для вердиктів
+   arch-review/drift у комітах (несе через squash-merge).
 
 ## 11. Короткий висновок
 

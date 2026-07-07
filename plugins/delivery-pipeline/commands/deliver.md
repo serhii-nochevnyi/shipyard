@@ -121,6 +121,10 @@ merged:   T-01-03
    повний текст плану тікета + Context reads + правило "працюй ТІЛЬКИ в
    межах files_modified; коміть атомарно з префіксом (T): ...; прожени
    Verification commands до зеленого локально".
+4b. (TUNE, опційно) Pre-push рев'ю адаптерами GSD — дешевше зловити
+    зауваження до PR-ботів: `/gsd-code-review <phase> --fix` або
+    `/gsd-review --coderabbit --opencode`, якщо CLI-рев'ювери налаштовані.
+    Недоступні — пропусти мовчки.
 5. Після виконавця: push гілки,
    `gh pr create --base <base-branch|main> --head <branch> --draft
    --title "<T>: <title>" --body <PR body за шаблоном>`.

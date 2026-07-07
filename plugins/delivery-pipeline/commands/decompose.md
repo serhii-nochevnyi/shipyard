@@ -49,7 +49,17 @@ exit 0 від validate-graph.cjs.
     "gsd-planner": "claude-fable-5",
     "gsd-executor": "claude-opus-4-8[1m]"
   },
-  "context_window": 1000000
+  "context_window": 1000000,
+  "ship": {
+    "pr_body_sections": [
+      { "heading": "Acceptance Criteria", "enabled": true,
+        "source": "PLAN.md ## Acceptance criteria",
+        "fallback": "- Covered by linked requirements and verification evidence." },
+      { "heading": "Risks & Dependencies", "enabled": true,
+        "source": "PLAN.md ## Risks || PLAN.md ## Dependencies",
+        "fallback": "- No known high-risk rollout dependencies." }
+    ]
+  }
 }
 ```
 

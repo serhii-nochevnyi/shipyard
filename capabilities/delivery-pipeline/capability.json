@@ -1,7 +1,7 @@
 {
   "id": "delivery-pipeline",
   "role": "feature",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "title": "Delivery pipeline loop gates",
   "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: a blocking plan:post gate runs the ticket-graph validator (Gate 2), so a decomposition without materialized, valid PLAN files cannot pass planning.",
   "tier": "full",
@@ -18,6 +18,11 @@
       "type": "boolean",
       "default": true,
       "description": "Run the delivery-pipeline ticket-graph validator as a blocking plan:post gate (mechanical Gate 2)."
+    },
+    "delivery_pipeline.uat_gate": {
+      "type": "boolean",
+      "default": true,
+      "description": "Block ship until the phase has verification evidence (fail-closed `phase uat-passed` predicate at ship:pre)."
     }
   },
   "steps": [],
@@ -35,6 +40,19 @@
       "blocking": true,
       "onError": "halt",
       "when": "delivery_pipeline.graph_gate"
+    },
+    {
+      "point": "ship:pre",
+      "check": {
+        "predicate": {
+          "kind": "command-exit-zero",
+          "command": "node \"${GSD_CAP_DIR}/checks/uat-gate.cjs\" ${PHASE_NUMBER}",
+          "timeout": 60
+        }
+      },
+      "blocking": true,
+      "onError": "halt",
+      "when": "delivery_pipeline.uat_gate"
     }
   ]
 }
