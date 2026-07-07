@@ -15,6 +15,13 @@ const candidates = [
   path.join(__dirname, 'validate-graph.cjs'),
   '/opt/delivery-pipeline/scripts/validate-graph.cjs',
 ];
+// Host installs: the validator ships inside the Claude plugin cache.
+const cacheRoot = path.join(process.env.HOME || '', '.claude', 'plugins', 'cache', 'delivery-pipeline', 'pipeline');
+if (fs.existsSync(cacheRoot)) {
+  for (const v of fs.readdirSync(cacheRoot).sort().reverse()) {
+    candidates.push(path.join(cacheRoot, v, 'scripts', 'validate-graph.cjs'));
+  }
+}
 const target = candidates.find((f) => fs.existsSync(f));
 if (!target) {
   console.error('graph-gate: validate-graph.cjs not found (checked bundled copy and /opt/delivery-pipeline)');
