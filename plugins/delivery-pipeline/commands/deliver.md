@@ -148,6 +148,17 @@ structured block:
    НІКОЛИ не конструюй tickets.json руками в обхід validate-graph.
 2. `state-sync.cjs` — перебудувати delivery-state з фактичного GitHub
    (локальний файл — лише кеш).
+2b. **Reaper (merged-only, самозагоєння).** Прибирання реконсиляційне, а не
+   happy-path-only: за свіжим delivery-state підмети хвости попередніх (навіть
+   перерваних) прогонів. Для КОЖНОГО тікета зі status `merged`, у якого ще існує
+   worktree (`ticket-worktree.sh list`) або локальна гілка:
+   - `ticket-worktree.sh remove <T>`;
+   - `git branch -D <branch>` — саме `-D`: squash-merge git НЕ бачить як merged,
+     тож `-d` відмовить; покладайся на GitHub-статус `merged` з delivery-state,
+     не на git-merge-базу.
+   Integrator/COMBINED worktree+гілку прибери так само, коли його combined-PR
+   `merged`. **НІКОЛИ** не чіпай worktree/гілку тікета, що НЕ merged
+   (in-flight/blocked/needs-replan) — там може бути незмерджена робота.
 3. Покажи ДОШКУ з stdout state-sync + tickets.json:
 
 ```text
@@ -311,7 +322,12 @@ loop:
    (`model: claude-opus-4-8[1m]`)
    → `INTEGRATION.md`; `needs-fix` → fix-тікети як нові плани → /shipyard:decompose
    Step 4 → наступний /shipyard:deliver.
-3. Приберися: `ticket-worktree.sh remove <T>` для merged тікетів.
+3. Приберися (merged-only, як reaper на Step 0): для КОЖНОГО merged тікета —
+   `ticket-worktree.sh remove <T>` + `git branch -D <branch>` (squash-merge →
+   `-D`, статус беремо з delivery-state). Коли integrator-прогін завершився і
+   його combined-PR merged — прибери й COMBINED worktree+гілку. Не-merged
+   (blocked/in-flight) не чіпай — їх підмете reaper наступного старту, коли
+   вони змерджаться.
 
 ## Правила
 
