@@ -15,11 +15,18 @@ const candidates = [
   path.join(__dirname, 'validate-graph.cjs'),
   '/opt/delivery-pipeline/scripts/validate-graph.cjs',
 ];
-// Host installs: the validator ships inside the Claude plugin cache.
-const cacheRoot = path.join(process.env.HOME || '', '.claude', 'plugins', 'cache', 'delivery-pipeline', 'pipeline');
-if (fs.existsSync(cacheRoot)) {
-  for (const v of fs.readdirSync(cacheRoot).sort().reverse()) {
-    candidates.push(path.join(cacheRoot, v, 'scripts', 'validate-graph.cjs'));
+// Host installs: the validator ships inside the Claude plugin cache under
+// <marketplace>/<plugin>/<version>/. Scan every plugin dir (the plugin may be
+// renamed — e.g. pipeline -> shipyard) and every version, newest first, so this
+// launcher never hardcodes the plugin name.
+const mpCache = path.join(process.env.HOME || '', '.claude', 'plugins', 'cache', 'delivery-pipeline');
+if (fs.existsSync(mpCache)) {
+  for (const plugin of fs.readdirSync(mpCache).sort()) {
+    const pluginDir = path.join(mpCache, plugin);
+    if (!fs.statSync(pluginDir).isDirectory()) continue;
+    for (const v of fs.readdirSync(pluginDir).sort().reverse()) {
+      candidates.push(path.join(pluginDir, v, 'scripts', 'validate-graph.cjs'));
+    }
   }
 }
 const target = candidates.find((f) => fs.existsSync(f));
