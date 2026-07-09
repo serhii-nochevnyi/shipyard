@@ -28,6 +28,11 @@ for wf in drift-gate executors fix-round; do
   } | node --check - || { echo "workflow $wf.mjs is not valid JS when wrapped as the runtime wraps it"; exit 1; }
 done
 [[ -f capabilities/delivery-pipeline/capability.json ]] || { echo "missing delivery-pipeline capability.json"; exit 1; }
+# The plugin and its GSD capability ship as one product — keep them on a single
+# version so a release can never half-update one and leave the other behind.
+PLUGIN_VER="$(node -p 'require("./plugins/delivery-pipeline/.claude-plugin/plugin.json").version')"
+CAP_VER="$(node -p 'require("./capabilities/delivery-pipeline/capability.json").version')"
+[[ "$PLUGIN_VER" == "$CAP_VER" ]] || { echo "delivery-pipeline version drift: plugin $PLUGIN_VER != capability $CAP_VER"; exit 1; }
 [[ -f capabilities/delivery-pipeline/checks/graph-gate.cjs ]] || { echo "missing capability graph-gate.cjs"; exit 1; }
 [[ ! -d config/claude-lsp-plugin ]] || { echo "config/claude-lsp-plugin should be gone"; exit 1; }
 [[ ! -f scripts/sync-dev-copilot.sh ]] || { echo "sync-dev-copilot.sh should be gone"; exit 1; }
