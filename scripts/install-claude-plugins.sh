@@ -30,7 +30,7 @@ pg 600 claude plugin marketplace add anthropics/claude-plugins-official
 # Install all plugins. Plugins from the official marketplace are pinned by the
 # marketplace's GitHub ref at clone time; no separate version pin is fabricated here.
 pg 300 claude plugin install andrej-karpathy-skills@karpathy-skills
-pg 300 claude plugin install pipeline@delivery-pipeline
+pg 300 claude plugin install shipyard@delivery-pipeline
 
 # Register the delivery-pipeline GSD capability (global scope — no per-project
 # consent needed). Its blocking plan:post gate runs the ticket-graph validator,
@@ -62,7 +62,7 @@ jq '
   .permissions.defaultMode = (.permissions.defaultMode // "bypassPermissions") |
   .enabledPlugins |= (. // {}) |
   .enabledPlugins["andrej-karpathy-skills@karpathy-skills"] = true |
-  .enabledPlugins["pipeline@delivery-pipeline"] = true |
+  .enabledPlugins["shipyard@delivery-pipeline"] = true |
   .enabledPlugins["skill-creator@claude-plugins-official"] = true |
   .enabledPlugins["code-simplifier@claude-plugins-official"] = true |
   .enabledPlugins["github@claude-plugins-official"] = true |

@@ -1,6 +1,6 @@
 # investigation research agents (fan-out)
 
-Four parallel research lines launched by /pipeline:investigate at INV start.
+Four parallel research lines launched by /shipyard:investigate at INV start.
 Each agent gets the problem statement + this brief and drafts its artifact
 sections. Drafts are inputs to the human dialog, not final documents.
 

@@ -66,7 +66,7 @@ docker run --rm claude-shipyard:test bash -lc '
   # official marketplace is registered
   jq -e ".\"claude-plugins-official\"" "$HOME/.claude/plugins/known_marketplaces.json" >/dev/null
   # all six plugins appear in installed_plugins.json
-  for p in andrej-karpathy-skills@karpathy-skills pipeline@delivery-pipeline skill-creator@claude-plugins-official code-simplifier@claude-plugins-official github@claude-plugins-official typescript-lsp@claude-plugins-official; do
+  for p in andrej-karpathy-skills@karpathy-skills shipyard@delivery-pipeline skill-creator@claude-plugins-official code-simplifier@claude-plugins-official github@claude-plugins-official typescript-lsp@claude-plugins-official; do
     jq -e --arg p "$p" ".plugins[\$p]" "$HOME/.claude/plugins/installed_plugins.json" >/dev/null
   done
   # the delivery-pipeline GSD capability is installed and its gate check is runnable

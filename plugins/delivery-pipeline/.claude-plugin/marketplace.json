@@ -5,11 +5,11 @@
     "name": "Nochevnyi Serhii"
   },
   "metadata": {
-    "description": "Multilevel delivery pipeline: /pipeline:investigate, /pipeline:decompose, /pipeline:deliver"
+    "description": "Multilevel delivery pipeline: /shipyard:investigate, /shipyard:decompose, /shipyard:deliver"
   },
   "plugins": [
     {
-      "name": "pipeline",
+      "name": "shipyard",
       "source": "./",
       "description": "Deep investigation -> ticket DAG -> per-ticket worktree/PR delivery babysat to green",
       "author": {

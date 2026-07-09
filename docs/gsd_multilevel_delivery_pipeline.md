@@ -613,7 +613,7 @@ GitHub, ADR-конформанс і integrator лишаються унікаль
 **Вже враховано в конвеєрі:**
 
 - `requirements[]` — обов'язкове поле frontmatter (порожнє = BLOCKER
-  plan-checker'а): шаблон у /pipeline:decompose доповнено, validate-graph
+  plan-checker'а): шаблон у /shipyard:decompose доповнено, validate-graph
   попереджає;
 - `wave` у шаблоні самостійного авторства планів;
 - preflight `gsd-tools worktree base-check` перед створенням ticket-worktree;
@@ -650,7 +650,7 @@ GitHub, ADR-конформанс і integrator лишаються унікаль
 - **`agent_skills` injection**: скіл `pipeline:delivery-rules`
   (правила frontmatter/delivery-блоку/branch naming/scope-дисципліни)
   інжектиться в gsd-planner і gsd-executor через
-  `agent_skills: {"gsd-planner": ["global:pipeline:delivery-rules"], ...}`
+  `agent_skills: {"gsd-planner": ["global:shipyard:delivery-rules"], ...}`
   у рекомендованому конфізі.
 - **Трейлер `gate_status:`** — deliver фіксує вердикти в PR body останнім
   рядком (`gate_status: arch-review=…, drift-check=…, checks=green`);

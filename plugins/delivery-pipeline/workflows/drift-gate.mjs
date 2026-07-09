@@ -4,7 +4,7 @@ export const meta = {
   phases: [{ title: 'Drift', detail: 'one read-only judge per stale ticket' }],
 }
 
-// ── args contract (built by /pipeline:deliver before invocation) ────────────
+// ── args contract (built by /shipyard:deliver before invocation) ────────────
 //   args = {
 //     tickets: [ { id, planPath, model } ],   // model optional (default sonnet)
 //     driftRefPath: "<abs path to references/drift-check.md>",

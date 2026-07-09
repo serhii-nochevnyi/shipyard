@@ -3,7 +3,7 @@
 
 // Cold-start resync: rebuild .planning/graph/delivery-state.json|yaml from the
 // ACTUAL GitHub state (gh CLI). The local state file is a cache; GitHub is the
-// source of truth. Idempotent — safe to run at every /pipeline:deliver start.
+// source of truth. Idempotent — safe to run at every /shipyard:deliver start.
 //
 // Ticket status model:
 //   merged   — a PR for the ticket branch is merged
@@ -99,7 +99,7 @@ for (const [id, s] of Object.entries(state)) {
 }
 fs.writeFileSync(path.join(GRAPH_DIR, 'delivery-state.yaml'), yaml.join('\n') + '\n');
 
-// board summary on stdout for the /pipeline:deliver skill
+// board summary on stdout for the /shipyard:deliver skill
 const buckets = {};
 for (const [id, s] of Object.entries(state)) {
   const b = s.status === 'pending' ? (s.ready ? 'ready' : 'blocked') : s.status;

@@ -13,7 +13,7 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-# /pipeline:investigate
+# /shipyard:investigate
 
 Ти ведеш контур 1 delivery-конвеєра (див. `docs/gsd_multilevel_delivery_pipeline.md`
 якщо є в репо). Стан живе ТІЛЬКИ в артефактах `.planning/investigations/` —
@@ -80,7 +80,7 @@ allowed-tools:
      кожне locked decision — явна секція, scope fences — окремим блоком);
    - за наявності матеріалу: INTERFACES.md, DATA-MODEL.md, ROLLOUT.md.
 3. Додай в PROBLEM.md frontmatter `status: closed` + дату і посилання на ADR.
-4. Скажи користувачу наступний крок: `/pipeline:decompose`.
+4. Скажи користувачу наступний крок: `/shipyard:decompose`.
 
 ## Правила
 

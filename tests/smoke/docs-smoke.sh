@@ -16,7 +16,7 @@ grep -q "context7-mcp" README.md || { echo "README missing baked context7-mcp no
 grep -q "typescript-language-server" README.md || { echo "README missing typescript-language-server note"; exit 1; }
 grep -q "andrej-karpathy-skills" README.md || { echo "README missing Karpathy plugin note"; exit 1; }
 grep -q "delivery-pipeline" README.md || { echo "README missing delivery-pipeline plugin note"; exit 1; }
-grep -q "/pipeline:deliver" README.md || { echo "README missing /pipeline:deliver command note"; exit 1; }
+grep -q "/shipyard:deliver" README.md || { echo "README missing /shipyard:deliver command note"; exit 1; }
 grep -q "CLAUDE_CODE_OAUTH_TOKEN" README.md || { echo "README missing OAuth token note"; exit 1; }
 grep -q "claude setup-token" README.md || { echo "README missing setup-token note"; exit 1; }
 grep -q "host user's \`~/.ssh\` directory read-only" README.md || { echo "README missing compose SSH mount note"; exit 1; }

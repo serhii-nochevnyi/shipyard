@@ -14,11 +14,11 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-# /pipeline:deliver
+# /shipyard:deliver
 
 Ти ведеш контур 3: набір тікетів → окремі worktrees → PR на тікет → зелений
 стан. Стан живе в GitHub і `.planning/graph/` — сесію можна вбити будь-коли
-і перезапустити `/pipeline:deliver` без втрат.
+і перезапустити `/shipyard:deliver` без втрат.
 
 ## Моделі агентів (обов'язково передавай `model` при кожному спавні)
 
@@ -99,7 +99,7 @@ ${CLAUDE_PLUGIN_ROOT}/workflows/fix-round.mjs    # Step 4 — один пара�
 ## Step 0 — Холодний старт (обов'язково при КОЖНОМУ запуску)
 
 1. `validate-graph.cjs` — граф проти поточного стану планів; помилки → стоп,
-   покажи їх (можливо, щось змерджено повз конвеєр — направ у /pipeline:decompose).
+   покажи їх (можливо, щось змерджено повз конвеєр — направ у /shipyard:decompose).
 
    **Кейс «декомпозиція не матеріалізована»** (немає `.planning/phases/` або
    жодного `*-PLAN.md`): це означає, що попередня декомпозиція закрила Gate 2
@@ -114,7 +114,7 @@ ${CLAUDE_PLUGIN_ROOT}/workflows/fix-round.mjs    # Step 4 — один пара�
       Verification commands). Чого немає в Jira (depends_on, files_modified) —
       виведи зі змісту або допитай користувача. Після імпорту — знову
       validate-graph (справжній Gate 2) і далі звичайний потік;
-   c. якщо зовнішніх тікетів немає — направ у /pipeline:decompose.
+   c. якщо зовнішніх тікетів немає — направ у /shipyard:decompose.
    НІКОЛИ не конструюй tickets.json руками в обхід validate-graph.
 2. `state-sync.cjs` — перебудувати delivery-state з фактичного GitHub
    (локальний файл — лише кеш).
@@ -151,7 +151,7 @@ merged:   T-01-03
   промпт `${CLAUDE_PLUGIN_ROOT}/references/drift-check.md` + контракт тікета).
 
 `drifted` → тікет виключається зі scope, позначається needs-replan,
-користувачу — підсумок дрейфу і направлення в /pipeline:decompose. НЕ виконуй
+користувачу — підсумок дрейфу і направлення в /shipyard:decompose. НЕ виконуй
 дрейфнутий тікет наосліп.
 
 ## Step 3 — Виконавці (паралельно по готовності)
@@ -270,8 +270,8 @@ loop:
 2. Якщо це були ОСТАННІ тікети фази (всі тікети фази merged) → запропонуй
    integrator-прогін: агент за `${CLAUDE_PLUGIN_ROOT}/references/integrator.md`
    (`model: claude-fable-5`)
-   → `INTEGRATION.md`; `needs-fix` → fix-тікети як нові плани → /pipeline:decompose
-   Step 4 → наступний /pipeline:deliver.
+   → `INTEGRATION.md`; `needs-fix` → fix-тікети як нові плани → /shipyard:decompose
+   Step 4 → наступний /shipyard:deliver.
 3. Приберися: `ticket-worktree.sh remove <T>` для merged тікетів.
 
 ## Правила

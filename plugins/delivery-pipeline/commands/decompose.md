@@ -13,7 +13,7 @@ allowed-tools:
   - Skill
 ---
 
-# /pipeline:decompose
+# /shipyard:decompose
 
 Ти ведеш контур 2: перетворення прийнятої архітектури на тікети з явним DAG.
 Тікет = GSD-план + `delivery:` блок у frontmatter. Залежності живуть у
@@ -22,7 +22,7 @@ frontmatter планів; `graph/tickets.yaml` — генерований view.
 **ЄДИНЕ джерело правди — файли `.planning/phases/<N>-*/<N>-<M>-PLAN.md`.**
 Jira/GitHub issues, ROLLOUT.md, списки в чаті — НЕ тікети конвеєра, а
 щонайбільше експортні проєкції. Декомпозиція без матеріалізованих PLAN-файлів
-не існує: /pipeline:deliver читає тільки їх. Оголошувати Gate 2 пройденим на
+не існує: /shipyard:deliver читає тільки їх. Оголошувати Gate 2 пройденим на
 підставі будь-яких інших артефактів ЗАБОРОНЕНО — Gate 2 це виключно
 exit 0 від validate-graph.cjs.
 
@@ -31,7 +31,7 @@ exit 0 від validate-graph.cjs.
 1. Прочитай `.planning/architecture/` — список `ADR-*.md`.
 2. Визнач, які ADR ще не декомпозовані: перевір ROADMAP.md і наявні
    `phases/*/`*-PLAN.md на згадки ADR. Якщо неоднозначно — запитай.
-3. Нема жодного ADR → скажи, що спершу `/pipeline:investigate`, і зупинись.
+3. Нема жодного ADR → скажи, що спершу `/shipyard:investigate`, і зупинись.
 4. Кілька кандидатів → AskUserQuestion: який ADR (або кілька в одну фазу).
 
 ## Step 0.5 — Моделі GSD-агентів
@@ -51,8 +51,8 @@ exit 0 від validate-graph.cjs.
   },
   "context_window": 1000000,
   "agent_skills": {
-    "gsd-planner": ["global:pipeline:delivery-rules"],
-    "gsd-executor": ["global:pipeline:delivery-rules"]
+    "gsd-planner": ["global:shipyard:delivery-rules"],
+    "gsd-executor": ["global:shipyard:delivery-rules"]
   },
   "ship": {
     "pr_body_sections": [
@@ -160,7 +160,7 @@ Gate 2 — це МЕХАНІЧНА перевірка, не судження. П
    - скільки waves і що піде паралельно.
 4. Користувач хоче зміни ("T-03 розбий на два") → точкова правка планів →
    знову Step 4.1.
-5. Апрув → скажи наступний крок: `/pipeline:deliver` (можна одразу або
+5. Апрув → скажи наступний крок: `/shipyard:deliver` (можна одразу або
    через тиждень — delivery сам зробить холодний старт).
 
 ## Правила

@@ -4,7 +4,7 @@ export const meta = {
   phases: [{ title: 'Execute', detail: 'one executor per ready ticket, in its own worktree' }],
 }
 
-// ── args contract (built by /pipeline:deliver before invocation) ────────────
+// ── args contract (built by /shipyard:deliver before invocation) ────────────
 //   args = {
 //     tickets: [ {
 //       id,            // "T-01-02"
@@ -84,7 +84,7 @@ return await parallel(
         schema: OUT,
       }
     )
-      .then((r) => (r ? { ...r, id: t.id, branch: t.branch } : execFallback(t, 'executor agent died — re-dispatch via /pipeline:deliver')))
-      .catch((e) => execFallback(t, `executor errored (${e && e.message ? e.message : e}) — re-dispatch via /pipeline:deliver`))
+      .then((r) => (r ? { ...r, id: t.id, branch: t.branch } : execFallback(t, 'executor agent died — re-dispatch via /shipyard:deliver')))
+      .catch((e) => execFallback(t, `executor errored (${e && e.message ? e.message : e}) — re-dispatch via /shipyard:deliver`))
   )
 )

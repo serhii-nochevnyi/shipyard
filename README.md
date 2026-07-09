@@ -39,21 +39,21 @@ Individual targets if you prefer to drive it yourself:
 ## Delivery workflow
 
 The main way to work in this container is the baked-in **delivery pipeline**
-(the `pipeline` plugin): a full cycle from a raw problem to a set of green PRs.
+(the `shipyard` plugin): a full cycle from a raw problem to a set of green PRs.
 Inside a `claude` session in your project directory:
 
 ```text
-/pipeline:investigate "тема або проблема"
+/shipyard:investigate "тема або проблема"
 ```
 
 Deep investigation: an intake interview refines the problem, parallel research
 agents draft options/constraints/risks, then you close open questions and lock
-decisions in a dialog. Re-run `/pipeline:investigate` anytime — it picks up the
+decisions in a dialog. Re-run `/shipyard:investigate` anytime — it picks up the
 open investigation from its artifacts. When all questions are closed it
 generates an ADR package (Gate 1 — the only fully human gate).
 
 ```text
-/pipeline:decompose
+/shipyard:decompose
 ```
 
 Finds undecomposed ADRs, runs the GSD planning chain under the hood, stamps
@@ -61,7 +61,7 @@ tickets with branches/risk, validates the dependency graph (Gate 2 — automatic
 and shows you the ticket set for approval.
 
 ```text
-/pipeline:deliver
+/shipyard:deliver
 ```
 
 Cold-starts from live GitHub state, shows a ticket board (ready / blocked /
@@ -110,8 +110,8 @@ The overlay image installs the following during build:
   (`2c606141936f1eeef17fa3043a72095b4765b9c2`) and registered with `claude plugin`.
 - **pipeline** (delivery-pipeline) — an in-repo Claude Code plugin (`plugins/delivery-pipeline/`)
   implementing the multilevel delivery pipeline from `docs/gsd_multilevel_delivery_pipeline.md`:
-  `/pipeline:investigate` (deep investigation → ADR), `/pipeline:decompose` (ADR → ticket DAG),
-  `/pipeline:deliver` (per-ticket worktree → PR babysat to green with CodeRabbit/Copilot
+  `/shipyard:investigate` (deep investigation → ADR), `/shipyard:decompose` (ADR → ticket DAG),
+  `/shipyard:deliver` (per-ticket worktree → PR babysat to green with CodeRabbit/Copilot
   reviewer re-initialization).
 - **skill-creator**, **code-simplifier**, **github** (GitHub MCP server), and
   **typescript-lsp** — installed from the official `claude-plugins-official` marketplace
@@ -240,8 +240,8 @@ when Claude Code starts an interactive session.
 - **gsd-core** (`@opengsd/gsd-core`) — Claude Code delivery plugin with full profile, installed via npx.
 - **andrej-karpathy-skills** — staged from pinned commit, registered via `claude plugin`.
 - **pipeline** — in-repo (`plugins/delivery-pipeline/`); investigation → ticket DAG →
-  per-ticket worktree/PR delivery. Commands: `/pipeline:investigate`, `/pipeline:decompose`,
-  `/pipeline:deliver`.
+  per-ticket worktree/PR delivery. Commands: `/shipyard:investigate`, `/shipyard:decompose`,
+  `/shipyard:deliver`.
 - **skill-creator** — from `claude-plugins-official`; helps create new Claude Code skills.
 - **code-simplifier** — from `claude-plugins-official`; reviews and simplifies code.
 - **github** — from `claude-plugins-official`; the official GitHub MCP server plugin.

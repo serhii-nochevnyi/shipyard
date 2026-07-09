@@ -4,7 +4,7 @@ export const meta = {
   phases: [{ title: 'Fix', detail: 'one fixer per open PR needing work' }],
 }
 
-// ── args contract (built by /pipeline:deliver each babysit round) ───────────
+// ── args contract (built by /shipyard:deliver each babysit round) ───────────
 //   args = {
 //     prs: [ {
 //       id,              // ticket id
