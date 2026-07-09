@@ -10,6 +10,7 @@ allowed-tools:
   - Grep
   - Glob
   - Agent
+  - Workflow
   - AskUserQuestion
 ---
 
@@ -50,6 +51,50 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs
 node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved> <pr>
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|list> ...
 ```
+
+## Burst-паралелізм через Workflow (опційно, з fallback)
+
+Три ділянки конвеєра — чистий fan-out по незалежних одиницях: drift-gate
+(Step 2), виконавці (Step 3), fix-прохід у babysit (Step 4). Якщо тобі
+доступний **Workflow tool**, оркеструй ці ділянки ним — так паралелізм
+детермінований, з гарантованим structured-output і керованим кепом
+конкурентності. Це легальний opt-in: slash-команда прямо інструктує задіяти
+Workflow.
+
+Готові скрипти (виконуй через `Workflow({scriptPath, args})`):
+
+```text
+${CLAUDE_PLUGIN_ROOT}/workflows/drift-gate.mjs   # Step 2 — паралельні судді
+${CLAUDE_PLUGIN_ROOT}/workflows/executors.mjs    # Step 3 — код+push+draft-PR+reinit
+${CLAUDE_PLUGIN_ROOT}/workflows/fix-round.mjs    # Step 4 — один паралельний fix-прохід
+```
+
+Кожен скрипт має у шапці `args`-контракт — будуй `args` рівно за ним
+(абсолютні шляхи: резолвни `${CLAUDE_PLUGIN_ROOT}` у конкретний шлях; референс-
+промпти й плани агенти читають самі — скрипти файлів не читають). Правила:
+
+- **Workflow асинхронний.** Виклик `Workflow(...)` повертається одразу (task id;
+  запуск фоновий) — фінальний structured-результат приходить ПІЗНІШЕ
+  (task-notification про завершення). Дочекайся завершення, ЗАБЕРИ результат і
+  перевір на error/failure (впав запуск / ненульовий вихід). Дошку, `state-sync`,
+  attempts і будь-які гейти будуй ТІЛЬКИ на завершеному Workflow з отриманим
+  результатом — ніколи на не-завершеному чи помилковому. Workflow впав до старту
+  (напр. недоступний) → перемкнись на Agent-фолбек цього кроку.
+- **Worktrees створює main-loop СЕРІЙНО** (`ticket-worktree.sh create`) ще ДО
+  інвокації Workflow і передає готові шляхи в `args.tickets[].worktreePath`.
+  `git worktree add` пише у спільний `.git` — паралельне створення дало б гонку
+  за index-lock. НЕ вживай нативний `isolation:'worktree'` Workflow — worktrees
+  конвеєра durable й base-specific, а не ефемерні.
+- Гейти лишаються за main-loop: attempts, очікування CI, arch-review,
+  conform-гейт, human-checkpoints, ескалації. Workflow робить лише burst-роботу
+  й повертає structured-вердикти — рішення ухвалюєш ти.
+- Моделі резолви ТУТ (політика + `pipeline.models` override) і передавай у
+  `args.tickets[].model` / `args.prs[].model` — скрипт лише вживає передане.
+
+**Фолбек і флаг.** Немає Workflow tool у сесії — виконуй ці кроки поточним
+способом: кілька `Agent` в одному повідомленні (описано в кожному Step). Флаг
+`pipeline.use_workflow` у `.planning/config.json`: за замовчуванням авто
+(вживати Workflow, коли доступний); `false` — примусово Agent-per-item фолбек.
 
 ## Step 0 — Холодний старт (обов'язково при КОЖНОМУ запуску)
 
@@ -96,9 +141,16 @@ merged:   T-01-03
 ## Step 2 — Drift-gate обраних тікетів
 
 Для кожного тікета зі scope, чий план старший за останній merge в main
-(або якщо минуло >2 днів від генерації) — запусти ПАРАЛЕЛЬНО drift-check
-агентів (`model: sonnet`; промпт: `${CLAUDE_PLUGIN_ROOT}/references/drift-check.md`
-+ контракт тікета). `drifted` → тікет виключається зі scope, позначається needs-replan,
+(або якщо минуло >2 днів від генерації) — прожени drift-check ПАРАЛЕЛЬНО:
+
+- **Workflow-шлях** (доступний і `use_workflow ≠ false`): `Workflow({scriptPath:
+  <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, model: sonnet}],
+  driftRefPath: <references/drift-check.md>}})`. Скрипт fail-safe: агент, що
+  впав, трактується як `drifted`.
+- **Фолбек**: кілька drift-check `Agent` в одному повідомленні (`model: sonnet`;
+  промпт `${CLAUDE_PLUGIN_ROOT}/references/drift-check.md` + контракт тікета).
+
+`drifted` → тікет виключається зі scope, позначається needs-replan,
 користувачу — підсумок дрейфу і направлення в /pipeline:decompose. НЕ виконуй
 дрейфнутий тікет наосліп.
 
@@ -133,8 +185,23 @@ merged:   T-01-03
 6. Одразу перший `reviewers.cjs reinit <pr>`.
 7. Онови delivery-state (`state-sync.cjs`).
 
-Незалежні тікети запускай ПАРАЛЕЛЬНО (кілька Agent в одному повідомленні).
-Конфлікти по файлах виключені Gate 2.
+Кроки 1–3 (base, preflight, `ticket-worktree.sh create`) — ЗАВЖДИ в main-loop
+і СЕРІЙНО: `git worktree add` пише у спільний `.git`, паралельне створення
+racy. Кроки 4–6 (код → verify → push → draft-PR → reinit) — це fan-out по
+готових тікетах:
+
+- **Workflow-шлях** (доступний і `use_workflow ≠ false`): після серійного
+  створення всіх worktrees — `Workflow({scriptPath: <workflows/executors.mjs>,
+  args: {tickets: [{id, title, planPath, branch, worktreePath, prBase,
+  model: opus[1m]}], reinitScript: <scripts/reviewers.cjs>, deliveryRulesHint,
+  prBodyGuide}})`. Агент сам комітить, пушить, відкриває draft-PR і робить
+  reinit у своєму worktree. `prBase` = `main` (залежності merged) або гілка
+  найглибшої незмердженої залежності.
+- **Фолбек**: кілька executor `Agent` в одному повідомленні (кроки 4–6 вручну,
+  як вище). Незалежні тікети — ПАРАЛЕЛЬНО.
+
+Крок 4b (pre-push рев'ю) і крок 7 (`state-sync.cjs` — один раз ПІСЛЯ повернення
+Workflow/агентів) лишаються за main-loop. Конфлікти по файлах виключені Gate 2.
 
 ## Step 4 — Babysit loop (для КОЖНОГО відкритого PR зі scope)
 
@@ -176,9 +243,25 @@ loop:
      → крок a
 ```
 
-Кілька відкритих PR обслуговуй по черзі раундами (a→d для кожного), поки всі
-не green/blocked. green + merged залежності розблоковують наступні тікети зі
-scope → повертайся у Step 3 для них.
+Кілька відкритих PR: **Workflow-шлях** (доступний і `use_workflow ≠ false`)
+паралелить САМЕ fix-роботу одного раунду. Порядок раунду:
+
+1. `state-sync.cjs` → для кожного відкритого PR визнач `needsCiFix` (checks
+   failing) і `needsReviewFix` (`reviewers.cjs unresolved` > 0). Ті, що чекають
+   на pending checks — пропусти цей раунд (їх добере наступний після watch).
+2. Є PR, що потребують роботи → `Workflow({scriptPath: <workflows/fix-round.mjs>,
+   args: {prs: [{id, pr, branch, worktreePath, planPath, needsCiFix,
+   needsReviewFix, model: opus[1m]}], ciFixRefPath, reviewFixRefPath,
+   reinitScript}})`. Один паралельний прохід; кожен агент пушить максимум раз і
+   робить reinit сам. `escalate` → status blocked, до людини.
+3. Для кожного `pushed:true` — `attempts += 1` (MAX 5), почекай CI
+   (`gh pr checks --watch`).
+4. Далі — крок **c** циклу (arch-review, Fable) і conform-гейт для кожного PR
+   у main-loop, як вище. Це судження і фіналізація — НЕ віддавай у Workflow.
+
+**Фолбек** (нема Workflow): обслуговуй по черзі раундами (a→d для кожного PR).
+Поки всі не green/blocked. green + merged залежності розблоковують наступні
+тікети зі scope → повертайся у Step 3 для них.
 
 ## Step 5 — Завершення
 

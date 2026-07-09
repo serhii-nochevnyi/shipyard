@@ -13,8 +13,9 @@ these rules keep them machine-consumable by the conveyor's deterministic layer.
 
 1. **Full frontmatter, always**: `phase`, `plan`, `title`, `type`, `wave`,
    `depends_on: []`, `files_modified: []`, `requirements: []`. Empty
-   `requirements` is a plan-checker BLOCKER — reference ROADMAP requirement
-   ids, or the external tracker id when the plan was imported.
+   `requirements` is a BLOCKER — both GSD's plan-checker and Gate 2
+   (`validate-graph`) reject it; reference ROADMAP requirement ids, or the
+   external tracker id when the plan was imported.
 2. **Delivery block** (additive, never replaces GSD fields):
 
    ```yaml
@@ -30,8 +31,11 @@ these rules keep them machine-consumable by the conveyor's deterministic layer.
    hyphens, ≤40 chars). Omit `delivery.branch` — the graph validator
    generates it; an explicit value is validated against the same rule.
 4. **files_modified is a contract, not a guess** — list every path the plan
-   touches. Dependency-unordered plans with overlapping paths fail Gate 2;
-   resolve with a dependency or a re-slice, never by widening globs.
+   touches. An EMPTY `files_modified` fails Gate 2 (it is what makes
+   "dependency-unordered tickets never collide" checkable, and it is the
+   executor's scope). Dependency-unordered plans with overlapping paths also
+   fail Gate 2; resolve with a dependency or a re-slice, never by widening
+   globs (a bare glob that matches everything is flagged).
 5. **Gate 2 is mechanical**: it passes only when the graph validator exits 0.
    Jira/GitHub issues, ROLLOUT.md, or prose summaries are never a substitute
    for materialized PLAN files.

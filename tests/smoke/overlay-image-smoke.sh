@@ -9,8 +9,23 @@ set -euo pipefail
 [[ -f plugins/delivery-pipeline/.claude-plugin/marketplace.json ]] || { echo "missing delivery-pipeline marketplace.json"; exit 1; }
 for f in commands/investigate.md commands/decompose.md commands/deliver.md \
          scripts/validate-graph.cjs scripts/state-sync.cjs scripts/reviewers.cjs \
-         scripts/validate-inv.cjs scripts/ticket-worktree.sh; do
+         scripts/validate-inv.cjs scripts/ticket-worktree.sh \
+         workflows/drift-gate.mjs workflows/executors.mjs workflows/fix-round.mjs; do
   [[ -f "plugins/delivery-pipeline/$f" ]] || { echo "missing delivery-pipeline $f"; exit 1; }
+done
+
+# Workflow scripts use the DSL's top-level await/return, so a BARE `node --check`
+# is expected to fail with "Illegal return statement". The runtime wraps the body
+# in an async function — replicate that wrap, THEN check, to catch real syntax
+# errors (typos) without false-failing on the intended top-level return.
+for wf in drift-gate executors fix-round; do
+  f="plugins/delivery-pipeline/workflows/$wf.mjs"
+  {
+    echo "let agent,parallel,phase,log,args;"
+    echo "async function __wf(){"
+    sed 's/^export const meta/const meta/' "$f"
+    echo "}; void __wf;"
+  } | node --check - || { echo "workflow $wf.mjs is not valid JS when wrapped as the runtime wraps it"; exit 1; }
 done
 [[ -f capabilities/delivery-pipeline/capability.json ]] || { echo "missing delivery-pipeline capability.json"; exit 1; }
 [[ -f capabilities/delivery-pipeline/checks/graph-gate.cjs ]] || { echo "missing capability graph-gate.cjs"; exit 1; }
@@ -35,6 +50,9 @@ docker run --rm claude-shipyard:test bash -lc '
   test -d /opt/delivery-pipeline
   test -x /opt/delivery-pipeline/scripts/validate-graph.cjs
   test -x /opt/delivery-pipeline/scripts/ticket-worktree.sh
+  test -f /opt/delivery-pipeline/workflows/executors.mjs
+  test -f /opt/delivery-pipeline/workflows/drift-gate.mjs
+  test -f /opt/delivery-pipeline/workflows/fix-round.mjs
   test -x /usr/local/bin/install-claude-plugins.sh
   command -v claude >/dev/null
   # gsd-core landed under ~/.claude

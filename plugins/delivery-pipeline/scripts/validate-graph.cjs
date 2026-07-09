@@ -3,15 +3,16 @@
 
 // Gate 2 validator + generator of the ticket graph view.
 //
-// Scans .planning/phases/*/​*-PLAN.md, reads plan frontmatter (GSD fields:
+// Scans .planning/phases/*/*-PLAN.md, reads plan frontmatter (GSD fields:
 // phase, plan, type, wave, depends_on, files_modified + our `delivery:` block),
 // validates the DAG and emits:
 //   .planning/graph/tickets.json  (machine view, consumed by state-sync/deliver)
 //   .planning/graph/tickets.yaml  (human view; generated -- do not edit)
 //
-// Checks: unique ticket ids, resolvable deps, no cycles, no files_modified
-// overlap between dependency-unordered tickets, high risk => human_checkpoint.
-// Exits non-zero with an explicit error list when the graph is invalid.
+// Checks: unique ticket ids, non-empty files_modified (the parallel-safety
+// contract) and non-empty requirements, resolvable deps, no cycles, no
+// files_modified overlap between dependency-unordered tickets, high risk =>
+// human_checkpoint. Exits non-zero with an explicit error list when invalid.
 
 const fs = require('fs');
 const path = require('path');
@@ -176,10 +177,29 @@ for (const file of planFiles.sort()) {
   if (delivery.branch && (!BRANCH_RE.test(delivery.branch) || String(delivery.branch).includes('..'))) {
     errors.push(`${id}: delivery.branch "${delivery.branch}" contains invalid characters — expected form: ${branchFor(id, title)}`);
   }
-  // GSD 1.7: `requirements` is mandatory in plan frontmatter (empty = BLOCKER
-  // in the plan-checker). Warn here so imported plans surface it before GSD does.
+  // Gate 2 core guarantee: files_modified is what makes the "dependency-unordered
+  // tickets never touch the same paths" check (below) meaningful, and it is the
+  // executor's scope contract (delivery-rules §4). An empty/missing list silently
+  // turns the overlap check into a no-op — so it is a hard error, not a warning.
+  if (tickets[id].files.length === 0) {
+    errors.push(`${id}: files_modified is empty — Gate 2's file-overlap guarantee and the executor scope both depend on it (delivery-rules §4); list every path the plan touches`);
+  } else {
+    for (const f of tickets[id].files) {
+      if (globPrefix(f) === '') {
+        warnings.push(`${id}: files_modified entry "${f}" is a bare glob matching everything — narrow it (delivery-rules §4: resolve overlap by a dependency or a re-slice, never by widening globs)`);
+      }
+    }
+  }
+  // depends_on must be an explicit decomposer decision, not an omission
+  // ([] = a legitimate root ticket; a MISSING key is a smell worth surfacing).
+  if (!Array.isArray(fm.depends_on)) {
+    warnings.push(`${id}: frontmatter has no depends_on[] — declare it explicitly (use [] for a root ticket)`);
+  }
+  // requirements[] is mandatory (delivery-rules §1). GSD's plan-checker also
+  // blocks on it, but the import path (deliver.md Step 0) can materialize plans
+  // without GSD ever running — so Gate 2 must own this too, as a hard error.
   if (!Array.isArray(fm.requirements) || fm.requirements.length === 0) {
-    warnings.push(`${id}: frontmatter has no requirements[] — GSD 1.7 plan-checker treats this as a BLOCKER`);
+    errors.push(`${id}: frontmatter has no requirements[] — reference ROADMAP requirement ids (or the external tracker id for imported plans)`);
   }
 }
 
