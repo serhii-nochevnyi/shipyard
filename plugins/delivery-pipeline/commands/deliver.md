@@ -22,26 +22,27 @@ allowed-tools:
 
 ## Моделі агентів (обов'язково передавай `model` при кожному спавні)
 
-Політика: найважче судження → Fable 5, важка робота → Opus 4.8, легка механіка →
-Sonnet 5.
+Політика (два яруси): важке судження + важка кодова робота → Opus 4.8 з 1M
+контекстом, легка механіка → Sonnet 5.
 
 ```text
-integrator     → claude-fable-5  (емерджентні порушення, найдорожчі помилки)
-arch-review    → claude-fable-5  (вердикт проти ADR — судження)
-executor       → opus[1m]        (основна кодова робота за контрактом)
-review-fix     → opus[1m]        (верифікація чужих claim'ів + правки)
-ci-fix         → opus[1m]        (діагностика падінь)
-drift-check    → sonnet          (механічна звірка контракту з кодом)
+integrator     → opus[1m]  (емерджентні порушення, найдорожчі помилки)
+arch-review    → opus[1m]  (вердикт проти ADR — судження)
+executor       → opus[1m]  (основна кодова робота за контрактом)
+review-fix     → opus[1m]  (верифікація чужих claim'ів + правки)
+ci-fix         → opus[1m]  (діагностика падінь)
+drift-check    → sonnet    (механічна звірка контракту з кодом)
 ```
 
-Точні ID: Fable 5 = `claude-fable-5` (передавай повний ID — tier-аліаса може
-не бути); Opus-ярус — Opus 4.8 з 1M контекстом: аліас `opus[1m]`
+Точні ID: Opus-ярус — Opus 4.8 з 1M контекстом: аліас `opus[1m]`
 (повна форма `claude-opus-4-8[1m]`); `sonnet` резолвиться в найновіший
-Sonnet (зараз `claude-sonnet-5`).
+Sonnet (зараз `claude-sonnet-5`). (Раніше найважчі судження — integrator,
+arch-review — йшли на Fable 5, але вона тепер платна; усі судження зведені
+до Opus 4.8 1M.)
 
 Override: якщо в `.planning/config.json` є блок `pipeline.models`
 (`{"pipeline": {"models": {"drift-check": "opus", ...}}}`) — його значення
-мають пріоритет; допускаються tier-аліаси (fable/opus/sonnet) і повні model ID.
+мають пріоритет; допускаються tier-аліаси (opus/sonnet) і повні model ID.
 
 Скрипти (детермінований шар — НЕ імпровізуй git/gh руками там, де є скрипт):
 
@@ -223,7 +224,7 @@ loop:
        агент або править (push → крок d), або відповідає reply на невалідні
        (без push → познач треди опрацьованими, знову b)
 
-  c. arch-review агент (`model: claude-fable-5`)
+  c. arch-review агент (`model: claude-opus-4-8[1m]`)
      (промпт ${CLAUDE_PLUGIN_ROOT}/references/arch-review.md + gh pr diff +
       .planning/architecture/)
      violation    → fix у worktree → push → крок d
@@ -256,7 +257,7 @@ loop:
    робить reinit сам. `escalate` → status blocked, до людини.
 3. Для кожного `pushed:true` — `attempts += 1` (MAX 5), почекай CI
    (`gh pr checks --watch`).
-4. Далі — крок **c** циклу (arch-review, Fable) і conform-гейт для кожного PR
+4. Далі — крок **c** циклу (arch-review, Opus 4.8 1M) і conform-гейт для кожного PR
    у main-loop, як вище. Це судження і фіналізація — НЕ віддавай у Workflow.
 
 **Фолбек** (нема Workflow): обслуговуй по черзі раундами (a→d для кожного PR).
@@ -269,7 +270,7 @@ loop:
    людину (апруви high-risk, merge).
 2. Якщо це були ОСТАННІ тікети фази (всі тікети фази merged) → запропонуй
    integrator-прогін: агент за `${CLAUDE_PLUGIN_ROOT}/references/integrator.md`
-   (`model: claude-fable-5`)
+   (`model: claude-opus-4-8[1m]`)
    → `INTEGRATION.md`; `needs-fix` → fix-тікети як нові плани → /shipyard:decompose
    Step 4 → наступний /shipyard:deliver.
 3. Приберися: `ticket-worktree.sh remove <T>` для merged тікетів.

@@ -38,15 +38,15 @@ exit 0 від validate-graph.cjs.
 
 Декомпозицію виконують GSD-агенти — їхні моделі регламентуються НЕ цим скілом,
 а `.planning/config.json`. Перевір і, якщо відсутнє, запропонуй додати
-(політика проєкту: найважче → Fable 5 `claude-fable-5`, важке → Opus 4.8,
-легке → Sonnet 5):
+(політика проєкту: важке судження + важка робота → Opus 4.8 з 1M контекстом
+`claude-opus-4-8[1m]`, легке → Sonnet 5):
 
 ```json
 {
   "model_profile": "balanced",
   "models": { "planning": "opus", "research": "sonnet", "verification": "sonnet" },
   "model_overrides": {
-    "gsd-planner": "claude-fable-5",
+    "gsd-planner": "claude-opus-4-8[1m]",
     "gsd-executor": "claude-opus-4-8[1m]"
   },
   "context_window": 1000000,
@@ -72,7 +72,7 @@ exit 0 від validate-graph.cjs.
 
 (`models.*` приймає лише tier-аліаси opus/sonnet/haiku; повні ID — тільки
 через `model_overrides` per-agent. Планувальник — найважча роль декомпозиції,
-тому піднятий до Fable через override; executor — Opus 4.8 з 1M контекстом.)
+тому піднятий до Opus 4.8 з 1M контекстом через override; executor — так само.)
 
 ## Step 1 — Уточнити режим
 

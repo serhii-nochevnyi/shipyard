@@ -27,7 +27,7 @@ export const meta = {
 // escalation. Fixing is what parallelizes across PRs; gating does not.
 //
 // ci-fix and review-fix are both opus[1m], so a single fixer agent per PR can
-// own both roles coherently. arch-review (Fable, judgment) stays in the main
+// own both roles coherently. arch-review (Opus 4.8 1M, judgment) stays in the main
 // loop. Each agent pushes at most once and re-inits reviewers itself.
 //
 // NOTE ON SYNTAX: `node --check` on this file fails with "Illegal return

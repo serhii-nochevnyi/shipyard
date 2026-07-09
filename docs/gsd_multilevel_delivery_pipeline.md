@@ -482,21 +482,22 @@ scope не доведений до зеленого або не заблоков
 
 ## 7.5. Політика моделей
 
-Три яруси: **найважче судження → Fable, важка робота → Opus, легка механіка →
-Sonnet.** Розкладка агентів конвеєра:
+Два яруси: **важке судження + важка робота → Opus 4.8 з 1M контекстом, легка
+механіка → Sonnet.** Розкладка агентів конвеєра:
 
 ```text
-Fable 5   integrator, arch-review          — судження з найдорожчими помилками
-Opus 4.8  executor, review-fix, ci-fix,    — кодова робота, діагностика,
-          research:alternatives              проєктування опцій
+Opus 4.8  integrator, arch-review,        — судження з найдорожчими помилками,
+1M        executor, review-fix, ci-fix,     кодова робота, діагностика,
+          research:alternatives             проєктування опцій
 Sonnet 5  drift-check, research:system-    — механічна звірка і збирання фактів
           state/constraints/risks
 ```
 
-Точні model ID (звірено з каталогом моделей): Fable 5 = `claude-fable-5`
-(у спавнах передається повним ID); Opus-ярус — **Opus 4.8 з 1M контекстом**:
-аліас `opus[1m]`, повна форма `claude-opus-4-8[1m]`; Sonnet 5 =
-`claude-sonnet-5` (скіли використовують аліас `sonnet`).
+Точні model ID (звірено з каталогом моделей): Opus-ярус — **Opus 4.8 з 1M
+контекстом**: аліас `opus[1m]`, повна форма `claude-opus-4-8[1m]`; Sonnet 5 =
+`claude-sonnet-5` (скіли використовують аліас `sonnet`). Раніше найважчі
+судження (integrator, arch-review) йшли на Fable 5, але вона тепер платна —
+усі судження зведені до Opus 4.8 1M.
 
 Скіли передають `model` при кожному спавні агента. Override — блок
 `pipeline.models` у `.planning/config.json` (tier-аліаси або повні model ID).
@@ -504,7 +505,7 @@ Sonnet 5  drift-check, research:system-    — механічна звірка �
 GSD-агенти декомпозиції регламентуються власним механізмом GSD
 (`model_profile` / `models` / `model_overrides` у тому ж config.json);
 рекомендація: `models.planning: opus` + `model_overrides.gsd-planner:
-claude-fable-5` — планувальник є найважчою роллю декомпозиції.
+claude-opus-4-8[1m]` — планувальник є найважчою роллю декомпозиції.
 
 ## 8. Gates (підсумкова таблиця)
 
