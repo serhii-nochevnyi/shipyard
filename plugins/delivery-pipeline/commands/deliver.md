@@ -22,27 +22,53 @@ allowed-tools:
 
 ## Моделі агентів (обов'язково передавай `model` при кожному спавні)
 
-Політика (два яруси): важке судження + важка кодова робота → Opus 4.8 з 1M
-контекстом, легка механіка → Sonnet 5.
+Політика — маршрутизація **роль × ризик × спроба**, не пласке «роль → модель».
+Сигнали вже детерміновані: `risk`/`type`/`files` з tickets.json (провалідовано
+Gate 2), `attempts` з babysit-циклу. Принцип: судження з найдорожчими
+помилками — завжди топ-ярус; кодова робота — за ризиком; ремонт — драбина
+ескалації (почни дешево, ескалюй на факті невдачі).
 
 ```text
-integrator     → opus[1m]  (емерджентні порушення, найдорожчі помилки)
-arch-review    → opus[1m]  (вердикт проти ADR — судження)
-executor       → opus[1m]  (основна кодова робота за контрактом)
-review-fix     → opus[1m]  (верифікація чужих claim'ів + правки)
-ci-fix         → opus[1m]  (діагностика падінь)
-drift-check    → sonnet    (механічна звірка контракту з кодом)
+integrator     → opus[1m]  ЗАВЖДИ (емерджентні порушення, найдорожчі помилки)
+arch-review    → opus[1m]  ЗАВЖДИ (вердикт проти ADR — судження)
+
+executor       → opus[1m]  risk high/human_checkpoint або medium (дефолт)
+               → sonnet    risk low І (type research АБО files_modified ≤ 2);
+                           якщо його PR потім падає в babysit — ремонт іде
+                           драбиною нижче, тож недооцінка самовиправляється
+
+ci-fix         → sonnet    1-ша спроба на цьому PR (лінт/снепшоти/тривіальне)
+               → opus[1m]  attempts ≥ 2 АБО попередній fix не позеленив CI
+
+review-fix     → sonnet    треди без зміни коду (відповідь/пояснення reply)
+               → opus[1m]  треди, що вимагають зміни коду
+
+drift-check    → sonnet    механічна звірка (можна haiku через override)
 ```
 
-Точні ID: Opus-ярус — Opus 4.8 з 1M контекстом: аліас `opus[1m]`
-(повна форма `claude-opus-4-8[1m]`); `sonnet` резолвиться в найновіший
-Sonnet (зараз `claude-sonnet-5`). (Раніше найважчі судження — integrator,
-arch-review — йшли на Fable 5, але вона тепер платна; усі судження зведені
-до Opus 4.8 1M.)
+Чому дешевий перший удар безпечний: зелене однаково проходить arch-review
+(opus[1m]) + гейт «була робота» + бот-рев'ю — false green дешевої моделі
+ловиться вище. Судження (integrator/arch-review) НЕ здешевлюй за жодного
+профілю — там механічної страховки вище нема.
 
-Override: якщо в `.planning/config.json` є блок `pipeline.models`
-(`{"pipeline": {"models": {"drift-check": "opus", ...}}}`) — його значення
-мають пріоритет; допускаються tier-аліаси (opus/sonnet) і повні model ID.
+Точні ID: Opus-ярус — Opus 4.8 з 1M контекстом: аліас `opus[1m]`
+(повна форма `claude-opus-4-8[1m]`); `sonnet` → найновіший Sonnet (зараз
+`claude-sonnet-5`); `haiku` → `claude-haiku-4-5-20251001`. (Раніше судження
+йшли на Fable 5, але вона платна; топ-ярус зведено до Opus 4.8 1M — підняти
+його назад можна одним рядком override, без зміни плагіна.)
+
+Конфіг у `.planning/config.json`:
+- `pipeline.model_policy`: `economy | balanced (дефолт) | premium`.
+  economy — executor при risk medium теж стартує з sonnet (з ескалацією через
+  babysit-драбину); premium — усе, крім drift-check, одразу opus[1m].
+  Судження — топ-ярус за БУДЬ-ЯКОГО профілю.
+- `pipeline.models` (per-role override, найвищий пріоритет):
+  `{"pipeline": {"models": {"integrator": "<model-id>", "drift-check": "haiku", ...}}}`
+  — tier-аліаси (opus/sonnet/haiku) або повні model ID.
+
+На Workflow-шляху модель резолвиш ТУТ за цією матрицею і передаєш per-item
+(`args.tickets[].model`, `args.prs[].model`); ефорт теж диференціюй, коли
+скрипт це підтримує: механіка — низький, код/судження — високий.
 
 Скрипти (детермінований шар — НЕ імпровізуй git/gh руками там, де є скрипт):
 
@@ -210,7 +236,9 @@ merged:   T-01-03
    Ім'я гілки береться ТІЛЬКИ з tickets.json (канонічний формат
    `ticket/<ID>-<slug-з-назви-тікета>`, вже санітизований validate-graph'ом) —
    не конструюй його вручну.
-4. Запусти executor-агента (Agent tool, `model: opus[1m]`) У WORKTREE. Промпт
+4. Запусти executor-агента (Agent tool, `model` — ЗА МАТРИЦЕЮ: risk
+   high/medium → `opus[1m]`; risk low і (research або files ≤ 2) → `sonnet`;
+   профіль economy/premium зсуває за правилами секції моделей) У WORKTREE. Промпт
    збирай ЗА ДИСЦИПЛІНОЮ АНТИІНʼЄКЦІЇ (див. секцію Workflow вище): у межах
    `<TICKET-CONTRACT>…</TICKET-CONTRACT>` — повний текст плану тікета + Context
    reads + правило "працюй ТІЛЬКИ в межах files_modified; коміть атомарно з
@@ -243,8 +271,8 @@ racy. Кроки 4–6 (код → verify → push → draft-PR → reinit) — 
 - **Workflow-шлях** (доступний і `use_workflow ≠ false`): після серійного
   створення всіх worktrees — `Workflow({scriptPath: <workflows/executors.mjs>,
   args: {tickets: [{id, title, planPath, branch, worktreePath, prBase,
-  model: opus[1m]}], reinitScript: <scripts/reviewers.cjs>, deliveryRulesHint,
-  prBodyGuide}})`. Агент сам комітить, пушить, відкриває draft-PR і робить
+  model: <за матрицею per-ticket>}], reinitScript: <scripts/reviewers.cjs>,
+  deliveryRulesHint, prBodyGuide}})`. Агент сам комітить, пушить, відкриває draft-PR і робить
   reinit у своєму worktree. `prBase` = `main` (залежності merged) або гілка
   найглибшої незмердженої залежності.
 - **Фолбек**: кілька executor `Agent` в одному повідомленні (кроки 4–6 вручну,
@@ -260,7 +288,9 @@ Workflow/агентів) лишаються за main-loop. Конфлікти �
 ```text
 loop:
   a. state-sync.cjs → checks цього PR
-     failing → ci-fix агент у worktree тікета (`model: opus[1m]`)
+     failing → ci-fix агент у worktree тікета — ДРАБИНА:
+       attempts == 1 → `model: sonnet` (лінт/снепшоти/тривіальне)
+       attempts ≥ 2 АБО попередній ci-fix не позеленив CI → `model: opus[1m]`
        (промпт ${CLAUDE_PLUGIN_ROOT}/references/ci-fix.md + контракт + лог
         падіння: gh run view --log-failed)
        'escalate' від агента → status blocked, до людини
@@ -268,7 +298,9 @@ loop:
      pending → почекай завершення checks (gh pr checks <pr> --watch), потім знову a
 
   b. reviewers.cjs unresolved <pr>
-     є треди → review-fix агент у worktree (`model: opus[1m]`)
+     є треди → review-fix агент у worktree — за ЗМІСТОМ тредів:
+       усі треди — відповідь/пояснення без зміни коду → `model: sonnet`
+       хоч один вимагає зміни коду (або визначити не можеш) → `model: opus[1m]`
        (промпт ${CLAUDE_PLUGIN_ROOT}/references/review-fix.md + JSON тредів)
        агент або править (push → крок d), або відповідає reply на невалідні
        (без push → познач треди опрацьованими, знову b)
@@ -301,9 +333,10 @@ loop:
    на pending checks — пропусти цей раунд (їх добере наступний після watch).
 2. Є PR, що потребують роботи → `Workflow({scriptPath: <workflows/fix-round.mjs>,
    args: {prs: [{id, pr, branch, worktreePath, planPath, needsCiFix,
-   needsReviewFix, model: opus[1m]}], ciFixRefPath, reviewFixRefPath,
-   reinitScript}})`. Один паралельний прохід; кожен агент пушить максимум раз і
-   робить reinit сам. `escalate` → status blocked, до людини.
+   needsReviewFix, model: <драбина per-PR: attempts==1 і тільки
+   тривіальні треди → sonnet; інакше opus[1m]>}], ciFixRefPath,
+   reviewFixRefPath, reinitScript}})`. Один паралельний прохід; кожен агент
+   пушить максимум раз і робить reinit сам. `escalate` → status blocked, до людини.
 3. Для кожного `pushed:true` — `attempts += 1` (MAX 5), почекай CI
    (`gh pr checks --watch`).
 4. Далі — крок **c** циклу (arch-review, Opus 4.8 1M) і conform-гейт для кожного PR
