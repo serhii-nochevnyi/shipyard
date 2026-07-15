@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 BASE_IMAGE ?= claude-shipyard-base:test
 DEV_IMAGE ?= claude-shipyard:test
-GSD_CORE_VERSION ?= 1.7.0-rc.4
+GSD_CORE_VERSION ?= 1.7.0
 KARPATHY_SKILLS_REPO ?= https://github.com/multica-ai/andrej-karpathy-skills
 KARPATHY_SKILLS_REF ?= 2c606141936f1eeef17fa3043a72095b4765b9c2
 KARPATHY_SKILLS_STAGING ?= .build/karpathy-skills
@@ -21,7 +21,7 @@ REPO ?=
 WORKSPACE_SUBDIR ?=
 DIR ?=
 
-.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image bootstrap-atlassian-oauth run-docker up dev claude shell clone deploy-k8s test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime
+.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image bootstrap-atlassian-oauth run-docker up dev claude shell clone deploy-k8s install-shipyard-codex test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime test-codex-shipyard
 
 build-base: sync-ssh-config
 	docker build -f Dockerfile.base -t $(BASE_IMAGE) \
@@ -94,6 +94,13 @@ deploy-k8s:
 	kubectl apply -f k8s/service.yaml
 	kubectl apply -f k8s/statefulset.yaml
 
+# Install the shipyard delivery conveyor onto a host OpenAI Codex CLI setup
+# (generates Codex-native artifacts from the canonical Claude plugin, registers
+# the runtime-agnostic GSD capability). Requires gsd-core installed for Codex.
+# Override phase with SHIPYARD_CODEX_PHASE=1 for investigate+decompose only.
+install-shipyard-codex:
+	./scripts/install-shipyard-codex.sh
+
 test-base:
 	./tests/smoke/base-image-smoke.sh
 
@@ -114,3 +121,6 @@ test-ssh-sync:
 
 test-mcp-runtime:
 	./tests/smoke/mcp-runtime-smoke.sh
+
+test-codex-shipyard:
+	./tests/smoke/codex-shipyard-smoke.sh

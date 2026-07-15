@@ -11,7 +11,7 @@ services:
       args:
         BASE_IMAGE: ${BASE_IMAGE:-claude-shipyard-base:test}
         KARPATHY_SKILLS_DIR: ${KARPATHY_SKILLS_DIR:-.build/karpathy-skills}
-        GSD_CORE_VERSION: ${GSD_CORE_VERSION:-1.7.0-rc.4}
+        GSD_CORE_VERSION: ${GSD_CORE_VERSION:-1.7.0}
     working_dir: /workspace
     stdin_open: true
     tty: true

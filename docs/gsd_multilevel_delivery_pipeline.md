@@ -1,6 +1,6 @@
 # Багаторівневий delivery-конвеєр на базі GSD
 
-> Версія 3. Актуальний пін: `@opengsd/gsd-core@1.7.0-rc.4` (команди і флаги
+> Версія 3. Актуальний пін: `@opengsd/gsd-core@1.7.0` (команди і флаги
 > звірені з пакетом і документацією next; статус адаптації — розділ 10.5).
 > Цільовий сценарій:
 > **глибокий investigation → декомпозиція на тікети із залежностями → реалізація
@@ -604,7 +604,7 @@ ci-fix/review-fix. `(опційно)` Jira/GitHub exporter: tickets.yaml → iss
 
 ---
 
-## 10.5. Реорієнтація на GSD 1.7 (пін: 1.7.0-rc.4)
+## 10.5. Реорієнтація на GSD 1.7 (пін: 1.7.0)
 
 Конвеєр переорієнтовано з 1.6.x на 1.7. Ключовий факт з ревізії документації
 next: GSD свідомо зупиняється на створенні PR (non-goals: no tracker
@@ -658,6 +658,34 @@ GitHub, ADR-конформанс і integrator лишаються унікаль
   переживає squash-merge, читається пост-фактум.
 
 Roadmap 1.7 закрито повністю.
+
+## 10.6. Codex runtime (той самий конвеєр на OpenAI Codex CLI)
+
+Конвеєр працює і на Codex — установка на хості, окремо від Docker-образу.
+Джерело правди лишається Claude-плагіном (`plugins/delivery-pipeline/commands/*.md`);
+генератор `scripts/gen-codex-shipyard.cjs` емітить Codex-native артефакти,
+тож два рантайми не розходяться (нуль дрейфу).
+
+- **Конверсія без реплікації.** Генератор `require()` власний конвертер gsd-core
+  (`runtime-artifact-conversion.cjs`) — команди стають Codex-скілами
+  `~/.agents/skills/shipyard-<cmd>/SKILL.md` з `<codex_skill_adapter>`-хедером
+  (мапінг `AskUserQuestion → request_user_input`, `Agent/Task → spawn_agent`).
+  Плагін-специфічні rewrite-и (`${CLAUDE_PLUGIN_ROOT}`, `/shipyard:<cmd>` →
+  `$shipyard-<cmd>`) робить сам генератор.
+- **Сабаґенти.** Ролі з `references/*.md` (arch-review, ci-fix, drift-check,
+  review-fix, integrator, inv-research) → `$CODEX_HOME/agents/shipyard-<role>.toml`,
+  зареєстровані в `config.toml [agents.*]` **non-destructively** (gsd-агенти
+  не чіпаються; merge ідемпотентний).
+- **Гейти.** Capability вже runtime-agnostic (`runtimeCompat: ["*"]`,
+  `command-exit-zero` + `agentVerdict`) — той самий Gate 2 і UAT-гейт
+  ставляться через `gsd-tools capability install`.
+- **`deliver` — гібрид.** У Codex немає Workflow tool, тож `deliver` іде своїм
+  вбудованим Agent-шляхом: детермінантика — Node-скрипти під
+  `$CODEX_HOME/shipyard/scripts/`, агентна робота — через `spawn_agent`.
+
+Установка: `make install-shipyard-codex` (потрібен gsd-core для Codex:
+`npx --yes @opengsd/gsd-core@1.7.0 --codex --global`). `SHIPYARD_CODEX_PHASE=1` —
+лише investigate+decompose. Смоук: `make test-codex-shipyard`.
 
 ## 11. Короткий висновок
 

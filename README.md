@@ -74,6 +74,38 @@ command re-derives its state from artifacts and GitHub, not from the chat.
 
 Full specification: `docs/gsd_multilevel_delivery_pipeline.md`.
 
+## Running shipyard on Codex
+
+The same conveyor runs on the **OpenAI Codex CLI** on the host — this is a
+host-side install, separate from the Docker image. The canonical source stays
+the Claude plugin (`plugins/delivery-pipeline/commands/*.md`); a generator emits
+Codex-native artifacts from it, so the two runtimes never drift.
+
+Prerequisite — gsd-core installed for Codex:
+
+```bash
+npx --yes @opengsd/gsd-core@1.7.0 --codex --global
+```
+
+Then install shipyard:
+
+```bash
+make install-shipyard-codex        # or: bash scripts/install-shipyard-codex.sh
+```
+
+This generates Codex skills from the Claude commands (via gsd-core's own
+converter — `$shipyard-investigate`, `$shipyard-decompose`, `$shipyard-deliver`),
+registers the delivery subagents in `$CODEX_HOME/config.toml` (non-destructively),
+copies the deterministic scripts/references under `$CODEX_HOME/shipyard/`, and
+installs the runtime-agnostic GSD capability that contributes the blocking
+Gate 2 (ticket graph) and UAT gates — the same gates the Claude runtime uses.
+Because Codex has no Workflow tool, `deliver` runs its built-in agent path:
+deterministic bookkeeping in Node scripts, agentic work via Codex `spawn_agent`.
+
+Set `SHIPYARD_CODEX_PHASE=1` to install `investigate`+`decompose` only and leave
+`deliver` out. Skills land in `~/.agents/skills`; nothing outside shipyard's own
+files is modified.
+
 ## Prerequisites
 
 - Docker with Compose support
@@ -267,4 +299,5 @@ make test-runtime
 make test-mcp-runtime
 make test-docs
 make test-ssh-sync
+make test-codex-shipyard   # generator + installer produce valid Codex artifacts (needs network)
 ```
