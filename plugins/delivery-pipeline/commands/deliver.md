@@ -77,7 +77,28 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-graph.cjs
 node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs
 node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved> <pr>
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|list> ...
+node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs [--json]
 ```
+
+## Телеметрія (журнал конвеєра)
+
+Журнал `.planning/graph/delivery-log.jsonl` — append-only вхід для
+`pipeline-stats.cjs`; з нього тюнимо драбину моделей і промпти fix-ролей.
+Переходи статусів журналить сам `state-sync.cjs` — їх руками НЕ пишеш.
+Ти журналиш через `log-event.cjs` ТІЛЬКИ те, що видно лише в сесії:
+
+```text
+attempt    — кожен babysit-раунд по PR:
+             log-event.cjs attempt ticket=<T> pr=<N> n=<attempts> role=<ci-fix|review-fix> model=<tier> outcome=<pushed|no-op|escalate>
+fix_round  — по КОЖНОМУ item з результату fix-round Workflow:
+             log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false>
+escalation — будь-яка ескалація до людини:
+             log-event.cjs escalation ticket=<T> pr=<N> reason="<стисло>"
+```
+
+Пропущена подія — втрачена назавжди (GitHub її не відновить), тож лог-виклик
+іде В ТОМУ Ж кроці, де стався факт, а не «наприкінці».
 
 ## Burst-паралелізм через Workflow (опційно, з fallback)
 
@@ -192,7 +213,13 @@ ready:    T-01-01, T-01-04
 blocked:  T-02-01 ← чекає T-01-02
 pr-open:  T-01-02 (PR #142, checks: 1 failing, review: CHANGES_REQUESTED)
 merged:   T-01-03
+⚠ stale: T-02-02 PR #444 approved+green — awaiting merge for 26h
 ```
+
+`⚠`-рядки state-sync (stale approved+green без merge; задавнені драфти;
+branch drift — тікет знайдено за маркером у назві PR, а не за гілкою) —
+ОБОВ'ЯЗКОВО покажи людині як окремий блок «потребує уваги». Merge — людська
+дія: конвеєр її не робить, але зобов'язаний про неї нагадувати.
 
 ## Step 1 — Вибір scope
 
@@ -258,8 +285,11 @@ merged:   T-01-03
    Є коміти → push гілки,
    `gh pr create --base <base-branch|main> --head <branch> --draft
    --title "<T>: <title>" --body <PR body за шаблоном>`.
-   PR body: Problem / Scope / Ticket / Dependency slice / Test evidence /
-   Rollout-Rollback (для risky).
+   PR body: ПЕРШИЙ рядок — машинозчитуваний маркер `Ticket: <T>` (страховка
+   матчингу state-sync, якщо ре-декомпозиція перейменує канонічну гілку);
+   далі Problem / Scope / Dependency slice / Test evidence /
+   Rollout-Rollback (для risky). Назва PR ЗАВЖДИ починається з `<T>: ` —
+   це другий якір того ж матчингу.
 6. Одразу перший `reviewers.cjs reinit <pr>`.
 7. Онови delivery-state (`state-sync.cjs`).
 
@@ -325,6 +355,11 @@ loop:
      → крок a
 ```
 
+Телеметрія раунду (див. секцію вище): кожен прохід a/b — `log-event.cjs
+attempt ...` з фактичними role/model/outcome; кожна ескалація (крок a
+'escalate', adr-outdated у c, attempts > MAX у d) — `log-event.cjs
+escalation ...` у той самий момент.
+
 Кілька відкритих PR: **Workflow-шлях** (доступний і `use_workflow ≠ false`)
 паралелить САМЕ fix-роботу одного раунду. Порядок раунду:
 
@@ -337,8 +372,9 @@ loop:
    тривіальні треди → sonnet; інакше opus[1m]>}], ciFixRefPath,
    reviewFixRefPath, reinitScript}})`. Один паралельний прохід; кожен агент
    пушить максимум раз і робить reinit сам. `escalate` → status blocked, до людини.
-3. Для кожного `pushed:true` — `attempts += 1` (MAX 5), почекай CI
-   (`gh pr checks --watch`).
+3. Для КОЖНОГО item результату — `log-event.cjs fix_round ticket=<T> pr=<N>
+   outcome=<...> pushed=<...>`; для `pushed:true` — `attempts += 1` (MAX 5),
+   почекай CI (`gh pr checks --watch`).
 4. Далі — крок **c** циклу (arch-review, Opus 4.8 1M) і conform-гейт для кожного PR
    у main-loop, як вище. Це судження і фіналізація — НЕ віддавай у Workflow.
 
@@ -349,7 +385,10 @@ loop:
 ## Step 5 — Завершення
 
 1. Всі тікети scope green/merged → підсумок: тікет / PR / стан / що чекає
-   людину (апруви high-risk, merge).
+   людину (апруви high-risk, merge). Додай зведення метрик:
+   `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs` — час до merge,
+   babysit-спроби, no-op раунди, ескалації. Аномалії (багато no-op, ескалації
+   на low-risk) назви явно — це вхід для тюнінгу драбини моделей.
 2. Якщо це були ОСТАННІ тікети фази (всі тікети фази merged) → запропонуй
    integrator-прогін: агент за `${CLAUDE_PLUGIN_ROOT}/references/integrator.md`
    (`model: claude-opus-4-8[1m]`)

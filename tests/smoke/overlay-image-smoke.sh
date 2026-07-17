@@ -10,8 +10,13 @@ set -euo pipefail
 for f in commands/investigate.md commands/decompose.md commands/deliver.md \
          scripts/validate-graph.cjs scripts/state-sync.cjs scripts/reviewers.cjs \
          scripts/validate-inv.cjs scripts/ticket-worktree.sh \
+         scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
          workflows/drift-gate.mjs workflows/executors.mjs workflows/fix-round.mjs; do
   [[ -f "plugins/delivery-pipeline/$f" ]] || { echo "missing delivery-pipeline $f"; exit 1; }
+done
+# telemetry layer is plain node — a bare syntax check must pass
+for f in scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs scripts/state-sync.cjs; do
+  node --check "plugins/delivery-pipeline/$f" || { echo "delivery-pipeline $f fails node --check"; exit 1; }
 done
 
 # Workflow scripts use the DSL's top-level await/return, so a BARE `node --check`

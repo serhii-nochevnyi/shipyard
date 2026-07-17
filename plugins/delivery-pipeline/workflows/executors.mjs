@@ -46,7 +46,7 @@ const OUT = {
 const tickets = (args && args.tickets) || []
 const reinitScript = args && args.reinitScript
 const rulesHint = (args && args.deliveryRulesHint) || 'Work ONLY within files_modified; commit atomically with a (T-id): prefix.'
-const prBodyGuide = (args && args.prBodyGuide) || 'PR body: Problem / Scope / Ticket / Dependency slice / Test evidence / Rollout-Rollback (risky only).'
+const prBodyGuide = (args && args.prBodyGuide) || 'PR body: FIRST line must be the machine-readable marker "Ticket: <ticket-id>" (state-sync match anchor), then Problem / Scope / Dependency slice / Test evidence / Rollout-Rollback (risky only).'
 
 if (!reinitScript) throw new Error('executors: args.reinitScript is required')
 if (!tickets.length) return []

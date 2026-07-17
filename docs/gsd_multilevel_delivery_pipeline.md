@@ -453,6 +453,27 @@ criteria. Вердикт `passed | needs-fix | human-review-required` в
 `INTEGRATION.md`; `needs-fix` породжує fix-тікети, які проходять той самий
 delivery-контур (розділ 6.1) — це і є зворотний цикл.
 
+### 6.5. Телеметрія конвеєра (вхід для вдосконалення)
+
+Конвеєр накопичує append-only журнал `.planning/graph/delivery-log.jsonl`:
+
+- `status_change` пише **сам `state-sync.cjs`** при кожному холодному старті
+  (перехід pending→branched→pr-open→merged, з таймстемпом);
+- session-only факти (`attempt` з role/model/outcome, `fix_round`
+  fixed|no-op|escalate, `escalation`) журналить оркестратор через
+  `log-event.cjs` — GitHub їх пізніше не відновить.
+
+`pipeline-stats.cjs` зводить журнал + `gh pr list` у метрики: медіанний
+час до merge, babysit-спроби, частку no-op fix-раундів, ескалації в розрізі
+risk. Це вхід для тюнінгу драбини моделей (§7.5) і промптів fix-ролей.
+
+Стан тікета в `delivery-state.json` додатково несе `since` (відколи тікет у
+поточному статусі); дошка холодного старту підсвічує «хвости» —
+approved+green PR без merge та задавнені драфти. Матчинг тікет↔PR —
+branch-first із fallback по маркеру `<T>:` у назві PR (страховка на випадок
+перейменування канонічної гілки ре-декомпозицією; `Ticket: <T>` — перший
+рядок PR body).
+
 ---
 
 ## 7. Оркестратор
