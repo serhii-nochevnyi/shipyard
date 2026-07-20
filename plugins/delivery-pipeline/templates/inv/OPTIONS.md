@@ -1,16 +1,16 @@
 # Options
 
-<!-- 2–4 справді різних підходи. Порівняльна таблиця обов'язкова. -->
-<!-- Рекомендацію не пише агент — вибір належить людині (DECISIONS.md). -->
+<!-- 2–4 genuinely different approaches. A comparison table is mandatory. -->
+<!-- The recommendation is not written by the agent — the choice belongs to the human (DECISIONS.md). -->
 
 ## Option A —
 
 ## Option B —
 
-## Порівняння
+## Comparison
 
 | | Option A | Option B |
 |---|---|---|
-| Складність | | |
-| Ризики | | |
-| Що унеможливлює | | |
+| Complexity | | |
+| Risks | | |
+| What it forecloses | | |

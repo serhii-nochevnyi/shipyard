@@ -1,13 +1,13 @@
 # Problem
 
-<!-- Заповнюється через intake-інтерв'ю. Сирий statement не приймається мовчки. -->
+<!-- Filled in through the intake interview. A raw statement is not accepted silently. -->
 
-## Що вирішуємо
+## What we are solving
 
-## Для кого
+## For whom
 
-## Поточний pain
+## Current pain
 
-## Що буде success
+## What success will be
 
-## Що точно поза scope
+## What is definitely out of scope

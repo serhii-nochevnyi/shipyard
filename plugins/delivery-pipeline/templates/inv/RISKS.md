@@ -1,7 +1,7 @@
 # Risks
 
-<!-- Формат запису: -->
-<!-- ## <ризик> -->
+<!-- Record format: -->
+<!-- ## <risk> -->
 <!-- severity: low|medium|high -->
-<!-- mitigation: <що робимо> -->
-<!-- Питання без відповіді — це не ризик, це OPEN-QUESTIONS.md. -->
+<!-- mitigation: <what we do> -->
+<!-- A question without an answer is not a risk, it is OPEN-QUESTIONS.md. -->

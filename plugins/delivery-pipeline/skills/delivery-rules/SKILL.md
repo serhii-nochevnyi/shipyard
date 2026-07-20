@@ -9,6 +9,10 @@ This project runs a per-ticket delivery conveyor on top of GSD
 (see `docs/gsd_multilevel_delivery_pipeline.md`). Plans double as tickets;
 these rules keep them machine-consumable by the conveyor's deterministic layer.
 
+**Language.** All artifacts — plans, frontmatter, commits, code, PR bodies — are
+written in English. When addressing the user directly, reply in the user's
+language; English is for the artifacts, the user's language is for conversation.
+
 ## For planners (writing PLAN.md)
 
 1. **Full frontmatter, always**: `phase`, `plan`, `title`, `type`, `wave`,

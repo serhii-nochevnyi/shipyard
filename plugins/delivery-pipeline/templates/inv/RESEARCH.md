@@ -1,11 +1,11 @@
 # Research
 
-<!-- Чернетки від research fan-out (лінії 1 і 3), уточнюються в діалозі. -->
-<!-- Кожне твердження про кодову базу — з file path; зовнішнє — з джерелом. -->
+<!-- Drafts from the research fan-out (lines 1 and 3), refined in the dialog. -->
+<!-- Every claim about the codebase carries a file path; every external one carries a source. -->
 
-## Поточний стан системи
+## Current system state
 
-## Обмеження
+## Constraints
 
 ### Technical
 
@@ -15,4 +15,4 @@
 
 ## Unknowns
 
-<!-- Кожен unknown має дзеркальний checkbox в OPEN-QUESTIONS.md -->
+<!-- Every unknown has a mirror checkbox in OPEN-QUESTIONS.md -->
