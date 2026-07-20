@@ -165,6 +165,7 @@ for (const file of planFiles.sort()) {
     file: rel,
     title,
     phase: String(fm.phase ?? fPhase),
+    phaseDir: path.basename(path.dirname(rel)),
     type: fm.type ?? 'implementation',
     depends_on: deps,
     files: Array.isArray(fm.files_modified) ? fm.files_modified.map(String) : [],
@@ -294,9 +295,42 @@ for (const id of order) {
   depth[id] = deps.length ? Math.max(...deps.map((d) => depth[d])) + 1 : 1;
 }
 
+// --- epic integration branches (epic-stacked delivery) ---
+// One epic branch per phase, cut from the repo default branch at delivery time.
+// Root tickets PR into the epic; a dependent ticket cascades — it PRs into its
+// primary same-phase parent's branch, so the flow never blocks on a merge. The
+// final PR is epic -> default branch. `base` is left null here: the runtime
+// (epic-branch.sh / state-sync) resolves the real default branch (main|master).
+const epics = {};
+for (const id of order) {
+  const t = tickets[id];
+  if (!epics[t.phase]) epics[t.phase] = { branch: `epic/${t.phaseDir}`, base: null };
+}
+// primary parent = deepest same-phase dependency (tie-break: lowest id). Only
+// same-phase deps cascade; a cross-phase dependency is assumed already merged
+// into the default branch (and thus present via the epic's base).
+function primaryParent(t) {
+  const same = t.depends_on.filter((d) => tickets[d] && tickets[d].phase === t.phase);
+  if (!same.length) return null;
+  return same.slice().sort((a, b) => depth[b] - depth[a] || (a < b ? -1 : 1))[0];
+}
+for (const id of order) {
+  const t = tickets[id];
+  t.epic = epics[t.phase].branch;
+  t.primary_parent = primaryParent(t);
+  t.pr_base = t.primary_parent ? tickets[t.primary_parent].branch : t.epic;
+  const same = t.depends_on.filter((d) => tickets[d] && tickets[d].phase === t.phase);
+  if (same.length > 1) {
+    warnings.push(
+      `${id}: ${same.length} same-phase parents (${same.join(', ')}) — the cascade bases on ${t.primary_parent} only; the others land through the epic. Linearize the chain if ${id} needs every parent's code at once.`
+    );
+  }
+}
+
 fs.mkdirSync(GRAPH_DIR, { recursive: true });
 const view = {
   generated_by: 'validate-graph.cjs — do not edit by hand',
+  epics,
   tickets: {},
 };
 for (const id of order) {
@@ -311,11 +345,19 @@ for (const id of order) {
     risk: t.risk,
     human_checkpoint: t.human_checkpoint,
     branch: t.branch,
+    epic: t.epic,
+    primary_parent: t.primary_parent,
+    pr_base: t.pr_base,
   };
 }
 fs.writeFileSync(path.join(GRAPH_DIR, 'tickets.json'), JSON.stringify(view, null, 2) + '\n');
 
-const yaml = [`# ${view.generated_by}`, 'tickets:'];
+const yaml = [`# ${view.generated_by}`, 'epics:'];
+for (const [phase, e] of Object.entries(epics)) {
+  yaml.push(`  "${phase}":`);
+  yaml.push(`    branch: ${e.branch}`);
+}
+yaml.push('tickets:');
 for (const [id, t] of Object.entries(view.tickets)) {
   yaml.push(`  ${id}:`);
   yaml.push(`    title: "${t.title}"`);
@@ -327,6 +369,9 @@ for (const [id, t] of Object.entries(view.tickets)) {
   yaml.push(`    risk: ${t.risk}`);
   yaml.push(`    human_checkpoint: ${t.human_checkpoint}`);
   yaml.push(`    branch: ${t.branch}`);
+  yaml.push(`    epic: ${t.epic}`);
+  yaml.push(`    primary_parent: ${t.primary_parent ?? 'null'}`);
+  yaml.push(`    pr_base: ${t.pr_base}`);
 }
 fs.writeFileSync(path.join(GRAPH_DIR, 'tickets.yaml'), yaml.join('\n') + '\n');
 

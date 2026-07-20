@@ -12,7 +12,9 @@ export const meta = {
 //       planPath,      // abs path to the ticket PLAN.md
 //       branch,        // canonical branch from tickets.json (already sanitized)
 //       worktreePath,  // ALREADY created by the main loop off `base` (serial, race-free)
-//       prBase,        // "main" or the deepest-unmerged-dependency branch
+//       prBase,        // resolved base = delivery-state[id].base: epic branch for a
+//                      // root ticket, primary-parent branch for a dependent one
+//                      // (epic-stacked); "main"/deepest-unmerged dep (direct-to-main)
 //       model,         // optional; default opus[1m]
 //     } ],
 //     reinitScript,      // abs path to scripts/reviewers.cjs

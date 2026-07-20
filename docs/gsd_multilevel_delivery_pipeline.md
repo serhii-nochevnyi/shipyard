@@ -329,27 +329,50 @@ Merged-залежності завжди вважаються задоволен
    контур 2 (/gsd-plan-phase точково)
 ```
 
+### 6.05. Модель інтеграції — epic-stacked (дефолт)
+
+Фаза інтегрується через ОДНУ epic-гілку, а не десятками PR прямо в default-
+гілку. `.planning/config.json` → `pipeline.integration_mode`:
+`epic-stacked` (дефолт) | `direct-to-main` (легасі; залежні чекають merge).
+
+- на фазу — epic-гілка `epic/<phase-dir>` від default-гілки (main|master),
+  згенерована в `tickets.json.epics` разом із per-ticket `epic`/`pr_base`;
+- корінний тікет (порожній `depends_on`) → PR у epic-гілку;
+- залежний тікет → **каскадний** PR у гілку primary-батька (найглибша
+  залежність тієї ж фази), БЕЗ очікування його merge — потік не спиняється;
+- `state-sync` обчислює `base` кожного тікета (корінь → epic; залежний → гілка
+  батька; merged-батько → epic — GitHub ретаргетить дітей мерджнутого батька);
+- фаза заходить у default-гілку ОДНИМ PR epic → default; його, як і тікет-PR,
+  мерджить людина після integrator `passed`;
+- готовність каскадна: тікет ready щойно батьки ≥ `branched` (а не merged) —
+  дитину можна вести паралельно з батьком.
+
+Детермінований шар: `epic-branch.sh ensure|pr|retarget|status`.
+
 ### 6.1. Модель виконання
 
 ```text
 для кожного тікета T з обраного scope у топологічному порядку:
-  ready(T) = всі depends_on(T) у стані merged
-             АБО (stacked-режим) у стані pr-open зі стабільною гілкою
+  ready(T) = epic-stacked: усі depends_on(T) ≥ branched (мають гілку для каскаду)
+             direct-to-main: усі depends_on(T) у стані merged
 
-  1. base   = main, якщо всі залежності merged;
-              інакше гілка найглибшої незмердженої залежності (stacked PR)
-  2. git worktree add ../wt/T-XX -b ticket/T-XX-slug <base>
+  1. base   = state[T].base (epic-stacked: epic для кореня / гілка primary-
+              батька для залежного / epic коли батько merged;
+              direct-to-main: main або гілка найглибшої незмердженої залежності)
+  2. git worktree add ../wt/T-XX <branch> <base>
   3. виконавець: headless-агент у worktree з контрактом тікета
      (claude -p з тілом тікета + Context reads; TDD за контрактом)
   4. локальна перевірка: verification commands з тікета
-  5. commit → push → gh pr create --base <base-branch> --draft
+  5. commit → push → gh pr create --base <base> --draft (перший рядок body:
+     машинозчитуваний "Ticket: <T>")
   6. babysit loop (6.2) до зеленого стану
-  7. green → ready for review/merge → після merge розблоковуються залежні тікети
-     (GitHub автоматично ретаргетить stacked PR на main після merge бази)
+  7. green → merge у СВОЮ базу (epic/гілка батька) → діти-PR ретаргетяться на
+     epic (epic-branch.sh retarget; GitHub часто робить це сам)
 ```
 
 Паралельність безкоштовна: всі тікети, у яких `ready(T)`, запускаються
 одночасно — кожен у своєму worktree, конфлікти по файлах виключені Gate 2.
+Каскад робить незалежним і ланцюг: дитина стартує, щойно батько має гілку.
 
 **Іменування гілок.** Гілка тікета — `ticket/<ID>-<slug>`, де slug — це
 **назва тікета після санітизації**: нижній регістр, кирилиця

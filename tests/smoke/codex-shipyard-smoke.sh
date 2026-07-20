@@ -50,9 +50,10 @@ grep -q 'codex_skill_adapter' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "mis
 # and they are valid node — the deliver skill calls them via the rewritten root
 for f in scripts/state-sync.cjs scripts/reviewers.cjs scripts/validate-graph.cjs \
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
-         scripts/ticket-worktree.sh; do
+         scripts/ticket-worktree.sh scripts/epic-branch.sh; do
   [[ -f "$CODEX_HOME/shipyard/$f" ]] || { echo "bundle missing $f"; exit 1; }
 done
+bash -n "$CODEX_HOME/shipyard/scripts/epic-branch.sh" || { echo "bundled epic-branch.sh syntax error"; exit 1; }
 for f in state-sync log-event pipeline-stats ticket-pr-match; do
   node --check "$CODEX_HOME/shipyard/scripts/$f.cjs" || { echo "bundle $f.cjs fails node --check"; exit 1; }
 done

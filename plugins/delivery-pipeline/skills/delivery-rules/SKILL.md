@@ -36,6 +36,14 @@ these rules keep them machine-consumable by the conveyor's deterministic layer.
    executor's scope). Dependency-unordered plans with overlapping paths also
    fail Gate 2; resolve with a dependency or a re-slice, never by widening
    globs (a bare glob that matches everything is flagged).
+5. **`depends_on` drives the cascade, not just ordering.** Under epic-stacked
+   delivery (the default), a root ticket (empty `depends_on`) PRs into the
+   phase epic branch; a dependent ticket cascades — it PRs into its primary
+   parent's branch WITHOUT waiting for a merge, so the flow never blocks.
+   Declare dependencies precisely: a spurious dep serializes the flow, a
+   missing one hands the executor an incomplete base. The validator derives
+   the epic (`epic/<phase-dir>`), the primary parent, and `pr_base`; multiple
+   same-phase parents (a diamond) get a warning — linearize when practical.
 5. **Gate 2 is mechanical**: it passes only when the graph validator exits 0.
    Jira/GitHub issues, ROLLOUT.md, or prose summaries are never a substitute
    for materialized PLAN files.
@@ -48,4 +56,7 @@ these rules keep them machine-consumable by the conveyor's deterministic layer.
 3. **Run the plan's Verification commands locally to green** before
    declaring done; never claim verification without command output.
 4. Worktree and branch come from the conveyor (`tickets.json`) — do not
-   create branches or worktrees ad hoc.
+   create branches or worktrees ad hoc. Your PR base is likewise resolved by
+   the conveyor (`delivery-state.json` → `base`: the epic branch for a root
+   ticket, the parent branch for a dependent one) — never open a PR straight
+   into main/master under epic-stacked.

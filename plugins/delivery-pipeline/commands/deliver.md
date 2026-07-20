@@ -77,9 +77,40 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-graph.cjs
 node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs
 node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved> <pr>
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|list> ...
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|pr|status|retarget> ...
 node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs [--json]
 ```
+
+## Модель інтеграції — epic-stacked (дефолт)
+
+Фаза інтегрується через ОДНУ epic-гілку, а не десятками PR прямо в main.
+`.planning/config.json` → `pipeline.integration_mode`:
+`epic-stacked` (дефолт) | `direct-to-main` (легасі). Режим друкує state-sync
+першим рядком — ДІЙ за ним, не вгадуй.
+
+**epic-stacked:**
+- на фазу — epic-гілка `epic/<phase-dir>` від default-гілки репо
+  (main|master); джерело — `tickets.json.epics` + поле `epic`/`pr_base` тікета,
+  усе згенеровано Gate 2.
+- **корінний тікет** (без залежностей) → PR у epic-гілку.
+- **залежний тікет** → PR **у гілку primary-батька** (каскад), НЕ чекаючи його
+  merge. Потік не зупиняється: тікет готовий щойно батьки мають ГІЛКУ
+  (`branched`+), а не merge.
+- **фінал фази** — один PR epic → default-гілка; його мерджить людина після
+  того, як усі тікети зелені й integrator дав `passed`.
+- база кожного тікета вже обчислена — бери її з `delivery-state.json`
+  (`state[id].base`): корінь → epic, залежний → гілка батька, а коли батько
+  вже merged — epic (GitHub сам ретаргетить дітей мерджнутого батька).
+  НЕ конструюй базу вручну.
+
+**Каскадний ретаргетинг.** Коли primary-батько мерджиться в epic, його
+відкриті діти-PR мають перенацілитись на epic:
+`epic-branch.sh retarget <child-pr> <epic>` (GitHub часто робить це сам при
+видаленні гілки батька — команда ідемпотентно доводить справу).
+
+`direct-to-main` (легасі): залежний чекає MERGE батька; база — main або гілка
+найглибшої незмердженої залежності (stacked). Вживай лише коли явно вибрано.
 
 ## Телеметрія (журнал конвеєра)
 
@@ -209,10 +240,12 @@ structured block:
 3. Покажи ДОШКУ з stdout state-sync + tickets.json:
 
 ```text
+integration mode: epic-stacked (→ main via epic)
 ready:    T-01-01, T-01-04
-blocked:  T-02-01 ← чекає T-01-02
+blocked:  T-02-01 ← чекає T-01-02 (ще pending, немає гілки для каскаду)
 pr-open:  T-01-02 (PR #142, checks: 1 failing, review: CHANGES_REQUESTED)
 merged:   T-01-03
+epic phase 1: epic/01-undo-under-experiment — 3 ahead of main, PR #150 open (draft)
 ⚠ stale: T-02-02 PR #444 approved+green — awaiting merge for 26h
 ```
 
@@ -226,11 +259,12 @@ branch drift — тікет знайдено за маркером у назві
 - Аргумент з тікетами → це scope; перевір проти дошки.
 - Інакше AskUserQuestion (multiSelect) з ready-тікетів + опції "вся фаза N",
   "все ready". pr-open тікети автоматично в scope babysit-циклу — їх не обирають.
-- Обраний blocked-тікет → уточни САМЕ ТОДІ:
-  залежність має відкритий PR → "додати залежність у scope / стекнутись на її
-  гілку (--on-top) / відкласти тікет"; залежність pending → "додати в scope /
-  відкласти".
-- Merged-залежності завжди задоволені — вибірка з середини графа легальна.
+- Обраний blocked-тікет → уточни САМЕ ТОДІ. У epic-stacked "blocked" означає
+  «батько ще pending (немає гілки для каскаду)» — запропонуй додати батька в
+  scope (тоді щойно він відгалузиться, дитина стає ready того ж прогону) або
+  відкласти. У direct-to-main "blocked" = батько не merged.
+- Каскад: залежність НЕ обов'язково merged — досить гілки. Вибірка з середини
+  графа легальна; корінь стека — epic.
 
 ## Step 2 — Drift-gate обраних тікетів
 
@@ -250,11 +284,19 @@ branch drift — тікет знайдено за маркером у назві
 
 ## Step 3 — Виконавці (паралельно по готовності)
 
-Для кожного тікета T зі scope, коли всі його depends_on merged (або —
---on-top — мають стабільну гілку):
+**Step 3.0 — epic-гілка (epic-stacked, раз на фазу перед першим виконавцем).**
+Для КОЖНОЇ фази, тікети якої є у scope: `epic-branch.sh ensure <epic-гілка>`
+(гілка — з `tickets.json.epics[<phase>].branch`; база — default-гілка репо,
+резолвиться скриптом). Створює epic від default-гілки і пушить, якщо ще нема;
+ідемпотентно. PR epic → default НЕ відкривай зараз — епік поки без комітів
+(див. Step 4/5). У direct-to-main цей крок пропусти.
 
-1. `base` = origin/main, якщо залежності merged; інакше гілка найглибшої
-   незмердженої залежності.
+Для кожного тікета T зі scope, коли він `ready` на дошці (epic-stacked: усі
+батьки ≥ `branched`; direct-to-main: усі depends_on merged):
+
+1. `base` = `state[T].base` з `delivery-state.json` (state-sync уже обчислив:
+   корінь → epic; залежний → гілка primary-батька; merged-батько → epic).
+   НЕ конструюй базу вручну і не бери main напряму в epic-stacked.
 2. Preflight (GSD 1.7): якщо доступний gsd-tools —
    `node ~/.claude/gsd-core/bin/gsd-tools.cjs worktree base-check` —
    ловить розбіжність HEAD із fork-base до створення worktree
@@ -283,8 +325,10 @@ branch drift — тікет знайдено за маркером у назві
    `blocked`, ескалація людині з причиною. Це ловить «агент завершився, але
    нічого не зробив» детерміновано (саме цей режим стався на injection-збої).
    Є коміти → push гілки,
-   `gh pr create --base <base-branch|main> --head <branch> --draft
+   `gh pr create --base <state[T].base> --head <branch> --draft
    --title "<T>: <title>" --body <PR body за шаблоном>`.
+   `--base` — це РЕЗОЛЬВНУТА база тікета (epic-гілка для кореня; гілка
+   primary-батька для залежного), НЕ main напряму в epic-stacked.
    PR body: ПЕРШИЙ рядок — машинозчитуваний маркер `Ticket: <T>` (страховка
    матчингу state-sync, якщо ре-декомпозиція перейменує канонічну гілку);
    далі Problem / Scope / Dependency slice / Test evidence /
@@ -303,8 +347,9 @@ racy. Кроки 4–6 (код → verify → push → draft-PR → reinit) — 
   args: {tickets: [{id, title, planPath, branch, worktreePath, prBase,
   model: <за матрицею per-ticket>}], reinitScript: <scripts/reviewers.cjs>,
   deliveryRulesHint, prBodyGuide}})`. Агент сам комітить, пушить, відкриває draft-PR і робить
-  reinit у своєму worktree. `prBase` = `main` (залежності merged) або гілка
-  найглибшої незмердженої залежності.
+  reinit у своєму worktree. `prBase` = `state[id].base` (epic-гілка для кореня;
+  гілка primary-батька для залежного; direct-to-main — main або гілка найглибшої
+  незмердженої залежності).
 - **Фолбек**: кілька executor `Agent` в одному повідомленні (кроки 4–6 вручну,
   як вище). Незалежні тікети — ПАРАЛЕЛЬНО.
 
@@ -379,8 +424,20 @@ escalation ...` у той самий момент.
    у main-loop, як вище. Це судження і фіналізація — НЕ віддавай у Workflow.
 
 **Фолбек** (нема Workflow): обслуговуй по черзі раундами (a→d для кожного PR).
-Поки всі не green/blocked. green + merged залежності розблоковують наступні
-тікети зі scope → повертайся у Step 3 для них.
+Поки всі не green/blocked.
+
+**Каскадне обслуговування (epic-stacked).** Тікет-PR мерджиться у СВОЮ базу
+(epic для кореня, гілка батька для залежного) — merge в main напряму не буває.
+Після кожного merge батька:
+- перезапусти `state-sync.cjs` — діти мерджнутого батька дістануть базу `epic`;
+- перенацілі їхні відкриті PR: `epic-branch.sh retarget <child-pr> <epic>`
+  (GitHub часто зробить це сам; команда ідемпотентна);
+- коли epic вперше отримав коміти (перший тікет влився) — відкрий інтеграційний
+  PR: `epic-branch.sh pr <epic>` (до появи комітів друкує `no-diff-yet`, no-op).
+Каскад означає, що дитину можна вести ПАРАЛЕЛЬНО з батьком: щойно батько
+`branched`, дитина ready (Step 3) — потік не спиняється на merge.
+
+green-батько розблоковує наступні тікети зі scope → повертайся у Step 3.
 
 ## Step 5 — Завершення
 
@@ -389,22 +446,33 @@ escalation ...` у той самий момент.
    `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs` — час до merge,
    babysit-спроби, no-op раунди, ескалації. Аномалії (багато no-op, ескалації
    на low-risk) назви явно — це вхід для тюнінгу драбини моделей.
-2. Якщо це були ОСТАННІ тікети фази (всі тікети фази merged) → запропонуй
-   integrator-прогін: агент за `${CLAUDE_PLUGIN_ROOT}/references/integrator.md`
-   (`model: claude-opus-4-8[1m]`)
-   → `INTEGRATION.md`; `needs-fix` → fix-тікети як нові плани → /shipyard:decompose
-   Step 4 → наступний /shipyard:deliver.
+2. Якщо це були ОСТАННІ тікети фази (всі тікети фази влиті в epic) → фіналізуй
+   epic:
+   - переконайся, що інтеграційний PR існує: `epic-branch.sh pr <epic>`;
+   - integrator-прогін за `${CLAUDE_PLUGIN_ROOT}/references/integrator.md`
+     (`model: claude-opus-4-8[1m]`) — diff epic проти default-гілки, а не окремі
+     тікет-PR → `INTEGRATION.md`;
+   - `passed` → зніми draft з epic-PR (`gh pr ready`) і передай людині на merge
+     epic → default-гілка (фаза заходить одним PR);
+   - `needs-fix` → fix-тікети як нові плани в тій самій фазі (їхня база — epic) →
+     /shipyard:decompose Step 4 → наступний /shipyard:deliver.
+   У direct-to-main epic немає — integrator дивиться merged тікет-PR, як раніше.
 3. Приберися (merged-only, як reaper на Step 0): для КОЖНОГО merged тікета —
    `ticket-worktree.sh remove <T>` + `git branch -D <branch>` (squash-merge →
-   `-D`, статус беремо з delivery-state). Коли integrator-прогін завершився і
-   його combined-PR merged — прибери й COMBINED worktree+гілку. Не-merged
-   (blocked/in-flight) не чіпай — їх підмете reaper наступного старту, коли
-   вони змерджаться.
+   `-D`, статус беремо з delivery-state). **epic-stacked**: перш ніж видаляти
+   гілку merged-батька, перенацілі його ще відкриті діти-PR на epic
+   (`epic-branch.sh retarget`) — інакше видалення осиротить їхню базу.
+   Саму epic-гілку прибирай ЛИШЕ коли інтеграційний epic-PR merged у
+   default-гілку (вся фаза зайшла); тоді ж прибери всі тікет-гілки фази.
+   Не-merged (blocked/in-flight) не чіпай — їх підмете reaper наступного старту.
 
 ## Правила
 
 - Merge робить людина (або auto-merge політика репо) — ти доводиш до green.
-- Ніколи не force-push. Ніколи не комітиш у main.
+  epic-stacked: тікет-PR мерджаться у свою базу (epic/гілка батька), фаза
+  заходить у default-гілку ОДНИМ epic-PR — його теж мерджить людина.
+- Ніколи не force-push. Ніколи не комітиш прямо в default-гілку/epic (лише
+  через тікет-PR у базу). epic-гілку рухають тільки merge тікет-PR.
 - Кожна зміна стану — через state-sync, не ручним редагуванням state-файлів.
 - Бот-рев'ювери можуть помилятися: незгода з обґрунтуванням — легальний
   результат review-fix, сліпе виконання — ні.
