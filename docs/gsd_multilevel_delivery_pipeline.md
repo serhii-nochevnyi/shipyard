@@ -265,15 +265,19 @@ If decomposition finished without materialized PLAN files — this is an
 improperly closed Gate 2; the deliver cold start detects this case and
 proposes importing external tickets into PLAN files with a repeated Gate 2.
 
-**Jira export (decompose Step 5).** When `.planning/config.json` →
-`pipeline.jira.enabled` is set, decomposition projects the validated graph into
-Jira *after* Gate 2 and approval: one Epic per phase, one issue per ticket
-(summary `<ticket-id>: <title>`), `depends_on` mapped to "is blocked by" links,
-all content in **English** regardless of conversation language. Idempotency is by
-a stable marker label `shipyard-<ticket-id>` (search-first, never duplicate); the
-resulting key is mirrored into the plan frontmatter `delivery.jira` and surfaced
-in `tickets.json`. This is strictly a projection — a Jira failure never blocks
-decomposition, and deliver still reads only PLAN files.
+**Jira export (decompose Step 5).** By default — no hand-written config needed —
+decomposition projects the validated graph into Jira *after* Gate 2 and approval:
+one Epic per phase, one issue per ticket (summary `<ticket-id>: <title>`),
+`depends_on` mapped to "is blocked by" links, all content in **English**
+regardless of conversation language. The project is auto-resolved (existing
+tracker keys in the repo → `getVisibleJiraProjects` → ask once) and cached into
+`.planning/config.json` → `pipeline.jira`, so later runs are non-interactive.
+Export is skipped only when `pipeline.jira.enabled` is explicitly `false` or no
+Jira MCP is connected. Idempotency is by a stable marker label
+`shipyard-<ticket-id>` (search-first, never duplicate); the resulting key is
+mirrored into the plan frontmatter `delivery.jira` and surfaced in `tickets.json`.
+This is strictly a projection — a Jira failure never blocks decomposition, and
+deliver still reads only PLAN files.
 
 ### 5.4. Gate 2 — Ticket graph valid (fully automatic)
 

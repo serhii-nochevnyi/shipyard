@@ -193,24 +193,55 @@ remain canonical, deliver never reads Jira, and Gate 2 never depends on it.
 written in ENGLISH**, regardless of the conversation language (it is a shipped
 artifact, per delivery-rules).
 
-**Config gate.** Read `.planning/config.json` → `pipeline.jira`:
+**Export is automatic — no hand-written config required.** Run it by default on
+every decomposition, resolving everything yourself. It is skipped ONLY when:
+- `.planning/config.json` → `pipeline.jira.enabled` is explicitly `false`, OR
+- no Jira/Atlassian MCP is connected at runtime (nothing to export to).
+In both cases skip with a one-line note. A Jira error never blocks or fails
+decomposition (Gate 2 already passed) — report it and continue.
+
+**Auto-resolve the project (once per repo, then persisted).** Config is a CACHE
+you fill in, not a precondition the user must author. Resolution order:
+1. `.planning/config.json` → `pipeline.jira.project` if already set → use it.
+2. Else infer from the repo: scan recent PR titles, branch names, and any prior
+   `delivery.jira` keys for a dominant `[A-Z]+-\d+` project prefix (e.g. `MYD`);
+   a single clear winner → use it.
+3. Else `getVisibleJiraProjects`: exactly one visible → use it; several →
+   AskUserQuestion ONCE (in the user's language) to pick.
+4. **Persist** the resolved `{ enabled: true, project, issue_type, epic_issue_type }`
+   back into `.planning/config.json` → `pipeline.jira` (merge, don't clobber other
+   keys) so every later run is non-interactive.
+Defaults when unset: `issue_type: "Task"`, `epic_issue_type: "Epic"` — but first
+confirm the type exists via project issue-type metadata
+(`getJiraProjectIssueTypesMetadata`); if the project has no Epic type, skip epics
+and fall back to a `Task` (or the project's default) issue type rather than failing.
+
+The `pipeline.jira` block, once persisted, looks like:
 
 ```json
 {
   "pipeline": {
     "jira": {
       "enabled": true,
-      "project": "MYD",              // Jira project key
-      "issue_type": "Task",          // per-ticket issue type
-      "epic_issue_type": "Epic"      // per-phase parent; omit to skip epics
+      "project": "MYD",              // auto-resolved & cached; edit to override
+      "issue_type": "Task",
+      "epic_issue_type": "Epic"      // set null to skip per-phase epics
     }
   }
 }
 ```
 
-Absent or `enabled: false` → **skip silently with a one-line note** (decomposition
-already succeeded at Gate 2; Jira is optional). Never block or fail decomposition
-on a Jira error — report it and continue.
+**Tooling.** Use whatever Jira/Atlassian MCP is connected at runtime (e.g.
+Atlassian Rovo: `getVisibleJiraProjects`, `getJiraProjectIssueTypesMetadata`,
+`searchJiraIssuesUsingJql`, `createJiraIssue`, `editJiraIssue`, `createIssueLink`,
+`getIssueLinkTypes`). No Jira MCP available → skip with a note; do not hand-roll
+REST calls.
+
+**Idempotency by marker label (survives re-runs and frontmatter edits).** Each
+issue carries a stable label: `shipyard-<ticket-id>` (e.g. `shipyard-T-01-02`),
+the epic carries `shipyard-epic-<phase>`. Always `searchJiraIssuesUsingJql`
+(`project = <KEY> AND labels = "shipyard-<id>"`) FIRST — found → update summary/
+description if changed; not found → create. Never create a duplicate.
 
 **Tooling.** Use whatever Jira/Atlassian MCP is connected at runtime (e.g.
 Atlassian Rovo: `getVisibleJiraProjects`, `searchJiraIssuesUsingJql`,
