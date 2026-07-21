@@ -51,6 +51,10 @@ language; English is for the artifacts, the user's language is for conversation.
 5. **Gate 2 is mechanical**: it passes only when the graph validator exits 0.
    Jira/GitHub issues, ROLLOUT.md, or prose summaries are never a substitute
    for materialized PLAN files.
+6. **Jira is a projection, not the source of truth.** If `pipeline.jira` is
+   enabled, decompose exports the validated graph to Jira (one Epic per phase,
+   one issue per ticket) in English, after Gate 2 — never before, never instead.
+   A Jira failure must not block decomposition; PLAN files stay canonical.
 
 ## For executors (implementing a ticket)
 

@@ -135,6 +135,7 @@ delivery:
   branch: ticket/T-<phase>-<plan>-<slug-from-title>   # can be omitted — validate-graph will generate it
   risk: low|medium|high             # assess from the plan content
   human_checkpoint: true|false      # true is MANDATORY if risk: high
+  # jira: <KEY>                     # do NOT set by hand — Step 5 writes it back after export
 ```
 
 **Branch naming**: the branch is the ticket title after sanitization:
@@ -179,8 +180,72 @@ freshly written. Do not report decomposition success without this.
    - how many waves and what will run in parallel; any diamond warnings of the graph.
 4. The user wants changes ("split T-03 into two") → targeted edit of the plans →
    back to Step 4.1.
-5. Approval → state the next step: `/shipyard:deliver` (can be right away or
-   a week later — deliver will do a cold start itself).
+5. Approval → proceed to Step 5 (Jira export), then state the next step:
+   `/shipyard:deliver` (can be right away or a week later — deliver will do a
+   cold start itself).
+
+## Step 5 — Export tickets to Jira (English)
+
+After Gate 2 passes AND the user approves the set, project the validated graph
+into Jira. This is a **projection, not the source of truth** (§5.35): PLAN files
+remain canonical, deliver never reads Jira, and Gate 2 never depends on it.
+**All Jira content — epic and issue summaries, descriptions, comments — is
+written in ENGLISH**, regardless of the conversation language (it is a shipped
+artifact, per delivery-rules).
+
+**Config gate.** Read `.planning/config.json` → `pipeline.jira`:
+
+```json
+{
+  "pipeline": {
+    "jira": {
+      "enabled": true,
+      "project": "MYD",              // Jira project key
+      "issue_type": "Task",          // per-ticket issue type
+      "epic_issue_type": "Epic"      // per-phase parent; omit to skip epics
+    }
+  }
+}
+```
+
+Absent or `enabled: false` → **skip silently with a one-line note** (decomposition
+already succeeded at Gate 2; Jira is optional). Never block or fail decomposition
+on a Jira error — report it and continue.
+
+**Tooling.** Use whatever Jira/Atlassian MCP is connected at runtime (e.g.
+Atlassian Rovo: `getVisibleJiraProjects`, `searchJiraIssuesUsingJql`,
+`createJiraIssue`, `editJiraIssue`, `createIssueLink`, `getIssueLinkTypes`). No
+Jira MCP available → skip with a note; do not hand-roll REST calls.
+
+**Idempotency by marker label (survives re-runs and frontmatter edits).** Each
+issue carries a stable label: `shipyard-<ticket-id>` (e.g. `shipyard-T-01-02`),
+the epic carries `shipyard-epic-<phase>`. Always `searchJiraIssuesUsingJql`
+(`project = <KEY> AND labels = "shipyard-<id>"`) FIRST — found → update summary/
+description if changed; not found → create. Never create a duplicate.
+
+**Procedure** (read `tickets.json` for the validated graph; process in dependency
+order so parents exist before links):
+
+1. Resolve the project (and cloudId) via the MCP; verify it is visible.
+2. Per phase (if `epic_issue_type` set): find-or-create the phase Epic.
+   Summary `[<phase>] <phase title>`, label `shipyard-epic-<phase>`,
+   description: what the phase delivers + its epic branch (`epic/<phase-dir>`).
+3. Per ticket, find-or-create the issue:
+   - summary: `<ticket-id>: <title>` (English);
+   - label: `shipyard-<ticket-id>` (+ optional `shipyard` label);
+   - description (English, concise projection — NOT the whole plan): Goal, Scope,
+     Acceptance criteria (from the PLAN body), risk, branch (`ticket/...`),
+     `pr_base`, and a pointer line "Source of truth: `<plan path>` (this issue is
+     a generated projection)";
+   - parent/epic link to the phase Epic (when epics are enabled);
+   - for each `depends_on`, a "is blocked by" issue link to that dependency's
+     issue (`createIssueLink`; pick the link type via `getIssueLinkTypes`).
+4. Write the resulting key back into the plan frontmatter under
+   `delivery.jira: <KEY>` (best-effort traceability), then re-run
+   `validate-graph.cjs` so `tickets.json` carries the `jira` field. The label is
+   the primary idempotency key; the frontmatter key is a convenience mirror.
+5. Report a compact map to the user (ticket-id → Jira key, epic key) in the
+   user's language.
 
 ## Rules
 

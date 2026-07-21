@@ -174,6 +174,9 @@ for (const file of planFiles.sort()) {
     // default branch is derived from the ticket title (sanitized); an explicit
     // delivery.branch wins but must be a valid git ref chunk
     branch: delivery.branch || branchFor(id, title),
+    // optional projection into an external tracker (written back by
+    // /shipyard:decompose Step 5); pass-through only — never a Gate 2 input
+    jira: delivery.jira != null ? String(delivery.jira) : null,
   };
   if (delivery.branch && (!BRANCH_RE.test(delivery.branch) || String(delivery.branch).includes('..'))) {
     errors.push(`${id}: delivery.branch "${delivery.branch}" contains invalid characters — expected form: ${branchFor(id, title)}`);
@@ -348,6 +351,7 @@ for (const id of order) {
     epic: t.epic,
     primary_parent: t.primary_parent,
     pr_base: t.pr_base,
+    jira: t.jira,
   };
 }
 fs.writeFileSync(path.join(GRAPH_DIR, 'tickets.json'), JSON.stringify(view, null, 2) + '\n');
@@ -372,6 +376,7 @@ for (const [id, t] of Object.entries(view.tickets)) {
   yaml.push(`    epic: ${t.epic}`);
   yaml.push(`    primary_parent: ${t.primary_parent ?? 'null'}`);
   yaml.push(`    pr_base: ${t.pr_base}`);
+  yaml.push(`    jira: ${t.jira ?? 'null'}`);
 }
 fs.writeFileSync(path.join(GRAPH_DIR, 'tickets.yaml'), yaml.join('\n') + '\n');
 
