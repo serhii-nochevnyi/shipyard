@@ -520,6 +520,22 @@ branch-first with a fallback on the `<T>:` marker in the PR title (a safeguard i
 the canonical branch is renamed by re-decomposition; `Ticket: <T>` is the first
 line of the PR body).
 
+### 6.6. Off-conveyor direct mode (`/shipyard:bench`)
+
+Not every session fits the conveyor. When you are working hands-on inside a
+checkout someone already set up — a shared/integration worktree, a teammate's
+branch, an experiment — with no ticket graph and often an explicit "don't
+commit", the delivery loop (loop 3) is the wrong tool: it assumes ticket
+preparation, isolated branches, cascading PRs, review, and merge/ship. For that
+case there is `/shipyard:bench`: a direct implementation mode that writes code
+and tests and runs verification locally, but **never** creates branches or
+worktrees, opens PRs, re-inits reviewers, merges, ships, or touches
+`.planning/graph/` state — and does **not commit unless explicitly asked**. It is
+strictly off-conveyor: it produces no tickets, no delivery state, and reads none.
+When the work genuinely needs to ship, bench stops and routes to
+`/shipyard:decompose` / `/shipyard:deliver`. Artifacts are English; conversation
+follows the user's language, like every other loop.
+
 ---
 
 ## 7. Orchestrator

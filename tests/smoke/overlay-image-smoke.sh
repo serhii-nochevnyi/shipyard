@@ -7,7 +7,7 @@ set -euo pipefail
 [[ -f scripts/entrypoint.sh ]] || { echo "missing scripts/entrypoint.sh"; exit 1; }
 [[ -f plugins/delivery-pipeline/.claude-plugin/plugin.json ]] || { echo "missing delivery-pipeline plugin.json"; exit 1; }
 [[ -f plugins/delivery-pipeline/.claude-plugin/marketplace.json ]] || { echo "missing delivery-pipeline marketplace.json"; exit 1; }
-for f in commands/investigate.md commands/decompose.md commands/deliver.md \
+for f in commands/investigate.md commands/decompose.md commands/deliver.md commands/bench.md \
          scripts/validate-graph.cjs scripts/state-sync.cjs scripts/reviewers.cjs \
          scripts/validate-inv.cjs scripts/ticket-worktree.sh scripts/epic-branch.sh \
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \

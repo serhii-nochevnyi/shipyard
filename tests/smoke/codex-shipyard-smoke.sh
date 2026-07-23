@@ -36,7 +36,7 @@ npx --yes "@opengsd/gsd-core@${GSD_CORE_VERSION}" --codex --global </dev/null >/
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 
 # skills present
-for s in shipyard-investigate shipyard-decompose shipyard-deliver shipyard-delivery-rules; do
+for s in shipyard-investigate shipyard-decompose shipyard-deliver shipyard-bench shipyard-delivery-rules; do
   [[ -f "$SKILLS/$s/SKILL.md" ]] || { echo "missing skill $s"; exit 1; }
 done
 # no Claude-only leaks; self-refs converted; adapter present

@@ -139,9 +139,10 @@ function main() {
   fs.mkdirSync(outDir, { recursive: true });
 
   // ── commands → Codex skills ───────────────────────────────────────────────
+  // bench is off-conveyor (no ticket graph) — always available, both phases
   const commands = phase >= 2
-    ? ['investigate', 'decompose', 'deliver']
-    : ['investigate', 'decompose'];
+    ? ['investigate', 'decompose', 'deliver', 'bench']
+    : ['investigate', 'decompose', 'bench'];
   const emittedSkills = [];
   for (const cmd of commands) {
     const src = path.join(pluginDir, 'commands', `${cmd}.md`);
