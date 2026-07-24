@@ -95,6 +95,40 @@ cp -R "$CAP_SRC/." "$CAP_STAGE/"
 cp "$PLUGIN_DIR/scripts/validate-graph.cjs" "$CAP_STAGE/checks/validate-graph.cjs"
 node "$GSD_TOOLS" capability install "$CAP_STAGE" --scope global --yes
 
+# ── auto-route policy → global AGENTS.md (Codex's always-loaded instructions) ──
+# So the pipeline is applied without the user invoking $shipyard-* by hand.
+# Idempotent: managed block between markers, rewritten in place on reinstall.
+AGENTS_MD="${CODEX_AGENTS_MD:-$HOME/.codex/AGENTS.md}"
+echo "→ ensuring shipyard auto-route block in $AGENTS_MD"
+mkdir -p "$(dirname "$AGENTS_MD")"
+CODEX_AGENTS_MD="$AGENTS_MD" node - <<'NODE'
+const fs = require('fs');
+const p = process.env.CODEX_AGENTS_MD;
+const BEGIN = '<!-- shipyard-auto-route:begin -->';
+const END = '<!-- shipyard-auto-route:end -->';
+const block = `${BEGIN}
+## shipyard auto-route (managed by shipyard install — do not edit between markers)
+
+When a message defines a scope of work or asks to implement / build / change /
+fix something in a codebase, handle it through shipyard rather than ad hoc — do
+not wait to be told to run a command:
+- Use the shipyard router \`$shipyard-route\` to size and dispatch the work:
+  large / multi-ticket -> \`$shipyard-decompose\` -> \`$shipyard-deliver\`; a small
+  change, an existing ticket, or "no ticket" -> \`$shipyard-bench\`; a one-liner ->
+  inline.
+- Research first (proportionate) and apply GSD at full across stages
+  (research -> plan -> implement -> verify -> review), driving GSD/shipyard
+  yourself.
+- The user should not have to invoke GSD or shipyard manually.
+Skip this entirely for pure questions, discussion, or non-code chatter.
+${END}`;
+let text = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+const re = new RegExp(BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\s\\S]*?' + END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+if (text.includes(BEGIN) && text.includes(END)) text = text.replace(re, block);
+else text = (text.trimEnd() + '\n\n' + block + '\n').replace(/^\n+/, '');
+fs.writeFileSync(p, text);
+NODE
+
 deliver_hint=""
 [[ "$PHASE" -ge 2 ]] && deliver_hint=' | $shipyard-deliver'
 echo "✓ shipyard installed for Codex."

@@ -101,6 +101,23 @@ installs the runtime-agnostic GSD capability that contributes the blocking
 Gate 2 (ticket graph) and UAT gates — the same gates the Claude runtime uses.
 Because Codex has no Workflow tool, `deliver` runs its built-in agent path:
 deterministic bookkeeping in Node scripts, agentic work via Codex `spawn_agent`.
+It also writes a managed "shipyard auto-route" block into the global
+`~/.codex/AGENTS.md`, so a defined scope of work is routed through shipyard
+(research-first, proportionate GSD) without the user invoking `$shipyard-*` by
+hand.
+
+### Auto-route on Claude Code
+
+The equivalent auto-route nudge for Claude Code is a `UserPromptSubmit` hook,
+installed separately (it edits your user settings, not the plugin):
+
+```bash
+bash scripts/install-shipyard-claude-hook.sh          # add (or --remove)
+```
+
+It writes `~/.claude/hooks/shipyard-auto-route.sh` and merges a hook into
+`~/.claude/settings.json` (idempotent, preserving your other hooks). On a running
+session, open `/hooks` once or restart to load it.
 
 Set `SHIPYARD_CODEX_PHASE=1` to install `investigate`+`decompose` only and leave
 `deliver` out. Skills land in `~/.agents/skills`; nothing outside shipyard's own
