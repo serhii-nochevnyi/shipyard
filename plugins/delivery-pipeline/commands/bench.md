@@ -33,6 +33,14 @@ conveyor — no.
 In every mode bench stays off-conveyor: it consumes a ticket at most as a scope
 source, never mints one and never drives PR/merge.
 
+**Full GSD, proportionate — driven for you.** bench is not "just edit". It runs a
+real, size-scaled loop — **research → implement → verify → review** — leaning on
+GSD and the available skills at each step. You do NOT call `/gsd-*` or another
+shipyard command yourself; shipyard invokes them under the hood. A one-line fix
+gets a one-line recon and a quick check; an unfamiliar or risky change gets
+genuine research before any edit and a review after. The rigor scales to the
+change — the ceremony does not.
+
 > **Communication language.** This skill and every artifact you produce (code,
 > tests, comments) are in English. But when you talk to the *user* —
 > AskUserQuestion prompts, progress notes, the final report — reply in the user's
@@ -114,19 +122,40 @@ bench never creates the conveyor's artifacts and never reads or writes
 - Locate the files/subsystem and read them before editing. Scale the depth to the
   change: a trivial edit does not need a full investigation.
 
+### Step 1.5 — Research the change (proportionate — even for small ones)
+Before editing, understand WHAT will change and the BEST way to implement it —
+this applies even to a small, single-ticket change. shipyard runs this for you;
+you never call GSD directly. Scale the effort to the change:
+- read the touched code plus its callers and tests;
+- unfamiliar subsystem or an architecture question → consult the codebase map
+  (`.planning/codebase/` if present) or spawn a quick read-only research/Explore
+  agent (the same recon GSD's phase-researcher does) instead of guessing;
+- external library / framework / API → pull current docs via context7 (the
+  Context7 MCP), not memory;
+- a risky unknown or a real design fork → a short `/gsd-spike` to learn by doing;
+- capture a 2–5 line approach note: what changes, where, why this way, risks.
+For a genuinely trivial edit, a one-line recon is the whole of this step — do not
+inflate it.
+
 ### Step 2 — Implement + tests
-- Make the minimal in-scope change; add or adjust tests alongside it.
+- Make the minimal in-scope change guided by the approach note; add or adjust
+  tests alongside it.
 
 ### Step 3 — Verify locally
 - Run tests / build / local run; iterate to green; capture the output. Prefer the
   `verify` / `run` skills or the repo's own commands.
 
+### Step 3.5 — Review (proportionate)
+- For a non-trivial change, run a read-only review of the diff (the `code-review`
+  skill, or `/gsd-code-review`) and fold in the fixes — still no commit. Skip for
+  a one-liner. shipyard runs this itself; you do not invoke the reviewer.
+
 ### Step 4 — Report
-- Summarize what changed (`git diff --stat`), how you verified it (real command
-  output), and state plainly that changes are left UNCOMMITTED (or committed only
-  because the user explicitly asked). Offer the next step — keep iterating, hand
-  off to `/shipyard:deliver`, or let the user commit — but do not take it
-  unprompted.
+- Summarize the approach note (Step 1.5), what changed (`git diff --stat`), how
+  you verified it (real command output), and the review outcome. State plainly
+  that changes are left UNCOMMITTED (or committed only because the user explicitly
+  asked). Offer the next step — keep iterating, hand off to `/shipyard:deliver`,
+  or let the user commit — but do not take it unprompted.
 
 ## Rules
 - No branch, worktree, PR, merge, push, or reviewer action — ever, in this mode.
@@ -134,6 +163,9 @@ bench never creates the conveyor's artifacts and never reads or writes
 - Never CREATE a ticket. Consuming an existing one (Jira/PLAN) as scope is fine;
   mutating the tracker (status/comments) only on explicit request.
 - Never fabricate conveyor artifacts (graph, delivery-state).
-- Scale process to the change — no ceremony for small edits.
+- Research before editing — proportionate, but real even for small changes.
+- Drive GSD and the available skills yourself (research, verify, review); the
+  user never invokes GSD or a shipyard command manually.
+- Scale process to the change — full rigor, no ceremony for small edits.
 - Artifacts in English; converse in the user's language.
 - If the real need is the delivery conveyor, stop and route to the right skill.

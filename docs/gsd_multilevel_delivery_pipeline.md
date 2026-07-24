@@ -64,6 +64,14 @@ conversation and want to know which flow fits, `/shipyard:route` classifies it
 side-effect-free, the router is the one entry the model may safely surface on its
 own from a scope discussion.
 
+Across every entry and every size, shipyard applies GSD at full — research →
+plan → implement → verify → review — proportionate to the work, and drives those
+GSD helpers itself: the user never calls `/gsd-*` or a shipyard command by hand.
+Research is not conveyor-only — the light `bench` path does proportionate recon
+before editing (codebase map / a research agent / context7 docs / a spike),
+mirroring how plan-phase runs a researcher before planning. Small change, full
+rigor; no ceremony.
+
 ---
 
 ## 2. Principles (essentially unchanged)

@@ -25,6 +25,14 @@ git state to classify, then recommends and (on your confirmation) invokes the
 chosen loop. It never creates tickets, branches, PRs, or commits itself — that
 is why it is safe for the model to surface on its own when you sketch a scope.
 
+**GSD is applied at full, driven for you — every path, every size.** Whichever
+target it picks, shipyard runs the GSD-backed loop under the hood —
+**research → plan → implement → verify → review**, proportionate to the work —
+so you never call `/gsd-*` or a shipyard command by hand. Research happens even
+on the light path: `bench` does proportionate recon before editing, exactly as
+the conveyor's plan-phase runs a researcher before planning. The user describes
+the work; shipyard picks the entry and orchestrates GSD.
+
 > **Communication language.** This skill and any shipyard artifact are in
 > English. But when you talk to the *user* — AskUserQuestion prompts, the
 > recommendation, hand-off notes — reply in the user's language (match what they
