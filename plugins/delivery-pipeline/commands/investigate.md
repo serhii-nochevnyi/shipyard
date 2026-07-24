@@ -1,6 +1,6 @@
 ---
 name: investigate
-description: "Deep investigation (loop 1): pick up an open INV or create a new one; intake interview, research fan-out, iterative dialogue, Gate 1 → ADR"
+description: "Deep investigation (loop 1): pick up an open INV or create a new one; intake interview, research fan-out, iterative dialogue, Gate 1 → ADR. Use when a topic is unclear, needs research, or the key decisions are not made yet — before any tickets or code."
 argument-hint: "[raw problem statement — optional]"
 allowed-tools:
   - Read

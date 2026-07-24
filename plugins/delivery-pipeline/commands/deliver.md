@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: "Delivery (loop 3): cold start → ticket board → scope selection → worktree/PR per ticket → babysit to green (CI + CodeRabbit/Copilot re-init). At the end of the phase — integrator."
+description: "Delivery (loop 3): cold start → ticket board → scope selection → worktree/PR per ticket → babysit to green (CI + CodeRabbit/Copilot re-init). At the end of the phase — integrator. Use when tickets already exist and the user explicitly wants them shipped as PRs — it opens PRs and drives merges, so invoke it deliberately, not from idle discussion."
 argument-hint: "[comma-separated tickets — optional, otherwise choose from the board]"
 allowed-tools:
   - Read

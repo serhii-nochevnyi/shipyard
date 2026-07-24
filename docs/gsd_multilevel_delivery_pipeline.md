@@ -53,6 +53,17 @@ GSD          = investigation support + planning + plan quality convergence
 Overlay      = ticket discipline + PR-per-ticket delivery + review babysitting
 ```
 
+**Entry points.** Three loops (investigate → decompose → deliver) plus two
+non-loop entries: `/shipyard:bench` for off-conveyor direct work (§6.6) and
+`/shipyard:route`, a read-only *entry router*. The loops are invoked
+deliberately — decompose/deliver create tickets, branches, PRs, and Jira issues,
+so they never fire from idle conversation. When you have sketched a scope in
+conversation and want to know which flow fits, `/shipyard:route` classifies it
+(needs research → investigate; an ADR to break down → decompose; tickets to ship
+→ deliver; direct worktree work → bench; trivial → inline) and hands off. Being
+side-effect-free, the router is the one entry the model may safely surface on its
+own from a scope discussion.
+
 ---
 
 ## 2. Principles (essentially unchanged)

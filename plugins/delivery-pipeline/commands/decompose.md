@@ -1,6 +1,6 @@
 ---
 name: decompose
-description: "Decomposition (loop 2): ADR → GSD plan-tickets with dependencies → valid graph (Gate 2). Finds undecomposed ADRs on its own."
+description: "Decomposition (loop 2): ADR → GSD plan-tickets with dependencies → valid graph (Gate 2), then export to Jira. Finds undecomposed ADRs on its own. Use when the user explicitly wants an accepted design/ADR broken into tickets — it creates tickets, so invoke it deliberately, not from idle discussion."
 argument-hint: "[phase number — optional]"
 allowed-tools:
   - Read

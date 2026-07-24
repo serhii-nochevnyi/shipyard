@@ -18,9 +18,20 @@ allowed-tools:
 
 Direct, off-conveyor implementation for when `/shipyard:deliver` does NOT fit:
 you are working hands-on inside an existing checkout (e.g. an integration
-worktree someone already set up), there is no ticket graph to drive, and often
-an explicit "don't commit" constraint. Code, tests, and local verification —
-yes; the branch/PR/review/merge conveyor — no.
+worktree someone already set up), and often under an explicit "don't commit"
+constraint. Code, tests, and local verification — yes; the branch/PR/review/merge
+conveyor — no.
+
+**Tickets are optional here — three modes:**
+- **no ticket** (default): just implement the scope; bench never creates a ticket;
+- **against an existing ticket**: point it at a Jira key (`MYD-1234`), an internal
+  ticket id (`T-01-02`), or a `*-PLAN.md` path — bench READS it for scope and
+  implements against it, without creating or restructuring anything;
+- **light touch**: scale the process to the change — a one-line fix needs no
+  ceremony, just the edit + a quick local check.
+
+In every mode bench stays off-conveyor: it consumes a ticket at most as a scope
+source, never mints one and never drives PR/merge.
 
 > **Communication language.** This skill and every artifact you produce (code,
 > tests, comments) are in English. But when you talk to the *user* —
@@ -36,9 +47,12 @@ Use `/shipyard:bench` when:
   its git;
 - the task is direct: implement a change, write/adjust tests, run them locally,
   iterate to green — without minting a ticket, a branch, or a PR;
+- you explicitly do NOT want a ticket created — the work should just happen;
+- you already HAVE a ticket (Jira key, internal `T-xx` id, or a PLAN file) and
+  want to implement it directly, without running it through the PR/merge conveyor;
 - there is an explicit "do not commit" / "don't push" instruction;
-- a quick fix / spike / integration touch-up where the delivery conveyor would
-  only get in the way.
+- a small change / quick fix / spike / integration touch-up where the delivery
+  conveyor would only get in the way — bench scales down to a one-liner.
 
 Do NOT use it — route to the conveyor instead — when:
 - you have `.planning/graph/tickets.json` and want PR-per-ticket delivery →
@@ -84,9 +98,21 @@ bench never creates the conveyor's artifacts and never reads or writes
 - Confirm the commit constraint: assume "do not commit" unless the user has
   clearly authorized commits in this session.
 
-### Step 1 — Understand the task
-- Take it from the argument, or ask (AskUserQuestion, in the user's language)
-  what to do and where. Locate the files/subsystem and read them before editing.
+### Step 1 — Understand the task (and its ticket, if any)
+- Take the scope from the argument, or ask (AskUserQuestion, in the user's
+  language) what to do and where.
+- If the scope references an existing ticket, READ it for the contract — do not
+  create one:
+  - a Jira key (`[A-Z]+-\d+`, e.g. `MYD-1234`) → fetch via the connected
+    Atlassian/Jira MCP (`getJiraIssue`); no MCP → ask the user to paste the ticket
+    text;
+  - an internal id (`T-01-02`) or a `*-PLAN.md` path → read the PLAN file
+    (`.planning/graph/tickets.json` maps id → plan);
+  - stay read-only on the tracker by default — no status transitions, comments,
+    or worklogs unless the user explicitly asks.
+- No ticket at all is fine (the default) — the argument/conversation IS the scope.
+- Locate the files/subsystem and read them before editing. Scale the depth to the
+  change: a trivial edit does not need a full investigation.
 
 ### Step 2 — Implement + tests
 - Make the minimal in-scope change; add or adjust tests alongside it.
@@ -105,6 +131,9 @@ bench never creates the conveyor's artifacts and never reads or writes
 ## Rules
 - No branch, worktree, PR, merge, push, or reviewer action — ever, in this mode.
 - No commit unless explicitly asked; "do not commit" is absolute.
-- Never fabricate conveyor artifacts (tickets, graph, delivery-state).
+- Never CREATE a ticket. Consuming an existing one (Jira/PLAN) as scope is fine;
+  mutating the tracker (status/comments) only on explicit request.
+- Never fabricate conveyor artifacts (graph, delivery-state).
+- Scale process to the change — no ceremony for small edits.
 - Artifacts in English; converse in the user's language.
 - If the real need is the delivery conveyor, stop and route to the right skill.
