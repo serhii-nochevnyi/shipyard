@@ -24,10 +24,24 @@ services:
     volumes:
       - ${WORKSPACE_DIR:-./workspace}:/workspace
       - ${HOME_CACHE_DIR:-./.cache-home}:/home/dev/.cache
-      - ${CLAUDE_CREDENTIALS_FILE:-./.claude-credentials.json}:/home/dev/.claude/.credentials.json
-      - ${HOME}/.ssh:/home/dev/.ssh:ro
+      # Durable state that must outlive the container. A DIRECTORY, not a single
+      # file: a bind-mounted file cannot be replaced by rename(2), so an atomic
+      # writer would fail on it. The entrypoint copies credentials in at start
+      # and mirrors them back on change.
+      - ${CLAUDE_STATE_DIR:-./.claude-state}:/home/dev/.claude-state
+      # SSH client files, read-only, at a NON-shadowing path — the entrypoint
+      # copies them into a writable ~/.ssh (so ssh can record new host keys).
+      # Default source is the build-staged SAFE subset (config, known_hosts):
+      # private keys stay on the host and auth goes through the forwarded agent.
+      # Set SSH_DIR=${HOME}/.ssh in .env ONLY if you must expose on-disk keys.
+      - ${SSH_DIR:-./.build/ssh-config}:/home/dev/.ssh-host:ro
       - ${HOME}/.config/gh:/home/dev/.config/gh:ro
       # SSH agent forwarding. macOS Docker Desktop proxies the host agent at
       # this magic path; on a Linux host set SSH_AUTH_SOCK_HOST=$SSH_AUTH_SOCK.
       - ${SSH_AUTH_SOCK_HOST:-/run/host-services/ssh-auth.sock}:/run/host-services/ssh-auth.sock
-      - ${PWD}:${PWD}
+      # NOTE: the repo root is deliberately NOT mounted into the container.
+      # A `${PWD}:${PWD}` mount used to expose this checkout — including `.env`
+      # with CLAUDE_CODE_OAUTH_TOKEN — to a session running with
+      # bypassPermissions, and double-mounted ./workspace under two paths, which
+      # breaks git worktree root detection. Point WORKSPACE_DIR at whatever you
+      # want visible instead.

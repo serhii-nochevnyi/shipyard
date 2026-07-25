@@ -5,7 +5,7 @@
     "name": "Nochevnyi Serhii"
   },
   "metadata": {
-    "description": "Multilevel delivery pipeline: /shipyard:investigate, /shipyard:decompose, /shipyard:deliver"
+    "description": "Multilevel delivery pipeline: /shipyard:route, /shipyard:investigate, /shipyard:decompose, /shipyard:deliver, /shipyard:bench"
   },
   "plugins": [
     {

@@ -1,38 +1,92 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# A contract on the documentation. Behaviour that is documented must stay
+# documented: if you change MCP servers, LSP coverage, the OAuth flow, mount
+# semantics or the command surface, update README.md or this fails.
+
 [[ -f README.md ]] || { echo "missing README.md"; exit 1; }
 [[ -f .env.example ]] || { echo "missing .env.example"; exit 1; }
 
-grep -q "make build-base" README.md || { echo "README missing make build-base"; exit 1; }
-grep -q "make build-dev-image" README.md || { echo "README missing make build-dev-image"; exit 1; }
-grep -q "make deploy-k8s" README.md || { echo "README missing make deploy-k8s"; exit 1; }
-grep -q "Claude Code" README.md || { echo "README missing Claude Code"; exit 1; }
-grep -q "gsd-core" README.md || { echo "README missing gsd-core note"; exit 1; }
-grep -q "@opengsd/gsd-core" README.md || { echo "README missing gsd-core package"; exit 1; }
-grep -q "Atlassian Rovo" README.md || { echo "README missing Atlassian Rovo MCP note"; exit 1; }
-grep -q "Context7" README.md || { echo "README missing Context7 MCP note"; exit 1; }
-grep -q "context7-mcp" README.md || { echo "README missing baked context7-mcp note"; exit 1; }
-grep -q "typescript-language-server" README.md || { echo "README missing typescript-language-server note"; exit 1; }
-grep -q "andrej-karpathy-skills" README.md || { echo "README missing Karpathy plugin note"; exit 1; }
-grep -q "delivery-pipeline" README.md || { echo "README missing delivery-pipeline plugin note"; exit 1; }
-grep -q "/shipyard:deliver" README.md || { echo "README missing /shipyard:deliver command note"; exit 1; }
-grep -q "CLAUDE_CODE_OAUTH_TOKEN" README.md || { echo "README missing OAuth token note"; exit 1; }
-grep -q "claude setup-token" README.md || { echo "README missing setup-token note"; exit 1; }
-grep -q "host user's \`~/.ssh\` directory read-only" README.md || { echo "README missing compose SSH mount note"; exit 1; }
-grep -q "make bootstrap-atlassian-oauth" README.md || { echo "README missing bootstrap-atlassian-oauth flow"; exit 1; }
-grep -q ".claude-credentials.json" README.md || { echo "README missing credentials persistence note"; exit 1; }
-grep -q "ephemeral" README.md || { echo "README missing ephemeral state note"; exit 1; }
-grep -q "skill-creator" README.md || { echo "README missing skill-creator plugin note"; exit 1; }
-grep -q "code-simplifier" README.md || { echo "README missing code-simplifier plugin note"; exit 1; }
-grep -q "GitHub MCP server" README.md || { echo "README missing github (GitHub MCP server) plugin note"; exit 1; }
-grep -q '~/.config/gh' README.md || { echo "README missing gh config mount note"; exit 1; }
-grep -q "read-only" README.md || { echo "README missing read-only note for gh mount"; exit 1; }
+need() { # need <pattern> <what is missing>
+  grep -q "$1" README.md || { echo "README missing $2"; exit 1; }
+}
 
+need "make build-base"        "make build-base"
+need "make build-dev-image"   "make build-dev-image"
+need "make deploy-k8s"        "make deploy-k8s"
+need "make test-fast"         "the fast test entry point"
+need "Claude Code"            "Claude Code"
+need "gsd-core"               "gsd-core note"
+need "@opengsd/gsd-core"      "gsd-core package"
+need "Atlassian Rovo"         "Atlassian Rovo MCP note"
+need "Context7"               "Context7 MCP note"
+need "context7-mcp"           "baked context7-mcp note"
+need "typescript-language-server" "typescript-language-server note"
+need "andrej-karpathy-skills" "Karpathy plugin note"
+need "delivery-pipeline"      "delivery-pipeline plugin note"
+need "CLAUDE_CODE_OAUTH_TOKEN" "OAuth token note"
+need "claude setup-token"     "setup-token note"
+need "make bootstrap-atlassian-oauth" "bootstrap-atlassian-oauth flow"
+need "ephemeral"              "ephemeral state note"
+need "skill-creator"          "skill-creator plugin note"
+need "code-simplifier"        "code-simplifier plugin note"
+need "GitHub MCP server"      "github (GitHub MCP server) plugin note"
+need '~/.config/gh'           "gh config mount note"
+need "read-only"              "read-only note for the gh mount"
+need 'host-services/ssh-auth.sock' "ssh-agent forwarding note"
+
+# every shipyard command the plugin ships must be documented
+for cmd in route investigate decompose deliver bench; do
+  need "/shipyard:$cmd" "the /shipyard:$cmd command"
+done
+# ...and the README's list must not drift from plugin.json
+node - <<'NODE'
+const fs = require('fs');
+const manifest = require('./plugins/delivery-pipeline/.claude-plugin/plugin.json');
+const readme = fs.readFileSync('README.md', 'utf8');
+const missing = (manifest.commands || [])
+  .map((c) => c.replace(/^\.\/commands\//, '').replace(/\.md$/, ''))
+  .filter((name) => !readme.includes(`/shipyard:${name}`));
+if (missing.length) {
+  console.error(`README does not mention: ${missing.map((m) => '/shipyard:' + m).join(', ')}`);
+  process.exit(1);
+}
+if (/\*\*pipeline\*\*/.test(readme)) {
+  console.error('README calls the plugin "pipeline"; its name is "shipyard"');
+  process.exit(1);
+}
+NODE
+
+# ── mount semantics (the security-relevant part) ─────────────────────────────
+need '/home/dev/.ssh-host'    "the non-shadowing SSH mount path"
+need 'SSH_DIR'                "the SSH_DIR opt-in for exposing private keys"
+need 'CLAUDE_STATE_DIR'       "the CLAUDE_STATE_DIR persistence variable"
+need 'repo checkout itself is deliberately not mounted' \
+     "an explicit statement that the repo root is not mounted"
+
+# The repo root must not be mounted (it holds .env with the OAuth token) and the
+# credentials mount must be a directory, not a single file.
+if grep -qE '^\s*-\s*\$\{PWD\}' docker-compose.yml; then
+  echo "docker-compose.yml mounts \${PWD} — that exposes .env to the container"
+  exit 1
+fi
+if grep -q '/home/dev/.claude/.credentials.json' docker-compose.yml; then
+  echo "docker-compose.yml still bind-mounts the credentials FILE (rename(2) cannot replace a mount point)"
+  exit 1
+fi
+if grep -qE ':/home/dev/\.ssh:' docker-compose.yml; then
+  echo "docker-compose.yml mounts over /home/dev/.ssh — it shadows the baked config and makes it read-only"
+  exit 1
+fi
+
+# ── .env.example ────────────────────────────────────────────────────────────
 grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' .env.example || { echo ".env.example missing CLAUDE_CODE_OAUTH_TOKEN"; exit 1; }
-grep -q '^CLAUDE_CREDENTIALS_FILE=' .env.example || { echo ".env.example missing CLAUDE_CREDENTIALS_FILE"; exit 1; }
 grep -q '^SSH_AUTH_SOCK_HOST=' .env.example || { echo ".env.example missing SSH_AUTH_SOCK_HOST"; exit 1; }
-grep -q 'host-services/ssh-auth.sock' README.md || { echo "README missing ssh-agent forwarding note"; exit 1; }
+# CLAUDE_STATE_DIR replaced CLAUDE_CREDENTIALS_FILE; either satisfies this while
+# the template catches up (the Makefile migrates the legacy file automatically).
+grep -qE '^(CLAUDE_STATE_DIR|CLAUDE_CREDENTIALS_FILE)=' .env.example \
+  || { echo ".env.example missing CLAUDE_STATE_DIR"; exit 1; }
 
 if grep -q 'DEV_COPILOT' .env.example; then
   echo ".env.example should not contain DEV_COPILOT vars"
@@ -46,5 +100,16 @@ for pat in 'dev-copilot' 'copilot plugin' '\.copilot' 'COPILOT_'; do
     exit 1
   fi
 done
+
+# ── the k8s flow the README documents must actually exist ───────────────────
+for f in k8s/configmap.yaml k8s/pvc.yaml k8s/service.yaml k8s/statefulset.yaml k8s/secret.example.yaml; do
+  [[ -f "$f" ]] || { echo "README documents the Kubernetes flow but $f is missing"; exit 1; }
+done
+grep -q "$(basename k8s/statefulset.yaml)" README.md || { echo "README should reference k8s/statefulset.yaml"; exit 1; }
+
+# ── every Makefile target the README names must exist ───────────────────────
+while read -r target; do
+  grep -qE "^${target}:" Makefile || { echo "README references 'make $target' but the Makefile has no such target"; exit 1; }
+done < <(grep -oE 'make [a-z][a-z0-9-]+' README.md | awk '{print $2}' | sort -u)
 
 echo "docs smoke passed"

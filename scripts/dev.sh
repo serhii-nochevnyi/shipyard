@@ -14,7 +14,10 @@ cd "$REPO_ROOT"
 
 SERVICE="${DEV_SERVICE:-dev}"
 DEV_IMAGE="${DEV_IMAGE:-claude-shipyard:test}"
-CRED_FILE="${CLAUDE_CREDENTIALS_FILE:-$REPO_ROOT/.claude-credentials.json}"
+# Durable state lives in a DIRECTORY (see docker-compose.yml); the credentials
+# file inside it is written by the container and mirrored by the entrypoint.
+CLAUDE_STATE_DIR="${CLAUDE_STATE_DIR:-$REPO_ROOT/.claude-state}"
+CRED_FILE="$CLAUDE_STATE_DIR/credentials.json"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -126,7 +129,7 @@ echo
 echo "What next?  1) claude   2) shell   3) leave running"
 read -rp "Choose [1/2/3]: " choice || choice="3"
 case "${choice:-3}" in
-  1) dexec bash -lc "cd '$PROJECT_DIR' && exec claude --dangerously-skip-permissions" ;;
-  2) dexec bash -lc "cd '$PROJECT_DIR' && exec bash" ;;
+  1) dexec bash -lc "cd '$PROJECT_DIR' && shipyard-trust '$PROJECT_DIR' >/dev/null 2>&1; exec claude --dangerously-skip-permissions" ;;
+  2) dexec bash -lc "cd '$PROJECT_DIR' && shipyard-trust '$PROJECT_DIR' >/dev/null 2>&1; exec bash" ;;
   *) echo "Container left running (work dir: $PROJECT_DIR). Attach later with: make claude | make shell" ;;
 esac

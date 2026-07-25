@@ -124,7 +124,10 @@ function main() {
   const pluginDir = expandHome(args.plugin) || path.join(repoRoot, 'plugins', 'delivery-pipeline');
   const outDir = expandHome(args.out) || path.join(repoRoot, '.build', 'codex-shipyard');
   const codexHome = expandHome(args['codex-home']) || process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex');
-  const phase = parseInt(args.phase || '2', 10);
+  // A malformed --phase used to become NaN, which silently compared false in
+  // every gate: no deliver skill AND every phase-2 agent emitted anyway.
+  const phase = args.phase === undefined ? 2 : parseInt(args.phase, 10);
+  if (![1, 2].includes(phase)) fail(`--phase must be 1 or 2 (got "${args.phase}")`);
   // Where the CLAUDE_PLUGIN_ROOT payload lands on the host (absolute, host-installed).
   const scriptsRoot = expandHome(args['bundle-root']) || path.join(codexHome, 'shipyard');
 
@@ -205,8 +208,11 @@ function main() {
     writeFile(path.join(outDir, 'config.fragment.toml'), frag);
   }
 
-  // ── CLAUDE_PLUGIN_ROOT payload (scripts/references/templates) ──────────────
-  for (const sub of ['scripts', 'references', 'templates']) {
+  // ── CLAUDE_PLUGIN_ROOT payload (scripts/references/templates/workflows) ────
+  // `workflows` is included even though Codex has no Workflow tool: the deliver
+  // skill's ${CLAUDE_PLUGIN_ROOT} references are rewritten to the bundle root, and
+  // leaving the directory out pointed those paths at files that do not exist.
+  for (const sub of ['scripts', 'references', 'templates', 'workflows']) {
     const s = path.join(pluginDir, sub);
     if (fs.existsSync(s)) copyDir(s, path.join(outDir, 'bundle', sub));
   }

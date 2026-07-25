@@ -21,6 +21,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
+const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
@@ -49,10 +50,14 @@ const journal = fs.existsSync(JOURNAL)
     })
   : [];
 
+const { config: cfg } = loadConfig(process.cwd());
 const prs = JSON.parse(
-  gh(['pr', 'list', '--state', 'all', '--limit', '200',
-      '--json', 'number,state,isDraft,headRefName,mergedAt,createdAt,url,reviewDecision,title'])
+  gh(['pr', 'list', '--state', 'all', '--limit', String(cfg.pr_fetch_limit),
+      '--json', 'number,state,isDraft,headRefName,baseRefName,mergedAt,createdAt,url,reviewDecision,title'])
 );
+// stats are advisory, but a truncated window silently understates delivery —
+// say so rather than printing confident numbers over partial data.
+const prsTruncated = prs.length >= cfg.pr_fetch_limit;
 
 const now = Date.now();
 const hours = (a, b) => Math.round(((b - a) / 3_600_000) * 10) / 10;
@@ -121,8 +126,16 @@ const phaseRows = Object.entries(phases).map(([phase, p]) => ({
 }));
 
 if (asJson) {
-  console.log(JSON.stringify({ tickets: rows, phases: phaseRows, journal_events: journal.length }, null, 2));
+  console.log(JSON.stringify({
+    tickets: rows,
+    phases: phaseRows,
+    journal_events: journal.length,
+    prs_truncated: prsTruncated,
+  }, null, 2));
   process.exit(0);
+}
+if (prsTruncated) {
+  console.log(`⚠ the PR listing hit its limit (${cfg.pr_fetch_limit}) — some tickets may show as pending; raise pipeline.pr_fetch_limit`);
 }
 
 const pad = (v, w) => String(v ?? '—').padEnd(w);

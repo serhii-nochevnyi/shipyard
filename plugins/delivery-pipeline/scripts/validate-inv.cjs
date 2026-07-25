@@ -30,10 +30,13 @@ const MIN_BODY_CHARS = 200; // below this an artifact is still a template stub
 const errors = [];
 
 function body(text) {
-  // strip headings, comments and blank lines to measure real content
-  return text
+  // Measure REAL content: drop the frontmatter block (PROBLEM.md ships a status
+  // stub, which would otherwise count towards the threshold), then headings,
+  // HTML comments and blank lines.
+  const withoutFrontmatter = text.replace(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '');
+  return withoutFrontmatter
     .split('\n')
-    .filter((l) => l.trim() && !l.trim().startsWith('#') && !l.trim().startsWith('<!--'))
+    .filter((l) => l.trim() && !l.trim().startsWith('#') && !l.trim().startsWith('<!--') && !l.trim().startsWith('-->'))
     .join('\n');
 }
 

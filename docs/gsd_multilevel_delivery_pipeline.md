@@ -123,9 +123,15 @@ Does not conflict with the native GSD layout (`STATE.md`, `ROADMAP.md`,
       02-01-PLAN.md
 
   graph/                        # overlay: generated views + delivery state
-    tickets.yaml                # generated from plan frontmatter
-    delivery-state.yaml         # state of each ticket in the delivery loop
+    tickets.json                # generated from plan frontmatter — the MACHINE view
+    tickets.yaml                #   the same data, rendered for humans
+    delivery-state.json         # state of each ticket in the delivery loop (machine)
+    delivery-state.yaml         #   the same, rendered for humans
+    delivery-log.jsonl          # append-only telemetry (pipeline-stats input)
 ```
+
+Every script reads the `.json` files; the `.yaml` mirrors exist for reading and are
+regenerated on each run. All four are generated — never hand-edited.
 
 ---
 
@@ -584,30 +590,37 @@ In this repository, the natural place to run it is the claude-shipyard container
 
 ## 7.5. Model policy
 
-Two tiers: **heavy judgment + heavy work → Opus 4.8 with 1M context, light
-mechanics → Sonnet.** The pipeline agent layout:
+Two tiers: **heavy judgment + heavy work → the Opus tier, light mechanics →
+Sonnet.** The pipeline agent layout:
 
 ```text
-Opus 4.8  integrator, arch-review,        — judgment with the most expensive mistakes,
-1M        executor, review-fix, ci-fix,     code work, diagnostics,
+opus      integrator, arch-review,        — judgment with the most expensive mistakes,
+          executor, review-fix, ci-fix,     code work, diagnostics,
           research:alternatives             option design
-Sonnet 5  drift-check, research:system-    — mechanical cross-checking and fact gathering
+sonnet    drift-check, research:system-    — mechanical cross-checking and fact gathering
           state/constraints/risks
 ```
 
-Exact model IDs (verified against the model catalog): the Opus tier — **Opus 4.8 with 1M
-context**: alias `opus[1m]`, full form `claude-opus-4-8[1m]`; Sonnet 5 =
-`claude-sonnet-5` (the skills use the alias `sonnet`). Previously the heaviest
-judgment (integrator, arch-review) went to Fable 5, but it is now paid — all
-judgment has been consolidated to Opus 4.8 1M.
+**The policy is code, not prose.** `scripts/pipeline-config.cjs model <role>
+[--risk|--type|--files|--attempt|…]` returns the tier for a spawn, applying the
+role × risk × attempt matrix, the `model_policy` profile, and any
+`pipeline.models` override. The skills call it instead of reasoning a value out —
+which is also what keeps the emitted values valid.
 
-The skills pass `model` at each agent spawn. The override is the `pipeline.models`
-block in `.planning/config.json` (tier aliases or full model IDs).
+**Only tier aliases are valid `model` values on a spawn**: `opus`, `sonnet`,
+`haiku`. The Agent tool validates `model` against exactly that set, so a full
+model ID (`claude-opus-…`) or a context-suffixed alias (`opus[1m]`) is rejected on
+input — an earlier revision of this document specified suffixed aliases, and every
+spawn following it would have failed validation. Deliberately no generation is
+pinned here: model ids move, and a document that names one goes stale silently.
+Context-window selection is a session/runtime concern and cannot be expressed in a
+spawn's `model` at all.
 
 The GSD decomposition agents are governed by GSD's own mechanism
-(`model_profile` / `models` / `model_overrides` in the same config.json);
-recommendation: `models.planning: opus` + `model_overrides.gsd-planner:
-claude-opus-4-8[1m]` — the planner is the heaviest decomposition role.
+(`model_profile` / `models` / `model_overrides` in the same config.json) —
+a separate namespace from `pipeline.*`. Recommendation: `models.planning: opus`;
+if you additionally pin a full id in `model_overrides.gsd-planner`, look it up in
+the current model catalog rather than copying it from here.
 
 ## 8. Gates (summary table)
 
@@ -716,12 +729,13 @@ GitHub, ADR conformance, and the integrator remain the unique value of the overl
 **Already accounted for in the pipeline:**
 
 - `requirements[]` — a mandatory frontmatter field (empty = a plan-checker
-  BLOCKER): the template in /shipyard:decompose has been extended, validate-graph
-  warns;
-- `wave` in the template for self-authored plans;
+  BLOCKER): the template in /shipyard:decompose has been extended, and
+  validate-graph rejects it as a hard Gate 2 error;
+- `wave` in the template for self-authored plans — documentation only: the
+  validator computes the real dependency depth and warns on a mismatch;
 - preflight `gsd-tools worktree base-check` before creating a ticket worktree;
-- `context_window: 1000000` in the recommended config (adaptive-context for
-  1M models, aligned with opus[1m]);
+- `context_window: 1000000` in the recommended config (GSD adaptive-context for
+  1M models; a per-spawn `model` cannot express a context window);
 - config booleans like `workflow.code_review` have become capability-owned — the skills
   do not read them directly.
 

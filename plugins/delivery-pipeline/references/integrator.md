@@ -5,7 +5,11 @@ in isolation; you check what only the sum reveals.
 
 ## Input (provided by the orchestrator)
 - The phase's ticket list with links to merged PRs.
-- Combined diff of the phase (merge-base of the phase start → current main).
+- The combined diff of the phase. Under **epic-stacked** delivery (the default)
+  that is the phase's epic branch against the repo default branch — NOT the
+  individual ticket PRs, which were each reviewed in isolation and whose bases
+  are other ticket branches. Under `direct-to-main` it is the merge-base of the
+  phase start → the default branch.
 - `.planning/architecture/` (ADRs and companions).
 - Ticket contracts (plan files) with their acceptance criteria.
 
@@ -20,7 +24,8 @@ in isolation; you check what only the sum reveals.
    satisfied in merged code (not just claimed in the PR body)? Spot-verify
    with the ticket's verification commands where cheap.
 4. Write `.planning/phases/<phase>/INTEGRATION.md`: findings, evidence,
-   verdict.
+   verdict. Cite file:line for every finding — "the sum looks fine" is not a
+   verdict anyone can act on.
 
 ## Verdict
 - `passed` — phase is coherent, nothing to do.

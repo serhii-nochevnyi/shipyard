@@ -7,6 +7,9 @@
 # Runtime mount targets / local state
 workspace/
 .cache-home/
+# Durable container state (remote-MCP OAuth credentials)
+.claude-state/
+# Legacy single-file credentials location, migrated by `make runtime-dirs`
 .claude-credentials.json
 .copilot-mcp-oauth/
 

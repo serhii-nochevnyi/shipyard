@@ -52,10 +52,13 @@ Read `.planning/investigations/` (may not exist):
 5. **Research fan-out**: launch 4 agents IN PARALLEL (Agent tool, in a single
    message) with the brief `${CLAUDE_PLUGIN_ROOT}/references/inv-research.md` —
    lines: system state / alternatives / constraints / risks+unknowns.
-   Models (policy: heavy → opus, light → sonnet; override —
-   `pipeline.models` in `.planning/config.json`):
-   - alternatives+prior-art → `model: opus[1m]` (designing options — the heavy line)
-   - system state, constraints, risks+unknowns → `model: sonnet` (fact gathering)
+   Models — ask the resolver, do not invent a value:
+   `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs model research --type alternatives`
+   (→ `opus`, designing options is the heavy line) and
+   `… model research --type facts` (→ `sonnet`, for system state / constraints /
+   risks+unknowns). Override per role via `pipeline.models` in `.planning/config.json`.
+   **Only the tier aliases `opus` / `sonnet` / `haiku` are valid `model` values** —
+   the Agent tool rejects full model IDs and suffixed aliases like `opus[1m]`.
    Pass each of them the problem statement and the path to the INV directory. Bring their results
    into RESEARCH.md, OPTIONS.md, RISKS.md, OPEN-QUESTIONS.md.
 6. Show the user a summary: how many options, key risks, the list of
@@ -85,7 +88,9 @@ When no `- [ ]` remains in OPEN-QUESTIONS.md — propose closing yourself:
      `/gsd-plan-phase --ingest` parses (Nygard: Status/Context/Decision/Consequences;
      each locked decision — an explicit section, scope fences — a separate block);
    - if there is material: INTERFACES.md, DATA-MODEL.md, ROLLOUT.md.
-3. Add to the PROBLEM.md frontmatter `status: closed` + the date and a link to the ADR.
+3. Update the PROBLEM.md frontmatter (the template ships it pre-stubbed):
+   `status: closed`, `closed: <YYYY-MM-DD>`, `adr: <path to the ADR>`.
+   Step 0 reads exactly these keys to tell an open INV from a closed one.
 4. Tell the user the next step: `/shipyard:decompose`.
 
 ## Rules

@@ -17,7 +17,9 @@ allowed-tools:
 
 You run loop 2: turning accepted architecture into tickets with an explicit DAG.
 A ticket = a GSD plan + a `delivery:` block in the frontmatter. Dependencies live in
-the plans' frontmatter; `graph/tickets.yaml` is a generated view.
+the plans' frontmatter; `graph/tickets.json` is the generated machine view every
+script consumes, and `graph/tickets.yaml` the same data rendered for humans. Both
+are generated — never hand-edited.
 
 > **Communication language.** These instructions and every artifact you produce
 > (PLAN files, frontmatter, branch names, the graph) are in English. But when you
@@ -43,20 +45,15 @@ exit 0 from validate-graph.cjs.
 ## Step 0.5 — GSD agent models
 
 Decomposition is performed by GSD agents — their models are governed NOT by this skill
-but by `.planning/config.json`. Check it and, if absent, propose adding it
-(project policy: role × risk × attempt routing — judgment is always
-Opus 4.8 1M `claude-opus-4-8[1m]`, code by risk, repair via an escalation ladder,
-mechanics → Sonnet 5; profile — `pipeline.model_policy: economy|balanced|premium`,
-details in /shipyard:deliver):
+but by GSD's own block in `.planning/config.json`. Check it and, if absent, propose
+adding it (project policy: role × risk × attempt routing — judgment always top tier,
+code by risk, repair via an escalation ladder, mechanics → Sonnet; profile —
+`pipeline.model_policy: economy|balanced|premium`, details in /shipyard:deliver):
 
 ```json
 {
   "model_profile": "balanced",
   "models": { "planning": "opus", "research": "sonnet", "verification": "sonnet" },
-  "model_overrides": {
-    "gsd-planner": "claude-opus-4-8[1m]",
-    "gsd-executor": "claude-opus-4-8[1m]"
-  },
   "context_window": 1000000,
   "agent_skills": {
     "gsd-planner": ["global:shipyard:delivery-rules"],
@@ -75,12 +72,20 @@ details in /shipyard:deliver):
 }
 ```
 
-(`context_window: 1000000` — GSD 1.7 enables adaptive-context enrichment for
-1M models, aligned with the conveyor's opus[1m] policy.)
+**Two different config namespaces — do not conflate them:**
+- `models` / `model_profile` / `model_overrides` (TOP level) belong to **GSD** and
+  govern the GSD agents. `models.*` takes only the tier aliases opus/sonnet/haiku;
+  a full model ID may be pinned per-agent via `model_overrides`, and GSD resolves it
+  itself. If you pin one, verify the id against the current model catalog first —
+  do NOT copy a generation out of this document, it will be stale.
+- `pipeline.*` belongs to **shipyard** and governs the conveyor's own agents; it is
+  read by `scripts/pipeline-config.cjs` and echoed by `state-sync` on every run.
+  `pipeline.models` takes tier aliases ONLY, because the Agent tool rejects
+  full model IDs.
 
-(`models.*` accepts only the tier aliases opus/sonnet/haiku; full IDs are set
-only via per-agent `model_overrides`. The planner is the heaviest role in decomposition,
-so it is raised to Opus 4.8 with 1M context via override; the executor likewise.)
+(`context_window: 1000000` — GSD 1.7 enables adaptive-context enrichment for 1M
+models. Context-window selection is a GSD/runtime concern; it cannot be encoded in
+an Agent spawn's `model`.)
 
 ## Step 1 — Clarify the mode
 
@@ -103,17 +108,19 @@ One question (AskUserQuestion), with a recommendation based on the type of work:
 
    ```markdown
    ---
+   # wave: 1 + max(wave of dependencies); no dependencies = 1. The graph is
+   # authoritative — validate-graph recomputes the depth and warns on a mismatch.
+   # requirements: REQUIRED. Requirement ids from ROADMAP.md; an empty array is a
+   # BLOCKER in both the GSD plan-checker and Gate 2. Importing from a tracker with
+   # no ROADMAP requirements — add a REQ entry to ROADMAP, or use the tracker id.
    phase: <NN>
    plan: <MM>
    title: "<ticket title>"
    type: implementation
-   wave: <N>                    # 1 + max(wave of dependencies); no dependencies = 1
+   wave: <N>
    depends_on: [<T-...>]
    files_modified: [<globs>]
-   requirements: [<REQ-ids>]    # REQUIRED in GSD 1.7: requirement ids from ROADMAP.md;
-                                # an empty array = BLOCKER in the plan-checker.
-                                # No ROADMAP requirements (import from Jira) — create
-                                # a REQ entry in ROADMAP or set the Jira ticket id
+   requirements: [<REQ-ids>]
    delivery:
      ticket: T-<NN>-<MM>
      risk: low|medium|high
@@ -122,6 +129,11 @@ One question (AskUserQuestion), with a recommendation based on the type of work:
    ## Goal / ## Context (Reads) / ## Scope / ## Out of scope /
    ## Acceptance criteria / ## Test strategy / ## Verification commands
    ```
+
+   **Comments go on their own line, never after a value.** A trailing `# note` on
+   `files_modified`/`requirements` is rejected by Gate 2: it is almost always a
+   comment that leaked into the value, and a corrupted path silently disables the
+   file-overlap guarantee for that entry.
 4. Run `/gsd-plan-review-convergence <N> --all --max-cycles 3`
    (if available; skipping convergence is a TUNE, skipping files is a BLOCK).
 
@@ -236,17 +248,6 @@ Atlassian Rovo: `getVisibleJiraProjects`, `getJiraProjectIssueTypesMetadata`,
 `searchJiraIssuesUsingJql`, `createJiraIssue`, `editJiraIssue`, `createIssueLink`,
 `getIssueLinkTypes`). No Jira MCP available → skip with a note; do not hand-roll
 REST calls.
-
-**Idempotency by marker label (survives re-runs and frontmatter edits).** Each
-issue carries a stable label: `shipyard-<ticket-id>` (e.g. `shipyard-T-01-02`),
-the epic carries `shipyard-epic-<phase>`. Always `searchJiraIssuesUsingJql`
-(`project = <KEY> AND labels = "shipyard-<id>"`) FIRST — found → update summary/
-description if changed; not found → create. Never create a duplicate.
-
-**Tooling.** Use whatever Jira/Atlassian MCP is connected at runtime (e.g.
-Atlassian Rovo: `getVisibleJiraProjects`, `searchJiraIssuesUsingJql`,
-`createJiraIssue`, `editJiraIssue`, `createIssueLink`, `getIssueLinkTypes`). No
-Jira MCP available → skip with a note; do not hand-roll REST calls.
 
 **Idempotency by marker label (survives re-runs and frontmatter edits).** Each
 issue carries a stable label: `shipyard-<ticket-id>` (e.g. `shipyard-T-01-02`),

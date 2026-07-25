@@ -14,7 +14,7 @@ export const meta = {
 //       planPath,        // ticket contract, for scope discipline
 //       needsCiFix,      // bool — checks are failing
 //       needsReviewFix,  // bool — unresolved review threads exist
-//       model,           // optional; default opus[1m]
+//       model,           // optional tier alias; default "opus"
 //     } ],
 //     ciFixRefPath,      // abs path to references/ci-fix.md
 //     reviewFixRefPath,  // abs path to references/review-fix.md
@@ -26,9 +26,15 @@ export const meta = {
 // attempts counter, CI waits, arch-review, the conform gate, and human
 // escalation. Fixing is what parallelizes across PRs; gating does not.
 //
-// ci-fix and review-fix are both opus[1m], so a single fixer agent per PR can
-// own both roles coherently. arch-review (Opus 4.8 1M, judgment) stays in the main
-// loop. Each agent pushes at most once and re-inits reviewers itself.
+// ci-fix and review-fix land on the same tier for a given round, so a single
+// fixer agent per PR can own both roles coherently. arch-review (judgment) stays
+// in the main loop. Each agent pushes at most once and re-inits reviewers itself.
+//
+// Letting the fixer publish IS safe here, unlike the executor: the outcome of a
+// fix round is verified mechanically afterwards from live GitHub (state-sync +
+// `gh pr checks`), so a `pushed: true` that did not happen simply shows up as an
+// unchanged red PR. The main loop still treats `pushed` as a CLAIM and confirms
+// it against GitHub before charging an attempt.
 //
 // NOTE ON SYNTAX: `node --check` on this file fails with "Illegal return
 // statement" — expected, not a bug. The Workflow runtime wraps the body in an
@@ -91,7 +97,8 @@ return await parallel(
     return agent(steps.join('\n'), {
       label: `fix:${p.id}#${p.pr}`,
       phase: 'Fix',
-      model: p.model || 'claude-opus-4-8[1m]',
+      // tier aliases only — the Agent tool rejects full model IDs
+      model: p.model || 'opus',
       agentType: 'general-purpose',
       schema: OUT,
     })

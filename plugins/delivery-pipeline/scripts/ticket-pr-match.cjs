@@ -12,8 +12,18 @@
 // (two different "T-01-01"s), so an ID hit alone is not enough: fallback
 // candidates must also clear a title-similarity threshold vs the ticket title.
 
-const PR_STATE_RANK = { MERGED: 0, OPEN: 1, CLOSED: 2 };
+// OPEN outranks MERGED on purpose. A branch can carry a merged PR AND a newer
+// open one (a follow-up on the same ticket); preferring the merged row made the
+// ticket read as `merged`, which is what the reaper acts on — it removed the
+// worktree and force-deleted a branch that still had an open PR and unmerged
+// commits. The live PR is always the truer state.
+const PR_STATE_RANK = { OPEN: 0, MERGED: 1, CLOSED: 2 };
 const SIMILARITY_MIN = 0.5;
+
+// newest first, for rows that tie on state
+function byRecency(a, b) {
+  return Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0) || (b.number || 0) - (a.number || 0);
+}
 
 function tokens(s) {
   return new Set(
@@ -42,7 +52,7 @@ function hasIdMarker(id, pr) {
 function matchTicketPr(id, ticket, prs) {
   const exact = prs
     .filter((p) => p.headRefName === ticket.branch)
-    .sort((a, b) => (PR_STATE_RANK[a.state] ?? 9) - (PR_STATE_RANK[b.state] ?? 9));
+    .sort((a, b) => (PR_STATE_RANK[a.state] ?? 9) - (PR_STATE_RANK[b.state] ?? 9) || byRecency(a, b));
   if (exact.length) return { pr: exact[0], matchedBy: 'branch' };
 
   const candidates = prs
@@ -51,7 +61,9 @@ function matchTicketPr(id, ticket, prs) {
     .filter((c) => c.sim >= SIMILARITY_MIN)
     .sort(
       (a, b) =>
-        (PR_STATE_RANK[a.p.state] ?? 9) - (PR_STATE_RANK[b.p.state] ?? 9) || b.sim - a.sim
+        (PR_STATE_RANK[a.p.state] ?? 9) - (PR_STATE_RANK[b.p.state] ?? 9) ||
+        b.sim - a.sim ||
+        byRecency(a.p, b.p)
     );
   return candidates.length ? { pr: candidates[0].p, matchedBy: 'marker' } : null;
 }

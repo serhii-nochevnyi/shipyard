@@ -20,6 +20,9 @@ language; English is for the artifacts, the user's language is for conversation.
    `requirements` is a BLOCKER — both GSD's plan-checker and Gate 2
    (`validate-graph`) reject it; reference ROADMAP requirement ids, or the
    external tracker id when the plan was imported.
+   `wave` is documentation for the human reader: the graph is authoritative and
+   the validator recomputes the real dependency depth, warning when your value
+   disagrees. Keep it truthful rather than decorative.
 2. **Delivery block** (additive, never replaces GSD fields):
 
    ```yaml
@@ -48,10 +51,21 @@ language; English is for the artifacts, the user's language is for conversation.
    missing one hands the executor an incomplete base. The validator derives
    the epic (`epic/<phase-dir>`), the primary parent, and `pr_base`; multiple
    same-phase parents (a diamond) get a warning — linearize when practical.
-5. **Gate 2 is mechanical**: it passes only when the graph validator exits 0.
+   **Keep dependencies inside one phase.** A cross-phase dependency cannot
+   cascade — there is no shared branch to stack on — so the dependent ticket
+   stays blocked until the parent's whole phase has landed on the default
+   branch. The validator warns about every one of them; re-slice instead.
+6. **Ids are canonical**: `T-<2-digit phase>-<2-digit plan>`. Write
+   `T-01-02`, never `T-1-2` — the validator normalizes both, but branches,
+   PR titles and Jira labels are string-compared everywhere else.
+7. **No trailing `#` comments on a value.** Put a comment on its own line.
+   `files_modified: [a.ts]  # note` used to fold the comment into the last
+   path; the parser now strips it correctly, but Gate 2 still rejects any
+   value that contains `#` because that is nearly always a leak.
+8. **Gate 2 is mechanical**: it passes only when the graph validator exits 0.
    Jira/GitHub issues, ROLLOUT.md, or prose summaries are never a substitute
    for materialized PLAN files.
-6. **Jira is a projection, not the source of truth.** By default (unless
+9. **Jira is a projection, not the source of truth.** By default (unless
    `pipeline.jira.enabled: false` or no Jira MCP is connected) decompose exports
    the validated graph to Jira (one Epic per phase, one issue per ticket) in
    English, after Gate 2 — never before, never instead. The project is
@@ -70,3 +84,9 @@ language; English is for the artifacts, the user's language is for conversation.
    the conveyor (`delivery-state.json` → `base`: the epic branch for a root
    ticket, the parent branch for a dependent one) — never open a PR straight
    into main/master under epic-stacked.
+5. **Stop at the commit.** Do not `push`, do not open the pull request, do not
+   touch reviewers. The orchestrator verifies the worktree mechanically
+   (`git log <base>..HEAD`) before publishing anything — that check is what
+   catches "the agent reported success and changed nothing", and it only works
+   if publishing is not in the hands of the agent being checked. Hand back your
+   verification evidence and a PR body instead.

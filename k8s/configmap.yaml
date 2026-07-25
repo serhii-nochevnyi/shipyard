@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claude-shipyard-config
+  labels:
+    app.kubernetes.io/name: claude-shipyard
+data:
+  # Non-secret runtime configuration. Secrets live in claude-shipyard-secrets
+  # (see secret.example.yaml) and are injected separately.
+  TZ: "UTC"
+  # The delivery conveyor creates one git worktree per ticket. By default they go
+  # to <repo>/../.wt-<repo-name>, which is unwritable when a repo is checked out
+  # at the volume root — so pin an explicit, writable location on the PVC.
+  SHIPYARD_WORKTREE_ROOT: "/workspace/.worktrees"

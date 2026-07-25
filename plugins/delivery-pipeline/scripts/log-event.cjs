@@ -26,10 +26,15 @@ if (!event || !/^[a-z][a-z0-9_-]*$/.test(event)) {
   process.exit(2);
 }
 
+// Only plain decimal integers/floats become numbers. `Number()` also accepts
+// "0x10", "1e5", "Infinity" and " 5 ", which would rewrite a ticket-ish value
+// into something the stats reader cannot match back (and Infinity JSON-encodes
+// as null, losing the field outright).
 function coerce(v) {
   if (v === 'true') return true;
   if (v === 'false') return false;
-  if (v !== '' && !Number.isNaN(Number(v))) return Number(v);
+  if (/^-?\d+$/.test(v)) return parseInt(v, 10);
+  if (/^-?\d+\.\d+$/.test(v)) return parseFloat(v);
   return v;
 }
 

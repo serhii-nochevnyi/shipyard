@@ -16,12 +16,28 @@ GIT_USER_NAME ?= Nochevnyi Serhii
 GIT_USER_EMAIL ?= nochevnyi.serhii@airslate.com
 WORKSPACE_DIR ?= $(CURDIR)/workspace
 HOME_CACHE_DIR ?= $(CURDIR)/.cache-home
+CLAUDE_STATE_DIR ?= $(CURDIR)/.claude-state
+# Legacy single-file credentials location, migrated into CLAUDE_STATE_DIR once.
+# Honours a CLAUDE_CREDENTIALS_FILE left over in an existing .env so upgrading
+# does not lose an already-authenticated Atlassian session.
+LEGACY_CRED_FILE ?= $(if $(CLAUDE_CREDENTIALS_FILE),$(CLAUDE_CREDENTIALS_FILE),$(CURDIR)/.claude-credentials.json)
 
 REPO ?=
 WORKSPACE_SUBDIR ?=
 DIR ?=
 
-.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image bootstrap-atlassian-oauth run-docker up dev claude shell clone deploy-k8s install-shipyard-codex test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime test-codex-shipyard
+COMPOSE_ENV = \
+  BASE_IMAGE=$(BASE_IMAGE) \
+  DEV_IMAGE=$(DEV_IMAGE) \
+  WORKSPACE_DIR="$(WORKSPACE_DIR)" \
+  HOME_CACHE_DIR="$(HOME_CACHE_DIR)" \
+  CLAUDE_STATE_DIR="$(CLAUDE_STATE_DIR)"
+
+.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image ensure-image runtime-dirs \
+        bootstrap-atlassian-oauth run-docker up dev claude shell clone deploy-k8s \
+        install-shipyard-codex install-shipyard-claude-hook remove-shipyard-claude-hook clean-cache \
+        test test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime \
+        test-codex-shipyard test-unit test-graph test-worktree test-fast
 
 build-base: sync-ssh-config
 	docker build -f Dockerfile.base -t $(BASE_IMAGE) \
@@ -50,43 +66,54 @@ build-dev-image: sync-karpathy-skills
 	  --build-arg GSD_CORE_VERSION=$(GSD_CORE_VERSION) \
 	  .
 
+# Compose declares a `build:` section, so a bare `docker compose up` would try to
+# build — and fail on the un-staged .build/ context. Guard the run targets: build
+# the images when the overlay is missing rather than surfacing a COPY error.
+ensure-image:
+	@if ! docker image inspect $(DEV_IMAGE) >/dev/null 2>&1; then \
+	  echo "image $(DEV_IMAGE) is missing — building it first (this is slow)"; \
+	  $(MAKE) build-base build-dev-image; \
+	fi
+
+# Everything the compose mounts need to exist BEFORE the container starts, or
+# Docker creates root-owned directories in their place.
+runtime-dirs: sync-ssh-config
+	mkdir -p "$(WORKSPACE_DIR)" "$(HOME_CACHE_DIR)" "$(CLAUDE_STATE_DIR)"
+	mkdir -p "$(HOME)/.config/gh"
+	@if [ -s "$(LEGACY_CRED_FILE)" ] && [ ! -s "$(CLAUDE_STATE_DIR)/credentials.json" ]; then \
+	  echo "migrating $(LEGACY_CRED_FILE) -> $(CLAUDE_STATE_DIR)/credentials.json"; \
+	  cp "$(LEGACY_CRED_FILE)" "$(CLAUDE_STATE_DIR)/credentials.json"; \
+	  chmod 600 "$(CLAUDE_STATE_DIR)/credentials.json"; \
+	fi
+
 bootstrap-atlassian-oauth:
 	./scripts/bootstrap-atlassian-rovo-oauth.sh
 
-run-docker:
-	mkdir -p "$(WORKSPACE_DIR)" "$(HOME_CACHE_DIR)"
-	mkdir -p "$(HOME)/.config/gh"
-	touch "$(CURDIR)/.claude-credentials.json"
-	BASE_IMAGE=$(BASE_IMAGE) \
-	DEV_IMAGE=$(DEV_IMAGE) \
-	WORKSPACE_DIR="$(WORKSPACE_DIR)" \
-	HOME_CACHE_DIR="$(HOME_CACHE_DIR)" \
-	CLAUDE_CREDENTIALS_FILE="$(CURDIR)/.claude-credentials.json" \
-	docker compose run --rm dev
+run-docker: ensure-image runtime-dirs
+	$(COMPOSE_ENV) docker compose run --rm dev
 
-up:
-	mkdir -p "$(WORKSPACE_DIR)" "$(HOME_CACHE_DIR)"
-	mkdir -p "$(HOME)/.config/gh"
-	touch "$(CURDIR)/.claude-credentials.json"
-	BASE_IMAGE=$(BASE_IMAGE) \
-	DEV_IMAGE=$(DEV_IMAGE) \
-	WORKSPACE_DIR="$(WORKSPACE_DIR)" \
-	HOME_CACHE_DIR="$(HOME_CACHE_DIR)" \
-	CLAUDE_CREDENTIALS_FILE="$(CURDIR)/.claude-credentials.json" \
-	docker compose up -d
+up: ensure-image runtime-dirs
+	$(COMPOSE_ENV) docker compose up -d
 
 dev:
 	./scripts/dev.sh
 
 claude: up
-	docker compose exec dev bash -lc 'cd "/workspace/$(DIR)" 2>/dev/null || cd /workspace; exec claude --dangerously-skip-permissions'
+	docker compose exec dev bash -lc 'target="/workspace/$(DIR)"; cd "$$target" 2>/dev/null || target=/workspace; cd "$$target"; shipyard-trust "$$target" >/dev/null 2>&1 || true; exec claude --dangerously-skip-permissions'
 
 shell: up
-	docker compose exec dev bash -lc 'cd "/workspace/$(DIR)" 2>/dev/null || cd /workspace; exec bash'
+	docker compose exec dev bash -lc 'target="/workspace/$(DIR)"; cd "$$target" 2>/dev/null || target=/workspace; cd "$$target"; shipyard-trust "$$target" >/dev/null 2>&1 || true; exec bash'
 
 clone: up
 	@test -n "$(REPO)" || { echo "usage: make clone REPO=<git-url> [WORKSPACE_SUBDIR=name]"; exit 1; }
-	docker compose exec dev bash -lc 'cd /workspace && git clone "$(REPO)" $(WORKSPACE_SUBDIR)'
+	docker compose exec dev bash -lc 'set -e; cd /workspace; git clone "$(REPO)" $(WORKSPACE_SUBDIR); \
+	  name="$(WORKSPACE_SUBDIR)"; [ -n "$$name" ] || name="$$(basename "$(REPO)" .git)"; \
+	  shipyard-trust "/workspace/$$name" >/dev/null 2>&1 || true'
+
+# MCP server logs under .cache-home grow without bound (they are per-session).
+clean-cache:
+	find "$(HOME_CACHE_DIR)" -name '*.jsonl' -mtime +7 -delete 2>/dev/null || true
+	@echo "pruned MCP logs older than 7 days from $(HOME_CACHE_DIR)"
 
 deploy-k8s:
 	kubectl apply -f k8s/configmap.yaml
@@ -100,6 +127,29 @@ deploy-k8s:
 # Override phase with SHIPYARD_CODEX_PHASE=1 for investigate+decompose only.
 install-shipyard-codex:
 	./scripts/install-shipyard-codex.sh
+
+# The Claude-side counterpart: a UserPromptSubmit hook in the HOST's user
+# settings. (Inside the container the same hook is baked in at build time.)
+install-shipyard-claude-hook:
+	./scripts/install-shipyard-claude-hook.sh
+
+remove-shipyard-claude-hook:
+	./scripts/install-shipyard-claude-hook.sh --remove
+
+# Everything that needs neither Docker nor the network — run this constantly.
+test-fast: test-unit test-graph test-worktree test-docs test-ssh-sync
+
+# The full suite (slow: builds images, needs Docker + network + kubectl).
+test: test-fast test-k8s test-base test-overlay test-runtime test-mcp-runtime test-codex-shipyard
+
+test-unit:
+	./tests/unit/run.sh
+
+test-graph:
+	./tests/smoke/graph-validator-smoke.sh
+
+test-worktree:
+	./tests/smoke/worktree-smoke.sh
 
 test-base:
 	./tests/smoke/base-image-smoke.sh

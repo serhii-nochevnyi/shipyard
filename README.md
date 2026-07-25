@@ -19,28 +19,41 @@ directory**. Each step is skipped if already done, so it is safe to re-run.
 Inside this isolated container, Claude always runs without per-action permission
 prompts: the image bakes `permissions.defaultMode: "bypassPermissions"` into
 `~/.claude/settings.json`, and the entrypoint pre-seeds the one-time bypass
-acceptance and `/workspace` trust into the (ephemeral) `~/.claude.json`. So a
-bare `claude` from any shell behaves the same as
-`claude --dangerously-skip-permissions` (which `make claude` and the launcher's
-"claude" option still pass explicitly). Use this only in the throwaway
-container, never against your host shell.
+acceptance plus per-directory trust for `/workspace` and every project inside it
+(the `shipyard-trust` helper covers repos cloned later). So a bare `claude` from
+any shell behaves the same as `claude --dangerously-skip-permissions` (which
+`make claude` and the launcher's "claude" option still pass explicitly). Use this
+only in the throwaway container, never against your host shell.
 
 Individual targets if you prefer to drive it yourself:
 
 | Command | Does |
 |---|---|
-| `make up` | start the persistent container (`docker compose up -d`) |
+| `make up` | start the persistent container (`docker compose up -d`; builds the image first if missing) |
 | `make claude [DIR=subdir]` | attach a `claude --dangerously-skip-permissions` session (in `/workspace/subdir` if `DIR` is given) |
 | `make shell [DIR=subdir]` | attach a `bash` shell (in `/workspace/subdir` if `DIR` is given) |
 | `make clone REPO=<git-url>` | clone a repo into `/workspace` (set `WORKSPACE_SUBDIR=name` to rename) |
 | `make bootstrap-atlassian-oauth` | authenticate the Atlassian Rovo MCP server |
 | `make run-docker` | one-off ephemeral session (`docker compose run --rm`) |
+| `make clean-cache` | prune MCP server logs older than 7 days from `.cache-home` |
 
 ## Delivery workflow
 
 The main way to work in this container is the baked-in **delivery pipeline**
 (the `shipyard` plugin): a full cycle from a raw problem to a set of green PRs.
-Inside a `claude` session in your project directory:
+You do not have to remember which entry to use — describe the work and the
+router picks it:
+
+```text
+/shipyard:route "scope of the work"
+```
+
+It is read-only and advisory: it sizes the work and hands off to the right loop
+(and the baked auto-route hook surfaces it for you, so in practice you just state
+what you want). Large multi-ticket efforts go through the three conveyor loops
+below; a small change, an existing ticket, or explicit "no ticket" goes to
+`/shipyard:bench`, which implements directly in the current worktree and never
+creates a branch, PR, or commit unless you ask.
 
 ```text
 /shipyard:investigate "тема або проблема"
@@ -57,22 +70,39 @@ generates an ADR package (Gate 1 — the only fully human gate).
 ```
 
 Finds undecomposed ADRs, runs the GSD planning chain under the hood, stamps
-tickets with branches/risk, validates the dependency graph (Gate 2 — automatic),
-and shows you the ticket set for approval.
+tickets with branches/risk, validates the dependency graph (Gate 2 — automatic,
+mechanical), and shows you the ticket set for approval. Gate 2 is
+`scripts/validate-graph.cjs` exiting 0 and nothing else.
 
 ```text
 /shipyard:deliver
 ```
 
-Cold-starts from live GitHub state, shows a ticket board (ready / blocked /
-pr-open / merged), lets you pick the scope to take on, then runs each ticket in
-its own git worktree to its own PR and babysits every PR to green: CI fixes,
-review-comment handling, architecture conformance, with CodeRabbit/Copilot
-re-review after every push. It only comes back to you for high-risk approvals,
-escalations, and merges. Gaps of days between the three stages are fine — each
-command re-derives its state from artifacts and GitHub, not from the chat.
+Cold-starts from live GitHub state, shows a ticket board (ready /
+branched-needs-pr / blocked / pr-open / merged), lets you pick the scope to take
+on, then runs each ticket in its own git worktree to its own PR and babysits
+every PR to green: CI fixes, review-comment handling, architecture conformance,
+with CodeRabbit/Copilot re-review after every push. It only comes back to you for
+high-risk approvals, escalations, and merges. Gaps of days between the three
+stages are fine — each command re-derives its state from artifacts and GitHub,
+not from the chat.
 
 Full specification: `docs/gsd_multilevel_delivery_pipeline.md`.
+
+### Agent model policy
+
+The conveyor routes agents by **role × risk × attempt**, and that policy is code:
+
+```bash
+node plugins/delivery-pipeline/scripts/pipeline-config.cjs model executor --risk high
+node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve      # effective config
+```
+
+It only ever emits the tier aliases `opus`, `sonnet` or `haiku` — the values the
+Agent tool accepts. Tune it via `.planning/config.json` → `pipeline`
+(`model_policy`, `models`, `max_attempts`, `pr_fetch_limit`,
+`integration_mode`, `use_workflow`, `jira`); `state-sync` echoes the effective
+settings and warns about keys that are not in effect.
 
 ## Running shipyard on Codex
 
@@ -94,25 +124,30 @@ make install-shipyard-codex        # or: bash scripts/install-shipyard-codex.sh
 ```
 
 This generates Codex skills from the Claude commands (via gsd-core's own
-converter — `$shipyard-investigate`, `$shipyard-decompose`, `$shipyard-deliver`),
-registers the delivery subagents in `$CODEX_HOME/config.toml` (non-destructively),
-copies the deterministic scripts/references under `$CODEX_HOME/shipyard/`, and
-installs the runtime-agnostic GSD capability that contributes the blocking
-Gate 2 (ticket graph) and UAT gates — the same gates the Claude runtime uses.
+converter — `$shipyard-route`, `$shipyard-investigate`, `$shipyard-decompose`,
+`$shipyard-deliver`, `$shipyard-bench`), registers the delivery subagents in
+`$CODEX_HOME/config.toml` (non-destructively), copies the deterministic
+scripts/references/workflows under `$CODEX_HOME/shipyard/`, and installs the
+runtime-agnostic GSD capability that contributes the blocking Gate 2 (ticket
+graph) and UAT gates — the same gates the Claude runtime uses.
 Because Codex has no Workflow tool, `deliver` runs its built-in agent path:
 deterministic bookkeeping in Node scripts, agentic work via Codex `spawn_agent`.
-It also writes a managed "shipyard auto-route" block into the global
-`~/.codex/AGENTS.md`, so a defined scope of work is routed through shipyard
+It also writes a managed "shipyard auto-route" block into
+`$CODEX_HOME/AGENTS.md`, so a defined scope of work is routed through shipyard
 (research-first, proportionate GSD) without the user invoking `$shipyard-*` by
 hand.
 
 ### Auto-route on Claude Code
 
-The equivalent auto-route nudge for Claude Code is a `UserPromptSubmit` hook,
-installed separately (it edits your user settings, not the plugin):
+Inside the container this is already done: the overlay build installs a
+`UserPromptSubmit` hook into the image's own `~/.claude`, so a scope of work is
+routed through shipyard without you invoking anything.
+
+To get the same nudge on your **host** Claude Code (it edits your user settings,
+not the plugin):
 
 ```bash
-bash scripts/install-shipyard-claude-hook.sh          # add (or --remove)
+make install-shipyard-claude-hook        # or: make remove-shipyard-claude-hook
 ```
 
 It writes `~/.claude/hooks/shipyard-auto-route.sh` and merges a hook into
@@ -126,10 +161,11 @@ files is modified.
 ## Prerequisites
 
 - Docker with Compose support
-- `kubectl`
+- `kubectl` (only for the Kubernetes deployment and `make test-k8s`)
 - Claude Pro or Max subscription (required for Claude Code)
 - valid `GITHUB_TOKEN` or `GH_TOKEN` for git/gh access inside the container (optional)
-- optional local SSH agent if you need private Git access at runtime
+- a local SSH agent if you need private Git access at runtime (recommended over
+  exposing on-disk keys — see "SSH access" below)
 
 ## Local build
 
@@ -141,7 +177,7 @@ files is modified.
 make build-base
 ```
 
-`make build-base` also stages safe SSH client files from your local `~/.ssh` into the build context. It copies only `config`, `known_hosts`, and `known_hosts2`, and it skips private keys.
+`make build-base` also stages safe SSH client files from your local `~/.ssh` into the build context. It copies only `config`, `known_hosts`, and `known_hosts2`, and it skips private keys. A host with no `~/.ssh` is fine — the staging directory is created empty and the container relies on agent forwarding.
 
 4. Build the overlay image:
 
@@ -157,16 +193,20 @@ The overlay image installs the following during build:
   gsd-core is NOT installed from the Claude Code marketplace; it is installed via npx.
 - **andrej-karpathy-skills** — a Claude Code plugin staged from a pinned Git ref
   (`2c606141936f1eeef17fa3043a72095b4765b9c2`) and registered with `claude plugin`.
-- **pipeline** (delivery-pipeline) — an in-repo Claude Code plugin (`plugins/delivery-pipeline/`)
-  implementing the multilevel delivery pipeline from `docs/gsd_multilevel_delivery_pipeline.md`:
-  `/shipyard:investigate` (deep investigation → ADR), `/shipyard:decompose` (ADR → ticket DAG),
-  `/shipyard:deliver` (per-ticket worktree → PR babysat to green with CodeRabbit/Copilot
-  reviewer re-initialization).
+- **shipyard** (from the in-repo `delivery-pipeline` marketplace) — a Claude Code
+  plugin (`plugins/delivery-pipeline/`) implementing the multilevel delivery
+  pipeline from `docs/gsd_multilevel_delivery_pipeline.md`: `/shipyard:route`
+  (entry router), `/shipyard:investigate` (deep investigation → ADR),
+  `/shipyard:decompose` (ADR → ticket DAG), `/shipyard:deliver` (per-ticket
+  worktree → PR babysat to green with CodeRabbit/Copilot reviewer
+  re-initialization), and `/shipyard:bench` (off-conveyor direct work).
 - **skill-creator**, **code-simplifier**, **github** (GitHub MCP server), and
   **typescript-lsp** — installed from the official `claude-plugins-official` marketplace
   (`anthropics/claude-plugins-official`). Plugin versions are pinned by the marketplace's
   GitHub ref at clone time. The `typescript-lsp` plugin wires `typescript-language-server`
   (already in the base image) into Claude Code, covering `.ts`, `.tsx`, `.js`, and `.jsx`.
+- the **shipyard auto-route** `UserPromptSubmit` hook, into the image's own
+  `~/.claude/settings.json`.
 
 The base image bakes in:
 
@@ -178,7 +218,8 @@ The base image bakes in:
 - `context7-mcp` binary (baked in, no runtime `npx -y` needed)
 - `typescript-language-server` and `typescript` for LSP support
 
-Private keys are not baked into the image.
+Private keys are not baked into the image, and by default they are not mounted
+into the running container either.
 
 ## Authentication
 
@@ -196,13 +237,14 @@ Copy the token into `.env` as `CLAUDE_CODE_OAUTH_TOKEN=<token>`. The container r
 make run-docker
 ```
 
-The container starts in `/workspace`. If you want a host bind mount there, keep the `WORKSPACE_DIR` volume enabled in `docker-compose.yml`.
+The container starts in `/workspace`, which is bind-mounted from `WORKSPACE_DIR`
+(default `./workspace`). **The repo checkout itself is deliberately not mounted**
+— it holds `.env` with your OAuth token, and the session runs with
+`bypassPermissions`. Point `WORKSPACE_DIR` at whatever you want visible instead.
 
-The Compose runtime mounts the host user's `~/.ssh` directory read-only at `/home/dev/.ssh`, so SSH Git access can use your existing host keys inside the container.
+### SSH access
 
-The host `~/.config/gh` directory is mounted read-only at `/home/dev/.config/gh`, so the GitHub CLI (`gh`) can use your existing host authentication inside the container. `make up` and `make run-docker` create `~/.config/gh` on the host if it does not exist (preventing Docker from creating a root-owned directory in its place). The `GITHUB_TOKEN` / `GH_TOKEN` environment variables are also forwarded into the container for token-based access.
-
-The host SSH agent is forwarded into the container by default: Compose binds
+Authentication goes through the **forwarded SSH agent** by default: Compose binds
 the agent socket to `/run/host-services/ssh-auth.sock` inside the container and
 sets `SSH_AUTH_SOCK` to that path. On macOS, Docker Desktop proxies the host
 agent at that magic path automatically — passphrase-protected keys and
@@ -210,6 +252,18 @@ certificate-based setups (e.g. Teleport) work without copying anything into the
 container. On a Linux host, point the bind at your real agent socket by setting
 `SSH_AUTH_SOCK_HOST=$SSH_AUTH_SOCK` in `.env`. Verify from inside the container
 with `ssh-add -l`.
+
+Your SSH **client config** is mounted read-only at `/home/dev/.ssh-host` and
+copied by the entrypoint into a writable `/home/dev/.ssh` (writable so `ssh` can
+record a new host key; existing files are never overwritten). The mount source
+defaults to the build-staged safe subset (`config`, `known_hosts`) — so your
+private keys stay on the host.
+
+If you genuinely cannot use agent forwarding, set `SSH_DIR=${HOME}/.ssh` in
+`.env` to mount your full `~/.ssh` read-only instead. That exposes your private
+keys to the container; prefer the agent.
+
+The host `~/.config/gh` directory is mounted read-only at `/home/dev/.config/gh`, so the GitHub CLI (`gh`) can use your existing host authentication inside the container. `make up` and `make run-docker` create `~/.config/gh` on the host if it does not exist (preventing Docker from creating a root-owned directory in its place). The `GITHUB_TOKEN` / `GH_TOKEN` environment variables are also forwarded into the container for token-based access.
 
 ## MCP Servers
 
@@ -233,9 +287,9 @@ Rovo authentication must run inside the container. The documented flow is:
 2. Start a persistent container: `make up`
 3. Run the bootstrap: `make bootstrap-atlassian-oauth`
 
-`make up` creates `.claude-credentials.json` on the host (if it does not already
-exist) before starting the container with `docker compose up -d`, preventing Docker
-from silently creating a directory mount in its place.
+`make up` creates the host directories the container mounts (including the state
+directory) before starting, preventing Docker from creating root-owned paths in
+their place.
 
 `make bootstrap-atlassian-oauth` runs `scripts/bootstrap-atlassian-rovo-oauth.sh`
 on the host. That script `docker exec -it`s into the running `dev` container and
@@ -255,25 +309,33 @@ receive the authorization code. `claude mcp login --no-browser` (Claude Code
    connection error — this is expected (the callback server is inside the container).
 3. Copy the full redirect URL from the address bar and paste it back at the prompt.
 
-Credentials then land in `/home/dev/.claude/.credentials.json`, which is bind-mounted
-from the host file `.claude-credentials.json` — persisting across container restarts.
+Credentials land in `/home/dev/.claude/.credentials.json` and are mirrored to the
+persisted state directory (see below), so they survive container recreation.
 (If a half-finished attempt blocks a retry, run
 `docker compose exec dev claude mcp logout atlassian-rovo` first.)
 
 ## Persistence
 
-Only a single file is bind-mounted for persistence between container restarts:
+One host **directory** is bind-mounted for state that must outlive the container:
 
-- `.claude-credentials.json` on the host (controlled by `CLAUDE_CREDENTIALS_FILE`
-  in `.env`, default `./.claude-credentials.json`) maps to
-  `/home/dev/.claude/.credentials.json` inside the container.
+- `CLAUDE_STATE_DIR` (default `./.claude-state`) maps to
+  `/home/dev/.claude-state`. The entrypoint restores
+  `credentials.json` from it into `~/.claude/.credentials.json` at start and
+  mirrors the live file back whenever it changes.
 
-This file holds remote-MCP OAuth state (e.g. Atlassian Rovo tokens).
+It is a directory rather than a single-file mount on purpose: a bind-mounted
+*file* cannot be replaced by `rename(2)`, so any writer that saves atomically
+would fail on it outright. An older layout used
+`CLAUDE_CREDENTIALS_FILE=./.claude-credentials.json`; `make up` migrates that
+file into the state directory automatically on first run.
 
 Everything else under `~/.claude` is baked into the image or generated at startup
 and is ephemeral — it is not persisted across container recreation.
 
 The host's full `~/.claude` is never mounted.
+
+`.cache-home` (mounted at `~/.cache`) accumulates per-session MCP server logs;
+`make clean-cache` prunes the ones older than a week.
 
 ## LSP Support
 
@@ -288,9 +350,10 @@ when Claude Code starts an interactive session.
 
 - **gsd-core** (`@opengsd/gsd-core`) — Claude Code delivery plugin with full profile, installed via npx.
 - **andrej-karpathy-skills** — staged from pinned commit, registered via `claude plugin`.
-- **pipeline** — in-repo (`plugins/delivery-pipeline/`); investigation → ticket DAG →
-  per-ticket worktree/PR delivery. Commands: `/shipyard:investigate`, `/shipyard:decompose`,
-  `/shipyard:deliver`.
+- **shipyard** — in-repo (`plugins/delivery-pipeline/`); investigation → ticket DAG →
+  per-ticket worktree/PR delivery. Commands: `/shipyard:route`,
+  `/shipyard:investigate`, `/shipyard:decompose`, `/shipyard:deliver`,
+  `/shipyard:bench`.
 - **skill-creator** — from `claude-plugins-official`; helps create new Claude Code skills.
 - **code-simplifier** — from `claude-plugins-official`; reviews and simplifies code.
 - **github** — from `claude-plugins-official`; the official GitHub MCP server plugin.
@@ -298,23 +361,55 @@ when Claude Code starts an interactive session.
 
 ## Deploy to Kubernetes
 
+The manifests in `k8s/` run the same overlay image as a single-replica
+StatefulSet you attach to with `kubectl exec`. One PVC backs `/workspace`,
+`~/.cache` and the credential state directory via `subPath`.
+
 1. Push the built overlay image to a registry reachable by the cluster and update
-   `k8s/statefulset.yaml` if needed.
-2. Create the real secret from `k8s/secret.example.yaml`.
+   the `image:` field in `k8s/statefulset.yaml`.
+2. Create the real secret — `k8s/secret.example.yaml` is a template and is
+   deliberately not applied by `make deploy-k8s`:
+
+```bash
+kubectl create secret generic claude-shipyard-secrets \
+  --from-literal=CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)" \
+  --from-literal=GITHUB_TOKEN="$GITHUB_TOKEN" \
+  --from-literal=GH_TOKEN="$GITHUB_TOKEN"
+```
+
 3. Apply manifests:
 
 ```bash
 make deploy-k8s
 ```
 
-## Smoke tests
+4. Attach:
 
 ```bash
+kubectl exec -it claude-shipyard-0 -- bash -lc 'cd /workspace && claude --dangerously-skip-permissions'
+```
+
+## Smoke tests
+
+`make test-fast` needs neither Docker nor the network — run it on every edit:
+
+```bash
+make test-fast          # unit + graph + worktree + docs + ssh-sync
+make test-unit          # frontmatter parser, model policy, ticket↔PR matching
+make test-graph         # Gate 2 contract + plan:post gate applicability, on fixtures
+make test-worktree      # epic-branch.sh + ticket-worktree.sh against real git repos
+make test-docs          # README + .env.example invariants
+make test-ssh-sync      # sync-local-ssh-config.sh behaviour
+```
+
+The rest build images or reach the network:
+
+```bash
+make test-k8s           # kubectl dry-run over k8s/
 make test-base
 make test-overlay
 make test-runtime
 make test-mcp-runtime
-make test-docs
-make test-ssh-sync
 make test-codex-shipyard   # generator + installer produce valid Codex artifacts (needs network)
+make test                  # everything, in order
 ```

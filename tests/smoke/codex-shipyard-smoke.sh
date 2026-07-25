@@ -54,12 +54,39 @@ for f in scripts/state-sync.cjs scripts/reviewers.cjs scripts/validate-graph.cjs
   [[ -f "$CODEX_HOME/shipyard/$f" ]] || { echo "bundle missing $f"; exit 1; }
 done
 bash -n "$CODEX_HOME/shipyard/scripts/epic-branch.sh" || { echo "bundled epic-branch.sh syntax error"; exit 1; }
-for f in state-sync log-event pipeline-stats ticket-pr-match; do
+bash -n "$CODEX_HOME/shipyard/scripts/ticket-worktree.sh" || { echo "bundled ticket-worktree.sh syntax error"; exit 1; }
+for f in state-sync log-event pipeline-stats ticket-pr-match frontmatter pipeline-config; do
   node --check "$CODEX_HOME/shipyard/scripts/$f.cjs" || { echo "bundle $f.cjs fails node --check"; exit 1; }
 done
+# The bundled validator must be able to load its siblings from the bundle root.
+# Capture first: it exits non-zero here by design, and `set -o pipefail` would
+# report that instead of the grep result.
+vg_out="$( ( cd "$WORK" && node -e 'require(process.argv[1])' "$CODEX_HOME/shipyard/scripts/validate-graph.cjs" 2>&1 ) || true )"
+grep -q 'missing .planning' <<<"$vg_out" || { echo "bundled validate-graph.cjs cannot load its modules: $vg_out"; exit 1; }
+# the model resolver travels with the bundle and only emits tier aliases
+[[ "$(node "$CODEX_HOME/shipyard/scripts/pipeline-config.cjs" model arch-review)" == opus ]] \
+  || { echo "bundled pipeline-config.cjs does not resolve the judgment tier"; exit 1; }
+
+# ${CLAUDE_PLUGIN_ROOT} is rewritten to the bundle root, so every path the skills
+# reference must actually EXIST there — including workflows/, which used to be
+# omitted from the bundle while the deliver skill still pointed into it.
+for wf in drift-gate executors fix-round; do
+  [[ -f "$CODEX_HOME/shipyard/workflows/$wf.mjs" ]] || { echo "bundle missing workflows/$wf.mjs"; exit 1; }
+done
+missing_paths=0
+while read -r p; do
+  [[ -e "$p" ]] || { echo "converted skill references a non-existent path: $p"; missing_paths=1; }
+done < <(grep -rhoE "$CODEX_HOME/shipyard/[A-Za-z0-9_./-]+\.(cjs|mjs|sh|md)" "$SKILLS"/shipyard-*/SKILL.md | sort -u)
+[[ "$missing_paths" -eq 0 ]] || exit 1
+
 # the converted deliver skill references the telemetry scripts at the bundle root
 grep -q 'log-event.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "deliver skill lost log-event.cjs reference"; exit 1; }
 grep -q 'pipeline-stats.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "deliver skill lost pipeline-stats.cjs reference"; exit 1; }
+grep -q 'pipeline-config.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "deliver skill lost the model resolver reference"; exit 1; }
+
+# auto-route lands in the CODEX_HOME being installed into, not a hardcoded ~/.codex
+grep -q 'shipyard-auto-route:begin' "$CODEX_HOME/AGENTS.md" \
+  || { echo "auto-route block missing from \$CODEX_HOME/AGENTS.md"; exit 1; }
 
 # agents present + registered; gsd agents intact
 for a in shipyard-arch-review shipyard-ci-fix shipyard-drift-check shipyard-integrator shipyard-inv-research shipyard-review-fix; do
@@ -74,14 +101,60 @@ bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 SHIP_AGENTS="$(grep -c '^\[agents\.shipyard-' "$CODEX_HOME/config.toml" || true)"
 [[ "$SHIP_AGENTS" -eq 6 ]] || { echo "merge not idempotent (shipyard agents=$SHIP_AGENTS)"; exit 1; }
 
-# capability installed, self-contained, and Gate 2 mechanic blocks an empty decomposition
-node "$CODEX_HOME/gsd-core/bin/gsd-tools.cjs" capability list 2>/dev/null | grep -q 'delivery-pipeline' \
-  || { echo "delivery-pipeline capability not listed"; exit 1; }
+# capability installed and self-contained
+cap_list="$(node "$CODEX_HOME/gsd-core/bin/gsd-tools.cjs" capability list 2>/dev/null || true)"
+grep -q 'delivery-pipeline' <<<"$cap_list" || { echo "delivery-pipeline capability not listed"; exit 1; }
 CAPDIR="$WORK/.gsd/capabilities/delivery-pipeline"
-[[ -f "$CAPDIR/checks/validate-graph.cjs" ]] || { echo "capability not self-contained (validate-graph.cjs missing)"; exit 1; }
+for f in validate-graph.cjs frontmatter.cjs pipeline-config.cjs; do
+  [[ -f "$CAPDIR/checks/$f" ]] || { echo "capability not self-contained ($f missing)"; exit 1; }
+done
+
+# ── the plan:post gate is GLOBAL, so applicability matters as much as strictness ──
+run_gate() { ( cd "$1" && GSD_CAP_DIR="$CAPDIR" node "$CAPDIR/checks/graph-gate.cjs" ); }
+
+# A plain GSD project (plans, but no delivery: block) must NOT be blocked: the
+# gate is installed globally and Gate 2's contract belongs to the conveyor only.
+mkdir -p "$WORK/plaingsd/.planning/phases/01-x"
+cat > "$WORK/plaingsd/.planning/phases/01-x/01-PLAN.md" <<'EOF'
+---
+phase: 01
+plan: 01
+title: "A plain GSD plan"
+type: implementation
+depends_on: []
+---
+## Goal
+Nothing to do with the delivery conveyor.
+EOF
+run_gate "$WORK/plaingsd" >/dev/null 2>&1 \
+  || { echo "the global plan:post gate blocks a plain GSD project"; exit 1; }
+
+# An empty project has nothing to gate.
 mkdir -p "$WORK/proj"
-if ( cd "$WORK/proj" && GSD_CAP_DIR="$CAPDIR" node "$CAPDIR/checks/graph-gate.cjs" ) >/dev/null 2>&1; then
-  echo "Gate 2 did NOT block an empty decomposition"; exit 1
+run_gate "$WORK/proj" >/dev/null 2>&1 \
+  || { echo "the global plan:post gate blocks a project with no plans"; exit 1; }
+
+# A CONVEYOR project with an invalid graph must still be blocked (fail closed).
+mkdir -p "$WORK/conveyor/.planning/phases/01-x"
+cat > "$WORK/conveyor/.planning/phases/01-x/01-PLAN.md" <<'EOF'
+---
+phase: 01
+plan: 01
+title: "A conveyor ticket with no scope"
+type: implementation
+depends_on: []
+files_modified: []
+requirements: []
+delivery:
+  ticket: T-01-01
+  risk: low
+  human_checkpoint: false
+---
+## Goal
+x
+EOF
+if run_gate "$WORK/conveyor" >/dev/null 2>&1; then
+  echo "Gate 2 did NOT block an invalid conveyor decomposition"; exit 1
 fi
 
 # phase gating: --phase 1 emits neither the deliver skill nor phase-2 agents,

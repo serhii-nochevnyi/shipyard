@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: claude-shipyard
+  labels:
+    app.kubernetes.io/name: claude-shipyard
+spec:
+  # Headless: this workload is attached to with `kubectl exec`, it serves no
+  # traffic. The Service exists to give the StatefulSet a stable pod DNS name.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: claude-shipyard
+  ports:
+    - name: placeholder
+      port: 9
+      targetPort: 9
+      protocol: TCP

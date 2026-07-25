@@ -90,15 +90,20 @@ fi
 # from its own checks/ dir on a host (there is no /opt/delivery-pipeline here).
 echo "→ registering GSD capability (Gate 2 / UAT gates)…"
 CAP_STAGE="$STAGE/capability/delivery-pipeline"
-mkdir -p "$CAP_STAGE"
+mkdir -p "$CAP_STAGE/checks"
 cp -R "$CAP_SRC/." "$CAP_STAGE/"
-cp "$PLUGIN_DIR/scripts/validate-graph.cjs" "$CAP_STAGE/checks/validate-graph.cjs"
+# The validator requires sibling modules (frontmatter.cjs, pipeline-config.cjs),
+# so the whole .cjs set travels with it — staging validate-graph.cjs alone would
+# leave the gate unable to load its parser.
+cp "$PLUGIN_DIR"/scripts/*.cjs "$CAP_STAGE/checks/"
 node "$GSD_TOOLS" capability install "$CAP_STAGE" --scope global --yes
 
 # ── auto-route policy → global AGENTS.md (Codex's always-loaded instructions) ──
 # So the pipeline is applied without the user invoking $shipyard-* by hand.
 # Idempotent: managed block between markers, rewritten in place on reinstall.
-AGENTS_MD="${CODEX_AGENTS_MD:-$HOME/.codex/AGENTS.md}"
+# Honour CODEX_HOME: with a custom home everything else installs there, so
+# hardcoding ~/.codex here split the install across two locations.
+AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
 echo "→ ensuring shipyard auto-route block in $AGENTS_MD"
 mkdir -p "$(dirname "$AGENTS_MD")"
 CODEX_AGENTS_MD="$AGENTS_MD" node - <<'NODE'

@@ -37,13 +37,32 @@ case "$cmd" in
     epic="${2:-}"; base="${3:-$(default_branch)}"
     [[ -n "$epic" ]] || { echo "usage: epic-branch.sh ensure <epic-branch> [base-ref]" >&2; exit 2; }
     git -C "$repo_root" fetch origin --prune 1>&2
+    # `ensure` guarantees BOTH refs: the remote epic and a LOCAL branch tracking
+    # it. Ticket worktrees are cut off this name, and a bare branch name that
+    # exists only on the remote does not resolve through `git rev-parse` — so
+    # short-circuiting on the remote ref alone broke every later
+    # `ticket-worktree.sh create <T> <branch> <epic>` with "base ref not found".
     if git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$epic"; then
+      if ! git -C "$repo_root" show-ref --verify --quiet "refs/heads/$epic"; then
+        git -C "$repo_root" branch --track "$epic" "origin/$epic" 1>&2 || {
+          echo "could not create a local branch for existing origin/$epic" >&2; exit 1; }
+      fi
       echo "$epic"; exit 0
     fi
     git -C "$repo_root" rev-parse --verify --quiet "origin/$base^{commit}" >/dev/null || {
       echo "base ref not found: origin/$base" >&2; exit 1; }
-    # create the ref without disturbing the current checkout, then publish it
-    git -C "$repo_root" branch --no-track "$epic" "origin/$base" 1>&2 2>/dev/null || true
+    # create the ref without disturbing the current checkout, then publish it.
+    # A pre-existing LOCAL branch of the same name is reused, but only after we
+    # confirm it descends from the base — silently pushing an unrelated local
+    # branch as the phase epic would poison the whole integration.
+    if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$epic"; then
+      git -C "$repo_root" merge-base --is-ancestor "origin/$base" "$epic" || {
+        echo "local branch $epic exists but does not contain origin/$base — refusing to publish it as the phase epic; delete or rename it first" >&2
+        exit 1; }
+      echo "reusing existing local branch $epic" >&2
+    else
+      git -C "$repo_root" branch --no-track "$epic" "origin/$base" 1>&2
+    fi
     git -C "$repo_root" push -u origin "$epic" 1>&2
     echo "$epic"
     ;;

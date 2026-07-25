@@ -4,8 +4,8 @@
 // Gate 2 validator + generator of the ticket graph view.
 //
 // Scans .planning/phases/*/*-PLAN.md, reads plan frontmatter (GSD fields:
-// phase, plan, type, wave, depends_on, files_modified + our `delivery:` block),
-// validates the DAG and emits:
+// phase, plan, type, wave, depends_on, files_modified, requirements + our
+// `delivery:` block), validates the DAG and emits:
 //   .planning/graph/tickets.json  (machine view, consumed by state-sync/deliver)
 //   .planning/graph/tickets.yaml  (human view; generated -- do not edit)
 //
@@ -13,9 +13,13 @@
 // contract) and non-empty requirements, resolvable deps, no cycles, no
 // files_modified overlap between dependency-unordered tickets, high risk =>
 // human_checkpoint. Exits non-zero with an explicit error list when invalid.
+//
+// Every problem is COLLECTED and reported together: a malformed plan must not
+// hide the other nine. The frontmatter parser lives in ./frontmatter.cjs.
 
 const fs = require('fs');
 const path = require('path');
+const { parseFrontmatter } = require(path.join(__dirname, 'frontmatter.cjs'));
 
 const ROOT = process.cwd();
 const PHASES_DIR = path.join(ROOT, '.planning', 'phases');
@@ -26,84 +30,23 @@ function fail(msg) {
   process.exit(1);
 }
 
-// --- minimal YAML frontmatter parser (scalars, inline/block lists, one nested map) ---
-function parseFrontmatter(text, file) {
-  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!m) return null;
-  const out = {};
-  let target = out;
-  let targetIndent = 0;
-  let lastKey = null;
-  for (const raw of m[1].split(/\r?\n/)) {
-    if (!raw.trim() || raw.trim().startsWith('#')) continue;
-    const indent = raw.length - raw.trimStart().length;
-    const line = raw.trim();
-    if (indent < targetIndent) { target = out; targetIndent = 0; }
-    if (line.startsWith('- ')) {
-      const key = lastKey;
-      if (!key || !Array.isArray(target[key])) {
-        fail(`${file}: stray list item "${line}" in frontmatter`);
-      }
-      target[key].push(scalar(line.slice(2)));
-      continue;
-    }
-    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (!kv) fail(`${file}: unparseable frontmatter line "${line}"`);
-    const [, key, valRaw] = kv;
-    const val = valRaw.trim();
-    if (val === '') {
-      // block list or nested map follows; decide on the next line -- prepare both
-      target[key] = [];
-      if (indent === 0) {
-        // could be a nested map (e.g. delivery:); switch target lazily
-        out[key] = [];
-        target = out;
-        targetIndent = 0;
-        lastKey = key;
-        // peek handled implicitly: nested "k: v" lines with indent>0 convert below
-        continue;
-      }
-      lastKey = key;
-      continue;
-    }
-    if (indent > 0 && target === out && lastKey && Array.isArray(out[lastKey]) && out[lastKey].length === 0 && !line.startsWith('- ')) {
-      // previous empty key was actually a nested map: convert
-      out[lastKey] = {};
-      target = out[lastKey];
-      targetIndent = indent;
-    }
-    if (val.startsWith('[')) {
-      const inner = val.replace(/^\[/, '').replace(/\]$/, '').trim();
-      target[key] = inner === '' ? [] : inner.split(',').map((s) => scalar(s));
-    } else {
-      target[key] = scalar(val);
-    }
-    if (target === out) lastKey = key;
-  }
-  return out;
-}
-
-function scalar(s) {
-  const v = s.trim().replace(/^["']|["']$/g, '');
-  if (v === 'true') return true;
-  if (v === 'false') return false;
-  if (v === 'null' || v === '~') return null;
-  if (/^-?\d+$/.test(v)) return parseInt(v, 10);
-  return v;
-}
-
-function normTicketId(id, phase) {
-  if (id == null) return null;
-  let s = String(id).trim();
-  if (/^T-/i.test(s)) return 'T-' + s.slice(2).toUpperCase();
-  if (/^\d+-\d+$/.test(s)) return 'T-' + s; // "01-02" -> "T-01-02"
-  if (/^\d+$/.test(s) && phase != null) return `T-${pad(phase)}-${pad(s)}`;
-  return s;
-}
-
 function pad(n) {
   const s = String(n);
   return s.length >= 2 ? s : '0' + s;
+}
+
+// Ticket ids are compared as strings all over the conveyor (frontmatter,
+// branches, PR titles, Jira labels), so they must normalize to ONE spelling:
+// every numeric segment zero-padded to two digits. `T-1-1`, `01-02` and `5`
+// (with phase 2) all resolve into the canonical `T-01-01` / `T-01-02` / `T-02-05`.
+function normTicketId(id, phase) {
+  if (id == null) return null;
+  let s = String(id).trim();
+  if (s === '') return null;
+  if (/^t-/i.test(s)) s = s.slice(2);
+  else if (/^\d+$/.test(s) && phase != null) s = `${phase}-${s}`;
+  const parts = s.split('-').map((p) => (/^\d+$/.test(p) ? pad(p) : p.toUpperCase()));
+  return 'T-' + parts.join('-');
 }
 
 // Branch naming: ticket/<ID>-<slug(title)>. The slug is the ticket title with
@@ -135,10 +78,12 @@ const BRANCH_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9._/-]*[a-zA-Z0-9])?$/;
 if (!fs.existsSync(PHASES_DIR)) fail(`missing ${path.relative(ROOT, PHASES_DIR)} — run decomposition first`);
 
 const planFiles = [];
-for (const phaseDir of fs.readdirSync(PHASES_DIR)) {
+for (const phaseDir of fs.readdirSync(PHASES_DIR).sort()) {
   const dir = path.join(PHASES_DIR, phaseDir);
-  if (!fs.statSync(dir).isDirectory()) continue;
-  for (const f of fs.readdirSync(dir)) {
+  let stat;
+  try { stat = fs.statSync(dir); } catch { continue; } // dangling symlink / vanished entry
+  if (!stat.isDirectory()) continue;
+  for (const f of fs.readdirSync(dir).sort()) {
     if (/-PLAN\.md$/.test(f)) planFiles.push(path.join(dir, f));
   }
 }
@@ -150,16 +95,36 @@ const warnings = [];
 
 for (const file of planFiles.sort()) {
   const rel = path.relative(ROOT, file);
-  const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'), rel);
+  const { data: fm, errors: fmErrors } = parseFrontmatter(fs.readFileSync(file, 'utf8'));
+  for (const e of fmErrors) errors.push(`${rel}:${e.line}: ${e.message}`);
   if (!fm) { errors.push(`${rel}: missing frontmatter`); continue; }
-  const delivery = typeof fm.delivery === 'object' && !Array.isArray(fm.delivery) ? fm.delivery : {};
+  const delivery = fm.delivery && typeof fm.delivery === 'object' && !Array.isArray(fm.delivery) ? fm.delivery : {};
+  if (fm.delivery != null && !Object.keys(delivery).length) {
+    errors.push(`${rel}: delivery: is present but not a mapping — expected the ticket/risk/human_checkpoint block`);
+  }
   const base = path.basename(file).replace(/-PLAN\.md$/, ''); // e.g. "01-02"
   const [fPhase] = base.split('-');
-  const id = normTicketId(delivery.ticket, fm.phase ?? fPhase) || `T-${base}`;
+  const id = normTicketId(delivery.ticket, fm.phase ?? fPhase) || normTicketId(base, fPhase);
   if (tickets[id]) { errors.push(`${rel}: duplicate ticket id ${id} (also in ${tickets[id].file})`); continue; }
-  const deps = (Array.isArray(fm.depends_on) ? fm.depends_on : [])
-    .map((d) => normTicketId(d, null));
-  const title = typeof fm.title === 'string' ? fm.title : base;
+
+  // Duplicate deps would double-count in the topological sort and surface as a
+  // phantom cycle, so they are collapsed here and surfaced as a warning.
+  const rawDeps = Array.isArray(fm.depends_on) ? fm.depends_on : [];
+  const deps = [];
+  for (const d of rawDeps) {
+    const nd = normTicketId(d, null);
+    if (nd == null) continue;
+    if (deps.includes(nd)) {
+      warnings.push(`${id}: depends_on lists ${nd} more than once — collapsed`);
+      continue;
+    }
+    deps.push(nd);
+  }
+  if (deps.includes(id)) {
+    errors.push(`${id}: depends_on includes itself`);
+  }
+
+  const title = typeof fm.title === 'string' && fm.title.trim() ? fm.title.trim() : base;
   tickets[id] = {
     id,
     file: rel,
@@ -167,7 +132,7 @@ for (const file of planFiles.sort()) {
     phase: String(fm.phase ?? fPhase),
     phaseDir: path.basename(path.dirname(rel)),
     type: fm.type ?? 'implementation',
-    depends_on: deps,
+    depends_on: deps.filter((d) => d !== id),
     files: Array.isArray(fm.files_modified) ? fm.files_modified.map(String) : [],
     risk: String(delivery.risk ?? 'medium'),
     human_checkpoint: delivery.human_checkpoint === true,
@@ -177,9 +142,13 @@ for (const file of planFiles.sort()) {
     // optional projection into an external tracker (written back by
     // /shipyard:decompose Step 5); pass-through only — never a Gate 2 input
     jira: delivery.jira != null ? String(delivery.jira) : null,
+    declaredWave: Number.isInteger(fm.wave) ? fm.wave : null,
   };
   if (delivery.branch && (!BRANCH_RE.test(delivery.branch) || String(delivery.branch).includes('..'))) {
     errors.push(`${id}: delivery.branch "${delivery.branch}" contains invalid characters — expected form: ${branchFor(id, title)}`);
+  }
+  if (!['low', 'medium', 'high'].includes(tickets[id].risk)) {
+    errors.push(`${id}: delivery.risk "${tickets[id].risk}" is not one of low|medium|high`);
   }
   // Gate 2 core guarantee: files_modified is what makes the "dependency-unordered
   // tickets never touch the same paths" check (below) meaningful, and it is the
@@ -191,6 +160,9 @@ for (const file of planFiles.sort()) {
     for (const f of tickets[id].files) {
       if (globPrefix(f) === '') {
         warnings.push(`${id}: files_modified entry "${f}" is a bare glob matching everything — narrow it (delivery-rules §4: resolve overlap by a dependency or a re-slice, never by widening globs)`);
+      }
+      if (/#/.test(f)) {
+        errors.push(`${id}: files_modified entry "${f}" contains "#" — a YAML trailing comment leaked into the value; move the comment onto its own line`);
       }
     }
   }
@@ -204,6 +176,12 @@ for (const file of planFiles.sort()) {
   // without GSD ever running — so Gate 2 must own this too, as a hard error.
   if (!Array.isArray(fm.requirements) || fm.requirements.length === 0) {
     errors.push(`${id}: frontmatter has no requirements[] — reference ROADMAP requirement ids (or the external tracker id for imported plans)`);
+  } else {
+    for (const r of fm.requirements) {
+      if (/#/.test(String(r))) {
+        errors.push(`${id}: requirements entry "${r}" contains "#" — a YAML trailing comment leaked into the value; move the comment onto its own line`);
+      }
+    }
   }
 }
 
@@ -236,6 +214,27 @@ const order = [];
     errors.push(`dependency cycle involving: ${cyclic.join(', ')}`);
   }
 }
+const acyclic = order.length === Object.keys(tickets).length;
+
+// --- transitive ancestors ---
+// Computed iteratively over the TOPOLOGICAL order, so every dependency's closure
+// is already complete before its dependents read it. (The previous recursive
+// version shared one `visited` set across sibling branches and then memoized the
+// truncated result — in a diamond that cached an EMPTY ancestor set for the
+// second branch, which made Gate 2 report a properly-ordered pair as
+// "dependency-unordered" and reject a valid graph.)
+const ancestors = {};
+if (acyclic) {
+  for (const id of order) {
+    const acc = new Set();
+    for (const d of tickets[id].depends_on) {
+      if (!tickets[d]) continue;
+      acc.add(d);
+      for (const a of ancestors[d]) acc.add(a);
+    }
+    ancestors[id] = acc;
+  }
+}
 
 // --- files overlap between dependency-unordered tickets ---
 function globPrefix(g) {
@@ -248,34 +247,24 @@ function overlaps(a, b) {
   if (!pa || !pb) return true; // bare glob like "**" overlaps everything
   return pa === pb || pa.startsWith(pb + '/') || pb.startsWith(pa + '/');
 }
-const ancestors = {};
-function ancestorsOf(id, seen = new Set()) {
-  if (ancestors[id]) return ancestors[id];
-  const acc = new Set();
-  for (const d of tickets[id]?.depends_on ?? []) {
-    if (!tickets[d] || seen.has(d)) continue;
-    seen.add(d);
-    acc.add(d);
-    for (const a of ancestorsOf(d, seen)) acc.add(a);
-  }
-  ancestors[id] = acc;
-  return acc;
-}
-const ids = Object.keys(tickets).sort();
-for (let i = 0; i < ids.length; i++) {
-  for (let j = i + 1; j < ids.length; j++) {
-    const a = tickets[ids[i]];
-    const b = tickets[ids[j]];
-    const ordered = ancestorsOf(a.id).has(b.id) || ancestorsOf(b.id).has(a.id);
-    if (ordered) continue;
-    for (const fa of a.files) {
-      for (const fb of b.files) {
-        if (overlaps(fa, fb)) {
-          errors.push(`${a.id} and ${b.id} are dependency-unordered but touch overlapping paths ("${fa}" vs "${fb}") — add a dependency or re-slice`);
+if (acyclic) {
+  const ids = Object.keys(tickets).sort();
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const a = tickets[ids[i]];
+      const b = tickets[ids[j]];
+      if (ancestors[a.id].has(b.id) || ancestors[b.id].has(a.id)) continue;
+      for (const fa of a.files) {
+        for (const fb of b.files) {
+          if (overlaps(fa, fb)) {
+            errors.push(`${a.id} and ${b.id} are dependency-unordered but touch overlapping paths ("${fa}" vs "${fb}") — add a dependency or re-slice`);
+          }
         }
       }
     }
   }
+} else {
+  warnings.push('file-overlap check skipped — fix the dependency cycle first');
 }
 
 // --- risk policy ---
@@ -297,6 +286,14 @@ for (const id of order) {
   const deps = tickets[id].depends_on.filter((d) => tickets[d]);
   depth[id] = deps.length ? Math.max(...deps.map((d) => depth[d])) + 1 : 1;
 }
+// `wave` in the frontmatter is documentation for the human reader; the graph is
+// authoritative. Surface a disagreement instead of silently overriding it.
+for (const id of order) {
+  const declared = tickets[id].declaredWave;
+  if (declared != null && declared !== depth[id]) {
+    warnings.push(`${id}: frontmatter wave: ${declared} disagrees with the computed dependency depth ${depth[id]} — the graph wins; fix the frontmatter`);
+  }
+}
 
 // --- epic integration branches (epic-stacked delivery) ---
 // One epic branch per phase, cut from the repo default branch at delivery time.
@@ -307,11 +304,15 @@ for (const id of order) {
 const epics = {};
 for (const id of order) {
   const t = tickets[id];
-  if (!epics[t.phase]) epics[t.phase] = { branch: `epic/${t.phaseDir}`, base: null };
+  if (!epics[t.phase]) epics[t.phase] = { branch: `epic/${t.phaseDir}`, base: null, phaseDir: t.phaseDir };
+  else if (epics[t.phase].phaseDir !== t.phaseDir) {
+    warnings.push(`phase ${t.phase} spans two directories (${epics[t.phase].phaseDir}, ${t.phaseDir}) — the epic branch is cut from the first one; keep one directory per phase`);
+  }
 }
 // primary parent = deepest same-phase dependency (tie-break: lowest id). Only
-// same-phase deps cascade; a cross-phase dependency is assumed already merged
-// into the default branch (and thus present via the epic's base).
+// same-phase deps cascade; a CROSS-phase dependency cannot stack onto a branch
+// in another epic, so it is only satisfied once its own phase has landed on the
+// default branch (state-sync enforces that; here we make the coupling visible).
 function primaryParent(t) {
   const same = t.depends_on.filter((d) => tickets[d] && tickets[d].phase === t.phase);
   if (!same.length) return null;
@@ -323,9 +324,15 @@ for (const id of order) {
   t.primary_parent = primaryParent(t);
   t.pr_base = t.primary_parent ? tickets[t.primary_parent].branch : t.epic;
   const same = t.depends_on.filter((d) => tickets[d] && tickets[d].phase === t.phase);
+  t.cross_phase_deps = t.depends_on.filter((d) => tickets[d] && tickets[d].phase !== t.phase);
   if (same.length > 1) {
     warnings.push(
       `${id}: ${same.length} same-phase parents (${same.join(', ')}) — the cascade bases on ${t.primary_parent} only; the others land through the epic. Linearize the chain if ${id} needs every parent's code at once.`
+    );
+  }
+  if (t.cross_phase_deps.length) {
+    warnings.push(
+      `${id}: cross-phase dependency on ${t.cross_phase_deps.join(', ')} — it cannot cascade through an epic, so ${id} stays blocked until phase ${t.cross_phase_deps.map((d) => tickets[d].phase).join('/')} has landed on the default branch. Prefer same-phase slicing.`
     );
   }
 }
@@ -333,9 +340,12 @@ for (const id of order) {
 fs.mkdirSync(GRAPH_DIR, { recursive: true });
 const view = {
   generated_by: 'validate-graph.cjs — do not edit by hand',
-  epics,
+  epics: {},
   tickets: {},
 };
+for (const [phase, e] of Object.entries(epics)) {
+  view.epics[phase] = { branch: e.branch, base: e.base };
+}
 for (const id of order) {
   const t = tickets[id];
   view.tickets[id] = {
@@ -344,8 +354,10 @@ for (const id of order) {
     phase: t.phase,
     wave: depth[id],
     depends_on: t.depends_on,
+    cross_phase_deps: t.cross_phase_deps,
     files: t.files,
     risk: t.risk,
+    type: t.type,
     human_checkpoint: t.human_checkpoint,
     branch: t.branch,
     epic: t.epic,
@@ -356,30 +368,45 @@ for (const id of order) {
 }
 fs.writeFileSync(path.join(GRAPH_DIR, 'tickets.json'), JSON.stringify(view, null, 2) + '\n');
 
+// The YAML view is a convenience mirror, but it must still PARSE: an unquoted
+// glob (`src/**/*.ts`) starts with a YAML alias indicator and a title with a
+// quote breaks the document. Everything goes through one conservative quoter.
+function yamlScalar(v) {
+  if (v === null || v === undefined) return 'null';
+  if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+  const s = String(v);
+  const plainSafe = /^[A-Za-z][A-Za-z0-9 ._/-]*$/.test(s) &&
+    !/^(true|false|null|yes|no|on|off)$/i.test(s) &&
+    !/\s$/.test(s);
+  return plainSafe ? s : `'${s.replace(/'/g, "''")}'`;
+}
+const yamlList = (arr) => `[${arr.map(yamlScalar).join(', ')}]`;
+
 const yaml = [`# ${view.generated_by}`, 'epics:'];
-for (const [phase, e] of Object.entries(epics)) {
-  yaml.push(`  "${phase}":`);
-  yaml.push(`    branch: ${e.branch}`);
+for (const [phase, e] of Object.entries(view.epics)) {
+  yaml.push(`  ${yamlScalar(phase)}:`);
+  yaml.push(`    branch: ${yamlScalar(e.branch)}`);
 }
 yaml.push('tickets:');
 for (const [id, t] of Object.entries(view.tickets)) {
-  yaml.push(`  ${id}:`);
-  yaml.push(`    title: "${t.title}"`);
-  yaml.push(`    plan: ${t.plan}`);
-  yaml.push(`    phase: "${t.phase}"`);
+  yaml.push(`  ${yamlScalar(id)}:`);
+  yaml.push(`    title: ${yamlScalar(t.title)}`);
+  yaml.push(`    plan: ${yamlScalar(t.plan)}`);
+  yaml.push(`    phase: ${yamlScalar(t.phase)}`);
   yaml.push(`    wave: ${t.wave}`);
-  yaml.push(`    depends_on: [${t.depends_on.join(', ')}]`);
-  yaml.push(`    files: [${t.files.join(', ')}]`);
-  yaml.push(`    risk: ${t.risk}`);
+  yaml.push(`    depends_on: ${yamlList(t.depends_on)}`);
+  yaml.push(`    files: ${yamlList(t.files)}`);
+  yaml.push(`    risk: ${yamlScalar(t.risk)}`);
   yaml.push(`    human_checkpoint: ${t.human_checkpoint}`);
-  yaml.push(`    branch: ${t.branch}`);
-  yaml.push(`    epic: ${t.epic}`);
-  yaml.push(`    primary_parent: ${t.primary_parent ?? 'null'}`);
-  yaml.push(`    pr_base: ${t.pr_base}`);
-  yaml.push(`    jira: ${t.jira ?? 'null'}`);
+  yaml.push(`    branch: ${yamlScalar(t.branch)}`);
+  yaml.push(`    epic: ${yamlScalar(t.epic)}`);
+  yaml.push(`    primary_parent: ${yamlScalar(t.primary_parent)}`);
+  yaml.push(`    pr_base: ${yamlScalar(t.pr_base)}`);
+  yaml.push(`    jira: ${yamlScalar(t.jira)}`);
 }
 fs.writeFileSync(path.join(GRAPH_DIR, 'tickets.yaml'), yaml.join('\n') + '\n');
 
-console.log(`validate-graph: OK — ${order.length} ticket(s), ${Math.max(...Object.values(depth))} wave(s)`);
+const maxWave = order.length ? Math.max(...order.map((id) => depth[id])) : 0;
+console.log(`validate-graph: OK — ${order.length} ticket(s), ${maxWave} wave(s)`);
 for (const w of warnings) console.log(`  warning: ${w}`);
-console.log(`wrote .planning/graph/tickets.json and tickets.yaml`);
+console.log('wrote .planning/graph/tickets.json and tickets.yaml');
