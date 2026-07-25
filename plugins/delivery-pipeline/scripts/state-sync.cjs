@@ -104,11 +104,16 @@ if (fs.existsSync(STATE)) {
 const nowIso = new Date().toISOString();
 const notices = [];
 
-function defaultBranch() {
+// GSD's `git.base_branch` is the project's integration branch — it is what
+// /gsd-ship targets. Honour it over the repo's default branch: in a repo that
+// integrates into `develop`, resolving from origin/HEAD alone cut every epic
+// from main and pointed the integration PR at the wrong place.
+function integrationBranch() {
+  if (cfg.gsd.base_branch) return { name: cfg.gsd.base_branch, from: 'git.base_branch' };
   const d = gh(['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], { tolerate: true });
-  return (d && d.trim()) || 'main';
+  return { name: (d && d.trim()) || 'main', from: 'repo default' };
 }
-const DEFAULT_BRANCH = defaultBranch();
+const { name: DEFAULT_BRANCH, from: DEFAULT_BRANCH_SOURCE } = integrationBranch();
 
 // one bulk call: every PR (branch-agnostic) — epic PRs and ticket PRs alike.
 const prs = JSON.parse(
@@ -315,8 +320,11 @@ function ageLabel(sinceIso) { const h = ageH(sinceIso); return h >= 48 ? `${Math
 for (const w of cfgWarnings) console.log(`⚠ config: ${w}`);
 if (epicNotice) console.log(`note: ${epicNotice}`);
 for (const n of notices) console.log(`⚠ ${n}`);
-console.log(`integration mode: ${mode}${mode === 'epic-stacked' ? ` (→ ${DEFAULT_BRANCH} via epic)` : ` (→ ${DEFAULT_BRANCH})`}`);
+console.log(`integration mode: ${mode}${mode === 'epic-stacked' ? ` (→ ${DEFAULT_BRANCH} via epic)` : ` (→ ${DEFAULT_BRANCH})`} [base from ${DEFAULT_BRANCH_SOURCE}]`);
 console.log(`model policy: ${cfg.model_policy} | workflow: ${cfg.use_workflow === false ? 'forced-off' : 'auto'} | max attempts: ${cfg.max_attempts}`);
+if (cfg.gsd.base_branch) {
+  console.log(`note: integrating into "${cfg.gsd.base_branch}" per git.base_branch — pass it to epic-branch.sh as the base ref`);
+}
 
 const buckets = {};
 for (const [id, s] of Object.entries(state)) {

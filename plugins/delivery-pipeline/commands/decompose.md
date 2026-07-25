@@ -53,7 +53,9 @@ code by risk, repair via an escalation ladder, mechanics → Sonnet; profile —
 ```json
 {
   "model_profile": "balanced",
-  "models": { "planning": "opus", "research": "sonnet", "verification": "sonnet" },
+  "runtime": "claude",
+  "granularity": "standard",
+  "models": { "planning": "opus", "research": "sonnet", "execution": "opus", "verification": "sonnet" },
   "context_window": 1000000,
   "agent_skills": {
     "gsd-planner": ["global:shipyard:delivery-rules"],
@@ -72,28 +74,54 @@ code by risk, repair via an escalation ladder, mechanics → Sonnet; profile —
 }
 ```
 
-**Two different config namespaces — do not conflate them:**
-- `models` / `model_profile` / `model_overrides` (TOP level) belong to **GSD** and
-  govern the GSD agents. `models.*` takes only the tier aliases opus/sonnet/haiku;
-  a full model ID may be pinned per-agent via `model_overrides`, and GSD resolves it
-  itself. If you pin one, verify the id against the current model catalog first —
-  do NOT copy a generation out of this document, it will be stale.
-- `pipeline.*` belongs to **shipyard** and governs the conveyor's own agents; it is
-  read by `scripts/pipeline-config.cjs` and echoed by `state-sync` on every run.
-  `pipeline.models` takes tier aliases ONLY, because the Agent tool rejects
-  full model IDs.
+**Config namespaces — do not conflate them:**
+- `models` / `model_profile` / `model_overrides` / `granularity` / `runtime`
+  (TOP level) belong to **GSD** and govern the GSD agents. `models.*` takes only
+  tier aliases; a full model ID may be pinned per-agent via `model_overrides`, and
+  GSD resolves it itself. If you pin one, verify the id against the current model
+  catalog first — do NOT copy a generation out of this document, it will be stale.
+  `model_profile` is `quality | balanced | budget | adaptive | inherit`.
+- `delivery_pipeline.*` / `pipeline.*` belong to **shipyard** and govern the
+  conveyor's own agents (see /shipyard:deliver). They take tier aliases ONLY,
+  because the Agent tool rejects full model IDs.
 
-(`context_window: 1000000` — GSD 1.7 enables adaptive-context enrichment for 1M
-models. Context-window selection is a GSD/runtime concern; it cannot be encoded in
-an Agent spawn's `model`.)
+**`agent_skills` — the working value depends on `runtime`.** This is how the
+frontmatter contract actually reaches the GSD planner, and it fails SILENTLY if
+the form is wrong. Check `runtime` in config.json and use the matching form:
+- `runtime: "claude"` (or unset) → `"global:shipyard:delivery-rules"`. The
+  plugin-namespaced form is emitted as a Skill-tool directive, which only the
+  claude runtime can act on.
+- any other runtime (`codex`, …) → `"global:shipyard-delivery-rules"`. The
+  namespaced form is **skipped with a stderr warning** on non-claude runtimes; the
+  bare name resolves from the runtime's global skills dir, which is exactly where
+  `install-shipyard-codex.sh` installs `shipyard-delivery-rules`.
 
-## Step 1 — Clarify the mode
+Set it with `/gsd-config --integrations` (it validates the paths) rather than by
+hand. `state-sync` warns when a namespaced entry cannot resolve on your runtime.
+
+(`context_window` — GSD enables adaptive-context enrichment at **≥ 500 000**;
+`1000000` is for 1M-context models. Context-window selection is a GSD/runtime
+concern; it cannot be encoded in an Agent spawn's `model`.)
+
+## Step 1 — Clarify the mode and the ticket size
 
 One question (AskUserQuestion), with a recommendation based on the type of work:
 - `--tdd` — when the work is well testable at the unit level (recommend for
   backend logic);
 - `--mvp` — vertical slices UI→API→DB (recommend for new features with UI);
 - no flags — standard planning.
+
+**Ticket size is `granularity`, not a flag.** GSD's top-level `granularity`
+controls how many tasks the planner emits per phase — `coarse` 2–4, `standard`
+4–6 (default), `fine` 6–10 — which is exactly the knob that decides how big a
+ticket gets. Check it, and propose changing it when the ADR's shape argues for it:
+`fine` for risky work you want reviewed in small PRs, `coarse` when the phase is a
+handful of large, cohesive units. Say which value you are planning under so the
+resulting ticket count is not a surprise.
+
+(If the input is a PRD or an acceptance-criteria document rather than an ADR,
+`/gsd-plan-phase --prd <path>` parses it into CONTEXT.md the same way `--ingest`
+parses ADRs.)
 
 ## Step 2 — GSD chain
 

@@ -53,14 +53,23 @@ for wf in drift-gate executors fix-round; do
   } | node --check - || { echo "workflow $wf.mjs is not valid JS when wrapped as the runtime wraps it"; exit 1; }
 done
 
-# The Agent tool validates `model` against the tier aliases opus|sonnet|haiku, so
-# a full model ID or a context-suffixed alias in a spawn is rejected on input.
+# The Agent tool validates `model` against the tier aliases opus|sonnet|haiku|fable,
+# so a full model ID or a context-suffixed alias in a spawn is rejected on input.
 # Keep them out of the workflow scripts and the skills for good.
 if grep -rEn 'model:\s*.?(claude-[a-z0-9.-]+|[a-z]+\[1m\])' \
      plugins/delivery-pipeline/workflows plugins/delivery-pipeline/commands; then
   echo "a spawn passes a non-alias model value — the Agent tool rejects those"
   exit 1
 fi
+
+# The Workflow path builds prompts deterministically and therefore BYPASSES the
+# skill's language block, so each worker script must state the artifact language
+# itself — otherwise a PR body can come back in the conversation language while
+# delivery-rules mandates English.
+for wf in executors fix-round; do
+  grep -q 'artifactLanguage' "plugins/delivery-pipeline/workflows/$wf.mjs" \
+    || { echo "workflows/$wf.mjs does not state the artifact language in its prompt"; exit 1; }
+done
 
 [[ -f capabilities/delivery-pipeline/capability.json ]] || { echo "missing delivery-pipeline capability.json"; exit 1; }
 # The plugin and its GSD capability ship as one product — keep them on a single

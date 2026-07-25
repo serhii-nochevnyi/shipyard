@@ -321,13 +321,25 @@ run_gate diamond >/dev/null 2>&1 \
   && ok "a conveyor project with a valid graph passes" \
   || bad "a conveyor project with a valid graph passes" "$(run_gate diamond)"
 
-# explicit opt-out
+# explicit opt-out — the GSD-native key is the capability's own declared one
 mkdir -p "$WORK/optout/.planning/phases/01-x"
 cp "$WORK/nofiles/.planning/phases/01-x/01-PLAN.md" "$WORK/optout/.planning/phases/01-x/01-PLAN.md"
+echo '{"delivery_pipeline":{"graph_gate":false}}' > "$WORK/optout/.planning/config.json"
+run_gate optout >/dev/null 2>&1 \
+  && ok "delivery_pipeline.graph_gate:false opts a project out (GSD-native key)" \
+  || bad "delivery_pipeline.graph_gate:false opts a project out" "$(run_gate optout)"
+
+# the legacy shipyard-namespaced key still works
 echo '{"pipeline":{"graph_gate":false}}' > "$WORK/optout/.planning/config.json"
 run_gate optout >/dev/null 2>&1 \
-  && ok "pipeline.graph_gate:false opts a project out" \
-  || bad "pipeline.graph_gate:false opts a project out" "$(run_gate optout)"
+  && ok "pipeline.graph_gate:false still opts out (legacy alias)" \
+  || bad "pipeline.graph_gate:false still opts out" "$(run_gate optout)"
+
+# ...and the GSD-native key wins when the two disagree
+echo '{"delivery_pipeline":{"graph_gate":true},"pipeline":{"graph_gate":false}}' > "$WORK/optout/.planning/config.json"
+run_gate optout >/dev/null 2>&1 \
+  && bad "delivery_pipeline.graph_gate:true overrides the legacy opt-out" \
+  || ok "delivery_pipeline.graph_gate:true overrides the legacy opt-out"
 
 echo
 echo "$pass passed, $fail failed"

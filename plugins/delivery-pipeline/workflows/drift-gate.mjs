@@ -6,7 +6,8 @@ export const meta = {
 
 // ── args contract (built by /shipyard:deliver before invocation) ────────────
 //   args = {
-//     tickets: [ { id, planPath, model } ],   // model optional (default sonnet)
+//     tickets: [ { id, planPath, model, effort } ],  // both optional
+//                                                    // (default sonnet / low)
 //     driftRefPath: "<abs path to references/drift-check.md>",
 //   }
 // returns: [ { id, verdict: 'fresh'|'drifted', moved: [string] } ]
@@ -60,6 +61,8 @@ return await parallel(
         label: `drift:${t.id}`,
         phase: 'Drift',
         model: t.model || 'sonnet',
+        // drift-check is mechanical reconciliation — cheap effort on purpose
+        effort: t.effort || 'low',
         agentType: 'general-purpose',
         schema: VERDICT,
       }

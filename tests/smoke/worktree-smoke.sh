@@ -123,6 +123,27 @@ else
   ok "create rejects a base that exists nowhere"
 fi
 
+# ── git.base_branch outranks the repo default ───────────────────────────────
+# GSD's git.base_branch IS the project's integration branch (it is what /gsd-ship
+# targets). A repo that integrates into `develop` must not have its epics cut from
+# main just because origin/HEAD points there.
+( cd "$W/seed" && git checkout -q main && git checkout -q -b develop && echo dev > d.txt \
+  && git add d.txt && git commit -qm 'develop only' && git push -q -u origin develop ) >/dev/null 2>&1
+( cd "$W/fresh" && git fetch -q origin ) >/dev/null 2>&1
+mkdir -p "$W/fresh/.planning"
+echo '{"git":{"base_branch":"develop"}}' > "$W/fresh/.planning/config.json"
+if out="$(run_epic ensure epic/03-based 2>&1)"; then
+  # the epic must contain develop's commit, not just main's
+  if git -C "$W/fresh" merge-base --is-ancestor origin/develop epic/03-based 2>/dev/null; then
+    ok "ensure cuts the epic from git.base_branch when set"
+  else
+    bad "ensure cuts the epic from git.base_branch when set" "epic does not contain origin/develop"
+  fi
+else
+  bad "ensure honours git.base_branch" "$out"
+fi
+rm -f "$W/fresh/.planning/config.json"
+
 # ── ensure refuses to publish an unrelated local branch as the phase epic ────
 ( cd "$W/fresh"
   git checkout -q --orphan epic/02-unrelated

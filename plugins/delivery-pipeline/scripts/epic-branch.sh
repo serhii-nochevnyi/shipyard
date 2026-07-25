@@ -18,9 +18,20 @@ cmd="${1:-}"
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not inside a git repository" >&2; exit 1; }
 
 default_branch() {
-  # origin/HEAD symref, else gh, else main
+  # GSD's git.base_branch is the project's integration branch (it is what
+  # /gsd-ship targets), so it OUTRANKS the repo default: a project that
+  # integrates into `develop` must not have its epics cut from main.
   local d
-  d="$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')" || true
+  d="$(node -e '
+    const fs=require("fs"),path=require("path");
+    const p=path.join(process.argv[1],".planning","config.json");
+    try{const c=JSON.parse(fs.readFileSync(p,"utf8"));const b=c&&c.git&&c.git.base_branch;
+      if(typeof b==="string"&&b)process.stdout.write(b);}catch{}
+  ' "$repo_root" 2>/dev/null)" || true
+  # then origin/HEAD symref, else gh, else main
+  if [[ -z "$d" ]]; then
+    d="$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')" || true
+  fi
   if [[ -z "$d" ]]; then
     d="$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null)" || true
   fi

@@ -68,18 +68,32 @@ tally everything at the end.
 The policy is **role × risk × attempt** routing, and it is now CODE, not prose:
 
 ```text
-node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs model <role> [flags]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs model <role> [--json] [flags]
   roles: integrator | arch-review | executor | ci-fix | review-fix | drift-check | research
   flags: --risk low|medium|high  --type <plan type>  --files <n>
          --attempt <n>  --checkpoint  --code-change|--no-code-change  --previous-failed
 ```
 
-It prints exactly one **tier alias** — `opus`, `sonnet` or `haiku` — and that is
-the only kind of value you may pass as `model`. **The Agent tool accepts tier
-aliases only; a full model ID (`claude-opus-…`, or an alias with a context suffix
-like `opus[1m]`) is rejected on input validation.** Full IDs belong to GSD's own
-`model_overrides`, which GSD resolves itself. Context-window selection is a
-session/runtime concern — it cannot be encoded in a spawn.
+Without `--json` it prints one **tier alias**; with `--json` it prints
+`{"model": "...", "effort": "..."}`. Pass BOTH on every spawn that supports them
+(Workflow's `agent()` takes `effort`; the args contracts carry `effort` per item).
+
+Valid model values are the aliases `opus`, `sonnet`, `haiku`, `fable` — nothing
+else. **The Agent tool accepts tier aliases only; a full model ID
+(`claude-opus-…`, or an alias with a context suffix like `opus[1m]`) is rejected
+on input validation.** Full IDs belong to GSD's own `model_overrides`, which GSD
+resolves itself.
+
+`fable` is Claude Fable 5: Opus-tier, **1M-token context**, adaptive thinking at
+xhigh effort — the only alias that expresses "top tier with a 1M window", which is
+what the old `opus[1m]` was reaching for. It is a paid model, so it is never a
+default; raise judgment to it deliberately with
+`{"pipeline": {"models": {"integrator": "fable", "arch-review": "fable"}}}`.
+
+Effort follows the RESOLVED tier (GSD's ladder: light→low, standard→high,
+heavy→xhigh), so escalating a repair to the top tier raises its effort with it.
+Mechanical roles stay cheap regardless. `minimal` is clamped to `low` (it is not
+in Workflow's enum) and `max` clamps to `xhigh` on the Codex runtime.
 
 The signals the resolver needs are already deterministic: `risk`/`type`/`files`
 from tickets.json (validated by Gate 2), `attempts` from the babysit cycle. The
@@ -109,16 +123,31 @@ caught upstream. Judgment (integrator/arch-review) is NOT cheapened under any
 profile — there is no mechanical safety net above it there, and the resolver
 enforces that regardless of configuration.
 
-Config in `.planning/config.json` → `pipeline` (all of it read by
-`pipeline-config.cjs`, and echoed by `state-sync` on every run):
-- `model_policy`: `economy | balanced (default) | premium`. economy — executor at
-  risk medium also starts with sonnet (escalating via the babysit ladder);
-  premium — everything except drift-check goes to opus immediately.
-- `models` (per-role override, highest priority): `{"models": {"drift-check": "haiku"}}`
-  — tier aliases only; anything else is rejected with a warning instead of being
-  silently honoured.
-- `max_attempts` (default 5), `pr_fetch_limit`, `stale_merge_hours`,
-  `stale_draft_hours`, `integration_mode`, `use_workflow`, `jira`.
+Config lives in `.planning/config.json` under **two** namespaces, both read by
+`pipeline-config.cjs` and echoed by `state-sync` on every run:
+- `delivery_pipeline.*` — the capability's own declared config. GSD-native: it is
+  what the capability's gate `when:` clauses read, and GSD's config tooling can
+  validate and set it. **Preferred**, and it wins over `pipeline.*`.
+- `pipeline.*` — shipyard's runtime knobs. Note `pipeline` is NOT a valid GSD
+  config key, so `/gsd-config --set pipeline.x` is rejected; edit the file.
+
+Keys: `model_policy` (`economy | balanced (default) | premium`; GSD's own
+`budget`/`quality` names are accepted as aliases), `models`, `effort`,
+`max_attempts` (5), `pr_fetch_limit`, `stale_merge_hours`, `stale_draft_hours`,
+`integration_mode`, `use_workflow`, `graph_gate`, `jira`.
+
+**GSD's own settings the conveyor obeys** (read, never written):
+- `git.base_branch` — the project's integration branch. It OUTRANKS the repo
+  default, so an epic in a repo that integrates into `develop` is cut from and
+  targeted at `develop`. state-sync prints which source it used.
+- `git.branching_strategy` — must be `none` (the default). `phase`/`milestone`
+  make GSD create its own branches while the conveyor owns branching; state-sync
+  warns if it is set.
+- `runtime` — decides effort clamping, and whether a plugin-namespaced
+  `agent_skills` entry resolves at all (claude only).
+- `response_language` — governs how agents talk to the USER. Shipped artifacts
+  stay English regardless (delivery-rules); the Workflow prompts state that
+  explicitly, since they bypass this skill's language block.
 
 Unknown or misspelled keys are reported as `⚠ config:` lines by `state-sync` —
 read them, they mean a setting you wrote is NOT in effect.
@@ -375,9 +404,9 @@ For each ticket in scope whose plan is older than the last merge into main
 (or if more than 2 days have passed since generation) — run drift-check IN PARALLEL:
 
 - **Workflow path** (available and `use_workflow ≠ false`): `Workflow({scriptPath:
-  <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, model: "sonnet"}],
-  driftRefPath: <references/drift-check.md>}})`. The script is fail-safe: an agent that
-  crashed is treated as `drifted`.
+  <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, model: "sonnet",
+  effort: "low"}], driftRefPath: <references/drift-check.md>}})`. The script is
+  fail-safe: an agent that crashed is treated as `drifted`.
 - **Fallback**: several drift-check `Agent`s in one message (`model: sonnet`;
   prompt `${CLAUDE_PLUGIN_ROOT}/references/drift-check.md` + the ticket contract).
 
@@ -389,10 +418,12 @@ blindly.
 
 **Step 3.0 — epic branch (epic-stacked, once per phase before the first executor).**
 For EACH phase whose tickets are in scope: `epic-branch.sh ensure <epic-branch>`
-(the branch — from `tickets.json.epics[<phase>].branch`; the base — the repo's default
-branch, resolved by the script). Creates the epic off the default branch and pushes it,
-if it doesn't exist yet; idempotent. Do NOT open the epic → default PR now — the epic
-has no commits yet (see Step 4/5). In direct-to-main skip this step.
+(the branch — from `tickets.json.epics[<phase>].branch`; the base — resolved by the
+script: `git.base_branch` from `.planning/config.json` if set, else the repo default).
+Creates the epic off that base and pushes it if it doesn't exist yet; idempotent, and
+it also guarantees a LOCAL ref so ticket worktrees can be cut from the name. Do NOT
+open the epic → base PR now — the epic has no commits yet (see Step 4/5). In
+direct-to-main skip this step.
 
 For each ticket T in scope, when the board shows it as `ready` (epic-stacked: all
 same-phase parents ≥ `branched`, all cross-phase parents landed on the default
@@ -420,8 +451,8 @@ the branch exists and only the publish half is missing (skip straight to 5).
 and do not open PRs.
 
 4. Launch the executor agent IN THE WORKTREE. Get its model from
-   `pipeline-config.cjs model executor --risk <risk> --type <type> --files <n>
-   [--checkpoint]` and pass the returned alias verbatim.
+   `pipeline-config.cjs model executor --json --risk <risk> --type <type>
+   --files <n> [--checkpoint]` and pass the returned `model` and `effort` verbatim.
    Assemble the prompt PER THE ANTI-INJECTION DISCIPLINE (see the Workflow section
    above): within `<TICKET-CONTRACT>…</TICKET-CONTRACT>` — the full text of the ticket's
    plan + Context reads + the rule "work ONLY within files_modified; commit atomically
@@ -431,8 +462,8 @@ and do not open PRs.
    over garbage, does not stop at "confirm").
    - **Workflow path** (available and `use_workflow ≠ false`): after serially
      creating all worktrees — `Workflow({scriptPath: <workflows/executors.mjs>,
-     args: {tickets: [{id, title, planPath, branch, worktreePath, prBase, model}],
-     deliveryRulesHint, prBodyGuide}})`. Returns
+     args: {tickets: [{id, title, planPath, branch, worktreePath, prBase, model, effort}],
+     deliveryRulesHint, prBodyGuide, artifactLanguage}})`. Returns
      `{id, status: committed|blocked, evidence, prBody}` per ticket.
    - **Fallback**: several executor `Agent`s in one message. Independent tickets —
      IN PARALLEL.
@@ -475,10 +506,10 @@ default 5 — state-sync prints the effective value on every run).
 ```text
 loop:
   a. state-sync.cjs → this PR's checks
-     failing → ci-fix agent in the ticket's worktree; model from
-       `pipeline-config.cjs model ci-fix --attempt <n> [--previous-failed]`
-       (attempt 1 → sonnet for lint/snapshots/trivial; ≥2 or a previous fix that
-        did not green CI → opus)
+     failing → ci-fix agent in the ticket's worktree; model+effort from
+       `pipeline-config.cjs model ci-fix --json --attempt <n> [--previous-failed]`
+       (attempt 1 → sonnet/high for lint/snapshots/trivial; ≥2 or a previous fix
+        that did not green CI → opus/xhigh — effort escalates with the tier)
        (prompt ${CLAUDE_PLUGIN_ROOT}/references/ci-fix.md + contract + the
         failure log: gh run view --log-failed)
        'escalate' from the agent → park `blocked` (note the reason), continue the front
@@ -488,8 +519,8 @@ loop:
        and say so to the human rather than reporting the PR as verified
 
   b. reviewers.cjs unresolved <pr>
-     there are threads → review-fix agent in the worktree; model from
-       `pipeline-config.cjs model review-fix [--no-code-change]`
+     there are threads → review-fix agent in the worktree; model+effort from
+       `pipeline-config.cjs model review-fix --json [--no-code-change]`
        (reply/explanation only → sonnet; anything needing a code change, or when
         you cannot tell → opus)
        (prompt ${CLAUDE_PLUGIN_ROOT}/references/review-fix.md + the JSON of the threads)
@@ -541,9 +572,9 @@ parallelizes EXACTLY the fix work of one round. The round order:
    on pending checks — skip them this round (the next one after watch will pick them up).
 2. There are PRs that need work → `Workflow({scriptPath: <workflows/fix-round.mjs>,
    args: {prs: [{id, pr, branch, worktreePath, planPath, needsCiFix,
-   needsReviewFix, model: <the alias from `pipeline-config.cjs model ci-fix
-   --attempt <n>` / `model review-fix`, per PR>}], ciFixRefPath,
-   reviewFixRefPath, reinitScript}})`. One parallel pass; each agent
+   needsReviewFix, model, effort: <from `pipeline-config.cjs model ci-fix --json
+   --attempt <n>` / `model review-fix --json`, per PR>}], ciFixRefPath,
+   reviewFixRefPath, reinitScript, artifactLanguage}})`. One parallel pass; each agent
    pushes at most once and does reinit itself. `escalate` → park `blocked`
    (note it), which does NOT halt the other PRs of the round.
    (A fixer MAY publish — unlike an executor — because the result of a fix is

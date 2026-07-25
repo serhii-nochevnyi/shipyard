@@ -95,14 +95,36 @@ The conveyor routes agents by **role × risk × attempt**, and that policy is co
 
 ```bash
 node plugins/delivery-pipeline/scripts/pipeline-config.cjs model executor --risk high
+node plugins/delivery-pipeline/scripts/pipeline-config.cjs model ci-fix --json --attempt 3
 node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve      # effective config
 ```
 
-It only ever emits the tier aliases `opus`, `sonnet` or `haiku` — the values the
-Agent tool accepts. Tune it via `.planning/config.json` → `pipeline`
-(`model_policy`, `models`, `max_attempts`, `pr_fetch_limit`,
-`integration_mode`, `use_workflow`, `jira`); `state-sync` echoes the effective
-settings and warns about keys that are not in effect.
+It only ever emits the tier aliases `opus`, `sonnet`, `haiku`, `fable` — the values
+the Agent tool accepts — and with `--json` it also returns the reasoning `effort`,
+which follows the resolved tier (GSD's ladder: light→low, standard→high,
+heavy→xhigh). So escalating a repair to the top tier makes it think harder too.
+
+`fable` is Claude Fable 5: Opus-tier with a **1M-token context window** and
+adaptive thinking. It is the only alias that expresses "top tier with 1M context".
+It is a paid model, so it is never a default — opt in per role:
+
+```json
+{ "pipeline": { "models": { "integrator": "fable", "arch-review": "fable" } } }
+```
+
+Configuration lives in `.planning/config.json` under two namespaces:
+`delivery_pipeline.*` (the capability's own declared config — GSD-native, settable
+and validated through GSD's tooling, and it wins) and `pipeline.*` (shipyard's
+runtime knobs; note `pipeline` is not a valid GSD config key, so edit the file
+directly). Keys: `model_policy` (GSD's own `budget`/`quality` names work as
+aliases), `models`, `effort`, `max_attempts`, `pr_fetch_limit`,
+`integration_mode`, `use_workflow`, `graph_gate`, `jira`.
+
+The conveyor also **obeys GSD's own settings** rather than second-guessing them:
+`git.base_branch` decides where epics are cut from and where the integration PR
+goes (it outranks the repo default), `git.branching_strategy` must stay `none`
+because the conveyor owns branching, and `runtime` decides effort clamping.
+`state-sync` echoes the effective settings and warns about anything not in effect.
 
 ## Running shipyard on Codex
 
@@ -132,6 +154,16 @@ runtime-agnostic GSD capability that contributes the blocking Gate 2 (ticket
 graph) and UAT gates — the same gates the Claude runtime uses.
 Because Codex has no Workflow tool, `deliver` runs its built-in agent path:
 deterministic bookkeeping in Node scripts, agentic work via Codex `spawn_agent`.
+
+<!-- keep in sync with commands/decompose.md -->
+**One config detail matters on Codex.** The delivery-rules contract reaches GSD's
+planner and executor through `agent_skills` in `.planning/config.json`, and the
+working value depends on `runtime`: the plugin-namespaced form
+`global:shipyard:delivery-rules` is resolved **only** on the `claude` runtime and
+is silently skipped elsewhere. On Codex use the bare form
+`global:shipyard-delivery-rules`, which resolves from `~/.agents/skills` — exactly
+where this installer puts it. `state-sync` warns when the form cannot resolve on
+your runtime.
 It also writes a managed "shipyard auto-route" block into
 `$CODEX_HOME/AGENTS.md`, so a defined scope of work is routed through shipyard
 (research-first, proportionate GSD) without the user invoking `$shipyard-*` by

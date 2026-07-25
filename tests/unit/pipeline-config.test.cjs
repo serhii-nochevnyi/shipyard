@@ -11,7 +11,7 @@ const path = require('path');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const mod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs');
-const { loadConfig, resolveModel, TIERS, DEFAULTS } = require(mod);
+const { loadConfig, resolveModel, resolveEffort, TIERS, EFFORTS, DEFAULTS } = require(mod);
 
 function withConfig(pipeline) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cfg-'));
@@ -19,6 +19,14 @@ function withConfig(pipeline) {
   if (pipeline !== undefined) {
     fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ pipeline }, null, 2));
   }
+  return loadConfig(dir);
+}
+
+// write an arbitrary config.json (to cover GSD's own top-level keys)
+function withRaw(raw) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cfg-'));
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
   return loadConfig(dir);
 }
 
@@ -161,6 +169,126 @@ test('an explicit per-role override wins over the profile — except for judgmen
 test('research: option design is heavy, fact gathering is not', () => {
   assert.strictEqual(resolveModel('research', { type: 'alternatives' }, cfg()), 'opus');
   assert.strictEqual(resolveModel('research', { type: 'facts' }, cfg()), 'sonnet');
+});
+
+suite('fable — the alias that expresses "top tier with a 1M window"');
+
+test('fable is a valid tier value', () => {
+  assert.ok(TIERS.includes('fable'));
+});
+
+test('fable is accepted as a per-role override (the old opus[1m] intent)', () => {
+  const { config, warnings } = withConfig({ models: { integrator: 'fable', 'arch-review': 'fable' } });
+  assert.strictEqual(config.models.integrator, 'fable');
+  assert.deepStrictEqual(warnings, []);
+  assert.strictEqual(resolveModel('integrator', {}, config), 'fable');
+});
+
+test('fable is NOT a default anywhere — it is a paid opt-in', () => {
+  for (const profile of ['economy', 'balanced', 'premium']) {
+    for (const role of ALL_ROLES) {
+      const got = resolveModel(role, { risk: 'high', attempt: 3 }, cfg({ model_policy: profile }));
+      assert.notStrictEqual(got, 'fable', `${profile}/${role} defaulted to fable`);
+    }
+  }
+});
+
+suite('GSD profile names are accepted as aliases');
+
+test("GSD's budget/quality map onto economy/premium without a warning", () => {
+  const budget = withConfig({ model_policy: 'budget' });
+  assert.strictEqual(budget.config.model_policy, 'economy');
+  assert.deepStrictEqual(budget.warnings, []);
+  const quality = withConfig({ model_policy: 'quality' });
+  assert.strictEqual(quality.config.model_policy, 'premium');
+  assert.deepStrictEqual(quality.warnings, []);
+});
+
+test('a genuinely unknown profile still warns', () => {
+  const { warnings } = withConfig({ model_policy: 'turbo' });
+  assert.ok(warnings.some((w) => /model_policy/.test(w)));
+});
+
+suite('delivery_pipeline.* (GSD-native) outranks pipeline.*');
+
+test('the capability-declared namespace wins on a conflicting key', () => {
+  const { config } = withRaw({
+    pipeline: { max_attempts: 2, integration_mode: 'direct-to-main' },
+    delivery_pipeline: { max_attempts: 9 },
+  });
+  assert.strictEqual(config.max_attempts, 9);
+  // keys only present in pipeline.* are still honoured
+  assert.strictEqual(config.integration_mode, 'direct-to-main');
+});
+
+suite("GSD's own settings the conveyor must obey");
+
+test('git.base_branch is read and exposed', () => {
+  const { config } = withRaw({ git: { base_branch: 'develop' } });
+  assert.strictEqual(config.gsd.base_branch, 'develop');
+});
+
+test('git.branching_strategy "none" is fine; phase/milestone warn about the collision', () => {
+  assert.deepStrictEqual(withRaw({ git: { branching_strategy: 'none' } }).warnings, []);
+  for (const strategy of ['phase', 'milestone']) {
+    const { warnings } = withRaw({ git: { branching_strategy: strategy } });
+    assert.ok(warnings.some((w) => /owns branching/.test(w)), `${strategy} did not warn`);
+  }
+});
+
+test('a plugin-namespaced agent_skills entry warns on a non-claude runtime', () => {
+  const codex = withRaw({ runtime: 'codex', agent_skills: { 'gsd-planner': ['global:shipyard:delivery-rules'] } });
+  assert.ok(codex.warnings.some((w) => /only on the claude/i.test(w)), codex.warnings.join('; '));
+  // the bare global form is what works there, and must NOT warn
+  const bare = withRaw({ runtime: 'codex', agent_skills: { 'gsd-planner': ['global:shipyard-delivery-rules'] } });
+  assert.deepStrictEqual(bare.warnings, []);
+  // ...and on claude the namespaced form is correct
+  const claude = withRaw({ runtime: 'claude', agent_skills: { 'gsd-planner': ['global:shipyard:delivery-rules'] } });
+  assert.deepStrictEqual(claude.warnings, []);
+});
+
+test('response_language is surfaced (it governs conversation, not artifacts)', () => {
+  const { config } = withRaw({ response_language: 'uk' });
+  assert.strictEqual(config.gsd.response_language, 'uk');
+});
+
+suite('resolveEffort — mirrors GSD light/standard/heavy defaults');
+
+test('every role × model returns an effort Workflow accepts', () => {
+  for (const role of ALL_ROLES) {
+    for (const model of TIERS) {
+      assert.ok(EFFORTS.includes(resolveEffort(role, model, cfg())), `${role}/${model}`);
+    }
+  }
+});
+
+test('effort follows the resolved tier, so an escalated repair thinks harder', () => {
+  assert.strictEqual(resolveEffort('ci-fix', 'sonnet', cfg()), 'high');
+  assert.strictEqual(resolveEffort('ci-fix', 'opus', cfg()), 'xhigh');
+  assert.strictEqual(resolveEffort('integrator', 'fable', cfg()), 'xhigh');
+  assert.strictEqual(resolveEffort('executor', 'haiku', cfg()), 'low');
+});
+
+test('mechanical roles stay cheap even when the tier is raised', () => {
+  assert.strictEqual(resolveEffort('drift-check', 'opus', cfg()), 'low');
+});
+
+test('a per-role effort override wins', () => {
+  const { config } = withConfig({ effort: { executor: 'max' } });
+  assert.strictEqual(resolveEffort('executor', 'sonnet', config), 'max');
+});
+
+test('minimal clamps to low (not in Workflow\'s enum) and max clamps on codex', () => {
+  const minimal = withConfig({ effort: { executor: 'minimal' } });
+  assert.strictEqual(resolveEffort('executor', 'sonnet', minimal.config), 'low');
+  const onCodex = withRaw({ runtime: 'codex', pipeline: { effort: { executor: 'max' } } });
+  assert.strictEqual(resolveEffort('executor', 'sonnet', onCodex.config), 'xhigh');
+});
+
+test('an invalid effort value is rejected with a warning, not honoured', () => {
+  const { config, warnings } = withConfig({ effort: { executor: 'ludicrous' } });
+  assert.strictEqual(config.effort.executor, undefined);
+  assert.ok(warnings.some((w) => /effort/.test(w)));
 });
 
 done();

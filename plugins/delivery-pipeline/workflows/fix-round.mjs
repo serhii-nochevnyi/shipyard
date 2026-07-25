@@ -15,10 +15,12 @@ export const meta = {
 //       needsCiFix,      // bool — checks are failing
 //       needsReviewFix,  // bool — unresolved review threads exist
 //       model,           // optional tier alias; default "opus"
+//       effort,          // optional reasoning effort; from `pipeline-config.cjs model … --json`
 //     } ],
 //     ciFixRefPath,      // abs path to references/ci-fix.md
 //     reviewFixRefPath,  // abs path to references/review-fix.md
 //     reinitScript,      // abs path to scripts/reviewers.cjs
+//     artifactLanguage,  // optional; language for shipped artifacts (default English)
 //   }
 // returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes } ]
 //
@@ -58,6 +60,9 @@ const prs = (args && args.prs) || []
 const ciRef = args && args.ciFixRefPath
 const reviewRef = args && args.reviewFixRefPath
 const reinitScript = args && args.reinitScript
+// Stated here because this path builds prompts deterministically and therefore
+// bypasses the skill's language block (see executors.mjs for the full reasoning).
+const artifactLanguage = (args && args.artifactLanguage) || 'English'
 
 if (!ciRef || !reviewRef || !reinitScript) {
   throw new Error('fix-round: args.ciFixRefPath, args.reviewFixRefPath and args.reinitScript are required')
@@ -88,6 +93,8 @@ return await parallel(
     }
     steps.push(
       ``,
+      `Language: every artifact you produce — code, comments, commit messages, review replies — is written in ${artifactLanguage}, regardless of the language used elsewhere in this project.`,
+      ``,
       `If you changed code: run the ticket's Verification commands to green, commit atomically referencing ${p.id}, push once, then re-init reviewers: node ${reinitScript} reinit ${p.pr}. Set pushed=true.`,
       `If you only replied to threads without a code change: pushed=false, status "fixed".`,
       `If nothing needed doing: status "no-op".`,
@@ -99,6 +106,7 @@ return await parallel(
       phase: 'Fix',
       // tier aliases only — the Agent tool rejects full model IDs
       model: p.model || 'opus',
+      ...(p.effort ? { effort: p.effort } : {}),
       agentType: 'general-purpose',
       schema: OUT,
     })

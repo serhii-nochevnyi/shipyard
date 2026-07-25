@@ -33,13 +33,20 @@ function pass(reason) {
 }
 
 // ── explicit opt-out ────────────────────────────────────────────────────────
+// `delivery_pipeline.graph_gate` is the capability's OWN declared config key —
+// the GSD-native switch that the gate's `when:` clause reads and that GSD's
+// config tooling can validate and set. Honour it here too, so disabling the gate
+// works whether GSD evaluates `when:` or this launcher runs standalone.
+// `pipeline.graph_gate` is kept as a legacy alias (`pipeline` is not a valid GSD
+// config key, so it cannot be set through GSD's tooling).
 const configFile = path.join(ROOT, '.planning', 'config.json');
 if (fs.existsSync(configFile)) {
   try {
     const cfg = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-    if (cfg && cfg.pipeline && cfg.pipeline.graph_gate === false) {
-      pass('pipeline.graph_gate is false in .planning/config.json');
-    }
+    const declared = cfg && cfg.delivery_pipeline && cfg.delivery_pipeline.graph_gate;
+    const legacy = cfg && cfg.pipeline && cfg.pipeline.graph_gate;
+    if (declared === false) pass('delivery_pipeline.graph_gate is false in .planning/config.json');
+    if (declared !== true && legacy === false) pass('pipeline.graph_gate is false in .planning/config.json');
   } catch {
     // an unreadable config is not this gate's business; the validator will
     // surface real problems if the project turns out to be a conveyor project.
