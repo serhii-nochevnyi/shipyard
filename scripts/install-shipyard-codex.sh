@@ -137,4 +137,5 @@ NODE
 deliver_hint=""
 [[ "$PHASE" -ge 2 ]] && deliver_hint=' | $shipyard-deliver'
 echo "✓ shipyard installed for Codex."
-echo "  In Codex: \$shipyard-investigate | \$shipyard-decompose${deliver_hint}"
+echo "  In Codex: \$shipyard-route | \$shipyard-investigate | \$shipyard-decompose${deliver_hint} | \$shipyard-bench"
+echo "  (auto-route is in $AGENTS_MD — describe the work and the router picks the entry)"

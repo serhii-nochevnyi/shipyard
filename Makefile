@@ -35,7 +35,8 @@ COMPOSE_ENV = \
 
 .PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image ensure-image runtime-dirs \
         bootstrap-atlassian-oauth run-docker up dev claude shell clone deploy-k8s \
-        install-shipyard-codex install-shipyard-claude-hook remove-shipyard-claude-hook clean-cache \
+        install-shipyard-codex install-shipyard-claude-hook remove-shipyard-claude-hook \
+        install-shipyard-capability clean-cache \
         test test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime \
         test-codex-shipyard test-unit test-graph test-worktree test-fast
 
@@ -132,6 +133,13 @@ install-shipyard-codex:
 # settings. (Inside the container the same hook is baked in at build time.)
 install-shipyard-claude-hook:
 	./scripts/install-shipyard-claude-hook.sh
+
+# Install/refresh the GSD capability (Gate 2 + UAT gates) for a host runtime.
+# `install-shipyard-codex` already does this for Codex; host Claude Code had no
+# installer at all, which is how a half-installed gate (validator without its
+# frontmatter.cjs sibling) could sit there unnoticed.
+install-shipyard-capability:
+	./scripts/install-shipyard-capability.sh claude
 
 remove-shipyard-claude-hook:
 	./scripts/install-shipyard-claude-hook.sh --remove

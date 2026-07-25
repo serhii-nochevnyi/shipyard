@@ -154,6 +154,27 @@ It writes `~/.claude/hooks/shipyard-auto-route.sh` and merges a hook into
 `~/.claude/settings.json` (idempotent, preserving your other hooks). On a running
 session, open `/hooks` once or restart to load it.
 
+### Installing the conveyor into host Claude Code
+
+The plugin itself comes from the in-repo marketplace, and the GSD capability that
+contributes Gate 2 has its own installer:
+
+```bash
+claude plugin marketplace update delivery-pipeline   # refresh from this checkout
+claude plugin update shipyard@delivery-pipeline      # restart Claude to apply
+make install-shipyard-capability                     # Gate 2 + UAT gates, global scope
+```
+
+The capability installer stages the validator **with its sibling modules**; a
+`gsd-tools capability install` pointed straight at `capabilities/` would leave the
+gate unable to load its parser. `make install-shipyard-codex` does the equivalent
+for Codex as part of its own run.
+
+The `plan:post` gate is installed at global scope but is applicability-scoped: it
+stays inert in projects that carry no `delivery:` blocks, and fails closed for
+real conveyor projects. Opt a project out entirely with
+`.planning/config.json` → `pipeline.graph_gate: false`.
+
 Set `SHIPYARD_CODEX_PHASE=1` to install `investigate`+`decompose` only and leave
 `deliver` out. Skills land in `~/.agents/skills`; nothing outside shipyard's own
 files is modified.
