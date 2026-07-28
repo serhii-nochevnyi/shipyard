@@ -583,8 +583,9 @@ scope is driven to green or blocked:
 The orchestrator is idempotent: all state is in `delivery-state.yaml` + GitHub,
 so it can be killed and restarted at any moment — it will reconstruct the
 picture from the PR state (`gh pr list --json`), not from session memory.
-In this repository, the natural place to run it is the claude-shipyard container
-(gh auth is already mounted, the claude CLI is baked in).
+In this repository the natural place to run it is the shipyard container (gh auth
+is already mounted, the Claude Code CLI is baked in); on the Codex runtime it runs
+from a host install (`make install-shipyard-codex`) against the same state files.
 
 ---
 

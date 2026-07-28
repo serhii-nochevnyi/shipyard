@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-This repo packages a **remote Claude Code dev environment** as a Docker image, runnable locally via Compose or deployable to Kubernetes. It does not contain application code — it is infrastructure that bakes a toolchain, the Claude Code CLI, Claude Code plugins (gsd-core, andrej-karpathy-skills, the in-repo `shipyard` conveyor, and four official plugins), and default MCP server configs into a reproducible container.
+This repo ships **the shipyard delivery conveyor** plus the environment it runs in. It contains no application code — it is infrastructure. Two deliverables, and they are frequently confused:
+
+1. **The conveyor** (`plugins/delivery-pipeline/` + `capabilities/delivery-pipeline/`) — investigate → decompose → deliver, with its deterministic git/`gh`/graph layer and blocking GSD gates. It targets **two runtimes**: Claude Code (canonical) and the OpenAI Codex CLI (generated from the same commands by `scripts/gen-codex-shipyard.cjs`, installed host-side by `make install-shipyard-codex`). It also installs into host Claude Code (`make install-shipyard-claude-hook`, `make install-shipyard-capability`).
+2. **The container** (`Dockerfile.base` + `Dockerfile`) — a remote **Claude Code** dev environment, runnable via Compose or deployable to Kubernetes, baking a pinned toolchain, the Claude Code CLI, Claude Code plugins (gsd-core, andrej-karpathy-skills, the in-repo `shipyard` conveyor, four official plugins) and default MCP server configs. The image is Claude-Code-only by design; Codex is never installed into it.
+
+**Consequence for edits:** a behavior change to a command doc or a script belongs to the conveyor and therefore reaches BOTH runtimes — so it must not assume Claude-only capabilities (the Workflow tool is the standing example: absent on Codex, hence the Agent fallback). Codex artifacts are generated, never hand-edited; edit the Claude command and re-run the installer.
 
 The `workspace/` directory is the mount point users do their actual work in at runtime; it is intentionally empty in the repo.
 

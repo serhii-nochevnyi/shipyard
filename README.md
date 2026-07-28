@@ -1,9 +1,31 @@
-# Claude Shipyard
+# Shipyard
 
-A remote Claude Code dev environment: an isolated Docker shipyard where Claude
-takes a problem all the way to a set of green PRs.
+A delivery conveyor for coding agents: it takes a problem from "we should look
+into this" all the way to a set of green PRs — deep investigation → a validated
+ticket graph → a worktree and PR per ticket, babysat to green.
+
+It runs on **two runtimes from one source of truth**. The Claude Code plugin
+(`plugins/delivery-pipeline/`) is canonical; a generator emits the Codex-native
+artifacts from it, so the OpenAI Codex CLI runs the same conveyor and the two
+cannot drift. Everything the conveyor must not improvise — git, `gh`, the graph,
+the gates — lives in tested Node/bash scripts shared by both.
+
+Three ways to run it:
+
+| | What you get | Start here |
+|---|---|---|
+| **Container** (Claude Code) | The whole toolchain pinned and baked: Claude Code CLI, gsd-core, shipyard, MCP servers, auto-route hook. Isolated, throwaway, `bypassPermissions` is safe inside it. | [`make dev`](#quick-start) |
+| **Host Claude Code** | The conveyor and its gates in your own Claude Code, no container. | [Installing the conveyor into host Claude Code](#installing-the-conveyor-into-host-claude-code) |
+| **Host Codex CLI** | The same skills, subagents and gates, generated for Codex. | [Shipyard on the OpenAI Codex CLI](#shipyard-on-the-openai-codex-cli) |
+
+The container is Claude Code only — Codex is a host-side install. Both host paths
+leave everything outside shipyard's own files untouched.
 
 ## Quick start
+
+This is the **containerized Claude Code** path. For a host install (Claude Code or
+Codex CLI) skip to [Shipyard on the OpenAI Codex CLI](#shipyard-on-the-openai-codex-cli)
+or [Installing the conveyor into host Claude Code](#installing-the-conveyor-into-host-claude-code).
 
 ```bash
 make dev
@@ -39,18 +61,18 @@ Individual targets if you prefer to drive it yourself:
 
 ## Delivery workflow
 
-The main way to work in this container is the baked-in **delivery pipeline**
-(the `shipyard` plugin): a full cycle from a raw problem to a set of green PRs.
-You do not have to remember which entry to use — describe the work and the
-router picks it:
+The conveyor is the same on every runtime — only the invocation differs:
+`/shipyard:<cmd>` on Claude Code, `$shipyard-<cmd>` on Codex. This section uses
+the Claude Code spelling. You do not have to remember which entry to use —
+describe the work and the router picks it:
 
 ```text
 /shipyard:route "scope of the work"
 ```
 
 It is read-only and advisory: it sizes the work and hands off to the right loop
-(and the baked auto-route hook surfaces it for you, so in practice you just state
-what you want). Large multi-ticket efforts go through the three conveyor loops
+(and the auto-route hook — baked into the container, installable on either host
+runtime — surfaces it for you, so in practice you just state what you want). Large multi-ticket efforts go through the three conveyor loops
 below; a small change, an existing ticket, or explicit "no ticket" goes to
 `/shipyard:bench`, which implements directly in the current worktree and never
 creates a branch, PR, or commit unless you ask.
@@ -142,12 +164,18 @@ goes (it outranks the repo default), `git.branching_strategy` must stay `none`
 because the conveyor owns branching, and `runtime` decides effort clamping.
 `state-sync` echoes the effective settings and warns about anything not in effect.
 
-## Running shipyard on Codex
+## Shipyard on the OpenAI Codex CLI
 
-The same conveyor runs on the **OpenAI Codex CLI** on the host — this is a
-host-side install, separate from the Docker image. The canonical source stays
-the Claude plugin (`plugins/delivery-pipeline/commands/*.md`); a generator emits
-Codex-native artifacts from it, so the two runtimes never drift.
+Codex is a **first-class runtime**, not a port: the same conveyor, the same
+deterministic scripts, the same blocking gates. It is a host-side install,
+separate from the Docker image (which is Claude Code only).
+
+The canonical source stays the Claude plugin
+(`plugins/delivery-pipeline/commands/*.md`); a generator emits the Codex-native
+artifacts from it, so the two runtimes never drift — change a command once and
+re-run the installer. Where the runtimes genuinely differ, the conveyor adapts
+instead of pretending: Codex has no Workflow tool, so `deliver` runs its built-in
+agent path, and `agent_skills` needs the bare skill form (both spelled out below).
 
 Prerequisite — gsd-core installed for Codex:
 
@@ -185,13 +213,15 @@ It also writes a managed "shipyard auto-route" block into
 (research-first, proportionate GSD) without the user invoking `$shipyard-*` by
 hand.
 
-### Auto-route on Claude Code
+### Auto-route on host Claude Code
 
-Inside the container this is already done: the overlay build installs a
-`UserPromptSubmit` hook into the image's own `~/.claude`, so a scope of work is
-routed through shipyard without you invoking anything.
+Both runtimes get the auto-route nudge, by different mechanisms: Codex through the
+managed block in `$CODEX_HOME/AGENTS.md` that its installer writes (above), Claude
+Code through a `UserPromptSubmit` hook. Inside the container the hook is already
+installed by the overlay build, so a scope of work is routed through shipyard
+without you invoking anything.
 
-To get the same nudge on your **host** Claude Code (it edits your user settings,
+To get the same on your **host** Claude Code (it edits your user settings,
 not the plugin):
 
 ```bash
@@ -229,12 +259,21 @@ files is modified.
 
 ## Prerequisites
 
-- Docker with Compose support
-- `kubectl` (only for the Kubernetes deployment and `make test-k8s`)
-- Claude Pro or Max subscription (required for Claude Code)
-- valid `GITHUB_TOKEN` or `GH_TOKEN` for git/gh access inside the container (optional)
+Per path — only the container path needs Docker at all:
+
+- **Container (Claude Code)**: Docker with Compose support; a Claude Pro or Max
+  subscription; `kubectl` for the Kubernetes deployment and `make test-k8s`.
+- **Host Claude Code**: the `claude` CLI and gsd-core installed for it.
+- **Host Codex CLI**: the `codex` CLI with its own access (ChatGPT plan or API
+  key) and gsd-core installed for Codex
+  (`npx --yes @opengsd/gsd-core@1.7.0 --codex --global`).
+- **Any path that opens PRs**: `gh` authenticated, plus a valid `GITHUB_TOKEN` or
+  `GH_TOKEN` for git/gh access inside the container (optional there).
 - a local SSH agent if you need private Git access at runtime (recommended over
   exposing on-disk keys — see "SSH access" below)
+
+The remaining sections up to [Plugins](#plugins) describe the **container**; the
+conveyor itself needs none of it.
 
 ## Local build
 
@@ -430,6 +469,9 @@ The plugin is installed from the official marketplace during the overlay build a
 when Claude Code starts an interactive session.
 
 ## Plugins
+
+Baked into the container image (hence all Claude Code plugins — on Codex the
+equivalents are installed as skills/subagents by `make install-shipyard-codex`):
 
 - **gsd-core** (`@opengsd/gsd-core`) — Claude Code delivery plugin with full profile, installed via npx.
 - **andrej-karpathy-skills** — staged from pinned commit, registered via `claude plugin`.
