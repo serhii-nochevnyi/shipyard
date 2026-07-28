@@ -6,6 +6,24 @@ set -euo pipefail
 # semantics or the command surface, update README.md or this fails.
 
 [[ -f README.md ]] || { echo "missing README.md"; exit 1; }
+
+# The repo is a plugin marketplace in its own right: `claude plugin marketplace
+# add <owner>/shipyard` only works when the manifest sits at the REPO ROOT (the
+# copy under plugins/delivery-pipeline/ serves the directory-source install and
+# is not reachable by a remote add). Losing this file makes the documented public
+# install silently impossible, so it is a contract.
+[[ -f .claude-plugin/marketplace.json ]] || { echo "missing root .claude-plugin/marketplace.json — the public marketplace install would break"; exit 1; }
+node - <<'NODE'
+const m = require('./.claude-plugin/marketplace.json');
+const entry = (m.plugins || []).find((p) => p.name === 'shipyard');
+if (!entry) { console.error('root marketplace.json does not offer the "shipyard" plugin'); process.exit(1); }
+const fs = require('fs');
+const src = entry.source.replace(/^\.\//, '');
+if (!fs.existsSync(`${src}/.claude-plugin/plugin.json`)) {
+  console.error(`root marketplace.json points at "${entry.source}", which has no .claude-plugin/plugin.json`);
+  process.exit(1);
+}
+NODE
 [[ -f .env.example ]] || { echo "missing .env.example"; exit 1; }
 
 need() { # need <pattern> <what is missing>
@@ -13,6 +31,7 @@ need() { # need <pattern> <what is missing>
 }
 
 need "make build-base"        "make build-base"
+need "claude plugin marketplace add serhii-nochevnyi/shipyard" "the public marketplace install command"
 need "make build-dev-image"   "make build-dev-image"
 need "make deploy-k8s"        "make deploy-k8s"
 need "make test-fast"         "the fast test entry point"

@@ -15,7 +15,7 @@ Three ways to run it:
 | | What you get | Start here |
 |---|---|---|
 | **Container** (Claude Code) | The whole toolchain pinned and baked: Claude Code CLI, gsd-core, shipyard, MCP servers, auto-route hook. Isolated, throwaway, `bypassPermissions` is safe inside it. | [`make dev`](#quick-start) |
-| **Host Claude Code** | The conveyor and its gates in your own Claude Code, no container. | [Installing the conveyor into host Claude Code](#installing-the-conveyor-into-host-claude-code) |
+| **Host Claude Code** | The conveyor and its gates in your own Claude Code, no container. Installable straight from GitHub: `claude plugin marketplace add serhii-nochevnyi/shipyard`. | [Installing the conveyor into host Claude Code](#installing-the-conveyor-into-host-claude-code) |
 | **Host Codex CLI** | The same skills, subagents and gates, generated for Codex. | [Shipyard on the OpenAI Codex CLI](#shipyard-on-the-openai-codex-cli) |
 
 The container is Claude Code only — Codex is a host-side install. Both host paths
@@ -183,9 +183,12 @@ Prerequisite — gsd-core installed for Codex:
 npx --yes @opengsd/gsd-core@1.7.0 --codex --global
 ```
 
-Then install shipyard:
+Then install shipyard from a checkout (the generator and the deterministic scripts
+come from the repo, so this path needs the clone — there is no marketplace for
+Codex):
 
 ```bash
+git clone https://github.com/serhii-nochevnyi/shipyard && cd shipyard
 make install-shipyard-codex        # or: bash scripts/install-shipyard-codex.sh
 ```
 
@@ -234,8 +237,25 @@ session, open `/hooks` once or restart to load it.
 
 ### Installing the conveyor into host Claude Code
 
-The plugin itself comes from the in-repo marketplace, and the GSD capability that
-contributes Gate 2 has its own installer:
+**From GitHub, no clone** — the repo is itself a plugin marketplace:
+
+```bash
+claude plugin marketplace add serhii-nochevnyi/shipyard
+claude plugin install shipyard@shipyard               # restart Claude to apply
+```
+
+That gives you the five commands and the delivery-rules skill. The blocking Gate 2
+/ UAT gates ship as a **GSD capability**, which needs the checkout (its installer
+stages the validator with its sibling modules), as does the Codex install:
+
+```bash
+git clone https://github.com/serhii-nochevnyi/shipyard && cd shipyard
+make install-shipyard-capability                     # Gate 2 + UAT gates, global scope
+make install-shipyard-claude-hook                    # optional: auto-route
+```
+
+Developing on the checkout instead? Register it as a directory marketplace and
+refresh from disk:
 
 ```bash
 claude plugin marketplace update delivery-pipeline   # refresh from this checkout
