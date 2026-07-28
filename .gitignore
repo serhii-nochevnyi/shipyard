@@ -58,3 +58,6 @@ vendor/
 coverage/
 .cache/
 tmp/
+
+# editor/agent scratch copies
+*.bak

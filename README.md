@@ -243,8 +243,22 @@ files is modified.
 3. Build the base image:
 
 ```bash
-make build-base
+make build-base GIT_USER_NAME="Your Name" GIT_USER_EMAIL=you@example.com
 ```
+
+`GIT_USER_NAME` and `GIT_USER_EMAIL` are **required** and have no default — they
+become `/home/dev/.gitconfig` inside the image, so they author every commit made
+in the container. To reuse your host identity:
+
+```bash
+make build-base \
+  GIT_USER_NAME="$(git config --global user.name)" \
+  GIT_USER_EMAIL="$(git config --global user.email)"
+```
+
+(The Makefile does not read `.env`; export the two variables or pass them per
+invocation. `make build-base` and a bare `docker build` both fail with the
+explicit reason when either is empty.)
 
 `make build-base` also stages safe SSH client files from your local `~/.ssh` into the build context. It copies only `config`, `known_hosts`, and `known_hosts2`, and it skips private keys. A host with no `~/.ssh` is fine — the staging directory is created empty and the container relies on agent forwarding.
 
@@ -280,7 +294,7 @@ The overlay image installs the following during build:
 The base image bakes in:
 
 - Claude Code CLI (`@anthropic-ai/claude-code`, pinned version) installed via npm.
-- Git identity: `Nochevnyi Serhii <nochevnyi.serhii@airslate.com>`
+- Git identity: whatever you passed as `GIT_USER_NAME` / `GIT_USER_EMAIL` (required build args, no default)
 - Git defaults: `init.defaultBranch=main`, `push.autoSetupRemote=true`, `color.ui=auto`,
   `fetch.prune=true`, `pull.rebase=false`, `pull.ff=only`
 - safe SSH client files from your local profile when present

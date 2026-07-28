@@ -12,8 +12,11 @@ TYPESCRIPT_LANGUAGE_SERVER_VERSION ?= 5.2.0
 TYPESCRIPT_VERSION ?= 6.0.3
 LOCAL_SSH_DIR ?= $(HOME)/.ssh
 SSH_STAGING_DIR ?= .build/ssh-config
-GIT_USER_NAME ?= Nochevnyi Serhii
-GIT_USER_EMAIL ?= nochevnyi.serhii@airslate.com
+# Git identity baked into the image's /home/dev/.gitconfig. REQUIRED, with no
+# default on purpose: a default here ends up authoring every commit made inside
+# every container built from this repo as whoever happened to write it down.
+GIT_USER_NAME ?=
+GIT_USER_EMAIL ?=
 WORKSPACE_DIR ?= $(CURDIR)/workspace
 HOME_CACHE_DIR ?= $(CURDIR)/.cache-home
 CLAUDE_STATE_DIR ?= $(CURDIR)/.claude-state
@@ -33,14 +36,27 @@ COMPOSE_ENV = \
   HOME_CACHE_DIR="$(HOME_CACHE_DIR)" \
   CLAUDE_STATE_DIR="$(CLAUDE_STATE_DIR)"
 
-.PHONY: build-base sync-ssh-config sync-karpathy-skills build-dev-image ensure-image runtime-dirs \
+.PHONY: build-base require-git-identity sync-ssh-config sync-karpathy-skills build-dev-image ensure-image runtime-dirs \
         bootstrap-atlassian-oauth run-docker up dev claude shell clone deploy-k8s \
         install-shipyard-codex install-shipyard-claude-hook remove-shipyard-claude-hook \
         install-shipyard-capability clean-cache \
         test test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime \
         test-codex-shipyard test-unit test-graph test-worktree test-fast
 
-build-base: sync-ssh-config
+require-git-identity:
+	@if [ -z "$(GIT_USER_NAME)" ] || [ -z "$(GIT_USER_EMAIL)" ]; then \
+	  echo "GIT_USER_NAME and GIT_USER_EMAIL are required — they become the git identity of every commit made inside the container." >&2; \
+	  echo "" >&2; \
+	  echo "  make build-base GIT_USER_NAME=\"Your Name\" GIT_USER_EMAIL=you@example.com" >&2; \
+	  echo "" >&2; \
+	  echo "Or take them from your host git config:" >&2; \
+	  echo "  make build-base GIT_USER_NAME=\"\$$(git config --global user.name)\" GIT_USER_EMAIL=\"\$$(git config --global user.email)\"" >&2; \
+	  echo "" >&2; \
+	  echo "Or set them once in .env (the Makefile does NOT read .env — export them, or put them in your shell profile)." >&2; \
+	  exit 1; \
+	fi
+
+build-base: require-git-identity sync-ssh-config
 	docker build -f Dockerfile.base -t $(BASE_IMAGE) \
 	  --build-arg GIT_USER_NAME='$(GIT_USER_NAME)' \
 	  --build-arg GIT_USER_EMAIL='$(GIT_USER_EMAIL)' \

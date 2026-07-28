@@ -6,6 +6,15 @@ if [[ ! -f Dockerfile.base ]]; then
   exit 1
 fi
 
+# The git identity is a REQUIRED build arg with no default (a baked-in fallback
+# would author every in-container commit as whoever wrote it down), so the suite
+# supplies one: the host's own git config, else an explicit test identity.
+GIT_USER_NAME="${GIT_USER_NAME:-$(git config --global user.name || true)}"
+GIT_USER_EMAIL="${GIT_USER_EMAIL:-$(git config --global user.email || true)}"
+GIT_USER_NAME="${GIT_USER_NAME:-shipyard test}"
+GIT_USER_EMAIL="${GIT_USER_EMAIL:-shipyard-test@example.invalid}"
+export GIT_USER_NAME GIT_USER_EMAIL
+
 LOCAL_SSH_DIR="${LOCAL_SSH_DIR:-$HOME/.ssh}" make build-base >/dev/null
 
 # The image is built via `make build-base`, so the expected version is the
@@ -15,6 +24,8 @@ EXPECTED_CLAUDE_VERSION="${CLAUDE_CODE_VERSION:-$(sed -n 's/^CLAUDE_CODE_VERSION
 
 docker run --rm \
   -e EXPECTED_CLAUDE_VERSION="$EXPECTED_CLAUDE_VERSION" \
+  -e EXPECTED_GIT_USER_NAME="$GIT_USER_NAME" \
+  -e EXPECTED_GIT_USER_EMAIL="$GIT_USER_EMAIL" \
   -v "$PWD/.build/ssh-config:/tmp/expected-ssh:ro" \
   claude-shipyard-base:test bash -lc '
   set -euo pipefail
@@ -26,8 +37,12 @@ docker run --rm \
   [[ "$HOME" == "/home/dev" ]]
   [[ -d /workspace ]]
 
-  [[ "$(git config --global user.name)" == "Nochevnyi Serhii" ]]
-  [[ "$(git config --global user.email)" == "nochevnyi.serhii@airslate.com" ]]
+  # whatever the build was given, and never empty — an empty identity makes
+  # every commit inside the container fail with "please tell me who you are"
+  [[ -n "$(git config --global user.name)" ]]
+  [[ -n "$(git config --global user.email)" ]]
+  [[ "$(git config --global user.name)" == "$EXPECTED_GIT_USER_NAME" ]]
+  [[ "$(git config --global user.email)" == "$EXPECTED_GIT_USER_EMAIL" ]]
   [[ "$(git config --global init.defaultBranch)" == "main" ]]
   [[ "$(git config --global push.autoSetupRemote)" == "true" ]]
   [[ "$(git config --global color.ui)" == "auto" ]]

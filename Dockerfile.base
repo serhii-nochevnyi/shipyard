@@ -34,8 +34,11 @@ ARG CLAUDE_CODE_VERSION=2.1.200
 ARG CONTEXT7_MCP_VERSION=2.2.5
 ARG TYPESCRIPT_LANGUAGE_SERVER_VERSION=5.2.0
 ARG TYPESCRIPT_VERSION=6.0.3
-ARG GIT_USER_NAME="Nochevnyi Serhii"
-ARG GIT_USER_EMAIL="nochevnyi.serhii@airslate.com"
+# Required, deliberately without a default: this identity authors every commit
+# made inside the container, so a baked-in fallback silently attributes work to
+# whoever wrote it down. The build fails below when either is empty.
+ARG GIT_USER_NAME=""
+ARG GIT_USER_EMAIL=""
 
 COPY .build/ssh-config/ /tmp/ssh-config/
 
@@ -84,6 +87,13 @@ RUN set -eux; \
   chmod +x /usr/local/bin/helm; \
   rm -f "/usr/local/src/node-v${NODE_VERSION}-${node_arch}.tar.xz" /usr/local/src/SHASUMS256.txt "/usr/local/src/go${GO_VERSION}.${go_arch}.tar.gz" "/usr/local/src/go${GO_VERSION}.${go_arch}.tar.gz.sha256" /usr/local/src/kubectl /usr/local/src/kubectl.sha256 "/usr/local/src/helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz" "/usr/local/src/helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz.sha256sum"; \
   rm -rf "/usr/local/src/linux-${helm_arch}"
+
+RUN if [ -z "$GIT_USER_NAME" ] || [ -z "$GIT_USER_EMAIL" ]; then \
+      echo "GIT_USER_NAME and GIT_USER_EMAIL build args are required (they become the container's git identity):" >&2; \
+      echo "  docker build -f Dockerfile.base --build-arg GIT_USER_NAME=\"Your Name\" --build-arg GIT_USER_EMAIL=you@example.com ." >&2; \
+      echo "or use: make build-base GIT_USER_NAME=... GIT_USER_EMAIL=..." >&2; \
+      exit 1; \
+    fi
 
 RUN userdel -r ubuntu || true \
   && useradd --uid 1000 --create-home --home-dir /home/dev --shell /bin/bash dev \
