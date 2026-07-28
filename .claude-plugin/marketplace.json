@@ -1,0 +1,22 @@
+{
+  "name": "shipyard",
+  "id": "shipyard",
+  "owner": {
+    "name": "Nochevnyi Serhii"
+  },
+  "metadata": {
+    "description": "Shipyard — a delivery conveyor for coding agents: deep investigation, a validated ticket graph, then a worktree and PR per ticket babysat to green. Runs on Claude Code and the OpenAI Codex CLI from one source."
+  },
+  "plugins": [
+    {
+      "name": "shipyard",
+      "source": "./plugins/delivery-pipeline",
+      "description": "Deep investigation -> ticket DAG -> per-ticket worktree/PR delivery babysat to green",
+      "author": {
+        "name": "Nochevnyi Serhii"
+      },
+      "keywords": ["delivery", "gsd", "tickets", "worktree", "pr"],
+      "category": "workflow"
+    }
+  ]
+}
