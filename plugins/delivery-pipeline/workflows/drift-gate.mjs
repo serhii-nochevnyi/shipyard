@@ -36,8 +36,15 @@ const VERDICT = {
   },
 }
 
-const tickets = (args && args.tickets) || []
-const refPath = args && args.driftRefPath
+// The Workflow runtime may hand `args` over as a JSON STRING rather than an
+// object (observed 2026-07-28). Reading `args.x` then silently yields undefined
+// and the script no-ops with zero agents. Normalize once, tolerate both.
+const argv = typeof args === 'string'
+  ? (() => { try { return JSON.parse(args) } catch { return {} } })()
+  : (args || {})
+
+const tickets = (argv && argv.tickets) || []
+const refPath = argv && argv.driftRefPath
 
 if (!refPath) throw new Error('drift-gate: args.driftRefPath is required')
 if (!tickets.length) return []

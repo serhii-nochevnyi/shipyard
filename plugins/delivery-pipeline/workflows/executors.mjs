@@ -59,15 +59,22 @@ const OUT = {
   },
 }
 
-const tickets = (args && args.tickets) || []
-const rulesHint = (args && args.deliveryRulesHint) || 'Work ONLY within files_modified; commit atomically with a (T-id): prefix.'
-const prBodyGuide = (args && args.prBodyGuide) || 'PR body: FIRST line must be the machine-readable marker "Ticket: <ticket-id>" (state-sync match anchor), then Problem / Scope / Dependency slice / Test evidence / Rollout-Rollback (risky only).'
+// The Workflow runtime may hand `args` over as a JSON STRING rather than an
+// object (observed 2026-07-28). Reading `args.x` then silently yields undefined
+// and the script no-ops with zero agents. Normalize once, tolerate both.
+const argv = typeof args === 'string'
+  ? (() => { try { return JSON.parse(args) } catch { return {} } })()
+  : (args || {})
+
+const tickets = (argv && argv.tickets) || []
+const rulesHint = (argv && argv.deliveryRulesHint) || 'Work ONLY within files_modified; commit atomically with a (T-id): prefix.'
+const prBodyGuide = (argv && argv.prBodyGuide) || 'PR body: FIRST line must be the machine-readable marker "Ticket: <ticket-id>" (state-sync match anchor), then Problem / Scope / Dependency slice / Test evidence / Rollout-Rollback (risky only).'
 // This path builds prompts deterministically, which means it also BYPASSES the
 // skill's language block — so the artifact-language rule has to be stated here or
 // a PR body can come back in the conversation language. GSD's `response_language`
 // governs how agents talk to the user; shipped artifacts are English by policy
 // (delivery-rules), and that is a separate decision.
-const artifactLanguage = (args && args.artifactLanguage) || 'English'
+const artifactLanguage = (argv && argv.artifactLanguage) || 'English'
 
 if (!tickets.length) return []
 

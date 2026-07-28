@@ -56,13 +56,20 @@ const OUT = {
   },
 }
 
-const prs = (args && args.prs) || []
-const ciRef = args && args.ciFixRefPath
-const reviewRef = args && args.reviewFixRefPath
-const reinitScript = args && args.reinitScript
+// The Workflow runtime may hand `args` over as a JSON STRING rather than an
+// object (observed 2026-07-28). Reading `args.x` then silently yields undefined
+// and the script no-ops with zero agents. Normalize once, tolerate both.
+const argv = typeof args === 'string'
+  ? (() => { try { return JSON.parse(args) } catch { return {} } })()
+  : (args || {})
+
+const prs = (argv && argv.prs) || []
+const ciRef = argv && argv.ciFixRefPath
+const reviewRef = argv && argv.reviewFixRefPath
+const reinitScript = argv && argv.reinitScript
 // Stated here because this path builds prompts deterministically and therefore
 // bypasses the skill's language block (see executors.mjs for the full reasoning).
-const artifactLanguage = (args && args.artifactLanguage) || 'English'
+const artifactLanguage = (argv && argv.artifactLanguage) || 'English'
 
 if (!ciRef || !reviewRef || !reinitScript) {
   throw new Error('fix-round: args.ciFixRefPath, args.reviewFixRefPath and args.reinitScript are required')
