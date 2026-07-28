@@ -18,10 +18,11 @@ fail=0
 ok()   { pass=$((pass + 1)); echo "  ✓ $1"; }
 bad()  { fail=$((fail + 1)); echo "  ✗ $1"; [[ -n "${2:-}" ]] && echo "$2" | sed 's/^/      /'; }
 
-# plan <project> <file> <ticket> <deps> <files> <reqs> [risk] [checkpoint] [extra frontmatter line]
+# plan <project> <file> <ticket> <deps> <files> <reqs> [risk] [checkpoint] \
+#      [extra frontmatter line] [extra line INSIDE the delivery block]
 plan() {
   local proj="$1" file="$2" ticket="$3" deps="$4" files="$5" reqs="$6"
-  local risk="${7:-low}" cp="${8:-false}" extra="${9:-}"
+  local risk="${7:-low}" cp="${8:-false}" extra="${9:-}" dextra="${10:-}"
   local dir="$WORK/$proj/.planning/phases/${file%%/*}"
   mkdir -p "$dir"
   {
@@ -37,6 +38,7 @@ plan() {
     echo "  ticket: $ticket"
     echo "  risk: $risk"
     echo "  human_checkpoint: $cp"
+    [[ -n "$dextra" ]] && echo "  $dextra"
     echo '---'
     echo '## Goal'
     echo 'x'
@@ -259,6 +261,88 @@ if out="$(run_validator crossphase)"; then
 else
   bad "a cross-phase dependency still validates" "$out"
 fi
+
+# ── 7b. multi-repo tickets (delivery.repo) ──────────────────────────────────
+# A ticket in a sibling repository is a normal part of a phase. Getting the repo
+# boundary wrong is what made a merged PR read as `pending` forever and pointed a
+# cascade base at a branch that does not exist in the ticket's repo.
+mkproj tworepos
+mkdir -p "$WORK/tworepos/.planning/phases/01-a"
+plan tworepos '01-a/01-PLAN.md' T-01-01 '' 'src/shared/x.ts' REQ-1 low false '' ''
+plan tworepos '01-a/02-PLAN.md' T-01-02 '' 'src/shared/x.ts' REQ-2 low false '' 'repo: acme/webapp'
+if out="$(run_validator tworepos)"; then
+  ok "identical paths in DIFFERENT repos are not an overlap conflict"
+  j="$WORK/tworepos/.planning/graph/tickets.json"
+  node -e '
+    const t = require(process.argv[1]).tickets;
+    if (t["T-01-02"].repo !== "acme/webapp") throw new Error("repo not carried into tickets.json");
+    if (t["T-01-01"].repo !== null) throw new Error("a same-repo ticket must have repo: null");
+  ' "$j" && ok "delivery.repo lands in tickets.json (null for this repo)" \
+         || bad "delivery.repo lands in tickets.json"
+  node -e '
+    const g = require(process.argv[1]);
+    const repos = g.epics["1"].repos || [];
+    if (!repos.includes(null) || !repos.includes("acme/webapp")) {
+      throw new Error("epic must list every repo the phase touches, got " + JSON.stringify(repos));
+    }
+  ' "$j" && ok "the epic records every repo the phase spans" \
+         || bad "the epic records every repo the phase spans"
+else
+  bad "a two-repo phase validates" "$out"
+fi
+
+# same repo, same path, dependency-unordered → still a Gate 2 error
+mkproj samerepo
+mkdir -p "$WORK/samerepo/.planning/phases/01-a"
+plan samerepo '01-a/01-PLAN.md' T-01-01 '' 'src/shared/x.ts' REQ-1 low false '' 'repo: acme/webapp'
+plan samerepo '01-a/02-PLAN.md' T-01-02 '' 'src/shared/x.ts' REQ-2 low false '' 'repo: acme/webapp'
+rejects samerepo 'overlapping paths' "identical paths in the SAME foreign repo are still rejected"
+
+# a cross-repo dependency cannot cascade: no primary parent, base stays the epic
+mkproj crossrepo
+mkdir -p "$WORK/crossrepo/.planning/phases/01-a"
+plan crossrepo '01-a/01-PLAN.md' T-01-01 ''        'packages/api/types.ts' REQ-1 low false '' 'repo: acme/webapp'
+plan crossrepo '01-a/02-PLAN.md' T-01-02 'T-01-01' 'src/consumer.ts'       REQ-2
+if out="$(run_validator crossrepo)"; then
+  grep -q 'crosses a repository boundary' <<<"$out" \
+    && ok "a cross-repo dependency is warned about" \
+    || bad "a cross-repo dependency is warned about" "$out"
+  node -e '
+    const t = require(process.argv[1]).tickets;
+    const c = t["T-01-02"];
+    if (c.primary_parent !== null) throw new Error("a foreign parent must not become the cascade parent");
+    if (c.pr_base !== c.epic) throw new Error("pr_base must stay the epic, got " + c.pr_base);
+    if (!c.cross_repo_deps.includes("T-01-01")) throw new Error("cross_repo_deps not recorded");
+  ' "$WORK/crossrepo/.planning/graph/tickets.json" \
+    && ok "a cross-repo parent never becomes a cascade base" \
+    || bad "a cross-repo parent never becomes a cascade base"
+else
+  bad "a cross-repo dependency still validates" "$out"
+fi
+
+# paths that escape the repo root: warn + flag, but do NOT fail the whole gate
+mkproj escapes
+mkdir -p "$WORK/escapes/.planning/phases/01-a"
+plan escapes '01-a/01-PLAN.md' T-01-01 '' '"../other-repo/src/x.ts", "src/ok.ts"' REQ-1
+if out="$(run_validator escapes)"; then
+  grep -q 'point OUTSIDE the repo' <<<"$out" \
+    && ok "a path escaping the repo is surfaced" \
+    || bad "a path escaping the repo is surfaced" "$out"
+  node -e '
+    const t = require(process.argv[1]).tickets;
+    if (t["T-01-01"].unreachable_paths !== true) throw new Error("unreachable_paths flag missing");
+  ' "$WORK/escapes/.planning/graph/tickets.json" \
+    && ok "the ticket is flagged unreachable_paths (state-sync parks it)" \
+    || bad "the ticket is flagged unreachable_paths"
+else
+  bad "an escaping path parks ONE ticket instead of failing Gate 2 for all" "$out"
+fi
+
+# a malformed repo slug is a hard error — it would silently target nothing
+mkproj badrepo
+mkdir -p "$WORK/badrepo/.planning/phases/01-a"
+plan badrepo '01-a/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 low false '' 'repo: not-a-slug'
+rejects badrepo 'is not an owner/name slug' "an invalid delivery.repo value is rejected"
 
 # ── 8. the generated YAML view must be parseable ────────────────────────────
 mkproj globs

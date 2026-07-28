@@ -291,4 +291,29 @@ test('an invalid effort value is rejected with a warning, not honoured', () => {
   assert.ok(warnings.some((w) => /effort/.test(w)));
 });
 
+suite('repos — sibling checkouts a multi-repo phase is driven in');
+
+test('no repos configured → an empty map, not undefined', () => {
+  const { config } = withConfig(undefined);
+  assert.deepStrictEqual(config.repos, {});
+});
+
+test('an owner/name slug with an absolute path is accepted', () => {
+  const { config, warnings } = withConfig({ repos: { 'acme/webapp': '/srv/webapp' } });
+  assert.strictEqual(config.repos['acme/webapp'], '/srv/webapp');
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('a relative path is rejected — the run works from many worktrees', () => {
+  const { config, warnings } = withConfig({ repos: { 'acme/webapp': '../webapp' } });
+  assert.strictEqual(config.repos['acme/webapp'], undefined);
+  assert.ok(warnings.some((w) => /ABSOLUTE/.test(w)));
+});
+
+test('a key that is not owner/name cannot match delivery.repo, so it warns', () => {
+  const { config, warnings } = withConfig({ repos: { webapp: '/srv/webapp' } });
+  assert.deepStrictEqual(config.repos, {});
+  assert.ok(warnings.some((w) => /owner\/name/.test(w)));
+});
+
 done();

@@ -153,6 +153,7 @@ parses ADRs.)
      ticket: T-<NN>-<MM>
      risk: low|medium|high
      human_checkpoint: false
+     # repo: owner/name  ← REQUIRED when the files live in another repository
    ---
    ## Goal / ## Context (Reads) / ## Scope / ## Out of scope /
    ## Acceptance criteria / ## Test strategy / ## Verification commands
@@ -175,8 +176,23 @@ delivery:
   branch: ticket/T-<phase>-<plan>-<slug-from-title>   # can be omitted — validate-graph will generate it
   risk: low|medium|high             # assess from the plan content
   human_checkpoint: true|false      # true is MANDATORY if risk: high
+  repo: owner/name                  # ONLY if the ticket's files live in ANOTHER repository
   # jira: <KEY>                     # do NOT set by hand — Step 5 writes it back after export
 ```
+
+**Multi-repo phases: `repo` is not optional.** If a ticket's files belong to a
+sibling repository (a frontend monorepo, an editor package), declare
+`delivery.repo: owner/name` and write `files_modified` **relative to that repo**.
+Two failure modes this closes, both observed in production:
+- no `repo` → the conveyor watches the wrong repository: the PR merges next door,
+  the board keeps saying `pending`, and every dependent is blocked behind a ticket
+  that can never move;
+- `../other-repo/src/x.ts` paths → an executor works in a `git worktree` and cannot
+  reach them at all; the ticket is a permanent no-op (Gate 2 warns, state-sync
+  parks it).
+Also prefer NOT to make a ticket depend across repos: branches do not cascade
+between repositories, so the child waits for a MERGE. Slice the contract (types,
+tool names, event shapes) into its own small ticket so both sides can proceed.
 
 **Branch naming**: the branch is the ticket title after sanitization:
 lowercase, Cyrillic is transliterated, ALL characters except letters and digits

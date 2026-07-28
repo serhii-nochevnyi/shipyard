@@ -29,8 +29,21 @@ const pr = Number(argv[1]);
 const asJson = argv.includes('--json');
 const force = argv.includes('--force');
 
+// A PR NUMBER means nothing without a repo, and this script resolves the repo
+// from the current directory. In a multi-repo phase that is a live hazard: run it
+// from the wrong checkout and `reinit` posts "@coderabbitai full review" on some
+// unrelated PR that happens to share the number. `--repo owner/name` pins it.
+const repoIdx = argv.indexOf('--repo');
+const REPO = repoIdx === -1 ? null : String(argv[repoIdx + 1] || '');
+if (repoIdx !== -1 && !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(REPO)) {
+  console.error(`reviewers: --repo "${REPO}" is not an owner/name slug`);
+  process.exit(2);
+}
+const REPO_ARG = REPO ? ['--repo', REPO] : [];
+const OWNER_REPO = REPO || '{owner}/{repo}';
+
 if (!['reinit', 'unresolved', 'status'].includes(cmd) || !Number.isInteger(pr) || pr <= 0) {
-  console.error('usage: reviewers.cjs <reinit|unresolved|status> <pr-number> [--json] [--force]');
+  console.error('usage: reviewers.cjs <reinit|unresolved|status> <pr-number> [--json] [--force] [--repo owner/name]');
   process.exit(2);
 }
 
@@ -60,8 +73,8 @@ const isCodeRabbit = (login) => String(login || '').toLowerCase().startsWith(COD
 const isCopilot = (login) => String(login || '').toLowerCase().startsWith('copilot');
 
 function prActivity() {
-  const comments = ghJson(['api', `repos/{owner}/{repo}/issues/${pr}/comments`, '--paginate'], []);
-  const reviews = ghJson(['api', `repos/{owner}/{repo}/pulls/${pr}/reviews`, '--paginate'], []);
+  const comments = ghJson(['api', `repos/${OWNER_REPO}/issues/${pr}/comments`, '--paginate'], []);
+  const reviews = ghJson(['api', `repos/${OWNER_REPO}/pulls/${pr}/reviews`, '--paginate'], []);
   const at = (v) => (v ? Date.parse(v) : 0);
   const latest = (rows, pick) => rows.reduce((max, r) => Math.max(max, at(pick(r))), 0);
 
@@ -116,7 +129,7 @@ if (cmd === 'reinit') {
   const shouldAsk = force || a.lastRequest === 0 || a.lastCodeRabbit > a.lastRequest;
   if (shouldAsk) {
     // tolerated: a repo that rejects PR comments must not abort the babysit round
-    const posted = gh(['pr', 'comment', String(pr), '--body', REVIEW_MARKER], { tolerate: true });
+    const posted = gh(['pr', 'comment', String(pr), ...REPO_ARG, '--body', REVIEW_MARKER], { tolerate: true });
     if (typeof posted === 'string') {
       result.coderabbit = { requested: true, reason: force ? 'forced' : a.lastRequest === 0 ? 'first request' : 'bot responded to the previous request' };
       lines.push(`PR #${pr}: requested CodeRabbit full review`);
@@ -130,7 +143,7 @@ if (cmd === 'reinit') {
   }
 
   const copilot = gh(
-    ['api', '-X', 'POST', `repos/{owner}/{repo}/pulls/${pr}/requested_reviewers`,
+    ['api', '-X', 'POST', `repos/${OWNER_REPO}/pulls/${pr}/requested_reviewers`,
      '-f', `reviewers[]=${COPILOT_BOT}`],
     { tolerate: true }
   );
@@ -148,7 +161,9 @@ if (cmd === 'reinit') {
 }
 
 // cmd === 'unresolved'
-const repo = JSON.parse(gh(['repo', 'view', '--json', 'owner,name']));
+const repo = REPO
+  ? { owner: { login: REPO.split('/')[0] }, name: REPO.split('/')[1] }
+  : JSON.parse(gh(['repo', 'view', '--json', 'owner,name']));
 const query = `
 query($owner: String!, $name: String!, $pr: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {

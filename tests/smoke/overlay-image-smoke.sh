@@ -13,7 +13,7 @@ for f in commands/route.md commands/investigate.md commands/decompose.md command
          scripts/validate-graph.cjs scripts/state-sync.cjs scripts/reviewers.cjs \
          scripts/validate-inv.cjs scripts/ticket-worktree.sh scripts/epic-branch.sh \
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
-         scripts/frontmatter.cjs scripts/pipeline-config.cjs \
+         scripts/frontmatter.cjs scripts/pipeline-config.cjs scripts/front.cjs \
          workflows/drift-gate.mjs workflows/executors.mjs workflows/fix-round.mjs; do
   [[ -f "plugins/delivery-pipeline/$f" ]] || { echo "missing delivery-pipeline $f"; exit 1; }
 done

@@ -14,6 +14,12 @@
 // files_modified overlap between dependency-unordered tickets, high risk =>
 // human_checkpoint. Exits non-zero with an explicit error list when invalid.
 //
+// A ticket may target ANOTHER repository (`delivery.repo: owner/name`) — a phase
+// that spans a backend and a frontend repo is normal. The repo is part of the
+// graph's semantics, not decoration: branches do not exist across repos, so a
+// dependency that crosses one cannot cascade (it has to MERGE first), and two
+// tickets in different repos never "overlap" on an identical path.
+//
 // Every problem is COLLECTED and reported together: a malformed plan must not
 // hide the other nine. The frontmatter parser lives in ./frontmatter.cjs.
 
@@ -73,6 +79,20 @@ function branchFor(id, title) {
   return slug ? `ticket/${id}-${slug}` : `ticket/${id}`;
 }
 const BRANCH_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9._/-]*[a-zA-Z0-9])?$/;
+const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+// A path that leaves the repo root can never be delivered: the executor works in
+// a `git worktree` whose parent directory is the worktree ROOT, so
+// `../other-repo/x.ts` resolves to nothing there — which is how tickets aimed at
+// a sibling checkout became permanent no-ops (the run kept them "ready", the
+// executor found nothing, the front never emptied honestly).
+// This is a WARNING plus a flag, not a Gate 2 error: an unreachable path breaks
+// ONE ticket, and failing the gate would stop delivery for every valid ticket in
+// the graph. state-sync parks the flagged ticket with this reason instead.
+function escapesRepo(f) {
+  const s = String(f);
+  return s.startsWith('/') || s === '..' || s.startsWith('../') || s.split('/').includes('..');
+}
 
 // --- collect plans ---
 if (!fs.existsSync(PHASES_DIR)) fail(`missing ${path.relative(ROOT, PHASES_DIR)} — run decomposition first`);
@@ -142,8 +162,13 @@ for (const file of planFiles.sort()) {
     // optional projection into an external tracker (written back by
     // /shipyard:decompose Step 5); pass-through only — never a Gate 2 input
     jira: delivery.jira != null ? String(delivery.jira) : null,
+    // null = the project's own repo (where .planning/ lives)
+    repo: delivery.repo != null && String(delivery.repo).trim() ? String(delivery.repo).trim() : null,
     declaredWave: Number.isInteger(fm.wave) ? fm.wave : null,
   };
+  if (tickets[id].repo && !REPO_RE.test(tickets[id].repo)) {
+    errors.push(`${id}: delivery.repo "${tickets[id].repo}" is not an owner/name slug (e.g. pdffiller/jsfiller)`);
+  }
   if (delivery.branch && (!BRANCH_RE.test(delivery.branch) || String(delivery.branch).includes('..'))) {
     errors.push(`${id}: delivery.branch "${delivery.branch}" contains invalid characters — expected form: ${branchFor(id, title)}`);
   }
@@ -163,6 +188,32 @@ for (const file of planFiles.sort()) {
       }
       if (/#/.test(f)) {
         errors.push(`${id}: files_modified entry "${f}" contains "#" — a YAML trailing comment leaked into the value; move the comment onto its own line`);
+      }
+      if (escapesRepo(f)) tickets[id].unreachable_paths = true;
+    }
+    if (tickets[id].unreachable_paths) {
+      const outside = tickets[id].files.filter(escapesRepo);
+      warnings.push(
+        `${id}: ${outside.length} of ${tickets[id].files.length} files_modified entries point OUTSIDE the repo ` +
+        `(e.g. "${outside[0]}") — a worktree executor cannot reach them, so this ticket cannot be delivered as ` +
+        'written. If the work belongs to another repository, declare `delivery.repo: <owner>/<name>` and list the ' +
+        'paths relative to THAT repo. state-sync parks the ticket until then.'
+      );
+    }
+    // A ticket whose paths all live under a top-level directory this repo does
+    // not have is the signature of an undeclared foreign-repo ticket — the exact
+    // shape that reads as `pending` forever while its PR is green elsewhere.
+    if (!tickets[id].repo && !tickets[id].unreachable_paths) {
+      const missing = [...new Set(tickets[id].files
+        .map((f) => globPrefix(f).split('/')[0])
+        .filter((seg) => seg && !seg.includes('*')))]
+        .filter((seg) => !fs.existsSync(path.join(ROOT, seg)));
+      if (missing.length && missing.length === new Set(tickets[id].files.map((f) => globPrefix(f).split('/')[0])).size) {
+        warnings.push(
+          `${id}: every files_modified path is under "${missing.join('", "')}", which does not exist in this repo — ` +
+          'if the ticket targets another repository declare `delivery.repo: <owner>/<name>`, otherwise ignore this ' +
+          '(a brand-new top-level directory looks the same). An undeclared foreign ticket can never leave `pending`.'
+        );
       }
     }
   }
@@ -254,6 +305,10 @@ if (acyclic) {
       const a = tickets[ids[i]];
       const b = tickets[ids[j]];
       if (ancestors[a.id].has(b.id) || ancestors[b.id].has(a.id)) continue;
+      // Different repositories = different file systems: an identical path in two
+      // repos is not a conflict, and treating it as one would force a bogus
+      // dependency between a backend and a frontend ticket.
+      if ((a.repo || null) !== (b.repo || null)) continue;
       for (const fa of a.files) {
         for (const fb of b.files) {
           if (overlaps(fa, fb)) {
@@ -304,17 +359,24 @@ for (const id of order) {
 const epics = {};
 for (const id of order) {
   const t = tickets[id];
-  if (!epics[t.phase]) epics[t.phase] = { branch: `epic/${t.phaseDir}`, base: null, phaseDir: t.phaseDir };
+  if (!epics[t.phase]) epics[t.phase] = { branch: `epic/${t.phaseDir}`, base: null, phaseDir: t.phaseDir, repos: [] };
   else if (epics[t.phase].phaseDir !== t.phaseDir) {
     warnings.push(`phase ${t.phase} spans two directories (${epics[t.phase].phaseDir}, ${t.phaseDir}) — the epic branch is cut from the first one; keep one directory per phase`);
   }
+  // One epic branch NAME per phase, but it has to exist in every repo the phase
+  // touches — each repo integrates its own slice through its own epic PR.
+  if (!epics[t.phase].repos.includes(t.repo || null)) epics[t.phase].repos.push(t.repo || null);
 }
-// primary parent = deepest same-phase dependency (tie-break: lowest id). Only
-// same-phase deps cascade; a CROSS-phase dependency cannot stack onto a branch
-// in another epic, so it is only satisfied once its own phase has landed on the
-// default branch (state-sync enforces that; here we make the coupling visible).
+// primary parent = deepest same-phase, SAME-REPO dependency (tie-break: lowest
+// id). Cascading means "PR into the parent's branch", and a branch does not
+// exist outside its own repo — a cross-REPO parent (even in the same phase)
+// therefore cannot be cascaded from and must merge first. Getting this wrong
+// produced a `pr_base` pointing at a branch in another repository, so
+// `gh pr create --base …` failed and the ticket stalled with no recovery path.
+// A CROSS-phase dependency likewise cannot stack onto a branch in another epic:
+// it is satisfied only once its own phase has landed on the default branch.
 function primaryParent(t) {
-  const same = t.depends_on.filter((d) => tickets[d] && tickets[d].phase === t.phase);
+  const same = t.depends_on.filter((d) => tickets[d] && tickets[d].phase === t.phase && (tickets[d].repo || null) === (t.repo || null));
   if (!same.length) return null;
   return same.slice().sort((a, b) => depth[b] - depth[a] || (a < b ? -1 : 1))[0];
 }
@@ -323,8 +385,17 @@ for (const id of order) {
   t.epic = epics[t.phase].branch;
   t.primary_parent = primaryParent(t);
   t.pr_base = t.primary_parent ? tickets[t.primary_parent].branch : t.epic;
-  const same = t.depends_on.filter((d) => tickets[d] && tickets[d].phase === t.phase);
-  t.cross_phase_deps = t.depends_on.filter((d) => tickets[d] && tickets[d].phase !== t.phase);
+  const same = t.depends_on.filter((d) => tickets[d] && tickets[d].phase === t.phase && (tickets[d].repo || null) === (t.repo || null));
+  t.cross_repo_deps = t.depends_on.filter((d) => tickets[d] && (tickets[d].repo || null) !== (t.repo || null));
+  t.cross_phase_deps = t.depends_on.filter((d) => tickets[d] && tickets[d].phase !== t.phase && (tickets[d].repo || null) === (t.repo || null));
+  if (t.cross_repo_deps.length) {
+    warnings.push(
+      `${id}: dependency on ${t.cross_repo_deps.join(', ')} crosses a repository boundary (${t.repo || 'this repo'} ← ` +
+      `${t.cross_repo_deps.map((d) => tickets[d].repo || 'this repo').join('/')}) — branches do not cascade across repos, so ` +
+      `${id} waits for the parent's PR to MERGE and then PRs into its own epic. Slice contract changes so the consumer ` +
+      'side can be written against the agreed shape instead of waiting.'
+    );
+  }
   if (same.length > 1) {
     warnings.push(
       `${id}: ${same.length} same-phase parents (${same.join(', ')}) — the cascade bases on ${t.primary_parent} only; the others land through the epic. Linearize the chain if ${id} needs every parent's code at once.`
@@ -344,7 +415,7 @@ const view = {
   tickets: {},
 };
 for (const [phase, e] of Object.entries(epics)) {
-  view.epics[phase] = { branch: e.branch, base: e.base };
+  view.epics[phase] = { branch: e.branch, base: e.base, repos: e.repos };
 }
 for (const id of order) {
   const t = tickets[id];
@@ -352,9 +423,12 @@ for (const id of order) {
     title: t.title,
     plan: t.file,
     phase: t.phase,
+    repo: t.repo,
     wave: depth[id],
     depends_on: t.depends_on,
     cross_phase_deps: t.cross_phase_deps,
+    cross_repo_deps: t.cross_repo_deps,
+    unreachable_paths: t.unreachable_paths === true,
     files: t.files,
     risk: t.risk,
     type: t.type,
@@ -386,6 +460,7 @@ const yaml = [`# ${view.generated_by}`, 'epics:'];
 for (const [phase, e] of Object.entries(view.epics)) {
   yaml.push(`  ${yamlScalar(phase)}:`);
   yaml.push(`    branch: ${yamlScalar(e.branch)}`);
+  yaml.push(`    repos: ${yamlList(e.repos || [null])}`);
 }
 yaml.push('tickets:');
 for (const [id, t] of Object.entries(view.tickets)) {
@@ -393,6 +468,7 @@ for (const [id, t] of Object.entries(view.tickets)) {
   yaml.push(`    title: ${yamlScalar(t.title)}`);
   yaml.push(`    plan: ${yamlScalar(t.plan)}`);
   yaml.push(`    phase: ${yamlScalar(t.phase)}`);
+  yaml.push(`    repo: ${yamlScalar(t.repo)}`);
   yaml.push(`    wave: ${t.wave}`);
   yaml.push(`    depends_on: ${yamlList(t.depends_on)}`);
   yaml.push(`    files: ${yamlList(t.files)}`);
