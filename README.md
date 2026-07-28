@@ -87,6 +87,22 @@ high-risk approvals, escalations, and merges. Gaps of days between the three
 stages are fine — each command re-derives its state from artifacts and GitHub,
 not from the chat.
 
+**When the run may stop is code, not judgement.** `state-sync` ends every board
+with the actionable front and a verdict — `fixpoint: NO — 12 item(s) are
+actionable RIGHT NOW` or `fixpoint: YES` — computed by
+`scripts/front.cjs` (also runnable alone, `--json` for the machine view, written to
+`.planning/graph/delivery-front.json`). A PR waiting on CI counts as "not a
+fixpoint" but never as a reason to block: the run serves the rest of the front and
+only waits when that PR is the last thing left.
+
+**A phase can span repositories.** A ticket whose files live in a sibling repo
+declares `delivery.repo: owner/name` in its plan; every GitHub query, epic branch
+and PR is then scoped to that repo, and the board tags it (`T-06-01@acme/webapp`).
+Tracking needs nothing else; *executing* there needs a local checkout —
+`pipeline.repos: {"acme/webapp": "/abs/path"}`. Without the declaration the
+conveyor watches the wrong repository: a PR merges next door while the board says
+`pending` and every dependent stays blocked. Gate 2 warns on that signature.
+
 Full specification: `docs/gsd_multilevel_delivery_pipeline.md`.
 
 ### Agent model policy
@@ -118,7 +134,7 @@ and validated through GSD's tooling, and it wins) and `pipeline.*` (shipyard's
 runtime knobs; note `pipeline` is not a valid GSD config key, so edit the file
 directly). Keys: `model_policy` (GSD's own `budget`/`quality` names work as
 aliases), `models`, `effort`, `max_attempts`, `pr_fetch_limit`,
-`integration_mode`, `use_workflow`, `graph_gate`, `jira`.
+`integration_mode`, `use_workflow`, `graph_gate`, `jira`, `repos`.
 
 The conveyor also **obeys GSD's own settings** rather than second-guessing them:
 `git.base_branch` decides where epics are cut from and where the integration PR

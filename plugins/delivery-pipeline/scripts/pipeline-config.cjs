@@ -62,6 +62,11 @@ const DEFAULTS = {
   graph_gate: true,                   // mirrors the capability's declared key
   models: {},                         // per-role override → tier alias
   effort: {},                         // per-role override → effort level
+  // Sibling repositories the graph delivers into ("owner/name" → absolute local
+  // checkout path). Tracking a foreign repo needs nothing but `delivery.repo` on
+  // the ticket; EXECUTING there needs a local checkout, because worktrees,
+  // commits and pushes are local git operations.
+  repos: {},
   jira: { enabled: true, project: null, issue_type: 'Task', epic_issue_type: 'Epic' },
 };
 
@@ -100,7 +105,7 @@ function loadConfig(root) {
   // over pipeline.* for any key present in both.
   const merged = { ...obj(raw.pipeline), ...obj(raw.delivery_pipeline) };
 
-  const cfg = { ...DEFAULTS, jira: { ...DEFAULTS.jira }, models: {}, effort: {} };
+  const cfg = { ...DEFAULTS, jira: { ...DEFAULTS.jira }, models: {}, effort: {}, repos: {} };
   for (const [key, value] of Object.entries(merged)) {
     if (!KNOWN_KEYS.has(key)) {
       warnings.push(`unknown pipeline config key "${key}" — ignored (known: ${[...KNOWN_KEYS].sort().join(', ')})`);
@@ -127,6 +132,24 @@ function loadConfig(root) {
           continue;
         }
         cfg.models[role] = tier;
+      }
+      continue;
+    }
+    if (key === 'repos') {
+      for (const [slug, local] of Object.entries(obj(value))) {
+        if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(slug)) {
+          warnings.push(`pipeline.repos."${slug}" is not an owner/name slug — ignored (it must match delivery.repo in the plans)`);
+          continue;
+        }
+        if (typeof local !== 'string' || !local) {
+          warnings.push(`pipeline.repos."${slug}" must be a path to the local checkout — ignored`);
+          continue;
+        }
+        if (!path.isAbsolute(local)) {
+          warnings.push(`pipeline.repos."${slug}" = "${local}" is relative — the conveyor runs from several worktrees, so it must be an ABSOLUTE path`);
+          continue;
+        }
+        cfg.repos[slug] = local;
       }
       continue;
     }

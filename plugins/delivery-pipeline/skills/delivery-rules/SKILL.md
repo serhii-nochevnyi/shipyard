@@ -30,7 +30,18 @@ language; English is for the artifacts, the user's language is for conversation.
      ticket: T-<phase>-<plan>
      risk: low|medium|high        # high REQUIRES human_checkpoint: true
      human_checkpoint: false
+     repo: owner/name             # ONLY when the work lives in another repository
    ```
+
+   **`repo` is mandatory for any ticket that does not touch this repo.** Omit it
+   and the conveyor tracks the ticket against the wrong repository: its PR can be
+   green and merged next door while the board says `pending` forever, and every
+   dependent stays blocked behind a ticket that will never move. Paths in
+   `files_modified` are then relative to THAT repo — never `../other-repo/x.ts`,
+   which no worktree can reach (Gate 2 warns, state-sync parks the ticket).
+   Cross-repo dependencies do not cascade: the parent must MERGE first, so slice
+   the contract side (types/tool names) into its own ticket rather than making the
+   consumer wait for a full feature.
 
 3. **Do not invent branch names.** The canonical branch is
    `ticket/<ID>-<slug>` where the slug is the sanitized ticket title

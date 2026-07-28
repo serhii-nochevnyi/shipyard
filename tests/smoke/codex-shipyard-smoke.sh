@@ -48,7 +48,7 @@ grep -q 'codex_skill_adapter' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "mis
 
 # bundle payload carries the deterministic scripts (incl. the telemetry layer)
 # and they are valid node — the deliver skill calls them via the rewritten root
-for f in scripts/state-sync.cjs scripts/reviewers.cjs scripts/validate-graph.cjs \
+for f in scripts/state-sync.cjs scripts/reviewers.cjs scripts/validate-graph.cjs scripts/front.cjs \
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
          scripts/ticket-worktree.sh scripts/epic-branch.sh; do
   [[ -f "$CODEX_HOME/shipyard/$f" ]] || { echo "bundle missing $f"; exit 1; }

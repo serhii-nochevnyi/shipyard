@@ -29,29 +29,64 @@ at any time and restarted with `/shipyard:deliver` without any loss.
 ## Principle: move toward the fixpoint (don't stop while there's somewhere to go)
 
 Your job is to drive the scope to completion, NOT to report the first blocker and
-halt. After every `state-sync.cjs`, compute the **actionable front**:
+halt. **You do not compute the stop condition — `state-sync.cjs` does**, and it
+prints the verdict as its last lines:
 
 ```text
-actionable = { ready tickets in scope, not yet started }
-           ∪ { branched tickets in scope with no PR yet — status branched-needs-pr }
-           ∪ { open PRs in scope, not yet green and NOT blocked }
+front: 12 actionable now — execute: T-05-01, … | fix: T-06-03 | finalize: T-06-05
+waiting: ci: T-06-02 | merge (human): T-02-02
+fixpoint: NO — 12 item(s) are actionable RIGHT NOW. Ending the run here is a defect.
 ```
 
-`branched-needs-pr` is a real bucket on the board, not a curiosity: a branch that
-was pushed before its PR was opened (an executor died between the two) is
-unfinished work. Leaving it out of the front made a run report "fixpoint" while a
-ticket sat idle forever. Pick those up at Step 3 — the code may already be there;
-run the did-work gate and open the PR.
+The same structure is written to `.planning/graph/delivery-front.json`
+(`front.cjs` — re-runnable on its own, `--json` for the machine view). The buckets:
 
-- `actionable` NOT empty → **keep going** (execute ready ones, babysit open PRs).
-- `actionable` empty → **STOP** and summarize. This is the fixpoint: everything
-  that remains is either green/merged or a genuine blocker.
+```text
+actionable now  execute  — ready, no branch yet          → Step 3
+                publish  — branch pushed, PR missing     → Step 3 phase C
+                fix      — open PR with failing checks   → Step 4a
+                finalize — open PR green: threads, arch-review, conform, undraft
+waiting         ci       — checks still running (NOT a fixpoint; NOT a reason to block)
+                merge/checkpoint — a human's move (fixpoint-compatible)
+parked          blocked  — deps unsatisfied, or parked by this run
+```
+
+- `fixpoint: NO` → **keep going.** Ending the run here is a defect, not a choice.
+- `fixpoint: YES` → STOP and summarize (Step 5). Everything left is merged, a
+  human's move, or a genuine blocker.
+
+Pass what only the SESSION knows back in, or the front will keep re-offering work
+you already gave up on: `state-sync.cjs --parked T-04-01,T-05-07` for tickets you
+parked this run (agent returned `escalate`, attempts > MAX). That is the one input
+the script cannot get from GitHub.
+
+`branched-needs-pr`/`publish` is a real bucket, not a curiosity: a branch that was
+pushed before its PR was opened (an executor died between the two) is unfinished
+work. Leaving it out of the front made a run report "fixpoint" while a ticket sat
+idle forever. Pick those up at Step 3 — the code may already be there; run the
+did-work gate and open the PR.
 
 **A blocker PARKS a ticket, it does not halt the run.** When a ticket becomes
 `blocked` (escalate, attempts>MAX, adr-outdated, drift, needs a human) — mark it,
 note the reason, and **move on to the rest of the front**. Never end the run while
 there is even a single actionable element anywhere in the graph. Stopping is legal
 only when the front is empty: everything is delivered OR only blockers remain.
+
+**The two ways runs have actually broken this rule** (both observed, both cost a
+whole session's motion — recognize them in yourself):
+
+1. **Serializing on CI.** You push a fix and then wait for `gh pr checks --watch`
+   while `execute:`/`fix:` items sit untouched. Waiting is legal ONLY when that PR
+   is the last thing left (`front: 0 actionable now` + `waiting: ci`). Otherwise:
+   leave it in `waiting: ci`, go serve the front, and pick it up on the next
+   state-sync. "I'll do the rest after the merge" is the same defect wearing a
+   different hat.
+2. **Reading a human gate as "do nothing".** `human_checkpoint: true` and
+   "show me before you open the PR" gate the **publish/merge step only** — never
+   the work. Drive the ticket all the way to the gate: worktree, code, verify,
+   commit, rebase onto the current base, arch-review — and bring the human a
+   concrete diff. Parking a checkpoint ticket with nothing done is not respecting
+   the gate, it is skipping the work.
 
 The cascade produces motion even in chains: as soon as a ticket's PR is
 `pr-open`/`branched`, its children become `ready` — after each state-sync PICK
@@ -134,7 +169,8 @@ Config lives in `.planning/config.json` under **two** namespaces, both read by
 Keys: `model_policy` (`economy | balanced (default) | premium`; GSD's own
 `budget`/`quality` names are accepted as aliases), `models`, `effort`,
 `max_attempts` (5), `pr_fetch_limit`, `stale_merge_hours`, `stale_draft_hours`,
-`integration_mode`, `use_workflow`, `graph_gate`, `jira`.
+`integration_mode`, `use_workflow`, `graph_gate`, `jira`, `repos`
+(`{"owner/name": "/abs/path/to/checkout"}` — see the multi-repo section).
 
 **GSD's own settings the conveyor obeys** (read, never written):
 - `git.base_branch` — the project's integration branch. It OUTRANKS the repo
@@ -161,9 +197,10 @@ exists):
 
 ```text
 node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-graph.cjs
-node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs
+node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs [--parked <T,T>]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/front.cjs [--json] [--parked <T,T>]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve | model <role> [flags]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved|status> <pr> [--json]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved|status> <pr> [--json] [--repo owner/name]
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|root|list [--json]> ...
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|pr|status|retarget> ...
 node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...]
@@ -200,6 +237,46 @@ parent's branch is deleted — the command idempotently finishes the job).
 `direct-to-main` (legacy): a dependent waits for the parent's MERGE; the base is
 main or the branch of the deepest unmerged dependency (stacked). Use only when
 explicitly chosen.
+
+## Multi-repo phases (a ticket can live in ANOTHER repository)
+
+A phase that spans a backend and a frontend repo is normal. The ticket declares it
+in its plan — `delivery.repo: owner/name` — and Gate 2 carries it into
+`tickets.json` (`repo`; `null` = this project's repo, where `.planning/` lives).
+state-sync then scopes every GitHub query to the ticket's own repo and tags the
+board (`T-06-01@pdffiller/jsfiller`).
+
+**Why this is not cosmetic.** A ticket whose repo is undeclared reads as `pending`
+forever — its PR can be green and merged in the sibling repo and the conveyor will
+never see it, so its dependents stay blocked and the front empties out while a
+third of the graph is deliverable. That exact state cost a phase most of a day.
+Gate 2 now warns on the signature (`every files_modified path is under "packages",
+which does not exist in this repo`) — treat that warning as a bug in the plan.
+
+Consequences you must honour:
+- **Branches never cascade across repos.** A cross-repo parent must be MERGED
+  (state-sync says so in `blocked_reasons`); the child then PRs into its OWN
+  repo's epic. Never pass a foreign branch to `--base` — the create just fails.
+- **One epic NAME per phase, one epic BRANCH per repo.** Run
+  `epic-branch.sh ensure <epic>` inside EACH repo the phase touches
+  (`tickets.json.epics[<phase>].repos`), and finalize one integration PR per repo.
+- **Every git/gh call runs in the ticket's repo.** The scripts are cwd-based, so
+  `cd` into that checkout (or `git -C`) before `ticket-worktree.sh` /
+  `epic-branch.sh`; `gh` calls take `--repo owner/name`. Worktrees land in that
+  repo's own `.wt-<repo-name>/` root — do not try to share one root.
+  **A PR number alone is ambiguous across repos**: always pass
+  `reviewers.cjs … --repo <owner/name>` for a foreign PR, or `reinit` posts
+  "@coderabbitai full review" on whatever unrelated PR shares that number here.
+- **Tracking is free, EXECUTING needs a local checkout.** Configure it:
+  `pipeline.repos: {"pdffiller/jsfiller": "/abs/path/to/jsfiller"}` (absolute —
+  the run works from many worktrees). state-sync prints a `⚠ repo … has no local
+  checkout configured` line when it is missing: those tickets can be tracked but
+  not driven, and saying so is mandatory, not optional.
+- **`.planning/` stays in the project repo only.** State, plans and the log never
+  get copied into the sibling checkout.
+- A plan whose `files_modified` uses `../other-repo/...` paths is a broken plan,
+  not a multi-repo ticket: a worktree cannot reach them. state-sync parks it with
+  that reason; the fix is `delivery.repo` + repo-relative paths (re-decompose).
 
 ## Telemetry (pipeline log)
 
@@ -355,15 +432,22 @@ itself a STOP signal, not a reason to improvise.
 ```text
 integration mode: epic-stacked (→ main via epic)
 model policy: balanced | workflow: auto | max attempts: 5
-ready:             T-01-01, T-01-04
+ready:             T-01-01, T-01-04, T-01-06@acme/webapp
 branched-needs-pr: T-01-05
 blocked:           T-02-01
   T-02-01 ← awaiting T-01-02 (parent has no branch yet (nothing to cascade from))
 pr-open:  T-01-02 (PR #142, checks: 1 failing, review: CHANGES_REQUESTED)
 merged:   T-01-03
 epic phase 1: epic/01-undo-under-experiment — 3 ahead of main, PR #150 open (draft)
+epic phase 1 [acme/webapp]: epic/01-undo-under-experiment — not created, not started
+repo acme/webapp: 4 ticket(s), checkout /Users/me/src/webapp
 ⚠ stale: T-02-02 PR #444 approved+green — awaiting merge for 26h
+front: 5 actionable now — execute: T-01-01, T-01-04, T-01-06 | publish: T-01-05 | fix: T-01-02
+fixpoint: NO — 5 item(s) are actionable RIGHT NOW. …
 ```
+
+The last two lines are the ones that decide whether the run may end — quote them
+in your progress notes so the human sees the same verdict you are acting on.
 
 The `⚠` lines from state-sync — you MUST show them to the human as a separate
 "needs attention" block. They are all actionable, never decoration:
@@ -417,7 +501,9 @@ blindly.
 ## Step 3 — Executors (in parallel as they become ready)
 
 **Step 3.0 — epic branch (epic-stacked, once per phase before the first executor).**
-For EACH phase whose tickets are in scope: `epic-branch.sh ensure <epic-branch>`
+For EACH phase whose tickets are in scope — and, when the phase spans repos, once
+per repo (`tickets.json.epics[<phase>].repos`, running the script inside that
+checkout): `epic-branch.sh ensure <epic-branch>`
 (the branch — from `tickets.json.epics[<phase>].branch`; the base — resolved by the
 script: `git.base_branch` from `.planning/config.json` if set, else the repo default).
 Creates the epic off that base and pushes it if it doesn't exist yet; idempotent, and
@@ -436,6 +522,9 @@ the branch exists and only the publish half is missing (skip straight to 5).
 1. `base` = `state[T].base` from `delivery-state.json` (state-sync already computed it:
    root → epic; dependent → the primary parent's branch; merged parent → epic).
    Do NOT construct the base by hand and don't take main directly in epic-stacked.
+   `state[T].repo` present → run every git/gh step of this ticket in THAT repo's
+   checkout (`pipeline.repos`), `gh … --repo <owner/name>`; no checkout configured
+   → the ticket can only be TRACKED: park it and say so.
 2. Preflight (GSD 1.7): if gsd-tools is available —
    `node ~/.claude/gsd-core/bin/gsd-tools.cjs worktree base-check` —
    catches a divergence of HEAD from the fork-base before creating the worktree
@@ -484,7 +573,8 @@ and do not open PRs.
    publisher would make the gate unenforceable.
 6. There are commits → push the branch (`git -C <worktree> push -u origin <branch>`),
    then `gh pr create --base <state[T].base> --head <branch> --draft
-   --title "<T>: <title>" --body <the agent's prBody>`.
+   --title "<T>: <title>" --body <the agent's prBody>` (add
+   `--repo <state[T].repo>` for a foreign-repo ticket).
    `--base` is the RESOLVED base of the ticket (the epic branch for a root; the
    primary parent's branch for a dependent), NOT main directly in epic-stacked.
    PR body: the FIRST line — a machine-readable marker `Ticket: <T>` (a safety net for
@@ -514,7 +604,12 @@ loop:
         failure log: gh run view --log-failed)
        'escalate' from the agent → park `blocked` (note the reason), continue the front
        a push happened → step d
-     pending → wait for the checks to finish (gh pr checks <pr> --watch), then a again
+     pending → do NOT block here. `gh pr checks <pr> --watch` is legal ONLY when
+       state-sync says `front: 0 actionable now` (this PR is the last thing left).
+       Otherwise leave the PR in `waiting: ci`, EXIT this PR's cycle, serve the
+       rest of the front (Step 3/4 for the others), and pick it up on the next
+       state-sync. Serializing the whole run behind one CI queue is the single
+       most expensive stall this pipeline has produced.
      no checks reported at all → state-sync flags it; treat "green" as "nothing ran"
        and say so to the human rather than reporting the PR as verified
 
@@ -582,8 +677,9 @@ parallelizes EXACTLY the fix work of one round. The round order:
    simply shows up as an unchanged red PR.)
 3. For EACH item of the result — `log-event.cjs fix_round ticket=<T> pr=<N>
    outcome=<...> pushed=<...>`; for `pushed:true` — CONFIRM the push against
-   GitHub first (step d), then `attempts += 1` (MAX = `pipeline.max_attempts`)
-   and wait for CI (`gh pr checks --watch`).
+   GitHub first (step d), then `attempts += 1` (MAX = `pipeline.max_attempts`).
+   Then re-run state-sync: if the front still has actionable items, serve THEM
+   while CI runs — only `--watch` when the front is otherwise empty (step a).
 4. Then — step **c** of the cycle (arch-review, `model: opus`) and the conform gate
    for each PR in the main loop, as above. This is judgment and finalization — do
    NOT hand it to Workflow.
@@ -631,8 +727,10 @@ into Step 3/4.
    babysit attempts, no-op rounds, escalations. Name anomalies (many no-ops,
    escalations on low-risk) explicitly — that's the input for tuning the model ladder.
 2. If these were the LAST tickets of the phase (all phase tickets flowed into the epic) →
-   finalize the epic:
-   - make sure the integration PR exists: `epic-branch.sh pr <epic>`;
+   finalize the epic — once per repo the phase touches:
+   - make sure the integration PR exists: `epic-branch.sh pr <epic>` (in each repo's
+     checkout; state-sync's `⚠ epic … has N commit(s) but no PR` line is the trigger
+     and it is actionable work, not a note);
    - an integrator run per `${CLAUDE_PLUGIN_ROOT}/references/integrator.md`
      (`model: opus` — judgment) — the epic diff against the default branch, not the
      individual ticket-PRs → `INTEGRATION.md`;
