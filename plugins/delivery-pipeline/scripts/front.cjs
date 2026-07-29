@@ -18,10 +18,14 @@
 //     publish   — branch pushed, PR missing (an executor died between the two)
 //     fix       — open PR with failing checks
 //     finalize  — open PR, checks green: threads/arch-review/conform gate/undraft
+//     merge     — open PR green + conform, targeting the STACK (epic/parent):
+//                 the sentinel squashes it in (auto-merge only, see below)
 //   waiting (NOT actionable, and NOT a fixpoint either — motion resumes by itself):
 //     ci        — checks still running
 //   parked (compatible with a fixpoint — only a human or a replan moves these):
-//     merge     — green, approved, out of draft: the merge is a human action
+//     merge_human — green, out of draft, but the merge is a human action
+//                   (auto-merge off, direct-to-main, or the PR targets the
+//                   integration branch)
 //     human     — a human_checkpoint ticket that has cleared its gate
 //     blocked   — dependencies unsatisfied, or parked by the run (--parked)
 //     done      — merged
@@ -30,16 +34,27 @@
 // still running is NOT a fixpoint: the round has to come back to it. But it is
 // also not a reason to block — the run serves the rest of the front meanwhile,
 // and only ever `--watch`es when that PR is the last thing left.
+//
+// OWNERSHIP. fix/finalize/merge are the PR SENTINEL's duty (sentinel.cjs), which
+// runs alongside the main loop; execute/publish belong to the main loop. The
+// split matters because it is what lets the run cascade onward while the tail of
+// open PRs is still being driven to green — before it, an unmerged green PR was
+// simply "waiting on a human" and the run declared a fixpoint on top of it.
 
-const ORDER = ['execute', 'publish', 'fix', 'finalize'];
+const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
+const SENTINEL_BUCKETS = ['fix', 'finalize', 'merge'];
 
 // Session-only facts (attempts > MAX, an agent that returned `escalate`) are
 // invisible to state-sync, and a front that keeps re-offering an escalated PR is
 // an infinite babysit loop. The caller passes those ids in.
 function computeFront(tickets, state, opts = {}) {
   const parkedIds = new Set(opts.parked || []);
-  const actionable = { execute: [], publish: [], fix: [], finalize: [] };
-  const waiting = { ci: [], merge: [], human: [] };
+  // Auto-merge is a config decision (pipeline.auto_merge) that state-sync passes
+  // in; the front never guesses it, because the difference is whether an unmerged
+  // green PR is the run's work or a human's.
+  const autoMerge = opts.autoMerge === true;
+  const actionable = { execute: [], publish: [], fix: [], finalize: [], merge: [] };
+  const waiting = { ci: [], merge_human: [], human: [] };
   const parked = { blocked: [], done: [] };
   const why = {};
 
@@ -81,9 +96,25 @@ function computeFront(tickets, state, opts = {}) {
         // only; it never justifies leaving the code unwritten (see deliver.md).
         waiting.human.push(id);
         why[id] = `PR #${s.pr}: human_checkpoint — awaiting approval/merge`;
-      } else if (s.review_decision === 'APPROVED') {
-        waiting.merge.push(id);
+      } else if (autoMerge && s.review_decision !== 'CHANGES_REQUESTED' && gateConform(s) && s.merge_scope === 'stacked') {
+        // The sentinel's merge: into the epic or a parent ticket branch only.
+        // `merge_scope` is set by state-sync; an integration-branch target never
+        // gets it, so a phase can never land on the default branch without a
+        // human. sentinel.cjs re-verifies all of this against live GitHub.
+        actionable.merge.push(id);
+        why[id] = `PR #${s.pr}: green + conform — squash into ${s.pr_base || s.base} (sentinel)`;
+      } else if (autoMerge && gateConform(s) && s.merge_scope !== 'stacked') {
+        waiting.merge_human.push(id);
+        why[id] = `PR #${s.pr}: green + conform, but it targets ${s.pr_base || s.base} — that merge is a human's`;
+      } else if (s.review_decision === 'APPROVED' && !autoMerge) {
+        waiting.merge_human.push(id);
         why[id] = `PR #${s.pr}: approved + green — awaiting merge (human)`;
+      } else if (autoMerge && !gateConform(s)) {
+        // Green and out of draft, but the architecture verdict was never
+        // recorded on the PR. With auto-merge on that trailer IS the gate, so
+        // the run owes the work rather than parking on a human.
+        actionable.finalize.push(id);
+        why[id] = `PR #${s.pr}: green, no \`gate_status: arch-review=conform\` trailer — threads + arch-review still owed`;
       } else {
         // Green, out of draft, not approved: bot/human review is still open, so
         // there are threads to service and an arch-review verdict to record.
@@ -119,16 +150,30 @@ function computeFront(tickets, state, opts = {}) {
     publish: actionable.publish.length,
     fix: actionable.fix.length,
     finalize: actionable.finalize.length,
+    merge: actionable.merge.length,
     ci: waiting.ci.length,
-    merge: waiting.merge.length,
+    merge_human: waiting.merge_human.length,
     human: waiting.human.length,
     blocked: parked.blocked.length,
     done: parked.done.length,
   };
   const actionableCount = ORDER.reduce((n, k) => n + actionable[k].length, 0);
   const fixpoint = actionableCount === 0 && waiting.ci.length === 0;
+  // What the sentinel owns (open PRs) vs what the main loop owns (new tickets).
+  // deliver.md splits the run on exactly this line.
+  const sentinel = {
+    duty: SENTINEL_BUCKETS.flatMap((k) => actionable[k]),
+    waiting_ci: waiting.ci.slice(),
+  };
+  sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0;
 
-  return { actionable, waiting, parked, why, counts, actionable_count: actionableCount, fixpoint };
+  return { actionable, waiting, parked, why, counts, actionable_count: actionableCount, fixpoint, sentinel };
+}
+
+// The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
+// (it survives a squash merge) and parsed by state-sync into state[id].gate.
+function gateConform(s) {
+  return String(((s && s.gate) || {})['arch-review'] || '').toLowerCase() === 'conform';
 }
 
 function blockedWhy(s) {
@@ -150,13 +195,21 @@ function formatFront(front) {
 
   const wparts = [];
   if (front.waiting.ci.length) wparts.push(`ci: ${front.waiting.ci.join(', ')}`);
-  if (front.waiting.merge.length) wparts.push(`merge (human): ${front.waiting.merge.join(', ')}`);
+  if (front.waiting.merge_human.length) wparts.push(`merge (human): ${front.waiting.merge_human.join(', ')}`);
   if (front.waiting.human.length) wparts.push(`checkpoint (human): ${front.waiting.human.join(', ')}`);
   if (wparts.length) lines.push(`waiting: ${wparts.join(' | ')}`);
 
+  // The sentinel's share of the front, named separately: it is the part that a
+  // background guard can take over so the main loop keeps cascading.
+  const s = front.sentinel || { duty: [], waiting_ci: [], clear: true };
+  lines.push(s.clear
+    ? 'sentinel: clear — no open PR needs guarding'
+    : `sentinel: ${s.duty.length} duty${s.duty.length ? ` (${s.duty.join(', ')})` : ''}` +
+      `${s.waiting_ci.length ? ` + ${s.waiting_ci.length} waiting on CI` : ''} — post/keep the guard, do NOT wait on it`);
+
   if (front.fixpoint) {
     lines.push(
-      front.counts.blocked || front.counts.merge || front.counts.human
+      front.counts.blocked || front.counts.merge_human || front.counts.human
         ? 'fixpoint: YES — nothing actionable and no checks running; only human actions and blockers remain → Step 5'
         : 'fixpoint: YES — everything in scope is delivered → Step 5'
     );
@@ -195,7 +248,12 @@ if (require.main === module) {
   const argv = process.argv.slice(2);
   const pIdx = argv.indexOf('--parked');
   const parked = pIdx === -1 ? [] : String(argv[pIdx + 1] || '').split(',').map((s) => s.trim()).filter(Boolean);
-  const front = computeFront(tickets, state, { parked });
+  // auto_merge decides whether an unmerged green PR is the sentinel's work or a
+  // human's, so the standalone CLI has to read it too (state-sync passes it in).
+  const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
+  const { config } = loadConfig(root);
+  const autoMerge = config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
+  const front = computeFront(tickets, state, { parked, autoMerge });
   if (argv.includes('--json')) {
     process.stdout.write(JSON.stringify(front, null, 2) + '\n');
   } else {

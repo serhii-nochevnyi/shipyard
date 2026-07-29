@@ -44,6 +44,7 @@ const { execFileSync, spawnSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { computeFront, formatFront } = require(path.join(__dirname, 'front.cjs'));
+const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -67,7 +68,10 @@ const RUN_PARKED = parkedArg === -1
 // it and a second, open-only pass fills it in (a handful of rows, ~1s). state-sync
 // runs on every babysit round, so its wall time is the conveyor's tick rate.
 const PR_FIELDS = 'number,state,isDraft,headRefName,baseRefName,mergedAt,createdAt,url,title';
-const REVIEW_FIELDS = 'number,reviewDecision';
+// `body` rides along in the open-only pass for the same reason as reviewDecision:
+// it is only read for OPEN PRs (the `gate_status:` trailer the conform gate
+// writes), and pulling bodies across the whole 1000-row window is expensive.
+const REVIEW_FIELDS = 'number,reviewDecision,body';
 
 function fail(msg) {
   console.error(`state-sync: ${msg}`);
@@ -190,9 +194,13 @@ function loadRepo(repo) {
     const reviewRaw = gh(['pr', 'list', ...repoArg(repo), '--state', 'open', '--limit', String(cfg.pr_fetch_limit), '--json', REVIEW_FIELDS], { tolerate: true });
     let rows = [];
     try { rows = JSON.parse(reviewRaw || '[]'); } catch { rows = []; }
-    const byNumber = new Map(rows.map((r) => [r.number, r.reviewDecision || null]));
+    const byNumber = new Map(rows.map((r) => [r.number, r]));
     for (const p of prs) {
-      if (p.state === 'OPEN' && byNumber.has(p.number)) p.reviewDecision = byNumber.get(p.number);
+      if (p.state === 'OPEN' && byNumber.has(p.number)) {
+        const r = byNumber.get(p.number);
+        p.reviewDecision = r.reviewDecision || null;
+        p.body = r.body || '';
+      }
     }
   }
   const branchesRaw = gh(['api', `${apiBase(repo)}/branches`, '--paginate', '--jq', '.[].name'], { tolerate: !!repo });
@@ -211,9 +219,25 @@ for (const r of REPO_IDS) repoData.set(r, loadRepo(r));
 function prsForBranch(repo, branch) {
   // branch-scoped, so a handful of rows: asking for reviewDecision here is cheap
   // and keeps a fallback-matched open PR from looking like it has no review.
-  const out = gh(['pr', 'list', ...repoArg(repo), '--state', 'all', '--head', branch, '--limit', '50', '--json', `${PR_FIELDS},reviewDecision`], { tolerate: true });
+  const out = gh(['pr', 'list', ...repoArg(repo), '--state', 'all', '--head', branch, '--limit', '50', '--json', `${PR_FIELDS},reviewDecision,body`], { tolerate: true });
   if (!out) return [];
   try { return JSON.parse(out); } catch { return []; }
+}
+
+// The conform gate records its verdicts as a `gate_status:` trailer in the PR
+// body precisely so they survive a squash merge and can be re-read by anything.
+// The front and the sentinel both key the "may this land?" decision on it, so it
+// is parsed here once instead of being re-derived per consumer.
+function parseGate(body) {
+  const line = String(body || '').split('\n').reverse().find((l) => /^\s*gate_status:/i.test(l));
+  if (!line) return null;
+  const out = {};
+  for (const part of line.replace(/^\s*gate_status:/i, '').split(',')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    out[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 // ── per-ticket status ───────────────────────────────────────────────────────
@@ -247,6 +271,8 @@ for (const [id, t] of Object.entries(tickets)) {
       entry.url = pr.url;
       entry.pr_base = pr.baseRefName;
       entry.pr_created_at = pr.createdAt;
+      const gate = parseGate(pr.body);
+      if (gate) entry.gate = gate;
       const { rows, none, note } = ghChecks(pr.number, repo);
       entry.checks = {
         total: rows.length,
@@ -352,6 +378,20 @@ for (const [id, t] of Object.entries(tickets)) {
     if (!pp) s.base = t.epic;
     else s.base = state[pp] && state[pp].status === 'merged' ? t.epic : (tickets[pp] ? tickets[pp].branch : t.epic);
     s.epic = t.epic;
+
+    // The sentinel's mandate boundary, computed rather than judged: `stacked`
+    // means the open PR targets this phase's epic or a parent ticket branch IN
+    // ITS OWN REPO, and landing it only moves work within the stack. Anything
+    // else — above all a PR pointed at the integration branch — is `integration`
+    // and stays a human merge, whatever pipeline.auto_merge says.
+    if (s.status === 'pr-open') {
+      const integ = (repoData.get(repoOf(t)) || {}).defaultBranch || DEFAULT_BRANCH;
+      const stackable = new Set([t.epic]);
+      for (const [otherId, other] of Object.entries(tickets)) {
+        if (otherId !== id && repoOf(other) === repoOf(t)) stackable.add(other.branch);
+      }
+      s.merge_scope = s.pr_base && s.pr_base !== integ && stackable.has(s.pr_base) ? 'stacked' : 'integration';
+    }
   } else {
     for (const d of deps) {
       if (!state[d]) continue;
@@ -422,10 +462,6 @@ for (const [id, entry] of Object.entries(state)) {
 }
 
 fs.mkdirSync(GRAPH_DIR, { recursive: true });
-if (transitions.length) {
-  fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
-}
-fs.writeFileSync(STATE, JSON.stringify(state, null, 2) + '\n');
 
 const yaml = ['# generated by state-sync.cjs from live GitHub state — do not edit'];
 for (const [id, s] of Object.entries(state)) {
@@ -434,7 +470,22 @@ for (const [id, s] of Object.entries(state)) {
     yaml.push(`  ${k}: ${typeof v === 'object' && v !== null ? JSON.stringify(v) : JSON.stringify(v)}`);
   }
 }
-fs.writeFileSync(path.join(GRAPH_DIR, 'delivery-state.yaml'), yaml.join('\n') + '\n');
+
+// ── the actionable front and the stop verdict (front.cjs) ───────────────────
+// Computed before the write so state, yaml and front land in ONE locked
+// section: the PR sentinel runs state-sync concurrently with the main loop, and
+// a reader that catches the pair half-updated acts on a state/front mismatch.
+const AUTO_MERGE = cfg.auto_merge === 'epic' && mode === 'epic-stacked';
+const front = computeFront(tickets, state, { parked: RUN_PARKED, autoMerge: AUTO_MERGE });
+
+withLock(lockDirFor(ROOT), 'state', () => {
+  if (transitions.length) {
+    fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
+  }
+  writeAtomic(STATE, JSON.stringify(state, null, 2) + '\n');
+  writeAtomic(path.join(GRAPH_DIR, 'delivery-state.yaml'), yaml.join('\n') + '\n');
+  writeAtomic(FRONT, JSON.stringify({ generated_at: nowIso, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', ...front }, null, 2) + '\n');
+}, { label: 'state-sync' });
 
 // ── board summary on stdout for the /shipyard:deliver skill ──
 function ageH(sinceIso) { return (Date.parse(nowIso) - Date.parse(sinceIso)) / 3_600_000; }
@@ -445,6 +496,10 @@ if (epicNotice) console.log(`note: ${epicNotice}`);
 for (const n of notices) console.log(`⚠ ${n}`);
 console.log(`integration mode: ${mode}${mode === 'epic-stacked' ? ` (→ ${DEFAULT_BRANCH} via epic)` : ` (→ ${DEFAULT_BRANCH})`} [base from ${DEFAULT_BRANCH_SOURCE}]`);
 console.log(`model policy: ${cfg.model_policy} | workflow: ${cfg.use_workflow === false ? 'forced-off' : 'auto'} | max attempts: ${cfg.max_attempts}`);
+console.log(
+  `sentinel: ${cfg.sentinel} | auto-merge: ${AUTO_MERGE ? `epic (ticket PRs → their base; ${DEFAULT_BRANCH} stays a human merge)` : 'off (every merge is a human action)'}` +
+  (cfg.auto_merge === 'epic' && !AUTO_MERGE ? ` — auto_merge is set but ${mode} targets the integration branch directly, so it does not apply` : '')
+);
 if (cfg.gsd.base_branch) {
   console.log(`note: integrating into "${cfg.gsd.base_branch}" per git.base_branch — pass it to epic-branch.sh as the base ref`);
 }
@@ -523,11 +578,9 @@ for (const [id, s] of Object.entries(state)) {
 }
 
 // ── the actionable front and the stop verdict (front.cjs) ───────────────────
-// This is the last thing printed because it is the only line that decides
-// whether the run may end. Prose could not hold this rule: runs serialized on a
-// CI watch and called it a fixpoint while a dozen tickets were executable.
-const front = computeFront(tickets, state, { parked: RUN_PARKED });
-fs.writeFileSync(FRONT, JSON.stringify({ generated_at: nowIso, parked_by_run: RUN_PARKED, ...front }, null, 2) + '\n');
+// Printed last because it is the only line that decides whether the run may
+// end. Prose could not hold this rule: runs serialized on a CI watch and called
+// it a fixpoint while a dozen tickets were executable.
 if (RUN_PARKED.length) console.log(`parked by this run: ${RUN_PARKED.join(', ')}`);
 for (const line of formatFront(front)) console.log(line);
 console.log('wrote .planning/graph/delivery-state.json, delivery-state.yaml and delivery-front.json');

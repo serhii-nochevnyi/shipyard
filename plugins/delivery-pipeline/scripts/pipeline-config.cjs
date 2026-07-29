@@ -54,6 +54,16 @@ const DEFAULTS = {
   integration_mode: 'epic-stacked',   // | direct-to-main
   model_policy: 'balanced',           // economy | balanced | premium
   use_workflow: 'auto',               // auto | false
+  // The PR sentinel: who drives open PRs to green and lands them in the stack
+  // while the main loop cascades onward.
+  //   sentinel:   auto (background guard when the runtime has one, otherwise a
+  //               mandatory duty pass every round) | off (main loop only)
+  //   auto_merge: epic — the sentinel squashes a green+conform ticket PR into
+  //               its base (phase epic or parent ticket branch). The epic →
+  //               integration-branch PR is NEVER auto-merged; that stays human.
+  //               off — every merge is a human's, the pre-sentinel behaviour.
+  sentinel: 'auto',                   // auto | off
+  auto_merge: 'epic',                 // epic | off
   max_attempts: 5,                    // babysit rounds per PR
   pr_fetch_limit: 1000,               // `gh pr list --limit`
   stale_merge_hours: 4,
@@ -72,7 +82,7 @@ const DEFAULTS = {
 
 const KNOWN_KEYS = new Set(Object.keys(DEFAULTS));
 const KNOWN_JIRA_KEYS = new Set(['enabled', 'project', 'issue_type', 'epic_issue_type']);
-const ROLES = ['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research'];
+const ROLES = ['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research', 'pr-sentinel'];
 
 // Judgment roles are never cheapened: there is no mechanical safety net above
 // them, so a false verdict is the most expensive kind of error in the pipeline.
@@ -170,6 +180,26 @@ function loadConfig(root) {
     cfg[key] = value;
   }
 
+  // Enum-ish knobs: a misspelling here decides whether PRs get merged at all, so
+  // it is reported rather than silently coerced to the safe value.
+  if (cfg.auto_merge === true) cfg.auto_merge = 'epic';
+  if (cfg.auto_merge === false) cfg.auto_merge = 'off';
+  if (!['epic', 'off'].includes(cfg.auto_merge)) {
+    warnings.push(`pipeline.auto_merge "${cfg.auto_merge}" is unknown — falling back to off (values: epic | off)`);
+    cfg.auto_merge = 'off';
+  }
+  if (cfg.sentinel === true) cfg.sentinel = 'auto';
+  if (cfg.sentinel === false) cfg.sentinel = 'off';
+  if (!['auto', 'off'].includes(cfg.sentinel)) {
+    warnings.push(`pipeline.sentinel "${cfg.sentinel}" is unknown — falling back to auto (values: auto | off)`);
+    cfg.sentinel = 'auto';
+  }
+  // The sentinel is what performs an auto-merge; without a guard there is nobody
+  // to re-verify the gate against live GitHub, so the pair must stay consistent.
+  if (cfg.sentinel === 'off' && cfg.auto_merge === 'epic') {
+    warnings.push('pipeline.sentinel is off, so nothing can auto-merge — treating pipeline.auto_merge as off (turn the sentinel back on to land ticket PRs automatically)');
+    cfg.auto_merge = 'off';
+  }
   if (!['epic-stacked', 'direct-to-main'].includes(cfg.integration_mode)) {
     warnings.push(`pipeline.integration_mode "${cfg.integration_mode}" is unknown — falling back to epic-stacked`);
     cfg.integration_mode = 'epic-stacked';
@@ -254,6 +284,11 @@ function resolveModel(role, signals = {}, cfg = DEFAULTS) {
       return attempt >= 2 || signals.previousFailed ? 'opus' : 'sonnet';
     case 'review-fix':
       return signals.codeChange === false ? 'sonnet' : 'opus';
+    case 'pr-sentinel':
+      // The guard judges bot feedback AND edits code, but its merge decision is
+      // mechanical (sentinel.cjs enforces the gate), so it follows the same
+      // cheap-first-strike ladder as ci-fix: escalate on a PR that resisted.
+      return attempt >= 2 || signals.previousFailed || risk === 'high' || signals.checkpoint ? 'opus' : 'sonnet';
     case 'drift-check':
       return 'sonnet';
     case 'research':

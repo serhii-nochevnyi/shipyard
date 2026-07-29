@@ -33,8 +33,9 @@ halt. **You do not compute the stop condition — `state-sync.cjs` does**, and i
 prints the verdict as its last lines:
 
 ```text
-front: 12 actionable now — execute: T-05-01, … | fix: T-06-03 | finalize: T-06-05
+front: 12 actionable now — execute: T-05-01, … | fix: T-06-03 | merge: T-06-05
 waiting: ci: T-06-02 | merge (human): T-02-02
+sentinel: 2 duty (T-06-03, T-06-05) + 1 waiting on CI — post/keep the guard, do NOT wait on it
 fixpoint: NO — 12 item(s) are actionable RIGHT NOW. Ending the run here is a defect.
 ```
 
@@ -42,14 +43,21 @@ The same structure is written to `.planning/graph/delivery-front.json`
 (`front.cjs` — re-runnable on its own, `--json` for the machine view). The buckets:
 
 ```text
-actionable now  execute  — ready, no branch yet          → Step 3
-                publish  — branch pushed, PR missing     → Step 3 phase C
-                fix      — open PR with failing checks   → Step 4a
-                finalize — open PR green: threads, arch-review, conform, undraft
+actionable now  execute  — ready, no branch yet          → Step 3   [main loop]
+                publish  — branch pushed, PR missing     → Step 3 phase C [main loop]
+                fix      — open PR with failing checks   → Step 4   [SENTINEL]
+                finalize — green: threads, arch-review, conform, undraft [SENTINEL]
+                merge    — green + conform, targets the stack: squash it in [SENTINEL]
 waiting         ci       — checks still running (NOT a fixpoint; NOT a reason to block)
-                merge/checkpoint — a human's move (fixpoint-compatible)
+                merge (human)/checkpoint — a human's move (fixpoint-compatible)
 parked          blocked  — deps unsatisfied, or parked by this run
 ```
+
+**The front has two owners.** `execute`/`publish` are the main loop's — new
+worktrees, new PRs, the cascade. `fix`/`finalize`/`merge` plus everything waiting
+on CI are the **PR sentinel's** (see the section below): the guard you leave
+behind on the open PRs so the run can keep cascading instead of standing over a
+CI queue. The `sentinel:` line names that split on every board.
 
 - `fixpoint: NO` → **keep going.** Ending the run here is a defect, not a choice.
 - `fixpoint: YES` → STOP and summarize (Step 5). Everything left is merged, a
@@ -76,11 +84,10 @@ only when the front is empty: everything is delivered OR only blockers remain.
 whole session's motion — recognize them in yourself):
 
 1. **Serializing on CI.** You push a fix and then wait for `gh pr checks --watch`
-   while `execute:`/`fix:` items sit untouched. Waiting is legal ONLY when that PR
-   is the last thing left (`front: 0 actionable now` + `waiting: ci`). Otherwise:
-   leave it in `waiting: ci`, go serve the front, and pick it up on the next
-   state-sync. "I'll do the rest after the merge" is the same defect wearing a
-   different hat.
+   while `execute:`/`fix:` items sit untouched. That wait belongs to the SENTINEL,
+   never to the main loop: leave the PR to the guard, go serve `execute`/`publish`,
+   and read the guard's report when it lands. "I'll do the rest after the merge"
+   is the same defect wearing a different hat.
 2. **Reading a human gate as "do nothing".** `human_checkpoint: true` and
    "show me before you open the PR" gate the **publish/merge step only** — never
    the work. Drive the ticket all the way to the gate: worktree, code, verify,
@@ -98,13 +105,86 @@ Human gates (high-risk approval, adr-outdated, merge) are parking "on a human,"
 not blocking the cycle: mark "awaiting human," continue with other tickets, and
 tally everything at the end.
 
+## The PR sentinel (вартовий) — leave a guard, take the next work
+
+The moment a ticket has an open PR, two different jobs exist and they run at
+different speeds: **cascading** (open the children's branches — minutes) and
+**driving that PR to green** (CI rounds, CodeRabbit, Copilot — tens of minutes,
+mostly spent waiting). Doing them in one thread is what produced the two defects
+above. So they are split:
+
+```text
+main loop   execute / publish  — worktrees, executors, new PRs, the cascade
+SENTINEL    fix / finalize / merge / wait-ci — everything about an OPEN PR,
+            until it is merged into the epic, parked, or handed to a human
+```
+
+**Post the guard, then keep moving. Never wait for it.**
+
+- **Background agent (preferred, Claude runtime).** After Step 3 publishes PRs,
+  spawn ONE sentinel with `Agent({ run_in_background: true, subagent_type:
+  'general-purpose', model, ... })` whose prompt is
+  `${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md` plus the guarded ticket list
+  (id, PR, branch, worktree path, repo, base, plan path), the absolute plugin
+  scripts path and `maxAttempts`. Model/effort:
+  `pipeline-config.cjs model pr-sentinel --json [--risk <max risk guarded>]
+  [--attempt <n>]`. Then go straight back to Step 3 for the cascade. Its report
+  arrives as a task notification — fold it into Step 5.
+  Re-post a guard for PRs opened after it started (or hand them to the running
+  one with `SendMessage`); do not leave a PR unguarded.
+- **Fallback: a duty pass every round (Codex, or no background agents).** The
+  mandate does not change, only who executes it: at the TOP of each round, before
+  taking new work, run `sentinel.cjs duty` and serve every actionable item —
+  ci-fix, review-fix, finalize, merge — then continue with `execute`/`publish`.
+  Announce it: `⚠ no background agent → sentinel duty runs inline each round`.
+  `pipeline.sentinel: off` also lands here (no guard, main loop does everything).
+
+**What the sentinel is allowed to do** — the boundary is code, not trust:
+
+```text
+node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs duty   [--json] [--parked T,T] [--scope T,T]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs merge  <ticket|--all> [--dry-run] [--json]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs report [--json] [--since <iso>]
+```
+
+`merge` squashes a ticket PR into **its own base** — the phase epic, or the
+parent ticket's branch — and only when, re-checked against LIVE GitHub: the PR is
+open and undrafted, checks are green, unresolved threads = 0, the body carries
+`gate_status: arch-review=conform`, the review is not CHANGES_REQUESTED, the
+ticket is not `human_checkpoint`, and the base is inside the stack. It then
+retargets cascade children onto the epic and journals a `merge` event. It refuses
+— loudly, with the reason — on anything unproven, and a refusal never aborts the
+guard's other work.
+
+**The epic → integration-branch PR is never auto-merged.** The phase lands on
+`main`/`develop` by a human's hand; that is the whole point of having an epic as
+the quarantine. `sentinel.cjs` will not do it even if asked.
+
+Config (`.planning/config.json`): `pipeline.sentinel` = `auto` (default) | `off`;
+`pipeline.auto_merge` = `epic` (default — ticket PRs land automatically) | `off`
+(every merge is a human's, the pre-sentinel behaviour). `auto_merge` has no effect
+in `direct-to-main`, where a ticket PR targets the integration branch itself.
+state-sync prints both on every run — act on what it prints, don't assume.
+
+**Concurrency is real, so the shared writes are locked.** state-sync replaces
+`delivery-state.json`/`delivery-front.json` atomically under a lock, and
+`ticket-worktree.sh` / `epic-branch.sh` take a git lock around anything that
+writes the shared `.git`. Consequences you must honour:
+- the main loop creates worktrees and branches; the SENTINEL never does. It works
+  only inside the worktrees it was handed.
+- a script may pause a moment waiting for the lock — that is the guard working,
+  not a hang. A `could not acquire the "state" lock` error means a process died
+  mid-write: check for a live sentinel before removing the lock directory.
+- never hand-edit the state files while a guard is running.
+
 ## Agent models — ASK the resolver, do not reason it out
 
 The policy is **role × risk × attempt** routing, and it is now CODE, not prose:
 
 ```text
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs model <role> [--json] [flags]
-  roles: integrator | arch-review | executor | ci-fix | review-fix | drift-check | research
+  roles: integrator | arch-review | executor | ci-fix | review-fix | pr-sentinel
+         | drift-check | research
   flags: --risk low|medium|high  --type <plan type>  --files <n>
          --attempt <n>  --checkpoint  --code-change|--no-code-change  --previous-failed
 ```
@@ -149,6 +229,10 @@ ci-fix         → sonnet   1st attempt on this PR (lint/snapshots/trivial)
 review-fix     → sonnet   threads with no code change (reply/explanation)
                → opus     threads that require a code change
 
+pr-sentinel    → sonnet   first watch over a PR set (same cheap first strike)
+               → opus     attempt ≥ 2, a previous fix that didn't green CI,
+                          risk high, or a checkpoint ticket in the set
+
 drift-check    → sonnet   mechanical reconciliation
 ```
 
@@ -169,7 +253,8 @@ Config lives in `.planning/config.json` under **two** namespaces, both read by
 Keys: `model_policy` (`economy | balanced (default) | premium`; GSD's own
 `budget`/`quality` names are accepted as aliases), `models`, `effort`,
 `max_attempts` (5), `pr_fetch_limit`, `stale_merge_hours`, `stale_draft_hours`,
-`integration_mode`, `use_workflow`, `graph_gate`, `jira`, `repos`
+`integration_mode`, `use_workflow`, `sentinel` (`auto` | `off`), `auto_merge`
+(`epic` | `off`), `graph_gate`, `jira`, `repos`
 (`{"owner/name": "/abs/path/to/checkout"}` — see the multi-repo section).
 
 **GSD's own settings the conveyor obeys** (read, never written):
@@ -199,8 +284,9 @@ exists):
 node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-graph.cjs
 node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs [--parked <T,T>]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/front.cjs [--json] [--parked <T,T>]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs <duty|merge <T|--all>|report> [--json] [--dry-run]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve | model <role> [flags]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved|status> <pr> [--json] [--repo owner/name]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved|feedback|status> <pr> [--json] [--repo owner/name]
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|root|list [--json]> ...
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|pr|status|retarget> ...
 node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...]
@@ -222,8 +308,13 @@ state-sync as the first line — ACT on it, don't guess.
 - **a dependent ticket** → PR **into the primary parent's branch** (cascade),
   without waiting for its merge. The flow does not stop: a ticket is ready as soon
   as the parents have a BRANCH (`branched`+), not a merge.
+- **a green ticket PR is merged into its base by the SENTINEL** (`auto_merge:
+  epic`, the default) as soon as it passes the gate — that is how the epic branch
+  actually accumulates the phase. With `auto_merge: off` it waits for a human
+  instead, and the run reports it as `waiting: merge (human)`.
 - **the phase finale** — one epic PR → the default branch; it is merged by a human
-  after all tickets are green and the integrator has given `passed`.
+  after all tickets are green and the integrator has given `passed`. Never
+  automatically, under any config.
 - each ticket's base is already computed — take it from `delivery-state.json`
   (`state[id].base`): root → epic, dependent → parent's branch, and when the parent
   is already merged — epic (GitHub itself retargets the children of a merged parent).
@@ -294,6 +385,9 @@ fix_round  — for EACH item from a fix-round Workflow result:
 escalation — any escalation to a human:
              log-event.cjs escalation ticket=<T> pr=<N> reason="<concise>"
 ```
+
+`merge` events are written by `sentinel.cjs merge` itself (like status_change) —
+do NOT log them by hand.
 
 A missed event is lost forever (GitHub won't recover it), so the log call goes IN
 THE SAME step where the fact occurred, not "at the end."
@@ -588,7 +682,27 @@ and do not open PRs.
 
 File conflicts between parallel tickets are ruled out by Gate 2.
 
-## Step 4 — Babysit loop (for EACH open PR in scope)
+## Step 4 — Post the sentinel; the babysit loop is ITS contract
+
+As soon as Phase C has opened PRs, hand them to the guard and go back to Step 3
+for the cascade (see "The PR sentinel" above):
+
+```text
+model+effort:  pipeline-config.cjs model pr-sentinel --json [--risk <max guarded>] [--attempt <n>]
+prompt:        ${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md
+             + the guarded list: {ticket, pr, branch, worktreePath, repo, base, planPath}
+             + the absolute scripts path and maxAttempts
+spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose', model, ... })
+```
+
+Then **return to Step 3 immediately.** Do not wait for the guard, do not watch
+CI, do not re-read the PR yourself. New PRs opened later either go to a fresh
+guard or to the running one via `SendMessage`.
+
+The loop below IS the sentinel's contract (`references/pr-sentinel.md` states the
+same rules for the agent). You run it YOURSELF only on the fallback path — no
+background agents, or `pipeline.sentinel: off` — and there it is a duty pass at
+the top of each round, before you take new work, never a place to camp.
 
 Attempt counter per PR: attempts (start 1, MAX = `pipeline.max_attempts`,
 default 5 — state-sync prints the effective value on every run).
@@ -604,17 +718,21 @@ loop:
         failure log: gh run view --log-failed)
        'escalate' from the agent → park `blocked` (note the reason), continue the front
        a push happened → step d
-     pending → do NOT block here. `gh pr checks <pr> --watch` is legal ONLY when
-       state-sync says `front: 0 actionable now` (this PR is the last thing left).
-       Otherwise leave the PR in `waiting: ci`, EXIT this PR's cycle, serve the
-       rest of the front (Step 3/4 for the others), and pick it up on the next
-       state-sync. Serializing the whole run behind one CI queue is the single
-       most expensive stall this pipeline has produced.
+     pending → the SENTINEL waits here (`gh pr checks <pr> --watch`) — that is its
+       job. On the fallback path YOU do not: leave the PR in `waiting: ci`, EXIT
+       this PR's cycle, serve the rest of the front, and pick it up next round.
+       Watching is legal for the main loop only when state-sync says
+       `front: 0 actionable now` and no guard is running. Serializing the whole
+       run behind one CI queue is the single most expensive stall this pipeline
+       has produced.
      no checks reported at all → state-sync flags it; treat "green" as "nothing ran"
        and say so to the human rather than reporting the PR as verified
 
-  b. reviewers.cjs unresolved <pr>
-     there are threads → review-fix agent in the worktree; model+effort from
+  b. reviewers.cjs feedback <pr>   (threads + the bots' PR-level comments +
+     verdicts + engagement — `unresolved` alone is only half of what CodeRabbit
+     and Copilot actually said, and the half they file as issue comments is the
+     half that silently went unaddressed)
+     there is feedback → review-fix agent in the worktree; model+effort from
        `pipeline-config.cjs model review-fix --json [--no-code-change]`
        (reply/explanation only → sonnet; anything needing a code change, or when
         you cannot tell → opus)
@@ -637,7 +755,20 @@ loop:
            human_checkpoint: true  → mark `awaiting-human` (green, but the
              merge/approval is a human's), notify, and CONTINUE the front —
              do NOT block the cycle while waiting
-           human_checkpoint: false → status green
+           human_checkpoint: false → status green → LAND IT:
+             node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs merge <T>
+               merged  → the ticket is IN THE EPIC; the script retargets cascade
+                         children onto the epic and journals the `merge` event.
+                         Next state-sync shows it `merged`; the reaper cleans up
+                         once it is reapable.
+               refused → the printed reason IS the next task (unresolved thread,
+                         missing gate trailer, conflicts). Fix that and come back;
+                         a refusal never ends the watch. EXCEPT `BLOCKED` (branch
+                         protection wants a human) or a base outside the stack —
+                         no work of yours clears those: mark `awaiting-human`,
+                         pass the ticket to `state-sync --parked`, and stop
+                         re-offering it, or the front never empties.
+             auto_merge: off → mark `awaiting-human` and say so in the summary.
          EITHER WAY, exit the cycle of THIS PR (not the run).
 
   d. after EACH push:
@@ -659,8 +790,10 @@ attempt ...` with the actual role/model/outcome; each escalation (step a
 'escalate', adr-outdated in c, attempts > MAX in d) — `log-event.cjs
 escalation ...` at that same moment.
 
-Several open PRs: the **Workflow path** (available and `use_workflow ≠ false`)
-parallelizes EXACTLY the fix work of one round. The round order:
+Several open PRs on the **fallback path** (the guard is inline): the **Workflow
+path** (available and `use_workflow ≠ false`) parallelizes EXACTLY the fix work of
+one duty pass. A background sentinel does not use Workflow — it services its PRs
+itself. The round order:
 
 1. `state-sync.cjs` → for each open PR determine `needsCiFix` (checks
    failing) and `needsReviewFix` (`reviewers.cjs unresolved` > 0). Those that are waiting
@@ -680,9 +813,9 @@ parallelizes EXACTLY the fix work of one round. The round order:
    GitHub first (step d), then `attempts += 1` (MAX = `pipeline.max_attempts`).
    Then re-run state-sync: if the front still has actionable items, serve THEM
    while CI runs — only `--watch` when the front is otherwise empty (step a).
-4. Then — step **c** of the cycle (arch-review, `model: opus`) and the conform gate
-   for each PR in the main loop, as above. This is judgment and finalization — do
-   NOT hand it to Workflow.
+4. Then — step **c** of the cycle (arch-review, `model: opus`), the conform gate
+   and the `sentinel.cjs merge` for each PR in the main loop, as above. This is
+   judgment, finalization and a merge — do NOT hand any of it to Workflow.
 
 **Fallback** (no Workflow): service them one at a time in rounds (a→d for each PR).
 Until each PR is green or park-blocked — and do NOT stop at that: move on to the
@@ -692,17 +825,21 @@ recomputation of the front below.
 1. `state-sync.cjs` — fresh state and board.
 2. Recompute the actionable front (the Principle at the top): new `ready` (unblocked
    children, cascade dependents) + `branched-needs-pr` + open non-green PRs.
-3. Front NOT empty → add the new ready ones to scope, return to Step 2/3 for them and
-   Step 4 for the open PRs. Thus exhaust the graph wave by wave WITHOUT re-asking the
-   human.
-4. Front empty → go to Step 5 (fixpoint).
+3. Front NOT empty → add the new ready ones to scope, return to Step 2/3 for them;
+   the open PRs are the guard's (Step 4 inline only on the fallback path). Thus
+   exhaust the graph wave by wave WITHOUT re-asking the human.
+4. Only `execute`/`publish` are empty but the guard is still working → that is NOT
+   a fixpoint. Report the guard's state, and wait for its report rather than
+   ending the run.
+5. Front empty AND the guard has reported → go to Step 5 (fixpoint).
 
 **Cascade servicing (epic-stacked).** A ticket-PR merges into ITS base
 (the epic for a root, the parent's branch for a dependent) — a direct merge into main
 does not happen. After each parent merge:
 - rerun `state-sync.cjs` — the children of the merged parent will get the base `epic`;
 - retarget their open PRs: `epic-branch.sh retarget <child-pr> <epic>`
-  (GitHub often does this itself; the command is idempotent);
+  (GitHub often does this itself, and `sentinel.cjs merge` does it for the children
+  it can see; the command stays idempotent);
 - when the epic first receives commits (the first ticket flowed in) — open the
   integration PR: `epic-branch.sh pr <epic>` (before there are commits it prints
   `no-diff-yet`, no-op).
@@ -714,15 +851,20 @@ via the loop-back above. Do NOT end while the front is not empty.
 
 ## Step 5 — Completion (only at the fixpoint)
 
-Enter here ONLY when the actionable front is empty: every scope ticket is either
-green/merged or park-blocked/awaiting-human, and no ready ticket remains
-unexecuted. If there is still somewhere to move — it's not Step 5, but a loop-back
-into Step 3/4.
+Enter here ONLY when the actionable front is empty AND the guard is done: every
+scope ticket is either merged/green or park-blocked/awaiting-human, no ready
+ticket remains unexecuted, and the sentinel has reported (`sentinel: clear`, or
+its final report has arrived). If there is still somewhere to move — it's not
+Step 5, but a loop-back into Step 3/4. Ending the run while a guard is still
+driving PRs hands the user a half-truth.
 
-1. A summary in three buckets: **delivered** (green/merged) / **awaiting human**
-   (high-risk approval, merge, adr-outdated) / **blockers** (park-blocked with a
-   reason and what would unblock it). State explicitly that autonomous motion is
-   exhausted and why each blocker remained. Add a metrics summary:
+1. A summary in **four** buckets: **landed** (merged into the epic — the sentinel's
+   `merged:` line, quote it) / **green, awaiting human** (checkpoint approval, an
+   integration-branch merge) / **blockers** (park-blocked with a reason and what
+   would unblock it) / **still moving** (anything the guard handed back mid-CI).
+   State explicitly that autonomous motion is exhausted and why each blocker
+   remained. Fold in the guard's report verbatim where it is more specific than
+   your own view (`sentinel.cjs report`). Add a metrics summary:
    `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs` — time to merge,
    babysit attempts, no-op rounds, escalations. Name anomalies (many no-ops,
    escalations on low-risk) explicitly — that's the input for tuning the model ladder.
@@ -753,9 +895,13 @@ into Step 3/4.
 
 ## Rules
 
-- Merge is done by a human (or the repo's auto-merge policy) — you drive to green.
-  epic-stacked: ticket-PRs merge into their base (epic/parent's branch), the phase
-  lands into the default branch as ONE epic-PR — which is also merged by a human.
+- **Ticket PRs land automatically, the phase does not.** epic-stacked with
+  `auto_merge: epic` (default): the sentinel squashes each green+conform ticket PR
+  into its base (epic/parent branch) through `sentinel.cjs merge` — never by a raw
+  `gh pr merge`, because the gate lives in the script. The phase reaches the
+  default branch as ONE epic-PR, merged by a human, always. `auto_merge: off` or
+  `direct-to-main` → every merge is a human's and you only drive to green.
+- A `human_checkpoint` ticket is never auto-merged, however green it is.
 - Never force-push. Never commit directly into the default branch/epic (only
   via a ticket-PR into the base). The epic branch is moved only by ticket-PR merges.
 - Every state change — via state-sync, not by hand-editing state files.

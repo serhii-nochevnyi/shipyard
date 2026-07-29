@@ -161,7 +161,7 @@ remove-shipyard-claude-hook:
 	./scripts/install-shipyard-claude-hook.sh --remove
 
 # Everything that needs neither Docker nor the network — run this constantly.
-test-fast: test-unit test-graph test-worktree test-docs test-ssh-sync
+test-fast: test-unit test-graph test-worktree test-sentinel test-docs test-ssh-sync
 
 # The full suite (slow: builds images, needs Docker + network + kubectl).
 test: test-fast test-k8s test-base test-overlay test-runtime test-mcp-runtime test-codex-shipyard
@@ -174,6 +174,9 @@ test-graph:
 
 test-worktree:
 	./tests/smoke/worktree-smoke.sh
+
+test-sentinel:
+	./tests/smoke/sentinel-smoke.sh
 
 test-base:
 	./tests/smoke/base-image-smoke.sh

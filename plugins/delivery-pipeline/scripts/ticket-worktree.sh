@@ -26,6 +26,34 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not inside a
 repo_name="$(basename "$repo_root")"
 wt_base="${SHIPYARD_WORKTREE_ROOT:-$(dirname "$repo_root")/.wt-${repo_name}}"
 
+# Serialize everything that writes to the SHARED .git. `git worktree add` and
+# branch creation both take index.lock, and since the PR sentinel guards open PRs
+# CONCURRENTLY with the main loop creating new worktrees, two of them can collide
+# on it. mkdir is atomic on every POSIX filesystem; a holder older than the TTL is
+# presumed dead, so a killed run cannot wedge the next one forever.
+git_dir="$(git -C "$repo_root" rev-parse --git-common-dir)"
+[[ "$git_dir" = /* ]] || git_dir="$repo_root/$git_dir"
+git_lock="$git_dir/shipyard-git.lock"
+
+lock_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+
+acquire_git_lock() {
+  local ttl=120 waited=0
+  while ! mkdir "$git_lock" 2>/dev/null; do
+    if [[ -d "$git_lock" ]] && (( $(date +%s) - $(lock_mtime "$git_lock") > ttl )); then
+      rm -rf "$git_lock"
+      continue
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+    if (( waited > 300 )); then
+      echo "could not acquire $git_lock after 60s — another shipyard process (the PR sentinel?) is mid-operation" >&2
+      return 1
+    fi
+  done
+  trap 'rm -rf "$git_lock"' EXIT INT TERM
+}
+
 # Resolve a base ref that may exist only on the remote. A bare branch name does
 # NOT resolve through `git rev-parse` unless a local ref exists, so a second
 # delivery run (or a fresh clone, or a machine that never created the epic
@@ -48,6 +76,7 @@ case "$cmd" in
     [[ -n "$ticket" && -n "$branch" && -n "$base" ]] || {
       echo "usage: ticket-worktree.sh create <ticket-id> <branch> <base-ref>" >&2; exit 2; }
     wt_dir="$wt_base/$ticket"
+    acquire_git_lock
 
     git -C "$repo_root" fetch origin --prune 1>&2 2>/dev/null || \
       echo "warning: git fetch origin failed — working from the local refs" >&2
@@ -95,6 +124,7 @@ case "$cmd" in
       echo "no worktree for $ticket at $wt_dir — nothing to remove" >&2
       exit 0
     fi
+    acquire_git_lock
     git -C "$repo_root" worktree remove --force "$wt_dir" 1>&2 2>/dev/null || rm -rf "$wt_dir"
     git -C "$repo_root" worktree prune 1>&2 2>/dev/null || true
     echo "removed $wt_dir"

@@ -316,4 +316,52 @@ test('a key that is not owner/name cannot match delivery.repo, so it warns', () 
   assert.ok(warnings.some((w) => /owner\/name/.test(w)));
 });
 
+suite('sentinel + auto_merge — the knobs that decide whether PRs land by themselves');
+
+test('the defaults post a guard and land ticket PRs in the epic', () => {
+  const { config } = withConfig(undefined);
+  assert.strictEqual(config.sentinel, 'auto');
+  assert.strictEqual(config.auto_merge, 'epic');
+});
+
+test('booleans are accepted as the obvious aliases', () => {
+  assert.strictEqual(withConfig({ auto_merge: false }).config.auto_merge, 'off');
+  assert.strictEqual(withConfig({ auto_merge: true }).config.auto_merge, 'epic');
+  assert.strictEqual(withConfig({ sentinel: false }).config.sentinel, 'off');
+});
+
+test('a misspelled auto_merge falls back to OFF and says so — never to merging', () => {
+  const { config, warnings } = withConfig({ auto_merge: 'yes-please' });
+  assert.strictEqual(config.auto_merge, 'off');
+  assert.ok(warnings.some((w) => /auto_merge/.test(w)));
+});
+
+test('no sentinel means nothing can auto-merge — the pair is kept consistent', () => {
+  const { config, warnings } = withConfig({ sentinel: 'off', auto_merge: 'epic' });
+  assert.strictEqual(config.auto_merge, 'off');
+  assert.ok(warnings.some((w) => /nothing can auto-merge/.test(w)));
+});
+
+test('delivery_pipeline.* still wins over pipeline.* for these keys', () => {
+  const { config } = withRaw({ pipeline: { auto_merge: 'epic' }, delivery_pipeline: { auto_merge: 'off' } });
+  assert.strictEqual(config.auto_merge, 'off');
+});
+
+suite('pr-sentinel model routing');
+
+test('the guard starts cheap and escalates like ci-fix', () => {
+  const { config } = withConfig(undefined);
+  assert.strictEqual(resolveModel('pr-sentinel', {}, config), 'sonnet');
+  assert.strictEqual(resolveModel('pr-sentinel', { attempt: 2 }, config), 'opus');
+  assert.strictEqual(resolveModel('pr-sentinel', { risk: 'high' }, config), 'opus');
+  assert.strictEqual(resolveModel('pr-sentinel', { checkpoint: true }, config), 'opus');
+});
+
+test('it is a real role, so an override for it is honoured rather than warned away', () => {
+  const { config, warnings } = withConfig({ models: { 'pr-sentinel': 'opus' } });
+  assert.strictEqual(resolveModel('pr-sentinel', {}, config), 'opus');
+  assert.deepStrictEqual(warnings, []);
+  assert.ok(EFFORTS.includes(resolveEffort('pr-sentinel', 'opus', config)));
+});
+
 done();

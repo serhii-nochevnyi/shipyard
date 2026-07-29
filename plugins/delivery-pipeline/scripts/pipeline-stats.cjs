@@ -129,6 +129,7 @@ if (asJson) {
   console.log(JSON.stringify({
     tickets: rows,
     phases: phaseRows,
+    sentinel_merges: journal.filter((e) => e.event === 'merge').length,
     journal_events: journal.length,
     prs_truncated: prsTruncated,
   }, null, 2));
@@ -159,6 +160,13 @@ for (const p of phaseRows) {
     (p.fix_noop ? `, ${p.fix_noop} no-op fix rounds` : '') +
     (p.escalations ? `, ${p.escalations} escalations` : '')
   );
+}
+// Who actually landed the work. A phase where the sentinel merged nothing while
+// PRs sat green is the signature of auto_merge being off (or of a gate the guard
+// could never satisfy) — worth seeing next to the merge times.
+const landed = journal.filter((e) => e.event === 'merge');
+if (landed.length) {
+  console.log(`sentinel landed ${landed.length} ticket PR(s) into the stack (${[...new Set(landed.map((e) => e.base))].join(', ')})`);
 }
 if (!journal.length) {
   console.log('note: delivery-log.jsonl is empty — attempts/fix-round columns fill up as /shipyard:deliver logs events');

@@ -176,6 +176,7 @@ function main() {
     'drift-check': { sandbox: 'read-only', phase: 2 },
     'review-fix': { sandbox: 'workspace-write', phase: 2 },
     'ci-fix': { sandbox: 'workspace-write', phase: 2 },
+    'pr-sentinel': { sandbox: 'workspace-write', phase: 2 },
     'integrator': { sandbox: 'workspace-write', phase: 2 },
   };
   const emittedAgents = [];
