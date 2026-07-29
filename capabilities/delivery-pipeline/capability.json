@@ -1,7 +1,7 @@
 {
   "id": "delivery-pipeline",
   "role": "feature",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "title": "Delivery pipeline loop gates",
   "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: a blocking plan:post gate runs the ticket-graph validator (Gate 2), so a decomposition without materialized, valid PLAN files cannot pass planning.",
   "tier": "full",
@@ -28,6 +28,16 @@
       "type": "boolean",
       "default": true,
       "description": "Advisory ship:pre agent verdict: check the phase's changes against locked ADR decisions in .planning/architecture/ and surface violations before shipping."
+    },
+    "delivery_pipeline.sentinel": {
+      "type": "string",
+      "default": "auto",
+      "description": "PR sentinel: 'auto' leaves a guard on the open PRs (a background agent where the runtime has one, otherwise a mandatory duty pass each round) so delivery can cascade onward; 'off' keeps every PR in the main loop."
+    },
+    "delivery_pipeline.auto_merge": {
+      "type": "string",
+      "default": "epic",
+      "description": "Ticket-PR landing: 'epic' lets the sentinel squash a green + arch-conform ticket PR into its base (phase epic or parent ticket branch) once the gate is re-verified against live GitHub; 'off' leaves every merge to a human. The epic -> integration-branch PR is NEVER auto-merged, and human_checkpoint tickets are always excluded."
     }
   },
   "steps": [],

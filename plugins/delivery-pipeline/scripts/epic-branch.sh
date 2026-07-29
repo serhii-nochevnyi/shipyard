@@ -38,6 +38,33 @@ default_branch() {
   echo "${d:-main}"
 }
 
+# `ensure` creates a branch and pushes it — a write to the SHARED .git, which the
+# PR sentinel can be touching at the same time from another worktree. Same lock as
+# ticket-worktree.sh, deliberately the same path so the two serialize against each
+# other and not just against themselves.
+git_dir="$(git -C "$repo_root" rev-parse --git-common-dir)"
+[[ "$git_dir" = /* ]] || git_dir="$repo_root/$git_dir"
+git_lock="$git_dir/shipyard-git.lock"
+
+lock_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+
+acquire_git_lock() {
+  local ttl=120 waited=0
+  while ! mkdir "$git_lock" 2>/dev/null; do
+    if [[ -d "$git_lock" ]] && (( $(date +%s) - $(lock_mtime "$git_lock") > ttl )); then
+      rm -rf "$git_lock"
+      continue
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+    if (( waited > 300 )); then
+      echo "could not acquire $git_lock after 60s — another shipyard process (the PR sentinel?) is mid-operation" >&2
+      return 1
+    fi
+  done
+  trap 'rm -rf "$git_lock"' EXIT INT TERM
+}
+
 ahead_by() { # commits on <epic> not yet in <base>, from the remote's view
   local epic="$1" base="$2"
   gh api "repos/{owner}/{repo}/compare/${base}...${epic}" --jq '.ahead_by' 2>/dev/null || echo 0
@@ -47,6 +74,7 @@ case "$cmd" in
   ensure)
     epic="${2:-}"; base="${3:-$(default_branch)}"
     [[ -n "$epic" ]] || { echo "usage: epic-branch.sh ensure <epic-branch> [base-ref]" >&2; exit 2; }
+    acquire_git_lock
     git -C "$repo_root" fetch origin --prune 1>&2
     # `ensure` guarantees BOTH refs: the remote epic and a LOCAL branch tracking
     # it. Ticket worktrees are cut off this name, and a bare branch name that

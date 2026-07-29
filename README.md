@@ -104,8 +104,10 @@ Cold-starts from live GitHub state, shows a ticket board (ready /
 branched-needs-pr / blocked / pr-open / merged), lets you pick the scope to take
 on, then runs each ticket in its own git worktree to its own PR and babysits
 every PR to green: CI fixes, review-comment handling, architecture conformance,
-with CodeRabbit/Copilot re-review after every push. It only comes back to you for
-high-risk approvals, escalations, and merges. Gaps of days between the three
+with CodeRabbit/Copilot re-review after every push. Green ticket PRs are squashed
+into the phase's epic branch by the sentinel (below); it only comes back to you
+for high-risk approvals, escalations, and the one merge that matters — the epic
+into `main`. Gaps of days between the three
 stages are fine — each command re-derives its state from artifacts and GitHub,
 not from the chat.
 
@@ -116,6 +118,22 @@ actionable RIGHT NOW` or `fixpoint: YES` — computed by
 `.planning/graph/delivery-front.json`). A PR waiting on CI counts as "not a
 fixpoint" but never as a reason to block: the run serves the rest of the front and
 only waits when that PR is the last thing left.
+
+**A sentinel guards the PRs while the run cascades on.** The moment tickets have
+PRs, two jobs run at different speeds — opening the next branches (minutes) and
+driving a PR to green (CI rounds, CodeRabbit, Copilot). So the run posts a
+background **PR sentinel** over the open PRs and goes back to the cascade. The
+guard fixes CI, services every reviewer comment (`reviewers.cjs feedback` returns
+threads *and* the bots' PR-level comments), records the arch-review verdict as a
+`gate_status:` trailer, and then **lands the ticket PR in the epic branch** —
+`scripts/sentinel.cjs merge`, which re-verifies the whole gate against live
+GitHub and refuses on anything unproven. It retargets cascade children and
+reports back. Knobs: `pipeline.sentinel` (`auto` | `off`), `pipeline.auto_merge`
+(`epic` | `off`). **The epic → `main` PR is never auto-merged** — the phase lands
+by a human's hand, which is what the epic-as-quarantine is for. Without a
+background-agent runtime (Codex) the same duty runs as a mandatory pass at the
+top of every round. Both writers take a lock: state files are replaced
+atomically, and `git worktree add` is serialized against the guard's pushes.
 
 **A phase can span repositories.** A ticket whose files live in a sibling repo
 declares `delivery.repo: owner/name` in its plan; every GitHub query, epic branch
@@ -539,10 +557,11 @@ kubectl exec -it claude-shipyard-0 -- bash -lc 'cd /workspace && claude --danger
 `make test-fast` needs neither Docker nor the network — run it on every edit:
 
 ```bash
-make test-fast          # unit + graph + worktree + docs + ssh-sync
-make test-unit          # frontmatter parser, model policy, ticket↔PR matching
+make test-fast          # unit + graph + worktree + sentinel + docs + ssh-sync
+make test-unit          # frontmatter parser, model policy, locks, front + sentinel verdicts
 make test-graph         # Gate 2 contract + plan:post gate applicability, on fixtures
 make test-worktree      # epic-branch.sh + ticket-worktree.sh against real git repos
+make test-sentinel      # state-sync → gate/merge_scope → guard duty, against a stubbed gh
 make test-docs          # README + .env.example invariants
 make test-ssh-sync      # sync-local-ssh-config.sh behaviour
 ```

@@ -8,6 +8,12 @@
 //        + re-request Copilot. Idempotent by design (see below).
 //   reviewers.cjs unresolved <pr>
 //        print unresolved review threads as JSON (input for the review-fix agent)
+//   reviewers.cjs feedback   <pr>
+//        EVERYTHING a reviewer said, in one call: unresolved threads + the bots'
+//        PR-level comments (CodeRabbit's summary/nitpick blocks, Copilot's
+//        remarks) + review verdicts + engagement. Threads alone miss the
+//        PR-level half, which is where CodeRabbit files most of its findings —
+//        a fixer working from `unresolved` only never saw them.
 //   reviewers.cjs status     <pr> [--json]
 //        which bot reviewers have ACTUALLY engaged on this PR
 //
@@ -42,8 +48,8 @@ if (repoIdx !== -1 && !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(REPO)) {
 const REPO_ARG = REPO ? ['--repo', REPO] : [];
 const OWNER_REPO = REPO || '{owner}/{repo}';
 
-if (!['reinit', 'unresolved', 'status'].includes(cmd) || !Number.isInteger(pr) || pr <= 0) {
-  console.error('usage: reviewers.cjs <reinit|unresolved|status> <pr-number> [--json] [--force] [--repo owner/name]');
+if (!['reinit', 'unresolved', 'status', 'feedback'].includes(cmd) || !Number.isInteger(pr) || pr <= 0) {
+  console.error('usage: reviewers.cjs <reinit|unresolved|feedback|status> <pr-number> [--json] [--force] [--repo owner/name]');
   process.exit(2);
 }
 
@@ -160,7 +166,7 @@ if (cmd === 'reinit') {
   process.exit(0);
 }
 
-// cmd === 'unresolved'
+// cmd === 'unresolved' | 'feedback'
 const repo = REPO
   ? { owner: { login: REPO.split('/')[0] }, name: REPO.split('/')[1] }
   : JSON.parse(gh(['repo', 'view', '--json', 'owner,name']));
@@ -216,9 +222,69 @@ const unresolved = threads
   }));
 
 const truncatedThreads = unresolved.filter((t) => t.comments_truncated).map((t) => t.url);
-console.log(JSON.stringify({
+const threadReport = {
   pr,
   unresolved_count: unresolved.length,
   truncated_threads: truncatedThreads,
   threads: unresolved,
+};
+
+if (cmd === 'unresolved') {
+  console.log(JSON.stringify(threadReport, null, 2));
+  process.exit(0);
+}
+
+// cmd === 'feedback' — the whole reviewer surface for one PR.
+// Bots do not put everything in resolvable threads: CodeRabbit posts its summary
+// and most nitpicks as PR-level issue comments, and a Copilot verdict lives on
+// the review, not on a thread. A fixer that only read `unresolved` silently
+// skipped them, which is how "green with 0 unresolved" coexisted with a page of
+// unaddressed review findings.
+const MAX_BODY = 6000;
+const MAX_ITEMS = 30;
+const clip = (body) => {
+  const s = String(body || '');
+  return s.length > MAX_BODY
+    ? { body: s.slice(0, MAX_BODY), body_truncated: true, body_length: s.length }
+    : { body: s, body_truncated: false, body_length: s.length };
+};
+
+const issueComments = ghJson(['api', `repos/${OWNER_REPO}/issues/${pr}/comments`, '--paginate'], []);
+const reviews = ghJson(['api', `repos/${OWNER_REPO}/pulls/${pr}/reviews`, '--paginate'], []);
+const isBot = (login) => isCodeRabbit(login) || isCopilot(login);
+
+const botComments = issueComments
+  .filter((c) => isBot(c.user && c.user.login))
+  // our own re-review asks are echoed back by nobody, but keep the filter honest
+  .filter((c) => !String(c.body || '').includes(REVIEW_MARKER))
+  .slice(-MAX_ITEMS)
+  .map((c) => ({ author: c.user.login, created_at: c.created_at, url: c.html_url, ...clip(c.body) }));
+
+const verdicts = reviews
+  .filter((r) => r.state && r.state !== 'PENDING')
+  .slice(-MAX_ITEMS)
+  .map((r) => ({
+    author: (r.user && r.user.login) || 'unknown',
+    bot: isBot(r.user && r.user.login),
+    state: r.state,
+    submitted_at: r.submitted_at,
+    url: r.html_url,
+    ...clip(r.body),
+  }));
+
+const activity = prActivity();
+console.log(JSON.stringify({
+  ...threadReport,
+  bot_comments: botComments,
+  bot_comment_count: botComments.length,
+  reviews: verdicts,
+  changes_requested: verdicts.some((v) => v.state === 'CHANGES_REQUESTED'),
+  engagement: {
+    coderabbit: { engaged: activity.lastCodeRabbit > 0, last_activity: activity.lastCodeRabbit ? new Date(activity.lastCodeRabbit).toISOString() : null },
+    copilot: { engaged: activity.lastCopilot > 0, last_activity: activity.lastCopilot ? new Date(activity.lastCopilot).toISOString() : null },
+    last_review_request: activity.lastRequest ? new Date(activity.lastRequest).toISOString() : null,
+    // "no unresolved threads" on a PR a bot never looked at is not a clean bill
+    // of health, and the sentinel has to be able to say which one it is.
+    awaiting_response: activity.lastRequest > Math.max(activity.lastCodeRabbit, activity.lastCopilot),
+  },
 }, null, 2));

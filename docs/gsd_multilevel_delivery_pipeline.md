@@ -404,9 +404,11 @@ for each ticket T from the selected scope in topological order:
   4. local check: verification commands from the ticket
   5. commit → push → gh pr create --base <base> --draft (first line of the body:
      machine-readable "Ticket: <T>")
-  6. babysit loop (6.2) until green
-  7. green → merge into ITS OWN base (epic/the parent's branch) → child PRs are retargeted onto
-     the epic (epic-branch.sh retarget; GitHub often does this itself)
+  6. babysit loop (6.2) until green — owned by the PR sentinel (6.2a), which runs
+     alongside the main loop rather than in front of it
+  7. green → the sentinel merges it into ITS OWN base (epic/the parent's branch)
+     via `sentinel.cjs merge` → child PRs are retargeted onto the epic
+     (GitHub often does this itself; the command finishes the job)
 ```
 
 Parallelism is free: all tickets for which `ready(T)` holds are launched
@@ -422,6 +424,45 @@ etc.) is replaced with a single hyphen, edge hyphens are trimmed, slug length
 by `validate-graph` from the title and ends up in `tickets.yaml`; an explicitly specified
 `delivery.branch` is validated against this same rule (forbidden characters →
 a Gate 2 error). Executors take the name only from `tickets.json`.
+
+### 6.2a. The PR sentinel — who owns an open PR
+
+Opening the next branches takes minutes; driving a PR to green takes CI rounds and
+two bot reviewers. Running both in one thread is what made runs serialize on
+`gh pr checks --watch` and call a pile of unmerged green PRs a fixpoint. So the
+front has two owners:
+
+| owner | buckets | what it does |
+|---|---|---|
+| main loop | `execute`, `publish` | worktrees, executors, new PRs, the cascade |
+| **PR sentinel** | `fix`, `finalize`, `merge`, `wait-ci` | everything about an OPEN PR until it is merged, parked, or handed to a human |
+
+The sentinel is posted as a background agent (`references/pr-sentinel.md`) and the
+run goes straight back to the cascade; where the runtime has no background agents
+(Codex) the same mandate runs as a mandatory duty pass at the top of every round.
+`scripts/sentinel.cjs` is its deterministic core:
+
+- `duty` — one action per open PR (`ci-fix | review-fix | finalize | merge |
+  wait-ci | human | parked`) plus the guard's own stop condition
+  (`sentinel: clear`, which is not the same as the run's fixpoint);
+- `merge <T|--all>` — squash the ticket PR into **its own base**, re-verifying
+  against live GitHub: open, undrafted, checks green, unresolved threads = 0,
+  `gate_status: arch-review=conform` in the body, not CHANGES_REQUESTED, not a
+  `human_checkpoint` ticket, and the base inside the stack. Then it retargets the
+  cascade children and journals a `merge` event. Any refusal is printed with its
+  reason and never aborts the rest of the watch;
+- `report` — what landed, what still needs a human, what is still moving.
+
+**The epic → integration-branch PR is never auto-merged.** That is the point of
+the epic: the phase lands on `main`/`develop` by a human's hand, after the
+integrator's verdict (6.4). Config: `pipeline.sentinel` (`auto` | `off`),
+`pipeline.auto_merge` (`epic` | `off`; no effect in `direct-to-main`).
+
+Because the guard and the main loop write the same files, `state-sync` replaces
+`delivery-state.json`/`delivery-front.json` atomically under a lock, and
+`ticket-worktree.sh`/`epic-branch.sh` serialize everything that writes the shared
+`.git`. The sentinel never creates worktrees or branches — it works only inside
+the ones it was handed.
 
 ### 6.2. Babysit loop — driving the PR to green
 
@@ -456,9 +497,11 @@ loop:
                 commit + push
               → step 4
 
-  2. Reviews: collect actionable comments
-                gh api repos/{o}/{r}/pulls/<pr>/comments   (inline)
-                gh api repos/{o}/{r}/pulls/<pr>/reviews    (verdicts)
+  2. Reviews: collect actionable comments — ALL of them, in one call:
+                reviewers.cjs feedback <pr>
+              (unresolved threads + the bots' PR-level comments + verdicts +
+               engagement. CodeRabbit files most of its findings as issue
+               comments, not threads, so `unresolved` alone is half the story)
               has unresolved → fix agent:
                 ! receiving-code-review discipline: a comment is first
                   verified against the code; an unfounded one gets a
@@ -726,6 +769,9 @@ The pipeline has been reoriented from 1.6.x to 1.7. The key fact from the review
 next documentation: GSD deliberately stops at PR creation (non-goals: no tracker
 integration, no auto-PR-loop, no auto-merge) — the babysit cycle, state resync from
 GitHub, ADR conformance, and the integrator remain the unique value of the overlay.
+The overlay does land ticket PRs itself (6.2a), but only into the phase epic and
+only through a mechanically re-verified gate; the epic → `main` merge stays a
+human's, so GSD's "no auto-merge" boundary is preserved where it matters.
 
 **Already accounted for in the pipeline:**
 
