@@ -31,17 +31,43 @@ function parseArgs(argv) {
 const TABLE_HEADER = /^\s*\[/;
 const OURS = /^\s*\[agents\.shipyard-[^\]]*\]/;
 const BARE_AGENTS = /^\s*\[agents\]\s*$/;
+const FENCE_BEGIN = /^\s*#\s*shipyard-agents:begin\b/;
+const FENCE_END = /^\s*#\s*shipyard-agents:end\b/;
+// The pre-fence fragment header. It belongs to no TOML table, so table-shaped
+// stripping never removed it and each install left another copy. Recognized here
+// so a config polluted by older installs heals on the next run instead of
+// accumulating forever.
+const LEGACY_HEADER = /^\s*#\s*shipyard delivery-pipeline agents\b/;
+// gsd-core's own marker. Its installer's `stripGsdFromCodexConfig` removes
+// "everything from marker to EOF" — so anything appended below it is deleted by
+// the next `gsd-core --codex` install OR uninstall, silently. Appending is
+// therefore not an option: our fragment goes ABOVE this line.
+const GSD_MARKER = /^\s*#\s*GSD Agent Configuration\b/;
 
-// Drop every `[agents.shipyard-*]` table block (header until the next table
-// header or EOF). Returns the remaining lines.
+// Drop everything shipyard owns: the fenced fragment (inclusive), plus — for
+// configs written before the fence existed — every `[agents.shipyard-*]` table
+// block (header until the next table header or EOF) and the legacy header
+// comment. Returns the remaining lines.
 function stripOurBlocks(lines) {
   const kept = [];
   let skipping = false;
-  for (const line of lines) {
-    if (TABLE_HEADER.test(line)) {
-      skipping = OURS.test(line);
+  let fenceEnd = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (i <= fenceEnd) continue;
+    if (FENCE_BEGIN.test(lines[i])) {
+      // Only consume the fence when a matching end exists below it. An
+      // unterminated one (a hand-edited config, an interrupted write) would
+      // otherwise swallow every table after it — deleting the user's own MCP
+      // servers and model settings to fix a duplicated comment.
+      const end = lines.findIndex((l, j) => j > i && FENCE_END.test(l));
+      if (end !== -1) { fenceEnd = end; continue; }
+      continue; // treat the orphan marker as a stray comment: drop just this line
     }
-    if (!skipping) kept.push(line);
+    if (LEGACY_HEADER.test(lines[i])) continue;
+    if (TABLE_HEADER.test(lines[i])) {
+      skipping = OURS.test(lines[i]);
+    }
+    if (!skipping) kept.push(lines[i]);
   }
   return kept;
 }
@@ -59,14 +85,28 @@ function main() {
   // Ensure a bare [agents] parent exists so our sub-tables are valid children.
   // gsd-core normally writes it; guard for a bare/absent config.
   const hasBareAgents = lines.some((l) => BARE_AGENTS.test(l));
-  let body = lines.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
   if (!hasBareAgents) {
-    body = `${body}${body ? '\n\n' : ''}[agents]\nmax_depth = 1`;
+    lines.push('', '[agents]', 'max_depth = 1');
   }
 
-  const merged = `${body}\n\n${fragment}\n`;
+  // Place the fragment ABOVE gsd-core's marker when there is one. Everything
+  // below that marker is gsd-core's to delete — appending at EOF is what made a
+  // routine `gsd-core --codex` upgrade wipe every shipyard agent registration
+  // without a word. Sub-tables preceding their `[agents]` super-table is
+  // out-of-order but valid TOML, and the alternative is losing the block.
+  const markerAt = lines.findIndex((l) => GSD_MARKER.test(l));
+  if (markerAt === -1) {
+    lines.push('', ...fragment.split('\n'));
+  } else {
+    lines.splice(markerAt, 0, ...fragment.split('\n'), '');
+  }
+
+  const merged = `${lines.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '')}\n`;
   fs.writeFileSync(args.config, merged);
-  process.stdout.write(`merged shipyard agents into ${args.config}\n`);
+  process.stdout.write(
+    `merged shipyard agents into ${args.config}` +
+    (markerAt === -1 ? '\n' : ' (above the gsd-core marker)\n')
+  );
 }
 
 main();
