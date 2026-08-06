@@ -277,8 +277,11 @@ On the Workflow path pass the resolved alias per-item
 (`args.tickets[].model`, `args.prs[].model`); differentiate effort too when the
 script supports it: mechanics — low, code/judgment — high.
 
-**The tier aliases are Claude's.** `opus`/`sonnet`/`haiku`/`fable` are what the
-Agent tool validates against, so they only mean anything on the Claude runtime.
+**The tier aliases belong to the Agent tool.** `opus`/`sonnet`/`haiku`/`fable`
+are what that tool validates against, so they mean something only where it
+exists. (Phrased without naming the runtime on purpose — the Codex generator
+substitutes that name in prose, which would inflect this sentence into saying
+the opposite where it matters most.)
 On Codex there is no Workflow tool and no model parameter to pass: each
 `$shipyard-<role>` agent runs under its own `~/.codex/agents/<name>.toml`, which
 deliberately carries NO `model` key, so the host's default applies — matching the
