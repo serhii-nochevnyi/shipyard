@@ -100,6 +100,17 @@ done < <(grep -rhoE "$CODEX_HOME/shipyard/[A-Za-z0-9_./-]+\.(cjs|mjs|sh|md)" "$S
 # the converted deliver skill references the telemetry scripts at the bundle root
 grep -q 'log-event.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "deliver skill lost log-event.cjs reference"; exit 1; }
 grep -q 'pipeline-stats.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "deliver skill lost pipeline-stats.cjs reference"; exit 1; }
+
+# gsd-core's converter substitutes the word "Claude" in prose, so a sentence that
+# contrasts the two runtimes by NAME arrives inverted: "…only mean anything on the
+# Claude runtime" shipped as "…on the the agent runtime", i.e. the opposite of the
+# warning it was. The tell is the doubled article the substitution leaves behind.
+for f in "$SKILLS"/shipyard-*/SKILL.md; do
+  if grep -nE '\b(the|a) the agent\b' "$f"; then
+    echo "$(basename "$(dirname "$f")"): a 'Claude' → 'the agent' substitution mangled a sentence (above). Name the mechanism (the Agent tool / the Workflow tool), not the runtime."
+    exit 1
+  fi
+done
 grep -q 'pipeline-config.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "deliver skill lost the model resolver reference"; exit 1; }
 
 # auto-route lands in the CODEX_HOME being installed into, not a hardcoded ~/.codex
