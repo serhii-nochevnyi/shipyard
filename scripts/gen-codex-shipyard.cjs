@@ -199,13 +199,19 @@ function main() {
 
   // ── config fragment registering our agents (merged non-destructively) ──────
   if (emittedAgents.length) {
-    let frag = '# shipyard delivery-pipeline agents — merged into $CODEX_HOME/config.toml\n';
+    // Fenced with begin/end markers, like the auto-route block in AGENTS.md, so
+    // the merger can remove the WHOLE previous fragment. Table-shaped stripping
+    // alone cannot: a leading comment sits before the first `[agents.shipyard-*]`
+    // header and belongs to no table, so every re-install left another copy of it
+    // behind (three, on a host installed three times).
+    let frag = '# shipyard-agents:begin — delivery-pipeline agents, managed by install-shipyard-codex.sh\n';
     for (const { agentName, description } of emittedAgents) {
       const cfgPath = path.join(codexHome, 'agents', `${agentName}.toml`);
       frag += `\n[agents.${agentName}]\n`;
       frag += `description = ${tomlBasic(description)}\n`;
       frag += `config_file = ${tomlBasic(cfgPath)}\n`;
     }
+    frag += '\n# shipyard-agents:end\n';
     writeFile(path.join(outDir, 'config.fragment.toml'), frag);
   }
 

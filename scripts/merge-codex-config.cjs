@@ -31,17 +31,38 @@ function parseArgs(argv) {
 const TABLE_HEADER = /^\s*\[/;
 const OURS = /^\s*\[agents\.shipyard-[^\]]*\]/;
 const BARE_AGENTS = /^\s*\[agents\]\s*$/;
+const FENCE_BEGIN = /^\s*#\s*shipyard-agents:begin\b/;
+const FENCE_END = /^\s*#\s*shipyard-agents:end\b/;
+// The pre-fence fragment header. It belongs to no TOML table, so table-shaped
+// stripping never removed it and each install left another copy. Recognized here
+// so a config polluted by older installs heals on the next run instead of
+// accumulating forever.
+const LEGACY_HEADER = /^\s*#\s*shipyard delivery-pipeline agents\b/;
 
-// Drop every `[agents.shipyard-*]` table block (header until the next table
-// header or EOF). Returns the remaining lines.
+// Drop everything shipyard owns: the fenced fragment (inclusive), plus — for
+// configs written before the fence existed — every `[agents.shipyard-*]` table
+// block (header until the next table header or EOF) and the legacy header
+// comment. Returns the remaining lines.
 function stripOurBlocks(lines) {
   const kept = [];
   let skipping = false;
-  for (const line of lines) {
-    if (TABLE_HEADER.test(line)) {
-      skipping = OURS.test(line);
+  let fenceEnd = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (i <= fenceEnd) continue;
+    if (FENCE_BEGIN.test(lines[i])) {
+      // Only consume the fence when a matching end exists below it. An
+      // unterminated one (a hand-edited config, an interrupted write) would
+      // otherwise swallow every table after it — deleting the user's own MCP
+      // servers and model settings to fix a duplicated comment.
+      const end = lines.findIndex((l, j) => j > i && FENCE_END.test(l));
+      if (end !== -1) { fenceEnd = end; continue; }
+      continue; // treat the orphan marker as a stray comment: drop just this line
     }
-    if (!skipping) kept.push(line);
+    if (LEGACY_HEADER.test(lines[i])) continue;
+    if (TABLE_HEADER.test(lines[i])) {
+      skipping = OURS.test(lines[i]);
+    }
+    if (!skipping) kept.push(lines[i]);
   }
   return kept;
 }

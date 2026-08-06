@@ -114,6 +114,31 @@ SHIP_AGENTS="$(grep -c '^\[agents\.shipyard-' "$CODEX_HOME/config.toml" || true)
 [[ "$SHIP_AGENTS" -eq "$EXPECTED_AGENTS" ]] \
   || { echo "merge not idempotent (shipyard agents=$SHIP_AGENTS, expected $EXPECTED_AGENTS)"; exit 1; }
 
+# Idempotency is about the WHOLE fragment, not just its tables. Counting tables
+# missed a leading comment that belongs to no table: it survived every strip and
+# a third install left three copies of it. Assert the fence markers are unique,
+# and that no pre-fence legacy header lingers.
+for marker in 'shipyard-agents:begin' 'shipyard-agents:end'; do
+  n="$(grep -c "$marker" "$CODEX_HOME/config.toml" || true)"
+  [[ "$n" -eq 1 ]] || { echo "merge left $n copies of '$marker' (expected 1)"; exit 1; }
+done
+LEGACY="$(grep -c '^# shipyard delivery-pipeline agents' "$CODEX_HOME/config.toml" || true)"
+[[ "$LEGACY" -eq 0 ]] || { echo "legacy fragment header still present ($LEGACY)"; exit 1; }
+
+# A config polluted by pre-fence installs must HEAL, not accumulate: seed the old
+# shape, re-merge, and require it gone.
+printf '\n# shipyard delivery-pipeline agents — merged into $CODEX_HOME/config.toml\n' >> "$CODEX_HOME/config.toml"
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+LEGACY="$(grep -c '^# shipyard delivery-pipeline agents' "$CODEX_HOME/config.toml" || true)"
+[[ "$LEGACY" -eq 0 ]] || { echo "legacy header not cleaned up on re-merge ($LEGACY)"; exit 1; }
+
+# An UNTERMINATED fence must not swallow the rest of the file — the config also
+# holds the user's own MCP servers and model settings.
+printf '\n# shipyard-agents:begin\n\n[mcp_servers.canary]\ncommand = "true"\n' >> "$CODEX_HOME/config.toml"
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+grep -q '^\[mcp_servers.canary\]' "$CODEX_HOME/config.toml" \
+  || { echo "an orphan fence marker swallowed a foreign table"; exit 1; }
+
 # capability installed and self-contained
 cap_list="$(node "$CODEX_HOME/gsd-core/bin/gsd-tools.cjs" capability list 2>/dev/null || true)"
 grep -q 'delivery-pipeline' <<<"$cap_list" || { echo "delivery-pipeline capability not listed"; exit 1; }
