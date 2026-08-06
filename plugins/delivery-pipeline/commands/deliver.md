@@ -939,6 +939,13 @@ driving PRs hands the user a half-truth.
 - A `human_checkpoint` ticket is never auto-merged, however green it is.
 - Never force-push. Never commit directly into the default branch/epic (only
   via a ticket-PR into the base). The epic branch is moved only by ticket-PR merges.
+- **Never hand execution to GSD's wave parallelism.** No `/gsd-execute-phase`, no
+  `/gsd-autonomous`: this loop fans out its own executors, one per ticket, each in a
+  worktree the main loop created and verifies. GSD's `dispatch.isolation` would have
+  IT create worktrees too (on Codex it runs `git worktree` itself), and two
+  orchestrators isolating the same plans is exactly the collision that loses commits.
+  Read-only and single-plan GSD commands stay fine — that is why 4b's
+  `/gsd-code-review --fix` is allowed, and why `workflow.use_worktrees` must be false.
 - Every state change — via state-sync, not by hand-editing state files.
 - Bot reviewers can be wrong: disagreement with justification is a legal
   review-fix result, blind execution is not.

@@ -115,6 +115,13 @@ function loadConfig(root) {
   // over pipeline.* for any key present in both.
   const merged = { ...obj(raw.pipeline), ...obj(raw.delivery_pipeline) };
 
+  // GSD's own `sub_repos` (both the flat and the nested shape it accepts). It is
+  // the declared way to say "this nested checkout belongs to my project", and
+  // findProjectRoot honours it BEFORE its git-boundary guard — so it is the fix
+  // we point at when a `pipeline.repos` path turns out to be nested.
+  const subReposRaw = raw.sub_repos ?? obj(raw.planning).sub_repos;
+  const subRepos = Array.isArray(subReposRaw) ? subReposRaw : [];
+
   const cfg = { ...DEFAULTS, jira: { ...DEFAULTS.jira }, models: {}, effort: {}, repos: {} };
   for (const [key, value] of Object.entries(merged)) {
     if (!KNOWN_KEYS.has(key)) {
@@ -158,6 +165,23 @@ function loadConfig(root) {
         if (!path.isAbsolute(local)) {
           warnings.push(`pipeline.repos."${slug}" = "${local}" is relative — the conveyor runs from several worktrees, so it must be an ABSOLUTE path`);
           continue;
+        }
+        // A sibling checkout NESTED inside this project is the one layout where
+        // GSD's project-root resolution changed under us: since gsd-core 1.9.1
+        // (#2843) findProjectRoot refuses to cross a git-repo boundary, so any
+        // GSD tooling run inside that nested repo no longer sees THIS project's
+        // .planning/ — it resolves to the child repo, silently. GSD's own escape
+        // hatch is `sub_repos`, which is checked before the boundary guard, so
+        // declaring it there restores the crossing deliberately.
+        const rel = path.relative(base, local);
+        const nested = rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+        if (nested && !subRepos.includes(rel.split(path.sep)[0])) {
+          warnings.push(
+            `pipeline.repos."${slug}" = "${local}" is nested inside this project. Since gsd-core 1.9.1, ` +
+            'GSD tooling run there resolves to that repo instead of this project (findProjectRoot no longer ' +
+            `crosses a git-repo boundary). Either check it out outside the project, or add "${rel.split(path.sep)[0]}" ` +
+            'to sub_repos in .planning/config.json so GSD keeps resolving here.'
+          );
         }
         cfg.repos[slug] = local;
       }

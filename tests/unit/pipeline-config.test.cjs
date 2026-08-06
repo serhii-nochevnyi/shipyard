@@ -236,6 +236,32 @@ test('git.branching_strategy "none" is fine; phase/milestone warn about the coll
   }
 });
 
+test('a pipeline.repos checkout nested in the project warns, unless sub_repos claims it', () => {
+  // The project root has to be a real directory for the nesting test to mean
+  // anything, so build the config in place rather than through withRaw.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cfg-'));
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  const write = (raw) => {
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
+    return loadConfig(dir);
+  };
+  const nestedPath = path.join(dir, 'vendor', 'webapp');
+
+  const nested = write({ pipeline: { repos: { 'acme/webapp': nestedPath } } });
+  assert.ok(nested.warnings.some((w) => /nested inside this project/.test(w)), nested.warnings.join('; '));
+  // still usable — this is advice, not a rejection
+  assert.strictEqual(nested.config.repos['acme/webapp'], nestedPath);
+
+  // GSD's own escape hatch silences it: sub_repos is honoured before the
+  // git-boundary guard, so the crossing becomes deliberate.
+  const claimed = write({ sub_repos: ['vendor'], pipeline: { repos: { 'acme/webapp': nestedPath } } });
+  assert.deepStrictEqual(claimed.warnings, []);
+
+  // the ordinary layout — a checkout OUTSIDE the project — must stay silent
+  const outside = write({ pipeline: { repos: { 'acme/webapp': path.join(os.tmpdir(), 'elsewhere-webapp') } } });
+  assert.deepStrictEqual(outside.warnings, []);
+});
+
 test('workflow.use_worktrees true warns — the conveyor already owns the worktree', () => {
   const on = withRaw({ workflow: { use_worktrees: true } });
   assert.strictEqual(on.config.gsd.use_worktrees, true);
