@@ -236,6 +236,17 @@ test('git.branching_strategy "none" is fine; phase/milestone warn about the coll
   }
 });
 
+test('workflow.use_worktrees true warns — the conveyor already owns the worktree', () => {
+  const on = withRaw({ workflow: { use_worktrees: true } });
+  assert.strictEqual(on.config.gsd.use_worktrees, true);
+  assert.ok(on.warnings.some((w) => /NESTED worktree/.test(w)), on.warnings.join('; '));
+  // false is the correct value, and absent must stay silent — most projects never
+  // set it, and a warning on every run would train the user to ignore warnings.
+  assert.deepStrictEqual(withRaw({ workflow: { use_worktrees: false } }).warnings, []);
+  assert.deepStrictEqual(withRaw({}).warnings, []);
+  assert.strictEqual(withRaw({}).config.gsd.use_worktrees, null);
+});
+
 test('a plugin-namespaced agent_skills entry warns on a non-claude runtime', () => {
   const codex = withRaw({ runtime: 'codex', agent_skills: { 'gsd-planner': ['global:shipyard:delivery-rules'] } });
   assert.ok(codex.warnings.some((w) => /only on the claude/i.test(w)), codex.warnings.join('; '));

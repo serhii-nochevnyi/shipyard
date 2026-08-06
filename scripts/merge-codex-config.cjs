@@ -38,6 +38,11 @@ const FENCE_END = /^\s*#\s*shipyard-agents:end\b/;
 // so a config polluted by older installs heals on the next run instead of
 // accumulating forever.
 const LEGACY_HEADER = /^\s*#\s*shipyard delivery-pipeline agents\b/;
+// gsd-core's own marker. Its installer's `stripGsdFromCodexConfig` removes
+// "everything from marker to EOF" — so anything appended below it is deleted by
+// the next `gsd-core --codex` install OR uninstall, silently. Appending is
+// therefore not an option: our fragment goes ABOVE this line.
+const GSD_MARKER = /^\s*#\s*GSD Agent Configuration\b/;
 
 // Drop everything shipyard owns: the fenced fragment (inclusive), plus — for
 // configs written before the fence existed — every `[agents.shipyard-*]` table
@@ -80,14 +85,28 @@ function main() {
   // Ensure a bare [agents] parent exists so our sub-tables are valid children.
   // gsd-core normally writes it; guard for a bare/absent config.
   const hasBareAgents = lines.some((l) => BARE_AGENTS.test(l));
-  let body = lines.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
   if (!hasBareAgents) {
-    body = `${body}${body ? '\n\n' : ''}[agents]\nmax_depth = 1`;
+    lines.push('', '[agents]', 'max_depth = 1');
   }
 
-  const merged = `${body}\n\n${fragment}\n`;
+  // Place the fragment ABOVE gsd-core's marker when there is one. Everything
+  // below that marker is gsd-core's to delete — appending at EOF is what made a
+  // routine `gsd-core --codex` upgrade wipe every shipyard agent registration
+  // without a word. Sub-tables preceding their `[agents]` super-table is
+  // out-of-order but valid TOML, and the alternative is losing the block.
+  const markerAt = lines.findIndex((l) => GSD_MARKER.test(l));
+  if (markerAt === -1) {
+    lines.push('', ...fragment.split('\n'));
+  } else {
+    lines.splice(markerAt, 0, ...fragment.split('\n'), '');
+  }
+
+  const merged = `${lines.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '')}\n`;
   fs.writeFileSync(args.config, merged);
-  process.stdout.write(`merged shipyard agents into ${args.config}\n`);
+  process.stdout.write(
+    `merged shipyard agents into ${args.config}` +
+    (markerAt === -1 ? '\n' : ' (above the gsd-core marker)\n')
+  );
 }
 
 main();

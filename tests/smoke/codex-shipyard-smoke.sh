@@ -20,7 +20,7 @@ node --check scripts/merge-codex-config.cjs
 bash -n scripts/install-shipyard-codex.sh
 
 # ── isolate: throwaway HOME so ~/.codex and ~/.agents never touch the host ────
-GSD_CORE_VERSION="${GSD_CORE_VERSION:-1.7.0}"
+GSD_CORE_VERSION="${GSD_CORE_VERSION:-1.9.1}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK"
@@ -32,8 +32,26 @@ npx --yes "@opengsd/gsd-core@${GSD_CORE_VERSION}" --codex --global </dev/null >/
   || { echo "gsd-core --codex install failed (network?)"; exit 1; }
 [[ -f "$CODEX_HOME/gsd-core/bin/gsd-tools.cjs" ]] || { echo "gsd-core not installed for codex"; exit 1; }
 
+# Snapshot what gsd-core owns BEFORE we touch the config. Asserting a literal
+# agent count here pinned us to one gsd-core release: 1.7.0 registered ~34
+# `[agents.gsd-*]` tables, 1.9.1 registers none at all (its
+# `generateCodexConfigBlock` ignores the agent list and emits only the marker and
+# `[agents] max_depth`). The invariant we actually care about is version-free —
+# whatever gsd-core wrote, our merge must hand it back untouched.
+gsd_owned_state() {
+  printf '%s|%s|%s\n' \
+    "$(grep -c '^\[agents\.gsd-' "$CODEX_HOME/config.toml" || true)" \
+    "$(grep -c '^# GSD Agent Configuration' "$CODEX_HOME/config.toml" || true)" \
+    "$(ls "$CODEX_HOME/agents"/gsd-*.toml 2>/dev/null | wc -l | tr -d ' ')"
+}
+GSD_BEFORE="$(gsd_owned_state)"
+
 # ── install shipyard (full, phase 2) ─────────────────────────────────────────
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+
+GSD_AFTER="$(gsd_owned_state)"
+[[ "$GSD_BEFORE" == "$GSD_AFTER" ]] \
+  || { echo "our merge changed gsd-core-owned state: $GSD_BEFORE -> $GSD_AFTER"; exit 1; }
 
 # skills present
 for s in shipyard-route shipyard-investigate shipyard-decompose shipyard-deliver shipyard-bench shipyard-delivery-rules; do
@@ -93,14 +111,13 @@ for a in shipyard-arch-review shipyard-ci-fix shipyard-drift-check shipyard-inte
   [[ -f "$CODEX_HOME/agents/$a.toml" ]] || { echo "missing agent $a.toml"; exit 1; }
   grep -q "^\[agents\.$a\]" "$CODEX_HOME/config.toml" || { echo "agent $a not registered in config.toml"; exit 1; }
 done
-GSD_AGENTS="$(grep -c '^\[agents\.gsd-' "$CODEX_HOME/config.toml" || true)"
-[[ "$GSD_AGENTS" -ge 30 ]] || { echo "gsd agents clobbered (found $GSD_AGENTS)"; exit 1; }
+[[ "$(gsd_owned_state)" == "$GSD_BEFORE" ]] \
+  || { echo "gsd-core-owned state drifted after install: $GSD_BEFORE -> $(gsd_owned_state)"; exit 1; }
 
-# idempotent merge: re-running registers each agent once, never a duplicate.
-# The count is derived from the generator's own ROLES table rather than hardcoded —
-# a literal here silently rots the moment a reference is added (it did: pr-sentinel
-# arrived in 0.15.0 and this assertion kept demanding the old six, so a correct
-# generator failed the gate).
+# How many agents we expect, derived from the generator's own ROLES table rather
+# than hardcoded — a literal here silently rots the moment a reference is added
+# (it did: pr-sentinel arrived in 0.15.0 and the assertion kept demanding the old
+# six, so a correct generator failed the gate).
 EXPECTED_AGENTS="$(node -e '
   const src = require("fs").readFileSync("scripts/gen-codex-shipyard.cjs", "utf8");
   const table = src.match(/const ROLES = \{([\s\S]*?)\n  \};/);
@@ -109,6 +126,27 @@ EXPECTED_AGENTS="$(node -e '
   if (!roles.length) { console.error("ROLES table parsed to nothing"); process.exit(1); }
   console.log(roles.filter(([, , ph]) => Number(ph) <= 2).length);
 ')"
+
+# Our fragment must sit ABOVE gsd-core's marker. Its installer removes
+# "everything from marker to EOF", so a fragment appended below is deleted by the
+# next gsd-core install OR uninstall — silently, taking every shipyard agent with
+# it. Placement is the fix; this asserts it.
+MARKER_LINE="$(grep -n '^# GSD Agent Configuration' "$CODEX_HOME/config.toml" | head -1 | cut -d: -f1)"
+FENCE_LINE="$(grep -n 'shipyard-agents:end' "$CODEX_HOME/config.toml" | head -1 | cut -d: -f1)"
+if [[ -n "$MARKER_LINE" ]]; then
+  [[ -n "$FENCE_LINE" && "$FENCE_LINE" -lt "$MARKER_LINE" ]] \
+    || { echo "shipyard fragment (line ${FENCE_LINE:-none}) is not above the gsd-core marker (line $MARKER_LINE) — a gsd-core reinstall would delete it"; exit 1; }
+fi
+
+# The end-to-end version of the same property: reinstall gsd-core AFTER shipyard
+# and require our registrations to still be there.
+npx --yes "@opengsd/gsd-core@${GSD_CORE_VERSION}" --codex --global </dev/null >/dev/null 2>&1 \
+  || { echo "gsd-core reinstall failed (network?)"; exit 1; }
+SURVIVED="$(grep -c '^\[agents\.shipyard-' "$CODEX_HOME/config.toml" || true)"
+[[ "$SURVIVED" -eq "$EXPECTED_AGENTS" ]] \
+  || { echo "a gsd-core reinstall wiped shipyard agents ($SURVIVED left, expected $EXPECTED_AGENTS)"; exit 1; }
+
+# idempotent merge: re-running registers each agent once, never a duplicate.
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 SHIP_AGENTS="$(grep -c '^\[agents\.shipyard-' "$CODEX_HOME/config.toml" || true)"
 [[ "$SHIP_AGENTS" -eq "$EXPECTED_AGENTS" ]] \

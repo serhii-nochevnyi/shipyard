@@ -224,12 +224,28 @@ function loadConfig(root) {
 
   // ── GSD's own settings the conveyor must agree with ───────────────────────
   const git = obj(raw.git);
+  const workflow = obj(raw.workflow);
   cfg.gsd = {
     runtime: typeof raw.runtime === 'string' ? raw.runtime : null,
     base_branch: typeof git.base_branch === 'string' && git.base_branch ? git.base_branch : null,
     branching_strategy: typeof git.branching_strategy === 'string' ? git.branching_strategy : null,
     response_language: typeof raw.response_language === 'string' ? raw.response_language : null,
+    use_worktrees: typeof workflow.use_worktrees === 'boolean' ? workflow.use_worktrees : null,
   };
+  // Same collision as branching_strategy, one level down. GSD's writer workflows
+  // fork their own git worktree when this is true — and the conveyor calls
+  // `/gsd-code-review --fix` from INSIDE a ticket worktree, so the fixer would
+  // nest a worktree within ours and commit the fix where no PR is watching.
+  // GSD 1.9.1 made `--fix` honor this setting, which is what makes `false` the
+  // correct value rather than a preference.
+  if (cfg.gsd.use_worktrees === true) {
+    warnings.push(
+      'workflow.use_worktrees is true, but the delivery conveyor already runs every ticket in its own worktree ' +
+      '(ticket-worktree.sh). GSD writer workflows invoked inside one — /gsd-code-review --fix in particular — ' +
+      'would create a NESTED worktree and commit outside the ticket branch. Set it to false; the conveyor supplies ' +
+      'the isolation.'
+    );
+  }
   // GSD's phase/milestone strategies create their own branches; the conveyor owns
   // branching (epic/<phase> + ticket/<id>) and the two would fight over it.
   if (cfg.gsd.branching_strategy && cfg.gsd.branching_strategy !== 'none') {
