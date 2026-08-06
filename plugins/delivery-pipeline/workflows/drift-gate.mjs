@@ -10,7 +10,12 @@ export const meta = {
 //                                                    // (default sonnet / low)
 //     driftRefPath: "<abs path to references/drift-check.md>",
 //   }
-// returns: [ { id, verdict: 'fresh'|'drifted', moved: [string] } ]
+// returns: [ { id, verdict: 'fresh'|'drifted', moved: [string], reuse_candidates: [string] } ]
+//
+// `reuse_candidates` is ADVISORY and orthogonal to the verdict: a `fresh`
+// ticket carries it into the executor prompt so the implementation builds on
+// what exists instead of reinventing it. It never excludes a ticket from the
+// run — work that is already DONE is `drifted`, which is a different finding.
 //
 // Read-only: agents JUDGE, they do not touch the tree. Worktrees are NOT used
 // here — the judge runs against the up-to-date default branch checkout.
@@ -24,7 +29,7 @@ export const meta = {
 const VERDICT = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'verdict', 'moved'],
+  required: ['id', 'verdict', 'moved', 'reuse_candidates'],
   properties: {
     id: { type: 'string' },
     verdict: { enum: ['fresh', 'drifted'] },
@@ -32,6 +37,11 @@ const VERDICT = {
       type: 'array',
       items: { type: 'string' },
       description: 'For drifted: itemized list of what moved (missing file, changed signature, pre-implemented scope). Empty for fresh.',
+    },
+    reuse_candidates: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Existing implementations this ticket should build on rather than reinvent, each as "file:line — what it already does, which part of the ticket it covers". Advisory, independent of the verdict; empty when there is none.',
     },
   },
 }
@@ -53,7 +63,7 @@ phase('Drift')
 
 // fail-safe: a dead (null) OR throwing agent is treated as `drifted` so the
 // orchestrator never runs an unchecked ticket on a silent judge failure.
-const driftFallback = (id, why) => ({ id, verdict: 'drifted', moved: [why] })
+const driftFallback = (id, why) => ({ id, verdict: 'drifted', moved: [why], reuse_candidates: [] })
 
 return await parallel(
   tickets.map((t) => () =>
@@ -62,6 +72,7 @@ return await parallel(
         `You are a drift-check judge. First read your full instructions and output contract from this file: ${refPath}.`,
         `Then read the ticket contract (plan file): ${t.planPath} — including every path it lists under Context reads and files_modified.`,
         `You are on an up-to-date default branch. Judge ONLY ticket ${t.id}. Do NOT modify anything.`,
+        `Run the reuse scan (step 4) even when nothing has drifted — search by BEHAVIOR, not by the names the plan proposes. Existing code to build on is reported in reuse_candidates and leaves the verdict "fresh"; only work that is already done, or an implementation that invalidates the ticket's approach, is "drifted".`,
         `Return the verdict for ticket id "${t.id}".`,
       ].join('\n'),
       {

@@ -8,6 +8,9 @@ set -euo pipefail
 #   ticket-worktree.sh path   <ticket-id>
 #   ticket-worktree.sh list            # human: `git worktree list`
 #   ticket-worktree.sh list --json     # machine: [{"ticket","path","branch"}]
+#   ticket-worktree.sh gc              # classify every pipeline worktree (report only)
+#   ticket-worktree.sh gc --prune      # …and remove the ones proven safe
+#   ticket-worktree.sh gc --json       # machine-readable classification
 #   ticket-worktree.sh root            # print the worktree root directory
 #
 # Worktrees live in <repo>/../.wt-<repo-name>/<ticket-id> so parallel executors
@@ -18,6 +21,15 @@ set -euo pipefail
 # create/remove are IDEMPOTENT: re-running a partially finished delivery must not
 # fail on "already exists"/"nothing to remove", because the babysit loop and the
 # reaper both re-enter after an interrupted run.
+#
+# `gc` exists because the reaper cannot see everything: it walks the CURRENT
+# tickets.json and removes what delivery-state marks `reapable`, so a worktree
+# whose ticket was re-decomposed away, one left by a run that died, or one from a
+# phase delivered months ago is invisible to it and accumulates forever. That is
+# not cosmetic — a large enough worktree set makes the sandbox profile exceed the
+# argv limit (E2BIG) and every sandboxed command starts failing. gc reports by
+# default and prunes only what it can PROVE is safe; SHIPYARD_WORKTREE_WARN_AT
+# (default 20) is when it starts saying the set is too big.
 
 cmd="${1:-}"
 ticket="${2:-}"
@@ -67,6 +79,46 @@ resolve_ref() {
     fi
   done
   return 1
+}
+
+# The pipeline's own worktrees, keyed by ticket id, as JSON. Shared by `list --json`
+# and `gc` so both see exactly the same set.
+#
+# `git worktree list` prints RESOLVED paths, so the prefix we compare against must
+# be resolved too — otherwise a root reached through a symlink (a macOS
+# /var -> /private/var TMPDIR, a symlinked home) matches nothing and the caller
+# concludes there are no worktrees at all.
+list_json() {
+  local list_base="$wt_base"
+  [[ -d "$wt_base" ]] && list_base="$(cd "$wt_base" && pwd -P)"
+  # the root is passed as an argv, not an env prefix: a `VAR=x a | b`
+  # assignment applies to `a` only, so `node` would never have seen it.
+  git -C "$repo_root" worktree list --porcelain | node -e '
+    let raw = "";
+    process.stdin.on("data", (d) => (raw += d)).on("end", () => {
+      const base = String(process.argv[1] || "").replace(/\/+$/, "");
+      const out = [];
+      let cur = {};
+      const flush = () => {
+        if (!cur.worktree) return;
+        const p = cur.worktree;
+        if (p === base || !p.startsWith(base + "/")) { cur = {}; return; }
+        const rest = p.slice(base.length + 1);
+        if (rest.includes("/")) { cur = {}; return; }
+        out.push({ ticket: rest, path: p, branch: (cur.branch || "").replace(/^refs\/heads\//, "") || null });
+        cur = {};
+      };
+      for (const line of raw.split("\n")) {
+        if (line === "") { flush(); continue; }
+        const sp = line.indexOf(" ");
+        const k = sp === -1 ? line : line.slice(0, sp);
+        const v = sp === -1 ? "" : line.slice(sp + 1);
+        cur[k] = v;
+      }
+      flush();
+      process.stdout.write(JSON.stringify(out, null, 2) + "\n");
+    });
+  ' "$list_base"
 }
 
 case "$cmd" in
@@ -140,46 +192,139 @@ case "$cmd" in
     # `list --json` reports only the PIPELINE's worktrees, keyed by ticket id, so
     # the reaper can act on data instead of parsing `git worktree list` prose.
     if [[ "${2:-}" == "--json" ]]; then
-      # `git worktree list` prints RESOLVED paths, so the prefix we compare against
-      # must be resolved too — otherwise a root reached through a symlink (a macOS
-      # /var -> /private/var TMPDIR, a symlinked home) matches nothing and the
-      # reaper concludes there are no worktrees to clean up.
-      list_base="$wt_base"
-      [[ -d "$wt_base" ]] && list_base="$(cd "$wt_base" && pwd -P)"
-      # the root is passed as an argv, not an env prefix: a `VAR=x a | b`
-      # assignment applies to `a` only, so `node` would never have seen it.
-      git -C "$repo_root" worktree list --porcelain | node -e '
-        let raw = "";
-        process.stdin.on("data", (d) => (raw += d)).on("end", () => {
-          const base = String(process.argv[1] || "").replace(/\/+$/, "");
-          const out = [];
-          let cur = {};
-          const flush = () => {
-            if (!cur.worktree) return;
-            const p = cur.worktree;
-            if (p === base || !p.startsWith(base + "/")) { cur = {}; return; }
-            const rest = p.slice(base.length + 1);
-            if (rest.includes("/")) { cur = {}; return; }
-            out.push({ ticket: rest, path: p, branch: (cur.branch || "").replace(/^refs\/heads\//, "") || null });
-            cur = {};
-          };
-          for (const line of raw.split("\n")) {
-            if (line === "") { flush(); continue; }
-            const sp = line.indexOf(" ");
-            const k = sp === -1 ? line : line.slice(0, sp);
-            const v = sp === -1 ? "" : line.slice(sp + 1);
-            cur[k] = v;
-          }
-          flush();
-          process.stdout.write(JSON.stringify(out, null, 2) + "\n");
-        });
-      ' "$list_base"
+      list_json
     else
       git -C "$repo_root" worktree list
     fi
     ;;
+  gc)
+    do_prune=false; as_json=false
+    for arg in "${@:2}"; do
+      case "$arg" in
+        --prune) do_prune=true ;;
+        --json)  as_json=true ;;
+        *) echo "usage: ticket-worktree.sh gc [--prune] [--json]" >&2; exit 2 ;;
+      esac
+    done
+
+    warn_at="${SHIPYARD_WORKTREE_WARN_AT:-20}"
+    [[ "$warn_at" =~ ^[0-9]+$ ]] || {
+      echo "SHIPYARD_WORKTREE_WARN_AT must be a non-negative integer, got '$warn_at'" >&2; exit 2; }
+
+    # Which tickets the CURRENT graph knows about. Its absence is the fail-closed
+    # case: with no graph every worktree looks foreign, and "delete everything the
+    # graph does not name" is precisely the mistake that loses a colleague's work.
+    graph="$repo_root/.planning/graph/tickets.json"
+    known=""; graph_present=false
+    if [[ -f "$graph" ]]; then
+      if known="$(node -e '
+        const t = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+        const ids = t && t.tickets ? Object.keys(t.tickets) : [];
+        process.stdout.write(ids.join("\n"));
+      ' "$graph" 2>/dev/null)"; then
+        graph_present=true
+      else
+        echo "warning: $graph is unreadable — classifying every worktree as 'review' (nothing will be pruned)" >&2
+      fi
+    fi
+
+    # Refresh remote refs once: the whole classification turns on whether
+    # origin/<branch> still exists, and a stale remote-tracking ref would make a
+    # merged-and-deleted branch look alive (nothing pruned, silently).
+    git -C "$repo_root" fetch origin --prune 1>&2 2>/dev/null || \
+      echo "warning: git fetch origin failed — origin/* may be stale, so gc is being conservative" >&2
+
+    rows=""; total=0; gone_count=0; landed_count=0
+    while IFS=$'\t' read -r ticket wt_path branch; do
+      [[ -n "$ticket" ]] || continue
+      total=$((total + 1))
+      verdict=""; reason=""
+      if [[ ! -d "$wt_path" ]]; then
+        verdict="gone"; reason="registered but the directory is missing"
+      elif [[ -n "$(git -C "$wt_path" status --porcelain 2>/dev/null)" ]]; then
+        verdict="dirty"; reason="uncommitted changes — never removed by gc"
+      elif [[ -n "$branch" ]] && git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        verdict="live"; reason="origin/$branch still exists"
+      elif $graph_present && printf '%s\n' "$known" | grep -qxF "$ticket"; then
+        # The conveyor deletes a ticket's remote branch only after it has landed,
+        # so "in the graph, clean, and origin/<branch> gone" is a merged ticket.
+        verdict="landed"; reason="origin/${branch:-?} gone and the tree is clean"
+      else
+        # Foreign or abandoned: possibly the only copy of real commits. gc reports
+        # it and stops — deciding this is a human's call, not a script's.
+        verdict="review"
+        reason="$($graph_present && echo "unknown to tickets.json" || echo "no tickets.json to check against"), origin/${branch:-?} gone"
+      fi
+      case "$verdict" in
+        gone)   gone_count=$((gone_count + 1)) ;;
+        landed) landed_count=$((landed_count + 1)) ;;
+      esac
+      rows+="$verdict"$'\t'"$ticket"$'\t'"${branch:-?}"$'\t'"$wt_path"$'\t'"$reason"$'\n'
+    done < <(list_json | node -e '
+      let raw = "";
+      process.stdin.on("data", (d) => (raw += d)).on("end", () => {
+        for (const w of JSON.parse(raw || "[]")) {
+          process.stdout.write([w.ticket, w.path, w.branch || ""].join("\t") + "\n");
+        }
+      });
+    ')
+
+    if $as_json; then
+      printf '%s' "$rows" | node -e '
+        let raw = "";
+        process.stdin.on("data", (d) => (raw += d)).on("end", () => {
+          const items = raw.split("\n").filter(Boolean).map((l) => {
+            const [verdict, ticket, branch, path, reason] = l.split("\t");
+            return { verdict, ticket, branch: branch === "?" ? null : branch, path, reason };
+          });
+          process.stdout.write(JSON.stringify({
+            root: process.argv[1],
+            total: items.length,
+            warn_at: Number(process.argv[2]),
+            over_threshold: items.length > Number(process.argv[2]),
+            pruned: process.argv[3] === "true",
+            worktrees: items,
+          }, null, 2) + "\n");
+        });
+      ' "$wt_base" "$warn_at" "$do_prune"
+    else
+      if (( total == 0 )); then
+        echo "no pipeline worktrees under $wt_base"
+      else
+        printf '%s' "$rows" | sort | awk -F'\t' '{ printf "  %-7s %-12s %-34s %s\n", $1, $2, $3, $5 }'
+        echo "  ── $total worktree(s); $((gone_count + landed_count)) removable ($landed_count landed, $gone_count gone)"
+      fi
+      if (( total > warn_at )); then
+        echo "⚠ $total worktrees exceeds SHIPYARD_WORKTREE_WARN_AT=$warn_at — a large enough set makes the sandbox profile exceed the argv limit (E2BIG) and every sandboxed command starts failing. Run: ticket-worktree.sh gc --prune" >&2
+      fi
+    fi
+
+    if ! $do_prune; then
+      if (( gone_count + landed_count > 0 )); then
+        echo "report only — re-run with --prune to remove the $((gone_count + landed_count)) safe one(s); 'dirty' and 'review' are never removed automatically" >&2
+      fi
+      exit 0
+    fi
+
+    acquire_git_lock
+    # A registration whose directory is already gone has no tree to lose work in.
+    git -C "$repo_root" worktree prune 1>&2 2>/dev/null || true
+    removed=0
+    while IFS=$'\t' read -r verdict ticket branch wt_path reason; do
+      [[ "$verdict" == "landed" ]] || continue
+      git -C "$repo_root" worktree remove --force "$wt_path" 1>&2 2>/dev/null || rm -rf "$wt_path"
+      removed=$((removed + 1))
+      echo "removed $ticket ($wt_path)" >&2
+    done < <(printf '%s' "$rows")
+    git -C "$repo_root" worktree prune 1>&2 2>/dev/null || true
+    # Say what was left behind and why: a gc that reports only its successes reads
+    # as "everything is clean" when the interesting cases are the ones it skipped.
+    removed=$((removed + gone_count))
+    kept=$((total - removed))
+    echo "gc: removed $removed ($landed_count landed, $gone_count stale registration(s)), kept $kept — dirty/live/review are never removed automatically, inspect them by hand" >&2
+    ;;
   *)
-    echo "usage: ticket-worktree.sh <create|remove|path|root|list [--json]> ..." >&2
+    echo "usage: ticket-worktree.sh <create|remove|path|root|list [--json]|gc [--prune] [--json]> ..." >&2
     exit 2
     ;;
 esac

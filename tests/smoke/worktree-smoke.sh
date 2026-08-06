@@ -158,6 +158,98 @@ else
   ok "ensure refuses a local epic branch that does not contain the base"
 fi
 
+# ── gc: classify and reap what the reaper cannot see ────────────────────────
+# The reaper walks the CURRENT tickets.json and acts on delivery-state's
+# `reapable`. gc covers the rest — worktrees the graph forgot, runs that died —
+# so its safety properties are the contract: it must never remove work that
+# exists nowhere else, and it must fail CLOSED when it cannot tell.
+git clone -q "$W/origin" "$W/gcrepo"
+GCWT="$W/gcwt"
+run_gc() { ( cd "$W/gcrepo" && SHIPYARD_WORKTREE_ROOT="$GCWT" bash "$SCRIPTS/ticket-worktree.sh" "$@" ); }
+verdict_of() {  # verdict_of <json> <ticket>
+  node -e '
+    const r = JSON.parse(process.argv[1]).worktrees.find((w) => w.ticket === process.argv[2]);
+    process.stdout.write(r ? r.verdict : "MISSING");
+  ' "$1" "$2"
+}
+
+run_gc create T-05-01 ticket/T-05-01-live   main >/dev/null 2>&1
+run_gc create T-05-02 ticket/T-05-02-landed main >/dev/null 2>&1
+run_gc create T-05-03 ticket/T-05-03-alien  main >/dev/null 2>&1
+run_gc create T-05-04 ticket/T-05-04-dirty  main >/dev/null 2>&1
+# only T-05-01 is published, so origin/<branch> exists for it alone
+git -C "$GCWT/T-05-01" push -q -u origin ticket/T-05-01-live >/dev/null 2>&1
+echo 'uncommitted' > "$GCWT/T-05-04/scratch.txt"
+mkdir -p "$W/gcrepo/.planning/graph"
+graph_json='{"tickets":{"T-05-02":{},"T-05-04":{}}}'
+echo "$graph_json" > "$W/gcrepo/.planning/graph/tickets.json"
+
+report="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
+[[ "$(verdict_of "$report" T-05-01)" == "live" ]] \
+  && ok "gc: a worktree whose origin/<branch> still exists is live" \
+  || bad "gc: published branch is live" "$report"
+[[ "$(verdict_of "$report" T-05-02)" == "landed" ]] \
+  && ok "gc: in the graph + origin/<branch> gone + clean = landed" \
+  || bad "gc: merged ticket is landed" "$report"
+[[ "$(verdict_of "$report" T-05-03)" == "review" ]] \
+  && ok "gc: a worktree the graph never heard of is review, not landed" \
+  || bad "gc: unknown ticket is review" "$report"
+[[ "$(verdict_of "$report" T-05-04)" == "dirty" ]] \
+  && ok "gc: uncommitted changes outrank every other verdict" \
+  || bad "gc: dirty wins over landed" "$report"
+
+# a report must never mutate anything
+if [[ -d "$GCWT/T-05-02" ]]; then
+  ok "gc without --prune removes nothing"
+else
+  bad "gc without --prune removes nothing" "T-05-02 disappeared on a read-only run"
+fi
+
+warn="$(SHIPYARD_WORKTREE_WARN_AT=0 run_gc gc 2>&1 >/dev/null || true)"
+grep -q 'E2BIG' <<<"$warn" \
+  && ok "gc warns past SHIPYARD_WORKTREE_WARN_AT and names the failure it prevents" \
+  || bad "gc warns past the threshold" "$warn"
+
+# ── fail closed: no graph means nothing can be proven landed ────────────────
+mv "$W/gcrepo/.planning/graph/tickets.json" "$W/gcrepo/.planning/graph/tickets.json.bak"
+nograph="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
+[[ "$(verdict_of "$nograph" T-05-02)" == "review" ]] \
+  && ok "gc without tickets.json downgrades landed to review" \
+  || bad "gc fails closed without a graph" "$nograph"
+run_gc gc --prune >/dev/null 2>&1 || true
+if [[ -d "$GCWT/T-05-02" ]]; then
+  ok "gc --prune with no graph removes nothing"
+else
+  bad "gc --prune with no graph removes nothing" "pruned a worktree it could not classify"
+fi
+mv "$W/gcrepo/.planning/graph/tickets.json.bak" "$W/gcrepo/.planning/graph/tickets.json"
+
+# ── --prune removes exactly the landed one ──────────────────────────────────
+run_gc gc --prune >/dev/null 2>&1 || true
+[[ ! -d "$GCWT/T-05-02" ]] \
+  && ok "gc --prune removes the landed worktree" \
+  || bad "gc --prune removes the landed worktree" "T-05-02 survived"
+if [[ -d "$GCWT/T-05-01" && -d "$GCWT/T-05-03" && -d "$GCWT/T-05-04" ]]; then
+  ok "gc --prune leaves live, review and dirty worktrees untouched"
+else
+  bad "gc --prune leaves live/review/dirty alone" "$(ls "$GCWT")"
+fi
+
+# ── a registration whose directory vanished is always safe to drop ──────────
+rm -rf "$GCWT/T-05-03"
+gone="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
+[[ "$(verdict_of "$gone" T-05-03)" == "gone" ]] \
+  && ok "gc reports a registration whose directory is missing as gone" \
+  || bad "gc reports a missing directory as gone" "$gone"
+
+if out="$(run_gc gc bogus 2>&1)"; then
+  bad "gc rejects an unknown flag"
+else
+  grep -q 'usage:' <<<"$out" \
+    && ok "gc rejects an unknown flag with a usage line" \
+    || bad "gc rejects an unknown flag with a usage line" "$out"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]] || exit 1

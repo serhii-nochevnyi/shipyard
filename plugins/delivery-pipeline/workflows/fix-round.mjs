@@ -102,7 +102,7 @@ return await parallel(
       ``,
       `Language: every artifact you produce — code, comments, commit messages, review replies — is written in ${artifactLanguage}, regardless of the language used elsewhere in this project.`,
       ``,
-      `If you changed code: run the ticket's Verification commands to green, commit atomically referencing ${p.id}, push once, then re-init reviewers: node ${reinitScript} reinit ${p.pr}. Set pushed=true.`,
+      `If you changed code: run the ticket's Verification commands to green — those, scoped as written, never the project's full suite or its e2e run (CI owns those, and this loop re-runs on every round) — then commit atomically referencing ${p.id}, push once, and re-init reviewers: node ${reinitScript} reinit ${p.pr}. Set pushed=true.`,
       `If you only replied to threads without a code change: pushed=false, status "fixed".`,
       `If nothing needed doing: status "no-op".`,
       `Return the result for PR #${p.pr}.`
