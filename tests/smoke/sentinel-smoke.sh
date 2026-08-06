@@ -136,6 +136,51 @@ else
 fi
 rm -rf "$locks/state.lock"
 
+# ── pipeline-stats must expose what the journal cannot ───────────────────────
+# A raw `gh pr merge` writes nothing to the journal, so a bypassed gate looks
+# exactly like an idle ticket. On a real project that hid 22 merges behind a
+# confident "sentinel landed 12". The only witness is GitHub's own MERGED state
+# against the absence of a `merge` event, and the same blindness applies to an
+# attempt logged under a role the ladder never resolved.
+sproj="$W/statsproj"
+mkdir -p "$sproj/.planning/graph" "$W/bin2"
+cat > "$sproj/.planning/graph/tickets.json" <<'JSON'
+{
+  "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },
+  "tickets": {
+    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-guarded",
+                 "title": "guarded", "depends_on": [], "risk": "low" },
+    "T-01-02": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-02-raw",
+                 "title": "raw", "depends_on": [], "risk": "low" }
+  }
+}
+JSON
+echo '{"pipeline":{}}' > "$sproj/.planning/config.json"
+# Both merged on GitHub; only the first went through the guard.
+cat > "$sproj/.planning/graph/delivery-log.jsonl" <<'JSON'
+{"ts":"2026-01-02T00:00:00Z","event":"merge","ticket":"T-01-01","pr":201,"base":"epic/01-demo","by":"sentinel"}
+{"ts":"2026-01-02T00:01:00Z","event":"attempt","ticket":"T-01-02","role":"frontend-delivery","outcome":"pushed"}
+JSON
+cat > "$W/bin2/gh" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  "pr list --state all"*)
+    cat <<'JSON'
+[{"number":201,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-01-guarded","baseRefName":"epic/01-demo","mergedAt":"2026-01-02T01:00:00Z","createdAt":"2026-01-02T00:00:00Z","url":"https://example/201","reviewDecision":null,"title":"T-01-01: guarded"},
+ {"number":202,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-02-raw","baseRefName":"epic/01-demo","mergedAt":"2026-01-02T01:00:00Z","createdAt":"2026-01-02T00:00:00Z","url":"https://example/202","reviewDecision":null,"title":"T-01-02: raw"}]
+JSON
+    ;;
+  *) echo "stub gh2: unhandled: $*" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin2/gh"
+( cd "$sproj" && PATH="$W/bin2:$PATH" node "$SCRIPTS/pipeline-stats.cjs" ) > "$W/stats.txt" 2>&1 || true
+
+has "stats names the ticket merged without the guard" "$W/stats.txt" "T-01-02#202"
+hasnt "stats does not accuse the guarded merge" "$W/stats.txt" "T-01-01#201"
+has "stats still credits the guarded merge" "$W/stats.txt" "sentinel landed 1 ticket PR"
+has "stats names the role the ladder does not know" "$W/stats.txt" "frontend-delivery"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" == 0 ]] || exit 1
