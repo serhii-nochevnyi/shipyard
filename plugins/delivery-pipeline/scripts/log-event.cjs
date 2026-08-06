@@ -10,6 +10,7 @@
 //   log-event.cjs attempt ticket=T-02-03 pr=445 n=2 role=ci-fix model=opus outcome=pushed
 //   log-event.cjs fix_round ticket=T-02-05 pr=447 outcome=no-op pushed=false
 //   log-event.cjs escalation ticket=T-01-04 pr=441 reason="out-of-scope fix needed"
+//   log-event.cjs reuse_scan ticket=T-02-03 hits=2 verdict=fresh
 //
 // status_change events are appended by state-sync.cjs automatically — do not
 // log them by hand. The journal is append-only; pipeline-stats.cjs reads it.

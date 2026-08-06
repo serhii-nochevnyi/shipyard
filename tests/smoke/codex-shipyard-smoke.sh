@@ -89,17 +89,30 @@ grep -q 'shipyard-auto-route:begin' "$CODEX_HOME/AGENTS.md" \
   || { echo "auto-route block missing from \$CODEX_HOME/AGENTS.md"; exit 1; }
 
 # agents present + registered; gsd agents intact
-for a in shipyard-arch-review shipyard-ci-fix shipyard-drift-check shipyard-integrator shipyard-inv-research shipyard-review-fix; do
+for a in shipyard-arch-review shipyard-ci-fix shipyard-drift-check shipyard-integrator shipyard-inv-research shipyard-pr-sentinel shipyard-review-fix; do
   [[ -f "$CODEX_HOME/agents/$a.toml" ]] || { echo "missing agent $a.toml"; exit 1; }
   grep -q "^\[agents\.$a\]" "$CODEX_HOME/config.toml" || { echo "agent $a not registered in config.toml"; exit 1; }
 done
 GSD_AGENTS="$(grep -c '^\[agents\.gsd-' "$CODEX_HOME/config.toml" || true)"
 [[ "$GSD_AGENTS" -ge 30 ]] || { echo "gsd agents clobbered (found $GSD_AGENTS)"; exit 1; }
 
-# idempotent merge: re-running keeps exactly 6 shipyard agents
+# idempotent merge: re-running registers each agent once, never a duplicate.
+# The count is derived from the generator's own ROLES table rather than hardcoded —
+# a literal here silently rots the moment a reference is added (it did: pr-sentinel
+# arrived in 0.15.0 and this assertion kept demanding the old six, so a correct
+# generator failed the gate).
+EXPECTED_AGENTS="$(node -e '
+  const src = require("fs").readFileSync("scripts/gen-codex-shipyard.cjs", "utf8");
+  const table = src.match(/const ROLES = \{([\s\S]*?)\n  \};/);
+  if (!table) { console.error("cannot find the ROLES table"); process.exit(1); }
+  const roles = [...table[1].matchAll(/^\s*.([a-z-]+).:\s*\{[^}]*phase:\s*(\d+)/gm)];
+  if (!roles.length) { console.error("ROLES table parsed to nothing"); process.exit(1); }
+  console.log(roles.filter(([, , ph]) => Number(ph) <= 2).length);
+')"
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 SHIP_AGENTS="$(grep -c '^\[agents\.shipyard-' "$CODEX_HOME/config.toml" || true)"
-[[ "$SHIP_AGENTS" -eq 6 ]] || { echo "merge not idempotent (shipyard agents=$SHIP_AGENTS)"; exit 1; }
+[[ "$SHIP_AGENTS" -eq "$EXPECTED_AGENTS" ]] \
+  || { echo "merge not idempotent (shipyard agents=$SHIP_AGENTS, expected $EXPECTED_AGENTS)"; exit 1; }
 
 # capability installed and self-contained
 cap_list="$(node "$CODEX_HOME/gsd-core/bin/gsd-tools.cjs" capability list 2>/dev/null || true)"

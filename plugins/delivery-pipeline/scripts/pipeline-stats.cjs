@@ -14,8 +14,11 @@
 //
 // Improvement loop this feeds: escalation rate per risk tier (is the
 // role×risk×attempt ladder tuned right?), fix rounds per ticket (are the
-// ci-fix/review-fix prompts effective?), no-op share (wasted rounds), and
-// time-to-merge (conveyor throughput incl. the human merge tail).
+// ci-fix/review-fix prompts effective?), no-op share (wasted rounds),
+// time-to-merge (conveyor throughput incl. the human merge tail), and the
+// reuse-scan hit rate (drift-check runs on a cheap tier — if it never finds an
+// existing implementation, that is either a clean codebase or too small a model,
+// and without the counter the two are indistinguishable).
 
 const fs = require('fs');
 const path = require('path');
@@ -125,11 +128,19 @@ const phaseRows = Object.entries(phases).map(([phase, p]) => ({
   escalations: p.escalations,
 }));
 
+// Reuse-scan yield. `hits` counts existing implementations drift-check told an
+// executor to build on; a long run of scans with zero hits is the signal to look
+// at the tier drift-check runs on, not proof the codebase has no duplication.
+const reuseScans = journal.filter((e) => e.event === 'reuse_scan');
+const reuseHits = reuseScans.reduce((n, e) => n + (Number(e.hits) || 0), 0);
+
 if (asJson) {
   console.log(JSON.stringify({
     tickets: rows,
     phases: phaseRows,
     sentinel_merges: journal.filter((e) => e.event === 'merge').length,
+    reuse_scans: reuseScans.length,
+    reuse_hits: reuseHits,
     journal_events: journal.length,
     prs_truncated: prsTruncated,
   }, null, 2));
@@ -167,6 +178,14 @@ for (const p of phaseRows) {
 const landed = journal.filter((e) => e.event === 'merge');
 if (landed.length) {
   console.log(`sentinel landed ${landed.length} ticket PR(s) into the stack (${[...new Set(landed.map((e) => e.base))].join(', ')})`);
+}
+if (reuseScans.length) {
+  const withHits = reuseScans.filter((e) => (Number(e.hits) || 0) > 0).length;
+  console.log(
+    `reuse scan: ${reuseHits} existing implementation(s) surfaced across ${reuseScans.length} drift-checked ticket(s) ` +
+    `(${withHits} ticket(s) had at least one)` +
+    (reuseHits === 0 ? ' — zero hits over a long run points at the drift-check tier, not at a duplicate-free codebase' : '')
+  );
 }
 if (!journal.length) {
   console.log('note: delivery-log.jsonl is empty — attempts/fix-round columns fill up as /shipyard:deliver logs events');

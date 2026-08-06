@@ -144,6 +144,12 @@ inflate it.
 ### Step 3 — Verify locally
 - Run tests / build / local run; iterate to green; capture the output. Prefer the
   `verify` / `run` skills or the repo's own commands.
+- **Run what covers the change, not the whole project.** Target the test files or
+  filters that exercise the edit, plus typecheck/lint over the touched paths. The
+  full suite and the e2e/integration runs belong to CI — starting one here holds
+  the session hostage for minutes to re-prove code you did not touch. If you
+  genuinely cannot tell which tests cover the change, spend the time finding out
+  (grep the imports) rather than running everything.
 
 ### Step 3.5 — Review (proportionate)
 - For a non-trivial change, run a read-only review of the diff (the `code-review`

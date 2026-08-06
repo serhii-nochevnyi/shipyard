@@ -135,6 +135,17 @@ background-agent runtime (Codex) the same duty runs as a mandatory pass at the
 top of every round. Both writers take a lock: state files are replaced
 atomically, and `git worktree add` is serialized against the guard's pushes.
 
+**Worktrees are garbage-collected, not just reaped.** The reaper walks the current
+ticket graph, so it structurally cannot see a worktree whose ticket was
+re-decomposed away or one left behind by a killed run — and past a few dozen of
+them the sandbox profile exceeds the argv limit (E2BIG) and every sandboxed
+command starts failing. `scripts/ticket-worktree.sh gc` classifies every pipeline
+worktree (`live` / `landed` / `dirty` / `review` / `gone`) and warns past
+`SHIPYARD_WORKTREE_WARN_AT` (default 20); `gc --prune` removes only what it can
+prove is safe. Uncommitted work and worktrees the graph cannot account for are
+never removed automatically, and with no `tickets.json` present gc prunes nothing
+at all.
+
 **A phase can span repositories.** A ticket whose files live in a sibling repo
 declares `delivery.repo: owner/name` in its plan; every GitHub query, epic branch
 and PR is then scoped to that repo, and the board tags it (`T-06-01@acme/webapp`).

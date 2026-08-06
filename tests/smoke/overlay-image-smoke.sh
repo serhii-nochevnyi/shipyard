@@ -92,7 +92,15 @@ KARPATHY_SKILLS_REF="${KARPATHY_SKILLS_REF:-2c606141936f1eeef17fa3043a72095b4765
 # clone. Go through the Makefile target that owns the staging.
 LOCAL_SSH_DIR="${LOCAL_SSH_DIR:-$HOME/.ssh}" make sync-ssh-config >/dev/null
 
-docker build -f Dockerfile.base -t claude-shipyard-base:test .
+# shellcheck source=lib/git-identity.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/git-identity.sh"
+
+# A direct `docker build` does not inherit the environment as build args — pass
+# them through explicitly, unlike the targets that go via `make`.
+docker build -f Dockerfile.base -t claude-shipyard-base:test \
+  --build-arg GIT_USER_NAME="$GIT_USER_NAME" \
+  --build-arg GIT_USER_EMAIL="$GIT_USER_EMAIL" \
+  .
 docker build -f Dockerfile -t claude-shipyard:test \
   --build-arg BASE_IMAGE=claude-shipyard-base:test \
   --build-arg KARPATHY_SKILLS_DIR=.build/karpathy-skills \

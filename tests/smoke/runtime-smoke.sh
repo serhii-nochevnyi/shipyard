@@ -4,6 +4,11 @@ set -euo pipefail
 [[ -f docker-compose.yml ]] || { echo "missing docker-compose.yml"; exit 1; }
 [[ -f Makefile ]] || { echo "missing Makefile"; exit 1; }
 
+# `make build-base` below hard-fails without it; the exported vars satisfy the
+# Makefile's `?=` defaults.
+# shellcheck source=lib/git-identity.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/git-identity.sh"
+
 STATE_DIR="$(pwd)/.claude-state"
 mkdir -p workspace .cache-home "$STATE_DIR" "$HOME/.config/gh"
 trap 'docker compose down >/dev/null 2>&1 || true' EXIT

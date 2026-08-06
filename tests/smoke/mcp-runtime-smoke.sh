@@ -4,6 +4,11 @@ set -euo pipefail
 [[ -f Dockerfile ]] || { echo "missing Dockerfile"; exit 1; }
 [[ -f Makefile ]] || { echo "missing Makefile"; exit 1; }
 
+# `make build-base` below hard-fails without it; the exported vars satisfy the
+# Makefile's `?=` defaults.
+# shellcheck source=lib/git-identity.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/git-identity.sh"
+
 make build-base sync-karpathy-skills build-dev-image >/dev/null
 
 docker run --rm claude-shipyard:test bash -lc '

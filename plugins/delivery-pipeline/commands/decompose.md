@@ -159,6 +159,14 @@ parses ADRs.)
    ## Acceptance criteria / ## Test strategy / ## Verification commands
    ```
 
+   **Verification commands are scoped to `files_modified`** (delivery-rules §6):
+   the specific test files/filters plus typecheck and lint over the touched
+   paths, runnable in a bare worktree with no external services. Never a bare
+   `npm test` / `make test` / the whole e2e suite — the executor runs these on
+   every attempt and the fix roles on every round, so an unscoped command sets
+   the tick rate of the entire conveyor. A check that genuinely needs a live
+   service belongs under Test strategy as CI-only, not here.
+
    **Comments go on their own line, never after a value.** A trailing `# note` on
    `files_modified`/`requirements` is rejected by Gate 2: it is almost always a
    comment that leaked into the value, and a corrupted path silently disables the

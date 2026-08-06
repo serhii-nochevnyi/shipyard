@@ -6,14 +6,8 @@ if [[ ! -f Dockerfile.base ]]; then
   exit 1
 fi
 
-# The git identity is a REQUIRED build arg with no default (a baked-in fallback
-# would author every in-container commit as whoever wrote it down), so the suite
-# supplies one: the host's own git config, else an explicit test identity.
-GIT_USER_NAME="${GIT_USER_NAME:-$(git config --global user.name || true)}"
-GIT_USER_EMAIL="${GIT_USER_EMAIL:-$(git config --global user.email || true)}"
-GIT_USER_NAME="${GIT_USER_NAME:-shipyard test}"
-GIT_USER_EMAIL="${GIT_USER_EMAIL:-shipyard-test@example.invalid}"
-export GIT_USER_NAME GIT_USER_EMAIL
+# shellcheck source=lib/git-identity.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/git-identity.sh"
 
 LOCAL_SSH_DIR="${LOCAL_SSH_DIR:-$HOME/.ssh}" make build-base >/dev/null
 
