@@ -24,7 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
-const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { loadConfig, ROLES } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
@@ -90,6 +90,14 @@ for (const [id, t] of Object.entries(tickets)) {
     fix_fixed: outcome('fixed'),
     fix_noop: outcome('no-op'),
     escalations,
+    // A ticket PR that reached MERGED with no `merge` event never went through
+    // `sentinel.cjs merge`, i.e. the gate did not run for it: nobody re-verified
+    // green checks, zero unresolved threads, the arch-review conform trailer, or
+    // that the base was inside the stack. The journal alone cannot show this — a
+    // raw `gh pr merge` writes nothing, so a bypass is indistinguishable from an
+    // idle ticket. Only GitHub's own MERGED state, which we already fetched,
+    // makes the silence legible.
+    unguarded_merge: !!(pr && pr.state === 'MERGED' && !events.some((e) => e.event === 'merge')),
   };
   rows.push(row);
 }
@@ -134,11 +142,23 @@ const phaseRows = Object.entries(phases).map(([phase, p]) => ({
 const reuseScans = journal.filter((e) => e.event === 'reuse_scan');
 const reuseHits = reuseScans.reduce((n, e) => n + (Number(e.hits) || 0), 0);
 
+// Merges that skipped the guard, and attempts logged under a role the model
+// ladder does not know. Both are silent failures of the same kind: the conveyor
+// keeps working, the numbers still look like progress, and the thing that was
+// supposed to be enforced simply did not run.
+const unguarded = rows.filter((r) => r.unguarded_merge);
+const guardedMerges = journal.filter((e) => e.event === 'merge');
+const unknownRoles = [...new Set(
+  journal.filter((e) => e.event === 'attempt' && e.role && !ROLES.includes(e.role)).map((e) => e.role)
+)];
+
 if (asJson) {
   console.log(JSON.stringify({
     tickets: rows,
     phases: phaseRows,
-    sentinel_merges: journal.filter((e) => e.event === 'merge').length,
+    sentinel_merges: guardedMerges.length,
+    unguarded_merges: unguarded.map((r) => ({ ticket: r.ticket, pr: r.pr })),
+    unknown_roles: unknownRoles,
     reuse_scans: reuseScans.length,
     reuse_hits: reuseHits,
     journal_events: journal.length,
@@ -175,9 +195,25 @@ for (const p of phaseRows) {
 // Who actually landed the work. A phase where the sentinel merged nothing while
 // PRs sat green is the signature of auto_merge being off (or of a gate the guard
 // could never satisfy) — worth seeing next to the merge times.
-const landed = journal.filter((e) => e.event === 'merge');
-if (landed.length) {
-  console.log(`sentinel landed ${landed.length} ticket PR(s) into the stack (${[...new Set(landed.map((e) => e.base))].join(', ')})`);
+if (guardedMerges.length) {
+  console.log(`sentinel landed ${guardedMerges.length} ticket PR(s) into the stack (${[...new Set(guardedMerges.map((e) => e.base))].join(', ')})`);
+}
+// Say this even when it is the only merge line: a guarded count printed alone
+// reads as "this is how the work landed", and the tickets below landed some
+// other way entirely.
+if (unguarded.length) {
+  console.log(
+    `⚠ ${unguarded.length} ticket PR(s) are MERGED with no guarded merge — the gate in \`sentinel.cjs merge\` ` +
+    `did not run for them (green checks, zero unresolved threads, the arch-review conform trailer, base inside ` +
+    `the stack): ${unguarded.slice(0, 12).map((r) => `${r.ticket}#${r.pr}`).join(', ')}` +
+    (unguarded.length > 12 ? `, +${unguarded.length - 12} more` : '')
+  );
+}
+if (unknownRoles.length) {
+  console.log(
+    `⚠ attempts logged under ${unknownRoles.length} role(s) the model ladder does not know: ${unknownRoles.join(', ')}. ` +
+    `Those dispatches resolved no model from role × risk × attempt — someone picked one by hand. Known roles: ${ROLES.join(', ')}.`
+  );
 }
 if (reuseScans.length) {
   const withHits = reuseScans.filter((e) => (Number(e.hits) || 0) > 0).length;

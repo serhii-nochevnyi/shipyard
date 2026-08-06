@@ -54,6 +54,23 @@ for (const pair of pairs) {
   rec[key] = coerce(pair.slice(eq + 1));
 }
 
+// An invented role is not a labelling nit: `pipeline-config.cjs model <role>`
+// rejects anything outside the set, so a dispatch logged under one resolved no
+// model from role × risk × attempt — a human picked it by hand and the ladder
+// never applied. The journal still takes the event (telemetry must not lose a
+// real attempt over its label), but it stops being silent about it.
+if (rec.role) {
+  try {
+    const { ROLES } = require(path.join(__dirname, 'pipeline-config.cjs'));
+    if (!ROLES.includes(rec.role)) {
+      console.error(
+        `log-event: WARNING role "${rec.role}" is not a pipeline role, so the model ladder did not resolve this ` +
+        `dispatch. Known roles: ${ROLES.join(', ')}. Logging it anyway; pipeline-stats will report it.`
+      );
+    }
+  } catch { /* resolver unavailable — never block telemetry on it */ }
+}
+
 fs.mkdirSync(GRAPH_DIR, { recursive: true });
 fs.appendFileSync(LOG, JSON.stringify(rec) + '\n');
 console.log(`logged ${event} → ${path.relative(process.cwd(), LOG)}`);
