@@ -277,6 +277,16 @@ On the Workflow path pass the resolved alias per-item
 (`args.tickets[].model`, `args.prs[].model`); differentiate effort too when the
 script supports it: mechanics — low, code/judgment — high.
 
+**The tier aliases are Claude's.** `opus`/`sonnet`/`haiku`/`fable` are what the
+Agent tool validates against, so they only mean anything on the Claude runtime.
+On Codex there is no Workflow tool and no model parameter to pass: each
+`$shipyard-<role>` agent runs under its own `~/.codex/agents/<name>.toml`, which
+deliberately carries NO `model` key, so the host's default applies — matching the
+`resolve_model_ids: "omit"` posture GSD installs there. Do not try to hand a
+Codex dispatch a tier alias; resolve the model only where you can pass it. The
+ladder still applies as JUDGMENT — escalate by re-reading the risk/attempt table,
+not by setting a field that does not exist on that runtime.
+
 Scripts (the deterministic layer — do NOT improvise git/gh by hand where a script
 exists):
 
