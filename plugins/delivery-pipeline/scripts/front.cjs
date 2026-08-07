@@ -167,7 +167,7 @@ function computeFront(tickets, state, opts = {}) {
   };
   sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0;
 
-  return { actionable, waiting, parked, why, counts, actionable_count: actionableCount, fixpoint, sentinel };
+  return { actionable, waiting, parked, why, counts, actionable_count: actionableCount, fixpoint, sentinel, roles: BUCKET_ROLES };
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
@@ -187,11 +187,35 @@ function blockedWhy(s) {
 
 // The board lines. Deliberately blunt: the last line is the stop verdict, and it
 // names the rule so a run cannot quietly reinterpret it.
+// Which ladder ROLE each actionable bucket dispatches. The front's buckets and
+// the model ladder's roles are two different vocabularies for the same work
+// (`execute` vs `executor`, `merge` vs `pr-sentinel`), and nothing used to map
+// between them — so a run reading the board naturally logged `role=finalize` or
+// `role=merge`, names `pipeline-config.cjs model <role>` rejects. The dispatch
+// then resolved no model from role × risk × attempt and someone picked one by
+// hand. Publishing has no agent at all: the main loop pushes and opens the PR
+// itself, deliberately, so that the "did work" gate is not run by the thing it
+// checks. Stating the mapping here is what makes the invented names unnecessary.
+const BUCKET_ROLES = {
+  execute: ['executor'],
+  publish: [],
+  fix: ['ci-fix', 'review-fix'],
+  finalize: ['review-fix', 'arch-review'],
+  merge: ['pr-sentinel'],
+};
+
 function formatFront(front) {
   const lines = [];
   const parts = ORDER.filter((k) => front.actionable[k].length)
     .map((k) => `${k}: ${front.actionable[k].join(', ')}`);
   lines.push(`front: ${front.actionable_count} actionable now${parts.length ? ` — ${parts.join(' | ')}` : ''}`);
+  // Name the role each live bucket dispatches, so the run resolves a model with
+  // `model <role>` instead of passing the bucket's own name — which the ladder
+  // does not know and silently declines to route.
+  const live = ORDER.filter((k) => front.actionable[k].length && (BUCKET_ROLES[k] || []).length);
+  if (live.length) {
+    lines.push(`  dispatch roles (for "model <role>"): ${live.map((k) => `${k} → ${BUCKET_ROLES[k].join(' / ')}`).join(', ')}`);
+  }
 
   const wparts = [];
   if (front.waiting.ci.length) wparts.push(`ci: ${front.waiting.ci.join(', ')}`);

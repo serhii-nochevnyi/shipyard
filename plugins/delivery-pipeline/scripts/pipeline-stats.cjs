@@ -36,14 +36,6 @@ function fail(msg) {
   process.exit(1);
 }
 
-function gh(args) {
-  try {
-    return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (e) {
-    fail(`gh ${args.join(' ')} failed: ${e.stderr ? String(e.stderr).trim() : e.message}`);
-  }
-}
-
 if (!fs.existsSync(TICKETS)) fail('missing .planning/graph/tickets.json — run validate-graph first');
 const { tickets } = JSON.parse(fs.readFileSync(TICKETS, 'utf8'));
 
@@ -54,13 +46,62 @@ const journal = fs.existsSync(JOURNAL)
   : [];
 
 const { config: cfg } = loadConfig(process.cwd());
-const prs = JSON.parse(
-  gh(['pr', 'list', '--state', 'all', '--limit', String(cfg.pr_fetch_limit),
-      '--json', 'number,state,isDraft,headRefName,baseRefName,mergedAt,createdAt,url,reviewDecision,title'])
-);
-// stats are advisory, but a truncated window silently understates delivery —
-// say so rather than printing confident numbers over partial data.
-const prsTruncated = prs.length >= cfg.pr_fetch_limit;
+
+// One PR window PER REPO the graph touches. `state-sync` learned this the hard
+// way — watching the wrong repository made a ticket whose PR was merged next
+// door read as `pending` forever — but the lesson stopped there, and this script
+// kept asking only about the repo it happens to run in. A phase living entirely
+// in a sibling repo then reports 0 merged with every ticket "no PR matched",
+// which reads as a stalled phase rather than an unasked question. Worse, an
+// unguarded merge over there cannot be detected at all: the PR is never fetched,
+// so its MERGED state never contradicts the missing journal event.
+// `reviewDecision` is deliberately ABSENT from the bulk window and fetched by a
+// separate open-only pass. It is the one field that dominates the call: on a
+// 12k-PR monorepo the same 3000-row request takes 17s without it and 116s WITH
+// it — ending in `HTTP 502` from the GraphQL API, i.e. the whole repo silently
+// drops out of the numbers. state-sync already carries this rule; it simply
+// never reached here. Only OPEN PRs are ever asked about it (the `approved`
+// column), and that window is small.
+const PR_FIELDS = 'number,state,isDraft,headRefName,baseRefName,mergedAt,createdAt,url,title';
+const OPEN_FIELDS = 'number,reviewDecision';
+const repoOf = (t) => (t && t.repo) || null;
+const REPO_IDS = [...new Set(Object.values(tickets).map(repoOf))];
+if (!REPO_IDS.includes(null)) REPO_IDS.unshift(null); // the project's own repo is always in play
+
+const prsByRepo = new Map();
+let prsTruncated = false;
+const unreachableRepos = [];
+for (const repo of REPO_IDS) {
+  const args = ['pr', 'list', '--state', 'all', '--limit', String(cfg.pr_fetch_limit), '--json', PR_FIELDS];
+  if (repo) args.push('--repo', repo);
+  let rows;
+  try {
+    rows = JSON.parse(execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+  } catch (e) {
+    // A sibling repo we cannot reach is a gap in the numbers, not a reason to
+    // print nothing: the rest of the graph is still worth reporting on.
+    unreachableRepos.push(repo);
+    rows = [];
+  }
+  if (rows.length >= cfg.pr_fetch_limit) prsTruncated = true;
+
+  // Second, cheap pass: review decisions for the OPEN PRs only.
+  try {
+    const openArgs = ['pr', 'list', '--state', 'open', '--limit', String(cfg.pr_fetch_limit), '--json', OPEN_FIELDS];
+    if (repo) openArgs.push('--repo', repo);
+    const decisions = new Map(
+      JSON.parse(execFileSync('gh', openArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }))
+        .map((p) => [p.number, p.reviewDecision])
+    );
+    for (const p of rows) if (decisions.has(p.number)) p.reviewDecision = decisions.get(p.number);
+  } catch {
+    // No review decisions for this repo — the `approved` column goes blank there
+    // rather than the whole repo dropping out, which is the trade this split buys.
+  }
+
+  prsByRepo.set(repo, rows);
+}
+const prsFor = (t) => prsByRepo.get(repoOf(t)) || [];
 
 const now = Date.now();
 const hours = (a, b) => Math.round(((b - a) / 3_600_000) * 10) / 10;
@@ -75,7 +116,7 @@ for (const [id, t] of Object.entries(tickets)) {
     events.filter((e) => e.event === 'escalation').length +
     fixRounds.filter((e) => e.outcome === 'escalate').length;
 
-  const match = matchTicketPr(id, t, prs);
+  const match = matchTicketPr(id, t, prsFor(t));
   const pr = match ? match.pr : null;
   const row = {
     ticket: id,
@@ -168,6 +209,9 @@ if (asJson) {
 }
 if (prsTruncated) {
   console.log(`⚠ the PR listing hit its limit (${cfg.pr_fetch_limit}) — some tickets may show as pending; raise pipeline.pr_fetch_limit`);
+}
+if (unreachableRepos.length) {
+  console.log(`⚠ could not list PRs for ${unreachableRepos.join(', ')} — every ticket in ${unreachableRepos.length > 1 ? 'those repos' : 'that repo'} reads as pending here regardless of what actually shipped`);
 }
 
 const pad = (v, w) => String(v ?? '—').padEnd(w);

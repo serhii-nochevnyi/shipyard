@@ -203,4 +203,31 @@ test('counts cover every ticket exactly once', () => {
   assert.strictEqual(total, 4);
 });
 
+test('every actionable bucket names roles the model ladder actually knows', () => {
+  const { ROLES } = require(path.join(
+    __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
+  ));
+  const { roles } = computeFront({}, {});
+  assert.ok(roles && typeof roles === 'object', 'the front must publish its bucket → role mapping');
+
+  // The buckets and the ladder are two vocabularies for the same work
+  // (`execute` vs `executor`, `merge` vs `pr-sentinel`). A run that reads the
+  // board and logs the BUCKET name gets a role the ladder declines to route —
+  // observed in the field as attempts logged under `finalize` and `merge`. The
+  // mapping is what makes that unnecessary, so it has to stay true.
+  for (const [bucket, list] of Object.entries(roles)) {
+    assert.ok(Array.isArray(list), `roles.${bucket} must be an array`);
+    for (const r of list) {
+      assert.ok(ROLES.includes(r), `roles.${bucket} names "${r}", which is not a pipeline role`);
+    }
+  }
+
+  // Every bucket the front can put work in must be covered — a new bucket with
+  // no entry is exactly how the gap reappears.
+  const { actionable } = computeFront({}, {});
+  for (const bucket of Object.keys(actionable)) {
+    assert.ok(bucket in roles, `bucket "${bucket}" has no entry in the role mapping`);
+  }
+});
+
 done();
