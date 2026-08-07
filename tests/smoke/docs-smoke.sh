@@ -131,4 +131,36 @@ while read -r target; do
   grep -qE "^${target}:" Makefile || { echo "README references 'make $target' but the Makefile has no such target"; exit 1; }
 done < <(grep -oE 'make [a-z][a-z0-9-]+' README.md | awk '{print $2}' | sort -u)
 
+# ── the drift gate must be anchored to the CONFIGURED base ──────────────────
+# Anchoring the staleness test to `main` by name is a gate that never opens on a
+# project integrating into a long-lived branch: nothing merges into main for
+# months, so every plan reads as fresh. That is how a whole phase came to run
+# against a module layout reorganized underneath it. Pin both halves — the
+# trigger's wording, and the fact that the judge is actually TOLD which ref.
+node - <<'NODE'
+const fs = require('fs');
+const deliver = fs.readFileSync('plugins/delivery-pipeline/commands/deliver.md', 'utf8');
+const gate = fs.readFileSync('plugins/delivery-pipeline/workflows/drift-gate.mjs', 'utf8');
+const ref = fs.readFileSync('plugins/delivery-pipeline/references/drift-check.md', 'utf8');
+const fail = (m) => { console.error(m); process.exit(1); };
+
+if (/older than the last merge into main\b/.test(deliver)) {
+  fail('deliver.md anchors the drift-gate staleness test to `main` by name — use the configured base (git.base_branch), or the gate never fires on a project that integrates elsewhere');
+}
+if (!/baseRef/.test(deliver)) {
+  fail('deliver.md never passes `baseRef` to the drift gate — the judge would reason about whatever branch is checked out');
+}
+if (!/baseRef/.test(gate)) {
+  fail('workflows/drift-gate.mjs does not accept `baseRef`, but deliver.md is told to pass it — args contract drift');
+}
+// The judge must be told, in its own brief, that the working tree is not the
+// authority. The Workflow path builds prompts deterministically and never reads
+// the reference, so BOTH surfaces have to carry it.
+for (const [name, text] of [['references/drift-check.md', ref], ['workflows/drift-gate.mjs', gate]]) {
+  if (!/working tree/.test(text)) {
+    fail(`${name} does not warn that the working tree is not what "has landed" means — a checkout cut before the work makes every path absent, and absence there proves nothing`);
+  }
+}
+NODE
+
 echo "docs smoke passed"

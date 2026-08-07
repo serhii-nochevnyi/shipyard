@@ -607,15 +607,33 @@ The `⚠` lines from state-sync — you MUST show them to the human as a separat
 
 ## Step 2 — Drift-gate the chosen tickets
 
-For each ticket in scope whose plan is older than the last merge into main
-(or if more than 2 days have passed since generation) — run drift-check IN PARALLEL:
+For each ticket in scope whose plan is older than the last merge into **the
+configured base** — `git.base_branch` when set, the repo default otherwise, the
+same ref the epic is cut from — or if more than 2 days have passed since
+generation, run drift-check IN PARALLEL.
+
+**Compare against the base, never against `main` by name.** A project that
+integrates into a long-lived branch merges nothing into `main` for months, so a
+staleness test anchored there is a gate that never opens: every plan looks fresh
+because the ref it is measured against never moves. That is not hypothetical —
+it is how a whole phase came to be executed, ticket after ticket, against a
+module layout that had been reorganized underneath it, costing 19 babysit
+attempts and landing nothing. When in doubt, RUN the check: it is a cheap
+read-only judge, and the failure it prevents is the most expensive one there is.
 
 - **Workflow path** (available and `use_workflow ≠ false`): `Workflow({scriptPath:
   <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, model: "sonnet",
-  effort: "low"}], driftRefPath: <references/drift-check.md>}})`. The script is
+  effort: "low"}], driftRefPath: <references/drift-check.md>,
+  baseRef: "origin/<the configured base>"}})`. The script is
   fail-safe: an agent that crashed is treated as `drifted`.
 - **Fallback**: several drift-check `Agent`s in one message (`model: sonnet`;
   prompt `${CLAUDE_PLUGIN_ROOT}/references/drift-check.md` + the ticket contract).
+
+**Always pass the base ref, on either path.** Without it the judge reasons about
+the working tree, and the working tree is whatever branch the session is on —
+possibly one cut before the work existed, where every path is missing and the
+judge concludes "untouched" about code that is sitting on the base under those
+exact names. Tell it the ref and it checks the right tree.
 
 `drifted` → the ticket is excluded from scope, marked needs-replan, and the user gets
 a drift summary and a route to /shipyard:decompose. Do NOT execute a drifted ticket
