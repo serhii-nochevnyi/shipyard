@@ -6,7 +6,18 @@ between decomposition and delivery; the codebase may have moved.
 
 ## Input (provided by the orchestrator)
 - Ticket contract (plan file): Context reads, Scope, files_modified.
-- Current repository state (you are on an up-to-date default branch).
+- The project's integration base — `git.base_branch` when set, the repo default
+  otherwise. This, not the working tree, is what "has landed" means.
+
+## Judge against the base ref, not against what is checked out
+The checkout you are handed is whatever branch the session happened to be on. It
+may have been cut before any of the work you are judging existed, in which case
+every path the ticket names is absent — and absence there proves nothing at all.
+Verify with `git cat-file -e origin/<base>:<path>` or
+`git ls-tree -r --name-only origin/<base> -- <dir>`, not with the filesystem.
+This is the single most misleading input in the job: a file-existence sweep of a
+stale worktree once reported "0 of 7 present, untouched" for tickets whose entire
+implementation was sitting on the base branch under those exact names.
 
 ## Procedure (fast — minutes, not an audit)
 1. Context reads: does every file/path the ticket says to read still exist?
