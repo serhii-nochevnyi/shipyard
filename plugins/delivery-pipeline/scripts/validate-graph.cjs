@@ -299,6 +299,7 @@ function overlaps(a, b) {
   return pa === pb || pa.startsWith(pb + '/') || pb.startsWith(pa + '/');
 }
 if (acyclic) {
+  const contested = new Map();
   const ids = Object.keys(tickets).sort();
   for (let i = 0; i < ids.length; i++) {
     for (let j = i + 1; j < ids.length; j++) {
@@ -312,11 +313,32 @@ if (acyclic) {
       for (const fa of a.files) {
         for (const fb of b.files) {
           if (overlaps(fa, fb)) {
-            errors.push(`${a.id} and ${b.id} are dependency-unordered but touch overlapping paths ("${fa}" vs "${fb}") — add a dependency or re-slice`);
+            // Group by the CONTESTED PATH, not by the ticket pair. Reporting
+            // every (pair × file) restates one fact once per combination: a
+            // single hot file touched by four tickets produced six lines, and a
+            // real graph produced 52 errors that were really a handful of files.
+            // A gate whose output cannot be read is a gate that gets skimmed.
+            const key = fa === fb ? fa : `${fa} ~ ${fb}`;
+            const entry = contested.get(key) || { ids: new Set(), phases: new Set() };
+            entry.ids.add(a.id); entry.ids.add(b.id);
+            entry.phases.add(String(a.phase)); entry.phases.add(String(b.phase));
+            contested.set(key, entry);
           }
         }
       }
     }
+  }
+
+  for (const [path_, { ids, phases }] of [...contested.entries()].sort()) {
+    const who = [...ids].sort().join(', ');
+    // The remedy depends on whether the clash crosses a phase boundary, and
+    // getting this wrong sends the reader into a construct the conveyor warns
+    // about: a cross-phase dependency cannot cascade (delivery-rules §7), so
+    // "add a dependency" is advice that only works inside one phase.
+    const remedy = phases.size > 1
+      ? `these tickets span phases ${[...phases].sort().join('/')}, and a cross-phase dependency cannot cascade (there is no shared branch to stack on) — RE-SLICE so the path belongs to one phase, do not wire a dependency across them`
+      : 'add a dependency between them, or re-slice';
+    errors.push(`contested path "${path_}" — ${who} are dependency-unordered but all touch it; ${remedy}`);
   }
 } else {
   warnings.push('file-overlap check skipped — fix the dependency cycle first');

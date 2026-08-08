@@ -296,7 +296,42 @@ mkproj samerepo
 mkdir -p "$WORK/samerepo/.planning/phases/01-a"
 plan samerepo '01-a/01-PLAN.md' T-01-01 '' 'src/shared/x.ts' REQ-1 low false '' 'repo: acme/webapp'
 plan samerepo '01-a/02-PLAN.md' T-01-02 '' 'src/shared/x.ts' REQ-2 low false '' 'repo: acme/webapp'
-rejects samerepo 'overlapping paths' "identical paths in the SAME foreign repo are still rejected"
+rejects samerepo 'contested path "src/shared/x.ts"' "identical paths in the SAME foreign repo are still rejected"
+rejects samerepo 'T-01-01, T-01-02' "the contested-path error names every ticket touching it, not one pair"
+rejects samerepo 'add a dependency between them' "a SAME-phase clash may be resolved by a dependency"
+
+# A clash ACROSS phases must not be told to add a dependency: delivery-rules §7
+# says a cross-phase dependency cannot cascade, so the old blanket advice sent the
+# reader straight into the construct the validator warns about one check later.
+mkproj crossphase
+plan crossphase '01-a/01-PLAN.md' T-01-01 '' 'src/shared/hot.ts' REQ-1
+plan crossphase '02-b/01-PLAN.md' T-02-01 '' 'src/shared/hot.ts' REQ-2
+rejects crossphase 'RE-SLICE' "a cross-phase contested path demands a re-slice"
+rejects crossphase 'cannot cascade' "and says why a dependency would not work"
+out="$(run_validator crossphase 2>&1 || true)"
+if grep -q 'add a dependency between them' <<<"$out"; then
+  bad "a cross-phase clash must NOT suggest adding a dependency" "$out"
+else
+  ok "a cross-phase clash must NOT suggest adding a dependency"
+fi
+
+# One contested file touched by three tickets is ONE error, not three pairs —
+# a real graph produced 52 lines restating a handful of files.
+mkproj hotfile
+plan hotfile '01-a/01-PLAN.md' T-01-01 '' 'evals/qa/cases.mjs' REQ-1
+plan hotfile '01-a/02-PLAN.md' T-01-02 '' 'evals/qa/cases.mjs' REQ-2
+plan hotfile '01-a/03-PLAN.md' T-01-03 '' 'evals/qa/cases.mjs' REQ-3
+out="$(run_validator hotfile 2>&1 || true)"
+n="$(grep -c 'contested path' <<<"$out" || true)"
+if [[ "$n" == "1" ]]; then
+  ok "three tickets contesting one path produce ONE grouped error"
+else
+  bad "three tickets contesting one path produce ONE grouped error" "got $n lines:
+$out"
+fi
+grep -q 'T-01-01, T-01-02, T-01-03' <<<"$out" \
+  && ok "the grouped error names all three tickets" \
+  || bad "the grouped error names all three tickets" "$out"
 
 # a cross-repo dependency cannot cascade: no primary parent, base stays the epic
 mkproj crossrepo
