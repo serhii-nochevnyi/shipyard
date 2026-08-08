@@ -302,9 +302,19 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve | model <role> [f
 node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved|feedback|status> <pr> [--json] [--repo owner/name]
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|root|list [--json]> ...
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|pr|status|retarget> ...
-node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--graph <dir>]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs <mark|clear|list> …
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs [--json]
 ```
+
+**Telemetry belongs to the PROJECT, wherever the agent happens to stand.** The
+journal is only readable beside its graph — `pipeline-stats` needs `tickets.json`
+next to it — so an event logged from a ticket worktree or a cross-repo checkout
+must name the project's graph explicitly: `--graph <project>/.planning/graph`, or
+`SHIPYARD_GRAPH_DIR` in the agent's environment. Logging without it from such a
+checkout now refuses instead of quietly starting a second journal there; one
+`attempt` for a cross-repo ticket did exactly that, landing an untracked
+`.planning/` in a borrowed repository where nothing would ever read it.
 
 ## Integration model — epic-stacked (default)
 
