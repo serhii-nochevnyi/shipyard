@@ -49,6 +49,15 @@ const SENTINEL_BUCKETS = ['fix', 'finalize', 'merge'];
 // an infinite babysit loop. The caller passes those ids in.
 function computeFront(tickets, state, opts = {}) {
   const parkedIds = new Set(opts.parked || []);
+  // A drift verdict is a fact about the PLAN, not about a session, so unlike
+  // `parked` it has to outlive the run that discovered it. Without that the front
+  // re-offers the ticket as executable on every single run: two tickets confirmed
+  // stale on 2026-08-06 were still being listed under `execute` days later, and
+  // deliver.md's promise that a drifted ticket is "marked needs-replan" pointed
+  // at a mark nothing wrote and nothing read. The caller supplies
+  // {ticket: reason}; it is expected to drop entries whose plan has since been
+  // re-planned, so the park lifts by itself rather than becoming permanent.
+  const drifted = opts.drifted || {};
   // Auto-merge is a config decision (pipeline.auto_merge) that state-sync passes
   // in; the front never guesses it, because the difference is whether an unmerged
   // green PR is the run's work or a human's.
@@ -65,6 +74,14 @@ function computeFront(tickets, state, opts = {}) {
     if (parkedIds.has(id)) {
       parked.blocked.push(id);
       why[id] = 'parked by this run (escalation or attempts exhausted)';
+      continue;
+    }
+
+    // Checked BEFORE `merged`: a ticket can be both drifted and already landed
+    // under other names, and calling that "done" would hide the stale plan.
+    if (drifted[id] && s.status !== 'merged') {
+      parked.blocked.push(id);
+      why[id] = `drifted — ${drifted[id]}. Re-plan it (/shipyard:decompose); executing this plan builds against a codebase that moved.`;
       continue;
     }
 

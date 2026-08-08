@@ -203,6 +203,41 @@ test('counts cover every ticket exactly once', () => {
   assert.strictEqual(total, 4);
 });
 
+test('a drift verdict parks the ticket, and expires when the plan is re-planned', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const { execFileSync } = require('child_process');
+  const script = path.join(
+    __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'drift-record.cjs'
+  );
+  const { activeDrift } = require(script);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-drift-'));
+  fs.mkdirSync(path.join(dir, '.planning', 'graph'), { recursive: true });
+  const plan = path.join(dir, 'PLAN.md');
+  fs.writeFileSync(plan, '# plan v1\n');
+
+  execFileSync('node', [script, 'mark', 'T-01-01', plan, 'landed under other names'], { cwd: dir });
+  const first = activeDrift(dir);
+  assert.strictEqual(first['T-01-01'], 'landed under other names');
+
+  // A ready ticket that would otherwise be executable must be parked instead.
+  const tickets = { 'T-01-01': { phase: '1' } };
+  const state = { 'T-01-01': { status: 'pending', ready: true } };
+  const parkedFront = computeFront(tickets, state, { drifted: first });
+  assert.strictEqual(parkedFront.actionable.execute.length, 0, 'a drifted ticket must not be executable');
+  assert.ok(parkedFront.parked.blocked.includes('T-01-01'));
+  assert.ok(/re-plan/i.test(parkedFront.why['T-01-01']), parkedFront.why['T-01-01']);
+
+  // …and re-planning the ticket must lift the park without anyone remembering
+  // to clear it. A verdict that outlived its plan would be the worse failure:
+  // the run would insist on staleness that had already been fixed.
+  fs.writeFileSync(plan, '# plan v2 — re-planned against what shipped\n');
+  assert.deepStrictEqual(activeDrift(dir), {}, 'the verdict must expire when the plan changes');
+  const freshFront = computeFront(tickets, state, { drifted: activeDrift(dir) });
+  assert.deepStrictEqual(freshFront.actionable.execute, ['T-01-01']);
+});
+
 test('every actionable bucket names roles the model ladder actually knows', () => {
   const { ROLES } = require(path.join(
     __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'

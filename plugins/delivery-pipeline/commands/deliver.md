@@ -635,9 +635,21 @@ possibly one cut before the work existed, where every path is missing and the
 judge concludes "untouched" about code that is sitting on the base under those
 exact names. Tell it the ref and it checks the right tree.
 
-`drifted` → the ticket is excluded from scope, marked needs-replan, and the user gets
-a drift summary and a route to /shipyard:decompose. Do NOT execute a drifted ticket
-blindly.
+`drifted` → **record it**, then exclude the ticket from scope and give the user a
+drift summary plus a route to /shipyard:decompose:
+
+```
+node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs mark <T> <plan-path> "<what moved>"
+```
+
+Recording is not bookkeeping — it is the whole difference between judging a
+ticket once and judging it forever. The verdict lives in `.planning/graph/drift.json`
+bound to the plan's content hash, so `state-sync` parks the ticket on every
+subsequent run and the park lifts BY ITSELF once the plan is re-planned. Skip
+this and the front offers the same stale plan to an executor next run, and the
+one after: two tickets judged stale on one day were still being listed under
+`execute` days later, because "marked needs-replan" named a mark nothing wrote.
+Do NOT execute a drifted ticket blindly.
 
 Log one `reuse_scan` event per drift-checked ticket — `log-event.cjs reuse_scan
 ticket=<T> hits=<n> verdict=<fresh|drifted>` — including `hits=0`. Only the zero
