@@ -44,6 +44,7 @@ const { execFileSync, spawnSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { computeFront, formatFront } = require(path.join(__dirname, 'front.cjs'));
+const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 
 const ROOT = process.cwd();
@@ -476,7 +477,12 @@ for (const [id, s] of Object.entries(state)) {
 // section: the PR sentinel runs state-sync concurrently with the main loop, and
 // a reader that catches the pair half-updated acts on a state/front mismatch.
 const AUTO_MERGE = cfg.auto_merge === 'epic' && mode === 'epic-stacked';
-const front = computeFront(tickets, state, { parked: RUN_PARKED, autoMerge: AUTO_MERGE });
+// Drift verdicts recorded by earlier runs, minus any whose plan has since been
+// re-planned (drift-record binds each verdict to the plan's content hash, so the
+// park lifts by itself). Without this the front hands a stale plan back to an
+// executor on every run, however many times it has already been judged.
+const DRIFTED = activeDrift(ROOT);
+const front = computeFront(tickets, state, { parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED });
 
 withLock(lockDirFor(ROOT), 'state', () => {
   if (transitions.length) {
