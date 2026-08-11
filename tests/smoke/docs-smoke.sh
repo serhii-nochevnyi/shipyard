@@ -160,6 +160,19 @@ for (const [name, text] of [['references/drift-check.md', ref], ['workflows/drif
   if (!/working tree/.test(text)) {
     fail(`${name} does not warn that the working tree is not what "has landed" means — a checkout cut before the work makes every path absent, and absence there proves nothing`);
   }
+  // A drift verdict that is not persisted dies with the run: the next state-sync
+  // recomputes the front and re-offers the same stale plan. Two tickets judged
+  // stale sat under `execute` for five days because recording them lived only in
+  // prose someone had to remember. Both judge surfaces must carry the duty.
+  if (!/drift-record/.test(text)) {
+    fail(`${name} never tells the judge to persist a drifted verdict (drift-record) — a verdict left in the reply is re-derived, and re-ignored, on every later run`);
+  }
+}
+if (!/drift-record\.cjs list/.test(deliver)) {
+  fail('deliver.md does not verify that the judge actually recorded — self-recording without a check is the same promise that already went unkept once');
+}
+if (!/recordCmd/.test(deliver) || !/recordCmd/.test(gate)) {
+  fail('the drift-gate `recordCmd` arg is not passed by deliver.md or not accepted by the script — args contract drift');
 }
 NODE
 

@@ -13,6 +13,10 @@ export const meta = {
 //                        // the ref that defines "has landed". Omit it and the
 //                        // judge falls back to reasoning about the working tree,
 //                        // which may predate the work entirely.
+//     recordCmd: "node <plugin-root>/scripts/drift-record.cjs",  // optional;
+//                        // when given, a `drifted` judge persists its own verdict
+//                        // instead of leaving it in a reply that dies with the run
+//     graphDir: "<project>/.planning/graph",  // where that record belongs
 //   }
 // returns: [ { id, verdict: 'fresh'|'drifted', moved: [string], reuse_candidates: [string] } ]
 //
@@ -78,6 +82,9 @@ return await parallel(
         `Judge ONLY ticket ${t.id}. Do NOT modify anything.`,
         `"Has landed" means present on the integration base${argv.baseRef ? ` (${argv.baseRef})` : ''}, NOT present in the working tree. The checkout may sit on a branch cut before this work existed, where every path the ticket names is absent and that absence proves nothing — verify with \`git cat-file -e <base>:<path>\` / \`git ls-tree -r --name-only <base> -- <dir>\`.`,
         `Run the reuse scan (step 4) even when nothing has drifted — search by BEHAVIOR, not by the names the plan proposes. Existing code to build on is reported in reuse_candidates and leaves the verdict "fresh"; only work that is already done, or an implementation that invalidates the ticket's approach, is "drifted".`,
+        ...(argv.recordCmd
+          ? [`If and only if your verdict is "drifted", persist it BEFORE answering: \`${argv.recordCmd} mark ${t.id} ${t.planPath} "<what moved>"${argv.graphDir ? ` --graph ${argv.graphDir}` : ''}\`. A verdict left only in this reply dies with the run and the next state-sync offers the same stale plan again; the record is bound to the plan's hash, so it lifts by itself once the ticket is re-planned. Report whether it landed.`]
+          : []),
         `Return the verdict for ticket id "${t.id}".`,
       ].join('\n'),
       {

@@ -634,7 +634,9 @@ read-only judge, and the failure it prevents is the most expensive one there is.
 - **Workflow path** (available and `use_workflow ≠ false`): `Workflow({scriptPath:
   <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, model: "sonnet",
   effort: "low"}], driftRefPath: <references/drift-check.md>,
-  baseRef: "origin/<the configured base>"}})`. The script is
+  baseRef: "origin/<the configured base>",
+  recordCmd: "node <plugin-root>/scripts/drift-record.cjs",
+  graphDir: "<project>/.planning/graph"}})`. The script is
   fail-safe: an agent that crashed is treated as `drifted`.
 - **Fallback**: several drift-check `Agent`s in one message (`model: sonnet`;
   prompt `${CLAUDE_PLUGIN_ROOT}/references/drift-check.md` + the ticket contract).
@@ -651,6 +653,13 @@ drift summary plus a route to /shipyard:decompose:
 ```
 node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs mark <T> <plan-path> "<what moved>"
 ```
+
+The judge records its own verdict when it can (`recordCmd`), exactly as the
+sentinel logs its own merges. **Verify that it landed** — `drift-record.cjs list`
+must name every ticket you just judged `drifted`, and any it does not name is
+yours to `mark` before the run ends. A judge that answered `recorded: no`, or a
+Workflow path invoked without `recordCmd`, leaves the finding in a reply that
+dies with the run.
 
 Recording is not bookkeeping — it is the whole difference between judging a
 ticket once and judging it forever. The verdict lives in `.planning/graph/drift.json`

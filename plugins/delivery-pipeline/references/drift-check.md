@@ -34,8 +34,33 @@ implementation was sitting on the base branch under those exact names.
    for what appeared, moved, or was missed SINCE.
 5. Do NOT fix anything. You only judge.
 
+## On `drifted`, RECORD IT YOURSELF before you answer
+
+```
+node <plugin-root>/scripts/drift-record.cjs mark <ticket> <plan-path> "<what moved>" \
+  [--graph <project>/.planning/graph]
+```
+
+This is your job, not the orchestrator's, and the reason is not tidiness. A
+verdict that lives only in your reply lasts exactly as long as the run reading
+it: the next `state-sync` recomputes the front from the graph, sees a ready
+ticket, and offers the same stale plan to an executor again. That is not a
+hypothesis — two tickets judged stale on one day were still sitting under
+`execute` five days later, because recording them was prose someone had to
+remember. The sentinel logs its own merges for the same reason, and that field
+is the one nobody has had to doubt.
+
+Recording is safe for a read-only judge: it writes a verdict about a PLAN, never
+a line of the repository under test. The record is bound to the plan's content
+hash, so it lifts by itself the moment the ticket is re-planned — you are not
+condemning it forever, you are stopping the next run from re-deriving what you
+just derived.
+
 ## Output (final message, structured)
 - `verdict: fresh | drifted`
+- `recorded: yes | no (reason)` — for a `drifted` verdict, whether the mark
+  above actually landed. "no" is a hand-off, not a footnote: the orchestrator
+  must then record it before the run ends, or the finding evaporates.
 - for `drifted`: an itemized list of what moved (missing file, changed
   signature, pre-implemented scope), enough for a targeted re-plan of THIS
   ticket only
