@@ -45,8 +45,11 @@ The same structure is written to `.planning/graph/delivery-front.json`
 ```text
 actionable now  execute  — ready, no branch yet          → Step 3   [main loop]
                 publish  — branch pushed, PR missing     → Step 3 phase C [main loop]
-                fix      — open PR with failing checks   → Step 4   [SENTINEL]
-                finalize — green: threads, arch-review, conform, undraft [SENTINEL]
+                fix      — open PR with failing checks, or unresolved review
+                           threads (serviced AHEAD of a running CI)  [SENTINEL]
+                finalize — green: arch-review verdict, conform trailer, undraft
+                           (the guard splits it into `arch-review` + `undraft`,
+                           so a faulted verdict cannot ready the PR) [SENTINEL]
                 merge    — green + conform, targets the stack: squash it in [SENTINEL]
 waiting         ci       — checks still running (NOT a fixpoint; NOT a reason to block)
                 merge (human)/checkpoint — a human's move (fixpoint-compatible)
@@ -115,7 +118,8 @@ above. So they are split:
 
 ```text
 main loop   execute / publish  — worktrees, executors, new PRs, the cascade
-SENTINEL    fix / finalize / merge / wait-ci — everything about an OPEN PR,
+SENTINEL    ci-fix / review-fix / arch-review / undraft / merge / wait-ci
+            — everything about an OPEN PR,
             until it is merged into the epic, parked, or handed to a human
 ```
 
@@ -135,7 +139,10 @@ SENTINEL    fix / finalize / merge / wait-ci — everything about an OPEN PR,
 - **Fallback: a duty pass every round (Codex, or no background agents).** The
   mandate does not change, only who executes it: at the TOP of each round, before
   taking new work, run `sentinel.cjs duty` and serve every actionable item —
-  ci-fix, review-fix, finalize, merge — then continue with `execute`/`publish`.
+  ci-fix, review-fix, arch-review, undraft, merge — then continue with
+  `execute`/`publish`. Every one of those except `undraft` (a bare `gh pr ready`,
+  no agent) is a role `pipeline-config.cjs model <role>` resolves — pass THAT,
+  never the front's bucket name.
   Announce it: `⚠ no background agent → sentinel duty runs inline each round`.
   `pipeline.sentinel: off` also lands here (no guard, main loop does everything).
 

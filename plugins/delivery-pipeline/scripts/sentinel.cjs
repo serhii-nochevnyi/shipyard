@@ -220,9 +220,16 @@ function dutyItems() {
     } else if ((c.pending || 0) > 0) {
       item.action = 'wait-ci';
       item.why = `${c.pending} check(s) still running${unresolved === null ? ' — review threads unreadable this tick' : ''} — re-tick, do not block the main loop`;
+    } else if (s.draft && !gateConform(s.gate)) {
+      // Certify BEFORE readying. Bundled together as one `finalize` these two
+      // could not report separately, so a `violation` verdict and a clean one
+      // ended the same way, and the action name itself was not a role the model
+      // ladder knows — it got logged as one anyway.
+      item.action = 'arch-review';
+      item.why = 'green draft, no `gate_status: arch-review=conform` trailer — judge the diff against the ADRs and record the verdict';
     } else if (s.draft) {
-      item.action = 'finalize';
-      item.why = 'green draft — service reviewer threads, run arch-review, record gate_status, undraft';
+      item.action = 'undraft';
+      item.why = 'green + conform, still a draft — ready it (`gh pr ready`); nothing else is owed';
     } else if (t.human_checkpoint) {
       item.action = 'human';
       item.why = 'human_checkpoint — the approval and the merge are the human\'s';
@@ -230,8 +237,8 @@ function dutyItems() {
       item.action = 'review-fix';
       item.why = 'CHANGES_REQUESTED — service the threads (a bot can be wrong: a reasoned reply is a valid resolution)';
     } else if (!gateConform(s.gate)) {
-      item.action = 'finalize';
-      item.why = 'green, but no `gate_status: arch-review=conform` trailer on the PR — threads + arch-review still owed';
+      item.action = 'arch-review';
+      item.why = 'green and out of draft, but no `gate_status: arch-review=conform` trailer — the architecture verdict was never recorded';
     } else if (AUTO_MERGE && s.merge_scope === 'stacked') {
       item.action = 'merge';
       item.why = `green + conform → squash into ${base}`;
@@ -248,7 +255,12 @@ function dutyItems() {
   return items;
 }
 
-const ACTIONABLE = new Set(['ci-fix', 'review-fix', 'finalize', 'merge']);
+// Every actionable name here is either a role the model ladder knows
+// (`ci-fix`, `review-fix`, `arch-review`) or a mechanical step the guard does
+// itself (`undraft` — one `gh pr ready`, no agent, no model). The old catch-all
+// `finalize` was neither, which is how it ended up in the journal as a role
+// `model <role>` declines to route.
+const ACTIONABLE = new Set(['ci-fix', 'review-fix', 'arch-review', 'undraft', 'merge']);
 
 function dutySummary() {
   const items = dutyItems();
