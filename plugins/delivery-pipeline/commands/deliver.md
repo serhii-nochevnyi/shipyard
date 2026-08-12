@@ -52,6 +52,13 @@ actionable now  execute  — ready, no branch yet          → Step 3   [main lo
                            so a faulted verdict cannot ready the PR) [SENTINEL]
                 merge    — green + conform, targets the stack: squash it in [SENTINEL]
 waiting         ci       — checks still running (NOT a fixpoint; NOT a reason to block)
+                parent   — stacked on a parent whose PR is still open [SENTINEL]
+                           Work it now and you buy a green the base move undoes:
+                           CI re-runs on different code, reviewers re-read a
+                           changed diff, resolved threads can reopen. Both the
+                           front and `duty` come back shallowest-first so the
+                           roots are reached first by default. A parent waiting
+                           on a PERSON never holds its children.
                 merge (human)/checkpoint — a human's move (fixpoint-compatible)
 parked          blocked  — deps unsatisfied, or parked by this run
 ```
