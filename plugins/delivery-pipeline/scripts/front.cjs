@@ -184,6 +184,20 @@ function computeFront(tickets, state, opts = {}) {
   };
   sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0;
 
+  // SHALLOWEST FIRST inside every bucket. A ticket stacked on an open parent is
+  // work that will have to be redone: when the parent lands, this branch's base
+  // moves, CI re-runs against different code and reviewers re-read a changed
+  // diff. Ordering by stack depth is what makes "drive the parents first" the
+  // default rather than a thing to remember, and it costs one comparison.
+  const depth = (id, seen = new Set()) => {
+    const parent = ((tickets && tickets[id]) || {}).primary_parent;
+    if (!parent || seen.has(id)) return 0;
+    seen.add(id);
+    return ((state[parent] || {}).status === 'merged' ? 0 : 1) + depth(parent, seen);
+  };
+  const byDepth = (a, b) => depth(a) - depth(b) || String(a).localeCompare(String(b));
+  for (const k of Object.keys(actionable)) actionable[k].sort(byDepth);
+
   return { actionable, waiting, parked, why, counts, actionable_count: actionableCount, fixpoint, sentinel, roles: BUCKET_ROLES };
 }
 

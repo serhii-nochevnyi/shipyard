@@ -71,6 +71,40 @@ test('without the trailer the same PR is arch-review work, not a merge', () => {
   assert.strictEqual(d.items[0].action, 'arch-review');
 });
 
+test('a child stacked on an open parent waits, and the parent is served first', () => {
+  const root = project({
+    tickets: { P: {}, C: { primary_parent: 'P' } },
+    state: {
+      P: { status: 'pr-open', pr: 1, checks: { failing: 1, pending: 0 } },
+      C: { status: 'pr-open', pr: 2, checks: { failing: 1, pending: 0 } },
+    },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json']).stdout);
+  const byId = Object.fromEntries(d.items.map((i) => [i.ticket, i]));
+  assert.strictEqual(byId.P.action, 'ci-fix', 'the root is the work');
+  // Anything done on the child now is provisional: the parent landing moves its
+  // base, CI re-runs against different code, reviewers re-read a changed diff.
+  assert.strictEqual(byId.C.action, 'wait-parent', byId.C.why);
+  assert.strictEqual(d.items[0].ticket, 'P', 'shallowest first, so a caller taking the head gets the root');
+  assert.strictEqual(d.actionable_count, 1, 'the child is not actionable while the parent moves');
+});
+
+test('a parent waiting on a PERSON does not freeze its subtree', () => {
+  // The deadlock this guard exists for: a checkpointed parent can sit for hours,
+  // and deferring behind it would stop the whole stack for exactly that long.
+  const root = project({
+    tickets: { P: { human_checkpoint: true }, C: { primary_parent: 'P' } },
+    state: {
+      P: { status: 'pr-open', pr: 1, checks: { failing: 0, pending: 0 }, gate: { 'arch-review': 'conform' } },
+      C: { status: 'pr-open', pr: 2, checks: { failing: 1, pending: 0 } },
+    },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json']).stdout);
+  const byId = Object.fromEntries(d.items.map((i) => [i.ticket, i]));
+  assert.strictEqual(byId.P.action, 'human');
+  assert.strictEqual(byId.C.action, 'ci-fix', 'the child keeps moving when its parent is a human\'s to unblock');
+});
+
 test('a certified draft is only owed the undraft — no agent, no model', () => {
   const root = project({
     tickets: { A: {} },

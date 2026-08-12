@@ -109,7 +109,15 @@ duty="$W/duty.json"
 ( cd "$proj" && node "$SCRIPTS/sentinel.cjs" duty --json > "$duty" ) || bad "sentinel duty runs"
 d() { node -e 'const s=require(process.argv[1]);process.stdout.write(String(s.items.find(i=>i.ticket===process.argv[2])[process.argv[3]]))' "$duty" "$@"; }
 [[ "$(d T-01-01 action)" == "merge" ]] && ok "duty: the green + conform PR is a merge" || bad "duty: the green + conform PR is a merge" "got: $(d T-01-01 action)"
-[[ "$(d T-01-02 action)" == "ci-fix" ]] && ok "duty: the red PR is ci-fix" || bad "duty: the red PR is ci-fix" "got: $(d T-01-02 action)"
+# T-01-02 is stacked on T-01-01, whose PR is still open — so the red child is NOT
+# ci-fix work yet. Fixing it now buys a green that the parent's merge undoes: the
+# base moves, CI re-runs on different code, reviewers re-read a changed diff.
+[[ "$(d T-01-02 action)" == "wait-parent" ]] \
+  && ok "duty: a red child of an open parent waits instead of being fixed twice" \
+  || bad "duty: a red child of an open parent waits" "got: $(d T-01-02 action)"
+[[ "$(d T-01-01 depth)" == "0" && "$(d T-01-02 depth)" == "1" ]] \
+  && ok "duty carries the stack depth it sorts by" \
+  || bad "duty carries the stack depth" "got: $(d T-01-01 depth) / $(d T-01-02 depth)"
 
 # auto_merge: off must hand the same PR back to a human, and restore the old
 # fixpoint semantics (nothing actionable → the run may end)

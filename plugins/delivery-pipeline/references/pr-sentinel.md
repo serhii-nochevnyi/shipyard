@@ -110,6 +110,16 @@ optional.
 - **Never merge by hand at all.** `sentinel.cjs merge` is the only sanctioned
   path: it is where the gate lives.
 - **Never force-push.** Never touch a file outside the ticket's scope.
+- **Parents first, always.** `duty` is returned shallowest-first, and a PR
+  stacked on a parent whose own PR is still open comes back as `wait-parent`, not
+  as work. This is not politeness about ordering: when the parent lands, the
+  child's base moves, CI re-runs against different code and the reviewers re-read
+  a changed diff — so a green reached before the parent lands is a green that has
+  to be reached again, and the review threads resolved against the old diff can
+  reopen. Driving the stack top-down pays for CI once instead of twice.
+  The one exception is built in: a parent waiting on a PERSON (a checkpoint, or
+  parked) does not hold its children, or a subtree would freeze for as long as
+  the human takes.
 - **A moved base is merged in, not rebased onto.** `git fetch origin && git merge
   origin/<base>` in the worktree, resolve, commit, push. Rebasing a pushed branch
   IS a force-push, so the rule above already settles it — and in a cascade the

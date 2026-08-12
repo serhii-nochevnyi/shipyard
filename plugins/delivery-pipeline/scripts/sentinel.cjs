@@ -170,6 +170,31 @@ function unresolvedThreads(pr, repo) {
   return n;
 }
 
+// How many unmerged tickets this one is stacked on. 0 = its PR targets the epic
+// (a root); 1 = its base is a parent branch still open; and so on. The graph
+// already carries `primary_parent`; nothing used it to decide what to work on.
+function stackDepth(id, seen = new Set()) {
+  const parent = (tickets[id] || {}).primary_parent;
+  if (!parent || seen.has(id)) return 0;
+  seen.add(id);
+  const ps = state[parent] || {};
+  if (ps.status === 'merged') return stackDepth(parent, seen); // landed: no longer above us
+  return 1 + stackDepth(parent, seen);
+}
+
+// A child is deferred while its parent PR is still being driven — but never
+// behind a parent that is waiting on a PERSON, or the whole subtree freezes for
+// as long as the human takes.
+function parentIsMoving(id) {
+  const parent = (tickets[id] || {}).primary_parent;
+  if (!parent) return false;
+  const ps = state[parent];
+  if (!ps || ps.status !== 'pr-open') return false;
+  if (PARKED.has(parent)) return false;
+  if ((tickets[parent] || {}).human_checkpoint) return false;
+  return true;
+}
+
 function dutyItems() {
   const items = [];
   for (const [id, s] of Object.entries(state)) {
@@ -186,13 +211,24 @@ function dutyItems() {
       base,
       epic: s.epic || null,
       worktree_hint: id,
+      depth: stackDepth(id),
       action: 'none',
       why: '',
     };
 
+    item.depth = stackDepth(id);
+
     if (PARKED.has(id)) {
       item.action = 'parked';
       item.why = 'parked by this run (escalation or attempts exhausted) — a human unparks it';
+    } else if (parentIsMoving(id)) {
+      // Drive the PARENT first. Anything done here is provisional: when the
+      // parent lands, this branch's base moves, CI re-runs against different
+      // code and reviewers re-read a changed diff — so a green reached now is a
+      // green that has to be reached again. Ordering the stack is not tidiness,
+      // it is the difference between paying for CI once and paying twice.
+      item.action = 'wait-parent';
+      item.why = `stacked on ${tickets[id].primary_parent}, whose PR is still open — driving this one to green now buys a green that the base move will undo`;
     } else if ((c.failing || 0) > 0) {
       item.action = 'ci-fix';
       item.why = `${c.failing} failing check(s) — read the failure log, fix in the worktree, push, reinit reviewers`;
@@ -252,7 +288,12 @@ function dutyItems() {
     if (c.none_reported) item.checks_note = 'no CI checks reported — "green" here means "nothing ran"';
     items.push(item);
   }
-  return items;
+  // SHALLOWEST FIRST. The guard serves the list in order, so a root whose base is
+  // the epic is reached before anything stacked on it — which is the whole point
+  // of `wait-parent` above: the order and the deferral say the same thing twice,
+  // once for a caller that reads the actions and once for a caller that just
+  // takes the first item.
+  return items.sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0) || String(a.ticket).localeCompare(String(b.ticket)));
 }
 
 // Every actionable name here is either a role the model ladder knows
