@@ -174,6 +174,9 @@ case "$*" in
  {"number":202,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-02-raw","baseRefName":"epic/01-demo","mergedAt":"2026-01-02T01:00:00Z","createdAt":"2026-01-02T00:00:00Z","url":"https://example/202","reviewDecision":null,"title":"T-01-02: raw"}]
 JSON
     ;;
+  # Asked only for the PRs already flagged — never in the bulk window, where this
+  # field costs the same order as reviewDecision.
+  "pr view 202 --json mergedBy"*) echo "octo-human" ;;
   *) echo "stub gh2: unhandled: $*" >&2; exit 1 ;;
 esac
 STUB
@@ -186,6 +189,9 @@ has "stats still credits the guarded merge" "$W/stats.txt" "sentinel landed 1 ti
 has "stats names the role the ladder does not know" "$W/stats.txt" "frontend-delivery"
 # One merge is one PR landing, however many times it was written down.
 has "a double-logged merge is counted once" "$W/stats.txt" "sentinel landed 1 ticket PR"
+# Who merged it is the difference between a person deciding and a run evading.
+has "the unguarded merge names who did it" "$W/stats.txt" "T-01-02#202 (octo-human)"
+hasnt "and mergedBy never enters the bulk window" "$W/stats.txt" "stub gh2: unhandled"
 hasnt "and no empty base leaks into the summary" "$W/stats.txt" "stack (, "
 
 # ── unresolved threads outrank a running CI ─────────────────────────────────
