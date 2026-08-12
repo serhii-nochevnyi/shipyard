@@ -48,8 +48,9 @@ if (repoIdx !== -1 && !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(REPO)) {
 const REPO_ARG = REPO ? ['--repo', REPO] : [];
 const OWNER_REPO = REPO || '{owner}/{repo}';
 
-if (!['reinit', 'unresolved', 'status', 'feedback'].includes(cmd) || !Number.isInteger(pr) || pr <= 0) {
-  console.error('usage: reviewers.cjs <reinit|unresolved|feedback|status> <pr-number> [--json] [--force] [--repo owner/name]');
+if (!['reinit', 'unresolved', 'status', 'feedback', 'resolve'].includes(cmd) || !Number.isInteger(pr) || pr <= 0) {
+  console.error('usage: reviewers.cjs <reinit|unresolved|feedback|status> <pr-number> [--json] [--force] [--repo owner/name]\n' +
+                '       reviewers.cjs resolve <pr-number> <threadId> [<threadId> ...] [--repo owner/name]');
   process.exit(2);
 }
 
@@ -166,6 +167,36 @@ if (cmd === 'reinit') {
   process.exit(0);
 }
 
+// cmd === 'resolve' — mark threads resolved by their GraphQL node id.
+//
+// This exists because "resolve the thread" was an instruction with no tool
+// behind it: the ids were not in the payload, and assembling the mutation by
+// hand is the kind of step that quietly does not happen. A thread answered but
+// left open is indistinguishable, to every counter downstream, from a thread
+// ignored — the merge gate refuses on it and the guard re-serves the same PR.
+if (cmd === 'resolve') {
+  const ids = argv.slice(2).filter((a) => !a.startsWith('--') && a !== String(pr) && argv[argv.indexOf(a) - 1] !== '--repo');
+  if (!ids.length) {
+    console.error('reviewers: resolve needs at least one threadId (get them from `reviewers.cjs unresolved <pr>`)');
+    process.exit(2);
+  }
+  const done = [];
+  const failed = [];
+  for (const id of ids) {
+    const out = gh([
+      'api', 'graphql',
+      '-f', 'query=mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}',
+      '-f', `id=${id}`,
+    ], { tolerate: true });
+    if (typeof out === 'string' && /"isResolved"\s*:\s*true/.test(out)) done.push(id);
+    else failed.push({ id, error: typeof out === 'string' ? out.trim().slice(0, 160) : out.error });
+  }
+  // Report failures loudly: a half-resolved round that reads as success is how
+  // the merge gate ends up refusing on work the run believed it had finished.
+  console.log(JSON.stringify({ pr, resolved: done.length, failed }, null, 2));
+  process.exit(failed.length ? 1 : 0);
+}
+
 // cmd === 'unresolved' | 'feedback'
 const repo = REPO
   ? { owner: { login: REPO.split('/')[0] }, name: REPO.split('/')[1] }
@@ -177,6 +208,7 @@ query($owner: String!, $name: String!, $pr: Int!, $cursor: String) {
       reviewThreads(first: 100, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
+          id
           isResolved
           isOutdated
           path
@@ -210,6 +242,12 @@ for (;;) {
 const unresolved = threads
   .filter((t) => !t.isResolved)
   .map((t) => ({
+    // The GraphQL node id, and the ONLY way to resolve the thread
+    // (`resolveReviewThread(input:{threadId:…})`). It was missing from both the
+    // query and this projection, so every consumer was told to resolve threads
+    // it had no handle for — which is why they were answered and left open, and
+    // why the merge gate then refused on its own reviewers' work.
+    id: t.id,
     path: t.path,
     line: t.line,
     outdated: t.isOutdated,

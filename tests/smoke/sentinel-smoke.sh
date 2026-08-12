@@ -181,6 +181,69 @@ hasnt "stats does not accuse the guarded merge" "$W/stats.txt" "T-01-01#201"
 has "stats still credits the guarded merge" "$W/stats.txt" "sentinel landed 1 ticket PR"
 has "stats names the role the ladder does not know" "$W/stats.txt" "frontend-delivery"
 
+# ── unresolved threads outrank a running CI ─────────────────────────────────
+# Reviewers answer in a minute; CI takes tens of them; and servicing a thread
+# that needs a change ends in a push that cancels the very run we waited for.
+# Waiting first buys two CI cycles where one would do, and the first validates
+# code nobody intends to keep. `ci-fix` already preempts pending checks for the
+# same reason — this pins that review feedback finally does too.
+tproj="$W/threadsproj"
+mkdir -p "$tproj/.planning/graph" "$W/bin3"
+cat > "$tproj/.planning/graph/tickets.json" <<'JSON'
+{ "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },
+  "tickets": { "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-x",
+                            "title": "x", "depends_on": [], "risk": "low" } } }
+JSON
+cat > "$tproj/.planning/graph/delivery-state.json" <<'JSON'
+{ "T-01-01": { "status": "pr-open", "pr": 301, "branch": "ticket/T-01-01-x", "base": "epic/01-demo",
+               "draft": false, "merge_scope": "stacked", "checks": { "failing": 0, "pending": 2 } } }
+JSON
+echo '{"pipeline":{}}' > "$tproj/.planning/config.json"
+cat > "$W/bin3/gh" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"repo"}' ;;
+  *"api graphql"*)
+    cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},
+ "nodes":[{"id":"PRRT_kwAAA","isResolved":false,"isOutdated":false,"path":"src/a.ts","line":7,
+ "comments":{"totalCount":1,"pageInfo":{"hasNextPage":false},
+ "nodes":[{"author":{"login":"coderabbitai"},"body":"nit: rename this","url":"https://example/1"}]}}]}}}}}
+JSON
+    ;;
+  *) echo "stub gh3: unhandled: $*" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin3/gh"
+( cd "$tproj" && PATH="$W/bin3:$PATH" node "$SCRIPTS/sentinel.cjs" duty --json ) > "$W/duty.json" 2>"$W/duty.err" || true
+
+if node -e '
+  const d = require(process.argv[1]);
+  const it = (d.items || []).find((i) => i.ticket === "T-01-01");
+  if (!it) { console.error("no duty item"); process.exit(1); }
+  if (it.action !== "review-fix") { console.error("action=" + it.action + " why=" + it.why); process.exit(1); }
+  process.exit(0);
+' "$W/duty.json" 2>>"$W/duty.err"; then
+  ok "an unresolved thread beats pending CI (review-fix, not wait-ci)"
+else
+  bad "an unresolved thread beats pending CI" "$(cat "$W/duty.json" "$W/duty.err" 2>/dev/null | head -12)"
+fi
+grep -q 'CI still running' "$W/duty.json" \
+  && ok "the reason says why servicing now is right, not just what to do" \
+  || bad "the reason explains the ordering" "$(cat "$W/duty.json" | head -6)"
+
+# The thread id is what resolving takes; without it the instruction to resolve
+# is one nobody can follow — which is exactly how threads got answered and left
+# open, and the merge gate then refused on its own reviewers' work.
+( cd "$tproj" && PATH="$W/bin3:$PATH" node "$SCRIPTS/reviewers.cjs" unresolved 301 ) > "$W/threads.json" 2>/dev/null || true
+node -e '
+  const r = require(process.argv[1]);
+  const t = (r.threads || [])[0];
+  process.exit(t && typeof t.id === "string" && t.id.length ? 0 : 1);
+' "$W/threads.json" \
+  && ok "unresolved threads carry the id needed to resolve them" \
+  || bad "unresolved threads carry their id" "$(head -20 "$W/threads.json")"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" == 0 ]] || exit 1
