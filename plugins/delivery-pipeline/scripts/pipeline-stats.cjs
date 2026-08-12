@@ -188,10 +188,39 @@ const reuseHits = reuseScans.reduce((n, e) => n + (Number(e.hits) || 0), 0);
 // keeps working, the numbers still look like progress, and the thing that was
 // supposed to be enforced simply did not run.
 const unguarded = rows.filter((r) => r.unguarded_merge);
-const guardedMerges = journal.filter((e) => e.event === 'merge');
+// One merge is one PR landing, however many times it was written down. Journals
+// in the wild carry duplicates — the guard writes its own record and a run wrote
+// another by hand seconds later — and counting both overstated "sentinel landed
+// N" while the hand-written copy, having no `base`, printed an empty entry in
+// the epic list. log-event now refuses those, but the journals that already have
+// them still have to read correctly.
+const guardedMerges = [...new Map(
+  journal.filter((e) => e.event === 'merge')
+    .map((e) => [`${e.repo || ''}#${e.pr ?? e.ticket}`, e])
+    // Keep the record that knows the most: the guard's carries `by` and `base`.
+    .sort(([, a], [, b]) => (a.by === 'sentinel' ? 1 : 0) - (b.by === 'sentinel' ? 1 : 0))
+).values()];
 const unknownRoles = [...new Set(
   journal.filter((e) => e.event === 'attempt' && e.role && !ROLES.includes(e.role)).map((e) => e.role)
 )];
+
+// Tickets the board keeps offering that no run ever takes. A run scopes itself
+// to the phase it is working, so a ticket from an older phase can sit under
+// `execute` indefinitely: never selected, therefore never drift-gated, therefore
+// never parked — and `fixpoint: NO` forever, over work nobody intends to do.
+// Two such tickets were still being offered six days after being judged stale,
+// because the judging only happens to tickets a run has already chosen.
+// "Left behind" is not "not started". A pending ticket in the phase currently
+// being worked is simply next in line; a pending ticket in a phase the run has
+// already moved PAST is one the board will keep offering and no run will take.
+// An escalation makes that more true, not less — the first version of this check
+// excluded escalated tickets and so missed the only two real cases on hand.
+const phaseNum = (p) => Number.parseInt(String(p), 10);
+const newestLandedPhase = rows
+  .filter((r) => r.status === 'merged')
+  .reduce((max, r) => Math.max(max, phaseNum(r.phase) || 0), 0);
+const stranded = rows.filter((r) =>
+  r.status === 'pending' && !r.pr && !r.attempts && (phaseNum(r.phase) || 0) < newestLandedPhase);
 
 if (asJson) {
   console.log(JSON.stringify({
@@ -240,7 +269,11 @@ for (const p of phaseRows) {
 // PRs sat green is the signature of auto_merge being off (or of a gate the guard
 // could never satisfy) — worth seeing next to the merge times.
 if (guardedMerges.length) {
-  console.log(`sentinel landed ${guardedMerges.length} ticket PR(s) into the stack (${[...new Set(guardedMerges.map((e) => e.base))].join(', ')})`);
+  // A cascade child lands on its PARENT's branch, not on an epic, so this list
+  // legitimately mixes both. Empty entries are dropped rather than printed as a
+  // gap: they only ever came from a record that did not know its own base.
+  const bases = [...new Set(guardedMerges.map((e) => e.base).filter(Boolean))];
+  console.log(`sentinel landed ${guardedMerges.length} ticket PR(s) into the stack (${bases.join(', ')})`);
 }
 // Say this even when it is the only merge line: a guarded count printed alone
 // reads as "this is how the work landed", and the tickets below landed some
@@ -251,6 +284,14 @@ if (unguarded.length) {
     `did not run for them (green checks, zero unresolved threads, the arch-review conform trailer, base inside ` +
     `the stack): ${unguarded.slice(0, 12).map((r) => `${r.ticket}#${r.pr}`).join(', ')}` +
     (unguarded.length > 12 ? `, +${unguarded.length - 12} more` : '')
+  );
+}
+if (stranded.length) {
+  console.log(
+    `⚠ ${stranded.length} ticket(s) in phases that have otherwise landed were never attempted: ` +
+    `${stranded.map((r) => r.ticket).join(', ')}. The board offers them every run and no run takes them, ` +
+    `so they are never drift-gated and never parked — take them, or record why not ` +
+    `(\`drift-record.cjs mark\` when the plan predates what shipped).`
   );
 }
 if (unknownRoles.length) {

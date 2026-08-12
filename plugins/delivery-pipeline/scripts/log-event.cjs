@@ -58,6 +58,24 @@ if (!event || !/^[a-z][a-z0-9_-]*$/.test(event)) {
   process.exit(2);
 }
 
+// Events the deterministic layer writes for itself. `sentinel.cjs merge` and
+// `state-sync.cjs` append these directly — neither goes through this CLI — so a
+// hand-written one is always a DUPLICATE, never a rescue. deliver.md has said
+// "do NOT log them by hand" since they existed and it happened anyway: two
+// merges were double-logged in one morning, which inflated "sentinel landed N"
+// and put an empty base in the summary, because the hand-written copy carries no
+// `by` and no `base`. Refusing costs nothing — the real record is already there.
+const OWNED_BY_SCRIPTS = { merge: 'sentinel.cjs merge', status_change: 'state-sync.cjs' };
+if (OWNED_BY_SCRIPTS[event]) {
+  console.error(
+    `log-event: "${event}" events are written by ${OWNED_BY_SCRIPTS[event]} itself — refusing to add a duplicate.\n` +
+    `  The genuine record carries fields a hand-written one cannot (by, base), and counting both\n` +
+    `  overstates what the guard actually did. If the real event is missing, that is a bug in\n` +
+    `  ${OWNED_BY_SCRIPTS[event]}, not something to paper over here.`
+  );
+  process.exit(1);
+}
+
 if (!GRAPH_EXPLICIT && !fs.existsSync(path.join(GRAPH_DIR, 'tickets.json'))) {
   console.error(
     `log-event: no ticket graph at ${GRAPH_DIR} — refusing to start a second journal there.\n` +
