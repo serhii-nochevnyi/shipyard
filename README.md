@@ -581,6 +581,7 @@ The rest build images or reach the network:
 
 ```bash
 make test-k8s           # kubectl dry-run over k8s/
+make test-releases      # every pushed tag carries a GitHub release entry (needs gh)
 make test-base
 make test-overlay
 make test-runtime
