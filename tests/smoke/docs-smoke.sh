@@ -174,6 +174,24 @@ if (!/drift-record\.cjs list/.test(deliver)) {
 if (!/recordCmd/.test(deliver) || !/recordCmd/.test(gate)) {
   fail('the drift-gate `recordCmd` arg is not passed by deliver.md or not accepted by the script — args contract drift');
 }
+
+// Every actionable duty the guard can emit must be a role the ladder resolves,
+// or a named mechanical step that needs no model. `finalize` was neither, and it
+// reached the journal as a role `model <role>` declines to route.
+const sentinel = fs.readFileSync('plugins/delivery-pipeline/scripts/sentinel.cjs', 'utf8');
+const { ROLES } = require('./plugins/delivery-pipeline/scripts/pipeline-config.cjs');
+const actionable = (sentinel.match(/const ACTIONABLE = new Set\(\[([^\]]*)\]/) || [])[1];
+if (!actionable) fail('cannot find the sentinel ACTIONABLE set');
+// Steps the guard performs ITSELF — no agent is dispatched, so no model is
+// resolved: `undraft` is a bare `gh pr ready`, and `merge` is `sentinel.cjs
+// merge`, which re-verifies the gate against live GitHub in the script precisely
+// so that no agent can be talked into it.
+const MECHANICAL = new Set(['undraft', 'merge']);
+for (const a of actionable.split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)) {
+  if (!ROLES.includes(a) && !MECHANICAL.has(a)) {
+    fail(`sentinel duty can emit "${a}", which is neither a pipeline role nor a declared mechanical step — whoever serves it has no model to resolve`);
+  }
+}
 NODE
 
 echo "docs smoke passed"

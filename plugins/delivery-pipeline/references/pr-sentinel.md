@@ -48,11 +48,20 @@ verify each comment against the actual code, fix what is right, and reply with a
 reasoned disagreement to what is wrong. A bot is not an authority — but an
 unanswered comment is not "resolved" either.
 
-**`finalize`** — green, but the gate is not recorded. Service the threads, run
-the arch-review verdict (`references/arch-review.md`, judgment work — do not
-cheapen it), and when checks are green ∧ unresolved threads = 0 ∧ arch conform,
-append the trailer as the LAST line of the PR body (it survives a squash merge)
-and undraft:
+**`arch-review`** — green, but no verdict is recorded. Run the architecture judge
+(`references/arch-review.md`, judgment work — do not cheapen it) and append the
+trailer as the LAST line of the PR body (it survives a squash merge). Threads are
+NOT part of this action any more: they are serviced by `review-fix` as soon as
+they appear, ahead of a still-running CI, so by the time a PR reaches here the
+thread count is already zero. A `violation` or `adr-outdated` verdict ends the
+action — do not undraft a PR the judge just faulted; that is fix work or a human's
+call, and bundling the two used to make both outcomes look alike.
+
+**`undraft`** — green ∧ threads = 0 ∧ arch conform, and the PR is still a draft.
+One `gh pr ready`; no agent and no model are involved. It is a separate action
+precisely because it must be unreachable until the verdict exists.
+
+The trailer, appended by `arch-review`:
 
 ```bash
 gh pr edit <pr> --body "<existing body>

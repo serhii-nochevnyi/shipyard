@@ -62,10 +62,31 @@ test('a green PR with the conform trailer is a merge', () => {
   assert.strictEqual(d.actionable_count, 1);
 });
 
-test('without the trailer the same PR is finalize work, not a merge', () => {
+test('without the trailer the same PR is arch-review work, not a merge', () => {
   const root = project({ tickets: { A: {} }, state: { A: { ...green, gate: undefined } } });
   const d = JSON.parse(run(root, ['duty', '--json']).stdout);
-  assert.strictEqual(d.items[0].action, 'finalize');
+  // Named for the role that does it, not for a stage. `finalize` bundled the
+  // architecture verdict with readying the PR, so a `violation` and a clean pass
+  // ended in the same action — and the name was not one the ladder could route.
+  assert.strictEqual(d.items[0].action, 'arch-review');
+});
+
+test('a certified draft is only owed the undraft — no agent, no model', () => {
+  const root = project({
+    tickets: { A: {} },
+    state: { A: { ...green, draft: true, gate: { 'arch-review': 'conform' } } },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json']).stdout);
+  assert.strictEqual(d.items[0].action, 'undraft');
+});
+
+test('an uncertified draft is judged before it is readied', () => {
+  const root = project({
+    tickets: { A: {} },
+    state: { A: { ...green, draft: true, gate: undefined } },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json']).stdout);
+  assert.strictEqual(d.items[0].action, 'arch-review', 'never ready a PR whose verdict was never recorded');
 });
 
 test('auto_merge: off hands the merge back to a human', () => {
