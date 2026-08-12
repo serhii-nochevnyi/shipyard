@@ -203,6 +203,62 @@ test('counts cover every ticket exactly once', () => {
   assert.strictEqual(total, 4);
 });
 
+test('parents come before children, but a left-behind phase never comes first', () => {
+  const tickets = {
+    'T-02-01': { phase: '2' },                              // left behind: 14 has landed
+    'T-14-02': { phase: '14' },                              // live root
+    'T-14-07': { phase: '14', primary_parent: 'T-14-02' },   // live child
+    'T-14-09': { phase: '14', primary_parent: 'T-14-07' },   // live grandchild
+    'T-14-01': { phase: '14' },
+  };
+  const state = {
+    'T-02-01': { status: 'pending', ready: true },
+    'T-14-02': { status: 'pending', ready: true },
+    'T-14-07': { status: 'pending', ready: true },
+    'T-14-09': { status: 'pending', ready: true },
+    'T-14-01': { status: 'merged' },
+  };
+  const f = computeFront(tickets, state, {});
+  // Depth orders a stack; it says nothing across phases. Sorting by depth alone
+  // put a phase-2 root (depth 0) ahead of every live phase-14 child — observed on
+  // a real board right after the sort shipped, with two tickets judged stale six
+  // days earlier sitting at the head of `execute`.
+  assert.deepStrictEqual(
+    f.actionable.execute,
+    ['T-14-02', 'T-14-07', 'T-14-09', 'T-02-01'],
+    'live stack top-down first, the left-behind phase last'
+  );
+  // Still listed: the fixpoint must not lie about work that exists.
+  assert.ok(f.actionable.execute.includes('T-02-01'));
+});
+
+test('when only left-behind work remains, the verdict stops demanding motion', () => {
+  const tickets = { 'T-02-01': { phase: '2' }, 'T-14-01': { phase: '14' } };
+  const state = {
+    'T-02-01': { status: 'pending', ready: true },
+    'T-14-01': { status: 'merged' },
+  };
+  const out = formatFront(computeFront(tickets, state, {})).join('\n');
+  // "Ending the run is a defect" is false when the only thing left has been
+  // offered and declined every round for days: continuing means taking abandoned
+  // work. Observed on a real board, where two such tickets held `fixpoint: NO`
+  // by themselves.
+  assert.ok(/ALL 1 actionable item/.test(out), out);
+  assert.ok(/decision, not motion/.test(out), out);
+  assert.ok(!/Ending the run here is a defect/.test(out), 'must not demand motion toward abandoned work');
+});
+
+test('live work still demands motion, even alongside left-behind tickets', () => {
+  const tickets = { 'T-02-01': { phase: '2' }, 'T-14-02': { phase: '14' }, 'T-14-01': { phase: '14' } };
+  const state = {
+    'T-02-01': { status: 'pending', ready: true },
+    'T-14-02': { status: 'pending', ready: true },
+    'T-14-01': { status: 'merged' },
+  };
+  const out = formatFront(computeFront(tickets, state, {})).join('\n');
+  assert.ok(/Ending the run here is a defect/.test(out), out);
+});
+
 test('a drift verdict parks the ticket, and expires when the plan is re-planned', () => {
   const fs = require('fs');
   const os = require('os');
