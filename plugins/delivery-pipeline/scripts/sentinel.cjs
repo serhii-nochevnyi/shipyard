@@ -373,7 +373,18 @@ function mergeOne(id) {
 
   // DIRTY = merge conflicts, BEHIND = the base moved under it. Both need work in
   // the worktree, not a retry: say which, so the guard fixes the right thing.
-  if (pr.mergeStateStatus === 'DIRTY') return block('merge conflicts with the base — rebase the ticket branch in its worktree');
+  // MERGE the base in; do not rebase. A ticket branch with an open PR has been
+  // pushed, so rebasing it requires a force-push — which this same guard forbids
+  // two rules down, dismisses a human approval, and re-anchors every reviewer
+  // thread we just drove to zero. The usual argument for rebasing is a clean
+  // history, and it does not apply here: the PR lands with `--squash`, so the
+  // epic gets exactly one commit per ticket whatever the branch looks like.
+  if (pr.mergeStateStatus === 'DIRTY') {
+    return block(
+      'merge conflicts with the base — in the ticket worktree: `git fetch origin && git merge origin/<base>`, ' +
+      'resolve, commit, push (NO force). Do not rebase a branch that already has a PR.'
+    );
+  }
   if (pr.mergeStateStatus === 'BLOCKED') return block('GitHub reports the merge as BLOCKED (branch protection: a required review or check is missing)');
 
   if (dryRun) {
