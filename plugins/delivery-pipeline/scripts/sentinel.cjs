@@ -154,6 +154,22 @@ function journal(rec) {
 const PARKED = new Set(listFlag('parked'));
 const SCOPE = listFlag('scope');
 
+// Unresolved review threads for one PR, or null when they cannot be read.
+// Cached: the duty pass and a later merge check ask about the same PRs, and the
+// GraphQL call is the expensive part of both.
+const threadCache = new Map();
+function unresolvedThreads(pr, repo) {
+  const key = `${repo || ''}#${pr}`;
+  if (threadCache.has(key)) return threadCache.get(key);
+  const out = spawnSync('node', [path.join(__dirname, 'reviewers.cjs'), 'unresolved', String(pr), ...repoArg(repo)], { encoding: 'utf8' });
+  let n = null;
+  if (out.status === 0) {
+    try { const v = JSON.parse(out.stdout).unresolved_count; if (typeof v === 'number') n = v; } catch { n = null; }
+  }
+  threadCache.set(key, n);
+  return n;
+}
+
 function dutyItems() {
   const items = [];
   for (const [id, s] of Object.entries(state)) {
@@ -180,9 +196,30 @@ function dutyItems() {
     } else if ((c.failing || 0) > 0) {
       item.action = 'ci-fix';
       item.why = `${c.failing} failing check(s) — read the failure log, fix in the worktree, push, reinit reviewers`;
+    } else {
+    // Threads are read here, BEFORE the pending-CI branch, and only when nothing
+    // is failing (a red PR is ci-fix's regardless, and the fetch is a GraphQL
+    // call we should not spend to learn that).
+    //
+    // Why threads outrank a running CI: reviewers answer in a minute, CI takes
+    // tens of them, and servicing a thread that needs a code change ends in a
+    // push that cancels the very run we would have waited for. Waiting first
+    // buys two CI cycles where one would do, and the first one validates code
+    // nobody intends to keep. The same reasoning already puts `ci-fix` ahead of
+    // pending checks; it was simply never applied to review feedback.
+    //
+    // Unreadable threads do NOT become "no threads": that would silently skip
+    // review servicing on an API hiccup and walk into the merge gate's refusal
+    // later. They fall through to the normal ordering, and the merge gate still
+    // refuses to merge blind.
+    const unresolved = unresolvedThreads(s.pr, s.repo || null);
+    if (typeof unresolved === 'number' && unresolved > 0) {
+      item.action = 'review-fix';
+      item.unresolved = unresolved;
+      item.why = `${unresolved} unresolved review thread(s)${(c.pending || 0) > 0 ? ` (CI still running — service them NOW: a fix pushes anyway and restarts that run)` : ''} — fix or reply with reasoning, then RESOLVE each one`;
     } else if ((c.pending || 0) > 0) {
       item.action = 'wait-ci';
-      item.why = `${c.pending} check(s) still running — re-tick, do not block the main loop`;
+      item.why = `${c.pending} check(s) still running${unresolved === null ? ' — review threads unreadable this tick' : ''} — re-tick, do not block the main loop`;
     } else if (s.draft) {
       item.action = 'finalize';
       item.why = 'green draft — service reviewer threads, run arch-review, record gate_status, undraft';
@@ -203,6 +240,7 @@ function dutyItems() {
       item.why = AUTO_MERGE
         ? `PR targets ${base} (the integration branch) — only a human merges that`
         : `green and conform — awaiting merge (${AUTO_MERGE_WHY})`;
+    }
     }
     if (c.none_reported) item.checks_note = 'no CI checks reported — "green" here means "nothing ran"';
     items.push(item);
