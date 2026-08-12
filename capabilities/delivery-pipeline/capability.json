@@ -1,7 +1,7 @@
 {
   "id": "delivery-pipeline",
   "role": "feature",
-  "version": "0.29.0",
+  "version": "0.29.1",
   "title": "Delivery pipeline loop gates",
   "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: a blocking plan:post gate runs the ticket-graph validator (Gate 2), so a decomposition without materialized, valid PLAN files cannot pass planning.",
   "tier": "full",

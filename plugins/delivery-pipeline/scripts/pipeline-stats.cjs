@@ -279,11 +279,33 @@ if (guardedMerges.length) {
 // reads as "this is how the work landed", and the tickets below landed some
 // other way entirely.
 if (unguarded.length) {
+  // WHO merged it decides whether this line is alarming or routine, and the
+  // report could not tell them apart: an operator merging deliberately looked
+  // exactly like a run skipping its own gate. `mergedBy` answers it, but it is a
+  // `reviewDecision`-class field — 3s→10s per 500 rows — so it is never asked in
+  // the bulk window, only for the handful already flagged.
+  const CAP = 20;
+  const asked = unguarded.slice(0, CAP);
+  const who = new Map();
+  for (const r of asked) {
+    const t = tickets[r.ticket] || {};
+    const args = ['pr', 'view', String(r.pr), '--json', 'mergedBy', '--jq', '.mergedBy.login'];
+    if (t.repo) args.push('--repo', t.repo);
+    try {
+      const login = execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      if (login) who.set(r.ticket, login);
+    } catch { /* unknown is a fair answer; the line still names the PR */ }
+  }
+  const label = (r) => `${r.ticket}#${r.pr}${who.has(r.ticket) ? ` (${who.get(r.ticket)})` : ''}`;
   console.log(
     `⚠ ${unguarded.length} ticket PR(s) are MERGED with no guarded merge — the gate in \`sentinel.cjs merge\` ` +
     `did not run for them (green checks, zero unresolved threads, the arch-review conform trailer, base inside ` +
-    `the stack): ${unguarded.slice(0, 12).map((r) => `${r.ticket}#${r.pr}`).join(', ')}` +
-    (unguarded.length > 12 ? `, +${unguarded.length - 12} more` : '')
+    `the stack): ${asked.map(label).join(', ')}` +
+    (unguarded.length > CAP ? `, +${unguarded.length - CAP} more (not attributed)` : '')
+  );
+  console.log(
+    '  A name in brackets is who merged it: a person merging deliberately is not the same finding as a run ' +
+    'going around its own guard, and this line used to report both identically.'
   );
 }
 if (stranded.length) {
