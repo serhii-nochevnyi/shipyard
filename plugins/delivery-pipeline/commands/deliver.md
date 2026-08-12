@@ -94,8 +94,10 @@ whole session's motion — recognize them in yourself):
 2. **Reading a human gate as "do nothing".** `human_checkpoint: true` and
    "show me before you open the PR" gate the **publish/merge step only** — never
    the work. Drive the ticket all the way to the gate: worktree, code, verify,
-   commit, rebase onto the current base, arch-review — and bring the human a
-   concrete diff. Parking a checkpoint ticket with nothing done is not respecting
+   commit, rebase onto the current base (legitimate HERE and only here — the PR
+   does not exist yet, so this is the last moment a rebase costs nothing; once it
+   is published the base is merged in instead), arch-review — and bring the human
+   a concrete diff. Parking a checkpoint ticket with nothing done is not respecting
    the gate, it is skipping the work.
 
 The cascade produces motion even in chains: as soon as a ticket's PR is
@@ -309,6 +311,8 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve | model <role> [f
 node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved|feedback|status> <pr> [--json] [--repo owner/name]
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|root|list [--json]> ...
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|pr|status|retarget> ...
+node ${CLAUDE_PLUGIN_ROOT}/scripts/scope-gate.cjs <T> --worktree <p> --base <ref> [--json]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--graph <dir>]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs <mark|clear|list> …
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs [--json]
@@ -769,6 +773,26 @@ and do not open PRs.
    but did nothing" deterministically (this exact mode occurred on the injection
    failure). This is why the executor no longer publishes: a self-certifying
    publisher would make the gate unenforceable.
+
+5b. **The scope gate (MANDATORY, MECHANICAL).** Commits existing is not the same
+   as the right commits existing:
+
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/scope-gate.cjs <T> --worktree <worktree> --base <base>
+   ```
+
+   Non-zero → do NOT push, do NOT open the PR. Gate 2 validated the DECLARATION
+   and 5 validated that WORK HAPPENED; nobody checked that what the branch
+   actually changed is what the ticket said it would, which is the one question
+   both of the others are about. Run against a live project by hand, that check
+   found three PRs in seconds and two were genuinely dangerous.
+   It matters here more than in an ordinary repo: `files_modified` is what makes
+   "dependency-unordered tickets never collide" checkable, so a branch editing
+   outside it voids that guarantee for every ticket running in parallel beside
+   it — and the collision surfaces later as a conflict, or as a merge that
+   quietly drops someone else's change.
+   A violation is a decision, never a retry: revert the stray edit and escalate
+   (it belongs to another ticket), or re-plan the ticket with the path declared.
 6. There are commits → push the branch (`git -C <worktree> push -u origin <branch>`),
    then `gh pr create --base <state[T].base> --head <branch> --draft
    --title "<T>: <title>" --body <the agent's prBody>` (add
@@ -1008,6 +1032,35 @@ driving PRs hands the user a half-truth.
 - A `human_checkpoint` ticket is never auto-merged, however green it is.
 - Never force-push. Never commit directly into the default branch/epic (only
   via a ticket-PR into the base). The epic branch is moved only by ticket-PR merges.
+- **When the base moves under an OPEN PR, merge it in — never rebase.**
+  `git fetch origin && git merge origin/<base>` in the ticket's worktree, resolve,
+  commit, push. Rebasing a branch that already has a PR is a force-push by
+  definition, and this is a cascade: bases move constantly as parents squash into
+  the epic, so that would not be one force-push but one per parent that lands.
+  Each of them dismisses a human approval and re-anchors the reviewer threads the
+  guard just drove to zero — paying, in review work, for a history nobody keeps.
+  Nobody keeps it because ticket PRs land with `--squash`: the epic receives one
+  commit per ticket no matter how the branch got there, so the only thing a rebase
+  buys is a tidier view of commits that are about to be collapsed anyway.
+  The merge is also incremental — resolve a conflict once and the next base move
+  merges on top of that resolution, where a rebase replays the same conflict from
+  scratch every time.
+  Rebase is legitimate in exactly one window: a branch that has never been pushed,
+  before its PR exists. After that, merge.
+
+  | branch state | action |
+  |---|---|
+  | not pushed yet | `rebase` — clean history, merge base correct immediately |
+  | already pushed | merge the base in — a rebase would be a force-push |
+
+  `base-merge.cjs <T> --worktree <p> --base <ref>` does it and resolves the
+  mechanical half: a conflict in a file the ticket does NOT declare takes the
+  base's edition (the ticket does not own it, so its side is a stale snapshot); a
+  conflict in a file it DOES declare is real work and is left for an agent or a
+  human, with the merge in progress and nothing committed. Keying on
+  `files_modified` rather than on "not my file" is what protects a child that
+  legitimately edits a file its parent also touched — it declared that file, so
+  the conflict lands in the second branch instead of being silently overwritten.
 - **Never hand execution to GSD's wave parallelism.** No `/gsd-execute-phase`, no
   `/gsd-autonomous`: this loop fans out its own executors, one per ticket, each in a
   worktree the main loop created and verifies. GSD's `dispatch.isolation` would have

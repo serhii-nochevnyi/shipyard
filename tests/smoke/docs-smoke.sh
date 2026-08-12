@@ -187,6 +187,20 @@ if (!actionable) fail('cannot find the sentinel ACTIONABLE set');
 // merge`, which re-verifies the gate against live GitHub in the script precisely
 // so that no agent can be talked into it.
 const MECHANICAL = new Set(['undraft', 'merge']);
+
+// The conflict remedy must not contradict the force-push ban sitting beside it.
+// Rebasing a branch that already has a PR IS a force-push, and in a cascade the
+// base moves once per parent that squashes into the epic — so the old "rebase
+// the ticket branch" advice was one dismissed approval per landed parent, in
+// service of a history `--squash` discards.
+const dirty = (sentinel.match(/mergeStateStatus === 'DIRTY'[\s\S]{0,400}?\n  \}/) || [])[0] || '';
+if (!dirty) fail('cannot find the DIRTY (merge-conflict) branch in sentinel.cjs');
+if (/rebase the ticket branch|— rebase\b/.test(dirty)) {
+  fail('sentinel tells a conflicted PR to rebase, which is a force-push — and the same file forbids force-pushing');
+}
+if (!/git merge origin/.test(dirty)) {
+  fail('the DIRTY remedy does not name the merge that replaces the rebase — an operator left to improvise will reach for rebase');
+}
 for (const a of actionable.split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)) {
   if (!ROLES.includes(a) && !MECHANICAL.has(a)) {
     fail(`sentinel duty can emit "${a}", which is neither a pipeline role nor a declared mechanical step — whoever serves it has no model to resolve`);

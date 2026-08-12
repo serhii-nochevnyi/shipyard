@@ -110,6 +110,13 @@ optional.
 - **Never merge by hand at all.** `sentinel.cjs merge` is the only sanctioned
   path: it is where the gate lives.
 - **Never force-push.** Never touch a file outside the ticket's scope.
+- **A moved base is merged in, not rebased onto.** `git fetch origin && git merge
+  origin/<base>` in the worktree, resolve, commit, push. Rebasing a pushed branch
+  IS a force-push, so the rule above already settles it — and in a cascade the
+  base moves once per parent that squashes into the epic, so rebasing would mean
+  a force-push per parent, each one dismissing an approval and re-anchoring the
+  threads you just resolved. The history you would be protecting does not survive:
+  the PR lands with `--squash`.
 - **Never create worktrees or branches for NEW tickets** — that is the main
   loop's half of the work, and the two would race on the shared `.git`. You work
   in the worktrees you were handed. (Both sides take the same lock, so a
