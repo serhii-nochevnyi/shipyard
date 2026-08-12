@@ -157,8 +157,12 @@ cat > "$sproj/.planning/graph/tickets.json" <<'JSON'
 JSON
 echo '{"pipeline":{}}' > "$sproj/.planning/config.json"
 # Both merged on GitHub; only the first went through the guard.
+# The duplicate on the third line is what a run wrote by hand seconds after the
+# guard wrote its own record: same PR, no `by`, no `base`. Counting both
+# overstates the guard and prints an empty base in the summary.
 cat > "$sproj/.planning/graph/delivery-log.jsonl" <<'JSON'
 {"ts":"2026-01-02T00:00:00Z","event":"merge","ticket":"T-01-01","pr":201,"base":"epic/01-demo","by":"sentinel"}
+{"ts":"2026-01-02T00:00:05Z","event":"merge","ticket":"T-01-01","pr":201,"outcome":"merged"}
 {"ts":"2026-01-02T00:01:00Z","event":"attempt","ticket":"T-01-02","role":"frontend-delivery","outcome":"pushed"}
 JSON
 cat > "$W/bin2/gh" <<'STUB'
@@ -180,6 +184,9 @@ has "stats names the ticket merged without the guard" "$W/stats.txt" "T-01-02#20
 hasnt "stats does not accuse the guarded merge" "$W/stats.txt" "T-01-01#201"
 has "stats still credits the guarded merge" "$W/stats.txt" "sentinel landed 1 ticket PR"
 has "stats names the role the ladder does not know" "$W/stats.txt" "frontend-delivery"
+# One merge is one PR landing, however many times it was written down.
+has "a double-logged merge is counted once" "$W/stats.txt" "sentinel landed 1 ticket PR"
+hasnt "and no empty base leaks into the summary" "$W/stats.txt" "stack (, "
 
 # ── unresolved threads outrank a running CI ─────────────────────────────────
 # Reviewers answer in a minute; CI takes tens of them; and servicing a thread

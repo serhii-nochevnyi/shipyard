@@ -77,6 +77,22 @@ test('SHIPYARD_GRAPH_DIR does the same without touching the command line', () =>
   assert.strictEqual(JSON.parse(lines(graph)[0]).ticket, 'T-12-04');
 });
 
+test('events the scripts own are refused, not duplicated', () => {
+  const { project, graph } = scratch();
+  // `sentinel.cjs merge` and `state-sync.cjs` append these themselves, so a
+  // hand-written one is always a duplicate — and a duplicate is not harmless:
+  // two merges logged twice in one morning inflated "sentinel landed N" and put
+  // an empty base in the summary, because the hand-written copy carries neither
+  // `by` nor `base`. deliver.md had forbidden it in prose the whole time.
+  for (const ev of ['merge', 'status_change']) {
+    const r = run(project, [ev, 'ticket=T-01-01', 'pr=1']);
+    assert.notStrictEqual(r.status, 0, `${ev} must be refused`);
+    assert.ok(/refusing to add a duplicate/.test(r.stderr), r.stderr);
+    assert.ok(/sentinel\.cjs|state-sync\.cjs/.test(r.stderr), 'the error must name the real writer');
+  }
+  assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
+});
+
 test('a bad event name still reports usage, not the graph error', () => {
   const { project } = scratch();
   const r = run(project, ['NotAnEvent']);
