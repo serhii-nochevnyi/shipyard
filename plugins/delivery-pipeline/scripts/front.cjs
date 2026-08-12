@@ -195,10 +195,35 @@ function computeFront(tickets, state, opts = {}) {
     seen.add(id);
     return ((state[parent] || {}).status === 'merged' ? 0 : 1) + depth(parent, seen);
   };
-  const byDepth = (a, b) => depth(a) - depth(b) || String(a).localeCompare(String(b));
+  // …but depth only orders work WITHIN a stack. Across phases it says nothing,
+  // and sorting by it alone promotes the oldest left-behind tickets to the head
+  // of the list: a phase-2 root has depth 0, so it outranks every live child of
+  // the phase being worked. Observed immediately after shipping the sort — two
+  // tickets judged stale six days earlier sat first under `execute`, and a run
+  // that takes the head of the list would have taken one.
+  //
+  // "Left behind" is a phase the run has already moved past: something newer has
+  // landed. Those go LAST — still listed, because the fixpoint must not lie about
+  // them, but never ahead of work that is actually in flight.
+  const phaseNum = (id) => Number.parseInt(String(((tickets && tickets[id]) || {}).phase ?? ''), 10) || 0;
+  const newestLandedPhase = Object.keys(state)
+    .filter((id) => (state[id] || {}).status === 'merged')
+    .reduce((max, id) => Math.max(max, phaseNum(id)), 0);
+  const leftBehind = (id) => (phaseNum(id) < newestLandedPhase ? 1 : 0);
+
+  const byDepth = (a, b) =>
+    leftBehind(a) - leftBehind(b) || depth(a) - depth(b) || String(a).localeCompare(String(b));
   for (const k of Object.keys(actionable)) actionable[k].sort(byDepth);
 
-  return { actionable, waiting, parked, why, counts, actionable_count: actionableCount, fixpoint, sentinel, roles: BUCKET_ROLES };
+  // How much of the actionable list is work the run has already moved past. The
+  // stop condition has to distinguish "there is live work" from "there is only
+  // abandoned work": on a real board `fixpoint: NO — 4 actionable` was held
+  // ENTIRELY by two tickets judged stale six days earlier, so the run was being
+  // told that stopping is a defect on account of work it would never take.
+  const actionableIds = ORDER.flatMap((k) => actionable[k]);
+  const leftBehindCount = actionableIds.filter((id) => leftBehind(id)).length;
+
+  return { actionable, waiting, parked, why, counts, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, sentinel, roles: BUCKET_ROLES };
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
@@ -272,6 +297,17 @@ function formatFront(front) {
     lines.push(
       `fixpoint: NO — ${front.counts.ci} PR(s) still running CI. Do NOT end the run: serve them when they report ` +
       '(watch is legal here — they are the only thing left).'
+    );
+  } else if (front.left_behind_count && front.left_behind_count === front.actionable_count) {
+    // Every actionable item is in a phase the run has already moved past. Saying
+    // "ending the run is a defect" here is false: continuing would mean taking
+    // work that has been offered and declined every round for days. The honest
+    // verdict names the two exits instead of demanding motion.
+    lines.push(
+      `fixpoint: NO — but ALL ${front.actionable_count} actionable item(s) are in phases already moved past ` +
+      `(${front.actionable.execute.concat(front.actionable.fix, front.actionable.finalize).slice(0, 6).join(', ')}). ` +
+      'Nothing live remains. These are a decision, not motion: take them, or record why not ' +
+      '(`drift-record.cjs mark` when the plan predates what shipped) — after which this reads `fixpoint: YES`.'
     );
   } else {
     lines.push(
