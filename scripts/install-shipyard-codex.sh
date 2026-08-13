@@ -70,7 +70,14 @@ for d in "$OUT"/skills/*/; do
 done
 
 # ── bundle payload (CLAUDE_PLUGIN_ROOT target: scripts/references/templates) ──
+# REPLACED, not merged over — the same way the skills above are. Copying onto an
+# existing bundle leaves every file the plugin has since deleted or renamed in
+# place forever, still reachable by path. Three stale `*.mjs.bak` files survived
+# an upgrade that way, and a renamed script would be worse: both editions present,
+# the old one silently callable. The bundle is wholly generated, so nothing
+# user-authored is at risk.
 echo "→ installing bundle payload → $BUNDLE_ROOT"
+rm -rf "${BUNDLE_ROOT:?}"
 mkdir -p "$BUNDLE_ROOT"
 cp -R "$OUT"/bundle/. "$BUNDLE_ROOT/"
 find "$BUNDLE_ROOT" -name '*.sh' -exec chmod +x {} +

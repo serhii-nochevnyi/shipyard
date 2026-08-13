@@ -258,4 +258,15 @@ node scripts/gen-codex-shipyard.cjs --plugin plugins/delivery-pipeline \
 STRAY="$(find "$CODEX_HOME/shipyard" \( -name '*.bak' -o -name '*.orig' -o -name '*~' -o -name '.DS_Store' \) 2>/dev/null)"
 [[ -z "$STRAY" ]] || { echo "generated bundle carries editor leftovers:"; echo "$STRAY"; exit 1; }
 
+# ...and a re-install REPLACES the bundle rather than merging onto it. Copying
+# over leaves everything the plugin has since deleted or renamed in place, still
+# reachable by path — which is how the .bak files above survived an upgrade even
+# after the generator learned to skip them.
+touch "$CODEX_HOME/shipyard/scripts/removed-last-release.cjs"
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+[[ ! -e "$CODEX_HOME/shipyard/scripts/removed-last-release.cjs" ]] \
+  || { echo "re-install left a file the plugin no longer ships"; exit 1; }
+[[ -e "$CODEX_HOME/shipyard/scripts/state-sync.cjs" ]] \
+  || { echo "re-install lost the real payload"; exit 1; }
+
 echo "codex-shipyard smoke: OK"
