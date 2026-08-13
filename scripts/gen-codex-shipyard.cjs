@@ -69,9 +69,17 @@ function rmrf(p) {
   fs.rmSync(p, { recursive: true, force: true });
 }
 
+// Editor leftovers must not become part of a shipped bundle. Three `*.mjs.bak`
+// files — stale copies of the Workflow prompt builders, differing from the live
+// ones by dozens of lines — reached BOTH installed runtimes this way. Inert, but
+// a reader who opens one is reading superseded logic that looks authoritative
+// because it shipped.
+const IGNORED = /\.(bak|orig|rej|swp)$|^\.DS_Store$|~$/;
+
 function copyDir(src, dst) {
   fs.mkdirSync(dst, { recursive: true });
   for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
+    if (IGNORED.test(ent.name)) continue;
     const s = path.join(src, ent.name);
     const d = path.join(dst, ent.name);
     if (ent.isDirectory()) copyDir(s, d);
