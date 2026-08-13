@@ -252,4 +252,10 @@ node scripts/gen-codex-shipyard.cjs --plugin plugins/delivery-pipeline \
 [[ ! -e "$WORK/p1/agents/shipyard-arch-review.toml" ]] || { echo "phase 1 leaked a phase-2 agent"; exit 1; }
 [[ -e "$WORK/p1/agents/shipyard-inv-research.toml" ]] || { echo "phase 1 missing inv-research agent"; exit 1; }
 
+# The bundle carries no editor leftovers. Three `*.mjs.bak` files — stale copies
+# of the Workflow prompt builders — reached both installed runtimes before the
+# generator learned to skip them, and nothing would ever have said so.
+STRAY="$(find "$CODEX_HOME/shipyard" \( -name '*.bak' -o -name '*.orig' -o -name '*~' -o -name '.DS_Store' \) 2>/dev/null)"
+[[ -z "$STRAY" ]] || { echo "generated bundle carries editor leftovers:"; echo "$STRAY"; exit 1; }
+
 echo "codex-shipyard smoke: OK"

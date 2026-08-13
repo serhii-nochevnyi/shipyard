@@ -270,6 +270,10 @@ test('a drift verdict parks the ticket, and expires when the plan is re-planned'
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-drift-'));
   fs.mkdirSync(path.join(dir, '.planning', 'graph'), { recursive: true });
+  // A real conveyor project always has this beside the store; drift-record now
+  // refuses without it, because its absence is the signature of a judge writing
+  // into its own worktree instead of the project.
+  fs.writeFileSync(path.join(dir, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: {} }));
   const plan = path.join(dir, 'PLAN.md');
   fs.writeFileSync(plan, '# plan v1\n');
 

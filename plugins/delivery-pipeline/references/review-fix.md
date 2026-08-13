@@ -52,7 +52,18 @@ eventually wait for is the one that validates the final code.
 
 ## After all threads
 - One commit for all accepted fixes: `review(T-XX-YY): address review round N`.
-- Push.
+- Push. **If the push is rejected because the base moved** (a parent squashed into
+  the epic while you were working), merge the base in — never rebase onto it:
+
+  ```
+  git fetch origin && git merge origin/<base>
+  ```
+
+  Rebasing a pushed branch IS a force-push, and it re-anchors the very threads you
+  just resolved: they reopen against the new commits and the round starts over.
+  `node <plugin-root>/scripts/base-merge.cjs` does it and takes the base's edition
+  for conflicts in files this ticket does not declare; conflicts inside your own
+  `files_modified` are left uncommitted for you to judge.
 - Re-read `reviewers.cjs unresolved <pr>`: anything still listed is either
   unfinished or something you deliberately escalated. Do not report done over an
   unresolved thread you meant to close — that is the loop above, one round later.

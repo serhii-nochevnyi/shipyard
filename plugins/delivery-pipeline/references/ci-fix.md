@@ -39,6 +39,33 @@ ticket's worktree and ONLY within the ticket's scope.
 5. Commit with a message referencing the ticket id, e.g.
    `fix(T-01-02): <what was actually wrong>`. Push.
 
+## When the base has moved under you
+
+In a cascade your base moves every time a parent squashes into the epic, so a red
+check that is really "my branch has not seen the parent's change yet" is common —
+and the push in step 5 can be rejected as non-fast-forward.
+
+**Merge the base in; never rebase onto it.**
+
+```
+git fetch origin && git merge origin/<base>
+```
+
+Resolve, commit, push. Rebasing a pushed branch IS a force-push: in a cascade it
+would mean one per parent, each dismissing an approval and re-anchoring the review
+threads that were just resolved. The history you would be protecting does not
+survive anyway — the PR lands with `--squash`.
+
+For the conflicts themselves there is a script, and it encodes the rule you would
+otherwise have to remember: `node <scripts>/base-merge.cjs` (beside the
+`reviewers.cjs` path you were given) merges the base in, takes the base's edition
+for conflicts in files this ticket does not declare, and leaves conflicts inside
+your own `files_modified` uncommitted for you to judge. It refuses on a dirty
+worktree — commit or stash first.
+
+A conflict in a file the ticket never declared is not yours to resolve by taste:
+the base is right by definition, and touching it is a scope violation.
+
 ## Output (final message, structured)
 - `result: fixed | not-reproducible | escalate`
 - what was wrong, what changed, verification evidence (command + tail of output)

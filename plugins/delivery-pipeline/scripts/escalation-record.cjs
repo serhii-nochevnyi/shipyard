@@ -42,6 +42,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
 
 function fail(msg) {
   process.stderr.write(`escalation-record: ${msg}\n`);
@@ -86,9 +87,18 @@ function load(cwd = process.cwd()) {
   }
 }
 
-function save(store, cwd = process.cwd()) {
+// Read-modify-write plus the journal line, under ONE lock and written atomically.
+// state-sync and the sentinel read this store concurrently — the sentinel runs
+// alongside the main loop by design — and a torn read silently un-parks the
+// ticket for that round, which is the exact harm the record exists to prevent.
+function mutate(cwd, fn) {
   fs.mkdirSync(graphDir(cwd), { recursive: true });
-  fs.writeFileSync(path.join(graphDir(cwd), 'escalations.json'), JSON.stringify(store, null, 2) + '\n');
+  return withLock(lockDirFor(cwd), 'escalation-record', () => {
+    const store = load(cwd);
+    const extra = fn(store);
+    writeAtomic(path.join(graphDir(cwd), 'escalations.json'), JSON.stringify(store, null, 2) + '\n');
+    if (extra) fs.appendFileSync(path.join(graphDir(cwd), 'delivery-log.jsonl'), JSON.stringify(extra) + '\n');
+  }, { label: 'escalation-record' });
 }
 
 /**
@@ -135,36 +145,33 @@ if (require.main === module) {
     const s = state[ticket];
     if (!s) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
 
-    const store = load(cwd);
-    store.tickets[ticket] = {
-      reason: reason.join(' '),
-      fingerprint: fingerprint(s),
-      pr: s.pr || null,
-      at: new Date().toISOString(),
-    };
-    save(store, cwd);
-
-    // The park and its journal entry are ONE act. Splitting them is how T-16-05
-    // ended up parked but uncounted — invisible to pipeline-stats' escalation rate,
-    // which is the metric that would have shown the problem.
-    fs.appendFileSync(path.join(graphDir(cwd), 'delivery-log.jsonl'), JSON.stringify({
-      ts: new Date().toISOString(),
-      event: 'escalation',
-      ticket,
-      pr: s.pr || null,
-      reason: reason.join(' '),
-      by: 'escalation-record',
-    }) + '\n');
+    // The park and its journal entry are ONE act, in one locked section. Splitting
+    // them is how T-16-05 ended up parked but uncounted — invisible to
+    // pipeline-stats' escalation rate, the metric that would have shown this.
+    mutate(cwd, (store) => {
+      store.tickets[ticket] = {
+        reason: reason.join(' '),
+        fingerprint: fingerprint(s),
+        pr: s.pr || null,
+        at: new Date().toISOString(),
+      };
+      return {
+        ts: new Date().toISOString(),
+        event: 'escalation',
+        ticket,
+        pr: s.pr || null,
+        reason: reason.join(' '),
+        by: 'escalation-record',
+      };
+    });
 
     console.log(`escalation recorded for ${ticket} — it stays parked until a human moves the PR, or you run \`clear\``);
   } else if (cmd === 'clear') {
     const [ticket] = rest;
     if (!ticket) fail('usage: escalation-record.cjs clear <ticket>');
-    const store = load(cwd);
-    if (!store.tickets[ticket]) { console.log(`no escalation recorded for ${ticket}`); process.exit(0); }
-    delete store.tickets[ticket];
-    save(store, cwd);
-    console.log(`escalation cleared for ${ticket}`);
+    const had = !!load(cwd).tickets[ticket];
+    if (had) mutate(cwd, (store) => { delete store.tickets[ticket]; });
+    console.log(had ? `escalation cleared for ${ticket}` : `no escalation recorded for ${ticket}`);
   } else if (cmd === 'list') {
     const active = activeEscalations(cwd);
     if (rest.includes('--json')) {
