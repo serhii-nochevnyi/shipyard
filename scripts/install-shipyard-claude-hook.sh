@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# install-shipyard-claude-hook.sh — set up the shipyard auto-route UserPromptSubmit
-# hook in the user's global Claude Code settings, so the pipeline is applied
-# without the user invoking /gsd-* or /shipyard:* by hand.
+# install-shipyard-claude-hook.sh — install shipyard's two host-side hooks into the
+# user's global Claude Code settings.
 #
-# Writes ~/.claude/hooks/shipyard-auto-route.sh (the injected policy) and merges a
-# UserPromptSubmit hook into ~/.claude/settings.json — idempotently, preserving
-# every other hook/event. The Codex side of the same policy lives in the global
-# AGENTS.md and is installed by install-shipyard-codex.sh.
+#   UserPromptSubmit → shipyard-auto-route.sh   the pipeline is applied without the
+#                                               user invoking /gsd-* or /shipyard:*
+#   Stop             → shipyard-stop-gate.cjs   the run does not end while the
+#                                               delivery front still has live work
+#
+# The two are opposite ends of the same conveyor: one gets work IN, the other
+# refuses to let it be abandoned half-done.
+#
+# Both are installed as SELF-CONTAINED copies under ~/.claude/hooks. The stop gate
+# reads only `.planning/graph/delivery-front.json`, so it needs nothing from the
+# plugin at run time — and copying it keeps the hook off the plugin's versioned
+# cache path, which changes on every release and would silently break the hook.
+# Re-run this installer after upgrading shipyard to refresh the copy.
+#
+# The Codex side of the auto-route policy lives in the global AGENTS.md and is
+# installed by install-shipyard-codex.sh.
 #
 # Environment overrides:
 #   CLAUDE_HOME   Claude config home (default: ~/.claude)
@@ -16,35 +27,65 @@ set -euo pipefail
 # Usage: bash scripts/install-shipyard-claude-hook.sh [--remove]
 
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
-HOOK="$CLAUDE_HOME/hooks/shipyard-auto-route.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SETTINGS="$CLAUDE_HOME/settings.json"
-CMD="bash \"$HOOK\""
+
+ROUTE_HOOK="$CLAUDE_HOME/hooks/shipyard-auto-route.sh"
+STOP_HOOK="$CLAUDE_HOME/hooks/shipyard-stop-gate.cjs"
+ROUTE_CMD="bash \"$ROUTE_HOOK\""
+STOP_CMD="node \"$STOP_HOOK\""
+
 REMOVE=0
 [[ "${1:-}" == "--remove" ]] && REMOVE=1
 
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
 
-if [[ "$REMOVE" == 1 ]]; then
-  CMD="$CMD" SETTINGS="$SETTINGS" node - <<'NODE'
-const fs = require('fs'), p = process.env.SETTINGS, cmd = process.env.CMD;
-if (!fs.existsSync(p)) process.exit(0);
+# drop_hook <event> <command> — remove one command from one event, preserving
+# every other hook, group and event.
+drop_hook() {
+  [[ -f "$SETTINGS" ]] || return 0
+  EVENT="$1" CMD="$2" SETTINGS="$SETTINGS" node - <<'NODE'
+const fs = require('fs'), p = process.env.SETTINGS, cmd = process.env.CMD, ev = process.env.EVENT;
 const s = JSON.parse(fs.readFileSync(p, 'utf8'));
-const ups = s.hooks && s.hooks.UserPromptSubmit;
-if (Array.isArray(ups)) {
-  s.hooks.UserPromptSubmit = ups
-    .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => h.command !== cmd) }))
-    .filter((g) => (g.hooks || []).length);
-  if (!s.hooks.UserPromptSubmit.length) delete s.hooks.UserPromptSubmit;
-  fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
-}
+const groups = s.hooks && s.hooks[ev];
+if (!Array.isArray(groups)) process.exit(0);
+s.hooks[ev] = groups
+  .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => h.command !== cmd) }))
+  .filter((g) => (g.hooks || []).length);
+if (!s.hooks[ev].length) delete s.hooks[ev];
+fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
 NODE
-  rm -f "$HOOK"
-  echo "✓ removed shipyard auto-route hook from Claude"
+}
+
+# add_hook <event> <command> — idempotent merge.
+add_hook() {
+  [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
+  EVENT="$1" CMD="$2" SETTINGS="$SETTINGS" node - <<'NODE'
+const fs = require('fs'), p = process.env.SETTINGS, cmd = process.env.CMD, ev = process.env.EVENT;
+const s = JSON.parse(fs.readFileSync(p, 'utf8'));
+const h = (s.hooks ||= {});
+const groups = (h[ev] ||= []);
+if (groups.some((g) => (g.hooks || []).some((x) => x.command === cmd))) {
+  console.log(`  ${ev}: already present — no change`);
+  process.exit(0);
+}
+groups.push({ hooks: [{ type: 'command', command: cmd }] });
+fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
+console.log(`  ${ev}: merged into ${p}`);
+NODE
+}
+
+if [[ "$REMOVE" == 1 ]]; then
+  drop_hook UserPromptSubmit "$ROUTE_CMD"
+  drop_hook Stop "$STOP_CMD"
+  rm -f "$ROUTE_HOOK" "$STOP_HOOK"
+  echo "✓ removed shipyard auto-route and stop-gate hooks from Claude"
   exit 0
 fi
 
 mkdir -p "$CLAUDE_HOME/hooks"
-cat > "$HOOK" <<'EOF'
+
+cat > "$ROUTE_HOOK" <<'EOF'
 #!/usr/bin/env bash
 # Managed by shipyard: inject the auto-route policy on every user prompt so the
 # pipeline is applied without the user manually invoking GSD or shipyard.
@@ -62,20 +103,26 @@ shipyard rather than ad hoc — do not wait to be told to run a command:
 Skip this entirely for pure questions, discussion, or non-code chatter.
 POLICY
 EOF
-chmod +x "$HOOK"
-echo "→ wrote $HOOK"
+chmod +x "$ROUTE_HOOK"
+echo "→ wrote $ROUTE_HOOK"
 
-[[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
-CMD="$CMD" SETTINGS="$SETTINGS" node - <<'NODE'
-const fs = require('fs'), p = process.env.SETTINGS, cmd = process.env.CMD;
-const s = JSON.parse(fs.readFileSync(p, 'utf8'));
-const h = (s.hooks ||= {});
-const ups = (h.UserPromptSubmit ||= []);
-const present = ups.some((g) => (g.hooks || []).some((x) => x.command === cmd));
-if (present) { console.log('settings hook already present — no change'); process.exit(0); }
-ups.push({ hooks: [{ type: 'command', command: cmd }] });
-fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
-console.log('merged UserPromptSubmit hook into ' + p);
-NODE
+# The plugin sits in the repo when this runs from a checkout, and at
+# /opt/delivery-pipeline inside the image (where this script lives in
+# /usr/local/bin and $ROOT resolves to /usr/local). Try both rather than assume.
+STOP_SRC=""
+for candidate in \
+  "${SHIPYARD_PLUGIN_DIR:-}/scripts/stop-gate.cjs" \
+  "$ROOT/plugins/delivery-pipeline/scripts/stop-gate.cjs" \
+  "/opt/delivery-pipeline/scripts/stop-gate.cjs"
+do
+  [[ -f "$candidate" ]] && { STOP_SRC="$candidate"; break; }
+done
+[[ -n "$STOP_SRC" ]] || { echo "error: stop-gate.cjs not found (looked under $ROOT/plugins/delivery-pipeline and /opt/delivery-pipeline)" >&2; exit 1; }
+cp "$STOP_SRC" "$STOP_HOOK"
+chmod +x "$STOP_HOOK"
+echo "→ wrote $STOP_HOOK"
 
-echo "✓ shipyard auto-route hook installed for Claude Code (new sessions; open /hooks or restart to load in a running session)"
+add_hook UserPromptSubmit "$ROUTE_CMD"
+add_hook Stop "$STOP_CMD"
+
+echo "✓ shipyard auto-route + stop-gate hooks installed for Claude Code (new sessions; open /hooks or restart to load in a running session)"

@@ -148,6 +148,11 @@ docker run --rm claude-shipyard:test bash -lc '
   test -x "$HOME/.claude/hooks/shipyard-auto-route.sh"
   jq -e "[.hooks.UserPromptSubmit[]?.hooks[]?.command] | any(contains(\"shipyard-auto-route.sh\"))" \
     "$HOME/.claude/settings.json" >/dev/null
+  # ...and so is the stop gate. In the image the installer runs from
+  # /usr/local/bin, so this also proves it found the plugin at /opt.
+  test -x "$HOME/.claude/hooks/shipyard-stop-gate.cjs"
+  jq -e "[.hooks.Stop[]?.hooks[]?.command] | any(contains(\"shipyard-stop-gate.cjs\"))" \
+    "$HOME/.claude/settings.json" >/dev/null
   # the delivery-pipeline GSD capability is installed and its gate check is runnable
   node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" capability list --json \
     | jq -e ".[] | select(.id == \"delivery-pipeline\")" >/dev/null
