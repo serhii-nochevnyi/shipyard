@@ -245,24 +245,35 @@ It also writes a managed "shipyard auto-route" block into
 (research-first, proportionate GSD) without the user invoking `$shipyard-*` by
 hand.
 
-### Auto-route on host Claude Code
+### Auto-route and the stop gate on host Claude Code
 
 Both runtimes get the auto-route nudge, by different mechanisms: Codex through the
 managed block in `$CODEX_HOME/AGENTS.md` that its installer writes (above), Claude
-Code through a `UserPromptSubmit` hook. Inside the container the hook is already
+Code through a `UserPromptSubmit` hook. Inside the container both hooks are already
 installed by the overlay build, so a scope of work is routed through shipyard
 without you invoking anything.
 
-To get the same on your **host** Claude Code (it edits your user settings,
-not the plugin):
+Claude Code also gets the **stop gate**, a `Stop` hook that refuses to end a run
+while `.planning/graph/delivery-front.json` still lists actionable work. Deliver's
+loop-back rule ("never stop while the front is non-empty") was the conveyor's only
+non-mechanical gate, and runs ended early against it — writing a summary looks like
+finishing. The gate stays out of the way otherwise: it is silent outside conveyor
+projects, on a front older than 45 minutes (`SHIPYARD_STOP_GATE_FRESH_MS`), when
+only CI is pending, when every actionable item is left behind in a phase the run
+has moved past, and on a stop it has already blocked once.
+
+To get both on your **host** Claude Code (it edits your user settings, not the
+plugin):
 
 ```bash
 make install-shipyard-claude-hook        # or: make remove-shipyard-claude-hook
 ```
 
-It writes `~/.claude/hooks/shipyard-auto-route.sh` and merges a hook into
+It writes `~/.claude/hooks/shipyard-auto-route.sh` and
+`~/.claude/hooks/shipyard-stop-gate.cjs`, then merges the two hooks into
 `~/.claude/settings.json` (idempotent, preserving your other hooks). On a running
-session, open `/hooks` once or restart to load it.
+session, open `/hooks` once or restart to load them. The stop gate is installed as
+a copy, so **re-run the installer after upgrading shipyard** to refresh it.
 
 ### Installing the conveyor into host Claude Code
 
@@ -280,7 +291,7 @@ stages the validator with its sibling modules), as does the Codex install:
 ```bash
 git clone https://github.com/serhii-nochevnyi/shipyard && cd shipyard
 make install-shipyard-capability                     # Gate 2 + UAT gates, global scope
-make install-shipyard-claude-hook                    # optional: auto-route
+make install-shipyard-claude-hook                    # optional: auto-route + stop gate
 ```
 
 Developing on the checkout instead? Register it as a directory marketplace and

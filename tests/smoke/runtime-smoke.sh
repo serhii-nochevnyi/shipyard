@@ -67,10 +67,16 @@ env "${COMPOSE_ENV[@]}" docker compose run --rm dev bash -lc '
     test ! -e "$HOME/.ssh/$forbidden"
   done
 
-  # the auto-route hook is baked in, so the container needs no manual install
+  # both hooks are baked in, so the container needs no manual install
   test -x "$HOME/.claude/hooks/shipyard-auto-route.sh"
   jq -e "[.hooks.UserPromptSubmit[]?.hooks[]?.command] | any(contains(\"shipyard-auto-route.sh\"))" \
     "$HOME/.claude/settings.json" >/dev/null
+  test -x "$HOME/.claude/hooks/shipyard-stop-gate.cjs"
+  jq -e "[.hooks.Stop[]?.hooks[]?.command] | any(contains(\"shipyard-stop-gate.cjs\"))" \
+    "$HOME/.claude/settings.json" >/dev/null
+  # and the stop gate is inert outside a conveyor project — /workspace has no
+  # delivery front, so a stop there must not be blocked
+  test -z "$(echo "{}" | node "$HOME/.claude/hooks/shipyard-stop-gate.cjs")"
 
   # the delivery scripts are runnable and self-contained
   node -e "require(\"/opt/delivery-pipeline/scripts/frontmatter.cjs\")"

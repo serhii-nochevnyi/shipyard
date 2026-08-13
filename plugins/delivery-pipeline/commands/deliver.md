@@ -968,6 +968,22 @@ recomputation of the front below.
    ending the run.
 5. Front empty AND the guard has reported → go to Step 5 (fixpoint).
 
+`stop-gate.cjs` exists to enforce this rule, because it was skipped repeatedly and
+always at the same moment: writing the summary. Where the runtime offers a stop
+hook, it is wired there (`make install-shipyard-claude-hook`, baked into the
+container) and refuses to end a run while `delivery-front.json` lists actionable
+work. Where it does not, nothing catches you and the rule is yours alone to keep —
+so assume you are on that side. Either way, two consequences:
+- **Do not treat a summary as an ending.** Post it if it helps the human follow
+  along, then keep going. You can also run `stop-gate.cjs` yourself — pipe it
+  `{}` — to check whether stopping here is legitimate.
+- **If work must NOT be taken, park it — do not leave it listed.** An escalation,
+  a human checkpoint, or `drift-record.cjs mark` for a plan that predates what
+  shipped. A parked item leaves the front; an ignored one does not.
+The gate is deliberately narrow: it is silent when only CI is pending, when every
+actionable item is left behind in a phase already moved past, on a stale front,
+and on a stop it has already blocked once. So a verdict from it is real work.
+
 **Cascade servicing (epic-stacked).** A ticket-PR merges into ITS base
 (the epic for a root, the parent's branch for a dependent) — a direct merge into main
 does not happen. After each parent merge:
