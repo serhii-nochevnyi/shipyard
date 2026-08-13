@@ -168,24 +168,29 @@ echo '{"pipeline":{}}' > "$sproj/.planning/config.json"
 # The duplicate on the third line is what a run wrote by hand seconds after the
 # guard wrote its own record: same PR, no `by`, no `base`. Counting both
 # overstates the guard and prints an empty base in the summary.
-cat > "$sproj/.planning/graph/delivery-log.jsonl" <<'JSON'
-{"ts":"2026-01-02T00:00:00Z","event":"merge","ticket":"T-01-01","pr":201,"base":"epic/01-demo","by":"sentinel"}
-{"ts":"2026-01-02T00:00:05Z","event":"merge","ticket":"T-01-01","pr":201,"outcome":"merged"}
-{"ts":"2026-01-02T00:01:00Z","event":"attempt","ticket":"T-01-02","role":"frontend-delivery","outcome":"pushed"}
+# Dated NOW, not at a fixed point: the warnings are windowed (default 14d), so a
+# fixture frozen in the past would exercise only the empty case and quietly stop
+# testing anything. `--since all` covers the lifetime path separately.
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$sproj/.planning/graph/delivery-log.jsonl" <<JSON
+{"ts":"$NOW","event":"merge","ticket":"T-01-01","pr":201,"base":"epic/01-demo","by":"sentinel"}
+{"ts":"$NOW","event":"merge","ticket":"T-01-01","pr":201,"outcome":"merged"}
+{"ts":"$NOW","event":"attempt","ticket":"T-01-02","role":"frontend-delivery","outcome":"pushed"}
+{"ts":"2026-01-02T00:01:00Z","event":"attempt","ticket":"T-01-02","role":"long-ago-role","outcome":"pushed"}
 JSON
-cat > "$W/bin2/gh" <<'STUB'
+cat > "$W/bin2/gh" <<STUB
 #!/usr/bin/env bash
-case "$*" in
+case "\$*" in
   "pr list --state all"*)
-    cat <<'JSON'
-[{"number":201,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-01-guarded","baseRefName":"epic/01-demo","mergedAt":"2026-01-02T01:00:00Z","createdAt":"2026-01-02T00:00:00Z","url":"https://example/201","reviewDecision":null,"title":"T-01-01: guarded"},
- {"number":202,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-02-raw","baseRefName":"epic/01-demo","mergedAt":"2026-01-02T01:00:00Z","createdAt":"2026-01-02T00:00:00Z","url":"https://example/202","reviewDecision":null,"title":"T-01-02: raw"}]
+    cat <<JSON
+[{"number":201,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-01-guarded","baseRefName":"epic/01-demo","mergedAt":"$NOW","createdAt":"$NOW","url":"https://example/201","reviewDecision":null,"title":"T-01-01: guarded"},
+ {"number":202,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-02-raw","baseRefName":"epic/01-demo","mergedAt":"$NOW","createdAt":"$NOW","url":"https://example/202","reviewDecision":null,"title":"T-01-02: raw"}]
 JSON
     ;;
   # Asked only for the PRs already flagged — never in the bulk window, where this
   # field costs the same order as reviewDecision.
   "pr view 202 --json mergedBy"*) echo "octo-human" ;;
-  *) echo "stub gh2: unhandled: $*" >&2; exit 1 ;;
+  *) echo "stub gh2: unhandled: \$*" >&2; exit 1 ;;
 esac
 STUB
 chmod +x "$W/bin2/gh"
@@ -195,6 +200,13 @@ has "stats names the ticket merged without the guard" "$W/stats.txt" "T-01-02#20
 hasnt "stats does not accuse the guarded merge" "$W/stats.txt" "T-01-01#201"
 has "stats still credits the guarded merge" "$W/stats.txt" "sentinel landed 1 ticket PR"
 has "stats names the role the ladder does not know" "$W/stats.txt" "frontend-delivery"
+# …but only while it is recent. The journal is append-only and the graph is
+# regenerated per phase, so an unwindowed warning reports a practice that stopped
+# days ago forever — which is how a report teaches its reader to skim it.
+hasnt "a role last used months ago is no longer shouted about" "$W/stats.txt" "long-ago-role"
+has "the window is stated, so nobody reads a slice as the whole record" "$W/stats.txt" "[since 14d]"
+( cd "$sproj" && PATH="$W/bin2:$PATH" node "$SCRIPTS/pipeline-stats.cjs" --since all ) > "$W/stats-all.txt" 2>&1 || true
+has "--since all restores the lifetime view" "$W/stats-all.txt" "long-ago-role"
 # One merge is one PR landing, however many times it was written down.
 has "a double-logged merge is counted once" "$W/stats.txt" "sentinel landed 1 ticket PR"
 # Who merged it is the difference between a person deciding and a run evading.

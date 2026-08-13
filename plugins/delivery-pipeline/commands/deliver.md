@@ -322,7 +322,7 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/scope-gate.cjs <T> --worktree <p> --base <ref
 node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--graph <dir>]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs <mark|clear|list> …
-node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs [--json]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs [--json] [--since 14d|all]
 ```
 
 **Telemetry belongs to the PROJECT, wherever the agent happens to stand.** The

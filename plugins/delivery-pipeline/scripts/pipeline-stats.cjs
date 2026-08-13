@@ -31,6 +31,30 @@ const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
 const asJson = process.argv.includes('--json');
 
+// The WARNINGS need a window; the totals do not. The journal is append-only and
+// the graph is regenerated per phase, so without one every warning reports the
+// whole history forever: a practice that stopped days ago keeps shouting, and a
+// merge a person made last week is still presented as something to look at. That
+// is how a report trains its reader to skim it. Rows and counts stay lifetime —
+// those are the record. `--since all` restores the old behaviour.
+const sinceArg = (() => {
+  const i = process.argv.indexOf('--since');
+  return i === -1 ? '14d' : String(process.argv[i + 1] || '14d');
+})();
+const sinceTs = (() => {
+  if (sinceArg === 'all') return null;
+  const rel = /^(\d+)d$/.exec(sinceArg);
+  if (rel) return Date.now() - Number(rel[1]) * 86_400_000;
+  const t = Date.parse(sinceArg);
+  return Number.isNaN(t) ? Date.now() - 14 * 86_400_000 : t;
+})();
+const withinWindow = (iso) => {
+  if (sinceTs === null) return true;
+  const t = Date.parse(iso || '');
+  return Number.isNaN(t) ? true : t >= sinceTs; // undated → report it rather than hide it
+};
+const windowLabel = sinceTs === null ? 'all time' : `since ${sinceArg}`;
+
 function fail(msg) {
   console.error(`pipeline-stats: ${msg}`);
   process.exit(1);
@@ -138,7 +162,11 @@ for (const [id, t] of Object.entries(tickets)) {
     // raw `gh pr merge` writes nothing, so a bypass is indistinguishable from an
     // idle ticket. Only GitHub's own MERGED state, which we already fetched,
     // makes the silence legible.
-    unguarded_merge: !!(pr && pr.state === 'MERGED' && !events.some((e) => e.event === 'merge')),
+    // Windowed like the other warnings: a merge a person made last week is a
+    // fact, not a thing to act on, and repeating it every run buries the one
+    // that happened this morning.
+    unguarded_merge: !!(pr && pr.state === 'MERGED' && !events.some((e) => e.event === 'merge')
+      && withinWindow(pr.mergedAt)),
   };
   rows.push(row);
 }
@@ -201,7 +229,9 @@ const guardedMerges = [...new Map(
     .sort(([, a], [, b]) => (a.by === 'sentinel' ? 1 : 0) - (b.by === 'sentinel' ? 1 : 0))
 ).values()];
 const unknownRoles = [...new Set(
-  journal.filter((e) => e.event === 'attempt' && e.role && !ROLES.includes(e.role)).map((e) => e.role)
+  journal
+    .filter((e) => e.event === 'attempt' && e.role && !ROLES.includes(e.role) && withinWindow(e.ts))
+    .map((e) => e.role)
 )];
 
 // Tickets the board keeps offering that no run ever takes. A run scopes itself
@@ -298,7 +328,7 @@ if (unguarded.length) {
   }
   const label = (r) => `${r.ticket}#${r.pr}${who.has(r.ticket) ? ` (${who.get(r.ticket)})` : ''}`;
   console.log(
-    `⚠ ${unguarded.length} ticket PR(s) are MERGED with no guarded merge — the gate in \`sentinel.cjs merge\` ` +
+    `⚠ [${windowLabel}] ${unguarded.length} ticket PR(s) are MERGED with no guarded merge — the gate in \`sentinel.cjs merge\` ` +
     `did not run for them (green checks, zero unresolved threads, the arch-review conform trailer, base inside ` +
     `the stack): ${asked.map(label).join(', ')}` +
     (unguarded.length > CAP ? `, +${unguarded.length - CAP} more (not attributed)` : '')
@@ -318,7 +348,7 @@ if (stranded.length) {
 }
 if (unknownRoles.length) {
   console.log(
-    `⚠ attempts logged under ${unknownRoles.length} role(s) the model ladder does not know: ${unknownRoles.join(', ')}. ` +
+    `⚠ [${windowLabel}] attempts logged under ${unknownRoles.length} role(s) the model ladder does not know: ${unknownRoles.join(', ')}. ` +
     `Those dispatches resolved no model from role × risk × attempt — someone picked one by hand. Known roles: ${ROLES.join(', ')}.`
   );
 }
