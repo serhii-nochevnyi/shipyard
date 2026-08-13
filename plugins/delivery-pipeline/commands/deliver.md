@@ -78,6 +78,15 @@ you already gave up on: `state-sync.cjs --parked T-04-01,T-05-07` for tickets yo
 parked this run (agent returned `escalate`, attempts > MAX). That is the one input
 the script cannot get from GitHub.
 
+But `--parked` is the WEAK channel — it lives and dies with the session, and the
+next run opens blind. Anything you expect to still be true tomorrow gets recorded
+instead, and the front reads it back by itself:
+- `escalation-record.cjs mark <T> <reason...>` — this PR needs a human. Lifts when
+  the PR moves (push, review answer, undraft) or on `clear`.
+- `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
+  Lifts when the plan is re-planned.
+Reserve `--parked` for what genuinely holds only for this session.
+
 `branched-needs-pr`/`publish` is a real bucket, not a curiosity: a branch that was
 pushed before its PR was opened (an executor died between the two) is unfinished
 work. Leaving it out of the front made a run report "fixpoint" while a ticket sat
@@ -423,12 +432,23 @@ attempt    — each babysit round on a PR:
              log-event.cjs attempt ticket=<T> pr=<N> n=<attempts> role=<ci-fix|review-fix> model=<tier> outcome=<pushed|no-op|escalate>
 fix_round  — for EACH item from a fix-round Workflow result:
              log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false>
-escalation — any escalation to a human:
-             log-event.cjs escalation ticket=<T> pr=<N> reason="<concise>"
+escalation — any escalation to a human — NOT through log-event:
+             escalation-record.cjs mark <T> <reason...>
 ```
 
-`merge` events are written by `sentinel.cjs merge` itself (like status_change) —
-do NOT log them by hand.
+`merge` and `status_change` are written by `sentinel.cjs merge` and
+`state-sync.cjs` themselves — do NOT log them by hand; log-event refuses.
+
+`escalation` is refused there too, for a different reason: journalling it does
+not PARK the ticket, and the two used to be separate acts, so one always got
+done without the other. `escalation-record.cjs mark` writes both — and the park
+is DURABLE, which `--parked` never was. That matters most at the moment you are
+escalating: `--parked` dies with the session, so the next run offered the ticket
+straight back and re-dispatched review-fix and arch-review at a PR a human had
+already been asked to resolve, with your reason gone. The reason you type is the
+only thing that session inherits, so write what a human must decide.
+It lifts itself once the PR moves (a push, a review answer, undrafting), or with
+`escalation-record.cjs clear <T>`.
 
 A missed event is lost forever (GitHub won't recover it), so the log call goes IN
 THE SAME step where the fact occurred, not "at the end."
@@ -851,7 +871,7 @@ loop:
         that did not green CI → opus/xhigh — effort escalates with the tier)
        (prompt ${CLAUDE_PLUGIN_ROOT}/references/ci-fix.md + contract + the
         failure log: gh run view --log-failed)
-       'escalate' from the agent → park `blocked` (note the reason), continue the front
+       'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
        a push happened → step d
      pending → the SENTINEL waits here (`gh pr checks <pr> --watch`) — that is its
        job. On the fallback path YOU do not: leave the PR in `waiting: ci`, EXIT
@@ -879,7 +899,7 @@ loop:
      (prompt ${CLAUDE_PLUGIN_ROOT}/references/arch-review.md + gh pr diff +
       .planning/architecture/)
      violation    → fix in the worktree → push → step d
-     adr-outdated → park `blocked` (the decision to change the ADR is a human's), continue the front
+     adr-outdated → `escalation-record.cjs mark <T> "adr-outdated: …"` (changing the ADR is a human's call), continue the front
      conform      → check the green criteria:
        all checks passed ∧ unresolved=0 ∧ arch conform
        → record the verdicts in the PR body as a trailer (survives squash-merge):
@@ -912,7 +932,7 @@ loop:
        `git -C <worktree> rev-parse origin/<branch>` (or the PR's head SHA)
      reviewers.cjs reinit <pr>
      attempts += 1
-     attempts > MAX → park `blocked` with a summary of the attempts, continue the front
+     attempts > MAX → `escalation-record.cjs mark <T> "<what the N attempts tried and why each failed>"`, continue the front
      → step a
 ```
 
@@ -938,7 +958,7 @@ itself. The round order:
    needsReviewFix, model, effort: <from `pipeline-config.cjs model ci-fix --json
    --attempt <n>` / `model review-fix --json`, per PR>}], ciFixRefPath,
    reviewFixRefPath, reinitScript, artifactLanguage}})`. One parallel pass; each agent
-   pushes at most once and does reinit itself. `escalate` → park `blocked`
+   pushes at most once and does reinit itself. `escalate` → `escalation-record.cjs mark`
    (note it), which does NOT halt the other PRs of the round.
    (A fixer MAY publish — unlike an executor — because the result of a fix is
    verified mechanically afterwards from live GitHub: a push that did not happen
@@ -977,9 +997,10 @@ so assume you are on that side. Either way, two consequences:
 - **Do not treat a summary as an ending.** Post it if it helps the human follow
   along, then keep going. You can also run `stop-gate.cjs` yourself — pipe it
   `{}` — to check whether stopping here is legitimate.
-- **If work must NOT be taken, park it — do not leave it listed.** An escalation,
-  a human checkpoint, or `drift-record.cjs mark` for a plan that predates what
-  shipped. A parked item leaves the front; an ignored one does not.
+- **If work must NOT be taken, park it — do not leave it listed.**
+  `escalation-record.cjs mark` when a human must decide, `drift-record.cjs mark`
+  when the plan predates what shipped. A parked item leaves the front; an ignored
+  one does not.
 The gate is deliberately narrow: it is silent when only CI is pending, when every
 actionable item is left behind in a phase already moved past, on a stale front,
 and on a stop it has already blocked once. So a verdict from it is real work.

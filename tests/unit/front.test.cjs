@@ -321,4 +321,56 @@ test('every actionable bucket names roles the model ladder actually knows', () =
   }
 });
 
+suite('front — the standalone CLI is equivalent to state-sync');
+
+// deliver.md advertises `front.cjs` as "re-runnable on its own", and it silently
+// was not: state-sync passed the durable parks in and the CLI did not, so the same
+// graph produced two different verdicts depending on which command you ran. A
+// ticket recorded as drifted read back as actionable — the exact re-offering
+// drift-record was written to stop.
+test('the CLI honours a recorded drift verdict', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { spawnSync } = require('child_process');
+  const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-frontcli-'));
+  const graph = path.join(dir, '.planning', 'graph');
+  fs.mkdirSync(graph, { recursive: true });
+  const plan = path.join(dir, 'T-01-01-PLAN.md');
+  fs.writeFileSync(plan, '# a plan that shipped under other names\n');
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': {} } }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'),
+    JSON.stringify({ 'T-01-01': { status: 'pending', ready: true, branch: 'ticket/T-01-01-x' } }));
+
+  const cli = (args = []) => spawnSync('node', [path.join(SCRIPTS, 'front.cjs'), ...args], { cwd: dir, encoding: 'utf8' });
+
+  const before = JSON.parse(cli(['--json']).stdout);
+  assert.deepEqual(before.actionable.execute, ['T-01-01'], 'executable before the verdict');
+
+  const mark = spawnSync('node',
+    [path.join(SCRIPTS, 'drift-record.cjs'), 'mark', 'T-01-01', plan, 'landed', 'as', 'PR', '#410'],
+    { cwd: dir, encoding: 'utf8' });
+  assert.equal(mark.status, 0, `drift mark must succeed (${mark.stderr})`);
+
+  const after = JSON.parse(cli(['--json']).stdout);
+  assert.equal(after.actionable_count, 0, 'the CLI must see the same verdict state-sync sees');
+  assert.ok(after.parked.blocked.includes('T-01-01'));
+
+  // ...and the same for an escalation, the other durable park.
+  const state = { 'T-01-01': { status: 'pr-open', pr: 5, draft: false, checks: { total: 1, failing: 0, pending: 0 } } };
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
+  fs.rmSync(path.join(graph, 'drift.json'));
+  assert.equal(JSON.parse(cli(['--json']).stdout).actionable_count, 1, 'actionable again once drift is gone');
+
+  const esc = spawnSync('node',
+    [path.join(SCRIPTS, 'escalation-record.cjs'), 'mark', 'T-01-01', 'the', 'reviewer', 'must', 'decide'],
+    { cwd: dir, encoding: 'utf8' });
+  assert.equal(esc.status, 0, `escalation mark must succeed (${esc.stderr})`);
+  const parked = JSON.parse(cli(['--json']).stdout);
+  assert.equal(parked.actionable_count, 0, 'the CLI honours the escalation too');
+  assert.ok(/the reviewer must decide/.test(parked.why['T-01-01']), 'and reports its reason');
+});
+
 done();

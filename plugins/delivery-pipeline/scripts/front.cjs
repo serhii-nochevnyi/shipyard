@@ -44,9 +44,9 @@
 const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
 const SENTINEL_BUCKETS = ['fix', 'finalize', 'merge'];
 
-// Session-only facts (attempts > MAX, an agent that returned `escalate`) are
-// invisible to state-sync, and a front that keeps re-offering an escalated PR is
-// an infinite babysit loop. The caller passes those ids in.
+// Facts GitHub cannot know. `parked` is the session-scoped channel — a judgement
+// made mid-run that has no home on disk yet; a front that keeps re-offering an
+// escalated PR is an infinite babysit loop, so the caller passes those ids in.
 function computeFront(tickets, state, opts = {}) {
   const parkedIds = new Set(opts.parked || []);
   // A drift verdict is a fact about the PLAN, not about a session, so unlike
@@ -58,6 +58,14 @@ function computeFront(tickets, state, opts = {}) {
   // {ticket: reason}; it is expected to drop entries whose plan has since been
   // re-planned, so the park lifts by itself rather than becoming permanent.
   const drifted = opts.drifted || {};
+  // An escalation is the same shape of fact one level down: not about the plan,
+  // but about the PR as it stood when the run gave up. It used to travel ONLY as
+  // `--parked`, so it died with the session and the next run re-dispatched
+  // review-fix and arch-review against a PR a human had already been asked to
+  // handle — with the reason, the only part worth inheriting, gone. The caller
+  // supplies {ticket: reason} and is expected to drop entries whose PR has since
+  // moved, so a human answering the review lifts the park by itself.
+  const escalated = opts.escalated || {};
   // Auto-merge is a config decision (pipeline.auto_merge) that state-sync passes
   // in; the front never guesses it, because the difference is whether an unmerged
   // green PR is the run's work or a human's.
@@ -87,6 +95,15 @@ function computeFront(tickets, state, opts = {}) {
 
     if (s.status === 'merged') {
       parked.done.push(id);
+      continue;
+    }
+
+    // After `merged` — unlike drift. A drifted plan stays worth flagging even
+    // when the work landed under other names, but an escalation is a verdict on
+    // getting this PR in: if it is in, there is nothing left to escalate.
+    if (escalated[id]) {
+      parked.blocked.push(id);
+      why[id] = `escalated — ${escalated[id]}. It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear ${id}\` to take it back.`;
       continue;
     }
 
@@ -344,7 +361,17 @@ if (require.main === module) {
   const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
   const { config } = loadConfig(root);
   const autoMerge = config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
-  const front = computeFront(tickets, state, { parked, autoMerge });
+  // The durable parks — drift verdicts and escalations — must be read here too.
+  // deliver.md advertises this CLI as "re-runnable on its own", and it silently
+  // was not equivalent: state-sync passed both in, so the same graph produced two
+  // different verdicts depending on which command you ran. A ticket parked as
+  // drifted read back as `execute` — the exact re-offering drift-record exists
+  // to stop.
+  const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
+  const { activeEscalations } = require(path.join(__dirname, 'escalation-record.cjs'));
+  const front = computeFront(tickets, state, {
+    parked, autoMerge, drifted: activeDrift(root), escalated: activeEscalations(root, state),
+  });
   if (argv.includes('--json')) {
     process.stdout.write(JSON.stringify(front, null, 2) + '\n');
   } else {
