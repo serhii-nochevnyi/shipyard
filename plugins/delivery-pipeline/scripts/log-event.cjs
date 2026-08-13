@@ -65,13 +65,29 @@ if (!event || !/^[a-z][a-z0-9_-]*$/.test(event)) {
 // merges were double-logged in one morning, which inflated "sentinel landed N"
 // and put an empty base in the summary, because the hand-written copy carries no
 // `by` and no `base`. Refusing costs nothing — the real record is already there.
-const OWNED_BY_SCRIPTS = { merge: 'sentinel.cjs merge', status_change: 'state-sync.cjs' };
+// `escalation` joined them for a different reason: journalling it by hand records
+// the fact WITHOUT parking the ticket, so the next session inherits a metric and
+// no verdict — which is how a ticket ended up parked with no journal entry and
+// six journalled escalations ended up with no durable park.
+const OWNED_BY_SCRIPTS = {
+  merge: 'sentinel.cjs merge',
+  status_change: 'state-sync.cjs',
+  escalation: 'escalation-record.cjs mark',
+};
 if (OWNED_BY_SCRIPTS[event]) {
   console.error(
-    `log-event: "${event}" events are written by ${OWNED_BY_SCRIPTS[event]} itself — refusing to add a duplicate.\n` +
-    `  The genuine record carries fields a hand-written one cannot (by, base), and counting both\n` +
-    `  overstates what the guard actually did. If the real event is missing, that is a bug in\n` +
-    `  ${OWNED_BY_SCRIPTS[event]}, not something to paper over here.`
+    `log-event: "${event}" events are written by ${OWNED_BY_SCRIPTS[event]} itself — ` +
+    // Not a duplicate, in the escalation case: an incomplete act. Different
+    // defect, so different words — "duplicate" would send the reader looking for
+    // a second record that does not exist.
+    (event === 'escalation' ? 'refusing a half-recorded escalation.\n' : 'refusing to add a duplicate.\n') +
+    (event === 'escalation'
+      ? '  Writing it here would record the fact without PARKING the ticket, so the next session\n' +
+        '  inherits a metric and no verdict — and the front hands the ticket straight back.\n' +
+        '  `escalation-record.cjs mark <ticket> <reason...>` does both in one act.'
+      : '  The genuine record carries fields a hand-written one cannot (by, base), and counting both\n' +
+        '  overstates what the guard actually did. If the real event is missing, that is a bug in\n' +
+        `  ${OWNED_BY_SCRIPTS[event]}, not something to paper over here.`)
   );
   process.exit(1);
 }

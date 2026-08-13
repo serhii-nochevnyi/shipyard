@@ -45,6 +45,7 @@ const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { computeFront, formatFront } = require(path.join(__dirname, 'front.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
+const { activeEscalations } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 
 const ROOT = process.cwd();
@@ -482,7 +483,12 @@ const AUTO_MERGE = cfg.auto_merge === 'epic' && mode === 'epic-stacked';
 // park lifts by itself). Without this the front hands a stale plan back to an
 // executor on every run, however many times it has already been judged.
 const DRIFTED = activeDrift(ROOT);
-const front = computeFront(tickets, state, { parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED });
+// Escalations recorded by earlier runs, minus any whose PR has since moved. The
+// state we just rebuilt IS the comparison, so it is passed in rather than re-read.
+const ESCALATED = activeEscalations(ROOT, state);
+const front = computeFront(tickets, state, {
+  parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED, escalated: ESCALATED,
+});
 
 withLock(lockDirFor(ROOT), 'state', () => {
   if (transitions.length) {

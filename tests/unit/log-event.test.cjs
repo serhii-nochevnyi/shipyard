@@ -90,6 +90,15 @@ test('events the scripts own are refused, not duplicated', () => {
     assert.ok(/refusing to add a duplicate/.test(r.stderr), r.stderr);
     assert.ok(/sentinel\.cjs|state-sync\.cjs/.test(r.stderr), 'the error must name the real writer');
   }
+  // `escalation` is refused for a DIFFERENT defect — it would record the fact
+  // without parking the ticket, leaving the next session a metric and no verdict.
+  // So it must not borrow the duplicate wording: that would send the reader
+  // looking for a second record that was never written.
+  const esc = run(project, ['escalation', 'ticket=T-01-01', 'pr=1']);
+  assert.notStrictEqual(esc.status, 0, 'escalation must be refused');
+  assert.ok(/half-recorded/.test(esc.stderr), esc.stderr);
+  assert.ok(!/duplicate/.test(esc.stderr), 'and must NOT call it a duplicate');
+  assert.ok(/escalation-record\.cjs mark/.test(esc.stderr), 'it must name the command that does both');
   assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
 });
 

@@ -151,7 +151,23 @@ function journal(rec) {
 }
 
 // ── duty: who owns each open PR right now ───────────────────────────────────
-const PARKED = new Set(listFlag('parked'));
+// The `--parked` flag alone is not the parked set. The front also parks on the
+// durable records (escalations, drift verdicts), and the guard runs CONCURRENTLY
+// with the main loop off the same state — so reading a narrower set here means
+// the guard keeps dispatching review-fix at exactly the PRs the front has set
+// aside. The two must agree on what is parked or the concurrency is a race with
+// a human in it.
+const { activeEscalations } = require(path.join(__dirname, 'escalation-record.cjs'));
+const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
+const ESCALATED = activeEscalations(ROOT);
+const DRIFTED = activeDrift(ROOT);
+const PARKED = new Set([...listFlag('parked'), ...Object.keys(ESCALATED), ...Object.keys(DRIFTED)]);
+// A recorded park carries a reason; the flag does not. Report the reason where
+// there is one — "parked" alone is what sent the last run looking through the
+// journal by hand.
+const PARKED_WHY = {};
+for (const [id, r] of Object.entries(ESCALATED)) PARKED_WHY[id] = `escalated — ${r} (lifts when the PR moves; \`escalation-record.cjs clear ${id}\`)`;
+for (const [id, r] of Object.entries(DRIFTED)) PARKED_WHY[id] = `drifted — ${r} (re-plan it; the park lifts when the plan changes)`;
 const SCOPE = listFlag('scope');
 
 // Unresolved review threads for one PR, or null when they cannot be read.
@@ -220,7 +236,8 @@ function dutyItems() {
 
     if (PARKED.has(id)) {
       item.action = 'parked';
-      item.why = 'parked by this run (escalation or attempts exhausted) — a human unparks it';
+      item.why = PARKED_WHY[id]
+        || 'parked by this run (escalation or attempts exhausted) — a human unparks it';
     } else if (parentIsMoving(id)) {
       // Drive the PARENT first. Anything done here is provisional: when the
       // parent lands, this branch's base moves, CI re-runs against different
