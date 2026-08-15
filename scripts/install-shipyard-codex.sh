@@ -141,6 +141,18 @@ else text = (text.trimEnd() + '\n\n' + block + '\n').replace(/^\n+/, '');
 fs.writeFileSync(p, text);
 NODE
 
+# ── GSD's global defaults for this runtime ───────────────────────────────────
+# See install-shipyard-claude-hook.sh for the full reasoning. In short:
+# ~/.gsd/defaults.json is inherited by any directory with no `.planning/`, it
+# holds ONE `runtime` shared by both installs, and only model-shaped keys belong
+# there — conveyor settings stay per-project.
+GSD_TUNE="$REPO_ROOT/plugins/delivery-pipeline/scripts/gsd-tune.cjs"
+[[ -f "$GSD_TUNE" ]] || GSD_TUNE="$BUNDLE_ROOT/scripts/gsd-tune.cjs"
+if [[ -f "$GSD_TUNE" ]]; then
+  echo "→ GSD global defaults (~/.gsd/defaults.json)"
+  node "$GSD_TUNE" --global --runtime codex --apply 2>&1 | sed 's/^/  /' || true
+fi
+
 deliver_hint=""
 [[ "$PHASE" -ge 2 ]] && deliver_hint=' | $shipyard-deliver'
 echo "✓ shipyard installed for Codex."

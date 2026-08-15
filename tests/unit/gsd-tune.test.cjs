@@ -192,4 +192,66 @@ test('model_profile mirrors the conveyor\'s own policy, in GSD\'s vocabulary', (
   }
 });
 
+suite('gsd-tune --global — the install-time surface');
+
+// ~/.gsd/defaults.json is what a directory with NO .planning/ inherits. Verified
+// against GSD: with no project config it supplies `runtime`; the moment a project
+// has its own config.json, even an empty one, it stops contributing. So it is the
+// only thing an installer can configure — there is no project at install time.
+function home(defaults) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsdhome-'));
+  fs.mkdirSync(path.join(dir, '.gsd'), { recursive: true });
+  if (defaults !== undefined) {
+    fs.writeFileSync(path.join(dir, '.gsd', 'defaults.json'), JSON.stringify(defaults, null, 2));
+  }
+  return dir;
+}
+const runGlobal = (h, args = []) =>
+  spawnSync('node', [SCRIPT, '--global', ...args], { cwd: h, encoding: 'utf8', env: { ...process.env, HOME: h } });
+const globalCfg = (h) => JSON.parse(fs.readFileSync(path.join(h, '.gsd', 'defaults.json'), 'utf8'));
+
+test('nothing conveyor-shaped is ever written machine-wide', () => {
+  // The file is inherited by GSD projects that never asked for shipyard. An
+  // ordinary one legitimately wants phase branches, so forcing branching,
+  // worktrees or agent_skills here is the overreach the capability's plan:post
+  // gate has an applicability check to avoid.
+  const h = home({});
+  runGlobal(h, ['--runtime', 'claude', '--apply']);
+  const cfg = globalCfg(h);
+  for (const key of ['git', 'agent_skills', 'workflow']) {
+    assert.equal(cfg[key], undefined, `${key} must not reach the global defaults`);
+  }
+  assert.equal(cfg.models.planning, 'opus', 'but the model settings do');
+  assert.equal(cfg.model_overrides['gsd-planner'], 'fable');
+});
+
+test('a runtime handover is announced, not performed silently', () => {
+  // One `runtime` shared by two installers means last-write-wins. That is how
+  // the real file came to say "codex" on a Claude machine, where every
+  // unconfigured directory then resolved gpt-5.6-sol.
+  const h = home({ runtime: 'codex', resolve_model_ids: 'omit' });
+  const r = runGlobal(h, ['--runtime', 'claude']);
+  assert.ok(/currently say runtime "codex"/.test(r.stdout), r.stdout);
+  assert.equal(r.status, 1, 'drift is reported, and reporting is not writing');
+  assert.equal(globalCfg(h).runtime, 'codex', 'nothing written without --apply');
+
+  runGlobal(h, ['--runtime', 'claude', '--apply']);
+  assert.equal(globalCfg(h).runtime, 'claude');
+  assert.equal(globalCfg(h).resolve_model_ids, 'omit', 'unrelated keys survive');
+});
+
+test('the global file is created when absent — unlike a project config', () => {
+  // A missing project config means "you are in the wrong directory" and is
+  // refused. A missing global defaults file just means nobody has written one.
+  const h = home(undefined);
+  assert.equal(runGlobal(h, ['--runtime', 'codex', '--apply']).status, 0);
+  assert.equal(globalCfg(h).runtime, 'codex');
+});
+
+test('codex gets no fable overrides machine-wide either', () => {
+  const h = home({});
+  runGlobal(h, ['--runtime', 'codex', '--apply']);
+  assert.equal(globalCfg(h).model_overrides, undefined, 'fable does not exist off Claude');
+});
+
 done();

@@ -44,17 +44,33 @@ const APPLY = argv.includes('--apply');
 const AS_JSON = argv.includes('--json');
 const flag = (n) => { const i = argv.indexOf(`--${n}`); return i === -1 ? null : argv[i + 1]; };
 
+// `--global` targets ~/.gsd/defaults.json, which is what an UNCONFIGURED
+// directory inherits — a new project before anyone has run /gsd-config in it.
+// Verified: with no `.planning/` at all, GSD reads that file; the moment a
+// project has its own `config.json`, even an empty one, the global file stops
+// contributing. So this is the install-time surface, and the only one: there is
+// no project to configure when a plugin is installed.
+//
+// It is also the file where a dual-runtime machine goes wrong. This one held
+// `runtime: "codex"` — written by whichever installer ran last — so on a Claude
+// machine every unconfigured directory resolved `gpt-5.6-sol`. Hence the narrow
+// global set below, and the loud warning when the runtime changes hands.
+const GLOBAL = argv.includes('--global');
 const ROOT = process.cwd();
-const CONFIG = path.join(ROOT, '.planning', 'config.json');
+const CONFIG = GLOBAL
+  ? path.join(process.env.HOME || '', '.gsd', 'defaults.json')
+  : path.join(ROOT, '.planning', 'config.json');
 
 function fail(msg, code = 2) { process.stderr.write(`gsd-tune: ${msg}\n`); process.exit(code); }
 
-if (!fs.existsSync(CONFIG)) {
-  fail(`no ${CONFIG} — run this from a GSD project (the conveyor's own project root)`);
-}
 let raw;
-try { raw = JSON.parse(fs.readFileSync(CONFIG, 'utf8')); }
-catch (e) { fail(`${CONFIG} is not valid JSON (${e.message}) — refusing to rewrite a file I cannot parse`); }
+if (!fs.existsSync(CONFIG)) {
+  if (!GLOBAL) fail(`no ${CONFIG} — run this from a GSD project (the conveyor's own project root)`);
+  raw = {}; // the global defaults file is ours to create; a project's config is not
+} else {
+  try { raw = JSON.parse(fs.readFileSync(CONFIG, 'utf8')); }
+  catch (e) { fail(`${CONFIG} is not valid JSON (${e.message}) — refusing to rewrite a file I cannot parse`); }
+}
 
 // The runtime decides two of the settings below, so guessing it wrong is worse
 // than not guessing: an explicit flag wins, then the config's own value, then the
@@ -107,7 +123,15 @@ const PROFILE_FOR_POLICY = { economy: 'budget', balanced: 'balanced', premium: '
 
 const { config: pipeline } = loadConfig(ROOT);
 
-const REQUIRED = [
+// Project mode only. `git.branching_strategy: none` is a CONVEYOR requirement,
+// and the global file is inherited by every unconfigured directory on the
+// machine — an ordinary GSD project legitimately wants phase branches, so
+// forcing this machine-wide is the same overreach the capability's plan:post
+// gate has an applicability check to avoid.
+const REQUIRED = GLOBAL ? [
+  ['runtime', runtime,
+    'which runtime an unconfigured project should assume on this machine'],
+] : [
   ['runtime', runtime,
     'decides whether a plugin-namespaced agent_skills entry resolves at all — wrong, and the skill is silently skipped'],
   ['git.branching_strategy', 'none',
@@ -135,7 +159,18 @@ const REQUIRED = [
 // costs money — they keep their profile tiers.
 const CLAUDE_1M_AGENTS = ['gsd-planner', 'gsd-code-reviewer'];
 
-const TUNING = [
+// Machine-wide settings must be about MODELS, never about the conveyor. The
+// global file is inherited by every unconfigured directory, so anything
+// conveyor-shaped in it (`workflow.use_worktrees`, `agent_skills`, branching)
+// would reconfigure GSD for projects that never asked for shipyard.
+const GLOBAL_SAFE = new Set([
+  'model_profile', 'models.planning', 'models.execution', 'models.research',
+  'models.verification', 'effort.routing_tier_defaults.light',
+  'effort.routing_tier_defaults.standard', 'effort.routing_tier_defaults.heavy',
+  'model_overrides.gsd-planner', 'model_overrides.gsd-code-reviewer',
+]);
+
+const TUNING_ALL = [
   // GSD's own default, and shipyard has no reason to move it. It was in REQUIRED
   // as `false`, on the belief that `/gsd-code-review --fix` — which the conveyor
   // DOES call from inside a ticket worktree — would fork a nested one. Checked
@@ -167,6 +202,8 @@ const TUNING = [
     `the delivery-rules skill in the form the "${runtime}" runtime resolves`],
 ];
 
+const TUNING = TUNING_ALL.filter(([key]) => !GLOBAL || GLOBAL_SAFE.has(key));
+
 const get = (o, dotted) => dotted.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
 function set(o, dotted, value) {
   const parts = dotted.split('.');
@@ -189,10 +226,29 @@ for (const [group, list] of [['required', REQUIRED], ['tuning', TUNING]]) {
   }
 }
 
+// A machine can have BOTH runtimes installed, and this file holds one `runtime`.
+// Whichever installer ran last wins — which is exactly how it came to say
+// "codex" on a Claude machine, making every unconfigured directory resolve
+// gpt-5.6-sol. Silent last-write-wins is the defect; saying so is the fix.
+const runtimeHandover = GLOBAL && typeof raw.runtime === 'string' && raw.runtime && raw.runtime !== runtime
+  ? raw.runtime : null;
+
 if (AS_JSON) {
-  console.log(JSON.stringify({ runtime, detected_by: how, applied: APPLY, drift }, null, 2));
+  console.log(JSON.stringify({
+    runtime, detected_by: how, applied: APPLY, scope: GLOBAL ? 'global' : 'project',
+    runtime_handover: runtimeHandover, drift,
+  }, null, 2));
 } else {
-  console.log(`gsd-tune: runtime "${runtime}" (${how}) — ${CONFIG}`);
+  console.log(`gsd-tune: runtime "${runtime}" (${how}) — ${CONFIG}${GLOBAL ? '  [global defaults]' : ''}`);
+  if (runtimeHandover) {
+    console.log(
+      `\n  ⚠ these global defaults currently say runtime "${runtimeHandover}".\n` +
+      `    This file is ONE value shared by both installs, and it is inherited by every\n` +
+      '    directory that has no .planning/ of its own — so the wrong one there makes an\n' +
+      `    unconfigured project resolve ${runtimeHandover}'s models. Applying sets it to "${runtime}".\n` +
+      '    A project with its own config.json is unaffected either way.'
+    );
+  }
   if (!drift.length) console.log('  nothing to change: this project already agrees with the conveyor');
   for (const g of ['required', 'tuning']) {
     const rows = drift.filter((d) => d.group === g);
