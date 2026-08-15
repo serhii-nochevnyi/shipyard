@@ -111,7 +111,10 @@ if npx --yes "@opengsd/gsd-core@${VERSION}" "${FLAGS[@]}" </dev/null; then
   if [[ -n "$after" && -n "$resolved" && "$resolved" != "latest" && "$after" != "$resolved" ]]; then
     echo "  ⚠ asked for $resolved, VERSION says $after"
   fi
-  [[ "$RUNTIME" == "claude" ]] && ensure_claude_plugin
+  # `[[ cond ]] && func` as the LAST statement returns 1 when cond is false, so on
+  # codex this script exited 1 and the caller's `set -e` aborted the whole install
+  # right after reporting success. An `if` has no such tail.
+  if [[ "$RUNTIME" == "claude" ]]; then ensure_claude_plugin; fi
 else
   echo "⚠ gsd-core install failed for $RUNTIME (offline? npm registry unreachable?)." >&2
   if [[ -d "$CORE" ]]; then

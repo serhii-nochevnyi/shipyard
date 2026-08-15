@@ -163,11 +163,22 @@ const CLAUDE_1M_AGENTS = ['gsd-planner', 'gsd-code-reviewer'];
 // global file is inherited by every unconfigured directory, so anything
 // conveyor-shaped in it (`workflow.use_worktrees`, `agent_skills`, branching)
 // would reconfigure GSD for projects that never asked for shipyard.
+//
+// `model_overrides.*` is deliberately NOT here, and the reason is observed rather
+// than argued: the values are `fable`, which exists only on Claude, and this file
+// is read by the Codex install too. GSD said so out loud —
+//   gsd: warning — Codex agent "gsd-code-reviewer" model "fable" is not a valid
+//   Codex model … dropping it
+// — twice, about a key we had written. It is dropped safely, but a setting that is
+// wrong half the time it is read belongs where the runtime is unambiguous: the
+// project config, which the project-mode list still sets on Claude.
+//
+// `models.*` and `effort.*` stay because they are TIER aliases, meaningful on both
+// runtimes; `model_overrides` carries a concrete model name and is not.
 const GLOBAL_SAFE = new Set([
   'model_profile', 'models.planning', 'models.execution', 'models.research',
   'models.verification', 'effort.routing_tier_defaults.light',
   'effort.routing_tier_defaults.standard', 'effort.routing_tier_defaults.heavy',
-  'model_overrides.gsd-planner', 'model_overrides.gsd-code-reviewer',
 ]);
 
 const TUNING_ALL = [
@@ -217,6 +228,17 @@ function set(o, dotted, value) {
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+// A narrow migration, not a general remover. An earlier version of THIS script
+// wrote `model_overrides.<agent>: "fable"` into the global defaults; the value is
+// Claude-only and the file is read by the Codex install too, which made GSD warn
+// on every Codex install about a key we had put there. Only those exact
+// agent/value pairs are withdrawn — a user's own override is left alone, and
+// nothing is removed outside `--global`.
+const OUR_OLD_GLOBAL_OVERRIDES = ['gsd-planner', 'gsd-code-reviewer'];
+const staleGlobalOverrides = GLOBAL && raw.model_overrides && typeof raw.model_overrides === 'object'
+  ? OUR_OLD_GLOBAL_OVERRIDES.filter((a) => raw.model_overrides[a] === 'fable')
+  : [];
+
 const drift = [];
 for (const [group, list] of [['required', REQUIRED], ['tuning', TUNING]]) {
   for (const [key, want, why] of list) {
@@ -264,7 +286,16 @@ if (AS_JSON) {
   }
 }
 
-if (!drift.length) process.exit(0);
+if (staleGlobalOverrides.length && !AS_JSON) {
+  console.log(
+    `\n  withdrawing ${staleGlobalOverrides.length} machine-wide model_overrides an earlier` +
+    ' version of this script wrote:\n    ' + staleGlobalOverrides.join(', ') +
+    ' = "fable"\n    `fable` exists only on Claude and this file is read by the Codex install too,' +
+    '\n    so GSD warned about it on every Codex install. It still applies to Claude PROJECTS.'
+  );
+}
+
+if (!drift.length && !staleGlobalOverrides.length) process.exit(0);
 
 if (!APPLY) {
   if (!AS_JSON) {
@@ -275,8 +306,17 @@ if (!APPLY) {
 }
 
 for (const d of drift) set(raw, d.key, d.want);
+for (const agent of staleGlobalOverrides) delete raw.model_overrides[agent];
+// Leave no empty husk behind — an empty object reads as "someone configured this".
+if (raw.model_overrides && !Object.keys(raw.model_overrides).length) delete raw.model_overrides;
+
 const tmp = `${CONFIG}.gsd-tune.tmp`;
 fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
 fs.renameSync(tmp, CONFIG); // atomic: a reader sees the old file or the new one
-if (!AS_JSON) console.log(`\n✓ wrote ${drift.length} setting(s) to ${CONFIG}`);
+if (!AS_JSON) {
+  const parts = [];
+  if (drift.length) parts.push(`wrote ${drift.length} setting(s)`);
+  if (staleGlobalOverrides.length) parts.push(`withdrew ${staleGlobalOverrides.length} stale override(s)`);
+  console.log(`\n✓ ${parts.join(', ')} in ${CONFIG}`);
+}
 process.exit(0);

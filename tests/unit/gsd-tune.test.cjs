@@ -221,8 +221,12 @@ test('nothing conveyor-shaped is ever written machine-wide', () => {
   for (const key of ['git', 'agent_skills', 'workflow']) {
     assert.equal(cfg[key], undefined, `${key} must not reach the global defaults`);
   }
-  assert.equal(cfg.models.planning, 'opus', 'but the model settings do');
-  assert.equal(cfg.model_overrides['gsd-planner'], 'fable');
+  assert.equal(cfg.models.planning, 'opus', 'but TIER settings do — they mean something on both runtimes');
+  // model_overrides carries `fable`, which exists only on Claude, while this file
+  // is read by the Codex install too. GSD said so itself during a real install:
+  // "Codex agent gsd-code-reviewer model fable is not a valid Codex model …
+  // dropping it" — twice, about a key we had written.
+  assert.equal(cfg.model_overrides, undefined, 'a Claude-only value must not go machine-wide');
 });
 
 test('a runtime handover is announced, not performed silently', () => {
@@ -248,10 +252,33 @@ test('the global file is created when absent — unlike a project config', () =>
   assert.equal(globalCfg(h).runtime, 'codex');
 });
 
-test('codex gets no fable overrides machine-wide either', () => {
-  const h = home({});
-  runGlobal(h, ['--runtime', 'codex', '--apply']);
-  assert.equal(globalCfg(h).model_overrides, undefined, 'fable does not exist off Claude');
+test('an override this script wrote machine-wide earlier is withdrawn', () => {
+  // Not a general remover: only our exact agent/value pairs. GSD warned about
+  // these on every Codex install, and we are the ones who wrote them.
+  const h = home({
+    model_overrides: { 'gsd-planner': 'fable', 'gsd-code-reviewer': 'fable', 'gsd-verifier': 'opus' },
+  });
+  runGlobal(h, ['--runtime', 'claude', '--apply']);
+  const cfg = globalCfg(h);
+  assert.equal(cfg.model_overrides['gsd-planner'], undefined, 'ours is withdrawn');
+  assert.equal(cfg.model_overrides['gsd-verifier'], 'opus', 'a user\'s is not');
+});
+
+test('a user override with a different value on the same agent survives', () => {
+  const h = home({ model_overrides: { 'gsd-planner': 'sonnet' } });
+  runGlobal(h, ['--runtime', 'claude', '--apply']);
+  assert.equal(globalCfg(h).model_overrides['gsd-planner'], 'sonnet');
+});
+
+test('NEITHER runtime gets model_overrides machine-wide', () => {
+  // Claude-only by value, shared by file — the combination GSD warns about. It
+  // still reaches Claude PROJECTS through the project-mode list, where the
+  // runtime is unambiguous.
+  for (const rt of ['claude', 'codex']) {
+    const h = home({});
+    runGlobal(h, ['--runtime', rt, '--apply']);
+    assert.equal(globalCfg(h).model_overrides, undefined, rt);
+  }
 });
 
 done();
