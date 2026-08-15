@@ -10,6 +10,17 @@ key modules, existing tests, known warts. Cite file paths. Use
 `.planning/codebase/` maps if present (`/gsd-map-codebase` output) instead of
 re-discovering.
 
+**When the problem statement is "X does not happen in <env>", deployment state
+is hypothesis #1, not the fallback.** Before any code-level root-cause work,
+prove the code you are investigating is actually THERE: find the commit that
+implements X, check it is on the integration branch (`git branch --contains`,
+`gh pr view` on the PR that shipped it), and check it is in <env>'s deployed
+build — then say so, with the deploy timestamp if reachable. Field record: at
+least three investigations chased behaviour that lived only in an unmerged PR
+or an undeployed build; each burned a full hypothesis-and-disprove cycle on a
+"defect" that was absence. Absence of the code explains absence of the
+behaviour completely — no defect analysis survives skipping this check.
+
 ## Line 2 — alternatives & prior art (→ OPTIONS.md draft)
 Enumerate 2–4 genuinely different approaches (including "do nothing" /
 "buy not build" where sane). For each: sketch, cost/complexity, risks,

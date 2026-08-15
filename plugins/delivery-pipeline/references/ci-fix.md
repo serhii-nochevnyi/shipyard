@@ -38,6 +38,11 @@ ticket's worktree and ONLY within the ticket's scope.
    one, not written up as green.
 5. Commit with a message referencing the ticket id, e.g.
    `fix(T-01-02): <what was actually wrong>`. Push.
+   **If the PR is APPROVED** (`gh pr view <n> --json reviewDecision`), your push
+   dismisses that approval — silently, from the reviewer's side. Push anyway (a
+   red check on an approved PR is real work), but say so in a PR comment: what
+   you changed and that the approval was dismissed by it, so the human knows why
+   they are re-approving rather than discovering it.
 
 ## When the base has moved under you
 
@@ -57,11 +62,20 @@ threads that were just resolved. The history you would be protecting does not
 survive anyway — the PR lands with `--squash`.
 
 For the conflicts themselves there is a script, and it encodes the rule you would
-otherwise have to remember: `node <scripts>/base-merge.cjs` (beside the
-`reviewers.cjs` path you were given) merges the base in, takes the base's edition
-for conflicts in files this ticket does not declare, and leaves conflicts inside
-your own `files_modified` uncommitted for you to judge. It refuses on a dirty
-worktree — commit or stash first.
+otherwise have to remember:
+
+```
+node <scripts>/base-merge.cjs <ticket> --worktree <your worktree> --base <base ref>
+```
+
+(`<scripts>` is the directory holding the `reviewers.cjs` path you were given.) It
+merges the base in, takes the base's edition for conflicts in files this ticket
+does not declare, and leaves conflicts inside your own `files_modified`
+uncommitted for you to judge. It refuses on a dirty worktree — commit or stash
+first. It finds the ticket graph through your worktree's own repository, so it
+works from where you are standing; for a **cross-repo** ticket, whose worktree is
+in a different repository from the graph, add
+`--graph <conveyor project>/.planning/graph`.
 
 A conflict in a file the ticket never declared is not yours to resolve by taste:
 the base is right by definition, and touching it is a scope violation.

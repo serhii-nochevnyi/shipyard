@@ -125,6 +125,18 @@ suite('stop-gate — degrades quietly');
 
 test('an unreadable front does not trap the session', () => {
   assert.equal(run('{not json'), null, 'a corrupt front is a bug elsewhere, not a trap here');
+  // JSON.parse("null") succeeds — reading .generated_at off it would throw, and
+  // an uncaught throw breaks "it always exits 0".
+  assert.equal(run('null'), null, 'a null front is as unreadable as a corrupt one');
+});
+
+test('garbage in SHIPYARD_STOP_GATE_FRESH_MS does not disable the staleness hatch', () => {
+  // Number('an hour') is NaN, and `age > NaN` is false — so a garbage value used
+  // to make EVERY front read as fresh, quietly re-arming the trap the window
+  // exists to prevent. It must fall back to the default instead.
+  assert.equal(
+    run(live({ generated_at: agesAgo() }), {}, { SHIPYARD_STOP_GATE_FRESH_MS: 'an hour' }),
+    null, 'a six-hour-old front stays stale under a garbage env var');
 });
 
 test('no stdin payload at all is survivable', () => {

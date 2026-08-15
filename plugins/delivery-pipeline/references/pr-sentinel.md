@@ -19,6 +19,11 @@ else is going to come back for them.
 
 ## The loop (repeat until your duty list is clear)
 
+**Steps 1 and 2 run from the PROJECT ROOT.** Both read the ticket graph from the
+current directory, and this loop sends you into ticket worktrees to do the work —
+so "go to 1" after a fix means `cd` back first. They fail loudly rather than
+guessing, but the message names a missing graph, which is not what went wrong.
+
 ```text
 1. node $SHIPYARD_ROOT/scripts/state-sync.cjs            # live GitHub → state
 2. node $SHIPYARD_ROOT/scripts/sentinel.cjs duty --json  # what each PR needs now

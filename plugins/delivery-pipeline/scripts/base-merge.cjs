@@ -34,7 +34,6 @@
 // touched will have DECLARED it, so the conflict lands in the second branch and
 // nothing of its work is discarded.
 
-const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -42,7 +41,12 @@ const argv = process.argv.slice(2);
 const asJson = argv.includes('--json');
 const noFetch = argv.includes('--no-fetch');
 const flag = (n) => { const i = argv.indexOf(`--${n}`); return i === -1 ? null : argv[i + 1]; };
-const positional = argv.filter((a, i) => !a.startsWith('--') && !['--worktree', '--base'].includes(argv[i - 1]));
+// `--graph` is in the exclusion list because its VALUE is a path: left out, a
+// flag-first invocation made that path positional[0] and the "ticket" — the same
+// off-by-the-flag trap drift-record documents. Deliberately NOT generalized to
+// "skip any token after any flag": --json/--no-fetch are boolean, and a generic
+// rule would eat the ticket after them.
+const positional = argv.filter((a, i) => !a.startsWith('--') && !['--worktree', '--base', '--graph'].includes(argv[i - 1]));
 const ticket = positional[0];
 
 function fail(msg, code = 2) { process.stderr.write(`base-merge: ${msg}\n`); process.exit(code); }
@@ -52,9 +56,11 @@ if (!ticket || !flag('worktree') || !flag('base')) {
 const worktree = path.resolve(flag('worktree'));
 const base = flag('base');
 
-const TICKETS = path.join(process.cwd(), '.planning', 'graph', 'tickets.json');
-if (!fs.existsSync(TICKETS)) fail(`missing ${TICKETS} — run validate-graph first`);
-const { tickets } = JSON.parse(fs.readFileSync(TICKETS, 'utf8'));
+// Resolved, not assumed from cwd: the documented caller is a fixer agent standing
+// IN the worktree, which has no .planning/ of its own when the project keeps it
+// untracked. See graph-dir.cjs for the order and why each step exists.
+const { loadTickets, resolveBaseRef } = require(path.join(__dirname, 'graph-dir.cjs'));
+const { tickets } = loadTickets(argv, worktree, 'base-merge');
 const t = tickets[ticket];
 if (!t) fail(`ticket ${ticket} is not in the graph`);
 const declared = Array.isArray(t.files) ? t.files : [];
@@ -78,11 +84,18 @@ if (git(['status', '--porcelain'], { tolerate: true }).out) {
 
 if (!noFetch) git(['fetch', 'origin', '--prune'], { tolerate: true });
 
-const merge = git(['merge', '--no-edit', base], { tolerate: true });
+// Resolved AFTER the fetch, because that is when origin/<base> is current. The
+// bare local name is what made this script report "already up to date" while
+// origin's epic carried the parent's squash — see resolveBaseRef for the full
+// account. From here on every git operation and every message uses baseRef; the
+// caller must be able to see which ref was actually measured.
+const baseRef = resolveBaseRef(worktree, base);
+
+const merge = git(['merge', '--no-edit', baseRef], { tolerate: true });
 if (merge.status === 0) {
   const msg = /Already up to date/i.test(merge.out) ? 'already up to date' : 'merged cleanly';
-  if (asJson) console.log(JSON.stringify({ ticket, base, result: msg, taken_from_base: [], unresolved: [] }, null, 2));
-  else console.log(`base-merge: ${ticket} — ${msg} with ${base}`);
+  if (asJson) console.log(JSON.stringify({ ticket, base: baseRef, requested_base: base, result: msg, taken_from_base: [], unresolved: [] }, null, 2));
+  else console.log(`base-merge: ${ticket} — ${msg} with ${baseRef}`);
   process.exit(0);
 }
 
@@ -100,7 +113,7 @@ for (const p of conflicted) {
   // add/add, where `--theirs` has no stage to read; a path the base deleted is
   // removed instead, which is the same rule applied to a file that no longer
   // exists there.
-  const co = git(['checkout', base, '--', p], { tolerate: true });
+  const co = git(['checkout', baseRef, '--', p], { tolerate: true });
   if (co.status === 0) { git(['add', '--', p], { tolerate: true }); taken.push(p); continue; }
   const rm = git(['rm', '-q', '--', p], { tolerate: true });
   if (rm.status === 0) { taken.push(p); continue; }
@@ -108,10 +121,10 @@ for (const p of conflicted) {
 }
 
 if (real.length) {
-  const payload = { ticket, base, result: 'conflicts remain', taken_from_base: taken, unresolved: real };
+  const payload = { ticket, base: baseRef, requested_base: base, result: 'conflicts remain', taken_from_base: taken, unresolved: real };
   if (asJson) console.log(JSON.stringify(payload, null, 2));
   else {
-    console.error(`base-merge: ${ticket} — ${taken.length} path(s) taken from ${base}, ${real.length} REAL conflict(s) left:`);
+    console.error(`base-merge: ${ticket} — ${taken.length} path(s) taken from ${baseRef}, ${real.length} REAL conflict(s) left:`);
     for (const p of real) console.error(`  - ${p}`);
     console.error('');
     console.error('These are files the ticket declares, so its side is not a stale snapshot —');
@@ -122,10 +135,10 @@ if (real.length) {
 }
 
 git(['commit', '--no-edit']);
-const payload = { ticket, base, result: 'resolved mechanically', taken_from_base: taken, unresolved: [] };
+const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved mechanically', taken_from_base: taken, unresolved: [] };
 if (asJson) console.log(JSON.stringify(payload, null, 2));
 else {
-  console.log(`base-merge: ${ticket} — merged ${base}; ${taken.length} undeclared path(s) taken from the base:`);
+  console.log(`base-merge: ${ticket} — merged ${baseRef}; ${taken.length} undeclared path(s) taken from the base:`);
   for (const p of taken) console.log(`  - ${p}`);
   console.log('Push without --force. The PR diff now narrows to this ticket\'s own work.');
 }
