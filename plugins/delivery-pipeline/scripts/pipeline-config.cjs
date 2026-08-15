@@ -262,14 +262,15 @@ function loadConfig(root) {
   // nest a worktree within ours and commit the fix where no PR is watching.
   // GSD 1.9.1 made `--fix` honor this setting, which is what makes `false` the
   // correct value rather than a preference.
-  if (cfg.gsd.use_worktrees === true) {
-    warnings.push(
-      'workflow.use_worktrees is true, but the delivery conveyor already runs every ticket in its own worktree ' +
-      '(ticket-worktree.sh). GSD writer workflows invoked inside one — /gsd-code-review --fix in particular — ' +
-      'would create a NESTED worktree and commit outside the ticket branch. Set it to false; the conveyor supplies ' +
-      'the isolation.'
-    );
-  }
+  // No warning: `true` is GSD's own default and is fine here. This used to warn,
+  // on the belief that `/gsd-code-review --fix` — which the conveyor DOES call
+  // from inside a ticket worktree — would fork a nested one. Checked against the
+  // source (1.9.1): code-review never mentions worktrees, and `git worktree add`
+  // lives only in execute-phase, new-workspace and worktree-safety.cjs, none of
+  // which the conveyor invokes. The boundary that DOES matter is stated
+  // elsewhere and is about wave parallelism, not this flag: no shipyard path may
+  // call `execute-phase`, because two orchestrators creating worktrees for the
+  // same plans would collide. Keep the check keyed to that, not to a setting.
   // GSD's phase/milestone strategies create their own branches; the conveyor owns
   // branching (epic/<phase> + ticket/<id>) and the two would fight over it.
   if (cfg.gsd.branching_strategy && cfg.gsd.branching_strategy !== 'none') {
@@ -298,13 +299,66 @@ function loadConfig(root) {
   return { config: cfg, warnings, file, exists };
 }
 
-// role × risk × attempt routing. Returns a tier alias the Agent tool accepts.
-function resolveModel(role, signals = {}, cfg = DEFAULTS) {
+// `fable` exists on the Claude runtime only. GSD's tier vocabulary is
+// opus|sonnet|haiku, and the Codex agent files are rendered through that map, so
+// asking for `fable` there produces a model nobody can resolve. Runtime-aware
+// here rather than at every call site: the ladder is the one place that decides
+// what "top tier" means.
+//
+// UNSET means opus, not fable — the asymmetry is deliberate. The two failures are
+// not equal: on Claude, `opus` instead of `fable` costs a smaller context window
+// on a job that usually fits anyway; on Codex, `fable` is a model id nothing can
+// resolve. So the default is the one that degrades rather than the one that
+// breaks, and the 1M tier is taken only where the runtime SAYS it is available.
+// `gsd-tune.cjs` writes that declaration — it is in the REQUIRED group precisely
+// because several behaviours, this one included, hang off it.
+const RUNTIMES_WITH_1M_TIER = new Set(['claude']);
+function topTier(cfg) {
+  const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
+  return RUNTIMES_WITH_1M_TIER.has(runtime) ? 'fable' : 'opus';
+}
+
+// A tier alias means the same STRENGTH everywhere but not the same ECONOMICS.
+// On Claude, `opus` is the ordinary choice for writing code. On Codex the top
+// tier is a premium reasoning model, and GSD's own catalog shows what that is
+// worth: of its 34 Codex agents, exactly TWO take the top model — `gsd-planner`
+// and `gsd-eval-planner`. Its executor, code-fixer, code-reviewer, debugger and
+// security-auditor are all on the workhorse tier. A straight tier-for-tier
+// mapping put four of our seven roles on the premium model, which is not the same
+// policy expressed on a different runtime — it is a more expensive one.
+//
+// So outside Claude the top model goes to NOBODY here, exactly as in GSD: the
+// only agents it gives `sol` to are `gsd-planner` and `gsd-eval-planner`, and the
+// conveyor has no planner among its roles — decomposition is done by the main
+// loop, not by a role agent. Its reviewer, executor, fixer and debugger are all
+// on the workhorse. Nothing is lost by following that, because GSD expresses
+// depth through EFFORT at the same model: `gsd-debugger` and
+// `gsd-security-auditor` are `gsd-executor`'s model at xhigh. The effort rule
+// below reproduces that, so a capped runtime keeps the whole ladder rather than
+// flattening it to one setting.
+const RUNTIMES_WITH_PREMIUM_TOP_TIER = new Set(['codex']);
+function capForRuntime(tier, cfg) {
+  const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
+  if (!RUNTIMES_WITH_PREMIUM_TOP_TIER.has(runtime)) return tier;
+  return TOP_TIERS.has(tier) ? 'sonnet' : tier;
+}
+
+// The ladder BEFORE the runtime cap — the strength this role deserves. Kept
+// separate so the effort rule can see the escalation the cap swallowed.
+function ladderTier(role, signals = {}, cfg = DEFAULTS) {
   const override = cfg.models && cfg.models[role];
   if (override) return override;
 
   const profile = cfg.model_policy || 'balanced';
-  if (JUDGMENT_ROLES.has(role)) return 'opus'; // top tier under EVERY profile
+  // The two judgment roles are never cheapened — top tier under EVERY profile —
+  // and on a runtime that HAS a 1M-context tier they take it, because the window
+  // is what actually distinguishes their work: arch-review reads the whole diff
+  // against every ADR/INTERFACES/DATA-MODEL at once, and the integrator
+  // reconciles across repositories. Everywhere else `fable` would only be a more
+  // expensive `opus` — an executor on a three-file ticket gains nothing from it.
+  // Elsewhere (Codex) there is no such tier: GSD's tier set is opus|sonnet|haiku,
+  // so this must degrade to `opus` rather than emit a name the runtime rejects.
+  if (JUDGMENT_ROLES.has(role)) return topTier(cfg);
 
   const risk = signals.risk || 'medium';
   const attempt = Number(signals.attempt) || 1;
@@ -338,10 +392,20 @@ function resolveModel(role, signals = {}, cfg = DEFAULTS) {
   }
 }
 
+// role × risk × attempt routing. Returns a tier alias the Agent tool accepts.
+function resolveModel(role, signals = {}, cfg = DEFAULTS) {
+  return capForRuntime(ladderTier(role, signals, cfg), cfg);
+}
+
 // Reasoning effort, mirroring GSD's light/standard/heavy tier defaults. Effort
 // follows the RESOLVED model, so escalating a repair to the top tier raises its
 // effort too — except for mechanical roles, which stay cheap either way.
-function resolveEffort(role, model, cfg = DEFAULTS) {
+//
+// `signals` is optional and exists for one case: where the runtime cap demoted
+// the model, the escalation must not vanish with it. GSD does exactly this —
+// `gsd-debugger` is its executor's model at a higher effort — so a capped repair
+// runs the workhorse at heavy rather than the premium model at heavy.
+function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
   const clamp = (level) => {
     // `minimal` is Codex-only in GSD and is not in Workflow's enum at all.
@@ -352,9 +416,22 @@ function resolveEffort(role, model, cfg = DEFAULTS) {
   };
   const override = cfg.effort && cfg.effort[role];
   if (override) return clamp(override);
+  // On a capped runtime the model can no longer express depth, so effort has to —
+  // the same way GSD does it. Two things earn heavy there:
+  //   * judgment, which is heavy by its nature and not by its signals;
+  //   * an ESCALATION — the ladder raised this role ABOVE its own baseline
+  //     (attempt ≥ 2, a previous failure, `alternatives` research). Comparing
+  //     against the role's baseline rather than against "is it top tier" is what
+  //     separates a repair that has already failed once (heavy) from an executor
+  //     whose baseline was top tier all along (standard) — on a capped runtime
+  //     both arrive as the same alias and would otherwise be indistinguishable.
+  const escalated = signals
+    && ladderTier(role, signals, cfg) !== ladderTier(role, {}, cfg)
+    && TOP_TIERS.has(ladderTier(role, signals, cfg));
   const tier = MECHANICAL_ROLES.has(role)
     ? 'light'
-    : TOP_TIERS.has(model) ? 'heavy' : model === 'haiku' ? 'light' : 'standard';
+    : (JUDGMENT_ROLES.has(role) || TOP_TIERS.has(model) || escalated) ? 'heavy'
+      : model === 'haiku' ? 'light' : 'standard';
   return clamp(EFFORT_TIER_DEFAULTS[tier]);
 }
 
@@ -396,7 +473,7 @@ if (require.main === module) {
     for (const w of warnings) process.stderr.write(`pipeline-config: warning: ${w}\n`);
     const model = resolveModel(role, signals, config);
     if (rest.includes('--json')) {
-      process.stdout.write(JSON.stringify({ model, effort: resolveEffort(role, model, config) }) + '\n');
+      process.stdout.write(JSON.stringify({ model, effort: resolveEffort(role, model, config, signals) }) + '\n');
     } else {
       process.stdout.write(model + '\n');
     }

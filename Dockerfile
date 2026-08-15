@@ -40,7 +40,10 @@ RUN /usr/local/bin/install-claude-plugins.sh /opt/karpathy-skills
 # automatically, so leaving the Claude side host-only made the container — the
 # actual product — the one place where "the user never invokes shipyard by hand"
 # was not true.
-RUN /usr/local/bin/install-shipyard-claude-hook.sh
+# SHIPYARD_GSD_AUTO_INSTALL=0: gsd-core is installed PINNED above. The host
+# installer pulls the latest by default — correct there, wrong in an image whose
+# whole point is a reproducible toolchain.
+RUN SHIPYARD_GSD_AUTO_INSTALL=0 /usr/local/bin/install-shipyard-claude-hook.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]

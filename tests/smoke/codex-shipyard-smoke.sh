@@ -46,6 +46,13 @@ gsd_owned_state() {
 }
 GSD_BEFORE="$(gsd_owned_state)"
 
+# This smoke deliberately PINNED gsd-core above and asserts against that
+# version's converter. The installer now refreshes gsd-core to the latest by
+# default — correct for a user, wrong here: it would overwrite the setup this
+# test just built and make every assertion below describe a different gsd-core
+# than the one it installed. Exported once; every install call below inherits it.
+export SHIPYARD_GSD_AUTO_INSTALL=0
+
 # ── install shipyard (full, phase 2) ─────────────────────────────────────────
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 
@@ -268,5 +275,14 @@ bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
   || { echo "re-install left a file the plugin no longer ships"; exit 1; }
 [[ -e "$CODEX_HOME/shipyard/scripts/state-sync.cjs" ]] \
   || { echo "re-install lost the real payload"; exit 1; }
+
+# The installer refreshes gsd-core by default — a superstructure that pins its
+# base rots against it. But the opt-out must WORK, because the image relies on it
+# to keep a pinned, reproducible toolchain (and because this smoke runs offline-ish
+# against a throwaway HOME it prepared itself).
+grep -q SHIPYARD_GSD_AUTO_INSTALL scripts/install-shipyard-codex.sh \
+  || { echo "codex installer lost its gsd-core opt-out"; exit 1; }
+grep -q SHIPYARD_GSD_AUTO_INSTALL=0 Dockerfile \
+  || { echo "the image must opt out of the latest-gsd pull — it installs a pinned one"; exit 1; }
 
 echo "codex-shipyard smoke: OK"

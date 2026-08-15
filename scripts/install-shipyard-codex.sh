@@ -12,7 +12,7 @@ set -euo pipefail
 # Prerequisites:
 #   - node on PATH
 #   - gsd-core already installed for Codex:
-#       npx --yes @opengsd/gsd-core@1.7.0 --codex --global
+#       npx --yes @opengsd/gsd-core@latest --codex --global
 #
 # Environment overrides:
 #   CODEX_HOME         Codex config home (default: ~/.codex)
@@ -43,10 +43,21 @@ done
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
 [[ -d "$PLUGIN_DIR" ]] || { echo "error: plugin dir missing: $PLUGIN_DIR" >&2; exit 1; }
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
+# gsd-core is a hard dependency here — the generator cannot convert a command
+# without it — so install/refresh it rather than telling the user to. Default is
+# the latest: shipyard is a superstructure over GSD, and pinning the base while
+# the superstructure moves is what left three different versions on one machine,
+# with the Codex generator reading the oldest of them. SHIPYARD_GSD_AUTO_INSTALL=0
+# opts out; GSD_CORE_VERSION pins.
+if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
+  bash "$REPO_ROOT/scripts/ensure-gsd-core.sh" codex
+fi
+
 if [[ ! -f "$GSD_TOOLS" ]]; then
   echo "error: gsd-core for Codex not found at $GSD_TOOLS" >&2
   echo "       install it first:" >&2
-  echo "       npx --yes @opengsd/gsd-core@1.7.0 --codex --global" >&2
+  echo "       npx --yes @opengsd/gsd-core@latest --codex --global" >&2
+  echo "       (or re-run this installer with a network — it installs it for you)" >&2
   exit 1
 fi
 
@@ -140,6 +151,18 @@ if (text.includes(BEGIN) && text.includes(END)) text = text.replace(re, block);
 else text = (text.trimEnd() + '\n\n' + block + '\n').replace(/^\n+/, '');
 fs.writeFileSync(p, text);
 NODE
+
+# ── GSD's global defaults for this runtime ───────────────────────────────────
+# See install-shipyard-claude-hook.sh for the full reasoning. In short:
+# ~/.gsd/defaults.json is inherited by any directory with no `.planning/`, it
+# holds ONE `runtime` shared by both installs, and only model-shaped keys belong
+# there — conveyor settings stay per-project.
+GSD_TUNE="$REPO_ROOT/plugins/delivery-pipeline/scripts/gsd-tune.cjs"
+[[ -f "$GSD_TUNE" ]] || GSD_TUNE="$BUNDLE_ROOT/scripts/gsd-tune.cjs"
+if [[ -f "$GSD_TUNE" ]]; then
+  echo "→ GSD global defaults (~/.gsd/defaults.json)"
+  node "$GSD_TUNE" --global --runtime codex --apply 2>&1 | sed 's/^/  /' || true
+fi
 
 deliver_hint=""
 [[ "$PHASE" -ge 2 ]] && deliver_hint=' | $shipyard-deliver'
