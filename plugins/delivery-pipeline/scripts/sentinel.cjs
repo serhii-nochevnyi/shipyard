@@ -301,6 +301,21 @@ function dutyItems() {
         ? `PR targets ${base} (the integration branch) — only a human merges that`
         : `green and conform — awaiting merge (${AUTO_MERGE_WHY})`;
     }
+
+    }
+
+    // AFTER the whole chain, because ci-fix is assigned in the OUTER branch and
+    // review-fix in the inner one — placed inside either, the other misses it.
+    // A push to an APPROVED PR dismisses the approval — silently, from the
+    // human's point of view: they approved one diff and woke up un-approving
+    // another. The fix still has to be pushed (a red check or an open thread on
+    // an approved PR is real work), so this is not a refusal; it is the duty
+    // carrying the fact, so the fixer says so in the PR comment instead of the
+    // human discovering it. Field-observed: a conveyor push over an approval
+    // cost an apology and a re-review round.
+    if ((item.action === 'ci-fix' || item.action === 'review-fix') && s.review_decision === 'APPROVED') {
+      item.dismisses_approval = true;
+      item.why += ' — NOTE: this PR is APPROVED, and your push will dismiss that approval; say so explicitly in the PR comment so the reviewer knows why they are re-approving';
     }
     if (c.none_reported) item.checks_note = 'no CI checks reported — "green" here means "nothing ran"';
     items.push(item);

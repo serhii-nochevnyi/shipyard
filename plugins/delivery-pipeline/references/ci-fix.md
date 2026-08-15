@@ -38,6 +38,11 @@ ticket's worktree and ONLY within the ticket's scope.
    one, not written up as green.
 5. Commit with a message referencing the ticket id, e.g.
    `fix(T-01-02): <what was actually wrong>`. Push.
+   **If the PR is APPROVED** (`gh pr view <n> --json reviewDecision`), your push
+   dismisses that approval — silently, from the reviewer's side. Push anyway (a
+   red check on an approved PR is real work), but say so in a PR comment: what
+   you changed and that the approval was dismissed by it, so the human knows why
+   they are re-approving rather than discovering it.
 
 ## When the base has moved under you
 

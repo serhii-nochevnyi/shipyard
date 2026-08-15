@@ -52,7 +52,10 @@ eventually wait for is the one that validates the final code.
 
 ## After all threads
 - One commit for all accepted fixes: `review(T-XX-YY): address review round N`.
-- Push. **If the push is rejected because the base moved** (a parent squashed into
+- Push. **If the PR is APPROVED**, the push dismisses that approval — push anyway
+  (an open thread on an approved PR is real work), but leave a PR comment naming
+  what changed and that the approval was dismissed by it, so the reviewer is
+  re-approving knowingly rather than discovering the dismissal. **If the push is rejected because the base moved** (a parent squashed into
   the epic while you were working), merge the base in — never rebase onto it:
 
   ```

@@ -71,6 +71,36 @@ test('without the trailer the same PR is arch-review work, not a merge', () => {
   assert.strictEqual(d.items[0].action, 'arch-review');
 });
 
+test('a push onto an APPROVED PR is flagged as dismissing the approval', () => {
+  // Field-observed: a conveyor push over a human approval dismissed it silently
+  // and cost an apology plus a re-review round. The fix still must be pushed —
+  // a red check on an approved PR is real work — so this is the duty CARRYING
+  // the fact, not a refusal.
+  const root = project({
+    tickets: { A: {}, B: {} },
+    state: {
+      A: { status: 'pr-open', pr: 1, checks: checks(1, 0), branch: 'ticket/A', review_decision: 'APPROVED' },
+      B: { status: 'pr-open', pr: 2, checks: checks(1, 0), branch: 'ticket/B' },
+    },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json']).stdout);
+  const byId = Object.fromEntries(d.items.map((i) => [i.ticket, i]));
+  assert.strictEqual(byId.A.action, 'ci-fix', 'the fix is still owed');
+  assert.strictEqual(byId.A.dismisses_approval, true);
+  assert.ok(/dismiss/.test(byId.A.why), 'the duty text must carry the warning to the fixer');
+  assert.strictEqual(byId.B.dismisses_approval, undefined, 'an unapproved PR gets no such flag');
+});
+
+test('the merge action never carries the dismissal flag — merging is not a push', () => {
+  const root = project({
+    tickets: { A: {} },
+    state: { A: { ...green, review_decision: 'APPROVED' } },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json']).stdout);
+  assert.strictEqual(d.items[0].action, 'merge');
+  assert.strictEqual(d.items[0].dismisses_approval, undefined);
+});
+
 test('a child stacked on an open parent waits, and the parent is served first', () => {
   const root = project({
     tickets: { P: {}, C: { primary_parent: 'P' } },
