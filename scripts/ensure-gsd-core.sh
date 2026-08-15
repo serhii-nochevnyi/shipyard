@@ -48,24 +48,70 @@ else
 fi
 CORE="$HOME_DIR/gsd-core"
 
-# The installed tree carries no version marker of its own, so "what is installed"
-# is only answerable as present/absent. Report the resolved target instead of
-# guessing at the current one — a wrong version claim is worse than none.
+# The install writes a VERSION file, so before/after is answerable exactly. Use
+# it. Comparing directory trees instead is what produced a confidently wrong
+# reading earlier — the npm package layout and the installed layout are different
+# artifacts, so a file-count diff between them measures nothing.
+installed_version() { cat "$CORE/VERSION" 2>/dev/null | tr -d '\n\r' || true; }
+
 resolved="$VERSION"
 if [[ "$VERSION" == "latest" ]]; then
   resolved="$(npm view @opengsd/gsd-core version 2>/dev/null || echo latest)"
 fi
+before="$(installed_version)"
 
-if [[ -d "$CORE" ]]; then
-  echo "→ gsd-core present at $CORE — reinstalling at $resolved"
+if [[ -n "$before" ]]; then
+  if [[ "$before" == "$resolved" ]]; then
+    echo "→ gsd-core $before already current for $RUNTIME — reinstalling to be sure"
+  else
+    echo "→ gsd-core $before → $resolved for $RUNTIME"
+  fi
 else
   echo "→ gsd-core missing for $RUNTIME — installing $resolved"
 fi
 
 # `</dev/null` because the installer prompts when it can; the whole point here is
 # an unattended install.
+# On Claude there are TWO gsd-core installs and updating one does not move the
+# other:
+#   * the npm global below ($CORE) — what `gsd-tools` resolves and what our
+#     scripts read;
+#   * the PLUGIN (`gsd-core@gsd-core`, marketplace open-gsd/gsd-core) — what
+#     supplies the /gsd-* slash commands the user actually types.
+# They drifted 1.9.1 vs 1.10.0 on this machine, which is how the same command can
+# be documented one way and behave another. Codex has no plugin concept, so this
+# is Claude-only.
+ensure_claude_plugin() {
+  command -v claude >/dev/null 2>&1 || {
+    echo "  (claude CLI not on PATH — skipping the gsd-core plugin)"
+    return 0
+  }
+  # `marketplace add` is idempotent-ish but noisy when already present; adding it
+  # only when absent keeps the output honest about what changed.
+  if ! claude plugin marketplace list 2>/dev/null | grep -q 'gsd-core'; then
+    echo "  → adding the gsd-core marketplace (open-gsd/gsd-core)"
+    claude plugin marketplace add open-gsd/gsd-core >/dev/null 2>&1 \
+      || { echo "  ⚠ could not add the gsd-core marketplace — skipping the plugin"; return 0; }
+  fi
+  echo "  → refreshing the gsd-core marketplace"
+  claude plugin marketplace update gsd-core >/dev/null 2>&1 || true
+  if claude plugin list 2>/dev/null | grep -q 'gsd-core@gsd-core'; then
+    claude plugin update gsd-core@gsd-core 2>&1 | sed 's/^/    /' || true
+  else
+    echo "  → installing the gsd-core plugin"
+    claude plugin install gsd-core@gsd-core 2>&1 | sed 's/^/    /' || true
+  fi
+}
+
 if npx --yes "@opengsd/gsd-core@${VERSION}" "${FLAGS[@]}" </dev/null; then
-  echo "✓ gsd-core $resolved installed for $RUNTIME → $CORE"
+  after="$(installed_version)"
+  # Report what the FILE says, not what was asked for: an install that quietly
+  # landed something else is exactly the case worth seeing.
+  echo "✓ gsd-core ${after:-$resolved} installed for $RUNTIME → $CORE"
+  if [[ -n "$after" && -n "$resolved" && "$resolved" != "latest" && "$after" != "$resolved" ]]; then
+    echo "  ⚠ asked for $resolved, VERSION says $after"
+  fi
+  [[ "$RUNTIME" == "claude" ]] && ensure_claude_plugin
 else
   echo "⚠ gsd-core install failed for $RUNTIME (offline? npm registry unreachable?)." >&2
   if [[ -d "$CORE" ]]; then
