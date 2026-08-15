@@ -34,7 +34,6 @@
 // touched will have DECLARED it, so the conflict lands in the second branch and
 // nothing of its work is discarded.
 
-const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -52,9 +51,11 @@ if (!ticket || !flag('worktree') || !flag('base')) {
 const worktree = path.resolve(flag('worktree'));
 const base = flag('base');
 
-const TICKETS = path.join(process.cwd(), '.planning', 'graph', 'tickets.json');
-if (!fs.existsSync(TICKETS)) fail(`missing ${TICKETS} — run validate-graph first`);
-const { tickets } = JSON.parse(fs.readFileSync(TICKETS, 'utf8'));
+// Resolved, not assumed from cwd: the documented caller is a fixer agent standing
+// IN the worktree, which has no .planning/ of its own when the project keeps it
+// untracked. See graph-dir.cjs for the order and why each step exists.
+const { loadTickets } = require(path.join(__dirname, 'graph-dir.cjs'));
+const { tickets } = loadTickets(argv, worktree, 'base-merge');
 const t = tickets[ticket];
 if (!t) fail(`ticket ${ticket} is not in the graph`);
 const declared = Array.isArray(t.files) ? t.files : [];

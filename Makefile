@@ -41,7 +41,7 @@ COMPOSE_ENV = \
         install-shipyard-codex install-shipyard-claude-hook remove-shipyard-claude-hook \
         install-shipyard-capability clean-cache \
         test test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime \
-        test-codex-shipyard test-releases test-unit test-graph test-worktree test-fast
+        test-codex-shipyard test-releases test-unit test-graph test-worktree test-worktree-gates test-fast
 
 require-git-identity:
 	@if [ -z "$(GIT_USER_NAME)" ] || [ -z "$(GIT_USER_EMAIL)" ]; then \
@@ -161,7 +161,7 @@ remove-shipyard-claude-hook:
 	./scripts/install-shipyard-claude-hook.sh --remove
 
 # Everything that needs neither Docker nor the network — run this constantly.
-test-fast: test-unit test-graph test-worktree test-sentinel test-docs test-ssh-sync
+test-fast: test-unit test-graph test-worktree test-worktree-gates test-sentinel test-docs test-ssh-sync
 
 # The full suite (slow: builds images, needs Docker + network + kubectl).
 test: test-fast test-k8s test-base test-overlay test-runtime test-mcp-runtime test-codex-shipyard test-releases
@@ -174,6 +174,9 @@ test-graph:
 
 test-worktree:
 	./tests/smoke/worktree-smoke.sh
+
+test-worktree-gates:
+	./tests/smoke/worktree-gates-smoke.sh
 
 test-sentinel:
 	./tests/smoke/sentinel-smoke.sh

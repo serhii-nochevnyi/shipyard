@@ -61,9 +61,12 @@ eventually wait for is the one that validates the final code.
 
   Rebasing a pushed branch IS a force-push, and it re-anchors the very threads you
   just resolved: they reopen against the new commits and the round starts over.
-  `node <plugin-root>/scripts/base-merge.cjs` does it and takes the base's edition
-  for conflicts in files this ticket does not declare; conflicts inside your own
-  `files_modified` are left uncommitted for you to judge.
+  `node <plugin-root>/scripts/base-merge.cjs <ticket> --worktree <yours> --base <ref>`
+  does it and takes the base's edition for conflicts in files this ticket does not
+  declare; conflicts inside your own `files_modified` are left uncommitted for you
+  to judge. It locates the ticket graph through your worktree's repository, so it
+  runs from where you are; a cross-repo ticket also needs
+  `--graph <conveyor project>/.planning/graph`.
 - Re-read `reviewers.cjs unresolved <pr>`: anything still listed is either
   unfinished or something you deliberately escalated. Do not report done over an
   unresolved thread you meant to close — that is the loop above, one round later.

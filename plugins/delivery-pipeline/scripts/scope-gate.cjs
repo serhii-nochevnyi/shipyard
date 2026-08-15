@@ -24,7 +24,6 @@
 // belongs to another ticket (escalate) or a plan that was wrong (re-plan). Both
 // are decisions, and neither is "push it and see".
 
-const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
@@ -48,9 +47,12 @@ if (!ticket || !flag('worktree') || !flag('base')) {
 const worktree = path.resolve(flag('worktree'));
 const base = flag('base');
 
-const TICKETS = path.join(process.cwd(), '.planning', 'graph', 'tickets.json');
-if (!fs.existsSync(TICKETS)) fail(`missing ${TICKETS} — run validate-graph first`);
-const { tickets } = JSON.parse(fs.readFileSync(TICKETS, 'utf8'));
+// Same resolution as base-merge: the graph belongs to the PROJECT, and the
+// worktree this gate is pointed at may be a checkout with no `.planning/` of its
+// own. Today the main loop calls this from the project, so it worked by luck of
+// the caller rather than by construction.
+const { loadTickets } = require(path.join(__dirname, 'graph-dir.cjs'));
+const { tickets } = loadTickets(argv, worktree, 'scope-gate');
 const t = tickets[ticket];
 if (!t) fail(`ticket ${ticket} is not in the graph`);
 
