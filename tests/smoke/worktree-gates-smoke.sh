@@ -161,5 +161,67 @@ grep -q 'not in the graph\|already up to date\|merged' <<<"$out" \
   || fail "--graph must be honoured over the worktree's own repository: $out"
 ok "--graph wins, which is the only thing that works cross-repo"
 
+# ── a STALE LOCAL base must not be the measurement ───────────────────────────
+# The sentinel merges a parent into the epic via the GitHub API, so origin/epic
+# moves and the local branch of the same name does not. Passed the bare name,
+# base-merge answered "already up to date" while the worktree never received the
+# parent's work — a silent false SUCCESS — and scope-gate, run right after a
+# correct merge, flagged the parent's files — a false FAILURE. Both must measure
+# origin's edition when it exists.
+git config --file "$GIT_CONFIG_GLOBAL" protocol.file.allow always
+O="$WORK/origin"; git init -q --bare "$O"
+SEED="$WORK/seed"; git init -q "$SEED"
+mkdir -p "$SEED/src"
+printf '.planning/\n' > "$SEED/.gitignore"
+printf 'shared v1\n' > "$SEED/src/shared.ts"
+printf 'child v1\n'  > "$SEED/src/child.ts"
+git -C "$SEED" add -A && git -C "$SEED" commit -qm init
+git -C "$SEED" branch epic/01
+git -C "$SEED" push -q "$O" main epic/01
+
+P3="$WORK/proj3"; git clone -q "$O" "$P3"
+mkdir -p "$P3/.planning/graph"
+cat > "$P3/.planning/graph/tickets.json" <<'JSON'
+{"tickets":{"T-01":{"files":["src/shared.ts"]},"T-02":{"files":["src/child.ts"]}}}
+JSON
+git -C "$P3" checkout -q -b epic/01 origin/epic/01     # a local snapshot, about to go stale
+git -C "$P3" checkout -q -b ticket/T-02 epic/01
+printf 'child v2\n' > "$P3/src/child.ts"
+git -C "$P3" commit -qam T-02
+git -C "$P3" checkout -q main
+
+# the parent lands on ORIGIN's epic — the local epic/01 in proj3 does not move
+git -C "$SEED" checkout -q epic/01
+printf 'shared v2 PARENT\n' > "$SEED/src/shared.ts"
+git -C "$SEED" commit -qam "squash T-01"
+git -C "$SEED" push -q "$O" epic/01
+
+WT3="$WORK/wt3"
+git -C "$P3" worktree add -q "$WT3" ticket/T-02
+
+out="$(cd "$WT3" && node "$SCRIPTS/base-merge.cjs" T-02 --worktree "$WT3" --base epic/01 2>&1)" \
+  || fail "base-merge must succeed against the moved origin base: $out"
+grep -q 'origin/epic/01' <<<"$out" \
+  || fail "the output must SAY it measured origin/epic/01, not the bare name: $out"
+# The assertion that matters is CONTENT, not the message — "already up to date"
+# and "merged cleanly" can both lie against a stale ref.
+grep -q 'shared v2 PARENT' "$WT3/src/shared.ts" \
+  || fail "the worktree must actually receive the parent's work, got: $(cat "$WT3/src/shared.ts")"
+ok "a bare base name measures origin's edition, and the parent's work arrives"
+
+out="$(cd "$WT3" && node "$SCRIPTS/scope-gate.cjs" T-02 --worktree "$WT3" --base epic/01 2>&1)" \
+  || fail "scope-gate vs the bare name right after a correct base merge must pass: $out"
+grep -q 'all inside files_modified' <<<"$out" \
+  || fail "the false scope violation is back — the gate measured the stale local ref: $out"
+ok "scope-gate after a base merge reads OK against the bare name"
+
+# ── --graph before the positionals must not eat the ticket ───────────────────
+out="$(cd "$WT3" && node "$SCRIPTS/base-merge.cjs" --graph "$P3/.planning/graph" T-02 --worktree "$WT3" --base epic/01 --no-fetch 2>&1)" \
+  || fail "flag-first base-merge failed: $out"
+grep -q 'T-02' <<<"$out" || fail "the ticket must survive flag-first ordering: $out"
+out="$(cd "$WT3" && node "$SCRIPTS/scope-gate.cjs" --graph "$P3/.planning/graph" T-02 --worktree "$WT3" --base epic/01 2>&1)" \
+  || fail "flag-first scope-gate failed: $out"
+ok "--graph before the positionals leaves the ticket intact in both gates"
+
 echo "$PASS passed, 0 failed"
 echo "worktree gates smoke passed"

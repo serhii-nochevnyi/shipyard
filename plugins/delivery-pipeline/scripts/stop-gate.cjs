@@ -33,7 +33,11 @@ const path = require('path');
 
 const FRONT = path.join(process.cwd(), '.planning', 'graph', 'delivery-front.json');
 // Older than this and the front describes a run that is no longer happening.
-const FRESH_MS = Number(process.env.SHIPYARD_STOP_GATE_FRESH_MS || 45 * 60 * 1000);
+const FRESH_MS_RAW = Number(process.env.SHIPYARD_STOP_GATE_FRESH_MS || 45 * 60 * 1000);
+// Garbage in the env var must not disable the staleness hatch: NaN poisons the
+// comparison below into never-stale, and "a stale front never traps a session"
+// is this hook's own stated invariant.
+const FRESH_MS = Number.isFinite(FRESH_MS_RAW) ? FRESH_MS_RAW : 45 * 60 * 1000;
 
 function allow() { process.exit(0); }
 
@@ -55,6 +59,9 @@ try {
 } catch {
   allow(); // an unreadable front is a bug to fix elsewhere, not a trap to spring here
 }
+// JSON.parse("null") succeeds; front.generated_at would then throw, and an
+// uncaught throw breaks "it always exits 0".
+if (!front || typeof front !== "object") allow();
 
 const generated = Date.parse(front.generated_at || '');
 if (!Number.isNaN(generated) && Date.now() - generated > FRESH_MS) allow();

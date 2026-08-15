@@ -81,4 +81,31 @@ function loadTickets(argv, worktree, label) {
   return { tickets: raw.tickets || {}, graphDir: dir, how };
 }
 
-module.exports = { resolveGraphDir, loadTickets, repoRootOf };
+/**
+ * Which edition of <base> is the MEASUREMENT: origin's, when it exists.
+ *
+ * Both worktree gates take `--base <ref>` and both were run against the bare
+ * local name. But the thing being measured — the PR's base, its three-dot diff —
+ * lives on ORIGIN; a local branch of the same name is a snapshot from whenever it
+ * was last touched. After the sentinel squash-merges a parent via the GitHub API
+ * the local epic does not move, and the bare name made both gates lie in the two
+ * worst directions at once: base-merge reported "already up to date" while
+ * origin/epic was ahead (a silent false SUCCESS — the worktree never received the
+ * parent's work), and scope-gate, run right after a correct base merge, flagged
+ * the parent's files as a scope violation (a false FAILURE — the kind that gets a
+ * gate switched off). Same lesson CLAUDE.md records for ticket-worktree.sh: a
+ * remote-only ref does not resolve through a bare name, and a stale local one is
+ * worse because it does.
+ *
+ * The full refs/remotes/ probe makes SHAs and already-prefixed refs fall through
+ * naturally. Callers print the resolved ref: a silently substituted base would be
+ * a new invisible behaviour, which is the exact class this exists to remove.
+ */
+function resolveBaseRef(worktreePath, base) {
+  const r = spawnSync('git',
+    ['-C', worktreePath, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${base}`],
+    { encoding: 'utf8' });
+  return r.status === 0 ? `origin/${base}` : base;
+}
+
+module.exports = { resolveGraphDir, loadTickets, repoRootOf, resolveBaseRef };

@@ -33,7 +33,11 @@ const flag = (name) => {
   const i = argv.indexOf(`--${name}`);
   return i === -1 ? null : argv[i + 1];
 };
-const ticket = argv.find((a) => !a.startsWith('--') && argv[argv.indexOf(a) - 1] !== '--worktree' && argv[argv.indexOf(a) - 1] !== '--base');
+// `--graph` excluded like the other value-carrying flags: left out, a flag-first
+// invocation makes the graph PATH the "ticket". Not generalized — --json is
+// boolean, and a skip-after-any-flag rule would eat the ticket after it.
+const VALUE_FLAGS = ['--worktree', '--base', '--graph'];
+const ticket = argv.find((a, i) => !a.startsWith('--') && !VALUE_FLAGS.includes(argv[i - 1]));
 
 function fail(msg, code = 2) {
   process.stderr.write(`scope-gate: ${msg}\n`);
@@ -45,14 +49,23 @@ if (!ticket || !flag('worktree') || !flag('base')) {
 }
 
 const worktree = path.resolve(flag('worktree'));
-const base = flag('base');
+const requestedBase = flag('base');
 
 // Same resolution as base-merge: the graph belongs to the PROJECT, and the
 // worktree this gate is pointed at may be a checkout with no `.planning/` of its
 // own. Today the main loop calls this from the project, so it worked by luck of
 // the caller rather than by construction.
-const { loadTickets } = require(path.join(__dirname, 'graph-dir.cjs'));
+const { loadTickets, resolveBaseRef } = require(path.join(__dirname, 'graph-dir.cjs'));
 const { tickets } = loadTickets(argv, worktree, 'scope-gate');
+
+// origin/<base> when it exists, for the same reason as base-merge — measured
+// against a bare stale local epic, this gate flagged the parent's files as a
+// scope violation RIGHT AFTER a correct base merge: the false positive its own
+// comment below names as the thing that gets a gate switched off. Deliberately
+// resolved WITHOUT fetching: a blocking pre-publish gate must not grow a network
+// dependency, so its staleness window is "since the last fetch" — which
+// base-merge closes at the moment it matters.
+const base = resolveBaseRef(worktree, requestedBase);
 const t = tickets[ticket];
 if (!t) fail(`ticket ${ticket} is not in the graph`);
 
@@ -84,7 +97,7 @@ try {
 }
 
 const outside = changed.filter((p) => !covered(p));
-const result = { ticket, base, worktree, changed: changed.length, declared, outside };
+const result = { ticket, base, requested_base: requestedBase, worktree, changed: changed.length, declared, outside };
 
 if (asJson) {
   console.log(JSON.stringify(result, null, 2));
