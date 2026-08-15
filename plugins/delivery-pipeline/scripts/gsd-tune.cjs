@@ -95,12 +95,15 @@ const DELIVERY_RULES = runtime === 'claude'
 // twice; leaving them to drift means the conveyor's agents and GSD's own agents
 // disagree about how much to spend on the same phase.
 //
-// The vocabulary is `golden | balanced | budget` — read from the model catalog's
-// own agent entries, not guessed. This mattered: the first draft wrote "quality",
-// and GSD's resolver does `agentModels[profile] || agentModels['balanced']`, so an
-// unknown profile does not fail — it SILENTLY becomes balanced. Setting premium
-// would have quietly produced the default, which is the worst of both outcomes.
-const PROFILE_FOR_POLICY = { economy: 'budget', balanced: 'balanced', premium: 'golden' };
+// The RUNTIME vocabulary is `quality | balanced | budget | adaptive | inherit`
+// (`VALID_PROFILES`). `golden` is only the raw field name inside
+// model-catalog.json: `MODEL_PROFILES` rebuilds each agent entry as
+// `quality: meta.golden` at load. Reading the JSON and concluding "the vocabulary
+// is golden" is a trap this file already fell into once — and an expensive one,
+// because the resolver does `agentModels[profile] || agentModels['balanced']`, so
+// a name outside the vocabulary does not fail, it SILENTLY becomes balanced.
+// Verify against `VALID_PROFILES`, never against the catalog's field names.
+const PROFILE_FOR_POLICY = { economy: 'budget', balanced: 'balanced', premium: 'quality' };
 
 const { config: pipeline } = loadConfig(ROOT);
 

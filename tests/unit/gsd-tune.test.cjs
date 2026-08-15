@@ -173,16 +173,18 @@ test('models.* stay inside GSD\'s vocabulary', () => {
 });
 
 test('model_profile mirrors the conveyor\'s own policy, in GSD\'s vocabulary', () => {
-  // The vocabulary is golden|balanced|budget — the keys on GSD's own agent
-  // entries. It matters that this is exact: GSD's resolver does
-  // `agentModels[profile] || agentModels['balanced']`, so a wrong name does not
-  // fail, it SILENTLY reads as balanced. "quality" (the first draft) would have
-  // turned a premium setting into the default with no warning anywhere.
-  const PROFILES = new Set(['golden', 'balanced', 'budget']);
+  // The RUNTIME vocabulary is quality|balanced|budget|adaptive|inherit
+  // (VALID_PROFILES). `golden` is only the raw field name in
+  // model-catalog.json — MODEL_PROFILES rebuilds it as `quality: meta.golden` at
+  // load. Reading the JSON and concluding "the vocabulary is golden" is a trap
+  // this file fell into once, and an expensive one: the resolver does
+  // `agentModels[profile] || agentModels['balanced']`, so a name outside the
+  // vocabulary does not fail — it silently becomes balanced.
+  const PROFILES = new Set(['quality', 'balanced', 'budget', 'adaptive', 'inherit']);
   const eco = keyed(driftOf(project({ pipeline: { model_policy: 'economy' } }), ['--runtime', 'claude']));
   assert.equal(eco['model_profile'].want, 'budget');
   const prem = keyed(driftOf(project({ pipeline: { model_policy: 'premium' } }), ['--runtime', 'claude']));
-  assert.equal(prem['model_profile'].want, 'golden');
+  assert.equal(prem['model_profile'].want, 'quality');
   for (const policy of ['economy', 'balanced', 'premium']) {
     const d = keyed(driftOf(project({ pipeline: { model_policy: policy } }), ['--runtime', 'claude']));
     const want = d['model_profile'] ? d['model_profile'].want : 'balanced';
