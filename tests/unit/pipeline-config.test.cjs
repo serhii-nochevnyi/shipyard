@@ -272,13 +272,18 @@ test('a pipeline.repos checkout nested in the project warns, unless sub_repos cl
   assert.deepStrictEqual(outside.warnings, []);
 });
 
-test('workflow.use_worktrees true warns — the conveyor already owns the worktree', () => {
-  const on = withRaw({ workflow: { use_worktrees: true } });
-  assert.strictEqual(on.config.gsd.use_worktrees, true);
-  assert.ok(on.warnings.some((w) => /NESTED worktree/.test(w)), on.warnings.join('; '));
-  // false is the correct value, and absent must stay silent — most projects never
-  // set it, and a warning on every run would train the user to ignore warnings.
-  assert.deepStrictEqual(withRaw({ workflow: { use_worktrees: false } }).warnings, []);
+test('workflow.use_worktrees is READ but never warned about, at any value', () => {
+  // It used to warn on `true`, on the belief that /gsd-code-review --fix would
+  // fork a nested worktree inside the ticket's. Checked against GSD 1.9.1's
+  // source: code-review never mentions worktrees, and `git worktree add` appears
+  // only in execute-phase, new-workspace and worktree-safety.cjs — none of which
+  // the conveyor invokes. `true` is also GSD's own default, so warning on it
+  // fired for most projects and trained the user to ignore warnings.
+  for (const value of [true, false]) {
+    const r = withRaw({ workflow: { use_worktrees: value } });
+    assert.strictEqual(r.config.gsd.use_worktrees, value, 'still read, for callers that care');
+    assert.deepStrictEqual(r.warnings, [], `use_worktrees: ${value} must not warn`);
+  }
   assert.deepStrictEqual(withRaw({}).warnings, []);
   assert.strictEqual(withRaw({}).config.gsd.use_worktrees, null);
 });
@@ -440,11 +445,43 @@ test('an UNSET runtime degrades to opus rather than guessing the paid tier', () 
   }
 });
 
-test('and degrade to opus on Codex, which has no such tier', () => {
+test('on Codex NO role takes the premium model — depth moves into effort', () => {
+  // GSD gives its top Codex model to exactly two of 34 agents, both planners;
+  // its reviewer, executor, fixer and debugger are all on the workhorse. The
+  // conveyor has no planner among its ROLES (decomposition is the main loop's),
+  // so a straight tier-for-tier mapping was not the same policy on another
+  // runtime — it was a more expensive one. Depth is expressed the way GSD
+  // expresses it: same model, higher effort.
   const { config } = withConfig({});
-  for (const role of ['arch-review', 'integrator']) {
-    assert.strictEqual(resolveModel(role, {}, asRuntime(config, 'codex')), 'opus', role);
+  const codex = asRuntime(config, 'codex');
+  for (const role of ['arch-review', 'integrator', 'executor', 'review-fix']) {
+    const m = resolveModel(role, { risk: 'high' }, codex);
+    assert.ok(!['opus', 'fable'].includes(m), `${role} must not take the premium tier, got ${m}`);
   }
+  for (const role of ['arch-review', 'integrator']) {
+    assert.strictEqual(resolveEffort(role, resolveModel(role, {}, codex), codex, {}), 'xhigh',
+      `${role}: judgment stays heavy even when the model is capped`);
+  }
+});
+
+test('a capped runtime still distinguishes a failed repair from a baseline one', () => {
+  // Both arrive as the same alias once capped, so the escalation would vanish
+  // unless effort carries it — which is exactly gsd-debugger vs gsd-executor.
+  const { config } = withConfig({});
+  const codex = asRuntime(config, 'codex');
+  const at = (n) => resolveEffort('ci-fix', resolveModel('ci-fix', { attempt: n }, codex), codex, { attempt: n });
+  assert.strictEqual(at(1), 'high', 'first strike');
+  assert.strictEqual(at(2), 'xhigh', 'a PR that already resisted');
+});
+
+test('an executor whose baseline was already top tier is NOT treated as escalated', () => {
+  // The distinction is "did the ladder raise this above its own baseline", not
+  // "is the uncapped tier a top one" — otherwise every executor reads as a
+  // failed repair and the whole capped ladder flattens to xhigh.
+  const { config } = withConfig({});
+  const codex = asRuntime(config, 'codex');
+  const sig = { risk: 'high' };
+  assert.strictEqual(resolveEffort('executor', resolveModel('executor', sig, codex), codex, sig), 'high');
 });
 
 test('no OTHER role is silently upgraded to the paid tier', () => {

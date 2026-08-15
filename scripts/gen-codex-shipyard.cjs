@@ -105,7 +105,7 @@ function codexModelFor(role, pluginDir, codexHome) {
     // `fable` is Claude-only and must degrade to `opus` here.
     const cfg = { ...config, gsd: { ...(config.gsd || {}), runtime: 'codex' } };
     const tier = resolveModel(LADDER_ROLE[role] || role, {}, cfg);
-    const effort = resolveEffort(LADDER_ROLE[role] || role, tier, cfg);
+    const effort = resolveEffort(LADDER_ROLE[role] || role, tier, cfg, {});
 
     const catalogPath = path.join(codexHome, 'gsd-core', 'bin', 'shared', 'model-catalog.json');
     if (!fs.existsSync(catalogPath)) return { model: null, effort };

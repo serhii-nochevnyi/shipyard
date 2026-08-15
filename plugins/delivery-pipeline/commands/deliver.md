@@ -538,6 +538,17 @@ itself a STOP signal, not a reason to improvise.
 
 ## Step 0 — Cold start (MANDATORY on EVERY run)
 
+0. `gsd-tune.cjs` — the GSD settings this project needs on THIS runtime. Report
+   only; it exits 1 when something drifts and writes nothing without `--apply`.
+   This runs here rather than at install time for a plain reason: installation is
+   global (`~/.claude`, `~/.codex`) and there is no project to configure yet — the
+   settings live in each project's `.planning/config.json`.
+   - REQUIRED drift (`runtime`, `git.branching_strategy`, `workflow.use_worktrees`)
+     means the conveyor is INCORRECT here: show it to the user and offer
+     `gsd-tune.cjs --apply` before delivering. Two orchestrators creating branches
+     or worktrees for the same plans is what those values prevent.
+   - tuning drift is cost and quality, never correctness — mention it once, do not
+     block on it, and never apply it without the user saying so.
 1. `validate-graph.cjs` — the graph against the current state of the plans; errors →
    stop, show them (perhaps something was merged past the pipeline — route to
    /shipyard:decompose).

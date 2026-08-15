@@ -94,7 +94,13 @@ const DELIVERY_RULES = runtime === 'claude'
 // `pipeline.model_policy` and GSD's `model_profile` are the same decision stated
 // twice; leaving them to drift means the conveyor's agents and GSD's own agents
 // disagree about how much to spend on the same phase.
-const PROFILE_FOR_POLICY = { economy: 'budget', balanced: 'balanced', premium: 'quality' };
+//
+// The vocabulary is `golden | balanced | budget` — read from the model catalog's
+// own agent entries, not guessed. This mattered: the first draft wrote "quality",
+// and GSD's resolver does `agentModels[profile] || agentModels['balanced']`, so an
+// unknown profile does not fail — it SILENTLY becomes balanced. Setting premium
+// would have quietly produced the default, which is the worst of both outcomes.
+const PROFILE_FOR_POLICY = { economy: 'budget', balanced: 'balanced', premium: 'golden' };
 
 const { config: pipeline } = loadConfig(ROOT);
 
@@ -103,13 +109,48 @@ const REQUIRED = [
     'decides whether a plugin-namespaced agent_skills entry resolves at all — wrong, and the skill is silently skipped'],
   ['git.branching_strategy', 'none',
     'the conveyor owns branching (epic/<phase> + ticket/<id>); GSD phase/milestone branches would fight it'],
-  ['workflow.use_worktrees', false,
-    'the conveyor gives every ticket its own worktree, and /gsd-code-review --fix inside one would nest another and commit off the ticket branch'],
 ];
 
+// The 1M-context tier for GSD's OWN agents, on Claude only.
+//
+// NOT via the tier keys, and that is the whole subtlety. `model_profile_overrides
+// .claude.*` and `model_policy.runtime_tiers.claude.*` look like the right lever
+// and are INERT here: the resolver's runtime-tier step is guarded by
+// `configRuntime !== 'claude'`, and on Claude it returns the bare tier ALIAS,
+// which Claude Code's Agent tool resolves itself. The catalog's `claude-opus-4-8`
+// is a label for that alias, not a model anyone launches — so remapping it
+// changes nothing.
+//
+// `model_overrides.<agent-id>` is step 1 of the resolver, ahead of all tier
+// logic, and it accepts a bare Agent-tool alias (`CLAUDE_AGENT_ALIASES` includes
+// `fable`). That is the working lever.
+//
+// Only the two agents whose work is genuinely context-bound, by the same rule the
+// conveyor applies to its own roles: the planner holds RESEARCH + roadmap +
+// codebase maps at once, the reviewer holds the whole diff. The executor and the
+// fixer work inside one ticket's narrow scope, where a 1M window buys nothing and
+// costs money — they keep their profile tiers.
+const CLAUDE_1M_AGENTS = ['gsd-planner', 'gsd-code-reviewer'];
+
 const TUNING = [
+  // GSD's own default, and shipyard has no reason to move it. It was in REQUIRED
+  // as `false`, on the belief that `/gsd-code-review --fix` — which the conveyor
+  // DOES call from inside a ticket worktree — would fork a nested one. Checked
+  // against the source: `code-review.md` does not mention worktrees at all, and
+  // `git worktree add` appears only in `execute-phase`, `new-workspace` and
+  // `worktree-safety.cjs` — none of which the conveyor invokes. The nesting was
+  // never possible on any path we take, so forcing the value was overreach.
+  ['workflow.use_worktrees', true,
+    'GSD\'s own default; no conveyor path creates a nested worktree, so this is not ours to force'],
   ['model_profile', PROFILE_FOR_POLICY[pipeline.model_policy] || 'balanced',
     `mirrors pipeline.model_policy = "${pipeline.model_policy}"`],
+  ...(runtime === 'claude'
+    ? CLAUDE_1M_AGENTS.map((agent) => [
+      `model_overrides.${agent}`, 'fable',
+      'context-bound on Claude: the 1M window is what distinguishes this agent\'s work. ' +
+      'Set here rather than via model_profile_overrides.claude.*, which the resolver skips on Claude',
+    ])
+    : []),
   // GSD's own stage agents. Its vocabulary is opus|sonnet|haiku — `fable` is ours
   // and is not valid here.
   ['models.planning', 'opus', 'planning is judgment; it is never cheapened'],

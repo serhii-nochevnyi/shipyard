@@ -34,14 +34,19 @@ const keyed = (drift) => Object.fromEntries(drift.map((d) => [d.key, d]));
 
 suite('gsd-tune — the required settings');
 
-test('a bare project is missing all three, and they are marked required', () => {
+test('a bare project is missing both required settings, and they are marked so', () => {
   const d = keyed(driftOf(project({}), ['--runtime', 'claude']));
   assert.equal(d['git.branching_strategy'].want, 'none');
-  assert.equal(d['workflow.use_worktrees'].want, false);
   assert.equal(d['runtime'].want, 'claude');
-  for (const k of ['git.branching_strategy', 'workflow.use_worktrees', 'runtime']) {
+  for (const k of ['git.branching_strategy', 'runtime']) {
     assert.equal(d[k].group, 'required', `${k} is correctness, not taste`);
   }
+  // use_worktrees is NOT required. It was, on a nesting scenario that GSD 1.9.1's
+  // source does not support: code-review never mentions worktrees, and
+  // `git worktree add` lives only in execute-phase/new-workspace/worktree-safety,
+  // none of which the conveyor invokes. It is tuning, and it wants GSD's default.
+  assert.equal(d['workflow.use_worktrees'].group, 'tuning');
+  assert.equal(d['workflow.use_worktrees'].want, true);
 });
 
 test('a project that already agrees reports nothing and exits 0', () => {
@@ -55,9 +60,9 @@ test('a project that already agrees reports nothing and exits 0', () => {
 test('a wrong value is reported as the user\'s, not as an absence', () => {
   // The distinction decides whether --apply is a fix or an override, so it has to
   // survive into the report.
-  const d = keyed(driftOf(project({ workflow: { use_worktrees: true } }), ['--runtime', 'claude']));
-  assert.equal(d['workflow.use_worktrees'].set, true, 'it was deliberately set');
-  assert.equal(d['workflow.use_worktrees'].have, true);
+  const d = keyed(driftOf(project({ git: { branching_strategy: 'phase' } }), ['--runtime', 'claude']));
+  assert.equal(d['git.branching_strategy'].set, true, 'it was deliberately set');
+  assert.equal(d['git.branching_strategy'].have, 'phase');
 });
 
 suite('gsd-tune — the runtime decides two values');
@@ -77,6 +82,31 @@ test('an already-correct skill entry is left alone', () => {
   const dir = project({ agent_skills: { 'gsd-executor': ['global:shipyard:delivery-rules'] } });
   const d = keyed(driftOf(dir, ['--runtime', 'claude']));
   assert.equal(d['agent_skills.gsd-executor'], undefined, 'no drift on a correct value');
+});
+
+test('the 1M tier for GSD\'s agents is set on Claude, and only there', () => {
+  // And via model_overrides, NOT the tier keys: the resolver's runtime-tier step
+  // is guarded by `configRuntime !== 'claude'`, so model_profile_overrides.claude.*
+  // is inert — it looks like the lever and does nothing.
+  const claude = keyed(driftOf(project({}), ['--runtime', 'claude']));
+  assert.equal(claude['model_overrides.gsd-planner'].want, 'fable');
+  assert.equal(claude['model_overrides.gsd-code-reviewer'].want, 'fable');
+  assert.equal(claude['model_profile_overrides.claude.opus'], undefined,
+    'the inert key must not be written — it would read as a working setting');
+
+  const codex = keyed(driftOf(project({}), ['--runtime', 'codex']));
+  for (const k of Object.keys(codex)) {
+    assert.ok(!k.startsWith('model_overrides.'), `${k}: fable does not exist off Claude`);
+  }
+});
+
+test('only context-bound GSD agents get it — not the executor or the fixer', () => {
+  // Same rule the conveyor applies to its own roles: those two work inside one
+  // ticket's narrow scope, where a 1M window buys nothing and costs money.
+  const d = keyed(driftOf(project({}), ['--runtime', 'claude']));
+  for (const agent of ['gsd-executor', 'gsd-code-fixer', 'gsd-codebase-mapper']) {
+    assert.equal(d[`model_overrides.${agent}`], undefined, agent);
+  }
 });
 
 test('the config\'s own runtime is honoured when no flag is given', () => {
@@ -142,11 +172,22 @@ test('models.* stay inside GSD\'s vocabulary', () => {
   }
 });
 
-test('model_profile mirrors the conveyor\'s own policy rather than a constant', () => {
+test('model_profile mirrors the conveyor\'s own policy, in GSD\'s vocabulary', () => {
+  // The vocabulary is golden|balanced|budget — the keys on GSD's own agent
+  // entries. It matters that this is exact: GSD's resolver does
+  // `agentModels[profile] || agentModels['balanced']`, so a wrong name does not
+  // fail, it SILENTLY reads as balanced. "quality" (the first draft) would have
+  // turned a premium setting into the default with no warning anywhere.
+  const PROFILES = new Set(['golden', 'balanced', 'budget']);
   const eco = keyed(driftOf(project({ pipeline: { model_policy: 'economy' } }), ['--runtime', 'claude']));
   assert.equal(eco['model_profile'].want, 'budget');
   const prem = keyed(driftOf(project({ pipeline: { model_policy: 'premium' } }), ['--runtime', 'claude']));
-  assert.equal(prem['model_profile'].want, 'quality');
+  assert.equal(prem['model_profile'].want, 'golden');
+  for (const policy of ['economy', 'balanced', 'premium']) {
+    const d = keyed(driftOf(project({ pipeline: { model_policy: policy } }), ['--runtime', 'claude']));
+    const want = d['model_profile'] ? d['model_profile'].want : 'balanced';
+    assert.ok(PROFILES.has(want), `${policy} → "${want}" is not a GSD profile`);
+  }
 });
 
 done();
