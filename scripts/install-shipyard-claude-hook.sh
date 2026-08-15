@@ -83,6 +83,19 @@ if [[ "$REMOVE" == 1 ]]; then
   exit 0
 fi
 
+# ── gsd-core, the thing shipyard is a superstructure over ────────────────────
+# Default on: a superstructure that never updates its base rots against it, which
+# is what three different gsd-core versions on one machine looked like. Opt out
+# with SHIPYARD_GSD_AUTO_INSTALL=0 — the IMAGE does exactly that, because
+# Dockerfile installs a PINNED gsd-core a few lines earlier and a reproducible
+# build must not have `latest` pulled in behind it.
+if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
+  if [[ -x "$ROOT/scripts/ensure-gsd-core.sh" ]]; then
+    bash "$ROOT/scripts/ensure-gsd-core.sh" claude || \
+      echo "  (continuing: the hooks below do not need gsd-core)"
+  fi
+fi
+
 mkdir -p "$CLAUDE_HOME/hooks"
 
 cat > "$ROUTE_HOOK" <<'EOF'

@@ -61,7 +61,7 @@ function resolveGsdLib(explicit, codexHome) {
   fail(
     'could not locate gsd-core runtime-artifact-conversion.cjs.\n' +
       `  looked in: ${candidates.join(', ')}\n` +
-      '  install gsd-core for Codex first: npx --yes @opengsd/gsd-core@1.7.0 --codex --global',
+      '  install gsd-core for Codex first: npx --yes @opengsd/gsd-core@latest --codex --global',
   );
 }
 

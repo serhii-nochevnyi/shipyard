@@ -41,7 +41,7 @@ COMPOSE_ENV = \
         install-shipyard-codex install-shipyard-claude-hook remove-shipyard-claude-hook \
         install-shipyard-capability clean-cache \
         test test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime \
-        test-codex-shipyard test-releases test-unit test-graph test-worktree test-worktree-gates test-fast gsd-tune gsd-tune-apply
+        test-codex-shipyard test-releases test-unit test-graph test-worktree test-worktree-gates test-fast gsd-tune gsd-tune-apply ensure-gsd-core-claude ensure-gsd-core-codex
 
 require-git-identity:
 	@if [ -z "$(GIT_USER_NAME)" ] || [ -z "$(GIT_USER_EMAIL)" ]; then \
@@ -180,6 +180,14 @@ test-worktree-gates:
 
 # Report (or apply) the GSD settings a conveyor project needs on this runtime.
 # Run from the PROJECT, not from here — it reads that project's .planning/config.json.
+# Install or refresh gsd-core — the base shipyard is a superstructure over.
+# GSD_CORE_VERSION pins it; default is the latest.
+ensure-gsd-core-claude:
+	./scripts/ensure-gsd-core.sh claude
+
+ensure-gsd-core-codex:
+	./scripts/ensure-gsd-core.sh codex
+
 gsd-tune:
 	node plugins/delivery-pipeline/scripts/gsd-tune.cjs
 
