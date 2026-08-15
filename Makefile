@@ -41,7 +41,7 @@ COMPOSE_ENV = \
         install-shipyard-codex install-shipyard-claude-hook remove-shipyard-claude-hook \
         install-shipyard-capability clean-cache \
         test test-base test-overlay test-runtime test-k8s test-docs test-ssh-sync test-mcp-runtime \
-        test-codex-shipyard test-releases test-unit test-graph test-worktree test-worktree-gates test-fast
+        test-codex-shipyard test-releases test-unit test-graph test-worktree test-worktree-gates test-fast gsd-tune gsd-tune-apply
 
 require-git-identity:
 	@if [ -z "$(GIT_USER_NAME)" ] || [ -z "$(GIT_USER_EMAIL)" ]; then \
@@ -177,6 +177,14 @@ test-worktree:
 
 test-worktree-gates:
 	./tests/smoke/worktree-gates-smoke.sh
+
+# Report (or apply) the GSD settings a conveyor project needs on this runtime.
+# Run from the PROJECT, not from here — it reads that project's .planning/config.json.
+gsd-tune:
+	node plugins/delivery-pipeline/scripts/gsd-tune.cjs
+
+gsd-tune-apply:
+	node plugins/delivery-pipeline/scripts/gsd-tune.cjs --apply
 
 test-sentinel:
 	./tests/smoke/sentinel-smoke.sh

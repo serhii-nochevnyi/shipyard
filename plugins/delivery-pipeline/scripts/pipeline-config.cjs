@@ -298,13 +298,40 @@ function loadConfig(root) {
   return { config: cfg, warnings, file, exists };
 }
 
+// `fable` exists on the Claude runtime only. GSD's tier vocabulary is
+// opus|sonnet|haiku, and the Codex agent files are rendered through that map, so
+// asking for `fable` there produces a model nobody can resolve. Runtime-aware
+// here rather than at every call site: the ladder is the one place that decides
+// what "top tier" means.
+//
+// UNSET means opus, not fable — the asymmetry is deliberate. The two failures are
+// not equal: on Claude, `opus` instead of `fable` costs a smaller context window
+// on a job that usually fits anyway; on Codex, `fable` is a model id nothing can
+// resolve. So the default is the one that degrades rather than the one that
+// breaks, and the 1M tier is taken only where the runtime SAYS it is available.
+// `gsd-tune.cjs` writes that declaration — it is in the REQUIRED group precisely
+// because several behaviours, this one included, hang off it.
+const RUNTIMES_WITH_1M_TIER = new Set(['claude']);
+function topTier(cfg) {
+  const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
+  return RUNTIMES_WITH_1M_TIER.has(runtime) ? 'fable' : 'opus';
+}
+
 // role × risk × attempt routing. Returns a tier alias the Agent tool accepts.
 function resolveModel(role, signals = {}, cfg = DEFAULTS) {
   const override = cfg.models && cfg.models[role];
   if (override) return override;
 
   const profile = cfg.model_policy || 'balanced';
-  if (JUDGMENT_ROLES.has(role)) return 'opus'; // top tier under EVERY profile
+  // The two judgment roles are never cheapened — top tier under EVERY profile —
+  // and on a runtime that HAS a 1M-context tier they take it, because the window
+  // is what actually distinguishes their work: arch-review reads the whole diff
+  // against every ADR/INTERFACES/DATA-MODEL at once, and the integrator
+  // reconciles across repositories. Everywhere else `fable` would only be a more
+  // expensive `opus` — an executor on a three-file ticket gains nothing from it.
+  // Elsewhere (Codex) there is no such tier: GSD's tier set is opus|sonnet|haiku,
+  // so this must degrade to `opus` rather than emit a name the runtime rejects.
+  if (JUDGMENT_ROLES.has(role)) return topTier(cfg);
 
   const risk = signals.risk || 'medium';
   const attempt = Number(signals.attempt) || 1;

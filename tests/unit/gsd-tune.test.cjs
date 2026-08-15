@@ -1,0 +1,152 @@
+'use strict';
+
+// gsd-tune turns three standing WARNINGS into one applicable act. The warnings
+// existed and were ignored for exactly the reason a warning gets ignored: acting
+// on it meant knowing which of ~60 GSD keys to touch and what value the conveyor
+// needs. The proving ground had none of the three REQUIRED settings set.
+//
+// Because it writes a file the user owns, the properties worth pinning are as
+// much about restraint as about correctness: it must not touch anything it was
+// not asked to, it must not write at all without --apply, and it must be right
+// about the runtime-dependent values — the first draft was not, and would have
+// rewritten a correct agent_skills entry into a skill that resolves nowhere.
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+
+const SCRIPT = path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'gsd-tune.cjs'
+);
+
+function project(config = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsdtune-'));
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(config, null, 2));
+  return dir;
+}
+const run = (dir, args = []) => spawnSync('node', [SCRIPT, ...args], { cwd: dir, encoding: 'utf8' });
+const readCfg = (dir) => JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8'));
+const driftOf = (dir, args = []) => JSON.parse(run(dir, ['--json', ...args]).stdout).drift;
+const keyed = (drift) => Object.fromEntries(drift.map((d) => [d.key, d]));
+
+suite('gsd-tune — the required settings');
+
+test('a bare project is missing all three, and they are marked required', () => {
+  const d = keyed(driftOf(project({}), ['--runtime', 'claude']));
+  assert.equal(d['git.branching_strategy'].want, 'none');
+  assert.equal(d['workflow.use_worktrees'].want, false);
+  assert.equal(d['runtime'].want, 'claude');
+  for (const k of ['git.branching_strategy', 'workflow.use_worktrees', 'runtime']) {
+    assert.equal(d[k].group, 'required', `${k} is correctness, not taste`);
+  }
+});
+
+test('a project that already agrees reports nothing and exits 0', () => {
+  const dir = project({});
+  assert.equal(run(dir, ['--runtime', 'claude', '--apply']).status, 0);
+  const second = run(dir, ['--runtime', 'claude']);
+  assert.equal(second.status, 0, 'idempotent');
+  assert.ok(/nothing to change/.test(second.stdout), second.stdout);
+});
+
+test('a wrong value is reported as the user\'s, not as an absence', () => {
+  // The distinction decides whether --apply is a fix or an override, so it has to
+  // survive into the report.
+  const d = keyed(driftOf(project({ workflow: { use_worktrees: true } }), ['--runtime', 'claude']));
+  assert.equal(d['workflow.use_worktrees'].set, true, 'it was deliberately set');
+  assert.equal(d['workflow.use_worktrees'].have, true);
+});
+
+suite('gsd-tune — the runtime decides two values');
+
+test('the delivery-rules skill takes the form each runtime actually resolves', () => {
+  // claude: plugin-namespaced, `global:<plugin>:<skill>` — the plugin is
+  // `shipyard` and the skill directory is `delivery-rules`.
+  // codex: flat skills dir, and the generator prefixes the name.
+  // A mix of the two resolves nowhere and is silently skipped, never failed.
+  const claude = keyed(driftOf(project({}), ['--runtime', 'claude']));
+  assert.deepEqual(claude['agent_skills.gsd-executor'].want, ['global:shipyard:delivery-rules']);
+  const codex = keyed(driftOf(project({}), ['--runtime', 'codex']));
+  assert.deepEqual(codex['agent_skills.gsd-executor'].want, ['global:shipyard-delivery-rules']);
+});
+
+test('an already-correct skill entry is left alone', () => {
+  const dir = project({ agent_skills: { 'gsd-executor': ['global:shipyard:delivery-rules'] } });
+  const d = keyed(driftOf(dir, ['--runtime', 'claude']));
+  assert.equal(d['agent_skills.gsd-executor'], undefined, 'no drift on a correct value');
+});
+
+test('the config\'s own runtime is honoured when no flag is given', () => {
+  const d = keyed(driftOf(project({ runtime: 'codex' })));
+  assert.equal(d['runtime'], undefined, 'it already matches, so it is not drift');
+  assert.deepEqual(d['agent_skills.gsd-executor'].want, ['global:shipyard-delivery-rules'],
+    'and the skill form follows that runtime');
+});
+
+suite('gsd-tune — restraint');
+
+test('nothing is written without --apply, and the exit code reports drift', () => {
+  const dir = project({});
+  const before = fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8');
+  const r = run(dir, ['--runtime', 'claude']);
+  assert.equal(r.status, 1, 'a caller must be able to gate on it, like the other conveyor gates');
+  assert.equal(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8'), before,
+    'the report must not be a write');
+});
+
+test('--apply preserves every key it was not asked about', () => {
+  const dir = project({
+    pipeline: { repos: { 'a/b': '/tmp/x' }, pr_fetch_limit: 3000 },
+    ship: { pr_body_sections: ['x'] },
+    context_window: 200000,
+  });
+  run(dir, ['--runtime', 'claude', '--apply']);
+  const after = readCfg(dir);
+  assert.deepEqual(after.pipeline.repos, { 'a/b': '/tmp/x' }, 'the conveyor\'s own namespace survives');
+  assert.equal(after.pipeline.pr_fetch_limit, 3000);
+  assert.deepEqual(after.ship.pr_body_sections, ['x']);
+  assert.equal(after.context_window, 200000);
+  assert.equal(after.git.branching_strategy, 'none', 'and the required ones landed');
+});
+
+test('a config that is not valid JSON is refused, not rewritten', () => {
+  const dir = project({});
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{ not json');
+  const r = run(dir, ['--runtime', 'claude', '--apply']);
+  assert.notEqual(r.status, 0);
+  assert.ok(/refusing/.test(r.stderr), r.stderr);
+  assert.equal(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8'), '{ not json',
+    'the unparseable file is left exactly as it was');
+});
+
+test('a project with no GSD config at all is refused', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-nogsd-'));
+  const r = run(dir, ['--runtime', 'claude', '--apply']);
+  assert.notEqual(r.status, 0);
+  assert.ok(!fs.existsSync(path.join(dir, '.planning', 'config.json')), 'no config is conjured');
+});
+
+suite('gsd-tune — the tuning half never claims a GSD-invalid tier');
+
+test('models.* stay inside GSD\'s vocabulary', () => {
+  // `fable` is OUR Claude-runtime tier. GSD's models.* accepts opus|sonnet|haiku
+  // (plus inherit), so mapping our top tier through here would write a value GSD
+  // rejects outright.
+  const d = driftOf(project({}), ['--runtime', 'claude']);
+  const VALID = new Set(['opus', 'sonnet', 'haiku', 'inherit']);
+  for (const row of d.filter((x) => x.key.startsWith('models.'))) {
+    assert.ok(VALID.has(row.want), `${row.key} = ${row.want} is not a GSD tier`);
+  }
+});
+
+test('model_profile mirrors the conveyor\'s own policy rather than a constant', () => {
+  const eco = keyed(driftOf(project({ pipeline: { model_policy: 'economy' } }), ['--runtime', 'claude']));
+  assert.equal(eco['model_profile'].want, 'budget');
+  const prem = keyed(driftOf(project({ pipeline: { model_policy: 'premium' } }), ['--runtime', 'claude']));
+  assert.equal(prem['model_profile'].want, 'quality');
+});
+
+done();

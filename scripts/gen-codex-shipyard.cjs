@@ -65,6 +65,65 @@ function resolveGsdLib(explicit, codexHome) {
   );
 }
 
+// ── the model ladder, rendered for Codex ─────────────────────────────────────
+//
+// On Claude the ladder reaches the agents at CALL time: the Workflow path passes
+// `model` and `effort` into every agent(). Codex has no such hook — an agent is a
+// static .toml — so a role's tier has to be baked in at generation time. Without
+// this the entire role × risk × attempt policy simply did not exist on Codex:
+// all seven agents ran at whatever the CLI default was, so arch-review and
+// drift-check were the same model. Every one of GSD's own 34 Codex agents carries
+// `model` + `model_reasoning_effort`; ours carried neither.
+//
+// Two layers, and we own only the first. `pipeline-config.cjs` decides the TIER
+// (opus|sonnet|haiku) and the universal effort — that is shipyard's policy, and
+// it stays the single source. GSD owns the second: `runtimeTierDefaults.codex`
+// in its model catalog maps a tier to the concrete model. Reading the catalog
+// rather than hardcoding is what makes a user's `model_profile_overrides.codex.*`
+// remap take effect, and what keeps us from pinning a model id that GSD moves.
+//
+// The signals are necessarily BASELINE (risk medium, attempt 1): risk is a
+// per-ticket fact and attempts are a per-run one, and neither exists when a
+// static file is written. So Codex gets the ladder's floor for each role, not its
+// escalation — an honest limit, not a silent one.
+// The Codex agent names are not all ladder role names: the investigation
+// researcher ships as `inv-research` (its reference file) while the ladder calls
+// the role `research`. Unmapped, it fell through to the ladder's `default` and
+// would have been billed as a judgment role.
+const LADDER_ROLE = { 'inv-research': 'research' };
+
+function codexModelFor(role, pluginDir, codexHome) {
+  try {
+    // require() treats a bare relative path as a PACKAGE name, so `--plugin
+    // plugins/delivery-pipeline` resolved to nothing and every agent silently
+    // shipped without a model — the failure this function exists to prevent,
+    // wearing its own fallback as a disguise.
+    const { loadConfig, resolveModel, resolveEffort } =
+      require(path.resolve(pluginDir, 'scripts', 'pipeline-config.cjs'));
+    const { config } = loadConfig(process.cwd());
+    // Force the codex branch of the policy regardless of where we generate from:
+    // `fable` is Claude-only and must degrade to `opus` here.
+    const cfg = { ...config, gsd: { ...(config.gsd || {}), runtime: 'codex' } };
+    const tier = resolveModel(LADDER_ROLE[role] || role, {}, cfg);
+    const effort = resolveEffort(LADDER_ROLE[role] || role, tier, cfg);
+
+    const catalogPath = path.join(codexHome, 'gsd-core', 'bin', 'shared', 'model-catalog.json');
+    if (!fs.existsSync(catalogPath)) return { model: null, effort };
+    const catalog = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+    const entry = ((catalog.runtimeTierDefaults || {}).codex || {})[tier];
+    // A tier the catalog does not carry is a fact worth saying out loud: the
+    // agent still ships, at the CLI default, rather than with a broken model id.
+    if (!entry || !entry.model) {
+      process.stderr.write(`gen-codex-shipyard: no codex model for tier "${tier}" (role ${role}) — leaving the agent on the CLI default\n`);
+      return { model: null, effort };
+    }
+    return { model: entry.model, effort };
+  } catch (e) {
+    process.stderr.write(`gen-codex-shipyard: could not resolve a model for ${role} (${e.message}) — leaving the agent on the CLI default\n`);
+    return { model: null, effort: null };
+  }
+}
+
 function rmrf(p) {
   fs.rmSync(p, { recursive: true, force: true });
 }
@@ -196,10 +255,13 @@ function main() {
     const raw = fs.readFileSync(src, 'utf8');
     const body = shipyardRewrites(convert.convertClaudeToCodexMarkdown(raw), scriptsRoot);
     const description = deriveDescription(raw, role);
+    const { model, effort } = codexModelFor(role, pluginDir, codexHome);
     const toml =
       `name = ${tomlBasic(agentName)}\n` +
       `description = ${tomlBasic(description)}\n` +
       `sandbox_mode = ${tomlBasic(meta.sandbox)}\n` +
+      (model ? `model = ${tomlBasic(model)}\n` : '') +
+      (effort ? `model_reasoning_effort = ${tomlBasic(effort)}\n` : '') +
       `developer_instructions = ${tomlMultiline(body)}\n`;
     writeFile(path.join(outDir, 'agents', `${agentName}.toml`), toml);
     emittedAgents.push({ agentName, description });

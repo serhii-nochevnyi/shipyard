@@ -1,0 +1,182 @@
+#!/usr/bin/env node
+'use strict';
+
+// gsd-tune.cjs — the GSD settings a conveyor project needs, for the runtime it is
+// actually installed on.
+//
+//   gsd-tune.cjs [--runtime claude|codex] [--json]     # report the drift (default)
+//   gsd-tune.cjs --apply [--runtime …]                 # write it
+//
+// WHY THIS IS A SEPARATE ACT. `pipeline-config.cjs` reads GSD's settings and
+// WARNS — deliberately: they are the user's file, and a conveyor that silently
+// rewrites the config of every GSD project on the machine is worse than one that
+// complains. But a warning nobody can act on in one step is how
+// `workflow.use_worktrees: true` survived: the reader saw it every run and it
+// stayed true, because fixing it meant knowing which of ~60 GSD keys to touch and
+// what value the conveyor actually needs. So: same knowledge, one button, and the
+// button is not pressed by default. `--check` is the default and exits 1 on drift;
+// `--apply` writes.
+//
+// TWO CLASSES OF SETTING, and the distinction is load-bearing:
+//
+//   REQUIRED — the conveyor is INCORRECT without them. Branch ownership and
+//     worktree ownership are not preferences: two orchestrators creating branches
+//     or worktrees for the same plans is the collision these values prevent.
+//     `runtime` belongs here too, because it decides whether a plugin-namespaced
+//     agent_skills entry resolves at all — wrong, and the skill is silently
+//     skipped rather than failing loudly.
+//
+//   TUNING — models and effort. These change cost and quality, never correctness,
+//     so they are reported but only written under --apply like the rest, and a
+//     value the user has deliberately set to something else is called out as
+//     THEIRS rather than as drift to be flattened.
+//
+// GSD's model vocabulary is opus|sonnet|haiku (plus `inherit`). `fable` is a
+// Claude-runtime tier of OURS and is not valid in GSD's `models.*` — mapping it
+// through here would write a value GSD rejects.
+
+const fs = require('fs');
+const path = require('path');
+const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
+
+const argv = process.argv.slice(2);
+const APPLY = argv.includes('--apply');
+const AS_JSON = argv.includes('--json');
+const flag = (n) => { const i = argv.indexOf(`--${n}`); return i === -1 ? null : argv[i + 1]; };
+
+const ROOT = process.cwd();
+const CONFIG = path.join(ROOT, '.planning', 'config.json');
+
+function fail(msg, code = 2) { process.stderr.write(`gsd-tune: ${msg}\n`); process.exit(code); }
+
+if (!fs.existsSync(CONFIG)) {
+  fail(`no ${CONFIG} — run this from a GSD project (the conveyor's own project root)`);
+}
+let raw;
+try { raw = JSON.parse(fs.readFileSync(CONFIG, 'utf8')); }
+catch (e) { fail(`${CONFIG} is not valid JSON (${e.message}) — refusing to rewrite a file I cannot parse`); }
+
+// The runtime decides two of the settings below, so guessing it wrong is worse
+// than not guessing: an explicit flag wins, then the config's own value, then the
+// bundle actually installed on this machine.
+function detectRuntime() {
+  const explicit = flag('runtime');
+  if (explicit) return { runtime: explicit, how: '--runtime' };
+  if (typeof raw.runtime === 'string' && raw.runtime) return { runtime: raw.runtime, how: 'config' };
+  const home = process.env.HOME || '';
+  const codex = fs.existsSync(path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'shipyard'));
+  const claude = fs.existsSync(path.join(home, '.claude', 'plugins'));
+  if (codex && !claude) return { runtime: 'codex', how: 'installed bundle' };
+  if (claude && !codex) return { runtime: 'claude', how: 'installed plugin' };
+  // Both (or neither) present: claude is the canonical runtime, and saying which
+  // way we guessed matters more than the guess.
+  return { runtime: 'claude', how: 'default (both runtimes present)' };
+}
+const { runtime, how } = detectRuntime();
+
+// The delivery-rules skill resolves under a DIFFERENT NAME per runtime, and the
+// difference is not cosmetic: the plugin-namespaced form works only on claude and
+// is silently skipped elsewhere.
+//
+//   claude — `global:<plugin>:<skill>`, and the skill directory is `delivery-rules`
+//            (the plugin is `shipyard`), so: global:shipyard:delivery-rules
+//   codex  — flat skills dir, and the generator PREFIXES the name, so the
+//            installed directory is `shipyard-delivery-rules`
+//
+// Both names are read from the artifacts rather than assumed. The first draft of
+// this script asserted `global:shipyard:shipyard-delivery-rules` — a mix of the
+// two — and would have rewritten a correct config into a skill that resolves
+// nowhere. The proving ground already had the right value; the tool was wrong.
+const DELIVERY_RULES = runtime === 'claude'
+  ? 'global:shipyard:delivery-rules'
+  : 'global:shipyard-delivery-rules';
+
+// `pipeline.model_policy` and GSD's `model_profile` are the same decision stated
+// twice; leaving them to drift means the conveyor's agents and GSD's own agents
+// disagree about how much to spend on the same phase.
+const PROFILE_FOR_POLICY = { economy: 'budget', balanced: 'balanced', premium: 'quality' };
+
+const { config: pipeline } = loadConfig(ROOT);
+
+const REQUIRED = [
+  ['runtime', runtime,
+    'decides whether a plugin-namespaced agent_skills entry resolves at all — wrong, and the skill is silently skipped'],
+  ['git.branching_strategy', 'none',
+    'the conveyor owns branching (epic/<phase> + ticket/<id>); GSD phase/milestone branches would fight it'],
+  ['workflow.use_worktrees', false,
+    'the conveyor gives every ticket its own worktree, and /gsd-code-review --fix inside one would nest another and commit off the ticket branch'],
+];
+
+const TUNING = [
+  ['model_profile', PROFILE_FOR_POLICY[pipeline.model_policy] || 'balanced',
+    `mirrors pipeline.model_policy = "${pipeline.model_policy}"`],
+  // GSD's own stage agents. Its vocabulary is opus|sonnet|haiku — `fable` is ours
+  // and is not valid here.
+  ['models.planning', 'opus', 'planning is judgment; it is never cheapened'],
+  ['models.execution', 'opus', 'the writer agent'],
+  ['models.research', 'sonnet', 'fact gathering, not option design'],
+  ['models.verification', 'sonnet', 'mechanical reconciliation against the plan'],
+  ['effort.routing_tier_defaults.light', 'low', 'mirrors the conveyor\'s own effort tiers'],
+  ['effort.routing_tier_defaults.standard', 'high', 'mirrors the conveyor\'s own effort tiers'],
+  ['effort.routing_tier_defaults.heavy', 'xhigh', 'mirrors the conveyor\'s own effort tiers'],
+  [`agent_skills.gsd-executor`, [DELIVERY_RULES],
+    `the delivery-rules skill in the form the "${runtime}" runtime resolves`],
+];
+
+const get = (o, dotted) => dotted.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
+function set(o, dotted, value) {
+  const parts = dotted.split('.');
+  const last = parts.pop();
+  let cur = o;
+  for (const p of parts) {
+    if (cur[p] == null || typeof cur[p] !== 'object') cur[p] = {};
+    cur = cur[p];
+  }
+  cur[last] = value;
+}
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+const drift = [];
+for (const [group, list] of [['required', REQUIRED], ['tuning', TUNING]]) {
+  for (const [key, want, why] of list) {
+    const have = get(raw, key);
+    if (same(have, want)) continue;
+    drift.push({ group, key, have: have === undefined ? null : have, want, why, set: have !== undefined });
+  }
+}
+
+if (AS_JSON) {
+  console.log(JSON.stringify({ runtime, detected_by: how, applied: APPLY, drift }, null, 2));
+} else {
+  console.log(`gsd-tune: runtime "${runtime}" (${how}) — ${CONFIG}`);
+  if (!drift.length) console.log('  nothing to change: this project already agrees with the conveyor');
+  for (const g of ['required', 'tuning']) {
+    const rows = drift.filter((d) => d.group === g);
+    if (!rows.length) continue;
+    console.log(`\n  ${g === 'required' ? 'REQUIRED — the conveyor is incorrect without these' : 'tuning — cost and quality, never correctness'}:`);
+    for (const d of rows) {
+      // A value the user deliberately set is named as theirs, not flattened as
+      // "drift": the difference decides whether --apply is a fix or an override.
+      const state = d.set ? `currently ${JSON.stringify(d.have)} (yours)` : 'unset';
+      console.log(`    ${d.key} → ${JSON.stringify(d.want)}   [${state}]`);
+      console.log(`        ${d.why}`);
+    }
+  }
+}
+
+if (!drift.length) process.exit(0);
+
+if (!APPLY) {
+  if (!AS_JSON) {
+    console.log('\n  reported only. `gsd-tune.cjs --apply` writes them; every other key in the file is left alone.');
+  }
+  // Non-zero so a caller can gate on it, the same way the other conveyor gates do.
+  process.exit(1);
+}
+
+for (const d of drift) set(raw, d.key, d.want);
+const tmp = `${CONFIG}.gsd-tune.tmp`;
+fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
+fs.renameSync(tmp, CONFIG); // atomic: a reader sees the old file or the new one
+if (!AS_JSON) console.log(`\n✓ wrote ${drift.length} setting(s) to ${CONFIG}`);
+process.exit(0);
