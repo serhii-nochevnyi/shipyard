@@ -70,6 +70,16 @@ function computeFront(tickets, state, opts = {}) {
   // in; the front never guesses it, because the difference is whether an unmerged
   // green PR is the run's work or a human's.
   const autoMerge = opts.autoMerge === true;
+  // The parent ticket id when this child's base is an OPEN human_checkpoint PR,
+  // else null. `sentinel.cjs` computes the same thing for its own gate — the two
+  // must agree, or the front keeps offering a merge the guard refuses.
+  const checkpointParent = (id) => {
+    const parent = ((tickets && tickets[id]) || {}).primary_parent;
+    if (!parent) return null;
+    if (!((tickets && tickets[parent]) || {}).human_checkpoint) return null;
+    return (state[parent] || {}).status === 'pr-open' ? parent : null;
+  };
+
   const actionable = { execute: [], publish: [], fix: [], finalize: [], merge: [] };
   const waiting = { ci: [], merge_human: [], human: [] };
   const parked = { blocked: [], done: [] };
@@ -130,6 +140,20 @@ function computeFront(tickets, state, opts = {}) {
         // only; it never justifies leaving the code unwritten (see deliver.md).
         waiting.human.push(id);
         why[id] = `PR #${s.pr}: human_checkpoint — awaiting approval/merge`;
+      } else if (autoMerge && gateConform(s) && s.merge_scope === 'stacked' && checkpointParent(id)) {
+        // Ready in every respect, and still not the run's to land: the base is a
+        // parent whose ticket is a human_checkpoint with an OPEN PR. Squashing
+        // there rewrites the diff that person is reading, and the post-merge
+        // retarget would send this child's own children to the epic — content
+        // that is actually sitting in a checkpoint branch. `sentinel.cjs merge`
+        // refuses it; the front must not offer what the guard will refuse, or
+        // every round re-proposes the same impossible action.
+        //
+        // waiting.human, NOT parked: nobody owes work here, a person holds the
+        // key — the same class the front already models. Three of five
+        // escalations in one phase existed only to hold this by hand.
+        waiting.human.push(id);
+        why[id] = `PR #${s.pr}: green + conform, but its base is ${checkpointParent(id)} — a human_checkpoint PR still open. It merges once that one lands.`;
       } else if (autoMerge && s.review_decision !== 'CHANGES_REQUESTED' && gateConform(s) && s.merge_scope === 'stacked') {
         // The sentinel's merge: into the epic or a parent ticket branch only.
         // `merge_scope` is set by state-sync; an integration-branch target never

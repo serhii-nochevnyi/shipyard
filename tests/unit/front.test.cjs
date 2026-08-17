@@ -325,6 +325,42 @@ test('every actionable bucket names roles the model ladder actually knows', () =
   }
 });
 
+suite('front — a child never lands into an open human_checkpoint parent');
+
+// Field-reported by the runs themselves: three of five escalations in phase 19
+// existed only to hold this merge by hand, each citing the sentinel's base check
+// by line number. Squashing into a checkpoint parent rewrites the diff a person
+// is reading, and the post-merge retarget then sends that child's own children to
+// the epic — content actually sitting in a checkpoint branch.
+const cpTickets = { P: { human_checkpoint: true, branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } };
+const cpState = (parentStatus) => ({
+  P: { status: parentStatus, pr: 1, draft: false, checks: checks(), branch: 'ticket/P' },
+  C: {
+    status: 'pr-open', pr: 2, draft: false, checks: checks(), gate: conform,
+    merge_scope: 'stacked', pr_base: 'ticket/P', branch: 'ticket/C',
+  },
+});
+
+test('while the parent PR is open the child waits on the human, not on the run', () => {
+  const f = computeFront(cpTickets, cpState('pr-open'), { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, [], 'the front must not offer what the guard refuses');
+  assert.ok(f.waiting.human.includes('C'), 'nobody owes work — a person holds the key');
+  assert.ok(!f.parked.blocked.includes('C'), 'and it is not parked: no decision is pending on our side');
+  assert.ok(/human_checkpoint/.test(f.why.C), f.why.C);
+  assert.ok(/\bP\b/.test(f.why.C), 'the reason names WHICH parent');
+});
+
+test('once the parent lands, the same child is a merge again', () => {
+  const f = computeFront(cpTickets, cpState('merged'), { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, ['C'], 'the hold is scoped to an OPEN parent');
+});
+
+test('a non-checkpoint parent does not hold the child', () => {
+  const t = { P: { branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } };
+  const f = computeFront(t, cpState('pr-open'), { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, ['C'], 'only a CHECKPOINT parent holds it');
+});
+
 suite('front — the standalone CLI is equivalent to state-sync');
 
 // deliver.md advertises `front.cjs` as "re-runnable on its own", and it silently

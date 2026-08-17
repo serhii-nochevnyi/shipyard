@@ -51,7 +51,15 @@ JSON
   "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/01-demo\nticket/T-01-01-root\nticket/T-01-02-child\n' ;;
   "api repos/{owner}/{repo}/compare"*) echo 0 ;;
   "pr checks 101"*) echo '[{"name":"build","state":"SUCCESS"}]' ;;
-  "pr checks 102"*) echo '[{"name":"build","state":"FAILURE"}]'; exit 1 ;;
+  # The checkpoint-parent case drives PR 102 to green; the earlier duty cases
+  # rely on it being red. Both are served: SENTINEL_SMOKE_GREEN_102 flips it.
+  "pr checks 102"*)
+    if [ -n "${SENTINEL_SMOKE_GREEN_102:-}" ]; then echo '[{"name":"build","state":"SUCCESS"}]';
+    else echo '[{"name":"build","state":"FAILURE"}]'; exit 1; fi ;;
+  # The merge gate re-reads the PR from live GitHub by design, so the stub has to
+  # answer it for any merge-path assertion.
+  "pr view 102 --json"*)
+    echo '{"number":102,"state":"OPEN","isDraft":false,"baseRefName":"ticket/T-01-01-root","headRefName":"ticket/T-01-02-child","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-01-02\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green"}' ;;
   *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;
 esac
 STUB
@@ -276,6 +284,66 @@ node -e '
 ' "$W/threads.json" \
   && ok "unresolved threads carry the id needed to resolve them" \
   || bad "unresolved threads carry their id" "$(head -20 "$W/threads.json")"
+
+# ── the merge gate refuses a base that is an OPEN human_checkpoint parent ────
+# Field-found, not invented: three of five escalations in one proving-ground phase
+# were manual holds on exactly this, each citing the gate's base check by line.
+# The base IS inside the stack, so the existing check passes it — the refusal has
+# to come from the parent's checkpoint flag. Needs the stubbed gh, because the
+# gate re-reads baseRefName from live GitHub by design.
+cpproj="$W/cpproj"
+mkdir -p "$cpproj/.planning/graph"
+cat > "$cpproj/.planning/graph/tickets.json" <<'JSON'
+{
+  "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },
+  "tickets": {
+    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-root",
+                 "title": "root", "depends_on": [], "risk": "high", "human_checkpoint": true },
+    "T-01-02": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-02-child",
+                 "title": "child", "depends_on": ["T-01-01"], "primary_parent": "T-01-01", "risk": "low" }
+  }
+}
+JSON
+echo '{"pipeline":{}}' > "$cpproj/.planning/config.json"
+
+# The child is green + conform + stacked on the parent's branch; the parent's PR
+# is still OPEN. Written directly so the case does not depend on a sync pass.
+cat > "$cpproj/.planning/graph/delivery-state.json" <<'JSON'
+{
+  "T-01-01": { "status": "pr-open", "pr": 101, "draft": false, "branch": "ticket/T-01-01-root",
+               "epic": "epic/01-demo", "checks": { "total": 1, "failing": 0, "pending": 0 } },
+  "T-01-02": { "status": "pr-open", "pr": 102, "draft": false, "branch": "ticket/T-01-02-child",
+               "epic": "epic/01-demo", "pr_base": "ticket/T-01-01-root", "merge_scope": "stacked",
+               "gate": { "arch-review": "conform" },
+               "checks": { "total": 1, "failing": 0, "pending": 0 } }
+}
+JSON
+
+cpout="$W/cp-merge.json"
+( cd "$cpproj" && SENTINEL_SMOKE_GREEN_102=1 node "$SCRIPTS/sentinel.cjs" merge T-01-02 --json > "$cpout" 2>"$W/cp-err.txt" ) || true
+if node -e '
+const r = require(process.argv[1]).results[0];
+const blocked = r && r.merged === false;
+const named = blocked && r.blockers.some((b) => /human_checkpoint/.test(b) && /T-01-01/.test(b));
+process.exit(blocked && named ? 0 : 1);
+' "$cpout" 2>/dev/null; then
+  ok "merge refuses a base that is an OPEN human_checkpoint parent, and names it"
+else
+  bad "merge refuses an open checkpoint parent" "$(cat "$cpout" 2>/dev/null | head -20)"
+fi
+
+# ...and the duty says so with the true reason rather than routing to human-merge.
+cpduty="$W/cp-duty.json"
+( cd "$cpproj" && node "$SCRIPTS/sentinel.cjs" duty --json > "$cpduty" 2>/dev/null ) || true
+if node -e '
+const items = require(process.argv[1]).items;
+const c = items.find((i) => i.ticket === "T-01-02");
+process.exit(c && c.action === "wait-parent" && /human_checkpoint/.test(c.why) ? 0 : 1);
+' "$cpduty" 2>/dev/null; then
+  ok "duty holds that child as wait-parent, naming the checkpoint"
+else
+  bad "duty holds the checkpoint-parented child" "$(cat "$cpduty" 2>/dev/null | head -20)"
+fi
 
 echo
 echo "$pass passed, $fail failed"

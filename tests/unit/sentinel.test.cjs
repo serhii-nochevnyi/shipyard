@@ -71,6 +71,35 @@ test('without the trailer the same PR is arch-review work, not a merge', () => {
   assert.strictEqual(d.items[0].action, 'arch-review');
 });
 
+test('duty holds a child whose base is an open human_checkpoint parent', () => {
+  // The runs found this themselves: three of five escalations in one phase were
+  // manual holds on exactly this, each citing the merge gate's base check. The
+  // duty must say WHICH human and why — routing it to `human-merge` ("awaiting
+  // merge") hides both.
+  const root = project({
+    tickets: { P: { human_checkpoint: true, branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } },
+    state: {
+      P: { status: 'pr-open', pr: 1, draft: false, checks: checks(), branch: 'ticket/P' },
+      C: { ...green, pr: 2, pr_base: 'ticket/P', branch: 'ticket/C' },
+    },
+  });
+  const byId = Object.fromEntries(JSON.parse(run(root, ['duty', '--json']).stdout).items.map((i) => [i.ticket, i]));
+  assert.strictEqual(byId.C.action, 'wait-parent', byId.C.why);
+  assert.ok(/human_checkpoint/.test(byId.C.why), byId.C.why);
+});
+
+test('and offers the merge again once that parent has landed', () => {
+  const root = project({
+    tickets: { P: { human_checkpoint: true, branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } },
+    state: {
+      P: { status: 'merged', pr: 1, branch: 'ticket/P' },
+      C: { ...green, pr: 2, pr_base: 'ticket/P', branch: 'ticket/C' },
+    },
+  });
+  const byId = Object.fromEntries(JSON.parse(run(root, ['duty', '--json']).stdout).items.map((i) => [i.ticket, i]));
+  assert.strictEqual(byId.C.action, 'merge', byId.C.why);
+});
+
 test('a push onto an APPROVED PR is flagged as dismissing the approval', () => {
   // Field-observed: a conveyor push over a human approval dismissed it silently
   // and cost an apology plus a re-review round. The fix still must be pushed —
