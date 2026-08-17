@@ -165,7 +165,17 @@ for (const [id, t] of Object.entries(tickets)) {
     // Windowed like the other warnings: a merge a person made last week is a
     // fact, not a thing to act on, and repeating it every run buries the one
     // that happened this morning.
+    // EXCEPT on a human_checkpoint ticket, where an unguarded merge is the
+    // contract, not an anomaly: `sentinel.cjs merge` refuses those outright
+    // ("the merge is the human's by contract"), so a guarded one is impossible
+    // by construction. Measured before this exclusion: 10 of 23 tickets flagged,
+    // and all 10 were exactly the 10 checkpoints — a warning that fires only on
+    // correct behaviour, which is how a user learns to ignore warnings. They are
+    // counted separately below instead, as a neutral fact.
+    checkpoint_merge: !!(pr && pr.state === 'MERGED' && t.human_checkpoint
+      && withinWindow(pr.mergedAt)),
     unguarded_merge: !!(pr && pr.state === 'MERGED' && !events.some((e) => e.event === 'merge')
+      && !t.human_checkpoint
       && withinWindow(pr.mergedAt)),
   };
   rows.push(row);
@@ -336,6 +346,18 @@ if (unguarded.length) {
   console.log(
     '  A name in brackets is who merged it: a person merging deliberately is not the same finding as a run ' +
     'going around its own guard, and this line used to report both identically.'
+  );
+}
+// Stated, not warned. A checkpoint ticket CANNOT have a guarded merge — the gate
+// refuses those by contract — so counting them as anomalies made 10 of 23 tickets
+// look wrong while every one of them was correct.
+const checkpointMerges = rows.filter((r) => r.checkpoint_merge);
+if (checkpointMerges.length) {
+  console.log(
+    `[${windowLabel}] ${checkpointMerges.length} human_checkpoint ticket PR(s) were merged by a person, as the ` +
+    'contract requires (the guard refuses them): ' +
+    checkpointMerges.slice(0, 8).map((r) => `${r.ticket}#${r.pr}`).join(', ') +
+    (checkpointMerges.length > 8 ? `, +${checkpointMerges.length - 8} more` : '')
   );
 }
 if (stranded.length) {

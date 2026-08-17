@@ -201,6 +201,16 @@ function stackDepth(id, seen = new Set()) {
 // A child is deferred while its parent PR is still being driven — but never
 // behind a parent that is waiting on a PERSON, or the whole subtree freezes for
 // as long as the human takes.
+// The parent ticket id when this child's base is an OPEN human_checkpoint PR,
+// else null. Shared by the duty chain and the merge gate so the two cannot
+// disagree about which children are landable.
+function checkpointParentOf(id) {
+  const parent = (tickets[id] || {}).primary_parent;
+  if (!parent) return null;
+  if (!(tickets[parent] || {}).human_checkpoint) return null;
+  return (state[parent] || {}).status === 'pr-open' ? parent : null;
+}
+
 function parentIsMoving(id) {
   const parent = (tickets[id] || {}).primary_parent;
   if (!parent) return false;
@@ -292,6 +302,14 @@ function dutyItems() {
     } else if (!gateConform(s.gate)) {
       item.action = 'arch-review';
       item.why = 'green and out of draft, but no `gate_status: arch-review=conform` trailer — the architecture verdict was never recorded';
+    } else if (AUTO_MERGE && s.merge_scope === 'stacked' && checkpointParentOf(id)) {
+      // Ready in every respect, and still not ours to land: the base is an open
+      // human_checkpoint parent. `merge` would be refused by the gate anyway —
+      // this exists so the duty says the true reason instead of routing it to
+      // `human-merge`, whose text ("awaiting merge") hides which human and why.
+      item.action = 'wait-parent';
+      item.why = `green + conform, but its base is ${checkpointParentOf(id)} — a human_checkpoint PR still open. `
+        + 'Landing now would rewrite the diff that person is reading; it merges once they land theirs.';
     } else if (AUTO_MERGE && s.merge_scope === 'stacked') {
       item.action = 'merge';
       item.why = `green + conform → squash into ${base}`;
@@ -418,6 +436,32 @@ function mergeOne(id) {
   }
   if (!allowed.has(pr.baseRefName)) {
     return block(`PR base "${pr.baseRefName}" is neither the phase epic nor a parent ticket branch in this repo — refusing to merge outside the stack`);
+  }
+
+  // The base may be inside the stack and STILL be a branch nobody may land on
+  // yet: a parent whose ticket is a human_checkpoint and whose PR is still open.
+  // Line 393 above refuses a checkpoint ticket's OWN merge; it says nothing about
+  // merging INTO one, and that gap cost three of five escalations in a single
+  // phase — the runs caught it themselves and held the merge by hand, citing this
+  // exact check. Two things go wrong if the squash happens:
+  //   * it folds the child's diff into the one a person is actively reading;
+  //   * the post-merge retarget below sends that child's own children to the
+  //     EPIC, which is incoherent with content sitting in a checkpoint branch.
+  // Deliberately scoped to an OPEN parent: once the human lands it, the child
+  // proceeds, which is exactly the unblock procedure those escalations described.
+  // `parentIsMoving` is untouched on purpose — the checkpoint exception there is
+  // right for driving a child to GREEN and wrong only for merging it.
+  const baseTicket = Object.entries(tickets).find(
+    ([, o]) => (o.repo || null) === repo && o.branch === pr.baseRefName
+  );
+  if (baseTicket) {
+    const [baseId, baseObj] = baseTicket;
+    if (baseObj.human_checkpoint && (state[baseId] || {}).status === 'pr-open') {
+      return block(
+        `base "${pr.baseRefName}" is ${baseId}, a human_checkpoint ticket whose PR is still open — ` +
+        'squashing into it would rewrite the diff a person is reviewing. It merges once they land theirs.'
+      );
+    }
   }
 
   if (pr.reviewDecision === 'CHANGES_REQUESTED') return block('review decision is CHANGES_REQUESTED');
