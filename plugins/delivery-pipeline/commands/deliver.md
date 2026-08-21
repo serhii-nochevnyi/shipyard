@@ -543,8 +543,8 @@ itself a STOP signal, not a reason to improvise.
    This runs here rather than at install time for a plain reason: installation is
    global (`~/.claude`, `~/.codex`) and there is no project to configure yet — the
    settings live in each project's `.planning/config.json`.
-   - REQUIRED drift (`runtime`, `git.branching_strategy`, `workflow.use_worktrees`)
-     means the conveyor is INCORRECT here: show it to the user and offer
+   - REQUIRED drift (`runtime`, `git.branching_strategy`) means the conveyor is
+     INCORRECT here: show it to the user and offer
      `gsd-tune.cjs --apply` before delivering. Two orchestrators creating branches
      or worktrees for the same plans is what those values prevent.
    - tuning drift is cost and quality, never correctness — mention it once, do not
