@@ -31,6 +31,15 @@ faster path to bad merges.
 
 ## Decision
 
+- **D1 — A failure is identified by a normalized SIGNATURE, not by an attempt count.** Error class + test/job id + file, hashed. The repair policy reads the signature's history: changed → progress, hold the tier; same twice → change STRATEGY, not tier; K distinct with no progress → D2. The attempt counter stays as telemetry and stops being an input to the model ladder for repair roles.
+- **D2 — `plan_defect` is the third terminal outcome, reached mechanically from D1.** It is not `failed`: `failed` needs a person NOW and stops the night, `plan_defect` needs a person in the MORNING — the ticket parks with its reason, is flagged for re-decomposition, and the cascade continues. It reuses the two existing stores rather than adding a third: park and journal are one act (escalation-record), and the verdict expires when the plan changes (drift-record's plan_hash rule).
+- **D3 — A flake is not an attempt.** The same job failing intermittently on an unchanged tree is instability, not a defect: quarantine it and do not charge the attempt, or a night burns on someone else's CI.
+- **D4 — The front is ordered, not just filtered.** `front.cjs` answers what is actionable; unattended, the ORDER decides how much work remains available at 04:00. Order by descendants in the DAG, then by expected CI length. The graph is already in hand.
+- **D5 — Prior attempts are an INPUT, not a memory.** A fresh subagent per attempt is correct for context hygiene and is exactly why attempt 3 can re-propose attempt 1's fix. The remedy is a deterministic per-ticket record — signature, hypothesis, diff summary, outcome — handed to the next attempt as data. Learning persists, context stays clean.
+- **D6 — Permissions move from runtime to plan.** Every high-risk approval arriving at 3am is a decision a person could have made while approving the ticket set. Risk classes are pre-authorized at decomposition; anything not pre-authorized defers to the morning front rather than blocking.
+- **D7 — Degenerate green is detected on the diff and REPORTS first.** The failure modes that pass under bots at night are enumerable: weakened assertion, skip, rewritten snapshot, raised timeout, `any`/`@ts-ignore`, swallowed catch, narrowed matcher. This belongs in the deterministic layer beside validate-graph.cjs — diff in, verdict out, recorded as a `gate_status:` trailer. It ships NON-BLOCKING: it is the only item that can be wrong about legitimate work, and in this repository a blocking gate with false positives gets switched off (use_worktrees, the unguarded-merge warning — both removed in this same programme). It earns blocking status from field data, not from argument.
+
+## Notes on the decisions
 ### D1 — A failure is a signature, not a count
 
 Normalize each failure to `error class + test/job identifier + file`, hashed. The
@@ -43,7 +52,6 @@ repair policy reads the signature's HISTORY, not the attempt number:
 
 The attempt counter stays as telemetry. It stops being an input to the model
 ladder for repair roles.
-
 ### D2 — `plan_defect` is the third terminal outcome
 
 Reached mechanically from D1. It is NOT `failed`:
@@ -56,33 +64,28 @@ Reached mechanically from D1. It is NOT `failed`:
 It reuses the two stores that already exist rather than adding a third: the park
 and its journal entry are one act (`escalation-record`), and the verdict expires
 when the PLAN changes, which is `drift-record`'s existing `plan_hash` rule.
-
 ### D3 — A flake is not an attempt
 
 The same job failing intermittently on an unchanged tree is instability, not a
 defect. Quarantine it and do not charge the attempt, or a night burns on someone
 else's CI.
-
 ### D4 — The front is ordered, not just filtered
 
 `front.cjs` answers *what is actionable*. Unattended, *in what order* decides how
 much work remains available at 04:00. Order by descendants in the DAG (unblocking
 power), then by expected CI length. The graph is already in hand.
-
 ### D5 — Prior attempts are an INPUT, not a memory
 
 A fresh subagent per attempt is correct for context hygiene and is why attempt 3
 can re-propose attempt 1's fix. The fix is not a longer-lived agent: it is a
 deterministic per-ticket record — signature, hypothesis, diff summary, outcome —
 handed to the next attempt as data. Learning persists; context stays clean.
-
 ### D6 — Permissions move from runtime to plan
 
 Every "high-risk approval" arriving at 3am is a decision a person could have made
 while approving the ticket set. Risk classes are pre-authorized at decomposition.
 Anything not pre-authorized is deferred to the morning front rather than blocking
 the run.
-
 ### D7 — Degenerate green is detected on the diff, and REPORTS first
 
 Drive-to-green optimizes the signal it is measured by. The failure modes that pass

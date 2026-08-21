@@ -209,6 +209,13 @@ const TUNING_ALL = [
   ['effort.routing_tier_defaults.light', 'low', 'mirrors the conveyor\'s own effort tiers'],
   ['effort.routing_tier_defaults.standard', 'high', 'mirrors the conveyor\'s own effort tiers'],
   ['effort.routing_tier_defaults.heavy', 'xhigh', 'mirrors the conveyor\'s own effort tiers'],
+  // BOTH agents, and the planner is the one that matters most: it writes the
+  // `delivery:` frontmatter block the whole graph is built from, so a planner
+  // without delivery-rules produces tickets Gate 2 then rejects. Only the
+  // executor was set here until decomposing this repo through the conveyor
+  // surfaced the omission — the skill's own template lists both.
+  [`agent_skills.gsd-planner`, [DELIVERY_RULES],
+    `the frontmatter contract, in the form the "${runtime}" runtime resolves`],
   [`agent_skills.gsd-executor`, [DELIVERY_RULES],
     `the delivery-rules skill in the form the "${runtime}" runtime resolves`],
 ];

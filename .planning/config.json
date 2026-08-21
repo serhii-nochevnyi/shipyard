@@ -62,6 +62,9 @@
   "agent_skills": {
     "gsd-executor": [
       "global:shipyard:delivery-rules"
+    ],
+    "gsd-planner": [
+      "global:shipyard:delivery-rules"
     ]
   },
   "claude_md_path": "./.claude/CLAUDE.md",
@@ -70,8 +73,7 @@
     "source_grounding_authority": "grep"
   },
   "mode": "standard",
-  "granularity": "fine",
-  "branching_strategy": "none",
+  "granularity": "standard",
   "intel": {
     "enabled": false
   },
