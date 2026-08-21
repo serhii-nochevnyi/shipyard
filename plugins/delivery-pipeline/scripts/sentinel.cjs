@@ -100,6 +100,23 @@ const repoArg = (repo) => (repo ? ['--repo', repo] : []);
 
 // `gh pr checks` reports CI state through its EXIT CODE while still printing the
 // JSON (8 = pending, 1 = failing or no checks at all) — see state-sync.cjs.
+// Commits on <base> that <head> does not have yet — i.e. how stale this branch is.
+// The mirror of epic-branch.sh's `ahead_by`, in the other direction.
+//
+// WHY WE ASK OURSELVES instead of trusting mergeStateStatus: GitHub only reports
+// BEHIND when branch protection requires branches to be up to date. Without that
+// setting a stale-but-conflict-free branch reports CLEAN, so a gate that only
+// reads mergeStateStatus is silent exactly where the repo has not been hardened.
+// One extra call, on the merge path only — merges are rare next to the per-round
+// syncing, so this does not touch the conveyor's tick rate.
+function behindBy(base, head, repo) {
+  const out = gh(['api', `repos/{owner}/{repo}/compare/${head}...${base}`,
+    ...repoArg(repo), '--jq', '.ahead_by'], { tolerate: true });
+  if (typeof out !== 'string') return null; // unreachable/unknown — never guess a number
+  const n = parseInt(out.trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 function ghChecks(pr, repo) {
   const r = spawnSync('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', 'name,state'], { encoding: 'utf8' });
   let rows = [];
@@ -503,6 +520,29 @@ function mergeOne(id) {
     );
   }
   if (pr.mergeStateStatus === 'BLOCKED') return block('GitHub reports the merge as BLOCKED (branch protection: a required review or check is missing)');
+
+  // The green that is the most expensive to trust: CI passed against a base that
+  // has since moved. Retargeting a cascade child updates WHERE it points; it does
+  // not re-run anything, so the check result still describes a merge base that no
+  // longer exists. Landing a night of those produces an epic where every ticket
+  // was green and the whole is broken.
+  //
+  // The comment two rules up has named BEHIND since this gate was written, and
+  // nothing ever checked it. Both readings are used, because neither alone is
+  // enough: mergeStateStatus is authoritative but only speaks when branch
+  // protection requires up-to-date branches, and our own comparison works
+  // everywhere but is a second opinion, not GitHub's verdict.
+  const staleBy = pr.mergeStateStatus === 'BEHIND'
+    ? (behindBy(pr.baseRefName, pr.headRefName, repo) ?? 'some')
+    : behindBy(pr.baseRefName, pr.headRefName, repo);
+  if (pr.mergeStateStatus === 'BEHIND' || (typeof staleBy === 'number' && staleBy > 0)) {
+    res.behind_by = staleBy;
+    return block(
+      `the base moved: ${pr.baseRefName} is ${staleBy} commit(s) ahead of this branch, so the green checks were ` +
+      'measured against a merge base that no longer exists. In the ticket worktree: ' +
+      '`git fetch origin && git merge origin/<base>` (NEVER rebase — the PR is pushed), push, let CI re-run.'
+    );
+  }
 
   if (dryRun) {
     res.would_merge = true;
