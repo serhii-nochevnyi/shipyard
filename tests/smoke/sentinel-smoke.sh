@@ -49,6 +49,19 @@ JSON
 JSON
     ;;
   "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/01-demo\nticket/T-01-01-root\nticket/T-01-02-child\n' ;;
+  # epic-branch's ahead_by AND the merge gate's behindBy both land here. The
+  # gate's probe is head...base, so a non-zero answer means "the base moved".
+  # reviewers.cjs `unresolved` asks GraphQL for the review threads, and the merge
+  # gate refuses to merge blind when it cannot read them — so every assertion
+  # PAST that point needs this answered. Zero open threads is the clean case.
+  # reviewers.cjs resolves the repo slug before anything else; without this every
+  # thread read fails and the merge gate refuses "blind" long before the rules
+  # under test are reached.
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  "api graphql"*)
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  "api repos/{owner}/{repo}/compare/ticket/T-01-02-child...ticket/T-01-01-root"*)
+    echo "${SENTINEL_SMOKE_BEHIND:-0}" ;;
   "api repos/{owner}/{repo}/compare"*) echo 0 ;;
   "pr checks 101"*) echo '[{"name":"build","state":"SUCCESS"}]' ;;
   # The checkpoint-parent case drives PR 102 to green; the earlier duty cases
@@ -343,6 +356,47 @@ process.exit(c && c.action === "wait-parent" && /human_checkpoint/.test(c.why) ?
   ok "duty holds that child as wait-parent, naming the checkpoint"
 else
   bad "duty holds the checkpoint-parented child" "$(cat "$cpduty" 2>/dev/null | head -20)"
+fi
+
+# ── a green measured against a base that has since moved ─────────────────────
+# The quietest failure of an unattended run: retargeting a cascade child updates
+# where it points and re-runs nothing, so its check result still describes a
+# merge base that no longer exists. The gate's own comment had named BEHIND
+# since it was written, and nothing checked it.
+mergeout="$W/behind.json"
+run_merge() {
+  ( cd "$cpproj" && env "$@" SENTINEL_SMOKE_GREEN_102=1 \
+      node "$SCRIPTS/sentinel.cjs" merge T-01-02 --json > "$mergeout" 2>/dev/null ) || true
+}
+blockers_match() { node -e '
+const r = require(process.argv[1]).results[0];
+process.exit(r && r.merged === false && r.blockers.some((b) => new RegExp(process.argv[2]).test(b)) ? 0 : 1);
+' "$mergeout" "$1" 2>/dev/null; }
+
+# The checkpoint parent would refuse first, so this case gives it a landed one.
+node -e '
+const f = process.argv[1]; const s = JSON.parse(require("fs").readFileSync(f, "utf8"));
+s["T-01-01"].status = "merged"; require("fs").writeFileSync(f, JSON.stringify(s));
+' "$cpproj/.planning/graph/delivery-state.json"
+
+run_merge SENTINEL_SMOKE_BEHIND=3
+if blockers_match 'the base moved'; then
+  ok "merge refuses a branch whose base moved under it, even with green checks"
+else
+  bad "merge refuses a stale base" "$(head -20 "$mergeout")"
+fi
+if blockers_match '3 commit'; then
+  ok "and says HOW far behind, so the fix is one merge and not a guess"
+else
+  bad "the refusal counts the commits" "$(head -20 "$mergeout")"
+fi
+
+# Zero behind: the staleness rule must not become a blanket refusal.
+run_merge SENTINEL_SMOKE_BEHIND=0
+if blockers_match 'the base moved'; then
+  bad "an up-to-date branch is not called stale" "$(head -20 "$mergeout")"
+else
+  ok "an up-to-date branch is not called stale"
 fi
 
 echo
