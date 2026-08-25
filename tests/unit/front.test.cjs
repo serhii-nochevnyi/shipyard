@@ -735,4 +735,51 @@ test('state-sync passes ci_estimates too — one graph, one ordering', () => {
   );
 });
 
+suite('front — a park is described by the store that owns it');
+
+// The board is the last thing a human reads before acting at 3am, so a lifting
+// rule stated there has to be the rule the store actually applies. It was not:
+// the store printed "Moving the PR does NOT lift it" for a plan defect while
+// this renderer told the same human the park lifts once the PR moves. The
+// wording is now produced once, beside the branch that decides expiry, and the
+// renderer's only remaining job is placement.
+
+const ESC_REASON = 'the reviewer must decide whether the endpoint may change';
+const DEFECT_REASON = 'the plan assumes a sync endpoint; the API streams';
+// The exact string `activeEscalations` hands back for a plan_defect record —
+// pinned verbatim by escalation-record.test.cjs, so a fixture here cannot drift
+// away from what the store produces.
+const DEFECT_PARK = `plan_defect — re-decompose: ${DEFECT_REASON}`;
+const escState = { T: { status: 'pr-open', pr: 7, draft: true, checks: checks() } };
+
+test('a plan_defect park names re-planning and never claims a PR move lifts it', () => {
+  const f = computeFront({ T: {} }, escState, { escalated: { T: DEFECT_PARK } });
+  const why = f.why.T;
+  assert.ok(f.parked.blocked.includes('T'), 'parked, whatever the wording');
+  assert.ok(/plan/i.test(why), `the sentence must send the human to the plan: ${why}`);
+  assert.ok(/re-plan|re-decompose/i.test(why), `and name the act that lifts it: ${why}`);
+  // Content, not a literal: a rewrite that reintroduces the falsehood must fail
+  // here even if every other word changed.
+  assert.ok(!/PR moves/.test(why), `the board must not promise what the store refuses: ${why}`);
+  assert.ok(why.includes(DEFECT_REASON), 'the recorded reason still travels verbatim');
+  assert.ok(/escalation-record\.cjs clear T/.test(why), 'clear is the remedy for every kind');
+});
+
+test('an ordinary escalation renders exactly as it did before', () => {
+  const f = computeFront({ T: {} }, escState, { escalated: { T: ESC_REASON } });
+  assert.strictEqual(
+    f.why.T,
+    `escalated — ${ESC_REASON}. It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear T\` to take it back.`,
+    'the kind that was already right must not move a byte'
+  );
+});
+
+test('a record with no kind reads as an ordinary escalation', () => {
+  // Every record written before kinds existed has no kind, and the reason it
+  // carries is free text — a park whose reason merely mentions a plan must not
+  // be re-described with the plan_defect rule.
+  const f = computeFront({ T: {} }, escState, { escalated: { T: 'the plan owner is on leave' } });
+  assert.ok(/PR moves/.test(f.why.T), `the pre-kind rule is unchanged for it: ${f.why.T}`);
+});
+
 done();

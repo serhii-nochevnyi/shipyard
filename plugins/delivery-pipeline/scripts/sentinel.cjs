@@ -174,7 +174,7 @@ function journal(rec) {
 // the guard keeps dispatching review-fix at exactly the PRs the front has set
 // aside. The two must agree on what is parked or the concurrency is a race with
 // a human in it.
-const { activeEscalations } = require(path.join(__dirname, 'escalation-record.cjs'));
+const { activeEscalations, escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
 const ESCALATED = activeEscalations(ROOT);
 const DRIFTED = activeDrift(ROOT);
@@ -183,7 +183,12 @@ const PARKED = new Set([...listFlag('parked'), ...Object.keys(ESCALATED), ...Obj
 // there is one — "parked" alone is what sent the last run looking through the
 // journal by hand.
 const PARKED_WHY = {};
-for (const [id, r] of Object.entries(ESCALATED)) PARKED_WHY[id] = `escalated — ${r} (lifts when the PR moves; \`escalation-record.cjs clear ${id}\`)`;
+// The escalation wording is the store's, not the guard's — see escalationWhy.
+// This site used to compose its own parenthetical, and once a second kind
+// existed it described a plan defect with the older kind's lifting rule, in a
+// sentence the board rendered differently again. Two texts for one fact is what
+// let them drift; the guard and the board now quote the same one.
+for (const [id, r] of Object.entries(ESCALATED)) PARKED_WHY[id] = escalationWhy(id, r);
 for (const [id, r] of Object.entries(DRIFTED)) PARKED_WHY[id] = `drifted — ${r} (re-plan it; the park lifts when the plan changes)`;
 const SCOPE = listFlag('scope');
 

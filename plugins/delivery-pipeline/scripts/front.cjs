@@ -41,6 +41,14 @@
 // open PRs is still being driven to green — before it, an unmerged green PR was
 // simply "waiting on a human" and the run declared a fixpoint on top of it.
 
+const path = require('path');
+// The lifting rule for a park comes from the store that OWNS the park, never
+// from here. Composing it at this render site is what let the board tell a
+// human that moving the PR lifts a plan defect, while escalation-record.cjs —
+// the file that decides when it actually lifts — says a PR move does not touch
+// it. This module's job for a park is placement; the wording is not its call.
+const { escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'));
+
 const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
 const SENTINEL_BUCKETS = ['fix', 'finalize', 'merge'];
 
@@ -118,7 +126,7 @@ function computeFront(tickets, state, opts = {}) {
     // getting this PR in: if it is in, there is nothing left to escalate.
     if (escalated[id]) {
       parked.blocked.push(id);
-      why[id] = `escalated — ${escalated[id]}. It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear ${id}\` to take it back.`;
+      why[id] = escalationWhy(id, escalated[id]);
       continue;
     }
 

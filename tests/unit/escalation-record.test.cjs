@@ -489,4 +489,64 @@ test('six plan defects in a row all survive, each with exactly one journal line'
   assert.equal(new Set(events.map((e) => e.ticket)).size, 6, 'no ticket logged twice');
 });
 
+suite('escalation-record — one lifting rule, quoted by both renderers');
+
+// The store said "Moving the PR does NOT lift it" for a plan defect while both
+// renderers told the same human it lifts once the PR moves. Neither renderer was
+// wrong on purpose: each composed its own sentence, so a kind added to the store
+// reached them as a bare reason string and fell through to the older kind's
+// semantics. The sentence is produced once now, beside the branch that decides
+// expiry — and the property worth pinning is the AGREEMENT, not the wording.
+
+const SENTINEL = path.join(SCRIPTS, 'sentinel.cjs');
+
+// What the guard puts on a parked PR's duty item, straight out of its PARKED_WHY.
+function guardWhy(dir, id) {
+  const r = spawnSync('node', [SENTINEL, 'duty', '--json'], { cwd: dir, encoding: 'utf8' });
+  assert.equal(r.status, 0, `duty must succeed (${r.stderr})`);
+  const item = JSON.parse(r.stdout).items.find((i) => i.ticket === id);
+  assert.ok(item, `${id} must appear in the duty board`);
+  assert.equal(item.action, 'parked', 'a recorded park is parked for the guard too');
+  return item.why;
+}
+
+// What the board puts on the same ticket, through the same reader.
+function boardWhy(dir, id) {
+  const { computeFront } = require(path.join(SCRIPTS, 'front.cjs'));
+  return computeFront({ [id]: {} }, stateOf(dir), { escalated: activeEscalations(dir) }).why[id];
+}
+
+test('a plan defect is described identically by the board and the guard', () => {
+  const { dir, plan } = planned();
+  run(dir, ['mark-plan-defect', 'T-16-05', plan, 'the plan splits a file two tickets both own']);
+  const board = boardWhy(dir, 'T-16-05');
+  assert.equal(guardWhy(dir, 'T-16-05'), board,
+    'two renderers composing their own sentence IS the defect — not the wording either one chose');
+  assert.ok(!/PR moves/.test(board), `and neither may claim a PR move lifts it: ${board}`);
+  assert.ok(/re-plan|re-decompose/i.test(board), `both must name the act that does: ${board}`);
+});
+
+test('an ordinary escalation is described identically too', () => {
+  const dir = project();
+  run(dir, ['mark', 'T-16-05', 'a', 'human', 'owns', 'the', 'API', 'key']);
+  const board = boardWhy(dir, 'T-16-05');
+  assert.equal(guardWhy(dir, 'T-16-05'), board, 'the agreement holds for the kind that predates kinds');
+  assert.ok(/PR moves/.test(board), `whose rule is unchanged: ${board}`);
+  assert.ok(/a human owns the API key/.test(board), 'the recorded reason still travels verbatim');
+});
+
+test('a record with no kind at all is rendered as an ordinary escalation', () => {
+  // Hand-written, because no command writes this shape any more: every record
+  // stored before `kind` existed looks exactly like this, and the fallback is
+  // what keeps it readable rather than mis-described.
+  const dir = project();
+  fs.writeFileSync(path.join(dir, '.planning', 'graph', 'escalations.json'), JSON.stringify({
+    tickets: { 'T-16-05': { reason: 'the plan owner is on leave', at: '2026-01-01T00:00:00Z' } },
+  }));
+  const board = boardWhy(dir, 'T-16-05');
+  assert.equal(guardWhy(dir, 'T-16-05'), board, 'still one sentence, still both renderers');
+  assert.ok(/PR moves/.test(board),
+    `a reason that merely mentions a plan must not borrow the plan_defect rule: ${board}`);
+});
+
 done();

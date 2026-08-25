@@ -66,6 +66,46 @@ const { planHash } = require(path.join(__dirname, 'drift-record.cjs'));
 // human needs reaches both for free — with no change in either file.
 const PLAN_DEFECT_PREFIX = 'plan_defect — re-decompose: ';
 
+// The LIFTING RULE, in the words the human woken at 3am reads — and it lives
+// here, beside the branch in `activeEscalations` that decides when a park
+// actually lifts. It used to be composed independently at the two render sites
+// (the board's why-message and the guard's PARKED_WHY), which is precisely how
+// they came to contradict this file: a kind added to the store reaches a
+// renderer as a bare reason string, falls through to the older kind's sentence,
+// and the board then promises that moving the PR lifts a park that only a
+// re-plan lifts. One home means the next kind cannot be described with another
+// kind's semantics — it either gets an entry here or gets the fallback.
+const LIFTS = {
+  escalation: (id) =>
+    `It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear ${id}\` to take it back.`,
+  // Deliberately says nothing at all about the PR. A push or an answered review
+  // is not evidence about the plan, and naming one here — even to deny it — is
+  // what put the falsehood on the board to begin with.
+  plan_defect: (id) =>
+    `Re-plan it (/shipyard:decompose): the park lifts when the plan file changes, and only then; \`escalation-record.cjs clear ${id}\` to take it back.`,
+};
+
+// The kind, recovered from the reason string this module itself produced. That
+// is what keeps `activeEscalations` a flat {ticket: reason} map — the shape the
+// guard and state-sync already consume — while the wording stays derived from
+// the record rather than guessed at a render site.
+function kindOf(reason) {
+  return String(reason || '').startsWith(PLAN_DEFECT_PREFIX) ? 'plan_defect' : 'escalation';
+}
+
+/**
+ * The whole park message for one ticket, given the reason `activeEscalations`
+ * returned for it. Both renderers assign this verbatim; their remaining job is
+ * placement, not wording.
+ *
+ * An unknown or absent kind falls back to the ordinary-escalation sentence:
+ * every record written before kinds existed carries no kind at all, and its
+ * free-text reason must not be re-described by a rule it was never filed under.
+ */
+function escalationWhy(id, reason) {
+  return `escalated — ${reason}. ${(LIFTS[kindOf(reason)] || LIFTS.escalation)(id)}`;
+}
+
 function fail(msg) {
   process.stderr.write(`escalation-record: ${msg}\n`);
   process.exit(1);
@@ -337,4 +377,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { activeEscalations, fingerprint };
+module.exports = { activeEscalations, fingerprint, escalationWhy };
