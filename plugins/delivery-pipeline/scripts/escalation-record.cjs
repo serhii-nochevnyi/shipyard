@@ -205,6 +205,21 @@ function activeEscalations(cwd = process.cwd(), state = null) {
   return out;
 }
 
+// A reason is the ENTIRE inheritance of the next session: it reads this string
+// and nothing else, so a park without one is the defect this store exists to
+// prevent. Checked on the JOINED, TRIMMED string, never on the argument count —
+// `mark T-01-01 ""` hands the parser a non-empty array holding nothing a human
+// can read, and so does `mark T-01-01 "" "  "`. That distinction was found by
+// Copilot's review of the PR that added `mark-plan-defect`, and only that call
+// site received it; the older, more-used `mark` kept `!reason.length` and
+// accepted the empty string for another epic. The condition lives here, once,
+// because a copy is exactly how the two came to disagree. The MESSAGE stays with
+// the caller: the two address different readers, one unblocking a PR and one
+// deciding how to re-plan.
+function requireReason(words, message) {
+  if (!words.join(' ').trim().length) fail(message);
+}
+
 // Repeatable and accepted in ANY position — the fixer that reaches this verdict
 // has one signature per distinct failure and pastes them in whatever order the
 // journal gave them. Enumerating the flag rather than inferring `--key value` is
@@ -264,15 +279,14 @@ if (require.main === module) {
   if (cmd === 'mark') {
     const [ticket, ...reason] = rest;
     if (!ticket) fail('usage: escalation-record.cjs mark <ticket> <reason...>');
-    // A reason is the entire point — the next session inherits this string and
-    // nothing else. "escalated" tells it no more than the disjunction it replaced.
-    if (!reason.length) {
-      fail(
-        'an escalation with no reason is the defect this script exists to fix.\n' +
-        '  The next session inherits ONLY this string: say what a human must decide,\n' +
-        '  e.g. "auth token expired; the live capture this ticket rests on cannot run".'
-      );
-    }
+    // Read by someone deciding how to UNBLOCK a PR — hence these words, and not
+    // `mark-plan-defect`'s. The condition itself is shared (see requireReason).
+    requireReason(
+      reason,
+      'an escalation with no reason is the defect this script exists to fix.\n' +
+      '  The next session inherits ONLY this string: say what a human must decide,\n' +
+      '  e.g. "auth token expired; the live capture this ticket rests on cannot run".'
+    );
     const state = readState(cwd);
     const s = state[ticket];
     if (!s) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
@@ -304,19 +318,15 @@ if (require.main === module) {
     if (!ticket || !plan) {
       fail('usage: escalation-record.cjs mark-plan-defect <ticket> <plan-path> <reason...> [--signature <sig>]... [--graph <dir>]');
     }
-    // Same guard as `mark`, different words on purpose: this reason is read by
-    // someone deciding how to RE-PLAN, not how to unblock a PR. Checked on the
-    // JOINED, TRIMMED string, not the argument count — `mark-plan-defect T plan
-    // ""` has a non-empty positional array but nothing a human could read. Found
-    // by Copilot's review of this PR.
-    if (!reason.join(' ').trim().length) {
-      fail(
-        'a plan defect with no reason is a dead end for whoever picks it up in the morning.\n' +
-        '  They inherit ONLY this string and the signatures: say what the PLAN got wrong,\n' +
-        '  e.g. "the plan assumes a sync endpoint; the API streams, so no fix inside these\n' +
-        '  files can pass" — never just "plan defect".'
-      );
-    }
+    // Read by someone deciding how to RE-PLAN, not how to unblock a PR — so the
+    // words differ from `mark`'s while the condition does not.
+    requireReason(
+      reason,
+      'a plan defect with no reason is a dead end for whoever picks it up in the morning.\n' +
+      '  They inherit ONLY this string and the signatures: say what the PLAN got wrong,\n' +
+      '  e.g. "the plan assumes a sync endpoint; the API streams, so no fix inside these\n' +
+      '  files can pass" — never just "plan defect".'
+    );
     const hash = planHash(plan);
     if (!hash) fail(`cannot read the plan at ${plan} — a verdict with no plan to bind to would never expire`);
     // The typo guard `mark` has, for the same reason: a park recorded against an
