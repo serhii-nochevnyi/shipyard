@@ -661,10 +661,10 @@ test('a torn journal line costs one sample, not the estimate', () => {
 });
 
 test("a merged ticket the CURRENT graph does not know does not pollute another repo's median", () => {
-  // Copilot's finding on this PR: `repoKey` defaults an unknown ticket to the
-  // SAME '' bucket a real local ticket uses, so a stale/pruned/foreign journal
-  // entry for a ticket id absent from `tickets` silently skews the local
-  // repo's median rather than being excluded for lack of a known repo.
+  // Invariant: `repoKey` defaults an unknown ticket to the SAME '' bucket a
+  // real local ticket uses, so a stale/pruned/foreign journal entry for a
+  // ticket id absent from `tickets` must be excluded for lack of a known
+  // repo, not silently folded into the local repo's median.
   const fs = require('fs');
   const { graph } = tmpGraph('shipyard-ciest-unknown-');
   fs.writeFileSync(path.join(graph, 'delivery-log.jsonl'), [

@@ -398,8 +398,8 @@ function ciEstimates(graphDir, tickets = {}) {
     // A ticket the journal remembers but the current graph does not (pruned,
     // archived, or read from the wrong graph) has no KNOWN repo — `repoKey`
     // would default it to '', the same bucket a real local ticket with no
-    // `repo` field uses, misattributing a foreign PR's lifetime into the local
-    // median. Found by Copilot's review of this PR.
+    // `repo` field uses, misattributing a foreign PR's lifetime into the
+    // local median.
     if (!(tickets && Object.prototype.hasOwnProperty.call(tickets, id))) continue;
     const opened = firstAt.get(`${id}\u0000pr-open`);
     // Merged with no journalled `pr-open` (imported history, a PR opened before
