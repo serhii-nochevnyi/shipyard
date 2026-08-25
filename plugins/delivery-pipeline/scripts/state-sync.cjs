@@ -43,7 +43,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-const { computeFront, formatFront } = require(path.join(__dirname, 'front.cjs'));
+const { computeFront, formatFront, ciEstimates } = require(path.join(__dirname, 'front.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
 const { activeEscalations } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
@@ -488,6 +488,11 @@ const DRIFTED = activeDrift(ROOT);
 const ESCALATED = activeEscalations(ROOT, state);
 const front = computeFront(tickets, state, {
   parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED, escalated: ESCALATED,
+  // Expected CI length per ticket, a per-repo median over the LOCAL journal — the
+  // front's last ordering key before the id (front.cjs). Note what does NOT feed
+  // it: no per-PR `gh` field. Adding one to the bulk window is the 41s-vs-7s
+  // regression this file already carries a warning about.
+  ci_estimates: ciEstimates(GRAPH_DIR, tickets),
 });
 
 withLock(lockDirFor(ROOT), 'state', () => {

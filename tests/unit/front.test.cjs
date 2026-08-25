@@ -6,7 +6,7 @@
 
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
-const { computeFront, formatFront } = require(path.join(
+const { computeFront, formatFront, ciEstimates } = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
 ));
 
@@ -411,6 +411,308 @@ test('the CLI honours a recorded drift verdict', () => {
   const parked = JSON.parse(cli(['--json']).stdout);
   assert.equal(parked.actionable_count, 0, 'the CLI honours the escalation too');
   assert.ok(/the reviewer must decide/.test(parked.why['T-01-01']), 'and reports its reason');
+});
+
+suite('front — D4: the actionable order is by unblocking power');
+
+// Unattended, the ORDER decides how much of the graph is still open by morning:
+// the head of the list is what a 04:00 round takes, so it has to be the ticket
+// that keeps the most work available afterwards.
+
+// A dependent that cannot run yet is exactly the work an unblocking ticket
+// frees, so these are parked in `state` but still counted as descendants.
+const held = (dep) => ({ status: 'pending', ready: false, blocked_by: [dep] });
+
+test('a root with more unmerged dependents sorts first, beating id order', () => {
+  const tickets = {
+    'A-root': { phase: '1' },
+    'A-kid': { phase: '1', depends_on: ['A-root'] },
+    'Z-root': { phase: '1' },
+    'Z-k1': { phase: '1', depends_on: ['Z-root'] },
+    'Z-k2': { phase: '1', depends_on: ['Z-root'] },
+    'Z-k3': { phase: '1', depends_on: ['Z-k1'] },
+    'Z-k4': { phase: '1', depends_on: ['Z-k2'] },
+    'Z-k5': { phase: '1', depends_on: ['Z-k3'] },
+  };
+  const state = {
+    'A-root': { status: 'pending', ready: true },
+    'A-kid': held('A-root'),
+    'Z-root': { status: 'pending', ready: true },
+    'Z-k1': held('Z-root'), 'Z-k2': held('Z-root'),
+    'Z-k3': held('Z-k1'), 'Z-k4': held('Z-k2'), 'Z-k5': held('Z-k3'),
+  };
+  const f = computeFront(tickets, state, {});
+  assert.deepStrictEqual(
+    f.actionable.execute, ['Z-root', 'A-root'],
+    '5 unmerged dependents outrank 1, whatever the ids say'
+  );
+});
+
+test('a diamond counts the shared descendant once', () => {
+  // The hazard validate-graph.cjs already paid for, mirrored: there a visited
+  // set SHARED across recursions cached truncated ancestor closures and rejected
+  // valid diamond graphs. Here the symptom would be inflation instead — in
+  // A←B, A←C, B←D, C←D, reaching D via both B and C must still count it once.
+  const tickets = {
+    'Z-dia': { phase: '1' },
+    'Z-b': { phase: '1', depends_on: ['Z-dia'] },
+    'Z-c': { phase: '1', depends_on: ['Z-dia'] },
+    'Z-d': { phase: '1', depends_on: ['Z-b', 'Z-c'] },
+    'A-chain': { phase: '1' },
+    'A-1': { phase: '1', depends_on: ['A-chain'] },
+    'A-2': { phase: '1', depends_on: ['A-1'] },
+    'A-3': { phase: '1', depends_on: ['A-2'] },
+  };
+  const state = {
+    'Z-dia': { status: 'pending', ready: true },
+    'Z-b': held('Z-dia'), 'Z-c': held('Z-dia'), 'Z-d': held('Z-b'),
+    'A-chain': { status: 'pending', ready: true },
+    'A-1': held('A-chain'), 'A-2': held('A-1'), 'A-3': held('A-2'),
+  };
+  const f = computeFront(tickets, state, {});
+  // descendants(Z-dia) is 3, which TIES the plain 3-chain and falls through to
+  // the id. Double-counting D would make it 4 and put the diamond first.
+  assert.deepStrictEqual(
+    f.actionable.execute, ['A-chain', 'Z-dia'],
+    'the shared descendant must be counted once, not once per path'
+  );
+});
+
+test('a merged dependent needs no unblocking and is not counted', () => {
+  const tickets = {
+    'Z-most': { phase: '1' },
+    'Z-m1': { phase: '1', depends_on: ['Z-most'] },
+    'Z-m2': { phase: '1', depends_on: ['Z-most'] },
+    'Z-live': { phase: '1', depends_on: ['Z-most'] },
+    'A-two': { phase: '1' },
+    'A-1': { phase: '1', depends_on: ['A-two'] },
+    'A-2': { phase: '1', depends_on: ['A-1'] },
+  };
+  const state = {
+    'Z-most': { status: 'pending', ready: true },
+    'Z-m1': { status: 'merged' }, 'Z-m2': { status: 'merged' },
+    'Z-live': held('Z-most'),
+    'A-two': { status: 'pending', ready: true },
+    'A-1': held('A-two'), 'A-2': held('A-1'),
+  };
+  const f = computeFront(tickets, state, {});
+  // Z-most has three dependents on paper but only one still needs unblocking.
+  assert.deepStrictEqual(
+    f.actionable.execute, ['A-two', 'Z-most'],
+    'counting merged dependents would promote a ticket that frees nothing'
+  );
+});
+
+test('a parent still sorts before its own stacked child', () => {
+  const tickets = {
+    'Z-parent': { phase: '1' },
+    'A-child': { phase: '1', depends_on: ['Z-parent'], primary_parent: 'Z-parent' },
+  };
+  const state = {
+    'Z-parent': { status: 'pending', ready: true },
+    'A-child': { status: 'pending', ready: true },
+  };
+  const f = computeFront(tickets, state, {});
+  // The parent's descendant set strictly contains its unmerged child's, so
+  // "drive the parents first" survives the new leading key by construction.
+  assert.deepStrictEqual(f.actionable.execute, ['Z-parent', 'A-child']);
+});
+
+test('left-behind still sorts last, however much it would unblock', () => {
+  const tickets = {
+    'T-02-01': { phase: '2' },
+    'T-02-02': { phase: '2', depends_on: ['T-02-01'] },
+    'T-02-03': { phase: '2', depends_on: ['T-02-01'] },
+    'T-02-04': { phase: '2', depends_on: ['T-02-01'] },
+    'T-14-02': { phase: '14' },
+    'T-14-01': { phase: '14' },
+  };
+  const state = {
+    'T-02-01': { status: 'pending', ready: true },
+    'T-02-02': held('T-02-01'), 'T-02-03': held('T-02-01'), 'T-02-04': held('T-02-01'),
+    'T-14-02': { status: 'pending', ready: true },
+    'T-14-01': { status: 'merged' },
+  };
+  const f = computeFront(tickets, state, {});
+  assert.deepStrictEqual(
+    f.actionable.execute, ['T-14-02', 'T-02-01'],
+    'unblocking power must never promote a phase the run has already moved past'
+  );
+  assert.strictEqual(f.left_behind_count, 1, 'and the count is unchanged');
+});
+
+test('with descendants and depth tied, the slower repo starts first', () => {
+  const tickets = {
+    'Z-slow': { phase: '1', repo: 'o/slow' },
+    'A-fast': { phase: '1', repo: 'o/fast' },
+  };
+  const state = {
+    'Z-slow': { status: 'pending', ready: true },
+    'A-fast': { status: 'pending', ready: true },
+  };
+  const f = computeFront(tickets, state, { ci_estimates: { 'Z-slow': 300, 'A-fast': 100 } });
+  assert.deepStrictEqual(
+    f.actionable.execute, ['Z-slow', 'A-fast'],
+    'starting the slowest pipeline earliest overlaps its wait with the rest of the front'
+  );
+  const none = computeFront(tickets, state, {});
+  assert.deepStrictEqual(
+    none.actionable.execute, ['A-fast', 'Z-slow'],
+    'with no journal data the term falls through to the id, and nothing throws'
+  );
+});
+
+test('sentinel.duty inherits the bucket order, not the state key order', () => {
+  const tickets = {
+    'A-few': { phase: '1' },
+    'Z-many': { phase: '1' },
+    'Z-k1': { phase: '1', depends_on: ['Z-many'] },
+    'Z-k2': { phase: '1', depends_on: ['Z-many'] },
+  };
+  const state = {
+    'A-few': { status: 'pr-open', pr: 1, draft: true, checks: checks() },
+    'Z-many': { status: 'pr-open', pr: 2, draft: true, checks: checks() },
+    'Z-k1': held('Z-many'), 'Z-k2': held('Z-many'),
+  };
+  const f = computeFront(tickets, state, {});
+  assert.deepStrictEqual(f.actionable.finalize, ['Z-many', 'A-few']);
+  assert.deepStrictEqual(
+    f.sentinel.duty, ['Z-many', 'A-few'],
+    'the board must not print one order in the buckets and another in the duty line'
+  );
+});
+
+test('computeFront stays a pure function over its inputs — no filesystem access', () => {
+  // The estimate is derived by `ciEstimates` and PASSED IN. Reading the journal
+  // from inside computeFront would make the pure classifier depend on a cwd,
+  // which is the defect graph-dir.cjs exists to talk about.
+  const src = computeFront.toString();
+  assert.ok(!/require\(\s*['"](fs|path)['"]\s*\)/.test(src), 'computeFront must not require fs/path');
+  assert.ok(
+    !/\b(readFileSync|existsSync|readdirSync|writeFileSync|appendFileSync)\b/.test(src),
+    'computeFront must not touch the filesystem'
+  );
+});
+
+suite('front — ciEstimates: a per-repo PR-lifetime proxy from the journal');
+
+const tmpGraph = (prefix) => {
+  const fs = require('fs');
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const graph = path.join(dir, '.planning', 'graph');
+  fs.mkdirSync(graph, { recursive: true });
+  return { dir, graph };
+};
+
+const T0 = Date.parse('2026-08-01T00:00:00.000Z');
+const evAt = (ticket, to, secs) =>
+  JSON.stringify({ ts: new Date(T0 + secs * 1000).toISOString(), event: 'status_change', ticket, from: null, to, pr: 1 });
+
+test('the estimate is the per-repo median of merged PR lifetimes', () => {
+  const fs = require('fs');
+  const { graph } = tmpGraph('shipyard-ciest-');
+  fs.writeFileSync(path.join(graph, 'delivery-log.jsonl'), [
+    // this repo (no `repo` field): lifetimes 100, 300, 200 → median 200
+    evAt('H-1', 'pr-open', 0), evAt('H-1', 'merged', 100),
+    evAt('H-2', 'pr-open', 0), evAt('H-2', 'merged', 300),
+    evAt('H-3', 'pr-open', 0), evAt('H-3', 'merged', 200),
+    // a sibling repo, even sample count: 100, 200 → median 150
+    evAt('S-1', 'pr-open', 0), evAt('S-1', 'merged', 100),
+    evAt('S-2', 'pr-open', 0), evAt('S-2', 'merged', 200),
+    // opened but never merged: no lifetime to measure, contributes nothing
+    evAt('N-1', 'pr-open', 0),
+    '',
+  ].join('\n'));
+  const tickets = {
+    'H-1': {}, 'H-2': {}, 'H-3': {},
+    'S-1': { repo: 'o/side' }, 'S-2': { repo: 'o/side' },
+    'N-1': {},
+    'H-next': {},
+    'S-next': { repo: 'o/side' },
+    'X-next': { repo: 'o/never-seen' },
+  };
+  const est = ciEstimates(graph, tickets);
+  assert.strictEqual(est['H-next'], 200, 'odd sample count → the middle value');
+  assert.strictEqual(est['S-next'], 150, 'even sample count → the mean of the middle pair');
+  assert.strictEqual(est['X-next'], 0, 'a repo with no merged sample estimates nothing');
+  // Grouping is by REPO: a phase spanning two repos has two unrelated pipelines,
+  // and a median from one says nothing about the other.
+  assert.strictEqual(est['N-1'], 200, "an unmerged ticket still gets its own repo's median");
+});
+
+test('a missing journal estimates 0 for everyone and never throws', () => {
+  const { graph } = tmpGraph('shipyard-ciest-none-');
+  assert.deepStrictEqual(ciEstimates(graph, { A: {}, B: { repo: 'o/x' } }), { A: 0, B: 0 });
+});
+
+test('a torn journal line costs one sample, not the estimate', () => {
+  const fs = require('fs');
+  const { graph } = tmpGraph('shipyard-ciest-torn-');
+  fs.writeFileSync(path.join(graph, 'delivery-log.jsonl'), [
+    evAt('H-1', 'pr-open', 0), evAt('H-1', 'merged', 100),
+    '{"ts":"2026-08-01T00:00:00.000Z","event":"status_ch',  // a half-written append
+    evAt('H-2', 'pr-open', 0), evAt('H-2', 'merged', 300),
+    '',
+  ].join('\n'));
+  // state-sync appends under a lock this read does not take, so a torn tail is
+  // reachable; it must cost a sample rather than the whole front.
+  assert.strictEqual(ciEstimates(graph, { 'H-1': {}, 'H-2': {}, 'H-3': {} })['H-3'], 200);
+});
+
+suite('front — the CLI and state-sync order the same graph the same way');
+
+test('the CLI derives ci_estimates from the journal, exactly as state-sync does', () => {
+  const fs = require('fs');
+  const { spawnSync } = require('child_process');
+  const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
+  const { dir, graph } = tmpGraph('shipyard-frontci-');
+
+  fs.writeFileSync(path.join(graph, 'delivery-log.jsonl'), [
+    evAt('T-01-90', 'pr-open', 0), evAt('T-01-90', 'merged', 3000),
+    evAt('T-01-91', 'pr-open', 0), evAt('T-01-91', 'merged', 100),
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({
+    tickets: {
+      'T-01-90': { phase: '1', repo: 'o/slow' },
+      'T-01-91': { phase: '1', repo: 'o/fast' },
+      'Z-slow': { phase: '1', repo: 'o/slow' },
+      'A-fast': { phase: '1', repo: 'o/fast' },
+    },
+  }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({
+    'T-01-90': { status: 'merged' },
+    'T-01-91': { status: 'merged' },
+    'Z-slow': { status: 'pending', ready: true },
+    'A-fast': { status: 'pending', ready: true },
+  }));
+
+  const out = spawnSync('node', [path.join(SCRIPTS, 'front.cjs'), '--json'], { cwd: dir, encoding: 'utf8' });
+  assert.strictEqual(out.status, 0, out.stderr);
+  // Nothing here is distinguishable except the journal: same phase, no
+  // dependencies, no stack. An id-only order would read ['A-fast', 'Z-slow'].
+  assert.deepStrictEqual(
+    JSON.parse(out.stdout).actionable.execute, ['Z-slow', 'A-fast'],
+    'the CLI must order by the journal-derived estimate, not by the id'
+  );
+});
+
+test('state-sync passes ci_estimates too — one graph, one ordering', () => {
+  const fs = require('fs');
+  // The CLI half is covered behaviourally above; state-sync itself needs live
+  // `gh`, so its half of the same defect is asserted on the source. The defect
+  // this guards is recorded in front.cjs's own CLI comment: state-sync passed
+  // options the CLI did not, and the same graph produced two different answers
+  // depending on which command you ran.
+  const src = fs.readFileSync(path.join(
+    __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'
+  ), 'utf8');
+  assert.ok(/\bciEstimates\b/.test(src), 'state-sync must import ciEstimates from front.cjs');
+  assert.ok(
+    /ci_estimates:\s*ciEstimates\(/.test(src),
+    'state-sync must pass ci_estimates into computeFront, or it and the CLI disagree'
+  );
 });
 
 done();
