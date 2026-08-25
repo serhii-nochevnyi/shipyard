@@ -371,9 +371,10 @@ checkout now refuses instead of quietly starting a second journal there; one
 `.planning/` in a borrowed repository where nothing would ever read it.
 The same flag and the same spelling reach everything else that touches that
 journal: `failure-signature.cjs verdict|rerun|lift`, `attempt-history.cjs` and
-`escalation-record.cjs`. The first two refuse in the same words as log-event does;
-escalation-record fails on a missing `delivery-state.json` instead — a different
-message for the same cause. The refusal matters most on the READING side: "no
+`escalation-record.cjs mark`/`mark-plan-defect` — all four refuse outright
+without it (escalation-record gained the same fail-closed `tickets.json` guard
+this same phase; `clear`/`list` stay permissive since they read or no-op rather
+than park a verdict nowhere). The refusal matters most on the READING side: "no
 prior attempts" answered from the wrong directory is indistinguishable from a
 fresh ticket, which is exactly how a fixer re-proposes a fix that already failed.
 `failure-signature.cjs compute` is the one exception, by design: it reads a log

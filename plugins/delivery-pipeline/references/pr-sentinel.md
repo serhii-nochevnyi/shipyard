@@ -21,11 +21,13 @@ else is going to come back for them.
   touches the delivery journal needs it by name once you are standing in a
   worktree — a worktree has no `.planning/` of its own — so pass
   `--graph <project>/.planning/graph` to `failure-signature.cjs verdict|rerun|lift`,
-  `attempt-history.cjs`, `log-event.cjs` and `escalation-record.cjs`. The first
-  three refuse outright without it; escalation-record fails on a missing
-  `delivery-state.json` instead. None of them answers from nowhere, and on the
-  reading side that is the point: "no prior attempts" read out of a worktree is
-  indistinguishable from a fresh ticket.
+  `attempt-history.cjs`, `log-event.cjs` and `escalation-record.cjs mark` /
+  `mark-plan-defect`. All of them refuse outright without it — `escalation-record`
+  gained the same fail-closed `tickets.json` guard as the others this same phase
+  (`clear`/`list` stay permissive; they read or no-op, they never park a verdict
+  nowhere). None of them answers from nowhere, and on the reading side that is
+  the point: "no prior attempts" read out of a worktree is indistinguishable from
+  a fresh ticket.
 
 ## The loop (repeat until your duty list is clear)
 
