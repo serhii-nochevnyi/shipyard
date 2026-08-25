@@ -82,6 +82,36 @@ test('an escalation with no reason is refused', () => {
     'nothing is written on refusal');
 });
 
+test('a blank reason is refused too — the guard reads the value, not the argument count', () => {
+  // `mark T ""` used to EXIT 0 and store `"reason": ""`: the check tested the
+  // positional ARRAY's length, and one empty-string argument makes that array
+  // non-empty while leaving nothing a human could read. Its sibling
+  // `mark-plan-defect` had already been given the joined-and-trimmed check; the
+  // older, more-used path had not. Reproduced on the merged epic before the fix.
+  for (const words of [[''], ['   '], ['', '  ']]) {
+    const dir = project();
+    const r = run(dir, ['mark', 'T-16-05', ...words]);
+    assert.equal(r.status, 1, `must refuse ${JSON.stringify(words)} (exit ${r.status})`);
+    assert.ok(/reason/i.test(r.stderr), 'and say why');
+    assert.ok(!fs.existsSync(path.join(dir, '.planning', 'graph', 'escalations.json')),
+      `nothing is written on refusal for ${JSON.stringify(words)}`);
+    assert.ok(!fs.existsSync(path.join(dir, '.planning', 'graph', 'delivery-log.jsonl')),
+      `and nothing is journalled either for ${JSON.stringify(words)}`);
+  }
+});
+
+test('a real reason still gets through, stored as the joined string', () => {
+  // The guard must reject blankness and nothing else — a reason containing an
+  // empty argument in the middle is still a reason.
+  const dir = project();
+  const r = run(dir, ['mark', 'T-16-05', 'auth', '', 'token', 'expired']);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  const rec = JSON.parse(
+    fs.readFileSync(path.join(dir, '.planning', 'graph', 'escalations.json'), 'utf8')
+  ).tickets['T-16-05'];
+  assert.equal(rec.reason, 'auth  token expired', 'the arguments are joined, not re-flowed');
+});
+
 test('an unknown ticket is refused rather than parked into the void', () => {
   const r = run(project(), ['mark', 'T-99-99', 'typo', 'in', 'the', 'id']);
   assert.equal(r.status, 1, 'must refuse');
@@ -233,6 +263,25 @@ test('an all-whitespace reason is refused, not stored as empty', () => {
   assert.ok(/reason/.test(r.stderr));
   assert.ok(!fs.existsSync(path.join(dir, '.planning', 'graph', 'escalations.json')),
     'nothing is written on refusal');
+});
+
+test('the two subcommands refuse blankness the same way — they cannot re-diverge silently', () => {
+  // The condition was a COPY, which is how it came to be `!reason.length` at one
+  // call site and `!reason.join(' ').trim().length` at the other. Pinning both
+  // against the same inputs is what makes a future one-sided edit fail here.
+  for (const blank of ['', '   ']) {
+    const mark = run(project(), ['mark', 'T-16-05', blank]);
+    const { dir, plan } = planned();
+    const defect = run(dir, ['mark-plan-defect', 'T-16-05', plan, blank]);
+    assert.equal(mark.status, 1, `mark must refuse ${JSON.stringify(blank)}`);
+    assert.equal(defect.status, 1, `mark-plan-defect must refuse ${JSON.stringify(blank)}`);
+    assert.ok(!fs.existsSync(path.join(dir, '.planning', 'graph', 'escalations.json')),
+      'and neither writes a record');
+    // The TEXT stays different on purpose: one reader is unblocking a PR, the
+    // other is deciding how to re-plan. Only the verdict is shared.
+    assert.ok(/plan/i.test(defect.stderr), 'the plan-defect message still names the plan');
+    assert.notEqual(mark.stderr, defect.stderr, 'each keeps its own words for its own reader');
+  }
 });
 
 test('--signature followed by another flag is refused, not swallowed as evidence', () => {
