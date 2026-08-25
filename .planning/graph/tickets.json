@@ -1,0 +1,169 @@
+{
+  "generated_by": "validate-graph.cjs — do not edit by hand",
+  "epics": {
+    "20": {
+      "branch": "epic/20-autonomy-of-the-drive-to-green-loop",
+      "base": null,
+      "repos": [
+        null
+      ]
+    }
+  },
+  "tickets": {
+    "T-20-01": {
+      "title": "Failure signature: normalize, history verdict, flake quarantine",
+      "plan": ".planning/phases/20-autonomy-of-the-drive-to-green-loop/20-01-PLAN.md",
+      "phase": "20",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/failure-signature.cjs",
+        "tests/unit/failure-signature.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-20-01-failure-signature-normalize-history-verd",
+      "epic": "epic/20-autonomy-of-the-drive-to-green-loop",
+      "primary_parent": null,
+      "pr_base": "epic/20-autonomy-of-the-drive-to-green-loop",
+      "jira": null
+    },
+    "T-20-02": {
+      "title": "Model ladder reads signature state, not attempts, for repair roles",
+      "plan": ".planning/phases/20-autonomy-of-the-drive-to-green-loop/20-02-PLAN.md",
+      "phase": "20",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-20-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "tests/unit/pipeline-config.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-20-02-model-ladder-reads-signature-state-not-a",
+      "epic": "epic/20-autonomy-of-the-drive-to-green-loop",
+      "primary_parent": "T-20-01",
+      "pr_base": "ticket/T-20-01-failure-signature-normalize-history-verd",
+      "jira": null
+    },
+    "T-20-03": {
+      "title": "plan_defect: the third terminal outcome in the escalation store",
+      "plan": ".planning/phases/20-autonomy-of-the-drive-to-green-loop/20-03-PLAN.md",
+      "phase": "20",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-20-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/escalation-record.cjs",
+        "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "tests/unit/escalation-record.test.cjs",
+        "tests/unit/log-event.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-20-03-plan-defect-the-third-terminal-outcome-i",
+      "epic": "epic/20-autonomy-of-the-drive-to-green-loop",
+      "primary_parent": "T-20-01",
+      "pr_base": "ticket/T-20-01-failure-signature-normalize-history-verd",
+      "jira": null
+    },
+    "T-20-04": {
+      "title": "Order the actionable front by unblocking power and CI length",
+      "plan": ".planning/phases/20-autonomy-of-the-drive-to-green-loop/20-04-PLAN.md",
+      "phase": "20",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "tests/unit/front.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-20-04-order-the-actionable-front-by-unblocking",
+      "epic": "epic/20-autonomy-of-the-drive-to-green-loop",
+      "primary_parent": null,
+      "pr_base": "epic/20-autonomy-of-the-drive-to-green-loop",
+      "jira": null
+    },
+    "T-20-05": {
+      "title": "Attempt history handed to fixers as input",
+      "plan": ".planning/phases/20-autonomy-of-the-drive-to-green-loop/20-05-PLAN.md",
+      "phase": "20",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/attempt-history.cjs",
+        "tests/unit/attempt-history.test.cjs",
+        "plugins/delivery-pipeline/workflows/fix-round.mjs",
+        "plugins/delivery-pipeline/references/ci-fix.md",
+        "plugins/delivery-pipeline/references/review-fix.md"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-20-05-attempt-history-handed-to-fixers-as-inpu",
+      "epic": "epic/20-autonomy-of-the-drive-to-green-loop",
+      "primary_parent": null,
+      "pr_base": "epic/20-autonomy-of-the-drive-to-green-loop",
+      "jira": null
+    },
+    "T-20-06": {
+      "title": "Wire the babysit loop to signature verdicts",
+      "plan": ".planning/phases/20-autonomy-of-the-drive-to-green-loop/20-06-PLAN.md",
+      "phase": "20",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-20-01",
+        "T-20-02",
+        "T-20-03",
+        "T-20-05"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/references/pr-sentinel.md",
+        "plugins/delivery-pipeline/.claude-plugin/plugin.json",
+        "capabilities/delivery-pipeline/capability.json"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-20-06-wire-the-babysit-loop-to-signature-verdi",
+      "epic": "epic/20-autonomy-of-the-drive-to-green-loop",
+      "primary_parent": "T-20-02",
+      "pr_base": "ticket/T-20-02-model-ladder-reads-signature-state-not-a",
+      "jira": null
+    }
+  }
+}
