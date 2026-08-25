@@ -319,8 +319,16 @@ function parseArgs(args) {
     const a = args[i];
     if (a === '--json') { flags.json = true; continue; }
     if (VALUE_FLAGS.has(a)) {
-      if (i + 1 >= args.length) usage(`${a} needs a value`);
-      flags[a.slice(2)] = args[++i];
+      // A following flag-shaped token (e.g. `--signature --head h1`) is not a
+      // value: consuming it silently used to make `--head` vanish and fail
+      // later with a confusing, unrelated error instead of naming the actual
+      // problem here. Found by Copilot's review of this PR.
+      const val = args[i + 1];
+      if (val === undefined || val.startsWith('--')) {
+        usage(`${a} needs a value (got ${val === undefined ? 'nothing' : `the flag "${val}"`})`);
+      }
+      flags[a.slice(2)] = val;
+      i++;
       continue;
     }
     if (a.startsWith('--')) usage(`unknown flag ${a}`);

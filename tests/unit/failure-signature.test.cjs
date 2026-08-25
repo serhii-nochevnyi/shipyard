@@ -432,6 +432,16 @@ test('verdict and rerun require the signature and the head', () => {
   assert.notEqual(run(['rerun', 'T-20-01', '--signature', 'aaaa', '--head', 'h1'], { cwd: project, encoding: 'utf8' }).status, 0);
 });
 
+test('a value-taking flag followed by another flag reports THAT flag as missing a value', () => {
+  // `--signature --head h1` used to consume "--head" as the signature, then
+  // fail later on a missing --head with a confusing, unrelated error. Found
+  // by Copilot's review of this PR.
+  const { project } = scratch();
+  const r = run(['verdict', 'T-20-01', '--signature', '--head', 'h1'], { cwd: project, encoding: 'utf8' });
+  assert.notEqual(r.status, 0);
+  assert.ok(/--signature needs a value/.test(r.stderr), r.stderr);
+});
+
 for (const [what, args] of [
   ['verdict', ['verdict', 'T-20-01', '--signature', 'aaaa', '--head', 'h1']],
   ['rerun', ['rerun', 'T-20-01', '--signature', 'aaaa', '--head', 'h1', '--outcome', 'green']],
