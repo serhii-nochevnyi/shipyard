@@ -432,6 +432,16 @@ test('verdict and rerun require the signature and the head', () => {
   assert.notEqual(run(['rerun', 'T-20-01', '--signature', 'aaaa', '--head', 'h1'], { cwd: project, encoding: 'utf8' }).status, 0);
 });
 
+test('a value-taking flag followed by another flag reports THAT flag as missing a value', () => {
+  // `--signature --head h1` used to consume "--head" as the signature, then
+  // fail later on a missing --head with a confusing, unrelated error. Found
+  // by Copilot's review of this PR.
+  const { project } = scratch();
+  const r = run(['verdict', 'T-20-01', '--signature', '--head', 'h1'], { cwd: project, encoding: 'utf8' });
+  assert.notEqual(r.status, 0);
+  assert.ok(/--signature needs a value/.test(r.stderr), r.stderr);
+});
+
 for (const [what, args] of [
   ['verdict', ['verdict', 'T-20-01', '--signature', 'aaaa', '--head', 'h1']],
   ['rerun', ['rerun', 'T-20-01', '--signature', 'aaaa', '--head', 'h1', '--outcome', 'green']],
@@ -454,6 +464,32 @@ for (const [what, args] of [
     const r = run(['--graph', graph, ...args], { cwd: worktree, encoding: 'utf8' });
     assert.equal(r.status, 0, `must succeed (${r.stderr})`);
     assert.ok(!fs.existsSync(path.join(worktree, '.planning')), 'and nothing lands in the worktree');
+  });
+}
+
+for (const [what, args] of [
+  ['verdict', ['verdict', 'T-20-01', '--signature', 'aaaa', '--head', 'h1']],
+  ['rerun', ['rerun', 'T-20-01', '--signature', 'aaaa', '--head', 'h1', '--outcome', 'green']],
+  ['lift', ['lift', 'T-20-01', '--signature', 'aaaa']],
+]) {
+  // Copilot's finding on this PR: `--graph` with no value read as "explicit"
+  // regardless, because the old check only tested flag PRESENCE. That resolved
+  // GRAPH_DIR to `path.resolve('')` (the cwd) and skipped the refusal below —
+  // a fixer's worktree cwd would silently become the graph dir.
+  test(`${what}: a --graph at the end with no value is a usage error, not a silent cwd fallback`, () => {
+    const { worktree } = scratch();
+    const r = run([...args, '--graph'], { cwd: worktree, encoding: 'utf8' });
+    assert.notEqual(r.status, 0, 'a missing value must not be treated as an explicit graph');
+    assert.ok(/--graph/.test(r.stderr), 'and the message names the flag');
+    assert.ok(!fs.existsSync(path.join(worktree, '.planning')), 'nothing is written to the wrong place');
+  });
+
+  test(`${what}: a --graph immediately followed by another flag is a usage error`, () => {
+    const { worktree } = scratch();
+    const r = run(['--graph', '--json', ...args], { cwd: worktree, encoding: 'utf8' });
+    assert.notEqual(r.status, 0, 'the next flag is not a directory value');
+    assert.ok(/--graph/.test(r.stderr));
+    assert.ok(!fs.existsSync(path.join(worktree, '.planning')), 'nothing is written to the wrong place');
   });
 }
 

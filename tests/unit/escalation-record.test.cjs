@@ -217,6 +217,32 @@ test('mark-plan-defect parks and journals in ONE act, kind-tagged', () => {
   assert.deepEqual(log[0].signatures, ['aaaa1111', 'bbbb2222']);
   assert.equal(log[0].plan_hash, rec.plan_hash, 'the journal carries the binding too');
   assert.equal(log[0].by, 'escalation-record');
+  // A journal-only morning audit (delivery-log.jsonl with no escalations.json)
+  // must still be able to identify WHICH plan the hash was bound to. Found by
+  // Copilot's review of this PR.
+  assert.equal(log[0].plan, plan, 'the journal carries the plan path too, not only its hash');
+});
+
+test('an all-whitespace reason is refused, not stored as empty', () => {
+  // The check used to test the positional ARRAY's length, so a single
+  // empty/blank-string argument passed it while leaving nothing a human could
+  // read. Found by Copilot's review of this PR.
+  const { dir, plan } = planned();
+  const r = run(dir, ['mark-plan-defect', 'T-16-05', plan, '   ']);
+  assert.equal(r.status, 1, 'must refuse');
+  assert.ok(/reason/.test(r.stderr));
+  assert.ok(!fs.existsSync(path.join(dir, '.planning', 'graph', 'escalations.json')),
+    'nothing is written on refusal');
+});
+
+test('--signature followed by another flag is refused, not swallowed as evidence', () => {
+  // `--signature --signature abc` used to record the literal string
+  // "--signature" as a signature, because the value check only caught undefined.
+  // Found by Copilot's review of this PR.
+  const { dir, plan } = planned();
+  const r = run(dir, ['mark-plan-defect', 'T-16-05', plan, '--signature', '--signature', 'the plan is wrong']);
+  assert.equal(r.status, 1, 'must refuse');
+  assert.ok(/--signature needs a value/.test(r.stderr), r.stderr);
 });
 
 test('--signature is collected from any position, distinct only, never into the reason', () => {
@@ -342,6 +368,31 @@ test('--graph records into the PROJECT from a worktree cwd, in any position', ()
   assert.ok(storeOf(dir)['T-16-05'], 'the park is in the project store');
   assert.ok(!fs.existsSync(path.join(elsewhere, '.planning')),
     'and no stray .planning appears in the borrowed checkout');
+});
+
+test('mark-plan-defect refuses a cwd with no ticket graph, and names --graph', () => {
+  // Unlike drift-record.cjs and log-event.cjs, this write path had no fail-closed
+  // tickets.json guard: a worktree carrying a stray/tracked delivery-state.json
+  // would succeed silently while state-sync and the front read the PROJECT graph,
+  // losing the verdict. Found by Copilot's review of this PR.
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-escal-nowt-'));
+  fs.writeFileSync(path.join(elsewhere, 'plan.md'), PLAN_BODY);
+  const r = run(elsewhere, ['mark-plan-defect', 'T-16-05', path.join(elsewhere, 'plan.md'), 'no ticket graph here']);
+  assert.equal(r.status, 1, 'must refuse');
+  assert.ok(/no ticket graph/.test(r.stderr), r.stderr);
+  assert.ok(/--graph/.test(r.stderr), 'and name the flag that fixes it');
+  assert.ok(!fs.existsSync(path.join(elsewhere, '.planning')), 'nothing is written to the wrong place');
+});
+
+test('a --graph with no value, or one followed by another flag, is a usage error', () => {
+  const { dir, plan } = planned();
+  const missing = run(dir, ['mark-plan-defect', 'T-16-05', plan, 'reason text', '--graph']);
+  assert.notEqual(missing.status, 0, 'a missing value must not resolve to two levels above cwd');
+  assert.ok(/--graph/.test(missing.stderr), missing.stderr);
+
+  const flagged = run(dir, ['--graph', '--signature', 'mark-plan-defect', 'T-16-05', plan, 'reason text']);
+  assert.notEqual(flagged.status, 0, 'a flag is not a directory value');
+  assert.ok(/--graph/.test(flagged.stderr), flagged.stderr);
 });
 
 test('clear takes back a plan defect, and list names the kind', () => {

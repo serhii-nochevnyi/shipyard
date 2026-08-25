@@ -175,7 +175,10 @@ function takeSignatures(args) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--signature') {
       const v = args[++i];
-      if (!v) fail('--signature needs a value — it is the evidence the verdict rests on');
+      // A following flag (e.g. `--signature --signature abc123`) is not a value:
+      // consuming it would record the literal string "--signature" as evidence.
+      // Found by Copilot's review of this PR.
+      if (!v || v.startsWith('--')) fail('--signature needs a value — it is the evidence the verdict rests on');
       sigs.push(v);
       continue;
     }
@@ -189,9 +192,34 @@ function takeSignatures(args) {
 if (require.main === module) {
   const argv = process.argv.slice(2);
   const gIdx = argv.indexOf('--graph');
-  const cwd = gIdx === -1 ? process.cwd() : path.resolve(argv[gIdx + 1] || '', '..', '..');
+  // A `--graph` with no value, or one immediately followed by another flag, is
+  // not a directory: resolving it anyway (the old `|| ''` fallback resolved to
+  // TWO levels above cwd) would read/write escalations.json in a directory
+  // nobody asked for, silently. Same class of bug already fixed this round in
+  // failure-signature.cjs and attempt-history.cjs; found here by Copilot's
+  // review of this PR.
+  if (gIdx !== -1) {
+    const val = argv[gIdx + 1];
+    if (val === undefined || val.startsWith('--')) {
+      fail(`--graph needs a directory value (got ${val === undefined ? 'nothing' : `the flag "${val}"`})`);
+    }
+  }
+  const cwd = gIdx === -1 ? process.cwd() : path.resolve(argv[gIdx + 1], '..', '..');
   if (gIdx !== -1) argv.splice(gIdx, 2);
+  // Fail-closed, matching drift-record.cjs/log-event.cjs's convention (CLAUDE.md,
+  // "the two durable stores"): a mark/mark-plan-defect run from a ticket worktree
+  // that happens to carry a stray/tracked delivery-state.json would otherwise
+  // succeed silently while state-sync and the front read the PROJECT graph,
+  // losing the verdict. `list`/`clear` are read/no-op-safe and stay permissive —
+  // only the write paths need the refusal.
   const [cmd, ...rest] = argv;
+  if ((cmd === 'mark' || cmd === 'mark-plan-defect') && gIdx === -1 && !fs.existsSync(path.join(graphDir(cwd), 'tickets.json'))) {
+    fail(
+      `no ticket graph at ${graphDir(cwd)} — refusing to record a verdict nothing will read.\n` +
+      '  state-sync and the front read the PROJECT\'s graph; one written elsewhere is invisible to them.\n' +
+      '  Run this from the conveyor project, or pass --graph <project>/.planning/graph.'
+    );
+  }
 
   if (cmd === 'mark') {
     const [ticket, ...reason] = rest;
@@ -237,8 +265,11 @@ if (require.main === module) {
       fail('usage: escalation-record.cjs mark-plan-defect <ticket> <plan-path> <reason...> [--signature <sig>]... [--graph <dir>]');
     }
     // Same guard as `mark`, different words on purpose: this reason is read by
-    // someone deciding how to RE-PLAN, not how to unblock a PR.
-    if (!reason.length) {
+    // someone deciding how to RE-PLAN, not how to unblock a PR. Checked on the
+    // JOINED, TRIMMED string, not the argument count — `mark-plan-defect T plan
+    // ""` has a non-empty positional array but nothing a human could read. Found
+    // by Copilot's review of this PR.
+    if (!reason.join(' ').trim().length) {
       fail(
         'a plan defect with no reason is a dead end for whoever picks it up in the morning.\n' +
         '  They inherit ONLY this string and the signatures: say what the PLAN got wrong,\n' +
@@ -275,6 +306,7 @@ if (require.main === module) {
         ticket,
         pr: s.pr || null,
         reason: reason.join(' '),
+        plan: planAbs,
         signatures,
         plan_hash: hash,
         by: 'escalation-record',
