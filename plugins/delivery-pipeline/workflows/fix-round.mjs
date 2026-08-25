@@ -14,6 +14,11 @@ export const meta = {
 //       planPath,        // ticket contract, for scope discipline
 //       needsCiFix,      // bool — checks are failing
 //       needsReviewFix,  // bool — unresolved review threads exist
+//       attemptHistory,  // optional PRE-RENDERED record of what already failed on this
+//                        // ticket — the output of `attempt-history.cjs <ticket>`, run by
+//                        // the ORCHESTRATOR (this path builds prompts deterministically
+//                        // and must not shell out). Absent on a first attempt, and an
+//                        // entry without it builds exactly the prompt it always did.
 //       model,           // optional tier alias; default "opus"
 //       effort,          // optional reasoning effort; from `pipeline-config.cjs model … --json`
 //     } ],
@@ -22,7 +27,14 @@ export const meta = {
 //     reinitScript,      // abs path to scripts/reviewers.cjs
 //     artifactLanguage,  // optional; language for shipped artifacts (default English)
 //   }
-// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes } ]
+// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis } ]
+//
+// A fresh agent per attempt is right for context hygiene and is exactly why
+// attempt 3 can re-propose attempt 1's failed fix. `attemptHistory` in, and
+// `hypothesis` out, are the two halves of the remedy: the orchestrator records
+// the reported hypothesis on the attempt event, and attempt-history renders it
+// back to the NEXT fixer as data. A round that reports only what it changed
+// leaves the round after it guessing from scratch.
 //
 // This is ONE round. The main loop keeps control of everything stateful:
 // attempts counter, CI waits, arch-review, the conform gate, and human
@@ -46,13 +58,17 @@ export const meta = {
 const OUT = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'pr', 'pushed', 'status', 'notes'],
+  required: ['id', 'pr', 'pushed', 'status', 'notes', 'hypothesis'],
   properties: {
     id: { type: 'string' },
     pr: { type: 'integer' },
     pushed: { type: 'boolean' },
     status: { enum: ['fixed', 'no-op', 'escalate'] },
     notes: { type: 'string', description: 'what was wrong, what changed + verification evidence, or the escalation reason' },
+    hypothesis: {
+      type: 'string',
+      description: 'one sentence: what you believed was wrong and what the fix targets; for no-op or escalate, why. Required — it is recorded on the attempt and handed to the next fixer as the record of what has already been tried',
+    },
   },
 }
 
@@ -85,6 +101,18 @@ return await parallel(
       `Ticket contract (respect Scope / Out of scope STRICTLY): ${p.planPath}.`,
       ``,
     ]
+    // Only when there IS a record. A first attempt gets exactly the prompt it
+    // always got — an empty history stated as a section would read as evidence
+    // that nothing was tried, which is a claim, not an absence.
+    if (p.attemptHistory) {
+      steps.push(
+        `Prior attempts on this PR — a deterministic record of what was already tried and did not hold:`,
+        p.attemptHistory,
+        ``,
+        `This record is INPUT, not background. You MUST NOT re-propose a fix a prior attempt already tried: if your best hypothesis matches one that is already in the record, form a DIFFERENT one — re-read the ticket contract, widen the context, raise the hypothesis above the symptom. If every plausible hypothesis is exhausted, return status "escalate" rather than cycling through a failed one again.`,
+        ``
+      )
+    }
     if (p.needsCiFix) {
       steps.push(
         `A) CI is failing. Read your ci-fix instructions and output rules from: ${ciRef}.`,
@@ -107,7 +135,11 @@ return await parallel(
       `If nothing needed doing: status "no-op".`,
       `Return the result for PR #${p.pr}.`
     )
-    const fixFallback = (why) => ({ id: p.id, pr: p.pr, pushed: false, status: 'escalate', notes: why })
+    // Locally constructed results must satisfy the same shape the consumers read,
+    // `hypothesis` included — and an invented one would be worse than none: it
+    // would enter the record as something that was tried and ruled out. Say what
+    // is actually known instead.
+    const fixFallback = (why, hypothesis) => ({ id: p.id, pr: p.pr, pushed: false, status: 'escalate', notes: why, hypothesis })
     return agent(steps.join('\n'), {
       label: `fix:${p.id}#${p.pr}`,
       phase: 'Fix',
@@ -117,7 +149,12 @@ return await parallel(
       agentType: 'general-purpose',
       schema: OUT,
     })
-      .then((r) => (r ? { ...r, id: p.id, pr: p.pr } : fixFallback('fixer agent died — re-dispatch')))
-      .catch((e) => fixFallback(`fixer errored (${e && e.message ? e.message : e}) — re-dispatch`))
+      .then((r) => (r
+        ? { ...r, id: p.id, pr: p.pr }
+        : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one')))
+      .catch((e) => fixFallback(
+        `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
+        'unknown — the fixer errored before reporting one'
+      ))
   })
 )
