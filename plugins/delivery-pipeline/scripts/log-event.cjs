@@ -31,6 +31,23 @@ const path = require('path');
 //   3. fail, saying where the event was about to go and why nobody would read it
 function resolveGraphDir(argv) {
   const flagAt = argv.indexOf('--graph');
+  // One spelling has to mean one PARSER — the same guard, in the same words, as
+  // drift-record.cjs and escalation-record.cjs. A flag-shaped token is not a
+  // directory: `--graph --json` used to resolve a directory literally called
+  // "--json" AND count as explicit, so the refusal below was skipped and the
+  // event was filed where pipeline-stats never looks, under `logged attempt`.
+  // A trailing `--graph` was worse than useless: it fell back to the cwd, i.e.
+  // the caller who passed the flag got the very default it was passed to
+  // override. Exit 1, with the refusal below rather than the exit-2 usage
+  // errors: this is "refusing to write where nobody will read", not a mistyped
+  // key=value pair.
+  if (flagAt !== -1) {
+    const val = argv[flagAt + 1];
+    if (val === undefined || val.startsWith('--')) {
+      console.error(`log-event: --graph needs a directory value (got ${val === undefined ? 'nothing' : `the flag "${val}"`})`);
+      process.exit(1);
+    }
+  }
   const explicit = flagAt !== -1 ? argv[flagAt + 1] : process.env.SHIPYARD_GRAPH_DIR;
   if (explicit) return { dir: path.resolve(explicit), explicit: true };
   return { dir: path.join(process.cwd(), '.planning', 'graph'), explicit: false };
