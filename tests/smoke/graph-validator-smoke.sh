@@ -308,6 +308,48 @@ plan crossphase '01-a/01-PLAN.md' T-01-01 '' 'src/shared/hot.ts' REQ-1
 plan crossphase '02-b/01-PLAN.md' T-02-01 '' 'src/shared/hot.ts' REQ-2
 rejects crossphase 'RE-SLICE' "a cross-phase contested path demands a re-slice"
 rejects crossphase 'cannot cascade' "and says why a dependency would not work"
+
+# A DELIVERED phase must not own its files forever. Same clash as `crossphase`
+# above, except phase 01 is already merged: its diff has landed, so there is
+# nothing left for it to write and nothing to collide with. Without this, the
+# second phase to touch any module is rejected and the reader is sent at a
+# remedy that cannot exist — the path legitimately belongs to both phases, at
+# different times.
+mkproj mergedphase
+plan mergedphase '01-a/01-PLAN.md' T-01-01 '' 'src/shared/hot.ts' REQ-1
+plan mergedphase '02-b/01-PLAN.md' T-02-01 '' 'src/shared/hot.ts' REQ-2
+mkdir -p "$WORK/mergedphase/.planning/graph"
+printf '{"tickets":{"T-01-01":{"status":"merged"}}}\n' \
+  > "$WORK/mergedphase/.planning/graph/delivery-state.json"
+if out="$(run_validator mergedphase)"; then
+  grep -q 'validate-graph: OK' <<<"$out" \
+    && ok "a merged ticket does not contest a path a later phase needs" \
+    || bad "a merged ticket does not contest a path a later phase needs (wrong reason)" "$out"
+else
+  bad "a merged ticket does not contest a path a later phase needs" "expected exit 0, got:
+$out"
+fi
+
+# ...but only `merged`. Live work with an unwritten diff still contests, or the
+# gate would switch itself off for every ticket that merely has a branch.
+mkproj openphase
+plan openphase '01-a/01-PLAN.md' T-01-01 '' 'src/shared/hot.ts' REQ-1
+plan openphase '02-b/01-PLAN.md' T-02-01 '' 'src/shared/hot.ts' REQ-2
+mkdir -p "$WORK/openphase/.planning/graph"
+printf '{"tickets":{"T-01-01":{"status":"pr-open"}}}\n' \
+  > "$WORK/openphase/.planning/graph/delivery-state.json"
+rejects openphase 'contested path' "an OPEN ticket still contests — only merged work is spent"
+
+# A state file that is missing, empty or corrupt must leave every ticket LIVE.
+# Failing open here would let an unreadable byte disable the file-overlap
+# guarantee for a whole project, silently.
+mkproj corruptstate
+plan corruptstate '01-a/01-PLAN.md' T-01-01 '' 'src/shared/hot.ts' REQ-1
+plan corruptstate '02-b/01-PLAN.md' T-02-01 '' 'src/shared/hot.ts' REQ-2
+mkdir -p "$WORK/corruptstate/.planning/graph"
+printf 'not json at all' > "$WORK/corruptstate/.planning/graph/delivery-state.json"
+rejects corruptstate 'contested path' "an unreadable delivery-state leaves every ticket live"
+
 out="$(run_validator crossphase 2>&1 || true)"
 if grep -q 'add a dependency between them' <<<"$out"; then
   bad "a cross-phase clash must NOT suggest adding a dependency" "$out"

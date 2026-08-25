@@ -34,6 +34,17 @@ script — not in a prompt.** Every requirement below is an instance of it.
   narrowed matcher) and REPORTED as a `gate_status:` trailer. Reporting first,
   blocking only once field data shows the false-positive rate.
 
+- **REQ-08** — A park is described to the human by the STORE that owns it, so a
+  new park kind cannot be rendered with another kind's lifting rule.
+- **REQ-09** — A guard that rejects an unusable value checks the VALUE, not the
+  shape of the argument list around it.
+- **REQ-10** — Every script sharing the `--graph` spelling shares its parsing,
+  including the refusal to swallow a following flag as the value.
+- **REQ-11** — A lock is held from the instant it exists, so a writer still
+  announcing itself is never mistaken for a dead one.
+- **REQ-12** — A test that cannot fail is a defect: the harness must fail an
+  asynchronous test that throws, rather than reporting it green.
+
 ## Phases
 
 ### Phase 20: Autonomy of the drive-to-green loop
@@ -52,3 +63,21 @@ Deferred deliberately. REQ-07 is the largest value in the programme and the only
 item that can be WRONG about correct work, so it ships as a report and earns its
 blocking status with evidence. REQ-06 needs phase 20 first: pre-authorization is
 only worth having once the night reliably reaches morning.
+
+### Phase 22: Close what phase 20 left open
+**Requirements**: REQ-08, REQ-09, REQ-10, REQ-11, REQ-12
+
+Repair debt surfaced BY delivering phase 20 — five defects the run found in
+code phase 20 touched or stood next to, all recorded in
+`.planning/backlog/phase-20-followups.md` and re-verified against the merged
+epic before being planned. Sequenced BEFORE phase 21 despite the higher number:
+21 ships a judgement (REQ-07) that must not be built on a harness which cannot
+fail a test, nor on a park message that states its own opposite.
+
+Two of the five are worse than they were reported. The renderer contradiction
+(REQ-08) is a rule stated backwards to the one person who has to act on it. And
+the harness (REQ-12) does not merely have vacuous tests: `test(name, fn)` calls
+`fn()` inside a `try`, so ANY asynchronous body reports green before its
+assertions run — proven with two async tests asserting `1 === 2`, both of which
+print a tick. Today that hides exactly two cases, and both pass once made to run;
+the value is closing the class before the next async test is written.

@@ -298,6 +298,30 @@ function overlaps(a, b) {
   if (!pa || !pb) return true; // bare glob like "**" overlaps everything
   return pa === pb || pa.startsWith(pb + '/') || pb.startsWith(pa + '/');
 }
+// A MERGED ticket cannot contest a path: its work has already landed, so there
+// is nothing left for it to write and nothing for a future ticket to collide
+// with. Without this, a delivered phase owns its files forever — the second
+// phase to touch any module is rejected, and the message sent the reader at a
+// remedy that does not exist ("RE-SLICE so the path belongs to one phase") for
+// a path that legitimately belongs to both, at different times.
+//
+// Only `merged` qualifies. `branched`/`pr-open`/`ready` are live work with an
+// unwritten diff and MUST still contest. The state is state-sync's, rebuilt from
+// GitHub; when it is absent, unreadable, or silent about a ticket, that ticket
+// is treated as LIVE — a missing file must not quietly switch the gate off.
+const mergedIds = (() => {
+  const out = new Set();
+  try {
+    const raw = fs.readFileSync(path.join(GRAPH_DIR, 'delivery-state.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    const rows = parsed && parsed.tickets ? parsed.tickets : parsed;
+    for (const [id, row] of Object.entries(rows || {})) {
+      if (row && row.status === 'merged') out.add(id);
+    }
+  } catch { /* no state, or unreadable: every ticket stays live */ }
+  return out;
+})();
+
 if (acyclic) {
   const contested = new Map();
   const ids = Object.keys(tickets).sort();
@@ -306,6 +330,7 @@ if (acyclic) {
       const a = tickets[ids[i]];
       const b = tickets[ids[j]];
       if (ancestors[a.id].has(b.id) || ancestors[b.id].has(a.id)) continue;
+      if (mergedIds.has(a.id) || mergedIds.has(b.id)) continue;
       // Different repositories = different file systems: an identical path in two
       // repos is not a conflict, and treating it as one would force a bogus
       // dependency between a backend and a frontend ticket.

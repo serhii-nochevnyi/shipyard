@@ -7,6 +7,13 @@
       "repos": [
         null
       ]
+    },
+    "22": {
+      "branch": "epic/22-close-what-phase-20-left-open",
+      "base": null,
+      "repos": [
+        null
+      ]
     }
   },
   "tickets": {
@@ -163,6 +170,127 @@
       "epic": "epic/20-autonomy-of-the-drive-to-green-loop",
       "primary_parent": "T-20-02",
       "pr_base": "ticket/T-20-02-model-ladder-reads-signature-state-not-a",
+      "jira": null
+    },
+    "T-22-01": {
+      "title": "A park is described by the store that owns it",
+      "plan": ".planning/phases/22-close-what-phase-20-left-open/22-01-PLAN.md",
+      "phase": "22",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/escalation-record.cjs",
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/unit/front.test.cjs",
+        "tests/unit/escalation-record.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-22-01-a-park-is-described-by-the-store-that-ow",
+      "epic": "epic/22-close-what-phase-20-left-open",
+      "primary_parent": null,
+      "pr_base": "epic/22-close-what-phase-20-left-open",
+      "jira": null
+    },
+    "T-22-02": {
+      "title": "A reason guard checks the value, not the argument count",
+      "plan": ".planning/phases/22-close-what-phase-20-left-open/22-02-PLAN.md",
+      "phase": "22",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-22-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/escalation-record.cjs",
+        "tests/unit/escalation-record.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-22-02-a-reason-guard-checks-the-value-not-the",
+      "epic": "epic/22-close-what-phase-20-left-open",
+      "primary_parent": "T-22-01",
+      "pr_base": "ticket/T-22-01-a-park-is-described-by-the-store-that-ow",
+      "jira": null
+    },
+    "T-22-03": {
+      "title": "One --graph spelling means one --graph parser",
+      "plan": ".planning/phases/22-close-what-phase-20-left-open/22-03-PLAN.md",
+      "phase": "22",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/drift-record.cjs",
+        "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "tests/unit/record-stores.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-22-03-one-graph-spelling-means-one-graph-parse",
+      "epic": "epic/22-close-what-phase-20-left-open",
+      "primary_parent": null,
+      "pr_base": "epic/22-close-what-phase-20-left-open",
+      "jira": null
+    },
+    "T-22-04": {
+      "title": "A lock is held from the instant it exists",
+      "plan": ".planning/phases/22-close-what-phase-20-left-open/22-04-PLAN.md",
+      "phase": "22",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/lock.cjs",
+        "tests/unit/lock.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "branch": "ticket/T-22-04-a-lock-is-held-from-the-instant-it-exist",
+      "epic": "epic/22-close-what-phase-20-left-open",
+      "primary_parent": null,
+      "pr_base": "epic/22-close-what-phase-20-left-open",
+      "jira": null
+    },
+    "T-22-05": {
+      "title": "The harness must be able to fail an asynchronous test",
+      "plan": ".planning/phases/22-close-what-phase-20-left-open/22-05-PLAN.md",
+      "phase": "22",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "tests/unit/assert-harness.cjs",
+        "tests/unit/harness.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-22-05-the-harness-must-be-able-to-fail-an-asyn",
+      "epic": "epic/22-close-what-phase-20-left-open",
+      "primary_parent": null,
+      "pr_base": "epic/22-close-what-phase-20-left-open",
       "jira": null
     }
   }
