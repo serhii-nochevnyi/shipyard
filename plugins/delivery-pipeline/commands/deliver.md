@@ -148,9 +148,12 @@ SENTINEL    ci-fix / review-fix / arch-review / undraft / merge / wait-ci
   'general-purpose', model, ... })` whose prompt is
   `${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md` plus the guarded ticket list
   (id, PR, branch, worktree path, repo, base, plan path), the absolute plugin
-  scripts path and `maxAttempts`. Model/effort:
-  `pipeline-config.cjs model pr-sentinel --json [--risk <max risk guarded>]
-  [--attempt <n>]`. Then go straight back to Step 3 for the cascade. Its report
+  scripts path, the project's `.planning/graph` path and `maxAttempts`.
+  Model/effort: `pipeline-config.cjs model pr-sentinel --json
+  [--risk <max risk guarded>] [--checkpoint] [--signature-state <verdict>]` — a
+  verdict exists only once a failure has been signed, so pass it when you re-post
+  a guard over a PR that keeps failing the same way (`repeat` holds the tier and
+  deepens the effort). Then go straight back to Step 3 for the cascade. Its report
   arrives as a task notification — fold it into Step 5.
   Re-post a guard for PRs opened after it started (or hand them to the running
   one with `SendMessage`); do not leave a PR unguarded.
@@ -204,19 +207,24 @@ writes the shared `.git`. Consequences you must honour:
 
 ## Agent models — ASK the resolver, do not reason it out
 
-The policy is **role × risk × attempt** routing, and it is now CODE, not prose:
+The policy is **role × risk** routing — plus, for the repair roles, the failure
+SIGNATURE's history instead of an attempt count — and it is CODE, not prose:
 
 ```text
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs model <role> [--json] [flags]
   roles: integrator | arch-review | executor | ci-fix | review-fix | pr-sentinel
          | drift-check | research
   flags: --risk low|medium|high  --type <plan type>  --files <n>
-         --attempt <n>  --checkpoint  --code-change|--no-code-change  --previous-failed
+         --checkpoint  --code-change|--no-code-change
+         --signature-state first|progress|repeat|flake_candidate|flake|plan_defect
+         --attempt <n>  --previous-failed   ← accepted, telemetry only (see below)
 ```
 
 Without `--json` it prints one **tier alias**; with `--json` it prints
-`{"model": "...", "effort": "..."}`. Pass BOTH on every spawn that supports them
-(Workflow's `agent()` takes `effort`; the args contracts carry `effort` per item).
+`{"model": "...", "effort": "..."}` — and a third field, `strategy`, whenever a
+valid `--signature-state` was passed. Pass model AND effort on every spawn that
+supports them (Workflow's `agent()` takes `effort`; the args contracts carry
+`effort` per item), and hand the `strategy` to the fixer as part of its input.
 
 Valid model values are the aliases `opus`, `sonnet`, `haiku`, `fable` — nothing
 else. **The Agent tool accepts tier aliases only; a full model ID
@@ -236,8 +244,9 @@ Mechanical roles stay cheap regardless. `minimal` is clamped to `low` (it is not
 in Workflow's enum) and `max` clamps to `xhigh` on the Codex runtime.
 
 The signals the resolver needs are already deterministic: `risk`/`type`/`files`
-from tickets.json (validated by Gate 2), `attempts` from the babysit cycle. The
-shape of the policy it implements:
+from tickets.json (validated by Gate 2), and — for a repair — the verdict
+`failure-signature.cjs verdict` computed from the journal. The shape of the
+policy it implements:
 
 ```text
 integrator     → opus     ALWAYS (emergent violations, most expensive errors)
@@ -248,18 +257,32 @@ executor       → opus     risk high/human_checkpoint, or medium (default)
                           if its PR later fails in babysit the repair goes down
                           the ladder below, so underestimation self-corrects
 
-ci-fix         → sonnet   1st attempt on this PR (lint/snapshots/trivial)
-               → opus     attempts ≥ 2 OR the previous fix didn't green CI
+ci-fix         → sonnet   risk low/medium (lint/snapshots/trivial)
+               → opus     risk high
+     signature-state repeat → SAME tier, effort xhigh, strategy `rethink`
 
 review-fix     → sonnet   threads with no code change (reply/explanation)
                → opus     threads that require a code change
+     signature-state repeat → SAME tier, effort xhigh, strategy `rethink`
 
-pr-sentinel    → sonnet   first watch over a PR set (same cheap first strike)
-               → opus     attempt ≥ 2, a previous fix that didn't green CI,
-                          risk high, or a checkpoint ticket in the set
+pr-sentinel    → sonnet   the ordinary watch (same cheap first strike)
+               → opus     risk high, or a checkpoint ticket in the set
+     signature-state repeat → SAME tier, effort xhigh, strategy `rethink`
 
 drift-check    → sonnet   mechanical reconciliation
 ```
+
+**A repeat escalates the STRATEGY, not the tier.** The repair roles used to read
+`attempt ≥ 2 → opus`, which is "try harder", and what it bought was one wrong
+hypothesis re-tried by three models in sequence. `--attempt` and
+`--previous-failed` are still ACCEPTED — telemetry passes them and older callers
+still spell them, so passing one is neither an error nor a warning — but they no
+longer route a repair tier. What routes it is `--signature-state`, whose verdict
+comes from `failure-signature.cjs verdict`, and whose K — how many DISTINCT
+signatures with no green mean the plan is wrong rather than the fix — is
+`plan_defect_signatures` (default 3). The returned `strategy` is the instruction:
+`fix` / `continue` (proceed), `rethink` (same tier, deeper effort, a different
+hypothesis), `rerun` / `quarantine` / `park` (do not dispatch a fixer at all).
 
 Why a cheap first strike is safe: green still goes through arch-review (opus) +
 the mechanical "did work" gate + bot review — a false green from a cheap model is
@@ -277,7 +300,8 @@ Config lives in `.planning/config.json` under **two** namespaces, both read by
 
 Keys: `model_policy` (`economy | balanced (default) | premium`; GSD's own
 `budget`/`quality` names are accepted as aliases), `models`, `effort`,
-`max_attempts` (5), `pr_fetch_limit`, `stale_merge_hours`, `stale_draft_hours`,
+`max_attempts` (5), `plan_defect_signatures` (3), `pr_fetch_limit`,
+`stale_merge_hours`, `stale_draft_hours`,
 `integration_mode`, `use_workflow`, `sentinel` (`auto` | `off`), `auto_merge`
 (`epic` | `off`), `graph_gate`, `jira`, `repos`
 (`{"owner/name": "/abs/path/to/checkout"}` — see the multi-repo section).
@@ -331,6 +355,9 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/scope-gate.cjs <T> --worktree <p> --base <ref
 node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--graph <dir>]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs <mark|clear|list> …
+node ${CLAUDE_PLUGIN_ROOT}/scripts/escalation-record.cjs <mark|mark-plan-defect|clear|list> …
+node ${CLAUDE_PLUGIN_ROOT}/scripts/failure-signature.cjs <compute|verdict|rerun|lift> …
+node ${CLAUDE_PLUGIN_ROOT}/scripts/attempt-history.cjs <T> [--json] [--limit <n>]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs [--json] [--since 14d|all]
 ```
 
@@ -342,6 +369,16 @@ must name the project's graph explicitly: `--graph <project>/.planning/graph`, o
 checkout now refuses instead of quietly starting a second journal there; one
 `attempt` for a cross-repo ticket did exactly that, landing an untracked
 `.planning/` in a borrowed repository where nothing would ever read it.
+The same flag and the same spelling reach everything else that touches that
+journal: `failure-signature.cjs verdict|rerun|lift`, `attempt-history.cjs` and
+`escalation-record.cjs mark`/`mark-plan-defect` — all four refuse outright
+without it (escalation-record gained the same fail-closed `tickets.json` guard
+this same phase; `clear`/`list` stay permissive since they read or no-op rather
+than park a verdict nowhere). The refusal matters most on the READING side: "no
+prior attempts" answered from the wrong directory is indistinguishable from a
+fresh ticket, which is exactly how a fixer re-proposes a fix that already failed.
+`failure-signature.cjs compute` is the one exception, by design: it reads a log
+and prints a hash, touches no journal, and is meant to run in a worktree.
 
 ## Integration model — epic-stacked (default)
 
@@ -429,15 +466,41 @@ session:
 
 ```text
 attempt    — each babysit round on a PR:
-             log-event.cjs attempt ticket=<T> pr=<N> n=<attempts> role=<ci-fix|review-fix> model=<tier> outcome=<pushed|no-op|escalate>
+             log-event.cjs attempt ticket=<T> pr=<N> n=<attempts> role=<ci-fix|review-fix> model=<tier> \
+               outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<sha> hypothesis="<the fixer's own>"
 fix_round  — for EACH item from a fix-round Workflow result:
              log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false>
 escalation — any escalation to a human — NOT through log-event:
              escalation-record.cjs mark <T> <reason...>
 ```
 
+`signature`, `head` and `hypothesis` are what make an attempt READABLE by the
+round after it, and they are new: `failure-signature.cjs verdict` compares
+`signature` against `head` to tell repetition from progress and instability from a
+defect, and `attempt-history.cjs <T>` renders the record — hypotheses included —
+into the next fixer's input. An attempt logged without them still counts toward
+the backstop and buys the next round nothing. `outcome=flake` is logged at an
+UNCHANGED `n`: a quarantined failure is not charged.
+
 `merge` and `status_change` are written by `sentinel.cjs merge` and
 `state-sync.cjs` themselves — do NOT log them by hand; log-event refuses.
+
+Four more events are refused there, and for a sharper reason than duplication —
+they are not a metric ABOUT a state, they ARE the state, so a hand-written one is
+a verdict the loop reads back and believes. Each has exactly one writer:
+
+```text
+plan_defect — escalation-record.cjs mark-plan-defect <T> <plan-path> <reason...> [--signature <sig>]…
+flake       — failure-signature.cjs rerun <T> --signature <sig> --head <sha> --outcome green
+flake_rerun — failure-signature.cjs rerun <T> --signature <sig> --head <sha> --outcome red
+flake_lift  — failure-signature.cjs lift  <T> --signature <sig>
+```
+
+The quarantine keeps no store beside the journal: those three lines ARE what
+`failure-signature.cjs verdict` reads back, written under its lock and with the
+`(ticket, signature, head)` bookkeeping the rules match on. `plan_defect` is
+refused for the `escalation` reason instead — journalling it does not PARK the
+ticket, and `mark-plan-defect` does both in one act.
 
 `escalation` is refused there too, for a different reason: journalling it does
 not PARK the ticket, and the two used to be separate acts, so one always got
@@ -854,10 +917,11 @@ As soon as Phase C has opened PRs, hand them to the guard and go back to Step 3
 for the cascade (see "The PR sentinel" above):
 
 ```text
-model+effort:  pipeline-config.cjs model pr-sentinel --json [--risk <max guarded>] [--attempt <n>]
+model+effort:  pipeline-config.cjs model pr-sentinel --json [--risk <max guarded>] [--checkpoint] [--signature-state <verdict>]
 prompt:        ${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md
              + the guarded list: {ticket, pr, branch, worktreePath, repo, base, planPath}
-             + the absolute scripts path and maxAttempts
+             + the absolute scripts path, the project's .planning/graph path,
+               maxAttempts and plan_defect_signatures (the K)
 spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose', model, ... })
 ```
 
@@ -871,17 +935,66 @@ background agents, or `pipeline.sentinel: off` — and there it is a duty pass a
 the top of each round, before you take new work, never a place to camp.
 
 Attempt counter per PR: attempts (start 1, MAX = `pipeline.max_attempts`,
-default 5 — state-sync prints the effective value on every run).
+default 5 — state-sync prints the effective value on every run). **The counter no
+longer routes anything** — the failure signature's verdict does — but it stays, as
+telemetry and as the backstop in step d.
 
 ```text
 loop:
   a. state-sync.cjs → this PR's checks
-     failing → ci-fix agent in the ticket's worktree; model+effort from
-       `pipeline-config.cjs model ci-fix --json --attempt <n> [--previous-failed]`
-       (attempt 1 → sonnet/high for lint/snapshots/trivial; ≥2 or a previous fix
-        that did not green CI → opus/xhigh — effort escalates with the tier)
-       (prompt ${CLAUDE_PLUGIN_ROOT}/references/ci-fix.md + contract + the
-        failure log: gh run view --log-failed)
+     failing → SIGN THE FAILURE FIRST; the verdict decides whether a fixer is even
+       the right move. Never dispatch straight off a red check — that is what
+       charged four attempts and three escalations to ONE deterministic failure.
+       a1. gh run view <run-id> --log-failed
+             | failure-signature.cjs compute --job <check name> --json
+           → {signature, error_class, test_id, file}. It never fails: an
+             unreadable or empty log signs as `unknown` rather than stopping the
+             round, and it needs no ticket graph, so it runs in the worktree.
+       a2. failure-signature.cjs verdict <T> --signature <sig> --head <head sha>
+             --k <pipeline.plan_defect_signatures> --json
+           → one of: first | progress | repeat | flake_candidate | flake | plan_defect
+       a3. branch on it. The last three do NOT dispatch a fixer:
+
+       flake — already quarantined. Do NOT dispatch a fixer and do NOT CHARGE THE
+         ATTEMPT: `n` stays exactly where it is, and the round is logged as
+         `log-event.cjs attempt … n=<n unchanged> outcome=flake signature=<sig>
+         head=<sha>`. Re-run the job (`gh run rerun <run-id> --failed`) or leave it
+         for the next round, and CONTINUE the front. If the signature turns out to
+         be real work after all, `failure-signature.cjs lift <T> --signature <sig>`
+         makes it count again.
+
+       flake_candidate — the same signature at the same head: the tree did not
+         move, so this may be instability rather than a defect. Re-run the failed
+         job ONCE before any dispatch, then record what the re-run proved:
+         `failure-signature.cjs rerun <T> --signature <sig> --head <sha>
+          --outcome green|red`. Green → quarantined as a flake, nothing charged,
+         continue the front. Red → deterministic, and the next verdict reads it as
+         `repeat`; proceed down that branch.
+
+       plan_defect — K distinct signatures with no green: the PLAN is wrong, not
+         the fix, and no further fixer can pass.
+         `escalation-record.cjs mark-plan-defect <T> <plan-path> "<what the plan
+          got wrong>" --signature <s1> --signature <s2> …` — the distinct
+         signatures the verdict rested on; the flag repeats and is accepted in any
+         position, and the reason is the ONLY thing whoever picks this up inherits,
+         so say what the plan got wrong, never just "plan defect". Then CONTINUE
+         the front: this ticket needs a person in the morning, not now, and the
+         cascade does not wait for one. The park is durable and is bound to the
+         PLAN — a push or an answered review does NOT lift it; re-decomposing the
+         plan file does.
+
+       first | progress | repeat — dispatch ci-fix in the ticket's worktree.
+         model+effort+strategy from `pipeline-config.cjs model ci-fix --json
+         --risk <r> --signature-state <verdict>`
+         → {"model": …, "effort": …, "strategy": fix|continue|rethink}.
+         On `repeat` the strategy is `rethink`: SAME tier, deeper effort, a
+         DIFFERENT approach — re-read the plan, widen the context, raise the
+         hypothesis above the symptom.
+         Hand the agent, as INPUT and not as background:
+           - prompt ${CLAUDE_PLUGIN_ROOT}/references/ci-fix.md + the ticket contract
+           - the failure log (gh run view --log-failed) and its signature
+           - the resolved `strategy`
+           - the prior-attempt record: the output of `attempt-history.cjs <T>`
        'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
        a push happened → step d
      pending → the SENTINEL waits here (`gh pr checks <pr> --watch`) — that is its
@@ -899,10 +1012,16 @@ loop:
      and Copilot actually said, and the half they file as issue comments is the
      half that silently went unaddressed)
      there is feedback → review-fix agent in the worktree; model+effort from
-       `pipeline-config.cjs model review-fix --json [--no-code-change]`
+       `pipeline-config.cjs model review-fix --json [--no-code-change]
+        [--signature-state <verdict>]`
        (reply/explanation only → sonnet; anything needing a code change, or when
-        you cannot tell → opus)
-       (prompt ${CLAUDE_PLUGIN_ROOT}/references/review-fix.md + the JSON of the threads)
+        you cannot tell → opus. Pass the signature state when this PR already has
+        a signed failure history: it is a repair role, so a `repeat` deepens its
+        effort to xhigh at the same tier, exactly as it does for ci-fix)
+       (prompt ${CLAUDE_PLUGIN_ROOT}/references/review-fix.md + the JSON of the
+        threads + the prior-attempt record, `attempt-history.cjs <T>` — the
+        reference tells the fixer to treat a hypothesis already in that record as
+        EXCLUDED, which it can only do if you pass the record)
        the agent either fixes (push → step d), or replies to invalid ones
        (no push → mark the threads processed, b again)
 
@@ -943,7 +1062,20 @@ loop:
        `git -C <worktree> rev-parse origin/<branch>` (or the PR's head SHA)
      reviewers.cjs reinit <pr>
      attempts += 1
+     log the round with the keys the NEXT round reads back:
+       `log-event.cjs attempt ticket=<T> pr=<N> n=<n> role=<role> model=<tier>
+        outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<sha>
+        hypothesis="<the fixer's own one sentence, verbatim>"`
+       `signature`+`head` are what the next `verdict` compares; `hypothesis` is
+       what `attempt-history.cjs` hands the next fixer so it cannot re-propose what
+       this one already ruled out. Never invent a hypothesis the fixer did not
+       report — an invented one enters the record as something tried and excluded.
      attempts > MAX → `escalation-record.cjs mark <T> "<what the N attempts tried and why each failed>"`, continue the front
+       THE ATTEMPT BACKSTOP STAYS, even though the ladder no longer reads the
+       counter. A signature that oscillates between two values is never the same
+       as the last one, so it never reads `repeat`, and it never reaches K
+       distinct, so it never reads `plan_defect`: it dodges both rules and nothing
+       else would ever stop it. This is not dead code — do not remove it.
      → step a
 ```
 
@@ -952,9 +1084,13 @@ After it, return to the actionable front (Step 3/4 for the rest); the run
 ends only when the front is empty (see the Principle and Step 5).
 
 Round telemetry (see the section above): each pass a/b — `log-event.cjs
-attempt ...` with the actual role/model/outcome; each escalation (step a
-'escalate', adr-outdated in c, attempts > MAX in d) — `log-event.cjs
-escalation ...` at that same moment.
+attempt ...` with the actual role/model/outcome AND `signature`/`head`/
+`hypothesis`; each escalation (step a 'escalate', adr-outdated in c, attempts >
+MAX in d) — `escalation-record.cjs mark <T> <reason>` at that same moment, and a
+`plan_defect` verdict — `escalation-record.cjs mark-plan-defect`. Both of those
+park AND journal in one act, which is why log-event refuses the bare `escalation`
+and `plan_defect` events: journalling without parking is the half that used to get
+done alone.
 
 Several open PRs on the **fallback path** (the guard is inline): the **Workflow
 path** (available and `use_workflow ≠ false`) parallelizes EXACTLY the fix work of
@@ -964,18 +1100,36 @@ itself. The round order:
 1. `state-sync.cjs` → for each open PR determine `needsCiFix` (checks
    failing) and `needsReviewFix` (`reviewers.cjs unresolved` > 0). Those that are waiting
    on pending checks — skip them this round (the next one after watch will pick them up).
-2. There are PRs that need work → `Workflow({scriptPath: <workflows/fix-round.mjs>,
+2. Sign each failing PR and take its verdict FIRST (a1–a3). A `flake`, a
+   `flake_candidate` or a `plan_defect` is served THERE and does not enter the
+   round — a quarantined or plan-defective PR handed to a fixer is the dispatch
+   this phase exists to prevent. What remains goes to
+   `Workflow({scriptPath: <workflows/fix-round.mjs>,
    args: {prs: [{id, pr, branch, worktreePath, planPath, needsCiFix,
-   needsReviewFix, model, effort: <from `pipeline-config.cjs model ci-fix --json
-   --attempt <n>` / `model review-fix --json`, per PR>}], ciFixRefPath,
-   reviewFixRefPath, reinitScript, artifactLanguage}})`. One parallel pass; each agent
-   pushes at most once and does reinit itself. `escalate` → `escalation-record.cjs mark`
-   (note it), which does NOT halt the other PRs of the round.
+   needsReviewFix, attemptHistory: <the output of `attempt-history.cjs <T>`>,
+   model, effort: <from `pipeline-config.cjs model ci-fix --json --risk <r>
+   --signature-state <verdict>` / `model review-fix --json [--signature-state
+   <verdict>]`, per PR>}],
+   ciFixRefPath, reviewFixRefPath, reinitScript, artifactLanguage}})`.
+   `attemptHistory` is a PRE-RENDERED string and producing it is YOURS: that path
+   builds each prompt deterministically from `args` and does not shell out, so a
+   record you do not pass does not exist for the agents. Omit it on a first
+   attempt — an empty history stated as a section reads as evidence that nothing
+   was tried, which is a claim rather than an absence. One parallel pass; each
+   agent pushes at most once and does reinit itself. `escalate` →
+   `escalation-record.cjs mark` (note it), which does NOT halt the other PRs of
+   the round.
    (A fixer MAY publish — unlike an executor — because the result of a fix is
    verified mechanically afterwards from live GitHub: a push that did not happen
    simply shows up as an unchanged red PR.)
 3. For EACH item of the result — `log-event.cjs fix_round ticket=<T> pr=<N>
-   outcome=<...> pushed=<...>`; for `pushed:true` — CONFIRM the push against
+   outcome=<...> pushed=<...>` — and log that item's attempt event with its
+   `hypothesis`. The round returns `{id, pr, pushed, status, notes, hypothesis}`
+   per PR and `hypothesis` is REQUIRED there, so it is always present; carry it
+   verbatim onto the attempt event together with the signature and head from a1.
+   Skipping it costs the next round the only thing it has: the fixer after this
+   one starts from zero and is free to retry what this one just ruled out.
+   For `pushed:true` — CONFIRM the push against
    GitHub first (step d), then `attempts += 1` (MAX = `pipeline.max_attempts`).
    Then re-run state-sync: if the front still has actionable items, serve THEM
    while CI runs — only `--watch` when the front is otherwise empty (step a).
@@ -984,8 +1138,14 @@ itself. The round order:
    judgment, finalization and a merge — do NOT hand any of it to Workflow.
 
 **Fallback** (no Workflow): service them one at a time in rounds (a→d for each PR).
-Until each PR is green or park-blocked — and do NOT stop at that: move on to the
-recomputation of the front below.
+The INPUTS are identical on this path and you assemble them yourself: the resolved
+`strategy` and the prior-attempt record (`attempt-history.cjs <T>`) go into the
+fixer's prompt, and its reported `hypothesis` comes back onto the attempt event.
+The `references/` files are the shared channel — they already tell a fixer to
+treat a recorded hypothesis as excluded and to report a new one — but the
+ARGUMENTS are this file's job on either path, so a fixer you dispatch without them
+is a fixer with no memory. Until each PR is green or park-blocked — and do NOT
+stop at that: move on to the recomputation of the front below.
 
 **Loop-back to the fixpoint (after each round/merge — mandatory).**
 1. `state-sync.cjs` — fresh state and board.

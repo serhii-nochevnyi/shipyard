@@ -15,7 +15,19 @@ else is going to come back for them.
 - `SHIPYARD_ROOT` — the absolute path of the plugin scripts directory.
 - The project root (where `.planning/` lives) and, per ticket, the checkout its
   repo lives in (a multi-repo phase has more than one).
-- `maxAttempts` (default 5) and, per ticket, the plan file path.
+- `maxAttempts` (default 5), `plan_defect_signatures` (default 3 — the K of the
+  k-distinct rule below) and, per ticket, the plan file path.
+- The project's `.planning/graph` directory, as an absolute path. Everything that
+  touches the delivery journal needs it by name once you are standing in a
+  worktree — a worktree has no `.planning/` of its own — so pass
+  `--graph <project>/.planning/graph` to `failure-signature.cjs verdict|rerun|lift`,
+  `attempt-history.cjs`, `log-event.cjs` and `escalation-record.cjs mark` /
+  `mark-plan-defect`. All of them refuse outright without it — `escalation-record`
+  gained the same fail-closed `tickets.json` guard as the others this same phase
+  (`clear`/`list` stay permissive; they read or no-op, they never park a verdict
+  nowhere). None of them answers from nowhere, and on the reading side that is
+  the point: "no prior attempts" read out of a worktree is indistinguishable from
+  a fresh ticket.
 
 ## The loop (repeat until your duty list is clear)
 
@@ -37,7 +49,45 @@ guessing, but the message names a missing graph, which is not what went wrong.
 
 `duty` gives each PR exactly one action. Serve it:
 
-**`ci-fix`** — failing checks. `gh run view <run-id> --log-failed` for the real
+**`ci-fix`** — failing checks. **Sign the failure before you touch it.** A red
+check is not yet a reason to fix anything: the verdict decides, and for three of
+its six values the right move is NOT a fix.
+
+```bash
+gh run view <run-id> --log-failed \
+  | node $SHIPYARD_ROOT/scripts/failure-signature.cjs compute --job <check> --json
+node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> \
+     --head <head sha> --k <plan_defect_signatures> --json \
+     --graph <project>/.planning/graph
+```
+
+- **`flake`** — already quarantined. Do NOT fix and do NOT CHARGE THE ATTEMPT:
+  log the round at the SAME `n` with `outcome=flake`, re-run the job
+  (`gh run rerun <run-id> --failed`) or leave it for the next tick, and serve
+  another PR. `failure-signature.cjs lift <T> --signature <sig>` makes that
+  signature count again if it turns out to be real work.
+- **`flake_candidate`** — the same signature at the same head, so the tree did not
+  move. Re-run the failed job ONCE before any fix, then record what the re-run
+  proved: `failure-signature.cjs rerun <T> --signature <sig> --head <sha>
+  --outcome green|red`. Green → quarantined, nothing charged. Red → deterministic,
+  and the next verdict reads it as `repeat`.
+- **`plan_defect`** — K distinct signatures with no green: the plan is wrong, not
+  the fix, so no amount of fixing passes. `escalation-record.cjs mark-plan-defect
+  <T> <plan-path> "<what the plan got wrong>" --signature <s1> --signature <s2> …`
+  (repeatable, any position), name it in the report, and keep guarding the rest.
+  Your parked set inherits it for free — it is one store, so `duty` stops offering
+  the ticket without any flag from you. Moving the PR does NOT lift this park;
+  re-decomposing the plan file does.
+- **`first` / `progress` / `repeat`** — fix it. Resolve model, effort and strategy
+  with `pipeline-config.cjs model ci-fix --json --risk <r> --signature-state
+  <verdict>`; on `repeat` the strategy is `rethink` — the SAME tier at a deeper
+  effort and a DIFFERENT hypothesis, because a bigger model on the hypothesis that
+  just failed is the failure mode, not the remedy. Read the prior-attempt record
+  before you settle on an explanation (`attempt-history.cjs <T> --graph
+  <project>/.planning/graph`): a hypothesis already in it was tried and did not
+  hold, so it is EXCLUDED, not a candidate to refine.
+
+Then the fix itself: `gh run view <run-id> --log-failed` for the real
 failing assertion, reproduce it in the ticket's worktree with the plan's
 Verification commands, make the SMALLEST fix inside the ticket's `files_modified`
 scope, re-verify locally, commit `fix(<T>): <what was wrong>`, push. A fix that
@@ -51,7 +101,13 @@ summary and nitpick blocks, Copilot's remarks) AND the review verdicts. Threads
 alone are only half of what the bots said. Then, per `references/review-fix.md`:
 verify each comment against the actual code, fix what is right, and reply with a
 reasoned disagreement to what is wrong. A bot is not an authority — but an
-unanswered comment is not "resolved" either.
+unanswered comment is not "resolved" either. Read the prior-attempt record here
+too (`attempt-history.cjs <T> --graph <project>/.planning/graph`): the same
+exclusion rule applies, and a thread serviced with a fix that already failed comes
+straight back. When this PR also carries a signed failure history, pass its
+verdict — `pipeline-config.cjs model review-fix --json [--no-code-change]
+[--signature-state <verdict>]` — it is a repair role, so a `repeat` deepens the
+effort at the same tier.
 
 **`arch-review`** — green, but no verdict is recorded. Run the architecture judge
 (`references/arch-review.md`, judgment work — do not cheapen it) and append the
@@ -100,10 +156,23 @@ a PR targeting the integration branch). Record it in the report and move on.
 git -C <worktree> rev-parse HEAD                     # must equal the pushed head
 node $SHIPYARD_ROOT/scripts/reviewers.cjs reinit <pr> [--repo owner/name]
 node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<attempts> \
-     role=<ci-fix|review-fix> model=<tier> outcome=<pushed|no-op|escalate>
+     role=<ci-fix|review-fix> model=<tier> outcome=<pushed|no-op|escalate|flake> \
+     signature=<sig> head=<sha> hypothesis="<one sentence: what you believed was wrong>" \
+     --graph <project>/.planning/graph
 ```
+`signature` and `head` are what the next `verdict` compares — without them every
+round looks like progress and the loop never notices it is repeating itself — and
+`hypothesis` is what `attempt-history.cjs` hands the next round so it cannot
+re-propose what this one already ruled out. Write the fixer's own sentence, never
+an invented one: an invented hypothesis enters the record as something tried and
+excluded. `outcome=flake` is logged at an UNCHANGED `n`.
+
 attempts += 1 per round on a PR; `attempts > maxAttempts` → park it `blocked`
-with a summary of what was tried and keep guarding the rest. Copilot does not
+with a summary of what was tried and keep guarding the rest. **That backstop stays
+even though the ladder no longer reads the counter:** a signature that oscillates
+between two values is never the same as the last one, so it never reads `repeat`,
+and it never reaches K distinct, so it never reads `plan_defect` — it dodges both
+rules, and nothing else would ever stop it. Copilot does not
 re-review a push on its own, and CodeRabbit needs the explicit ask — a fix that
 is never re-reviewed sits at "unresolved" forever, which is why reinit is not
 optional.
@@ -146,6 +215,9 @@ sentinel report
   merged:        <T (PR #n → base)>, …
   green/awaiting human: <T (PR #n)> — why a human is needed
   parked:        <T (PR #n)> — reason, attempts, what would unblock it
+  plan defects:  <T (PR #n)> — what the PLAN got wrong + the distinct signatures
+                 (needs re-decomposition, not another fix)
+  flakes:        <T> — signature quarantined, not charged as an attempt
   still moving:  <T (PR #n)> — waiting on CI at hand-back time
   epic state:    <epic branch> — N commit(s), integration PR #n (human merge)
   anomalies:     no checks reported / bot never engaged / retarget failures
