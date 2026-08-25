@@ -18,8 +18,20 @@ eventually wait for is the one that validates the final code.
 - Worktree path and branch.
 - JSON list of unresolved threads (`id`, path, line, author, comments) —
   the `id` is what resolving takes.
+- The prior-attempt record, when any exists: per attempt — its failure
+  signature, the hypothesis it acted on, and how it ended. It is rendered from
+  the delivery journal by the orchestrator, so it is what previous rounds
+  actually did, not a recollection of it.
 
 ## Procedure — for EACH thread independently
+
+**Before you propose any change, consult the prior-attempt record.** A
+hypothesis already in it has been tried and did not hold: it is EXCLUDED, not a
+candidate to refine — re-proposing it is the defect the record exists to
+prevent, and a thread serviced with a fix that already failed comes straight
+back. When every plausible explanation in reach is already in the record, say so
+and escalate rather than cycle through one of them again.
+
 1. Read the actual code at the referenced location. Verify the claim:
    is the issue real, in scope, and worth the change?
 2. If the comment is VALID: implement the minimal fix, run the ticket's
@@ -75,6 +87,11 @@ eventually wait for is the one that validates the final code.
   unresolved thread you meant to close — that is the loop above, one round later.
 
 ## Output (final message, structured)
+- `hypothesis: <one sentence>` — what you believed was wrong and what your
+  changes target; when you changed nothing, why the threads did not warrant it.
+  This is not a summary of the per-thread lines: the orchestrator records it on
+  the attempt, and it is what the NEXT round reads as the record above. Omit it
+  and the next fixer starts from zero and is free to retry what you ruled out.
 - per thread: `accepted | rejected(reason) | out-of-scope(ticket-hint)` — each
   with `resolved: yes | no (why)`
 - `unresolved_after`: the count `reviewers.cjs unresolved` reports at the end,

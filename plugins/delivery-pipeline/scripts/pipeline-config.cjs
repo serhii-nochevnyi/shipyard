@@ -2,7 +2,8 @@
 'use strict';
 
 // Single deterministic reader for the conveyor's configuration, plus the
-// role × risk × attempt model policy and the matching reasoning effort.
+// role × risk model policy, the matching reasoning effort, and the repair
+// STRATEGY a failure signature's history implies.
 //
 // Before this module the policy lived only as prose inside the skills, so it was
 // unenforceable and drifted (it named model IDs the Agent tool does not accept).
@@ -11,9 +12,22 @@
 //   node pipeline-config.cjs resolve                      # effective config, JSON
 //   node pipeline-config.cjs model <role> [flags]         # one tier alias
 //   node pipeline-config.cjs model <role> --json [flags]  # {model, effort}
+//                                                        # + strategy, with --signature-state
 //
 //   flags: --risk low|medium|high  --type <plan type>  --files <n>
-//          --attempt <n>  --checkpoint  --code-change  --previous-failed
+//          --checkpoint  --code-change|--no-code-change
+//          --signature-state first|progress|repeat|flake_candidate|flake|plan_defect
+//          --attempt <n>  --previous-failed   ← accepted, but INERT (see below)
+//
+// REPAIRS ESCALATE BY STRATEGY, NOT BY TIER (ADR-001 D1). The repair roles
+// (ci-fix, review-fix, pr-sentinel) used to read `attempt >= 2 → opus`, which is
+// "try harder": the observed loss is one wrong hypothesis re-tried by three
+// models in sequence. Their tier is now role × risk alone, and the failure
+// SIGNATURE's history — computed by failure-signature.cjs, passed in as
+// `--signature-state` — decides what to do differently, plus how deep to think
+// at the same tier. `--attempt` and `--previous-failed` remain accepted for the
+// callers and docs that still pass them (and the attempt counter remains as
+// telemetry), but they no longer route anything.
 //
 // TWO CONFIG NAMESPACES, both in .planning/config.json:
 //
@@ -50,6 +64,36 @@ const EFFORT_TIER_DEFAULTS = { light: 'low', standard: 'high', heavy: 'xhigh' };
 // when the model tier is raised by an override.
 const MECHANICAL_ROLES = new Set(['drift-check']);
 
+// The roles that repair an existing PR rather than build a ticket. They are the
+// ones ADR-001 D1 took the attempt counter away from, and the only ones a
+// signature state applies to — an executor has no failure history to read.
+const REPAIR_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel']);
+
+// What a signature's history means for the NEXT move. The keys are
+// failure-signature.cjs's verdict enum verbatim — it is the contract between the
+// two files, so a synonym or a seventh word here is a silent no-op there (the
+// unit test asserts the two lists are identical). Not imported: this reader must
+// stay free of the journal/lock chain, since every skill loads it.
+//
+// The values are pinned strings the babysit loop switches on. The last three
+// mean "do not dispatch a fixer at all".
+const STRATEGIES = {
+  first: 'fix',
+  progress: 'continue',
+  // Hold the tier, change the approach: re-read the plan, widen the context,
+  // raise the hypothesis above the symptom.
+  repeat: 'rethink',
+  flake_candidate: 'rerun',
+  flake: 'quarantine',
+  plan_defect: 'park',
+};
+const SIGNATURE_STATES = Object.keys(STRATEGIES);
+
+// Own-property only: `strategyFor('toString')` must be unknown, not a function.
+function strategyFor(state) {
+  return Object.prototype.hasOwnProperty.call(STRATEGIES, state) ? STRATEGIES[state] : undefined;
+}
+
 const DEFAULTS = {
   integration_mode: 'epic-stacked',   // | direct-to-main
   model_policy: 'balanced',           // economy | balanced | premium
@@ -64,7 +108,11 @@ const DEFAULTS = {
   //               off — every merge is a human's, the pre-sentinel behaviour.
   sentinel: 'auto',                   // auto | off
   auto_merge: 'epic',                 // epic | off
-  max_attempts: 5,                    // babysit rounds per PR
+  max_attempts: 5,                    // babysit rounds per PR (the backstop, not the ladder's input)
+  // K of the k-distinct rule: this many DIFFERENT failure signatures with no
+  // green means the ticket is wrong, not the fix (ADR-001 D2). Same default as
+  // `failure-signature.cjs verdict --k`, and the two must agree.
+  plan_defect_signatures: 3,
   pr_fetch_limit: 1000,               // `gh pr list --limit`
   stale_merge_hours: 4,
   stale_draft_hours: 24,
@@ -234,7 +282,7 @@ function loadConfig(root) {
     warnings.push(`pipeline.model_policy "${cfg.model_policy}" is unknown — falling back to balanced`);
     cfg.model_policy = 'balanced';
   }
-  for (const numeric of ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours']) {
+  for (const numeric of ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours', 'plan_defect_signatures']) {
     const n = Number(cfg[numeric]);
     if (!Number.isFinite(n) || n <= 0) {
       warnings.push(`pipeline.${numeric} must be a positive number — using ${DEFAULTS[numeric]}`);
@@ -361,7 +409,6 @@ function ladderTier(role, signals = {}, cfg = DEFAULTS) {
   if (JUDGMENT_ROLES.has(role)) return topTier(cfg);
 
   const risk = signals.risk || 'medium';
-  const attempt = Number(signals.attempt) || 1;
 
   if (profile === 'premium') return role === 'drift-check' ? 'sonnet' : 'opus';
 
@@ -374,15 +421,19 @@ function ladderTier(role, signals = {}, cfg = DEFAULTS) {
       return 'opus';
     }
     case 'ci-fix':
-      // cheap first strike, escalate on an actual failure
-      return attempt >= 2 || signals.previousFailed ? 'opus' : 'sonnet';
+      // Role × risk, and nothing else. This used to read
+      // `attempt >= 2 || previousFailed → opus`; ADR-001 D1 removed it, because
+      // a bigger model on the same wrong hypothesis is the failure mode, not the
+      // remedy. A repeat now changes strategy and effort (see resolveEffort).
+      return risk === 'high' ? 'opus' : 'sonnet';
     case 'review-fix':
       return signals.codeChange === false ? 'sonnet' : 'opus';
     case 'pr-sentinel':
       // The guard judges bot feedback AND edits code, but its merge decision is
-      // mechanical (sentinel.cjs enforces the gate), so it follows the same
-      // cheap-first-strike ladder as ci-fix: escalate on a PR that resisted.
-      return attempt >= 2 || signals.previousFailed || risk === 'high' || signals.checkpoint ? 'opus' : 'sonnet';
+      // mechanical (sentinel.cjs enforces the gate), so it follows ci-fix's
+      // ladder — including D1: the attempt count is gone, what is left is the
+      // stakes of the PR in front of it.
+      return risk === 'high' || signals.checkpoint ? 'opus' : 'sonnet';
     case 'drift-check':
       return 'sonnet';
     case 'research':
@@ -401,10 +452,14 @@ function resolveModel(role, signals = {}, cfg = DEFAULTS) {
 // follows the RESOLVED model, so escalating a repair to the top tier raises its
 // effort too — except for mechanical roles, which stay cheap either way.
 //
-// `signals` is optional and exists for one case: where the runtime cap demoted
-// the model, the escalation must not vanish with it. GSD does exactly this —
-// `gsd-debugger` is its executor's model at a higher effort — so a capped repair
-// runs the workhorse at heavy rather than the premium model at heavy.
+// `signals` is optional and carries two things. First, the signature state: on a
+// REPEAT the tier holds and the effort deepens (ADR-001 D1) — the model stays
+// where it is and thinks harder about a different hypothesis, rather than the
+// rejected "same hypothesis, bigger model". Second, the escalation the runtime
+// cap swallowed: where the cap demoted the model, the escalation must not vanish
+// with it. GSD does exactly this — `gsd-debugger` is its executor's model at a
+// higher effort — so a capped repair runs the workhorse at heavy rather than the
+// premium model at heavy.
 function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
   const clamp = (level) => {
@@ -416,15 +471,21 @@ function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   };
   const override = cfg.effort && cfg.effort[role];
   if (override) return clamp(override);
+  // The same failure came back: hold the tier, deepen the thinking. Placed after
+  // the override so an explicit configuration still wins, and before the tier
+  // table because it outranks every signal below it. No mechanical-role guard is
+  // needed — no repair role is mechanical, and drift-check is not a repair.
+  if (signals && REPAIR_ROLES.has(role) && signals.signatureState === 'repeat') return clamp('xhigh');
   // On a capped runtime the model can no longer express depth, so effort has to —
   // the same way GSD does it. Two things earn heavy there:
   //   * judgment, which is heavy by its nature and not by its signals;
   //   * an ESCALATION — the ladder raised this role ABOVE its own baseline
-  //     (attempt ≥ 2, a previous failure, `alternatives` research). Comparing
-  //     against the role's baseline rather than against "is it top tier" is what
-  //     separates a repair that has already failed once (heavy) from an executor
-  //     whose baseline was top tier all along (standard) — on a capped runtime
-  //     both arrive as the same alias and would otherwise be indistinguishable.
+  //     (a high-risk or checkpointed ticket, an economy-profile executor on a
+  //     risky one, `alternatives` research). Comparing against the role's
+  //     baseline rather than against "is it top tier" is what separates a repair
+  //     on a high-risk ticket (heavy) from an executor whose baseline was top
+  //     tier all along (standard) — on a capped runtime both arrive as the same
+  //     alias and would otherwise be indistinguishable.
   const escalated = signals
     && ladderTier(role, signals, cfg) !== ladderTier(role, {}, cfg)
     && TOP_TIERS.has(ladderTier(role, signals, cfg));
@@ -435,7 +496,10 @@ function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   return clamp(EFFORT_TIER_DEFAULTS[tier]);
 }
 
-module.exports = { loadConfig, resolveModel, resolveEffort, DEFAULTS, TIERS, EFFORTS, ROLES };
+module.exports = {
+  loadConfig, resolveModel, resolveEffort, strategyFor,
+  DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
+};
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {
@@ -461,25 +525,57 @@ if (require.main === module) {
       const i = rest.indexOf(`--${name}`);
       return i === -1 ? undefined : rest[i + 1];
     };
+    // An unknown value is ignored with a warning — the same posture as every
+    // invalid config value in this file, and for a sharper reason here: a
+    // resolver that exits non-zero at 3am stops the round it exists to keep
+    // running.
+    let signatureState;
+    let signatureStateWarning = null;
+    if (rest.includes('--signature-state')) {
+      const value = flag('signature-state');
+      if (SIGNATURE_STATES.includes(value)) {
+        signatureState = value;
+      } else {
+        signatureStateWarning =
+          `--signature-state "${value === undefined ? '' : value}" is not a signature state — ignored ` +
+          `(${SIGNATURE_STATES.join('|')}; compute it with \`failure-signature.cjs verdict\`)`;
+      }
+    }
     const signals = {
       risk: flag('risk'),
       type: flag('type'),
       files: flag('files'),
+      // Accepted, recorded, and INERT for the repair roles (ADR-001 D1). They
+      // stay because deliver.md still documents them and telemetry still passes
+      // them; passing one is not an error, so it does not warn.
       attempt: flag('attempt'),
-      checkpoint: rest.includes('--checkpoint'),
       previousFailed: rest.includes('--previous-failed'),
+      signatureState,
+      checkpoint: rest.includes('--checkpoint'),
       codeChange: rest.includes('--no-code-change') ? false : undefined,
     };
     for (const w of warnings) process.stderr.write(`pipeline-config: warning: ${w}\n`);
+    if (signatureStateWarning) process.stderr.write(`pipeline-config: warning: ${signatureStateWarning}\n`);
     const model = resolveModel(role, signals, config);
     if (rest.includes('--json')) {
-      process.stdout.write(JSON.stringify({ model, effort: resolveEffort(role, model, config, signals) }) + '\n');
+      const out = { model, effort: resolveEffort(role, model, config, signals) };
+      // `strategy` appears ONLY when a valid state was passed, so every existing
+      // consumer keeps seeing exactly `{model, effort}`.
+      if (signatureState) out.strategy = strategyFor(signatureState);
+      process.stdout.write(JSON.stringify(out) + '\n');
     } else {
       process.stdout.write(model + '\n');
     }
     process.exit(0);
   }
 
-  process.stderr.write('usage: pipeline-config.cjs <resolve|model <role> [--json] [flags]>\n');
+  process.stderr.write(
+    'usage: pipeline-config.cjs <resolve | model <role> [--json] [flags]>\n' +
+    '  flags: --risk low|medium|high  --type <plan type>  --files <n>  --checkpoint\n' +
+    '         --code-change|--no-code-change\n' +
+    '         --signature-state ' + SIGNATURE_STATES.join('|') + '\n' +
+    '         --attempt <n>  --previous-failed  (accepted, telemetry only: they no\n' +
+    '           longer route the repair roles — a repeat changes strategy, not tier)\n'
+  );
   process.exit(2);
 }

@@ -7,13 +7,13 @@
 //
 // Examples (what /shipyard:deliver logs — session-only facts GitHub can't
 // reconstruct later):
-//   log-event.cjs attempt ticket=T-02-03 pr=445 n=2 role=ci-fix model=opus outcome=pushed
+//   log-event.cjs attempt ticket=T-02-03 pr=445 n=2 role=ci-fix model=opus signature=9f2a outcome=pushed
 //   log-event.cjs fix_round ticket=T-02-05 pr=447 outcome=no-op pushed=false
-//   log-event.cjs escalation ticket=T-01-04 pr=441 reason="out-of-scope fix needed"
 //   log-event.cjs reuse_scan ticket=T-02-03 hits=2 verdict=fresh
 //
-// status_change events are appended by state-sync.cjs automatically — do not
-// log them by hand. The journal is append-only; pipeline-stats.cjs reads it.
+// Some events belong to a script and are refused here — see OWNED_BY_SCRIPTS
+// below, which says for each one what writing it by hand would break. The journal
+// is append-only; pipeline-stats.cjs reads it.
 
 const fs = require('fs');
 const path = require('path');
@@ -68,27 +68,67 @@ if (!event || !/^[a-z][a-z0-9_-]*$/.test(event)) {
 // `escalation` joined them for a different reason: journalling it by hand records
 // the fact WITHOUT parking the ticket, so the next session inherits a metric and
 // no verdict — which is how a ticket ended up parked with no journal entry and
-// six journalled escalations ended up with no durable park.
+// six journalled escalations ended up with no durable park. `plan_defect` is that
+// same half-act one verdict over, and the flake trio is a third case again: those
+// events ARE the quarantine — failure-signature.cjs keeps no store beside the
+// journal — so a hand-written one duplicates nothing, it invents state the loop
+// then reads back as a verdict.
+//
+// Three harms, three messages: the wording is what sends the reader to the right
+// place, and "duplicate" pointed at a second record that, for two of these, was
+// never written.
+const duplicate = (e) =>
+  'refusing to add a duplicate.\n' +
+  '  The genuine record carries fields a hand-written one cannot (by, base), and counting both\n' +
+  '  overstates what the guard actually did. If the real event is missing, that is a bug in\n' +
+  `  ${e.by}, not something to paper over here.`;
+
+// Not a duplicate: an incomplete act. The journal line is half of a park, and the
+// half that leaves no verdict behind.
+const halfAct = (e) =>
+  `refusing a half-recorded ${e.kind}.\n` +
+  '  Writing it here would record the fact without PARKING the ticket, so the next session\n' +
+  '  inherits a metric and no verdict — and the front hands the ticket straight back.\n' +
+  `  \`${e.fix}\` does both in one act.`;
+
+// Not a duplicate and not half an act: the quarantine has NO store beside the
+// journal, so these lines are the state itself. A hand-written one is a verdict
+// invented outside the lock and outside the (ticket, signature, head) bookkeeping
+// the rules match on — and the loop would read it back and believe it.
+const forgedState = (e) =>
+  'refusing to invent quarantine state.\n' +
+  '  There is no second store: these events ARE what `failure-signature.cjs verdict` reads\n' +
+  '  back, so a hand-written line is a verdict — written outside the lock and without the\n' +
+  '  (ticket, signature, head) bookkeeping the rules match on. The loop would believe it.\n' +
+  `  \`${e.fix}\` records it properly.`;
+
 const OWNED_BY_SCRIPTS = {
-  merge: 'sentinel.cjs merge',
-  status_change: 'state-sync.cjs',
-  escalation: 'escalation-record.cjs mark',
+  merge: { by: 'sentinel.cjs merge', why: duplicate },
+  status_change: { by: 'state-sync.cjs', why: duplicate },
+  escalation: {
+    by: 'escalation-record.cjs mark', kind: 'escalation', why: halfAct,
+    fix: 'escalation-record.cjs mark <ticket> <reason...>',
+  },
+  plan_defect: {
+    by: 'escalation-record.cjs mark-plan-defect', kind: 'plan defect', why: halfAct,
+    fix: 'escalation-record.cjs mark-plan-defect <ticket> <plan-path> <reason...>',
+  },
+  flake: {
+    by: 'failure-signature.cjs rerun', why: forgedState,
+    fix: 'failure-signature.cjs rerun <ticket> --signature <sig> --head <sha> --outcome green',
+  },
+  flake_rerun: {
+    by: 'failure-signature.cjs rerun', why: forgedState,
+    fix: 'failure-signature.cjs rerun <ticket> --signature <sig> --head <sha> --outcome red',
+  },
+  flake_lift: {
+    by: 'failure-signature.cjs lift', why: forgedState,
+    fix: 'failure-signature.cjs lift <ticket> --signature <sig>',
+  },
 };
 if (OWNED_BY_SCRIPTS[event]) {
-  console.error(
-    `log-event: "${event}" events are written by ${OWNED_BY_SCRIPTS[event]} itself — ` +
-    // Not a duplicate, in the escalation case: an incomplete act. Different
-    // defect, so different words — "duplicate" would send the reader looking for
-    // a second record that does not exist.
-    (event === 'escalation' ? 'refusing a half-recorded escalation.\n' : 'refusing to add a duplicate.\n') +
-    (event === 'escalation'
-      ? '  Writing it here would record the fact without PARKING the ticket, so the next session\n' +
-        '  inherits a metric and no verdict — and the front hands the ticket straight back.\n' +
-        '  `escalation-record.cjs mark <ticket> <reason...>` does both in one act.'
-      : '  The genuine record carries fields a hand-written one cannot (by, base), and counting both\n' +
-        '  overstates what the guard actually did. If the real event is missing, that is a bug in\n' +
-        `  ${OWNED_BY_SCRIPTS[event]}, not something to paper over here.`)
-  );
+  const owner = OWNED_BY_SCRIPTS[event];
+  console.error(`log-event: "${event}" events are written by ${owner.by} itself — ` + owner.why(owner));
   process.exit(1);
 }
 
