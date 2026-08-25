@@ -746,10 +746,14 @@ suite('front — a park is described by the store that owns it');
 
 const ESC_REASON = 'the reviewer must decide whether the endpoint may change';
 const DEFECT_REASON = 'the plan assumes a sync endpoint; the API streams';
-// The exact string `activeEscalations` hands back for a plan_defect record —
-// pinned verbatim by escalation-record.test.cjs, so a fixture here cannot drift
-// away from what the store produces.
-const DEFECT_PARK = `plan_defect — re-decompose: ${DEFECT_REASON}`;
+// The record `activeParks` hands back for a plan defect — the shape front.cjs's
+// own CLI passes in, so this fixture is wired the way production is. The kind
+// travels as a FIELD; the flat `{ticket: reason}` view keeps it only as a text
+// prefix, which is why a renderer must not be fed that view.
+const DEFECT_PARK = { kind: 'plan_defect', reason: DEFECT_REASON };
+// What the flat view renders for the same record. Used below only to prove that
+// a reason which merely LOOKS like it is not treated as one.
+const DEFECT_FLAT = `plan_defect — re-decompose: ${DEFECT_REASON}`;
 const escState = { T: { status: 'pr-open', pr: 7, draft: true, checks: checks() } };
 
 test('a plan_defect park names re-planning and never claims a PR move lifts it', () => {
@@ -766,7 +770,7 @@ test('a plan_defect park names re-planning and never claims a PR move lifts it',
 });
 
 test('an ordinary escalation renders exactly as it did before', () => {
-  const f = computeFront({ T: {} }, escState, { escalated: { T: ESC_REASON } });
+  const f = computeFront({ T: {} }, escState, { escalated: { T: { kind: 'escalation', reason: ESC_REASON } } });
   assert.strictEqual(
     f.why.T,
     `escalated — ${ESC_REASON}. It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear T\` to take it back.`,
@@ -780,6 +784,30 @@ test('a record with no kind reads as an ordinary escalation', () => {
   // be re-described with the plan_defect rule.
   const f = computeFront({ T: {} }, escState, { escalated: { T: 'the plan owner is on leave' } });
   assert.ok(/PR moves/.test(f.why.T), `the pre-kind rule is unchanged for it: ${f.why.T}`);
+  // The bare string IS the legacy shape — the flat `activeEscalations` view, which
+  // has already discarded the kind — so it must render the same sentence as the
+  // record that spells the kind out.
+  const rec = computeFront({ T: {} }, escState, {
+    escalated: { T: { kind: 'escalation', reason: 'the plan owner is on leave' } },
+  });
+  assert.strictEqual(f.why.T, rec.why.T, 'one sentence for one kind, whichever shape carried it');
+});
+
+test('an ordinary escalation whose reason LOOKS like a plan defect is still an escalation', () => {
+  // The reason is free text a human types. While the kind was recovered from the
+  // reason's PREFIX, a human pasting a board line back into `mark` was told that
+  // re-planning lifts a park that a PR move actually lifts — the same falsehood
+  // this suite exists to delete, one indirection down. Copilot, PR #8.
+  const f = computeFront({ T: {} }, escState, {
+    escalated: { T: { kind: 'escalation', reason: DEFECT_FLAT } },
+  });
+  // Byte-exact, because "contains re-plan" cannot distinguish the LIFTING
+  // sentence from the reason quoting one: the reason itself says re-decompose.
+  assert.strictEqual(
+    f.why.T,
+    `escalated — ${DEFECT_FLAT}. It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear T\` to take it back.`,
+    'the kind is the record\'s field, never the reason\'s opening words'
+  );
 });
 
 done();
