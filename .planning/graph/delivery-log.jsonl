@@ -35,3 +35,17 @@
 {"ts":"2026-08-25T10:31:11.672Z","event":"status_change","ticket":"T-22-03","from":null,"to":"pending","pr":null}
 {"ts":"2026-08-25T10:31:11.672Z","event":"status_change","ticket":"T-22-04","from":null,"to":"pending","pr":null}
 {"ts":"2026-08-25T10:31:11.672Z","event":"status_change","ticket":"T-22-05","from":null,"to":"pending","pr":null}
+{"ts":"2026-08-25T10:49:06.662Z","event":"status_change","ticket":"T-22-01","from":"pending","to":"pr-open","pr":8}
+{"ts":"2026-08-25T10:49:06.662Z","event":"status_change","ticket":"T-22-03","from":"pending","to":"pr-open","pr":9}
+{"ts":"2026-08-25T10:49:06.662Z","event":"status_change","ticket":"T-22-04","from":"pending","to":"pr-open","pr":10}
+{"ts":"2026-08-25T11:03:31.530Z","event":"status_change","ticket":"T-22-02","from":"pending","to":"pr-open","pr":11}
+{"ts":"2026-08-25T11:03:31.530Z","event":"status_change","ticket":"T-22-05","from":"pending","to":"pr-open","pr":12}
+{"ts":"2026-08-25T11:04:41.726Z","event":"merge","ticket":"T-22-03","pr":9,"base":"epic/22-close-what-phase-20-left-open","repo":null,"by":"sentinel"}
+{"ts":"2026-08-25T11:15:07.228Z","event":"status_change","ticket":"T-22-03","from":"pr-open","to":"merged","pr":9}
+{"ts":"2026-08-25T11:18:03.342Z","event":"merge","ticket":"T-22-01","pr":8,"base":"epic/22-close-what-phase-20-left-open","repo":null,"by":"sentinel"}
+{"ts":"2026-08-25T11:26:39.697Z","event":"merge","ticket":"T-22-02","pr":11,"base":"epic/22-close-what-phase-20-left-open","repo":null,"by":"sentinel"}
+{"ts":"2026-08-25T11:26:39.733Z","event":"status_change","ticket":"T-22-01","from":"pr-open","to":"merged","pr":8}
+{"ts":"2026-08-25T11:26:39.733Z","event":"status_change","ticket":"T-22-02","from":"pr-open","to":"merged","pr":11}
+{"ts":"2026-08-25T12:23:07.786Z","event":"merge","ticket":"T-22-05","pr":12,"base":"epic/22-close-what-phase-20-left-open","repo":null,"by":"sentinel"}
+{"ts":"2026-08-25T12:23:15.946Z","event":"status_change","ticket":"T-22-04","from":"pr-open","to":"merged","pr":10}
+{"ts":"2026-08-25T12:23:15.946Z","event":"status_change","ticket":"T-22-05","from":"pr-open","to":"merged","pr":12}

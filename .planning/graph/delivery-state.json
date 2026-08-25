@@ -61,58 +61,52 @@
   },
   "T-22-01": {
     "branch": "ticket/T-22-01-a-park-is-described-by-the-store-that-ow",
-    "pr": null,
-    "status": "pending",
+    "pr": 8,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/8",
     "base": "epic/22-close-what-phase-20-left-open",
     "epic": "epic/22-close-what-phase-20-left-open",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-08-25T10:31:11.672Z"
+    "reapable": true,
+    "since": "2026-08-25T11:26:39.733Z"
   },
   "T-22-02": {
     "branch": "ticket/T-22-02-a-reason-guard-checks-the-value-not-the",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-22-01-a-park-is-described-by-the-store-that-ow",
+    "pr": 11,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/11",
+    "base": "epic/22-close-what-phase-20-left-open",
     "epic": "epic/22-close-what-phase-20-left-open",
-    "ready": false,
-    "blocked_by": [
-      "T-22-01"
-    ],
-    "blocked_reasons": {
-      "T-22-01": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-08-25T10:31:11.672Z"
+    "reapable": true,
+    "since": "2026-08-25T11:26:39.733Z"
   },
   "T-22-03": {
     "branch": "ticket/T-22-03-one-graph-spelling-means-one-graph-parse",
-    "pr": null,
-    "status": "pending",
+    "pr": 9,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/9",
     "base": "epic/22-close-what-phase-20-left-open",
     "epic": "epic/22-close-what-phase-20-left-open",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-08-25T10:31:11.672Z"
+    "reapable": true,
+    "since": "2026-08-25T11:15:07.228Z"
   },
   "T-22-04": {
     "branch": "ticket/T-22-04-a-lock-is-held-from-the-instant-it-exist",
-    "pr": null,
-    "status": "pending",
+    "pr": 10,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/10",
     "base": "epic/22-close-what-phase-20-left-open",
     "epic": "epic/22-close-what-phase-20-left-open",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-08-25T10:31:11.672Z"
+    "reapable": true,
+    "since": "2026-08-25T12:23:15.946Z"
   },
   "T-22-05": {
     "branch": "ticket/T-22-05-the-harness-must-be-able-to-fail-an-asyn",
-    "pr": null,
-    "status": "pending",
+    "pr": 12,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/12",
     "base": "epic/22-close-what-phase-20-left-open",
     "epic": "epic/22-close-what-phase-20-left-open",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-08-25T10:31:11.672Z"
+    "reapable": true,
+    "since": "2026-08-25T12:23:15.946Z"
   }
 }
