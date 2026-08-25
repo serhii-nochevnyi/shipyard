@@ -6,7 +6,19 @@ set -euo pipefail
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-perms() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+# GNU first, BSD second — the reverse order silently returns garbage on Linux.
+# `stat -f` on GNU means "file SYSTEM status", so `stat -f %Lp file` there does
+# not fail: it succeeds printing something that is not a mode, the `||` fallback
+# never runs, and the caller compares nonsense to "600". `stat -c` is simply
+# unknown to BSD stat, which does fail, so this order degrades correctly on both.
+# The digit check is the load-bearing part: a mode we cannot read must abort the
+# test, never quietly become a failed assertion about permissions.
+perms() {
+  local p
+  p="$(stat -c %a "$1" 2>/dev/null)" || p="$(stat -f %Lp "$1" 2>/dev/null)" || p=''
+  [[ "$p" =~ ^[0-7]{3,4}$ ]] || { echo "perms: cannot read the mode of $1 (got '$p')" >&2; return 1; }
+  printf '%s\n' "$p"
+}
 
 source_dir="$tmpdir/source"
 target_dir="$tmpdir/target"
