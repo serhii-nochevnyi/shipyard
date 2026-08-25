@@ -109,4 +109,33 @@ test('a bad event name still reports usage, not the graph error', () => {
   assert.ok(/usage:/.test(r.stderr), r.stderr);
 });
 
+test('the plan_defect verdict is refused for the escalation reason, not the duplicate one', () => {
+  // Journalling it by hand records the CONCLUSION without parking the ticket —
+  // and without the plan hash that lets the park lift when the plan is
+  // re-decomposed. The next session inherits a metric and no verdict.
+  const { project, graph } = scratch();
+  const r = run(project, ['plan_defect', 'ticket=T-20-03', 'pr=1']);
+  assert.notStrictEqual(r.status, 0, 'must be refused');
+  assert.ok(/half-recorded/.test(r.stderr), r.stderr);
+  assert.ok(!/duplicate/.test(r.stderr), 'an incomplete act, not a duplicate');
+  assert.ok(/escalation-record\.cjs mark-plan-defect/.test(r.stderr),
+    'it must name the command that parks AND journals');
+  assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
+});
+
+test('the flake trio is refused — those events ARE the quarantine store', () => {
+  // failure-signature.cjs has no store of its own: `verdict` reads these lines
+  // back. A hand-written one is therefore neither a duplicate nor half an act —
+  // it is invented state, outside the lock and outside the (ticket, signature,
+  // head) bookkeeping the rules match on, and the loop would believe it.
+  const { project, graph } = scratch();
+  for (const ev of ['flake', 'flake_rerun', 'flake_lift']) {
+    const r = run(project, [ev, 'ticket=T-20-01', 'signature=9f2a', 'head=deadbee']);
+    assert.notStrictEqual(r.status, 0, `${ev} must be refused`);
+    assert.ok(/failure-signature\.cjs/.test(r.stderr), `${ev}: the error must name the owning script`);
+    assert.ok(!/duplicate/.test(r.stderr), `${ev}: there is no second record to duplicate`);
+  }
+  assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
+});
+
 done();
