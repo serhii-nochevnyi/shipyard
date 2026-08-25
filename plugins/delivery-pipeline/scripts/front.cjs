@@ -70,6 +70,11 @@ function computeFront(tickets, state, opts = {}) {
   // in; the front never guesses it, because the difference is whether an unmerged
   // green PR is the run's work or a human's.
   const autoMerge = opts.autoMerge === true;
+  // Expected CI length per ticket, in seconds, supplied by the caller —
+  // `ciEstimates` below derives it and BOTH entry points pass it in. It is data,
+  // not a lookup: computeFront is a pure function over its inputs and reads no
+  // file, so the journal is opened by the caller or not at all.
+  const ciEst = opts.ci_estimates || {};
   // The parent ticket id when this child's base is an OPEN human_checkpoint PR,
   // else null. `sentinel.cjs` computes the same thing for its own gate — the two
   // must agree, or the front keeps offering a merge the guard refuses.
@@ -217,15 +222,8 @@ function computeFront(tickets, state, opts = {}) {
   };
   const actionableCount = ORDER.reduce((n, k) => n + actionable[k].length, 0);
   const fixpoint = actionableCount === 0 && waiting.ci.length === 0;
-  // What the sentinel owns (open PRs) vs what the main loop owns (new tickets).
-  // deliver.md splits the run on exactly this line.
-  const sentinel = {
-    duty: SENTINEL_BUCKETS.flatMap((k) => actionable[k]),
-    waiting_ci: waiting.ci.slice(),
-  };
-  sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0;
-
-  // SHALLOWEST FIRST inside every bucket. A ticket stacked on an open parent is
+  // SHALLOWEST FIRST within a stack — the THIRD sort key now; the full order is
+  // stated at the comparator below. A ticket stacked on an open parent is
   // work that will have to be redone: when the parent lands, this branch's base
   // moves, CI re-runs against different code and reviewers re-read a changed
   // diff. Ordering by stack depth is what makes "drive the parents first" the
@@ -252,9 +250,79 @@ function computeFront(tickets, state, opts = {}) {
     .reduce((max, id) => Math.max(max, phaseNum(id)), 0);
   const leftBehind = (id) => (phaseNum(id) < newestLandedPhase ? 1 : 0);
 
-  const byDepth = (a, b) =>
-    leftBehind(a) - leftBehind(b) || depth(a) - depth(b) || String(a).localeCompare(String(b));
-  for (const k of Object.keys(actionable)) actionable[k].sort(byDepth);
+  // UNBLOCKING POWER — how much other work this ticket is holding up. Depth
+  // orders a stack and left-behind demotes an abandoned phase, but neither says
+  // which of two live roots to take, and unattended that is the decision that
+  // matters: the head of the list is what the 04:00 round picks up, so it should
+  // be the ticket that leaves the most work available behind it.
+  //
+  // Counted over `depends_on` (the whole DAG) rather than `primary_parent` (the
+  // branch stack): a ticket can gate work it was never going to be the base of.
+  const dependents = new Map();
+  for (const [cid, t] of Object.entries(tickets || {})) {
+    for (const dep of (t && t.depends_on) || []) {
+      if (!dependents.has(dep)) dependents.set(dep, []);
+      dependents.get(dep).push(cid);
+    }
+  }
+  // A FRESH visited set per root, memoised by root. validate-graph.cjs already
+  // paid for the other half of this: ancestor closures computed with a set
+  // SHARED across recursions cached truncated closures and rejected valid
+  // diamond graphs. The mirror-image defect here is inflation — in A←B, A←C,
+  // B←D, C←D, D is reachable by two paths and must still count ONCE for A. The
+  // same set makes the walk cycle-tolerant: Gate 2 proves the graph acyclic, but
+  // the front must not hang on a corrupt file.
+  const descCache = new Map();
+  const descendants = (id) => {
+    if (descCache.has(id)) return descCache.get(id);
+    const seen = new Set([id]);
+    const stack = (dependents.get(id) || []).slice();
+    let n = 0;
+    while (stack.length) {
+      const cur = stack.pop();
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      // Merged dependents are walked THROUGH — their own children are still held
+      // up — but never counted: a merged ticket needs no unblocking.
+      if ((state[cur] || {}).status !== 'merged') n++;
+      for (const next of dependents.get(cur) || []) stack.push(next);
+    }
+    descCache.set(id, n);
+    return n;
+  };
+  // Longest pipeline first: starting the slowest one earliest is what overlaps
+  // its wait with the rest of the front. A missing or malformed entry ties at 0
+  // rather than poisoning the comparator.
+  const ciLen = (id) => Number(ciEst[id]) || 0;
+
+  // The order inside every actionable bucket:
+  //   leftBehind  ASC   an abandoned phase never leads (unchanged, still first)
+  //   descendants DESC  the widest unblocker first
+  //   depth       ASC   then top-down within a stack
+  //   ciLen       DESC  then the longest pipeline, started earliest
+  //   id          ASC   a stable tiebreak, so the board does not shuffle
+  //
+  // Descendants-before-depth keeps "drive the parents first" by construction
+  // rather than by luck: a parent's descendant set strictly contains its
+  // unmerged child's, so the parent always wins that key outright.
+  const byUnblocking = (a, b) =>
+    leftBehind(a) - leftBehind(b) ||
+    descendants(b) - descendants(a) ||
+    depth(a) - depth(b) ||
+    ciLen(b) - ciLen(a) ||
+    String(a).localeCompare(String(b));
+  for (const k of Object.keys(actionable)) actionable[k].sort(byUnblocking);
+
+  // What the sentinel owns (open PRs) vs what the main loop owns (new tickets).
+  // deliver.md splits the run on exactly this line. Built AFTER the sort so the
+  // duty line and the buckets it is drawn from cannot print two different orders
+  // of the same work. (The guard's own serving order is sentinel.cjs's — this is
+  // the board's view of its share.)
+  const sentinel = {
+    duty: SENTINEL_BUCKETS.flatMap((k) => actionable[k]),
+    waiting_ci: waiting.ci.slice(),
+  };
+  sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0;
 
   // How much of the actionable list is work the run has already moved past. The
   // stop condition has to distinguish "there is live work" from "there is only
@@ -271,6 +339,89 @@ function computeFront(tickets, state, opts = {}) {
 // (it survives a squash merge) and parsed by state-sync into state[id].gate.
 function gateConform(s) {
   return String(((s && s.gate) || {})['arch-review'] || '').toLowerCase() === 'conform';
+}
+
+// EXPECTED CI LENGTH, as a per-repo median over the delivery journal.
+//
+// A PROXY, and named as one: what is journalled is the PR's LIFETIME (first
+// `pr-open` → first `merged`), not CI wall time — nothing records the latter, so
+// this number carries review latency and merge-queue waiting with it. That is
+// exactly why it is the front's LAST key before the id: it breaks ties between
+// otherwise indistinguishable tickets and never outranks unblocking power or
+// stack depth.
+//
+// Grouped by repo because a phase spanning a backend and a frontend repo has two
+// unrelated pipelines, and a median from one says nothing about the other.
+// MEDIAN, not mean: one PR that sat over a weekend must not redefine its repo.
+//
+// It reads the LOCAL journal only. Nothing here may grow into a per-PR `gh`
+// field — that is the 41s-vs-7s lesson state-sync's bulk window records.
+function ciEstimates(graphDir, tickets = {}) {
+  const fs = require('fs');
+  const path = require('path');
+  const repoKey = (id) => String(((tickets && tickets[id]) || {}).repo || '');
+  const out = {};
+  for (const id of Object.keys(tickets || {})) out[id] = 0;
+
+  let raw;
+  try {
+    raw = fs.readFileSync(path.join(graphDir, 'delivery-log.jsonl'), 'utf8');
+  } catch (e) {
+    // No journal yet (a first run, or a fresh graph): everyone estimates 0 and
+    // the term falls through to the id, which is the pre-existing order.
+    return out;
+  }
+
+  // FIRST occurrence wins. The journal is append-only, so the earliest entry for
+  // a (ticket, status) pair is when the ticket actually reached that status; a
+  // later duplicate is a resync re-observing it.
+  const firstAt = new Map();
+  for (const line of raw.split('\n')) {
+    const s = line.trim();
+    if (!s) continue;
+    let e;
+    // state-sync appends under a lock this read does not take, so a torn tail is
+    // reachable. It must cost one sample, never the whole front.
+    try { e = JSON.parse(s); } catch (_) { continue; }
+    if (!e || e.event !== 'status_change' || !e.ticket || !e.to) continue;
+    const ms = Date.parse(e.ts);
+    if (!Number.isFinite(ms)) continue;
+    const key = `${e.ticket}\u0000${e.to}`;
+    if (!firstAt.has(key)) firstAt.set(key, ms);
+  }
+
+  const samples = new Map();
+  for (const key of firstAt.keys()) {
+    const sep = key.indexOf('\u0000');
+    if (key.slice(sep + 1) !== 'merged') continue;
+    const id = key.slice(0, sep);
+    // A ticket the journal remembers but the current graph does not (pruned,
+    // archived, or read from the wrong graph) has no KNOWN repo — `repoKey`
+    // would default it to '', the same bucket a real local ticket with no
+    // `repo` field uses, misattributing a foreign PR's lifetime into the
+    // local median.
+    if (!(tickets && Object.prototype.hasOwnProperty.call(tickets, id))) continue;
+    const opened = firstAt.get(`${id}\u0000pr-open`);
+    // Merged with no journalled `pr-open` (imported history, a PR opened before
+    // the conveyor watched it): there is no lifetime to measure, so no sample.
+    if (!Number.isFinite(opened)) continue;
+    const secs = (firstAt.get(key) - opened) / 1000;
+    if (!(secs > 0)) continue;
+    const r = repoKey(id);
+    if (!samples.has(r)) samples.set(r, []);
+    samples.get(r).push(secs);
+  }
+
+  const medians = new Map();
+  for (const [r, xs] of samples) {
+    const sorted = xs.slice().sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    medians.set(r, sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2);
+  }
+  // Every ticket gets its OWN repo's median; a repo with no merged sample yet
+  // estimates nothing, which ties it at 0.
+  for (const id of Object.keys(out)) out[id] = medians.get(repoKey(id)) || 0;
+  return out;
 }
 
 function blockedWhy(s) {
@@ -359,7 +510,7 @@ function formatFront(front) {
   return lines;
 }
 
-module.exports = { computeFront, formatFront };
+module.exports = { computeFront, formatFront, ciEstimates };
 
 // ── CLI: read the state files this project already has and print the verdict ──
 if (require.main === module) {
@@ -395,6 +546,10 @@ if (require.main === module) {
   const { activeEscalations } = require(path.join(__dirname, 'escalation-record.cjs'));
   const front = computeFront(tickets, state, {
     parked, autoMerge, drifted: activeDrift(root), escalated: activeEscalations(root, state),
+    // …and the ORDER has the same requirement as the verdict: state-sync derives
+    // this from the journal, so the CLI must too, or the two commands rank the
+    // same graph differently.
+    ci_estimates: ciEstimates(dir, tickets),
   });
   if (argv.includes('--json')) {
     process.stdout.write(JSON.stringify(front, null, 2) + '\n');
