@@ -41,8 +41,33 @@ const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock
 // trap for the caller who puts it first.
 const ARGV_ALL = process.argv.slice(2);
 const GRAPH_FLAG_AT = ARGV_ALL.indexOf('--graph');
+// One spelling has to mean one PARSER. A flag-shaped token is not a directory:
+// `--graph --json` used to resolve a directory literally called "--json", and a
+// trailing `--graph` fell through the `|| ''` below to the cwd — both then read
+// as EXPLICIT, which is exactly what skips the no-ticket-graph refusal further
+// down. The verdict lands where state-sync never reads it and the script prints
+// `drift recorded`: the silent failure this store exists to prevent, reached
+// through its own flag. escalation-record.cjs, failure-signature.cjs and
+// attempt-history.cjs each grew this guard on the PR where a reviewer hit it;
+// the wording below is escalation-record.cjs's, verbatim, because a caller who
+// learns one spelling must not meet a second phrasing here.
+//
+// CLI only, deliberately: escalation-record.cjs, sentinel.cjs and front.cjs
+// `require` this file for planHash/activeDrift, and an exit at require time
+// would kill THEM — under this script's name, before their own guard could say
+// anything better.
+if (require.main === module && GRAPH_FLAG_AT !== -1) {
+  const val = ARGV_ALL[GRAPH_FLAG_AT + 1];
+  if (val === undefined || val.startsWith('--')) {
+    fail(`--graph needs a directory value (got ${val === undefined ? 'nothing' : `the flag "${val}"`})`);
+  }
+}
 const GRAPH_EXPLICIT = GRAPH_FLAG_AT !== -1 || !!process.env.SHIPYARD_GRAPH_DIR;
 const GRAPH_DIR = GRAPH_FLAG_AT !== -1
+  // The `|| ''` is not dead code behind that guard: it covers the library
+  // `require`, where a trailing `--graph` in someone else's argv would make
+  // path.resolve(undefined) throw at require time instead of reaching that
+  // caller's own message.
   ? path.resolve(ARGV_ALL[GRAPH_FLAG_AT + 1] || '')
   : (process.env.SHIPYARD_GRAPH_DIR
     ? path.resolve(process.env.SHIPYARD_GRAPH_DIR)
