@@ -395,6 +395,12 @@ function ciEstimates(graphDir, tickets = {}) {
     const sep = key.indexOf('\u0000');
     if (key.slice(sep + 1) !== 'merged') continue;
     const id = key.slice(0, sep);
+    // A ticket the journal remembers but the current graph does not (pruned,
+    // archived, or read from the wrong graph) has no KNOWN repo — `repoKey`
+    // would default it to '', the same bucket a real local ticket with no
+    // `repo` field uses, misattributing a foreign PR's lifetime into the local
+    // median. Found by Copilot's review of this PR.
+    if (!(tickets && Object.prototype.hasOwnProperty.call(tickets, id))) continue;
     const opened = firstAt.get(`${id}\u0000pr-open`);
     // Merged with no journalled `pr-open` (imported history, a PR opened before
     // the conveyor watched it): there is no lifetime to measure, so no sample.

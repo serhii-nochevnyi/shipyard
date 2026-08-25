@@ -660,6 +660,26 @@ test('a torn journal line costs one sample, not the estimate', () => {
   assert.strictEqual(ciEstimates(graph, { 'H-1': {}, 'H-2': {}, 'H-3': {} })['H-3'], 200);
 });
 
+test("a merged ticket the CURRENT graph does not know does not pollute another repo's median", () => {
+  // Copilot's finding on this PR: `repoKey` defaults an unknown ticket to the
+  // SAME '' bucket a real local ticket uses, so a stale/pruned/foreign journal
+  // entry for a ticket id absent from `tickets` silently skews the local
+  // repo's median rather than being excluded for lack of a known repo.
+  const fs = require('fs');
+  const { graph } = tmpGraph('shipyard-ciest-unknown-');
+  fs.writeFileSync(path.join(graph, 'delivery-log.jsonl'), [
+    // the local repo's one legitimate sample: lifetime 100
+    evAt('H-1', 'pr-open', 0), evAt('H-1', 'merged', 100),
+    // a ticket the journal remembers but the current graph does not — a much
+    // longer lifetime that must not be attributed to the local repo just
+    // because its repo identity is unknown.
+    evAt('GONE-1', 'pr-open', 0), evAt('GONE-1', 'merged', 10000),
+    '',
+  ].join('\n'));
+  const est = ciEstimates(graph, { 'H-1': {}, 'H-next': {} });
+  assert.strictEqual(est['H-next'], 100, "the unknown ticket's sample must be excluded, not merged in");
+});
+
 suite('front — the CLI and state-sync order the same graph the same way');
 
 test('the CLI derives ci_estimates from the journal, exactly as state-sync does', () => {
