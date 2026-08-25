@@ -24,7 +24,10 @@
 //
 // The lock is a DIRECTORY (mkdir is atomic on every POSIX filesystem, unlike
 // "check then create"), holding an owner.json so a stale lock can be identified
-// and taken over — a killed session must not wedge the next run forever.
+// and taken over — a killed session must not wedge the next run forever. The
+// directory and its owner.json are two calls, though, so every live acquire
+// spends a moment holding a lock that cannot yet name its holder; see
+// OWNERLESS_GRACE_MS for how that window is told apart from a death in it.
 
 const fs = require('fs');
 const path = require('path');
@@ -32,6 +35,15 @@ const path = require('path');
 const DEFAULT_TTL_MS = 120_000;   // a holder older than this is presumed dead
 const DEFAULT_WAIT_MS = 60_000;   // how long we queue before giving up
 const POLL_MS = 120;
+
+// How long a lock directory that has no owner.json yet is presumed HELD. The
+// mkdir and the writeFileSync that follows it are microseconds apart, so two
+// seconds cover that window by orders of magnitude while staying 1/60 of the
+// TTL — a session killed between the two calls is still taken over, two seconds
+// later instead of instantly. It also clears the one-second mtime granularity
+// some filesystems still report, which would otherwise make a directory created
+// this instant read as nearly a second old.
+const OWNERLESS_GRACE_MS = 2_000;
 
 // These scripts are synchronous end to end, so the wait has to be synchronous
 // too. A `while (Date.now() < t) {}` spin would burn a core precisely while the
@@ -54,6 +66,14 @@ function readOwner(lockPath) {
   } catch {
     return null;
   }
+}
+
+// When the mkdir happened, straight from the filesystem — the age an owner-less
+// lock cannot state itself. A lock that vanished while we looked at it reports
+// NaN, which the negated comparison below treats as "take it over": breaking a
+// directory that is already gone is a no-op, and the retry re-runs the mkdir.
+function ownerlessAgeMs(lockPath) {
+  try { return Date.now() - fs.statSync(lockPath).mtimeMs; } catch { return NaN; }
 }
 
 function breakLock(lockPath) {
@@ -88,14 +108,35 @@ function acquire(dir, name, opts = {}) {
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
       const holder = readOwner(lockPath);
-      // No owner.json = a process died between mkdir and the write, so the age
-      // is unknown; an unparseable timestamp is the same case. Both are treated
-      // as stale rather than as "held forever" (note the negated comparison —
-      // NaN < ttl is false, which is the behaviour we want).
-      const age = holder && holder.at ? Date.now() - Date.parse(holder.at) : NaN;
-      if (!(age < ttlMs)) {
-        breakLock(lockPath);
-        continue;
+      if (holder && holder.at) {
+        // A lock that names its holder is stale once that holder's own
+        // timestamp is older than the TTL. An unparseable timestamp is an
+        // unknown age and is taken over at once — note the negated comparison,
+        // NaN < ttl is false, which is the behaviour we want here.
+        const age = Date.now() - Date.parse(holder.at);
+        if (!(age < ttlMs)) {
+          breakLock(lockPath);
+          continue;
+        }
+      } else {
+        // No owner.json. Two states look identical from here: a process that
+        // died between the mkdir and the write, and one that is ABOUT to write.
+        // The second is the common one — those two calls are microseconds apart
+        // in EVERY live acquire — so treating the pair as stale broke live
+        // locks out from under their holders, and both processes then believed
+        // they held it. The age is not actually unknown: the lock directory's
+        // own mtime records when the mkdir happened. Inside the grace the lock
+        // is HELD and we queue; past it the takeover is exactly as before, so a
+        // killed session still cannot wedge the next run. (A corrupt owner.json,
+        // or one that names no time at all, reads the same as a missing one and
+        // so waits out the grace too — a takeover delayed by two seconds and
+        // nothing more. An owner.json that DOES name a time, unparseably, keeps
+        // its instant takeover in the branch above.)
+        const age = ownerlessAgeMs(lockPath);
+        if (!(age < OWNERLESS_GRACE_MS)) {
+          breakLock(lockPath);
+          continue;
+        }
       }
       if (Date.now() >= deadline) return null;
       sleepSync(POLL_MS);
@@ -140,7 +181,7 @@ function writeAtomic(file, data) {
   }
 }
 
-module.exports = { withLock, acquire, writeAtomic, lockDirFor, sleepSync, DEFAULT_TTL_MS };
+module.exports = { withLock, acquire, writeAtomic, lockDirFor, sleepSync, DEFAULT_TTL_MS, OWNERLESS_GRACE_MS };
 
 // ── CLI: the shell scripts take the same locks (git worktree/branch surgery) ──
 //   lock.cjs run <dir> <name> -- <command> [args...]
