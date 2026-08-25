@@ -67,9 +67,21 @@ const DEFAULT_K = 3; // the same default T-20-02 declares as pipeline.plan_defec
 // at the end is a trap for the caller who puts it first.
 const ARGV_ALL = process.argv.slice(2);
 const GRAPH_FLAG_AT = ARGV_ALL.indexOf('--graph');
+// A `--graph` with no value — at the end, or immediately followed by another
+// flag — must not read as "explicit". Before this check it did: GRAPH_EXPLICIT
+// only tested flag PRESENCE, so `--graph` alone resolved to `path.resolve('')`
+// (the cwd) and skipped requireGraph()'s refusal entirely — a fixer's worktree
+// cwd would then silently become the graph dir, exactly the class of bug the
+// refusal exists to prevent, just reached by a different door.
+if (GRAPH_FLAG_AT !== -1) {
+  const val = ARGV_ALL[GRAPH_FLAG_AT + 1];
+  if (val === undefined || val.startsWith('--')) {
+    usage(`--graph needs a directory value (got ${val === undefined ? 'nothing' : `the flag "${val}"`}) — refusing to guess and land in the wrong project's journal`);
+  }
+}
 const GRAPH_EXPLICIT = GRAPH_FLAG_AT !== -1 || !!process.env.SHIPYARD_GRAPH_DIR;
 const GRAPH_DIR = GRAPH_FLAG_AT !== -1
-  ? path.resolve(ARGV_ALL[GRAPH_FLAG_AT + 1] || '')
+  ? path.resolve(ARGV_ALL[GRAPH_FLAG_AT + 1])
   : (process.env.SHIPYARD_GRAPH_DIR
     ? path.resolve(process.env.SHIPYARD_GRAPH_DIR)
     : path.join(process.cwd(), '.planning', 'graph'));

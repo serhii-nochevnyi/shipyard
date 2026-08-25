@@ -457,6 +457,32 @@ for (const [what, args] of [
   });
 }
 
+for (const [what, args] of [
+  ['verdict', ['verdict', 'T-20-01', '--signature', 'aaaa', '--head', 'h1']],
+  ['rerun', ['rerun', 'T-20-01', '--signature', 'aaaa', '--head', 'h1', '--outcome', 'green']],
+  ['lift', ['lift', 'T-20-01', '--signature', 'aaaa']],
+]) {
+  // Copilot's finding on this PR: `--graph` with no value read as "explicit"
+  // regardless, because the old check only tested flag PRESENCE. That resolved
+  // GRAPH_DIR to `path.resolve('')` (the cwd) and skipped the refusal below —
+  // a fixer's worktree cwd would silently become the graph dir.
+  test(`${what}: a --graph at the end with no value is a usage error, not a silent cwd fallback`, () => {
+    const { worktree } = scratch();
+    const r = run([...args, '--graph'], { cwd: worktree, encoding: 'utf8' });
+    assert.notEqual(r.status, 0, 'a missing value must not be treated as an explicit graph');
+    assert.ok(/--graph/.test(r.stderr), 'and the message names the flag');
+    assert.ok(!fs.existsSync(path.join(worktree, '.planning')), 'nothing is written to the wrong place');
+  });
+
+  test(`${what}: a --graph immediately followed by another flag is a usage error`, () => {
+    const { worktree } = scratch();
+    const r = run(['--graph', '--json', ...args], { cwd: worktree, encoding: 'utf8' });
+    assert.notEqual(r.status, 0, 'the next flag is not a directory value');
+    assert.ok(/--graph/.test(r.stderr));
+    assert.ok(!fs.existsSync(path.join(worktree, '.planning')), 'nothing is written to the wrong place');
+  });
+}
+
 test('SHIPYARD_GRAPH_DIR resolves it too', () => {
   const { worktree, graph } = scratch();
   const r = run(['lift', 'T-20-01', '--signature', 'aaaa'],
