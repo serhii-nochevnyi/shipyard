@@ -1,13 +1,9 @@
 {
-  "generated_at": "2026-08-25T07:07:39.707Z",
+  "generated_at": "2026-08-25T09:09:32.981Z",
   "parked_by_run": [],
   "auto_merge": "epic",
   "actionable": {
-    "execute": [
-      "T-20-01",
-      "T-20-04",
-      "T-20-05"
-    ],
+    "execute": [],
     "publish": [],
     "fix": [],
     "finalize": [],
@@ -19,23 +15,19 @@
     "human": []
   },
   "parked": {
-    "blocked": [
+    "blocked": [],
+    "done": [
+      "T-20-01",
       "T-20-02",
       "T-20-03",
+      "T-20-04",
+      "T-20-05",
       "T-20-06"
-    ],
-    "done": []
+    ]
   },
-  "why": {
-    "T-20-01": "ready — worktree + executor",
-    "T-20-02": "T-20-01 (parent has no branch yet (nothing to cascade from))",
-    "T-20-03": "T-20-01 (parent has no branch yet (nothing to cascade from))",
-    "T-20-04": "ready — worktree + executor",
-    "T-20-05": "ready — worktree + executor",
-    "T-20-06": "T-20-01 (parent has no branch yet (nothing to cascade from)); T-20-02 (parent has no branch yet (nothing to cascade from)); T-20-03 (parent has no branch yet (nothing to cascade from)); T-20-05 (parent has no branch yet (nothing to cascade from))"
-  },
+  "why": {},
   "counts": {
-    "execute": 3,
+    "execute": 0,
     "publish": 0,
     "fix": 0,
     "finalize": 0,
@@ -43,12 +35,12 @@
     "ci": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 3,
-    "done": 0
+    "blocked": 0,
+    "done": 6
   },
-  "actionable_count": 3,
+  "actionable_count": 0,
   "left_behind_count": 0,
-  "fixpoint": false,
+  "fixpoint": true,
   "sentinel": {
     "duty": [],
     "waiting_ci": [],

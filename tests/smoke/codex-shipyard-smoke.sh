@@ -88,9 +88,17 @@ done
 # report that instead of the grep result.
 vg_out="$( ( cd "$WORK" && node -e 'require(process.argv[1])' "$CODEX_HOME/shipyard/scripts/validate-graph.cjs" 2>&1 ) || true )"
 grep -q 'missing .planning' <<<"$vg_out" || { echo "bundled validate-graph.cjs cannot load its modules: $vg_out"; exit 1; }
-# the model resolver travels with the bundle and only emits tier aliases
-[[ "$(node "$CODEX_HOME/shipyard/scripts/pipeline-config.cjs" model arch-review)" == opus ]] \
-  || { echo "bundled pipeline-config.cjs does not resolve the judgment tier"; exit 1; }
+# The model resolver travels with the bundle and only emits tier aliases.
+# Run it from "$WORK" for the same reason validate-graph is run there: the
+# resolver reads `<cwd>/.planning/config.json`, and this smoke's own cwd is the
+# repo root, which BECAME a GSD project (`runtime: claude`) after this line was
+# written. That config legitimately resolves the two judgment roles to `fable`,
+# so the assertion started failing on a correct resolver. What is under test is
+# that the bundled copy loads and answers with a tier alias — not what the host
+# project happens to configure.
+pc_tier="$( cd "$WORK" && node "$CODEX_HOME/shipyard/scripts/pipeline-config.cjs" model arch-review )"
+[[ "$pc_tier" == opus ]] \
+  || { echo "bundled pipeline-config.cjs does not resolve the judgment tier (got '$pc_tier', want 'opus')"; exit 1; }
 
 # ${CLAUDE_PLUGIN_ROOT} is rewritten to the bundle root, so every path the skills
 # reference must actually EXIST there — including workflows/, which used to be

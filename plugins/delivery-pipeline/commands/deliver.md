@@ -143,7 +143,7 @@ SENTINEL    ci-fix / review-fix / arch-review / undraft / merge / wait-ci
 
 **Post the guard, then keep moving. Never wait for it.**
 
-- **Background agent (preferred, Claude runtime).** After Step 3 publishes PRs,
+- **Background agent (preferred, where the Agent tool exists).** After Step 3 publishes PRs,
   spawn ONE sentinel with `Agent({ run_in_background: true, subagent_type:
   'general-purpose', model, ... })` whose prompt is
   `${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md` plus the guarded ticket list
