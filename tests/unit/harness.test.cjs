@@ -27,13 +27,21 @@ const HARNESS = path.join(__dirname, 'assert-harness.cjs');
 // and exited with.
 function runSuite(body) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-harness-'));
-  const file = path.join(dir, 'scratch-suite.cjs');
-  fs.writeFileSync(file, [
-    `const { suite, test, done, assert } = require(${JSON.stringify(HARNESS)});`,
-    body,
-  ].join('\n'));
-  const r = spawnSync(process.execPath, [file], { encoding: 'utf8', timeout: 20000 });
-  return { status: r.status, out: `${r.stdout}${r.stderr}` };
+  try {
+    const file = path.join(dir, 'scratch-suite.cjs');
+    fs.writeFileSync(file, [
+      `const { suite, test, done, assert } = require(${JSON.stringify(HARNESS)});`,
+      body,
+    ].join('\n'));
+    const r = spawnSync(process.execPath, [file], { encoding: 'utf8', timeout: 20000 });
+    return { status: r.status, out: `${r.stdout}${r.stderr}` };
+  } finally {
+    // `spawnSync` has already reaped the child, so nothing is still reading this
+    // directory. `finally` rather than a line after the spawn because a failed
+    // write or a spawn that never starts must not leak the directory either —
+    // one scratch dir per call, ~13 per run of this file, more on CI.
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 const occurrences = (haystack, needle) => haystack.split(needle).length - 1;
@@ -143,6 +151,86 @@ done();
 `);
   assert.equal(status, 0, `exit status must be 0, got ${status}:\n${out}`);
   assert.ok(out.includes('1 passed, 0 failed'), out);
+});
+
+suite('assert harness — a thrown value is not a signal');
+
+// Regression on this PR, found by Copilot. `record()` inferred the outcome from
+// the truthiness of what it was handed (`if (!error)`), and the two call sites
+// disagreed: the async path normalized its rejection to an Error while the
+// synchronous `catch` passed the raw value straight through. A sync body that
+// threw anything FALSY was therefore recorded as a pass — `throw 0` printed ✓
+// where before this ticket it printed ✗, a loud failure turned silent inside
+// the file whose whole purpose is closing that class. These pin the entire
+// falsy set as failing, which is also what makes the claim in the suite above
+// — that the synchronous path is unchanged — true.
+
+// Spelled as source literals so the generated name reads `sync body that
+// throws 0`, and so the empty string is spelled `""`: safe inside the
+// single-quoted test name it is interpolated into.
+const FALSY_LITERALS = ['0', '""', 'undefined', 'null', 'false', 'NaN'];
+
+test('a sync body that throws a FALSY value fails — the whole set, not just 0', () => {
+  const { status, out } = runSuite([
+    "suite('falsy throws');",
+    ...FALSY_LITERALS.map((lit) => `test('sync body that throws ${lit}', () => { throw ${lit}; });`),
+    'done();',
+  ].join('\n'));
+  for (const lit of FALSY_LITERALS) {
+    assert.ok(out.includes(`✗ sync body that throws ${lit}`), `throw ${lit} must fail:\n${out}`);
+    // The regression, pinned as ABSENT: every one of these printed a tick.
+    assert.equal(occurrences(out, `✓ sync body that throws ${lit}`), 0,
+      `no tick for throw ${lit}:\n${out}`);
+  }
+  // The tally separates "the harness failed them" from "the harness crashed" —
+  // a normalizer that throws inside the catch handler prints neither ✗ nor this.
+  assert.ok(out.includes(`0 passed, ${FALSY_LITERALS.length} failed`),
+    `tally must count every falsy throw as a failure:\n${out}`);
+  assert.equal(status, 1, `exit status must be 1, got ${status}:\n${out}`);
+});
+
+test('an async body rejecting a falsy value fails too — both paths agree', () => {
+  // The path that was already correct, pinned so the two can no longer diverge.
+  const { status, out } = runSuite(`
+suite('async falsy');
+test('async body rejecting 0', () => Promise.reject(0));
+done();
+`);
+  assert.ok(out.includes('✗ async body rejecting 0'), `must fail:\n${out}`);
+  assert.equal(occurrences(out, '✓ async body rejecting 0'), 0, `and never tick:\n${out}`);
+  assert.ok(out.includes('0 passed, 1 failed'), out);
+  assert.equal(status, 1, `exit status must be 1, got ${status}:\n${out}`);
+});
+
+test('a non-Error thrown synchronously reports its reason, not `undefined`', () => {
+  // The second half of the same thread: `record()` read `.message` off whatever
+  // it was handed, so a raw string throw printed `undefined` as the reason.
+  // Deliberately the ONLY test in its suite — the count below looks for
+  // `undefined` across the whole child output.
+  const { status, out } = runSuite(`
+suite('non-Error throw');
+test('sync body that throws a string', () => { throw 'boom'; });
+done();
+`);
+  assert.ok(out.includes('✗ sync body that throws a string'), `must fail:\n${out}`);
+  assert.ok(out.includes('boom'), `the reason must survive:\n${out}`);
+  assert.equal(occurrences(out, 'undefined'), 0, `and must not be reported as undefined:\n${out}`);
+  assert.equal(status, 1, `exit status must be 1, got ${status}:\n${out}`);
+});
+
+test('a thrown Symbol is reported rather than crashing the harness', () => {
+  // `String(Symbol())` throws a TypeError — inside the very handler that exists
+  // to report a failure. The tally assertion is what pins the difference: a
+  // harness that died here would print no tally at all.
+  const { status, out } = runSuite(`
+suite('symbol throw');
+test('sync body that throws a Symbol', () => { throw Symbol('sym'); });
+done();
+`);
+  assert.ok(out.includes('✗ sync body that throws a Symbol'), `must fail:\n${out}`);
+  assert.ok(out.includes('Symbol(sym)'), `the reason must survive:\n${out}`);
+  assert.ok(out.includes('0 passed, 1 failed'), `the tally proves it did not crash:\n${out}`);
+  assert.equal(status, 1, `exit status must be 1, got ${status}:\n${out}`);
 });
 
 suite('assert harness — a run that never reaches its tally is not a pass');

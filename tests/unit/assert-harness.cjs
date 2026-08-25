@@ -24,15 +24,33 @@ function suite(name) {
   console.log(`\n${name}`);
 }
 
-function record(suiteName, name, error) {
-  if (!error) {
+// A thrown value can be anything at all, including something falsy or something
+// that is not an Error. Normalizing in ONE place — here, rather than at each
+// call site — is the whole point: the previous shape normalized on the async
+// path and not on the synchronous one, and that divergence was the defect.
+function asError(thrown) {
+  if (thrown instanceof Error) return thrown;
+  // `String(Symbol())` throws, which would blow up inside the very handler that
+  // exists to report a failure.
+  return new Error(typeof thrown === 'symbol' ? thrown.toString() : String(thrown));
+}
+
+// The outcome is STATED by the caller and never inferred from the payload. It
+// used to be read off `!error`, so a body that threw a FALSY value — `throw 0`,
+// `throw ''`, `throw undefined`, `null`, `false`, `NaN` — was counted green:
+// six loud failures each printing a tick. That is the same silent-green class
+// this file exists to close, so the signal is now passed explicitly and no
+// thrown value can ever be mistaken for one.
+function record(suiteName, name, ok, thrown) {
+  if (ok) {
     passed++;
     console.log(`  ✓ ${name}`);
     return;
   }
+  const error = asError(thrown);
   failures.push({ suite: suiteName, name, error });
   console.log(`  ✗ ${name}`);
-  console.log(`      ${String(error.message).split('\n').join('\n      ')}`);
+  console.log(`      ${error.message.split('\n').join('\n      ')}`);
 }
 
 function test(name, fn) {
@@ -44,19 +62,19 @@ function test(name, fn) {
   try {
     result = fn();
   } catch (e) {
-    record(from, name, e);
+    record(from, name, false, e);
     return;
   }
   if (!result || typeof result.then !== 'function') {
-    record(from, name, null);
+    record(from, name, true);
     return;
   }
   // Asynchronous body: its ✓/✗ is printed when the promise settles, which is
   // necessarily AFTER every synchronous test in the file. A result that appears
   // out of source order is that, not a shuffled suite.
   pending.push(Promise.resolve(result).then(
-    () => record(from, name, null),
-    (e) => record(from, name, e instanceof Error ? e : new Error(String(e)))
+    () => record(from, name, true),
+    (e) => record(from, name, false, e)
   ));
 }
 
