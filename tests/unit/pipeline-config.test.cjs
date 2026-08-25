@@ -8,10 +8,15 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const mod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs');
-const { loadConfig, resolveModel, resolveEffort, TIERS, EFFORTS, DEFAULTS } = require(mod);
+const {
+  loadConfig, resolveModel, resolveEffort, strategyFor,
+  TIERS, EFFORTS, DEFAULTS, SIGNATURE_STATES,
+} = require(mod);
+const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
 function withConfig(pipeline) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cfg-'));
@@ -145,10 +150,15 @@ test('executor: economy starts medium risk on sonnet, balanced does not', () => 
   assert.strictEqual(resolveModel('executor', { risk: 'medium', files: 5 }, cfg()), 'opus');
 });
 
-test('ci-fix ladder: cheap first strike, escalate on a real failure', () => {
-  assert.strictEqual(resolveModel('ci-fix', { attempt: 1 }, cfg()), 'sonnet');
-  assert.strictEqual(resolveModel('ci-fix', { attempt: 2 }, cfg()), 'opus');
-  assert.strictEqual(resolveModel('ci-fix', { attempt: 1, previousFailed: true }, cfg()), 'opus');
+test('ci-fix: risk decides the tier, the attempt count decides nothing (ADR-001 D1)', () => {
+  // This case used to read `attempt >= 2 -> opus`. D1 removed that input: raising
+  // the model on a repeat is "try harder", and the loss it produced is one wrong
+  // hypothesis re-tried by three models in sequence (phase 19, T-19-05: four
+  // attempts, three escalations, one deterministically failing job). The tier is
+  // role x risk; what a repeat changes is the STRATEGY, not the model.
+  assert.strictEqual(resolveModel('ci-fix', {}, cfg()), 'sonnet');
+  assert.strictEqual(resolveModel('ci-fix', { attempt: 5, previousFailed: true }, cfg()), 'sonnet');
+  assert.strictEqual(resolveModel('ci-fix', { risk: 'high' }, cfg()), 'opus');
 });
 
 test('review-fix: reply-only is cheap, a code change is not; unknown defaults to opus', () => {
@@ -401,10 +411,12 @@ test('delivery_pipeline.* still wins over pipeline.* for these keys', () => {
 
 suite('pr-sentinel model routing');
 
-test('the guard starts cheap and escalates like ci-fix', () => {
+test('the guard starts cheap and is raised by risk, not by attempts (ADR-001 D1)', () => {
   const { config } = withConfig(undefined);
   assert.strictEqual(resolveModel('pr-sentinel', {}, config), 'sonnet');
-  assert.strictEqual(resolveModel('pr-sentinel', { attempt: 2 }, config), 'opus');
+  // was `attempt: 2 -> opus`, dropped with ci-fix's for the same reason: a PR that
+  // resisted twice needs a different hypothesis, not a bigger model.
+  assert.strictEqual(resolveModel('pr-sentinel', { attempt: 2 }, config), 'sonnet');
   assert.strictEqual(resolveModel('pr-sentinel', { risk: 'high' }, config), 'opus');
   assert.strictEqual(resolveModel('pr-sentinel', { checkpoint: true }, config), 'opus');
 });
@@ -464,14 +476,21 @@ test('on Codex NO role takes the premium model — depth moves into effort', () 
   }
 });
 
-test('a capped runtime still distinguishes a failed repair from a baseline one', () => {
+test('a capped runtime still distinguishes a repeating repair from a baseline one', () => {
   // Both arrive as the same alias once capped, so the escalation would vanish
   // unless effort carries it — which is exactly gsd-debugger vs gsd-executor.
+  // The TRIGGER is what ADR-001 D1 changed: it used to be `attempt >= 2`, it is
+  // now the signature history saying the same failure came back unchanged.
   const { config } = withConfig({});
   const codex = asRuntime(config, 'codex');
-  const at = (n) => resolveEffort('ci-fix', resolveModel('ci-fix', { attempt: n }, codex), codex, { attempt: n });
-  assert.strictEqual(at(1), 'high', 'first strike');
-  assert.strictEqual(at(2), 'xhigh', 'a PR that already resisted');
+  const at = (signatureState) => resolveEffort(
+    'ci-fix', resolveModel('ci-fix', { signatureState }, codex), codex, { signatureState });
+  assert.strictEqual(at('first'), 'high', 'first strike');
+  assert.strictEqual(at('repeat'), 'xhigh', 'the same failure, back again');
+  // risk still raises the ladder above its own baseline, and the cap must not eat
+  // that either — the same reason the `escalated` comparison exists at all.
+  const risky = { risk: 'high' };
+  assert.strictEqual(resolveEffort('ci-fix', resolveModel('ci-fix', risky, codex), codex, risky), 'xhigh');
 });
 
 test('an executor whose baseline was already top tier is NOT treated as escalated', () => {
@@ -510,6 +529,183 @@ test('an explicit override still wins over the runtime default', () => {
   const { config, warnings } = withConfig({ models: { 'arch-review': 'sonnet' } });
   assert.deepStrictEqual(warnings, []);
   assert.strictEqual(resolveModel('arch-review', {}, asRuntime(config, 'claude')), 'sonnet');
+});
+
+suite('the repair ladder reads the failure SIGNATURE, not the attempt count (ADR-001 D1)');
+
+const REPAIR_ROLES = ['ci-fix', 'review-fix', 'pr-sentinel'];
+
+test('attempt and previousFailed are inert for every repair role', () => {
+  // The removed behaviour is pinned as ABSENT, not merely the new one as present:
+  // `attempt >= 2 -> opus` is the rejected "try harder" (ADR-001, Rejected).
+  for (const role of REPAIR_ROLES) {
+    for (const risk of ['low', 'medium', 'high']) {
+      const baseline = resolveModel(role, { risk }, cfg());
+      for (const extra of [{ attempt: 2 }, { attempt: 9 }, { previousFailed: true }, { attempt: 4, previousFailed: true }]) {
+        const got = resolveModel(role, { risk, ...extra }, cfg());
+        assert.strictEqual(got, baseline, `${role}/${risk}/${JSON.stringify(extra)} moved the tier`);
+      }
+    }
+  }
+});
+
+test('role x risk remains: risk and a checkpoint still raise the repair tier', () => {
+  assert.strictEqual(resolveModel('ci-fix', { risk: 'high' }, cfg()), 'opus');
+  assert.strictEqual(resolveModel('ci-fix', { risk: 'low' }, cfg()), 'sonnet');
+  assert.strictEqual(resolveModel('pr-sentinel', { risk: 'high' }, cfg()), 'opus');
+  assert.strictEqual(resolveModel('pr-sentinel', { checkpoint: true }, cfg()), 'opus');
+  // review-fix keeps its own signal: it is about the nature of the work (a reply
+  // versus a code change), never about how many attempts came before.
+  assert.strictEqual(resolveModel('review-fix', { codeChange: false }, cfg()), 'sonnet');
+  assert.strictEqual(resolveModel('review-fix', {}, cfg()), 'opus');
+});
+
+test('no signature state moves the TIER, at any risk — escalation is by strategy', () => {
+  for (const role of REPAIR_ROLES) {
+    for (const risk of ['low', 'medium', 'high']) {
+      const baseline = resolveModel(role, { risk }, cfg());
+      for (const signatureState of SIGNATURE_STATES) {
+        const got = resolveModel(role, { risk, signatureState }, cfg());
+        assert.strictEqual(got, baseline, `${role}/${risk}/${signatureState} moved the tier`);
+        assert.ok(TIERS.includes(got), `${got} is not a tier alias`);
+      }
+    }
+  }
+});
+
+test('the state vocabulary is failure-signature.cjs verbatim — one enum, two files', () => {
+  // A synonym or a seventh word here is a silent no-op in whatever reads it, so
+  // the coupling is asserted rather than commented.
+  const { VERDICTS } = require(sigMod);
+  assert.deepStrictEqual(SIGNATURE_STATES, VERDICTS);
+});
+
+test('every state maps to exactly the strategy the loop switches on', () => {
+  assert.deepStrictEqual(
+    Object.fromEntries(SIGNATURE_STATES.map((s) => [s, strategyFor(s)])),
+    {
+      first: 'fix',
+      progress: 'continue',
+      repeat: 'rethink',
+      flake_candidate: 'rerun',
+      flake: 'quarantine',
+      plan_defect: 'park',
+    },
+  );
+});
+
+test('an unknown state has no strategy — it is ignored, never guessed', () => {
+  for (const bogus of ['bogus', '', 'REPEAT', undefined, null]) {
+    assert.strictEqual(strategyFor(bogus), undefined, String(bogus));
+  }
+  // and nothing reaches through Object.prototype
+  assert.strictEqual(strategyFor('toString'), undefined);
+  assert.strictEqual(strategyFor('constructor'), undefined);
+});
+
+test('repeat deepens the EFFORT at the held tier, for repair roles', () => {
+  for (const role of REPAIR_ROLES) {
+    const signals = { signatureState: 'repeat' };
+    assert.strictEqual(
+      resolveEffort(role, resolveModel(role, signals, cfg()), cfg(), signals), 'xhigh', role);
+  }
+  // ci-fix in particular: same tier as a first strike, deeper thinking on it
+  assert.strictEqual(resolveModel('ci-fix', { signatureState: 'repeat' }, cfg()), 'sonnet');
+  assert.strictEqual(resolveEffort('ci-fix', 'sonnet', cfg(), { signatureState: 'first' }), 'high');
+  assert.strictEqual(resolveEffort('ci-fix', 'sonnet', cfg(), { signatureState: 'progress' }), 'high');
+});
+
+test('a non-repair role is not deepened by a signature state', () => {
+  const light = { risk: 'low', files: 1, signatureState: 'repeat' };
+  assert.strictEqual(resolveModel('executor', light, cfg()), 'sonnet');
+  assert.strictEqual(resolveEffort('executor', 'sonnet', cfg(), light), 'high');
+  // mechanical work stays cheap whatever the history says
+  assert.strictEqual(resolveEffort('drift-check', 'sonnet', cfg(), { signatureState: 'repeat' }), 'low');
+});
+
+test('an explicit effort override still outranks the repeat rule', () => {
+  const { config } = withConfig({ effort: { 'ci-fix': 'low' } });
+  assert.strictEqual(resolveEffort('ci-fix', 'sonnet', config, { signatureState: 'repeat' }), 'low');
+});
+
+suite('plan_defect_signatures — the K of the k-distinct rule');
+
+test('it defaults to 3, the same K failure-signature.cjs uses', () => {
+  const { DEFAULT_K } = require(sigMod);
+  assert.strictEqual(DEFAULTS.plan_defect_signatures, 3);
+  assert.strictEqual(withConfig(undefined).config.plan_defect_signatures, 3);
+  assert.strictEqual(DEFAULTS.plan_defect_signatures, DEFAULT_K, 'the two files must agree on K');
+});
+
+test('a positive value is honoured; a non-positive one warns and falls back', () => {
+  assert.strictEqual(withConfig({ plan_defect_signatures: 5 }).config.plan_defect_signatures, 5);
+  const bad = withConfig({ plan_defect_signatures: 0 });
+  assert.strictEqual(bad.config.plan_defect_signatures, 3);
+  assert.ok(bad.warnings.some((w) => /plan_defect_signatures/.test(w) && /positive number/.test(w)),
+    bad.warnings.join('; '));
+});
+
+suite('the CLI contract the babysit loop calls');
+
+// A temp cwd with no .planning/: default config, runtime UNSET — which is the
+// state the acceptance criteria are written against.
+function runCli(args) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cli-'));
+  const r = spawnSync(process.execPath, [mod, ...args], { cwd: dir, encoding: 'utf8' });
+  return { status: r.status, out: (r.stdout || '').trim(), err: r.stderr || '', json: () => JSON.parse(r.stdout) };
+}
+
+test('without --signature-state the --json shape is unchanged from today', () => {
+  const r = runCli(['model', 'ci-fix', '--json']);
+  assert.strictEqual(r.status, 0, r.err);
+  assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model']);
+  assert.deepStrictEqual(r.json(), { model: 'sonnet', effort: 'high' });
+});
+
+test('--attempt/--previous-failed are still accepted and resolve the same tier', () => {
+  // deliver.md still documents them and telemetry callers still pass --attempt,
+  // so they must keep working — silently, without a deprecation notice.
+  const plain = runCli(['model', 'ci-fix', '--json']);
+  const withAttempt = runCli(['model', 'ci-fix', '--json', '--attempt', '3', '--previous-failed']);
+  assert.strictEqual(withAttempt.status, 0, withAttempt.err);
+  assert.deepStrictEqual(withAttempt.json(), plain.json());
+  assert.strictEqual(withAttempt.err, '', 'a still-documented flag must not start warning');
+  assert.strictEqual(runCli(['model', 'ci-fix', '--risk', 'high']).out, 'opus', 'risk still routes');
+});
+
+test('--signature-state repeat: same tier, deeper effort, a strategy to change', () => {
+  assert.deepStrictEqual(runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat']).json(),
+    { model: 'sonnet', effort: 'xhigh', strategy: 'rethink' });
+  assert.deepStrictEqual(runCli(['model', 'ci-fix', '--json', '--signature-state', 'first']).json(),
+    { model: 'sonnet', effort: 'high', strategy: 'fix' });
+});
+
+test('the three do-not-dispatch states surface as their pinned strings', () => {
+  const strategy = (role, state) => runCli(['model', role, '--json', '--signature-state', state]).json().strategy;
+  assert.strictEqual(strategy('pr-sentinel', 'plan_defect'), 'park');
+  assert.strictEqual(strategy('ci-fix', 'flake'), 'quarantine');
+  assert.strictEqual(strategy('ci-fix', 'flake_candidate'), 'rerun');
+  assert.strictEqual(strategy('review-fix', 'progress'), 'continue');
+});
+
+test('an unknown state warns on stderr, omits strategy, and still exits 0', () => {
+  const r = runCli(['model', 'ci-fix', '--json', '--signature-state', 'bogus']);
+  assert.strictEqual(r.status, 0, 'a resolver that exits non-zero at 3am stops the round');
+  assert.ok(/signature-state/.test(r.err) && /bogus/.test(r.err), r.err);
+  assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model']);
+});
+
+test('--signature-state with no value is the same warn-and-ignore, not a crash', () => {
+  const r = runCli(['model', 'ci-fix', '--json', '--signature-state']);
+  assert.strictEqual(r.status, 0, r.err);
+  assert.ok(/signature-state/.test(r.err), r.err);
+  assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model']);
+});
+
+test('resolve reports the new key', () => {
+  const r = runCli(['resolve']);
+  assert.strictEqual(r.status, 0, r.err);
+  assert.strictEqual(JSON.parse(r.out).config.plan_defect_signatures, 3);
 });
 
 done();
