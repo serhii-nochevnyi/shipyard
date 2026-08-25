@@ -142,4 +142,106 @@ test('a half-written store can never be observed', () => {
   assert.doesNotThrow(() => JSON.parse(fs.readFileSync(path.join(graph, 'drift.json'), 'utf8')));
 });
 
+suite('record stores — one --graph spelling means one --graph parser');
+
+// drift-record.cjs and log-event.cjs share ONE `--graph` spelling, so they are
+// pinned by ONE table: a divergence between the two parsers is the defect this
+// suite exists to catch. Three sibling scripts (escalation-record,
+// failure-signature, attempt-history) each grew the guard on the PR where a
+// reviewer happened to hit it; these two were never on such a PR, and swallowed
+// the following flag as the flag's value.
+//
+// Every malformed case below runs from the PROJECT cwd — which HAS a ticket
+// graph — so the "no ticket graph" refusal cannot fire. A non-zero exit there can
+// only be the flag guard, and a test that passed because the script failed for
+// the other reason would be no test at all.
+const LOGEVENT = path.join(SCRIPTS, 'log-event.cjs');
+
+// SHIPYARD_GRAPH_DIR is the other explicit channel; a value inherited from the
+// runner would decide these cases instead of the flag.
+const run = (script, args, cwd) => spawnSync('node', [script, ...args], {
+  cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '' },
+});
+
+const logged = (graph) => {
+  try {
+    return fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8')
+      .trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch { return []; }
+};
+
+const PARSERS = [
+  {
+    what: 'drift-record',
+    script: DRIFT,
+    cmd: (project) => ['mark', 'T-01', path.join(project, 'p1.md'), 'moved'],
+    landed: (graph) => !!store(graph, 'drift.json')['T-01'],
+    // Where the unguarded parser used to put the record: `path.resolve('--json')`
+    // is a directory literally called "--json" beside the cwd, and the old
+    // `|| ''` fallback made a value-less `--graph` resolve to the cwd itself.
+    strays: (project) => [path.join(project, '--json'), path.join(project, 'drift.json')],
+  },
+  {
+    what: 'log-event',
+    script: LOGEVENT,
+    cmd: () => ['attempt', 'ticket=T-01'],
+    landed: (graph) => logged(graph).some((e) => e.event === 'attempt' && e.ticket === 'T-01'),
+    strays: (project) => [path.join(project, '--json')],
+  },
+];
+
+for (const p of PARSERS) {
+  test(`${p.what} refuses a flag-shaped --graph value instead of resolving it`, () => {
+    const { project, graph } = scratch();
+    const r = run(p.script, [...p.cmd(project), '--graph', '--json'], project);
+    assert.equal(r.status, 1, `must refuse (stderr: ${r.stderr})`);
+    // The one message check in this suite, and it is a discriminator rather than
+    // a wording assertion: the no-ticket-graph refusal names `--graph` too, so
+    // only the quoted VALUE tells the two failures apart.
+    assert.ok(/"--json"/.test(r.stderr), `must name the token it refused (stderr: ${r.stderr})`);
+    assert.ok(!p.landed(graph), 'a refusal, not a silent redirect into the project store');
+    for (const stray of p.strays(project)) {
+      assert.ok(!fs.existsSync(stray), `nothing is written to ${stray}`);
+    }
+  });
+
+  test(`${p.what} refuses --graph with no value at all`, () => {
+    // The end-of-argv twin. It used to resolve to the cwd and still count as
+    // EXPLICIT, so the refusal that exists for exactly this was skipped and the
+    // caller got the default the flag was passed to override.
+    const { project, graph } = scratch();
+    const r = run(p.script, [...p.cmd(project), '--graph'], project);
+    assert.equal(r.status, 1, `must refuse (stderr: ${r.stderr})`);
+    assert.ok(!p.landed(graph), 'and does not fall back to the cwd graph');
+    for (const stray of p.strays(project)) {
+      assert.ok(!fs.existsSync(stray), `nothing is written to ${stray}`);
+    }
+  });
+
+  test(`${p.what} still takes a real --graph in either position`, () => {
+    // The guard must reject flag-shaped values only. A flag tolerated at one end
+    // of the argv is a trap for the caller who puts it at the other.
+    const first = scratch();
+    const rf = run(p.script, ['--graph', first.graph, ...p.cmd(first.project)], first.worktree);
+    assert.equal(rf.status, 0, `flag first must succeed (${rf.stderr})`);
+    assert.ok(p.landed(first.graph), 'recorded in the PROJECT graph, from a foreign cwd');
+
+    const last = scratch();
+    const rl = run(p.script, [...p.cmd(last.project), '--graph', last.graph], last.worktree);
+    assert.equal(rl.status, 0, `flag last must succeed (${rl.stderr})`);
+    assert.ok(p.landed(last.graph), 'recorded in the PROJECT graph, from a foreign cwd');
+  });
+
+  test(`${p.what} with no --graph at all does not eat the first positional`, () => {
+    // The `-1` trap, pinned: `i !== flagAt + 1` with no flag present reads as
+    // `i !== 0` and strips argv[0] — the subcommand for one script, the event
+    // name for the other. Guarding the flag's VALUE must not reintroduce it.
+    const { project, graph } = scratch();
+    const r = run(p.script, p.cmd(project), project);
+    assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+    assert.ok(p.landed(graph), 'the first positional survived the flag stripping');
+  });
+}
+
+
 done();

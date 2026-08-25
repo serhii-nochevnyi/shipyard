@@ -66,6 +66,59 @@ const { planHash } = require(path.join(__dirname, 'drift-record.cjs'));
 // human needs reaches both for free — with no change in either file.
 const PLAN_DEFECT_PREFIX = 'plan_defect — re-decompose: ';
 
+// The LIFTING RULE, in the words the human woken at 3am reads — and it lives
+// here, beside the branch in `activeEscalations` that decides when a park
+// actually lifts. It used to be composed independently at the two render sites
+// (the board's why-message and the guard's PARKED_WHY), which is precisely how
+// they came to contradict this file: a kind added to the store reaches a
+// renderer as a bare reason string, falls through to the older kind's sentence,
+// and the board then promises that moving the PR lifts a park that only a
+// re-plan lifts. One home means the next kind cannot be described with another
+// kind's semantics — it either gets an entry here or gets the fallback.
+const LIFTS = {
+  escalation: (id) =>
+    `It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear ${id}\` to take it back.`,
+  // Deliberately says nothing at all about the PR. A push or an answered review
+  // is not evidence about the plan, and naming one here — even to deny it — is
+  // what put the falsehood on the board to begin with.
+  plan_defect: (id) =>
+    `Re-plan it (/shipyard:decompose): the park lifts when the plan file changes, and only then; \`escalation-record.cjs clear ${id}\` to take it back.`,
+};
+
+// The reason as the FLAT readers see it — the kind's prefix, applied at read time
+// and never stored, so `list --json` and any consumer of the flat map can still
+// see which rule a park is filed under. It is presentation, and nothing reads a
+// kind back out of it.
+function parkReason(park) {
+  return park.kind === 'plan_defect' ? PLAN_DEFECT_PREFIX + park.reason : park.reason;
+}
+
+/**
+ * The whole park message for one ticket, given the PARK RECORD `activeParks`
+ * returned for it — `{kind, reason}`. Both renderers assign this verbatim; their
+ * remaining job is placement, not wording.
+ *
+ * The kind comes from the record and from nowhere else. It used to be recovered
+ * by testing the reason against PLAN_DEFECT_PREFIX, which made free text a
+ * control channel: `mark <T> "plan_defect — re-decompose: …"` — a human pasting a
+ * board line back into the ordinary command — was then told that re-planning
+ * lifts a park that a PR move actually lifts, i.e. the exact falsehood this whole
+ * ticket exists to delete, one indirection further down. Found by Copilot on
+ * PR #8.
+ *
+ * An unknown or absent kind falls back to the ordinary-escalation sentence, and
+ * now does so structurally: `activeParks` reports the rule that ACTUALLY expired
+ * the park, so a record written before kinds existed reports `escalation` because
+ * it was expired by the fingerprint rule — the sentence and the expiry cannot
+ * disagree. A bare string (the flat `activeEscalations` view, which has already
+ * discarded the kind) is accepted as that same legacy shape.
+ */
+function escalationWhy(id, park) {
+  const p = typeof park === 'string' ? { reason: park } : (park || {});
+  const kind = LIFTS[p.kind] ? p.kind : 'escalation';
+  return `escalated — ${parkReason({ kind, reason: p.reason })}. ${LIFTS[kind](id)}`;
+}
+
 function fail(msg) {
   process.stderr.write(`escalation-record: ${msg}\n`);
   process.exit(1);
@@ -124,20 +177,26 @@ function mutate(cwd, fn) {
 }
 
 /**
- * The parks still in force, as {ticket: reason} — the shape `computeFront` takes
- * as `opts.escalated` and the sentinel reads straight into its PARKED_WHY. A
- * merged ticket is never parked, whichever kind it carries: whatever we gave up
+ * The parks still in force, as RECORDS: {ticket: {kind, reason}}. This is the
+ * authoritative reader — `activeEscalations` below is a flattening of it, and the
+ * two renderers take these records so the lifting sentence is derived from the
+ * kind rather than reconstructed from the text.
+ *
+ * A merged ticket is never parked, whichever kind it carries: whatever we gave up
  * on, it landed.
  *
  * The two kinds expire against different subjects — an escalation against the PR
  * it was a verdict about, a plan defect against the plan — and that branch is the
- * whole of the difference. The RETURN SHAPE is deliberately unchanged, which is
- * why the guard and the front need no edit to honour the new kind.
+ * whole of the difference. The `kind` reported here is therefore the rule that
+ * EXPIRED the park, not a copy of the stored field: a record with an absent or
+ * unrecognised kind is expired by the fingerprint rule, so it reports
+ * `escalation` and gets the ordinary sentence. That equivalence is what makes the
+ * fallback a property of the code rather than a promise in a docstring.
  *
- * `state` may be passed in by a caller that already has it (state-sync does),
- * otherwise it is read from disk.
+ * `state` may be passed in by a caller that already has it, otherwise it is read
+ * from disk.
  */
-function activeEscalations(cwd = process.cwd(), state = null) {
+function activeParks(cwd = process.cwd(), state = null) {
   const live = state || readState(cwd);
   const out = {};
   for (const [id, rec] of Object.entries(load(cwd).tickets || {})) {
@@ -153,15 +212,44 @@ function activeEscalations(cwd = process.cwd(), state = null) {
       if (!rec.plan) continue;
       const current = planHash(path.isAbsolute(rec.plan) ? rec.plan : path.join(cwd, rec.plan));
       if (!current || current !== rec.plan_hash) continue; // re-decomposed, or the plan is gone
-      out[id] = PLAN_DEFECT_PREFIX + (rec.reason || 'the plan cannot be delivered as written');
+      out[id] = { kind: 'plan_defect', reason: rec.reason || 'the plan cannot be delivered as written' };
       continue;
     }
 
     // No kind (every record written before plan_defect existed) — the original
     // rule, unchanged: the verdict was about the PR as it stood.
     if (rec.fingerprint && fingerprint(s) !== rec.fingerprint) continue; // a human moved it
-    out[id] = rec.reason || 'escalated to a human';
+    out[id] = { kind: 'escalation', reason: rec.reason || 'escalated to a human' };
   }
+  return out;
+}
+
+// A reason is the ENTIRE inheritance of the next session: it reads this string
+// and nothing else, so a park without one is the defect this store exists to
+// prevent. Checked on the JOINED, TRIMMED string, never on the argument count —
+// `mark T-01-01 ""` hands the parser a non-empty array holding nothing a human
+// can read, and so does `mark T-01-01 "" "  "`. That distinction was found by
+// Copilot's review of the PR that added `mark-plan-defect`, and only that call
+// site received it; the older, more-used `mark` kept `!reason.length` and
+// accepted the empty string for another epic. The condition lives here, once,
+// because a copy is exactly how the two came to disagree. The MESSAGE stays with
+// the caller: the two address different readers, one unblocking a PR and one
+// deciding how to re-plan.
+function requireReason(words, message) {
+  if (!words.join(' ').trim().length) fail(message);
+}
+
+/**
+ * The same parks as a flat {ticket: reason} map — the shape `list`/`list --json`
+ * prints and the one any external consumer already reads. It is a VIEW: the kind
+ * survives only as the rendered prefix, which is why a renderer must not take its
+ * kind from here (that inference is the defect Copilot found on PR #8). Renderers
+ * take `activeParks`; this stays for the CLI and for callers that only ever
+ * wanted the sentence a human reads.
+ */
+function activeEscalations(cwd = process.cwd(), state = null) {
+  const out = {};
+  for (const [id, park] of Object.entries(activeParks(cwd, state))) out[id] = parkReason(park);
   return out;
 }
 
@@ -224,15 +312,14 @@ if (require.main === module) {
   if (cmd === 'mark') {
     const [ticket, ...reason] = rest;
     if (!ticket) fail('usage: escalation-record.cjs mark <ticket> <reason...>');
-    // A reason is the entire point — the next session inherits this string and
-    // nothing else. "escalated" tells it no more than the disjunction it replaced.
-    if (!reason.length) {
-      fail(
-        'an escalation with no reason is the defect this script exists to fix.\n' +
-        '  The next session inherits ONLY this string: say what a human must decide,\n' +
-        '  e.g. "auth token expired; the live capture this ticket rests on cannot run".'
-      );
-    }
+    // Read by someone deciding how to UNBLOCK a PR — hence these words, and not
+    // `mark-plan-defect`'s. The condition itself is shared (see requireReason).
+    requireReason(
+      reason,
+      'an escalation with no reason is the defect this script exists to fix.\n' +
+      '  The next session inherits ONLY this string: say what a human must decide,\n' +
+      '  e.g. "auth token expired; the live capture this ticket rests on cannot run".'
+    );
     const state = readState(cwd);
     const s = state[ticket];
     if (!s) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
@@ -264,19 +351,15 @@ if (require.main === module) {
     if (!ticket || !plan) {
       fail('usage: escalation-record.cjs mark-plan-defect <ticket> <plan-path> <reason...> [--signature <sig>]... [--graph <dir>]');
     }
-    // Same guard as `mark`, different words on purpose: this reason is read by
-    // someone deciding how to RE-PLAN, not how to unblock a PR. Checked on the
-    // JOINED, TRIMMED string, not the argument count — `mark-plan-defect T plan
-    // ""` has a non-empty positional array but nothing a human could read. Found
-    // by Copilot's review of this PR.
-    if (!reason.join(' ').trim().length) {
-      fail(
-        'a plan defect with no reason is a dead end for whoever picks it up in the morning.\n' +
-        '  They inherit ONLY this string and the signatures: say what the PLAN got wrong,\n' +
-        '  e.g. "the plan assumes a sync endpoint; the API streams, so no fix inside these\n' +
-        '  files can pass" — never just "plan defect".'
-      );
-    }
+    // Read by someone deciding how to RE-PLAN, not how to unblock a PR — so the
+    // words differ from `mark`'s while the condition does not.
+    requireReason(
+      reason,
+      'a plan defect with no reason is a dead end for whoever picks it up in the morning.\n' +
+      '  They inherit ONLY this string and the signatures: say what the PLAN got wrong,\n' +
+      '  e.g. "the plan assumes a sync endpoint; the API streams, so no fix inside these\n' +
+      '  files can pass" — never just "plan defect".'
+    );
     const hash = planHash(plan);
     if (!hash) fail(`cannot read the plan at ${plan} — a verdict with no plan to bind to would never expire`);
     // The typo guard `mark` has, for the same reason: a park recorded against an
@@ -337,4 +420,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { activeEscalations, fingerprint };
+module.exports = { activeParks, activeEscalations, fingerprint, escalationWhy };
