@@ -174,9 +174,12 @@ function journal(rec) {
 // the guard keeps dispatching review-fix at exactly the PRs the front has set
 // aside. The two must agree on what is parked or the concurrency is a race with
 // a human in it.
-const { activeEscalations, escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'));
+// The park RECORDS, not the flat {ticket: reason} view: PARKED_WHY's sentence is
+// chosen by the park's KIND, and the flat view keeps the kind only as a prefix on
+// a reason a human typed — which a human can type by hand.
+const { activeParks, escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
-const ESCALATED = activeEscalations(ROOT);
+const ESCALATED = activeParks(ROOT);
 const DRIFTED = activeDrift(ROOT);
 const PARKED = new Set([...listFlag('parked'), ...Object.keys(ESCALATED), ...Object.keys(DRIFTED)]);
 // A recorded park carries a reason; the flag does not. Report the reason where
@@ -187,8 +190,9 @@ const PARKED_WHY = {};
 // This site used to compose its own parenthetical, and once a second kind
 // existed it described a plan defect with the older kind's lifting rule, in a
 // sentence the board rendered differently again. Two texts for one fact is what
-// let them drift; the guard and the board now quote the same one.
-for (const [id, r] of Object.entries(ESCALATED)) PARKED_WHY[id] = escalationWhy(id, r);
+// let them drift; the guard and the board now quote the same one, off the same
+// record.
+for (const [id, park] of Object.entries(ESCALATED)) PARKED_WHY[id] = escalationWhy(id, park);
 for (const [id, r] of Object.entries(DRIFTED)) PARKED_WHY[id] = `drifted — ${r} (re-plan it; the park lifts when the plan changes)`;
 const SCOPE = listFlag('scope');
 

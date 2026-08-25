@@ -85,25 +85,38 @@ const LIFTS = {
     `Re-plan it (/shipyard:decompose): the park lifts when the plan file changes, and only then; \`escalation-record.cjs clear ${id}\` to take it back.`,
 };
 
-// The kind, recovered from the reason string this module itself produced. That
-// is what keeps `activeEscalations` a flat {ticket: reason} map — the shape the
-// guard and state-sync already consume — while the wording stays derived from
-// the record rather than guessed at a render site.
-function kindOf(reason) {
-  return String(reason || '').startsWith(PLAN_DEFECT_PREFIX) ? 'plan_defect' : 'escalation';
+// The reason as the FLAT readers see it — the kind's prefix, applied at read time
+// and never stored, so `list --json` and any consumer of the flat map can still
+// see which rule a park is filed under. It is presentation, and nothing reads a
+// kind back out of it.
+function parkReason(park) {
+  return park.kind === 'plan_defect' ? PLAN_DEFECT_PREFIX + park.reason : park.reason;
 }
 
 /**
- * The whole park message for one ticket, given the reason `activeEscalations`
- * returned for it. Both renderers assign this verbatim; their remaining job is
- * placement, not wording.
+ * The whole park message for one ticket, given the PARK RECORD `activeParks`
+ * returned for it — `{kind, reason}`. Both renderers assign this verbatim; their
+ * remaining job is placement, not wording.
  *
- * An unknown or absent kind falls back to the ordinary-escalation sentence:
- * every record written before kinds existed carries no kind at all, and its
- * free-text reason must not be re-described by a rule it was never filed under.
+ * The kind comes from the record and from nowhere else. It used to be recovered
+ * by testing the reason against PLAN_DEFECT_PREFIX, which made free text a
+ * control channel: `mark <T> "plan_defect — re-decompose: …"` — a human pasting a
+ * board line back into the ordinary command — was then told that re-planning
+ * lifts a park that a PR move actually lifts, i.e. the exact falsehood this whole
+ * ticket exists to delete, one indirection further down. Found by Copilot on
+ * PR #8.
+ *
+ * An unknown or absent kind falls back to the ordinary-escalation sentence, and
+ * now does so structurally: `activeParks` reports the rule that ACTUALLY expired
+ * the park, so a record written before kinds existed reports `escalation` because
+ * it was expired by the fingerprint rule — the sentence and the expiry cannot
+ * disagree. A bare string (the flat `activeEscalations` view, which has already
+ * discarded the kind) is accepted as that same legacy shape.
  */
-function escalationWhy(id, reason) {
-  return `escalated — ${reason}. ${(LIFTS[kindOf(reason)] || LIFTS.escalation)(id)}`;
+function escalationWhy(id, park) {
+  const p = typeof park === 'string' ? { reason: park } : (park || {});
+  const kind = LIFTS[p.kind] ? p.kind : 'escalation';
+  return `escalated — ${parkReason({ kind, reason: p.reason })}. ${LIFTS[kind](id)}`;
 }
 
 function fail(msg) {
@@ -164,20 +177,26 @@ function mutate(cwd, fn) {
 }
 
 /**
- * The parks still in force, as {ticket: reason} — the shape `computeFront` takes
- * as `opts.escalated` and the sentinel reads straight into its PARKED_WHY. A
- * merged ticket is never parked, whichever kind it carries: whatever we gave up
+ * The parks still in force, as RECORDS: {ticket: {kind, reason}}. This is the
+ * authoritative reader — `activeEscalations` below is a flattening of it, and the
+ * two renderers take these records so the lifting sentence is derived from the
+ * kind rather than reconstructed from the text.
+ *
+ * A merged ticket is never parked, whichever kind it carries: whatever we gave up
  * on, it landed.
  *
  * The two kinds expire against different subjects — an escalation against the PR
  * it was a verdict about, a plan defect against the plan — and that branch is the
- * whole of the difference. The RETURN SHAPE is deliberately unchanged, which is
- * why the guard and the front need no edit to honour the new kind.
+ * whole of the difference. The `kind` reported here is therefore the rule that
+ * EXPIRED the park, not a copy of the stored field: a record with an absent or
+ * unrecognised kind is expired by the fingerprint rule, so it reports
+ * `escalation` and gets the ordinary sentence. That equivalence is what makes the
+ * fallback a property of the code rather than a promise in a docstring.
  *
- * `state` may be passed in by a caller that already has it (state-sync does),
- * otherwise it is read from disk.
+ * `state` may be passed in by a caller that already has it, otherwise it is read
+ * from disk.
  */
-function activeEscalations(cwd = process.cwd(), state = null) {
+function activeParks(cwd = process.cwd(), state = null) {
   const live = state || readState(cwd);
   const out = {};
   for (const [id, rec] of Object.entries(load(cwd).tickets || {})) {
@@ -193,15 +212,29 @@ function activeEscalations(cwd = process.cwd(), state = null) {
       if (!rec.plan) continue;
       const current = planHash(path.isAbsolute(rec.plan) ? rec.plan : path.join(cwd, rec.plan));
       if (!current || current !== rec.plan_hash) continue; // re-decomposed, or the plan is gone
-      out[id] = PLAN_DEFECT_PREFIX + (rec.reason || 'the plan cannot be delivered as written');
+      out[id] = { kind: 'plan_defect', reason: rec.reason || 'the plan cannot be delivered as written' };
       continue;
     }
 
     // No kind (every record written before plan_defect existed) — the original
     // rule, unchanged: the verdict was about the PR as it stood.
     if (rec.fingerprint && fingerprint(s) !== rec.fingerprint) continue; // a human moved it
-    out[id] = rec.reason || 'escalated to a human';
+    out[id] = { kind: 'escalation', reason: rec.reason || 'escalated to a human' };
   }
+  return out;
+}
+
+/**
+ * The same parks as a flat {ticket: reason} map — the shape `list`/`list --json`
+ * prints and the one any external consumer already reads. It is a VIEW: the kind
+ * survives only as the rendered prefix, which is why a renderer must not take its
+ * kind from here (that inference is the defect Copilot found on PR #8). Renderers
+ * take `activeParks`; this stays for the CLI and for callers that only ever
+ * wanted the sentence a human reads.
+ */
+function activeEscalations(cwd = process.cwd(), state = null) {
+  const out = {};
+  for (const [id, park] of Object.entries(activeParks(cwd, state))) out[id] = parkReason(park);
   return out;
 }
 
@@ -377,4 +410,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { activeEscalations, fingerprint, escalationWhy };
+module.exports = { activeParks, activeEscalations, fingerprint, escalationWhy };

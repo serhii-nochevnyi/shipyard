@@ -20,7 +20,7 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 
 const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
 const SCRIPT = path.join(SCRIPTS, 'escalation-record.cjs');
-const { activeEscalations, fingerprint } = require(SCRIPT);
+const { activeParks, activeEscalations, fingerprint } = require(SCRIPT);
 
 // A ticket mid-flight: PR open, green, still a draft — the front calls this
 // `finalize`, i.e. actionable, which is exactly what must NOT happen once parked.
@@ -510,10 +510,14 @@ function guardWhy(dir, id) {
   return item.why;
 }
 
-// What the board puts on the same ticket, through the same reader.
+// What the board puts on the same ticket, through the same reader — `activeParks`,
+// the park RECORDS, exactly as front.cjs's own CLI passes them. Wiring this helper
+// to the flat `activeEscalations` view instead would test a path production does
+// not take: the flat view has already discarded the kind, so the board would be
+// reading it back out of the reason TEXT, which is the defect this suite pins.
 function boardWhy(dir, id) {
   const { computeFront } = require(path.join(SCRIPTS, 'front.cjs'));
-  return computeFront({ [id]: {} }, stateOf(dir), { escalated: activeEscalations(dir) }).why[id];
+  return computeFront({ [id]: {} }, stateOf(dir), { escalated: activeParks(dir) }).why[id];
 }
 
 test('a plan defect is described identically by the board and the guard', () => {
@@ -547,6 +551,45 @@ test('a record with no kind at all is rendered as an ordinary escalation', () =>
   assert.equal(guardWhy(dir, 'T-16-05'), board, 'still one sentence, still both renderers');
   assert.ok(/PR moves/.test(board),
     `a reason that merely mentions a plan must not borrow the plan_defect rule: ${board}`);
+});
+
+test('an ordinary escalation whose REASON is a pasted plan_defect line stays an escalation', () => {
+  // The collision the prefix scheme could not survive. `mark`'s reason is free
+  // text a human types, so "starts with the plan_defect prefix" was reachable by
+  // anyone quoting a board line back into the ordinary command — and the answer
+  // they got was that re-planning lifts a park only a PR move lifts. The kind now
+  // comes from the record's own field, and `activeParks` reports the rule that
+  // actually expired the park, so the two cannot disagree. Copilot, PR #8.
+  const dir = project();
+  const pasted = 'plan_defect — re-decompose: the board said this and I am quoting it back';
+  const r = run(dir, ['mark', 'T-16-05', ...pasted.split(' ')]);
+  assert.equal(r.status, 0, `mark must accept any free text (${r.stderr})`);
+  assert.equal(activeParks(dir)['T-16-05'].kind, 'escalation',
+    'the store filed it under `mark`, and nothing in the text may re-file it');
+
+  const board = boardWhy(dir, 'T-16-05');
+  assert.equal(guardWhy(dir, 'T-16-05'), board, 'both renderers, one sentence, as for every kind');
+  // Byte-exact: "mentions re-planning" cannot tell the LIFTING sentence apart
+  // from a reason that quotes one, and here the reason quotes one on purpose.
+  assert.equal(
+    board,
+    `escalated — ${pasted}. It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear T-16-05\` to take it back.`,
+    'the ordinary rule, stated in full — the docstring guarantee is now structural'
+  );
+});
+
+test('the flat view is a rendering of the records, not a second source of truth', () => {
+  // `list --json` and any external consumer still get {ticket: reason}, with the
+  // kind visible as the prefix it always was. What changed is that no renderer
+  // reads a kind back out of that string.
+  const { dir, plan } = planned();
+  run(dir, ['mark-plan-defect', 'T-16-05', plan, 'the plan splits a file two tickets both own']);
+  const parks = activeParks(dir);
+  const flat = activeEscalations(dir);
+  assert.deepEqual(Object.keys(flat), Object.keys(parks), 'the same parks, both ways');
+  assert.equal(parks['T-16-05'].kind, 'plan_defect');
+  assert.equal(flat['T-16-05'], `plan_defect — re-decompose: ${parks['T-16-05'].reason}`,
+    'the flat value is the record rendered, and the record is what a renderer takes');
 });
 
 done();
