@@ -208,4 +208,32 @@ for (const a of actionable.split(',').map((s) => s.trim().replace(/^['"]|['"]$/g
 }
 NODE
 
+# ── CI runs the same Node the image ships ────────────────────────────────────
+# .github/workflows/test.yml duplicates Dockerfile.base's NODE_VERSION, because
+# a workflow cannot read a Dockerfile ARG. A duplicated constant drifts
+# silently, and the drift is invisible in the worst direction: a suite that
+# passes on a major the container never runs is measuring the wrong runtime.
+wf=".github/workflows/test.yml"
+if [[ -f "$wf" ]]; then
+  df_node="$(sed -n 's/^ARG NODE_VERSION=//p' Dockerfile.base | head -1)"
+  wf_node="$(sed -n "s/.*node-version: *'\([^']*\)'.*/\1/p" "$wf" | head -1)"
+  [[ -n "$df_node" ]] || { echo "docs smoke: cannot read NODE_VERSION from Dockerfile.base"; exit 1; }
+  [[ -n "$wf_node" ]] || { echo "docs smoke: cannot read node-version from $wf"; exit 1; }
+  [[ "$df_node" == "$wf_node" ]] || {
+    echo "docs smoke: CI runs Node $wf_node but the image ships $df_node — bump both or the suite tests a runtime nobody deploys"
+    exit 1
+  }
+  # The fast suite is the whole point of this workflow: it is the only target
+  # that needs neither Docker nor the network, so it is the only one that can
+  # run here. A job that reached for `make test` would hang on Docker.
+  grep -q 'make test-fast' "$wf" || {
+    echo "docs smoke: $wf does not run make test-fast"; exit 1;
+  }
+  for slow in test-base test-overlay test-runtime test-mcp-runtime test-k8s; do
+    grep -qE "run:.*\b$slow\b" "$wf" && {
+      echo "docs smoke: $wf runs $slow, which needs Docker/kubectl — it belongs in a separate optional workflow"; exit 1;
+    }
+  done
+fi
+
 echo "docs smoke passed"

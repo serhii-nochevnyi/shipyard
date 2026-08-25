@@ -1,0 +1,51 @@
+# The fast suite, on every PR and every push to main.
+#
+# Scope is deliberate: `make test-fast` only. It needs no Docker, no network and
+# no npm install (this repo has no package.json — the tests run on bare node),
+# so it finishes in seconds and covers the deterministic layer where this repo's
+# sharp bugs live: the frontmatter parser, the model policy, the graph validator,
+# the worktree lifecycle, the pre-publish gates, the sentinel, and the docs
+# contract.
+#
+# NOT here, on purpose: test-base, test-overlay, test-runtime and
+# test-mcp-runtime build or run images (Docker), test-k8s needs kubectl, and
+# test-codex-shipyard installs gsd-core from the network. Those belong in a
+# separate, optional workflow if they are ever added — putting them in this job
+# would trade a seconds-long signal for a minutes-long one on every push.
+#
+# Why this exists: until it did, every PR in this repository reported "no checks
+# reported", and `state-sync` had to warn on each one that "green" meant
+# "nothing ran". See .planning/backlog/no-ci-in-the-conveyors-own-repo.md.
+
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push to the same ref supersedes the run in flight — the older result
+  # describes a tree nobody will merge.
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Pinned to Dockerfile.base's NODE_VERSION ARG. These two must agree:
+          # a suite that passes here on a different major than the image ships
+          # is measuring something the container will never run.
+          node-version: '24.15.0'
+
+      - name: make test-fast
+        run: make test-fast
