@@ -474,9 +474,9 @@ for (const [id, s] of Object.entries(state)) {
 }
 
 // ── the actionable front and the stop verdict (front.cjs) ───────────────────
-// Computed before the write so state, yaml and front land in ONE locked
-// section: the PR sentinel runs state-sync concurrently with the main loop, and
-// a reader that catches the pair half-updated acts on a state/front mismatch.
+// AUTO_MERGE/DRIFTED/ESCALATED do not depend on this run's own journal append,
+// so they are computed here; ciEstimates DOES (see below), so computeFront
+// itself moves inside the locked section, after the append.
 const AUTO_MERGE = cfg.auto_merge === 'epic' && mode === 'epic-stacked';
 // Drift verdicts recorded by earlier runs, minus any whose plan has since been
 // re-planned (drift-record binds each verdict to the plan's content hash, so the
@@ -486,22 +486,31 @@ const DRIFTED = activeDrift(ROOT);
 // Escalations recorded by earlier runs, minus any whose PR has since moved. The
 // state we just rebuilt IS the comparison, so it is passed in rather than re-read.
 const ESCALATED = activeEscalations(ROOT, state);
-const front = computeFront(tickets, state, {
-  parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED, escalated: ESCALATED,
-  // Expected CI length per ticket, a per-repo median over the LOCAL journal — the
-  // front's last ordering key before the id (front.cjs). Note what does NOT feed
-  // it: no per-PR `gh` field. Adding one to the bulk window is the 41s-vs-7s
-  // regression this file already carries a warning about.
-  ci_estimates: ciEstimates(GRAPH_DIR, tickets),
-});
 
-withLock(lockDirFor(ROOT), 'state', () => {
+const front = withLock(lockDirFor(ROOT), 'state', () => {
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
   }
+  // Computed AFTER the append, in the SAME locked section, so THIS run's own
+  // newly observed status_change events (a ticket that just reached `merged`,
+  // say) feed ciEstimates immediately. Reading the journal before the append
+  // (the original placement) made the front's ordering lag one sync behind
+  // what a fresh `front.cjs --json` would compute right after this write —
+  // state, yaml and front still land in one locked section, so a concurrent
+  // reader still never catches the trio half-updated. Found by Copilot's
+  // review of this PR.
+  const front = computeFront(tickets, state, {
+    parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED, escalated: ESCALATED,
+    // Expected CI length per ticket, a per-repo median over the LOCAL journal —
+    // the front's last ordering key before the id (front.cjs). Note what does
+    // NOT feed it: no per-PR `gh` field. Adding one to the bulk window is the
+    // 41s-vs-7s regression this file already carries a warning about.
+    ci_estimates: ciEstimates(GRAPH_DIR, tickets),
+  });
   writeAtomic(STATE, JSON.stringify(state, null, 2) + '\n');
   writeAtomic(path.join(GRAPH_DIR, 'delivery-state.yaml'), yaml.join('\n') + '\n');
   writeAtomic(FRONT, JSON.stringify({ generated_at: nowIso, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', ...front }, null, 2) + '\n');
+  return front;
 }, { label: 'state-sync' });
 
 // ── board summary on stdout for the /shipyard:deliver skill ──
