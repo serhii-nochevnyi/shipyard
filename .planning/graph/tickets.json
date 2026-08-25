@@ -275,8 +275,10 @@
       "plan": ".planning/phases/22-close-what-phase-20-left-open/22-05-PLAN.md",
       "phase": "22",
       "repo": null,
-      "wave": 1,
-      "depends_on": [],
+      "wave": 2,
+      "depends_on": [
+        "T-22-04"
+      ],
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -289,8 +291,8 @@
       "human_checkpoint": false,
       "branch": "ticket/T-22-05-the-harness-must-be-able-to-fail-an-asyn",
       "epic": "epic/22-close-what-phase-20-left-open",
-      "primary_parent": null,
-      "pr_base": "epic/22-close-what-phase-20-left-open",
+      "primary_parent": "T-22-04",
+      "pr_base": "ticket/T-22-04-a-lock-is-held-from-the-instant-it-exist",
       "jira": null
     }
   }

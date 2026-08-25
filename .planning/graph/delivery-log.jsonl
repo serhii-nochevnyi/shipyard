@@ -30,3 +30,8 @@
 {"ts":"2026-08-25T08:58:38.631Z","event":"attempt","ticket":"T-20-06","pr":6,"n":1,"role":"review-fix","model":"opus","outcome":"pushed"}
 {"ts":"2026-08-25T09:01:00.635Z","event":"merge","ticket":"T-20-06","pr":6,"base":"epic/20-autonomy-of-the-drive-to-green-loop","repo":null,"by":"sentinel"}
 {"ts":"2026-08-25T09:01:09.731Z","event":"status_change","ticket":"T-20-06","from":"pr-open","to":"merged","pr":6}
+{"ts":"2026-08-25T10:31:11.672Z","event":"status_change","ticket":"T-22-01","from":null,"to":"pending","pr":null}
+{"ts":"2026-08-25T10:31:11.672Z","event":"status_change","ticket":"T-22-02","from":null,"to":"pending","pr":null}
+{"ts":"2026-08-25T10:31:11.672Z","event":"status_change","ticket":"T-22-03","from":null,"to":"pending","pr":null}
+{"ts":"2026-08-25T10:31:11.672Z","event":"status_change","ticket":"T-22-04","from":null,"to":"pending","pr":null}
+{"ts":"2026-08-25T10:31:11.672Z","event":"status_change","ticket":"T-22-05","from":null,"to":"pending","pr":null}
