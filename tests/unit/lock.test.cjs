@@ -10,7 +10,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const LOCK = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'lock.cjs');
-const { withLock, acquire, writeAtomic } = require(LOCK);
+const { withLock, acquire, writeAtomic, OWNERLESS_GRACE_MS, DEFAULT_TTL_MS } = require(LOCK);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-lock-'));
 
@@ -60,12 +60,56 @@ test('a stale lock is taken over — a killed session must not wedge the next ru
   h.release();
 });
 
-test('a lock directory with no owner.json is treated as stale, not as held forever', () => {
+suite('lock — the owner-less window (mkdir has happened, owner.json has not)');
+
+// Every live acquire passes through a window in which its lock directory exists
+// and its owner.json does not. Judging that state stale broke LIVE locks:
+//
+//   P1: mkdirSync(lockPath) succeeds        <- holds the lock
+//       (descheduled before writeFileSync)
+//   P2: mkdirSync -> EEXIST; no owner.json yet; age unknown -> "stale"
+//       breakLock(P1's live lock); mkdirSync succeeds
+//   P1: resumes and writes owner.json into P2's lock
+//
+// Both then believe they hold it. The states are built directly on disk here:
+// winning a real race is scheduling-dependent, and a flaky test in the suite
+// every executor runs is worse than no test.
+
+test('a lock directory created just now with no owner.json is HELD, not broken', () => {
+  const fresh = path.join(tmp, 'fresh.lock');
+  fs.mkdirSync(fresh);                        // exactly P1's state, mid-window
+  const second = acquire(tmp, 'fresh', { waitMs: 250 });
+  assert.strictEqual(second, null, 'a just-created owner-less lock must not be handed out');
+  assert.ok(fs.existsSync(fresh), 'and it must not be broken out from under its holder');
+  fs.rmSync(fresh, { recursive: true, force: true });
+});
+
+test('past the grace an owner-less lock is taken over — a killed session must not wedge the next run', () => {
   const orphan = path.join(tmp, 'orphan.lock');
   fs.mkdirSync(orphan);
+  // Back-date the directory well beyond any sane grace. Numeric utimes arguments
+  // are SECONDS since the epoch; Date objects keep the unit honest.
+  const past = new Date(Date.now() - 60_000);
+  fs.utimesSync(orphan, past, past);
   const h = acquire(tmp, 'orphan', { waitMs: 500 });
   assert.ok(h, 'an acquire that died before writing its owner must not be permanent');
   h.release();
+});
+
+test('an unparseable owner timestamp is still taken over at once, grace or no grace', () => {
+  const bad = path.join(tmp, 'badstamp.lock');
+  fs.mkdirSync(bad);                          // brand new: inside the grace
+  fs.writeFileSync(path.join(bad, 'owner.json'), JSON.stringify({ pid: 999999, label: 'x', at: 'not-a-date' }));
+  const h = acquire(tmp, 'badstamp', { waitMs: 250 });
+  assert.ok(h, 'a lock that names an age nobody can read is unchanged: stale on sight');
+  h.release();
+});
+
+test('the grace covers the mkdir-to-write window without approaching the TTL', () => {
+  assert.ok(OWNERLESS_GRACE_MS >= 2_000,
+    'it must clear the 1-second mtime granularity some filesystems still report');
+  assert.ok(OWNERLESS_GRACE_MS < DEFAULT_TTL_MS / 10,
+    'and stay far below the TTL, so a dead session is still taken over promptly');
 });
 
 suite('lock — cross-process (the actual scenario: sentinel + main loop)');
