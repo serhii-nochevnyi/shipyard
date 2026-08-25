@@ -20,7 +20,7 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 
 const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
 const SCRIPT = path.join(SCRIPTS, 'escalation-record.cjs');
-const { activeEscalations, fingerprint } = require(SCRIPT);
+const { activeParks, activeEscalations, fingerprint } = require(SCRIPT);
 
 // A ticket mid-flight: PR open, green, still a draft — the front calls this
 // `finalize`, i.e. actionable, which is exactly what must NOT happen once parked.
@@ -487,6 +487,109 @@ test('six plan defects in a row all survive, each with exactly one journal line'
   const events = journal(dir).filter((e) => e.event === 'plan_defect');
   assert.equal(events.length, 6, 'one journal line each');
   assert.equal(new Set(events.map((e) => e.ticket)).size, 6, 'no ticket logged twice');
+});
+
+suite('escalation-record — one lifting rule, quoted by both renderers');
+
+// The store said "Moving the PR does NOT lift it" for a plan defect while both
+// renderers told the same human it lifts once the PR moves. Neither renderer was
+// wrong on purpose: each composed its own sentence, so a kind added to the store
+// reached them as a bare reason string and fell through to the older kind's
+// semantics. The sentence is produced once now, beside the branch that decides
+// expiry — and the property worth pinning is the AGREEMENT, not the wording.
+
+const SENTINEL = path.join(SCRIPTS, 'sentinel.cjs');
+
+// What the guard puts on a parked PR's duty item, straight out of its PARKED_WHY.
+function guardWhy(dir, id) {
+  const r = spawnSync('node', [SENTINEL, 'duty', '--json'], { cwd: dir, encoding: 'utf8' });
+  assert.equal(r.status, 0, `duty must succeed (${r.stderr})`);
+  const item = JSON.parse(r.stdout).items.find((i) => i.ticket === id);
+  assert.ok(item, `${id} must appear in the duty board`);
+  assert.equal(item.action, 'parked', 'a recorded park is parked for the guard too');
+  return item.why;
+}
+
+// What the board puts on the same ticket, through the same reader — `activeParks`,
+// the park RECORDS, exactly as front.cjs's own CLI passes them. Wiring this helper
+// to the flat `activeEscalations` view instead would test a path production does
+// not take: the flat view has already discarded the kind, so the board would be
+// reading it back out of the reason TEXT, which is the defect this suite pins.
+function boardWhy(dir, id) {
+  const { computeFront } = require(path.join(SCRIPTS, 'front.cjs'));
+  return computeFront({ [id]: {} }, stateOf(dir), { escalated: activeParks(dir) }).why[id];
+}
+
+test('a plan defect is described identically by the board and the guard', () => {
+  const { dir, plan } = planned();
+  run(dir, ['mark-plan-defect', 'T-16-05', plan, 'the plan splits a file two tickets both own']);
+  const board = boardWhy(dir, 'T-16-05');
+  assert.equal(guardWhy(dir, 'T-16-05'), board,
+    'two renderers composing their own sentence IS the defect — not the wording either one chose');
+  assert.ok(!/PR moves/.test(board), `and neither may claim a PR move lifts it: ${board}`);
+  assert.ok(/re-plan|re-decompose/i.test(board), `both must name the act that does: ${board}`);
+});
+
+test('an ordinary escalation is described identically too', () => {
+  const dir = project();
+  run(dir, ['mark', 'T-16-05', 'a', 'human', 'owns', 'the', 'API', 'key']);
+  const board = boardWhy(dir, 'T-16-05');
+  assert.equal(guardWhy(dir, 'T-16-05'), board, 'the agreement holds for the kind that predates kinds');
+  assert.ok(/PR moves/.test(board), `whose rule is unchanged: ${board}`);
+  assert.ok(/a human owns the API key/.test(board), 'the recorded reason still travels verbatim');
+});
+
+test('a record with no kind at all is rendered as an ordinary escalation', () => {
+  // Hand-written, because no command writes this shape any more: every record
+  // stored before `kind` existed looks exactly like this, and the fallback is
+  // what keeps it readable rather than mis-described.
+  const dir = project();
+  fs.writeFileSync(path.join(dir, '.planning', 'graph', 'escalations.json'), JSON.stringify({
+    tickets: { 'T-16-05': { reason: 'the plan owner is on leave', at: '2026-01-01T00:00:00Z' } },
+  }));
+  const board = boardWhy(dir, 'T-16-05');
+  assert.equal(guardWhy(dir, 'T-16-05'), board, 'still one sentence, still both renderers');
+  assert.ok(/PR moves/.test(board),
+    `a reason that merely mentions a plan must not borrow the plan_defect rule: ${board}`);
+});
+
+test('an ordinary escalation whose REASON is a pasted plan_defect line stays an escalation', () => {
+  // The collision the prefix scheme could not survive. `mark`'s reason is free
+  // text a human types, so "starts with the plan_defect prefix" was reachable by
+  // anyone quoting a board line back into the ordinary command — and the answer
+  // they got was that re-planning lifts a park only a PR move lifts. The kind now
+  // comes from the record's own field, and `activeParks` reports the rule that
+  // actually expired the park, so the two cannot disagree. Copilot, PR #8.
+  const dir = project();
+  const pasted = 'plan_defect — re-decompose: the board said this and I am quoting it back';
+  const r = run(dir, ['mark', 'T-16-05', ...pasted.split(' ')]);
+  assert.equal(r.status, 0, `mark must accept any free text (${r.stderr})`);
+  assert.equal(activeParks(dir)['T-16-05'].kind, 'escalation',
+    'the store filed it under `mark`, and nothing in the text may re-file it');
+
+  const board = boardWhy(dir, 'T-16-05');
+  assert.equal(guardWhy(dir, 'T-16-05'), board, 'both renderers, one sentence, as for every kind');
+  // Byte-exact: "mentions re-planning" cannot tell the LIFTING sentence apart
+  // from a reason that quotes one, and here the reason quotes one on purpose.
+  assert.equal(
+    board,
+    `escalated — ${pasted}. It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear T-16-05\` to take it back.`,
+    'the ordinary rule, stated in full — the docstring guarantee is now structural'
+  );
+});
+
+test('the flat view is a rendering of the records, not a second source of truth', () => {
+  // `list --json` and any external consumer still get {ticket: reason}, with the
+  // kind visible as the prefix it always was. What changed is that no renderer
+  // reads a kind back out of that string.
+  const { dir, plan } = planned();
+  run(dir, ['mark-plan-defect', 'T-16-05', plan, 'the plan splits a file two tickets both own']);
+  const parks = activeParks(dir);
+  const flat = activeEscalations(dir);
+  assert.deepEqual(Object.keys(flat), Object.keys(parks), 'the same parks, both ways');
+  assert.equal(parks['T-16-05'].kind, 'plan_defect');
+  assert.equal(flat['T-16-05'], `plan_defect — re-decompose: ${parks['T-16-05'].reason}`,
+    'the flat value is the record rendered, and the record is what a renderer takes');
 });
 
 done();

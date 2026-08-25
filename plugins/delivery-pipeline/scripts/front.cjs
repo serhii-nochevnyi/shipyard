@@ -41,6 +41,14 @@
 // open PRs is still being driven to green — before it, an unmerged green PR was
 // simply "waiting on a human" and the run declared a fixpoint on top of it.
 
+const path = require('path');
+// The lifting rule for a park comes from the store that OWNS the park, never
+// from here. Composing it at this render site is what let the board tell a
+// human that moving the PR lifts a plan defect, while escalation-record.cjs —
+// the file that decides when it actually lifts — says a PR move does not touch
+// it. This module's job for a park is placement; the wording is not its call.
+const { escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'));
+
 const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
 const SENTINEL_BUCKETS = ['fix', 'finalize', 'merge'];
 
@@ -63,8 +71,14 @@ function computeFront(tickets, state, opts = {}) {
   // `--parked`, so it died with the session and the next run re-dispatched
   // review-fix and arch-review against a PR a human had already been asked to
   // handle — with the reason, the only part worth inheriting, gone. The caller
-  // supplies {ticket: reason} and is expected to drop entries whose PR has since
-  // moved, so a human answering the review lifts the park by itself.
+  // supplies the park RECORDS `activeParks` returns — {ticket: {kind, reason}} —
+  // and is expected to drop entries whose PR has since moved, so a human
+  // answering the review lifts the park by itself. The record travels whole
+  // rather than flattened to its reason because the KIND decides which lifting
+  // rule the human is told about, and a kind recovered from the reason TEXT is a
+  // kind that free text can forge. A bare string is still accepted: that is the
+  // flat `activeEscalations` view, which has already discarded the kind, so it
+  // renders as an ordinary escalation.
   const escalated = opts.escalated || {};
   // Auto-merge is a config decision (pipeline.auto_merge) that state-sync passes
   // in; the front never guesses it, because the difference is whether an unmerged
@@ -118,7 +132,7 @@ function computeFront(tickets, state, opts = {}) {
     // getting this PR in: if it is in, there is nothing left to escalate.
     if (escalated[id]) {
       parked.blocked.push(id);
-      why[id] = `escalated — ${escalated[id]}. It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear ${id}\` to take it back.`;
+      why[id] = escalationWhy(id, escalated[id]);
       continue;
     }
 
@@ -543,9 +557,11 @@ if (require.main === module) {
   // drifted read back as `execute` — the exact re-offering drift-record exists
   // to stop.
   const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
-  const { activeEscalations } = require(path.join(__dirname, 'escalation-record.cjs'));
+  // The RECORDS, not the flat view: the board's lifting sentence is chosen by the
+  // park's kind, and the flat map keeps the kind only as a text prefix.
+  const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
   const front = computeFront(tickets, state, {
-    parked, autoMerge, drifted: activeDrift(root), escalated: activeEscalations(root, state),
+    parked, autoMerge, drifted: activeDrift(root), escalated: activeParks(root, state),
     // …and the ORDER has the same requirement as the verdict: state-sync derives
     // this from the journal, so the CLI must too, or the two commands rank the
     // same graph differently.
