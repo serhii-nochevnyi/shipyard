@@ -158,6 +158,26 @@ test('no graph and no --graph refuses, naming the way out', () => {
     'a reader must not create anything anywhere');
 });
 
+test('--graph followed by another flag is a usage error, not a silent history from nowhere', () => {
+  // Copilot's finding on this PR: the flag-stripping loop skips exactly one
+  // token after `--graph` unconditionally, so `--graph --json` used to read
+  // "--json" as the directory — disabling JSON mode AND resolving GRAPH_DIR to
+  // a nonexistent path outside cwd/.planning, which reported an empty history
+  // instead of refusing.
+  const { borrowed } = scratch();
+  const r = run(borrowed, ['--graph', '--json', 'T-01-01']);
+  assert.notStrictEqual(r.status, 0, 'a flag is not a directory value');
+  assert.ok(/--graph/.test(r.stderr), r.stderr);
+  assert.strictEqual(fs.existsSync(path.join(borrowed, '.planning')), false);
+});
+
+test('--graph at the very end with no value is a usage error, not a silent cwd fallback', () => {
+  const { borrowed } = scratch();
+  const r = run(borrowed, ['T-01-01', '--graph']);
+  assert.notStrictEqual(r.status, 0, 'a missing value must not be treated as an explicit graph');
+  assert.ok(/--graph/.test(r.stderr), r.stderr);
+});
+
 test('--graph works from anywhere, in any position', () => {
   const { borrowed, graph } = scratch();
   // FIRST, deliberately: positional parsing that only tolerates a trailing flag

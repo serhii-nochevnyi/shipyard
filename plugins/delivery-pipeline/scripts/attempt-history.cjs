@@ -30,6 +30,13 @@ const path = require('path');
 
 const argvAll = process.argv.slice(2);
 
+const USAGE = 'usage: attempt-history.cjs <ticket> [--json] [--limit <n>] [--graph <dir>]';
+
+function usage(msg) {
+  console.error(`attempt-history: ${msg}\n${USAGE}`);
+  process.exit(2);
+}
+
 // The journal is only meaningful BESIDE its graph, so resolve where to read it
 // exactly as log-event.cjs resolves where to write it — one convention for
 // "which graph does this belong to", so a caller who learns it once is right
@@ -42,18 +49,24 @@ const argvAll = process.argv.slice(2);
 // there would be the exact defect this record exists to prevent, dressed as a
 // clean slate.
 const graphFlagAt = argvAll.indexOf('--graph');
+// `--graph` immediately followed by another flag (e.g. `--graph --json`) must
+// not be read as an explicit value: the flag-stripping loop below skips
+// exactly one token after `--graph` unconditionally, so `--json` would be
+// silently consumed as the "directory", disabling JSON mode AND resolving
+// GRAPH_DIR to a nonexistent path outside cwd/.planning — which reads back as
+// an empty history from nowhere rather than the refusal it should be. Found
+// by Copilot's review of this PR.
+if (graphFlagAt !== -1) {
+  const val = argvAll[graphFlagAt + 1];
+  if (val === undefined || val.startsWith('--')) {
+    usage(`--graph needs a directory value (got ${val === undefined ? 'nothing' : `the flag "${val}"`})`);
+  }
+}
 const explicitGraph = graphFlagAt !== -1 ? argvAll[graphFlagAt + 1] : process.env.SHIPYARD_GRAPH_DIR;
 const GRAPH_EXPLICIT = !!explicitGraph;
 const GRAPH_DIR = GRAPH_EXPLICIT
   ? path.resolve(explicitGraph)
   : path.join(process.cwd(), '.planning', 'graph');
-
-const USAGE = 'usage: attempt-history.cjs <ticket> [--json] [--limit <n>] [--graph <dir>]';
-
-function usage(msg) {
-  console.error(`attempt-history: ${msg}\n${USAGE}`);
-  process.exit(2);
-}
 
 // Both value-taking flags are stripped wherever they sit: a flag only tolerated
 // at the end is a trap for the caller who puts it first, and here it would be
