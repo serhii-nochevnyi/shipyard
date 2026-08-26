@@ -20,6 +20,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/failure-signature.cjs, tests/unit/failure-signature.test.cjs]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-20-01-failure-signature-normalize-history-verd
     epic: epic/20-autonomy-of-the-drive-to-green-loop
     primary_parent: null
@@ -35,6 +36,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-20-02-model-ladder-reads-signature-state-not-a
     epic: epic/20-autonomy-of-the-drive-to-green-loop
     primary_parent: T-20-01
@@ -50,6 +52,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/escalation-record.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/escalation-record.test.cjs, tests/unit/log-event.test.cjs]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-20-03-plan-defect-the-third-terminal-outcome-i
     epic: epic/20-autonomy-of-the-drive-to-green-loop
     primary_parent: T-20-01
@@ -65,6 +68,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/front.test.cjs]
     risk: low
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-20-04-order-the-actionable-front-by-unblocking
     epic: epic/20-autonomy-of-the-drive-to-green-loop
     primary_parent: null
@@ -80,6 +84,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/attempt-history.cjs, tests/unit/attempt-history.test.cjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/review-fix.md]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-20-05-attempt-history-handed-to-fixers-as-inpu
     epic: epic/20-autonomy-of-the-drive-to-green-loop
     primary_parent: null
@@ -95,6 +100,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-20-06-wire-the-babysit-loop-to-signature-verdi
     epic: epic/20-autonomy-of-the-drive-to-green-loop
     primary_parent: T-20-02
@@ -110,6 +116,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/smoke/graph-validator-smoke.sh]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-21-01-pre-authorization-is-recorded-in-the-pla
     epic: epic/21-verdicts-a-human-would-have-made-anyway
     primary_parent: null
@@ -125,6 +132,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/front.cjs, tests/unit/sentinel.test.cjs, tests/unit/front.test.cjs]
     risk: high
     human_checkpoint: true
+    preauthorized: false
     branch: ticket/T-21-02-one-predicate-decides-whether-a-checkpoi
     epic: epic/21-verdicts-a-human-would-have-made-anyway
     primary_parent: T-21-01
@@ -140,6 +148,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/decompose.md]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-21-03-decomposition-asks-for-the-approval-the
     epic: epic/21-verdicts-a-human-would-have-made-anyway
     primary_parent: T-21-01
@@ -155,6 +164,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/degenerate-green.cjs, tests/unit/degenerate-green.test.cjs]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-21-04-degenerate-green-is-detected-on-the-diff
     epic: epic/21-verdicts-a-human-would-have-made-anyway
     primary_parent: null
@@ -170,6 +180,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json, tests/unit/trailer.test.cjs]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-21-05-the-degenerate-green-verdict-rides-the-t
     epic: epic/21-verdicts-a-human-would-have-made-anyway
     primary_parent: T-21-04
@@ -185,6 +196,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/escalation-record.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/front.test.cjs, tests/unit/escalation-record.test.cjs]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-22-01-a-park-is-described-by-the-store-that-ow
     epic: epic/22-close-what-phase-20-left-open
     primary_parent: null
@@ -200,6 +212,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/escalation-record.cjs, tests/unit/escalation-record.test.cjs]
     risk: low
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-22-02-a-reason-guard-checks-the-value-not-the
     epic: epic/22-close-what-phase-20-left-open
     primary_parent: T-22-01
@@ -215,6 +228,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/drift-record.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/record-stores.test.cjs]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-22-03-one-graph-spelling-means-one-graph-parse
     epic: epic/22-close-what-phase-20-left-open
     primary_parent: null
@@ -230,6 +244,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/lock.cjs, tests/unit/lock.test.cjs]
     risk: high
     human_checkpoint: true
+    preauthorized: false
     branch: ticket/T-22-04-a-lock-is-held-from-the-instant-it-exist
     epic: epic/22-close-what-phase-20-left-open
     primary_parent: null
@@ -245,6 +260,7 @@ tickets:
     files: [tests/unit/assert-harness.cjs, tests/unit/harness.test.cjs]
     risk: medium
     human_checkpoint: false
+    preauthorized: false
     branch: ticket/T-22-05-the-harness-must-be-able-to-fail-an-asyn
     epic: epic/22-close-what-phase-20-left-open
     primary_parent: T-22-04
