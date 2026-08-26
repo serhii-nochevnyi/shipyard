@@ -8,6 +8,13 @@
         null
       ]
     },
+    "21": {
+      "branch": "epic/21-verdicts-a-human-would-have-made-anyway",
+      "base": null,
+      "repos": [
+        null
+      ]
+    },
     "22": {
       "branch": "epic/22-close-what-phase-20-left-open",
       "base": null,
@@ -170,6 +177,131 @@
       "epic": "epic/20-autonomy-of-the-drive-to-green-loop",
       "primary_parent": "T-20-02",
       "pr_base": "ticket/T-20-02-model-ladder-reads-signature-state-not-a",
+      "jira": null
+    },
+    "T-21-01": {
+      "title": "Pre-authorization is recorded in the plan, not decided at 3am",
+      "plan": ".planning/phases/21-verdicts-a-human-would-have-made-anyway/21-01-PLAN.md",
+      "phase": "21",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/validate-graph.cjs",
+        "tests/smoke/graph-validator-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-21-01-pre-authorization-is-recorded-in-the-pla",
+      "epic": "epic/21-verdicts-a-human-would-have-made-anyway",
+      "primary_parent": null,
+      "pr_base": "epic/21-verdicts-a-human-would-have-made-anyway",
+      "jira": null
+    },
+    "T-21-02": {
+      "title": "One predicate decides whether a checkpoint still needs a person",
+      "plan": ".planning/phases/21-verdicts-a-human-would-have-made-anyway/21-02-PLAN.md",
+      "phase": "21",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-21-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "tests/unit/sentinel.test.cjs",
+        "tests/unit/front.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "branch": "ticket/T-21-02-one-predicate-decides-whether-a-checkpoi",
+      "epic": "epic/21-verdicts-a-human-would-have-made-anyway",
+      "primary_parent": "T-21-01",
+      "pr_base": "ticket/T-21-01-pre-authorization-is-recorded-in-the-pla",
+      "jira": null
+    },
+    "T-21-03": {
+      "title": "Decomposition asks for the approval the night would have needed",
+      "plan": ".planning/phases/21-verdicts-a-human-would-have-made-anyway/21-03-PLAN.md",
+      "phase": "21",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-21-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/commands/decompose.md"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-21-03-decomposition-asks-for-the-approval-the",
+      "epic": "epic/21-verdicts-a-human-would-have-made-anyway",
+      "primary_parent": "T-21-01",
+      "pr_base": "ticket/T-21-01-pre-authorization-is-recorded-in-the-pla",
+      "jira": null
+    },
+    "T-21-04": {
+      "title": "Degenerate green is detected on the diff",
+      "plan": ".planning/phases/21-verdicts-a-human-would-have-made-anyway/21-04-PLAN.md",
+      "phase": "21",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/degenerate-green.cjs",
+        "tests/unit/degenerate-green.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-21-04-degenerate-green-is-detected-on-the-diff",
+      "epic": "epic/21-verdicts-a-human-would-have-made-anyway",
+      "primary_parent": null,
+      "pr_base": "epic/21-verdicts-a-human-would-have-made-anyway",
+      "jira": null
+    },
+    "T-21-05": {
+      "title": "The degenerate-green verdict rides the trailer and changes no outcome",
+      "plan": ".planning/phases/21-verdicts-a-human-would-have-made-anyway/21-05-PLAN.md",
+      "phase": "21",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-21-04"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/references/pr-sentinel.md",
+        "plugins/delivery-pipeline/.claude-plugin/plugin.json",
+        "capabilities/delivery-pipeline/capability.json",
+        "tests/unit/trailer.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "branch": "ticket/T-21-05-the-degenerate-green-verdict-rides-the-t",
+      "epic": "epic/21-verdicts-a-human-would-have-made-anyway",
+      "primary_parent": "T-21-04",
+      "pr_base": "ticket/T-21-04-degenerate-green-is-detected-on-the-diff",
       "jira": null
     },
     "T-22-01": {
