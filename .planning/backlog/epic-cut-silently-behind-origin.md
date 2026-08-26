@@ -1,5 +1,16 @@
 # epic-branch.sh ensure: warn when the local base is ahead of origin
 
+**STILL LIVE — re-verified 2026-08-26 and deliberately NOT closed.** No commit has
+added the check. `plugins/delivery-pipeline/scripts/epic-branch.sh` contains no
+`git rev-list --count` at all: `ensure` fetches, confirms `origin/<base>`
+resolves (line 91), and then cuts the epic with
+`git branch --no-track "$epic" "origin/$base"` (line 103) without ever comparing
+the local `<base>` against it. The one nearby guard — `merge-base --is-ancestor
+"origin/$base" "$epic"` at line 98 — answers a different question: it refuses a
+pre-existing LOCAL epic branch that does not contain the base, and says nothing
+about commits sitting on the local base that the epic will not carry. Still
+unowned.
+
 **Found:** 2026-08-25, during the first `/shipyard:deliver` run on this repo.
 **Scope:** none of phase 20's tickets — do not smuggle it into one.
 

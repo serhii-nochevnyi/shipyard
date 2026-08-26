@@ -1,12 +1,27 @@
 # The conveyor's own repo has no CI, so it cannot dogfood drive-to-green
 
+**RESOLVED — released in v0.40.0.** Closed by commit `6ae1414`
+(`ci: run make test-fast on every PR and push to main`) rather than by a numbered
+ticket: it was taken directly after phase 20 landed, which is exactly what
+"Why it was NOT done during phase 20" below asks for. Re-verified against the
+shipped tree by T-23-02 on 2026-08-26, not read off a summary:
+`.github/workflows/test.yml` exists, runs `make test-fast` on `pull_request` and
+on pushes to `main`, and pins `node-version: '24.15.0'` to `Dockerfile.base`'s
+`NODE_VERSION` ARG as this entry asked. `git tag --contains 6ae1414` reports
+v0.40.0 as the first release carrying it.
+
+Nothing below is outstanding. The body is kept because it records WHY the
+workflow has the scope it has — one fast job, with the Docker- and
+network-dependent targets deliberately left out — and deleting the reasoning
+would lose the record of that decision while keeping only its result.
+
 **Found:** 2026-08-25, opening the first ticket PRs of phase 20 on this repo.
 **Scope:** none of phase 20's tickets. Deliberately NOT done during the phase.
 
 ## What happened
 
-`.github/workflows/` does not exist. Every PR opened here reports
-`no checks reported`, and `state-sync` flags each one:
+At the time, `.github/workflows/` did not exist. Every PR opened here reported
+`no checks reported`, and `state-sync` flagged each one:
 
     ⚠ T-20-01 PR #1: no CI checks reported — "green" here means "nothing to run"
 
