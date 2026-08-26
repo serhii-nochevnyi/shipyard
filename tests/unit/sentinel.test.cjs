@@ -26,8 +26,15 @@ function project({ tickets, state, config }) {
   return root;
 }
 
-function run(root, args) {
-  const r = spawnSync(process.execPath, [SENTINEL, ...args], { cwd: root, encoding: 'utf8' });
+function run(root, args, opts = {}) {
+  const r = spawnSync(process.execPath, [SENTINEL, ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    // The merge path re-reads the PR from LIVE GitHub by design, so every case
+    // past the pre-gh refusals needs a `gh` on PATH that answers. `stubGh`
+    // below builds one; the cases that must stay hermetic pass the deny-all.
+    env: { ...process.env, ...(opts.env || {}) },
+  });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -306,6 +313,285 @@ test('missing state is an actionable error, not a crash', () => {
   const r = run(root, ['duty']);
   assert.strictEqual(r.status, 1);
   assert.ok(/run state-sync/.test(r.stderr));
+});
+
+
+// ── pre-authorization (ADR-001 D6) ──────────────────────────────────────────
+//
+// `delivery.preauthorized` (T-21-01) records that the judgement a
+// `human_checkpoint` asks for was supplied by a person while the ticket set was
+// approved. Nothing read it until now. Two properties are non-negotiable, and
+// each has its own case below: pre-authorization must never reach the
+// epic → integration boundary, and the board and the guard must answer every
+// combination the same way — through the same predicate, not through two copies
+// of it.
+
+const { computeFront, needsHuman } = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
+));
+
+// A `gh` that answers exactly the calls `sentinel.cjs merge` makes. The gate
+// re-reads the PR from LIVE GitHub by design, so every assertion past the
+// pre-gh refusals needs one. Answers come from the environment so a single
+// script serves every case.
+function stubGh() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-ghstub-'));
+  roots.push(dir);
+  const script = [
+    '#!/bin/sh',
+    'argv="$*"',
+    'case "$argv" in',
+    '  "pr view "*)',
+    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"gate_status: arch-review=conform, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" ;;',
+    '  "pr checks "*) echo \'[{"name":"test-fast","state":"SUCCESS"}]\' ;;',
+    '  "repo view --json owner,name"*) echo \'{"owner":{"login":"acme"},"name":"demo"}\' ;;',
+    '  "repo view --json defaultBranchRef"*) echo "main" ;;',
+    '  "api graphql"*) echo \'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\' ;;',
+    '  "api repos/{owner}/{repo}/compare/"*) echo "${STUB_BEHIND:-0}" ;;',
+    '  "pr merge "*) echo "squash-merged" ;;',
+    '  "pr edit "*) echo "retargeted" ;;',
+    '  *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;',
+    'esac',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(dir, 'gh'), script, { mode: 0o755 });
+  return dir;
+}
+
+// The opposite stub: a `gh` that answers nothing. A refusal that must happen
+// BEFORE any network call is only pinned as such if the network cannot answer.
+function denyGh() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-ghdeny-'));
+  roots.push(dir);
+  fs.writeFileSync(
+    path.join(dir, 'gh'),
+    '#!/bin/sh\necho "gh: refused — this case must not need GitHub" >&2\nexit 1\n',
+    { mode: 0o755 }
+  );
+  return dir;
+}
+
+const onPath = (dir, extra = {}) => ({ PATH: dir + path.delimiter + process.env.PATH, ...extra });
+
+suite('pre-authorization — the board and the guard, driven from ONE state');
+
+// Built once and handed to BOTH readers: the sentinel receives them through the
+// project on disk, `computeFront` receives the very same objects. Two parallel
+// tests, one per file, is exactly the shape this ticket exists to remove —
+// `checkpointParent` lived twice (front.cjs:95, sentinel.cjs:233) and a second
+// condition added to two copies is how a rule comes to contradict itself.
+const agreeTickets = {
+  'T-PRE': { human_checkpoint: true, preauthorized: true, branch: 'ticket/T-PRE', epic: 'epic/21-x' },
+  'T-HOLD': { human_checkpoint: true, branch: 'ticket/T-HOLD', epic: 'epic/21-x' },
+  'T-PLAIN': { branch: 'ticket/T-PLAIN', epic: 'epic/21-x' },
+  'C-PRE': { primary_parent: 'T-PRE', branch: 'ticket/C-PRE', epic: 'epic/21-x' },
+  'C-HOLD': { primary_parent: 'T-HOLD', branch: 'ticket/C-HOLD', epic: 'epic/21-x' },
+};
+const openGreen = (pr, branch, base) => ({
+  status: 'pr-open', pr, draft: false, checks: checks(), gate: conform,
+  merge_scope: 'stacked', pr_base: base, epic: 'epic/21-x', branch,
+});
+const agreeState = {
+  'T-PRE': openGreen(11, 'ticket/T-PRE', 'epic/21-x'),
+  'T-HOLD': openGreen(12, 'ticket/T-HOLD', 'epic/21-x'),
+  'T-PLAIN': openGreen(13, 'ticket/T-PLAIN', 'epic/21-x'),
+  'C-PRE': openGreen(14, 'ticket/C-PRE', 'ticket/T-PRE'),
+  'C-HOLD': openGreen(15, 'ticket/C-HOLD', 'ticket/T-HOLD'),
+};
+
+test('front and sentinel agree on every pre-authorization combination', () => {
+  const root = project({ tickets: agreeTickets, state: agreeState });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  const duty = Object.fromEntries(d.items.map((i) => [i.ticket, i]));
+  // project()'s default config leaves auto_merge at its 'epic' default and
+  // integration_mode at 'epic-stacked', which is what AUTO_MERGE resolves to
+  // inside the subprocess — so `{ autoMerge: true }` asks the board the SAME
+  // question. Asserted, not assumed: a config drift here would make the two
+  // sides disagree for a reason that has nothing to do with the predicate.
+  assert.strictEqual(d.auto_merge, 'epic');
+  const f = computeFront(agreeTickets, agreeState, { autoMerge: true });
+
+  const bucketOf = (id) => {
+    for (const [k, v] of Object.entries(f.actionable)) if (v.includes(id)) return `actionable.${k}`;
+    for (const [k, v] of Object.entries(f.waiting)) if (v.includes(id)) return `waiting.${k}`;
+    for (const [k, v] of Object.entries(f.parked)) if (v.includes(id)) return `parked.${k}`;
+    return 'nowhere';
+  };
+  const expected = {
+    // pre-authorized: the person answered at plan time, so the guard lands it
+    'T-PRE': { action: 'merge', bucket: 'actionable.merge' },
+    // an ordinary ticket — the positive control that keeps the merge sets below
+    // from being trivially equal because nothing is ever mergeable
+    'T-PLAIN': { action: 'merge', bucket: 'actionable.merge' },
+    // un-authorized: unchanged, a person still holds the key
+    'T-HOLD': { action: 'human', bucket: 'waiting.human' },
+    // a child never lands into an OPEN checkpoint parent, authorized or not:
+    // pre-authorization covers that parent's own merge, not merges INTO it
+    'C-PRE': { action: 'wait-parent', bucket: 'waiting.human' },
+    'C-HOLD': { action: 'wait-parent', bucket: 'waiting.human' },
+  };
+  for (const [id, want] of Object.entries(expected)) {
+    assert.strictEqual(duty[id].action, want.action, `${id} duty says ${duty[id].action}: ${duty[id].why}`);
+    assert.strictEqual(bucketOf(id), want.bucket, `${id} front says ${bucketOf(id)}: ${f.why[id]}`);
+  }
+
+  // The invariant, DERIVED from the two answers rather than restated as a third
+  // table: whatever the rows above say, the guard's merge and the board's merge
+  // bucket must name the same set. The front must never offer what the guard
+  // refuses — nor withhold what it would take.
+  const guardMerges = d.items.filter((i) => i.action === 'merge').map((i) => i.ticket).sort();
+  assert.deepStrictEqual(guardMerges, f.actionable.merge.slice().sort(),
+    `guard merges ${guardMerges} vs board merges ${f.actionable.merge}`);
+  // Same for actionability as a whole — `wait-parent` and `human` are the
+  // guard's two ways of saying "not now", and both must leave the board's
+  // actionable buckets empty of that ticket.
+  const GUARD_ACTIONABLE = new Set(['ci-fix', 'review-fix', 'arch-review', 'undraft', 'merge']);
+  const guardActionable = d.items.filter((i) => GUARD_ACTIONABLE.has(i.action)).map((i) => i.ticket).sort();
+  const boardActionable = Object.values(f.actionable).flat().sort();
+  assert.deepStrictEqual(guardActionable, boardActionable,
+    `guard actionable ${guardActionable} vs board actionable ${boardActionable}`);
+  // Negative control for both deepStrictEquals: two empty lists are equal, so
+  // the agreement above is only evidence if the sets are non-empty and are the
+  // ones the table named.
+  assert.deepStrictEqual(guardMerges, ['T-PLAIN', 'T-PRE']);
+
+  // A hold is a hold, not a park: nobody owes work on a checkpoint child.
+  assert.deepStrictEqual(f.parked.blocked, []);
+  // Each held child's reason names WHICH parent, and the pre-authorized one
+  // says the parent lands first rather than implying a person is reading it.
+  assert.ok(/T-PRE/.test(f.why['C-PRE']), f.why['C-PRE']);
+  assert.ok(/pre-authorized/.test(f.why['C-PRE']), f.why['C-PRE']);
+  assert.ok(/T-PRE/.test(duty['C-PRE'].why), duty['C-PRE'].why);
+  assert.ok(/pre-authorized/.test(duty['C-PRE'].why), duty['C-PRE'].why);
+  assert.ok(/T-HOLD/.test(f.why['C-HOLD']), f.why['C-HOLD']);
+  assert.ok(/human_checkpoint/.test(f.why['C-HOLD']), f.why['C-HOLD']);
+});
+
+test('the shared predicate is the one both files import', () => {
+  // The reduction to one home is the ticket's goal, not an aside. If a second
+  // copy is ever reintroduced this assertion still passes — so it is paired
+  // with the agreement test above, which is what actually catches divergence.
+  assert.strictEqual(typeof needsHuman, 'function');
+  assert.strictEqual(needsHuman({ human_checkpoint: true }), true);
+  assert.strictEqual(needsHuman({ human_checkpoint: true, preauthorized: true }), false);
+});
+
+suite('pre-authorization — the epic → integration boundary is not negotiable');
+
+const epicTickets = {
+  'T-PRE': { human_checkpoint: true, preauthorized: true, branch: 'ticket/T-PRE', epic: 'epic/21-x' },
+  'T-TWO': { human_checkpoint: true, preauthorized: true, branch: 'ticket/T-TWO', epic: 'epic/21-x' },
+};
+// `git.base_branch` makes integrationBranchOf() answer without asking gh, so
+// the stub only has to serve the PR itself.
+const epicConfig = { pipeline: {}, git: { base_branch: 'main' } };
+
+test('a PR targeting the integration branch is refused though every ticket is pre-authorized', () => {
+  const root = project({
+    tickets: epicTickets,
+    state: {
+      'T-PRE': { ...openGreen(9, 'ticket/T-PRE', 'main'), merge_scope: 'integration' },
+      'T-TWO': openGreen(10, 'ticket/T-TWO', 'epic/21-x'),
+    },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'main', STUB_HEAD: 'ticket/T-PRE', STUB_PR: '9' });
+  const r = JSON.parse(run(root, ['merge', 'T-PRE', '--json'], { env }).stdout).results[0];
+  assert.strictEqual(r.merged, false);
+  assert.strictEqual(r.would_merge, undefined, 'not even a dry run may say it would land');
+  assert.ok(r.blockers.some((b) => /integration branch/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /human/.test(b)), r.blockers.join('; '));
+});
+
+test('...and the SAME pre-authorized ticket does land on its epic (the control)', () => {
+  // Without this the refusal above proves nothing: a gate that refuses
+  // everything would satisfy it.
+  const root = project({
+    tickets: epicTickets,
+    state: { 'T-PRE': openGreen(9, 'ticket/T-PRE', 'epic/21-x'), 'T-TWO': openGreen(10, 'ticket/T-TWO', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-PRE', STUB_PR: '9' });
+  const r = JSON.parse(run(root, ['merge', 'T-PRE', '--json', '--dry-run'], { env }).stdout).results[0];
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.preauthorized, true, 'the result records WHY the checkpoint was passable');
+});
+
+test('an un-authorized checkpoint is still refused, in today\'s words, before any gh call', () => {
+  const root = project({
+    tickets: { 'T-HOLD': { human_checkpoint: true, branch: 'ticket/T-HOLD', epic: 'epic/21-x' } },
+    state: { 'T-HOLD': openGreen(9, 'ticket/T-HOLD', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const r = JSON.parse(run(root, ['merge', 'T-HOLD', '--json'], { env: onPath(denyGh()) }).stdout).results[0];
+  assert.strictEqual(r.merged, false);
+  assert.deepStrictEqual(r.blockers, ['human_checkpoint ticket — the merge is the human\'s by contract']);
+  assert.strictEqual(r.preauthorized, undefined, 'nothing to record — no pre-authorization was involved');
+});
+
+suite('pre-authorization — a child still waits for its parent to land');
+
+const childTickets = {
+  'T-PRE': { human_checkpoint: true, preauthorized: true, branch: 'ticket/T-PRE', epic: 'epic/21-x' },
+  'C-PRE': { primary_parent: 'T-PRE', branch: 'ticket/C-PRE', epic: 'epic/21-x' },
+};
+const childEnv = () => onPath(stubGh(), { STUB_BASE: 'ticket/T-PRE', STUB_HEAD: 'ticket/C-PRE', STUB_PR: '14' });
+
+test('the guard refuses a child whose base is an OPEN pre-authorized checkpoint parent', () => {
+  const root = project({
+    tickets: childTickets,
+    state: { 'T-PRE': openGreen(11, 'ticket/T-PRE', 'epic/21-x'), 'C-PRE': openGreen(14, 'ticket/C-PRE', 'ticket/T-PRE') },
+    config: epicConfig,
+  });
+  const r = JSON.parse(run(root, ['merge', 'C-PRE', '--json'], { env: childEnv() }).stdout).results[0];
+  assert.strictEqual(r.merged, false);
+  assert.ok(r.blockers.some((b) => /T-PRE/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /pre-authorized/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /lands first/.test(b)), r.blockers.join('; '));
+});
+
+test('...and takes it once that parent has ACTUALLY merged (the control)', () => {
+  const root = project({
+    tickets: childTickets,
+    state: {
+      'T-PRE': { ...openGreen(11, 'ticket/T-PRE', 'epic/21-x'), status: 'merged' },
+      'C-PRE': openGreen(14, 'ticket/C-PRE', 'ticket/T-PRE'),
+    },
+    config: epicConfig,
+  });
+  const r = JSON.parse(run(root, ['merge', 'C-PRE', '--json', '--dry-run'], { env: childEnv() }).stdout).results[0];
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+suite('pre-authorization — the journal has to be able to tell the two apart');
+
+test('the merge event carries preauthorized=true, and only when that is why', () => {
+  // Design-time authorization is only defensible if it is auditable afterwards:
+  // without this the board cannot distinguish "a human approved this in advance"
+  // from "the guard merged a checkpoint it should have refused".
+  const root = project({
+    tickets: {
+      'T-PRE': { human_checkpoint: true, preauthorized: true, branch: 'ticket/T-PRE', epic: 'epic/21-x' },
+      'T-PLAIN': { branch: 'ticket/T-PLAIN', epic: 'epic/21-x' },
+    },
+    state: { 'T-PRE': openGreen(9, 'ticket/T-PRE', 'epic/21-x'), 'T-PLAIN': openGreen(10, 'ticket/T-PLAIN', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const gh = stubGh();
+  const a = JSON.parse(run(root, ['merge', 'T-PRE', '--json'],
+    { env: onPath(gh, { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-PRE', STUB_PR: '9' }) }).stdout).results[0];
+  const b = JSON.parse(run(root, ['merge', 'T-PLAIN', '--json'],
+    { env: onPath(gh, { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-PLAIN', STUB_PR: '10' }) }).stdout).results[0];
+  assert.strictEqual(a.merged, true, (a.blockers || []).join('; '));
+  assert.strictEqual(b.merged, true, (b.blockers || []).join('; '));
+
+  const journal = fs.readFileSync(path.join(root, '.planning', 'graph', 'delivery-log.jsonl'), 'utf8')
+    .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+  const pre = journal.find((e) => e.event === 'merge' && e.ticket === 'T-PRE');
+  const plain = journal.find((e) => e.event === 'merge' && e.ticket === 'T-PLAIN');
+  assert.strictEqual(pre.preauthorized, true, JSON.stringify(pre));
+  assert.ok(!Object.prototype.hasOwnProperty.call(plain, 'preauthorized'),
+    `an ordinary merge must claim no pre-authorization: ${JSON.stringify(plain)}`);
 });
 
 for (const r of roots) {
