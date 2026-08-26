@@ -184,9 +184,19 @@ delivery:
   branch: ticket/T-<phase>-<plan>-<slug-from-title>   # can be omitted — validate-graph will generate it
   risk: low|medium|high             # assess from the plan content
   human_checkpoint: true|false      # true is MANDATORY if risk: high
+  # preauthorized: true|false       # do NOT set by hand — Step 4.3 writes it
   repo: owner/name                  # ONLY if the ticket's files live in ANOTHER repository
   # jira: <KEY>                     # do NOT set by hand — Step 5 writes it back after export
 ```
+
+**`preauthorized` is a record of a decision, not a setting.** It says a person
+looked at THIS ticket while approving the set and accepted its risk in advance,
+so the merge no longer has to wake anyone. Only Step 4.3 writes it, and only onto
+a ticket that already carries `human_checkpoint: true` — authorizing a stop that
+does not exist is a planning mistake, and Gate 2 rejects it. Absent means `false`:
+nothing is pre-authorized by default. Never set it while writing a plan to make
+your own phase run unattended; a later reader must be able to read it as a
+person's signature and nothing else.
 
 **Multi-repo phases: `repo` is not optional.** If a ticket's files belong to a
 sibling repository (a frontend monorepo, an editor package), declare
@@ -242,6 +252,37 @@ freshly written. Do not report decomposition success without this.
      branch) / risk;
    - who is high-risk and will wait for a human;
    - how many waves and what will run in parallel; any diamond warnings of the graph.
+
+   **Then ask which risk classes are pre-authorized.** Every "approve this merge?"
+   that arrives at 3am is a decision that could have been made right here, with
+   the table already in front of the reader. Ask by CLASS, one question
+   (AskUserQuestion, in the user's language), naming the tickets it covers —
+   "medium-risk: T-03, T-07 — pre-authorize their merges?". Ask only about classes
+   that actually contain tickets with `human_checkpoint: true`: a ticket that
+   would never stop has nothing to authorize, so asking about it is a question
+   with no consequence.
+
+   Say plainly what a yes changes. Those tickets stop waiting for a person: the
+   guard merges them itself once they clear every other merge gate, and their
+   children cascade behind them instead of sitting behind an open checkpoint. It
+   does NOT reach the phase epic's own merge into the integration branch — that
+   boundary is never crossed unattended, whatever is pre-authorized underneath it.
+   A no changes nothing at all: those tickets reach green, they wait, and the
+   morning front offers them.
+
+   **Record per ticket, never by class.** For each ticket in an approved class,
+   write `delivery.preauthorized: true` into ITS plan frontmatter, then re-run
+   `validate-graph.cjs` so `tickets.json` carries the field — the same write-back
+   pattern Step 5 uses for `delivery.jira`. The plan file is the source of truth
+   and the thing that survives the session; a class recorded only in config could
+   never say which ticket a person actually looked at. If the set then changes
+   (Step 4.4), ask again after the re-slice: a flag written against a ticket that
+   has since been split or renumbered records an approval of something nobody saw.
+
+   **The default is no pre-authorization.** A declined class, a skipped question,
+   an unanswered one — each leaves the frontmatter untouched, requires no
+   re-validation, and leaves the conveyor behaving exactly as it does today.
+   Silence is not consent.
 4. The user wants changes ("split T-03 into two") → targeted edit of the plans →
    back to Step 4.1.
 5. Approval → proceed to Step 5 (Jira export), then state the next step:
