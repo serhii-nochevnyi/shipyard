@@ -31,9 +31,9 @@ other, and both shipped in the same epic:
                                  a review answer, undrafting)"
     sentinel.cjs:186            "(lifts when the PR moves; `… clear <id>`)"
 
-`front.cjs` and `sentinel.cjs` contain **zero** occurrences of `plan_defect`, so
-T-20-03's new park kind falls through to the generic escalation string. A person
-reading the board at 3am is told the exact opposite of the rule: a plan defect
+`front.cjs` and `sentinel.cjs` contained **zero** occurrences of `plan_defect`, so
+T-20-03's new park kind fell through to the generic escalation string. A person
+reading the board at 3am was told the exact opposite of the rule: a plan defect
 lifts only when the PLAN changes (re-decompose) or on an explicit `clear`.
 
 This is the repo's recurring defect shape — prose asserting behaviour the code
@@ -61,11 +61,11 @@ condition lives once, as `requireReason` at `escalation-record.cjs:238`
     line 229 (mark)              if (!reason.length)
     line 272 (mark-plan-defect)  if (!reason.join(' ').trim().length)
 
-So `escalation-record.cjs mark T-01-01 ""` passes: a non-empty positional array
+So `escalation-record.cjs mark T-01-01 ""` passed: a non-empty positional array
 holding nothing a human can read. Copilot found this on `mark-plan-defect` and
-the sentinel fixed it there; `mark` — the older, more-used path — still has it.
-The comment at 272 already explains why the joined-and-trimmed form is the right
-one. Apply the same guard, and pin the empty-string case in a test.
+the sentinel fixed it there; `mark` — the older, more-used path — still had it.
+The comment at 272 already explained why the joined-and-trimmed form was the
+right one. Same guard, applied above.
 
 ## 3. `drift-record.cjs` and `log-event.cjs` lack the `--graph`-flag-as-value guard — VERIFIED
 
@@ -82,12 +82,12 @@ merged epic:
     attempt-history.cjs     1      drift-record.cjs        0
                                    log-event.cjs           0
 
-Three scripts got this guard this session because Copilot found the bug
-independently in each. The two that were not touched still swallow a following
+Three scripts got this guard that session because Copilot found the bug
+independently in each. The two that were not touched still swallowed a following
 flag as `--graph`'s value — the same class that once wrote a drift verdict into
-a worktree and returned exit 0. These two are exactly the pair CLAUDE.md names
-as sharing one spelling of the flag with `escalation-record.cjs`, so they should
-share its parsing too.
+a worktree and returned exit 0. These two were exactly the pair CLAUDE.md names
+as sharing one spelling of the flag with `escalation-record.cjs`, and now share
+its parsing (T-22-03, above).
 
 ## 4. `lock.cjs` `acquire()` has a race window in the `owner.json` takeover — REPORTED
 
@@ -142,6 +142,7 @@ costs without closing it.
 `reviewers.cjs reinit` was run on every PR and reported
 `requested CodeRabbit full review` each time; CodeRabbit never posted. Copilot
 was the only bot reviewer in force for the whole phase. Not a code defect, but
-it halves the bot-review leg of the evidence base — which matters more here than
-usual, because this repo has no CI (see `no-ci-in-the-conveyors-own-repo.md`).
+it halves the bot-review leg of the evidence base — which mattered more at the
+time this was written, when the repo had no CI at all (see the correction
+above; `no-ci-in-the-conveyors-own-repo.md` closed that gap in v0.40.0).
 Check whether the app is still installed and authorized on this repository.

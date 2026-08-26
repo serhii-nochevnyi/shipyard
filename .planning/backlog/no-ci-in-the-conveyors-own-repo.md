@@ -20,8 +20,8 @@ would lose the record of that decision while keeping only its result.
 
 ## What happened
 
-`.github/workflows/` does not exist. Every PR opened here reports
-`no checks reported`, and `state-sync` flags each one:
+At the time, `.github/workflows/` did not exist. Every PR opened here reported
+`no checks reported`, and `state-sync` flagged each one:
 
     ⚠ T-20-01 PR #1: no CI checks reported — "green" here means "nothing to run"
 
