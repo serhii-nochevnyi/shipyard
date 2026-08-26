@@ -158,5 +158,35 @@
     "epic": "epic/22-close-what-phase-20-left-open",
     "reapable": true,
     "since": "2026-08-25T12:23:15.946Z"
+  },
+  "T-23-01": {
+    "branch": "ticket/T-23-01-a-dispatched-ticket-is-visible-as-dispat",
+    "pr": 20,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/20",
+    "base": "epic/23-the-board-tells-the-truth-about-itself",
+    "epic": "epic/23-the-board-tells-the-truth-about-itself",
+    "reapable": true,
+    "since": "2026-08-26T18:05:56.845Z"
+  },
+  "T-23-02": {
+    "branch": "ticket/T-23-02-the-backlog-states-what-is-true-now",
+    "pr": 21,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/21",
+    "base": "epic/23-the-board-tells-the-truth-about-itself",
+    "epic": "epic/23-the-board-tells-the-truth-about-itself",
+    "reapable": true,
+    "since": "2026-08-26T18:05:56.845Z"
+  },
+  "T-23-03": {
+    "branch": "ticket/T-23-03-two-test-files-stop-lying-about-the-code",
+    "pr": 22,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/22",
+    "base": "epic/23-the-board-tells-the-truth-about-itself",
+    "epic": "epic/23-the-board-tells-the-truth-about-itself",
+    "reapable": true,
+    "since": "2026-08-26T18:05:56.845Z"
   }
 }

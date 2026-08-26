@@ -68,3 +68,20 @@
 {"ts":"2026-08-26T14:46:26.054Z","event":"merge","ticket":"T-21-05","pr":19,"base":"epic/21-verdicts-a-human-would-have-made-anyway","repo":null,"by":"sentinel"}
 {"ts":"2026-08-26T14:46:41.312Z","event":"status_change","ticket":"T-21-05","from":"pr-open","to":"merged","pr":19}
 {"ts":"2026-08-26T16:44:38.248Z","event":"status_change","ticket":"T-21-02","from":"pr-open","to":"merged","pr":17}
+{"ts":"2026-08-26T17:43:46.419Z","event":"status_change","ticket":"T-23-01","from":null,"to":"pr-open","pr":20}
+{"ts":"2026-08-26T17:43:46.419Z","event":"status_change","ticket":"T-23-02","from":null,"to":"pr-open","pr":21}
+{"ts":"2026-08-26T17:43:46.419Z","event":"status_change","ticket":"T-23-03","from":null,"to":"pr-open","pr":22}
+{"ts":"2026-08-26T17:44:22.111Z","event":"dispatch","ticket":"T-23-01","role":"arch-review","pr":20,"by":"dispatch-record"}
+{"ts":"2026-08-26T17:44:22.162Z","event":"dispatch","ticket":"T-23-02","role":"arch-review","pr":21,"by":"dispatch-record"}
+{"ts":"2026-08-26T17:44:22.201Z","event":"dispatch","ticket":"T-23-03","role":"arch-review","pr":22,"by":"dispatch-record"}
+{"ts":"2026-08-26T17:48:21.719Z","event":"degenerate_green","ticket":"T-23-01","pr":20,"findings":1,"modes":"swallowed_catch:1"}
+{"ts":"2026-08-26T17:51:30.935Z","event":"degenerate_green","ticket":"T-23-02","pr":21,"findings":0,"modes":"none"}
+{"ts":"2026-08-26T17:53:36.616Z","event":"degenerate_green","ticket":"T-23-03","pr":22,"findings":2,"modes":"skip:2"}
+{"ts":"2026-08-26T17:57:10.093Z","event":"attempt","ticket":"T-23-01","pr":20,"n":1,"role":"review-fix","model":"inline","outcome":"pushed","head":"65eb75c","hypothesis":"mark's success message unconditionally claimed the front was refreshed, even when refreshFront() returned null (no board yet, or a concurrent state-sync holding the lock); captured the return value and worded the message conditionally"}
+{"ts":"2026-08-26T18:01:18.144Z","event":"attempt","ticket":"T-23-02","pr":21,"n":1,"role":"review-fix","model":"inline","outcome":"pushed","head":"bc10cb9","hypothesis":"the preserved original bug-report text below each RESOLVED note kept present tense, reading as a live claim contradicting the RESOLVED status above it; reworded four passages to past tense without changing what they assert, and fixed section 6's own stale sentence its correcting note pointed at but never touched"}
+{"ts":"2026-08-26T18:02:45.965Z","event":"merge","ticket":"T-23-01","pr":20,"base":"epic/23-the-board-tells-the-truth-about-itself","repo":null,"by":"sentinel"}
+{"ts":"2026-08-26T18:04:21.987Z","event":"merge","ticket":"T-23-02","pr":21,"base":"epic/23-the-board-tells-the-truth-about-itself","repo":null,"by":"sentinel"}
+{"ts":"2026-08-26T18:05:51.976Z","event":"merge","ticket":"T-23-03","pr":22,"base":"epic/23-the-board-tells-the-truth-about-itself","repo":null,"by":"sentinel"}
+{"ts":"2026-08-26T18:05:56.845Z","event":"status_change","ticket":"T-23-01","from":"pr-open","to":"merged","pr":20}
+{"ts":"2026-08-26T18:05:56.845Z","event":"status_change","ticket":"T-23-02","from":"pr-open","to":"merged","pr":21}
+{"ts":"2026-08-26T18:05:56.845Z","event":"status_change","ticket":"T-23-03","from":"pr-open","to":"merged","pr":22}

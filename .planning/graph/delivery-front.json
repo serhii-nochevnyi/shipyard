@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-26T16:44:38.248Z",
+  "generated_at": "2026-08-26T18:14:31.736Z",
   "parked_by_run": [],
   "auto_merge": "epic",
   "actionable": {
@@ -11,6 +11,7 @@
   },
   "waiting": {
     "ci": [],
+    "dispatched": [],
     "merge_human": [],
     "human": []
   },
@@ -32,7 +33,10 @@
       "T-22-02",
       "T-22-03",
       "T-22-04",
-      "T-22-05"
+      "T-22-05",
+      "T-23-01",
+      "T-23-02",
+      "T-23-03"
     ]
   },
   "why": {},
@@ -43,10 +47,11 @@
     "finalize": 0,
     "merge": 0,
     "ci": 0,
+    "dispatched": 0,
     "merge_human": 0,
     "human": 0,
     "blocked": 0,
-    "done": 16
+    "done": 19
   },
   "actionable_count": 0,
   "left_behind_count": 0,
@@ -54,6 +59,7 @@
   "sentinel": {
     "duty": [],
     "waiting_ci": [],
+    "dispatched": [],
     "clear": true
   },
   "roles": {
