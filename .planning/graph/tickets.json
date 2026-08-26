@@ -21,6 +21,13 @@
       "repos": [
         null
       ]
+    },
+    "23": {
+      "branch": "epic/23-the-board-tells-the-truth-about-itself",
+      "base": null,
+      "repos": [
+        null
+      ]
     }
   },
   "tickets": {
@@ -441,6 +448,86 @@
       "epic": "epic/22-close-what-phase-20-left-open",
       "primary_parent": "T-22-04",
       "pr_base": "ticket/T-22-04-a-lock-is-held-from-the-instant-it-exist",
+      "jira": null
+    },
+    "T-23-01": {
+      "title": "A dispatched ticket is visible as dispatched",
+      "plan": ".planning/phases/23-the-board-tells-the-truth-about-itself/23-01-PLAN.md",
+      "phase": "23",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/references/pr-sentinel.md",
+        "plugins/delivery-pipeline/.claude-plugin/plugin.json",
+        "capabilities/delivery-pipeline/capability.json",
+        "tests/unit/dispatch-record.test.cjs",
+        "tests/unit/front.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-23-01-a-dispatched-ticket-is-visible-as-dispat",
+      "epic": "epic/23-the-board-tells-the-truth-about-itself",
+      "primary_parent": null,
+      "pr_base": "epic/23-the-board-tells-the-truth-about-itself",
+      "jira": null
+    },
+    "T-23-02": {
+      "title": "The backlog states what is true now",
+      "plan": ".planning/phases/23-the-board-tells-the-truth-about-itself/23-02-PLAN.md",
+      "phase": "23",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        ".planning/backlog/no-ci-in-the-conveyors-own-repo.md",
+        ".planning/backlog/phase-20-followups.md",
+        ".planning/backlog/phase-22-followups.md",
+        ".planning/backlog/epic-cut-silently-behind-origin.md"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-23-02-the-backlog-states-what-is-true-now",
+      "epic": "epic/23-the-board-tells-the-truth-about-itself",
+      "primary_parent": null,
+      "pr_base": "epic/23-the-board-tells-the-truth-about-itself",
+      "jira": null
+    },
+    "T-23-03": {
+      "title": "Two test files stop lying about the code they test",
+      "plan": ".planning/phases/23-the-board-tells-the-truth-about-itself/23-03-PLAN.md",
+      "phase": "23",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "tests/unit/failure-signature.test.cjs",
+        "tests/unit/degenerate-green.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-23-03-two-test-files-stop-lying-about-the-code",
+      "epic": "epic/23-the-board-tells-the-truth-about-itself",
+      "primary_parent": null,
+      "pr_base": "epic/23-the-board-tells-the-truth-about-itself",
       "jira": null
     }
   }

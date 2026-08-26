@@ -45,6 +45,13 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-12** — A test that cannot fail is a defect: the harness must fail an
   asynchronous test that throws, rather than reporting it green.
 
+- **REQ-13** — A ticket handed to an agent is VISIBLE as dispatched: the front
+  reports it as waiting rather than offering it again, and the record expires by
+  itself so a killed run cannot hide work from the next one.
+- **REQ-14** — The backlog states what is true now. An entry describing a defect
+  that has since been fixed is the same class of error the programme exists to
+  remove: prose asserting a state the code does not have.
+
 ## Phases
 
 ### Phase 20: Autonomy of the drive-to-green loop
@@ -81,3 +88,22 @@ the harness (REQ-12) does not merely have vacuous tests: `test(name, fn)` calls
 assertions run — proven with two async tests asserting `1 === 2`, both of which
 print a tick. Today that hides exactly two cases, and both pass once made to run;
 the value is closing the class before the next async test is written.
+
+### Phase 23: The board tells the truth about itself
+**Requirements**: REQ-13, REQ-14
+
+Housekeeping with one real defect in it. The conveyor's own board has been
+lying in two directions, and both were measured rather than suspected.
+
+The front cannot see "dispatched", so it re-offers work already in flight —
+five times in a single session, across BOTH owners, every one verified live
+before being reported. That is not an occasional annoyance: the documented
+protocol says "post the guard and do NOT wait", so the front is wrong by
+construction on every healthy run, and the stop gate's blocks stop meaning
+anything. A gate whose blocks are usually false gets switched off, which this
+repository has done twice already.
+
+The backlog lies the other way: six of its seven phase-20 entries describe
+defects that phases 21 and 22 fixed. A reader trusting it would re-do finished
+work — and the entry claiming this repository has no CI is now read by a
+repository that gained CI two releases ago.
