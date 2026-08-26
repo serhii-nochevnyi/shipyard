@@ -1034,7 +1034,7 @@ loop:
        counts.total is the trailer's value (`clean` at zero, `skipped` on exit 2);
        the findings go in the PR body as a short skimmable list, and into the
        journal: `log-event.cjs degenerate_green ticket=<T> pr=<N>
-       findings=<n> --graph <project>/.planning/graph`.
+       findings=<n> modes=<mode:count,…> --graph <project>/.planning/graph`.
        IT REPORTS AND DECIDES NOTHING — never a reason to withhold `conform`,
        never a reason to hold a merge. `sentinel.cjs merge` reads `arch-review`
        and nothing else, pinned by tests/unit/trailer.test.cjs.
