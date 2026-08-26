@@ -513,9 +513,14 @@ test('six concurrent re-run marks all reach the journal', () => {
   // The loop and the sentinel run at once, so two processes can record a re-run
   // in the same instant. An append that escaped the lock shows up here as a short
   // or interleaved log — the same repro that found drift-record's lost updates.
-  // (Spawned through bash rather than from an async test body: this harness's
-  // `test()` is synchronous and `done()` exits the process, so an awaited body
-  // would be marked green before its assertions ever ran.)
+  // (Spawned through bash rather than from an async test body: `bash -c '... & wait'`
+  // is the plainest way to get six writers into flight AT ONCE, which is the
+  // contention under test — `spawnSync` in a loop would serialize it away before
+  // the lock is ever asked anything. It was first written this way for a different
+  // reason: the harness could not await an async body at all, and that defect was
+  // routed around here rather than recorded, which is how two vacuous tests kept
+  // reporting safety for a month. T-22-05 repaired the harness — an async body is
+  // awaited now and can fail — so only the first reason still holds.)
   const { project, graph } = scratch();
   const cmd = [1, 2, 3, 4, 5, 6].map((i) =>
     `${JSON.stringify(process.execPath)} ${JSON.stringify(SCRIPT)} rerun T-20-01 ` +

@@ -184,6 +184,33 @@ fires('a failing test registered as skipped', D(
   '     await expect(verify(expired)).rejects.toThrow();'
 ), { mode: 'skip', file: 'tests/unit/auth.test.ts', line: 19, text: 'it.skip' });
 
+fires('a failing test disabled by the Mocha `x` prefix', D(
+  'diff --git a/tests/unit/checkout.test.js b/tests/unit/checkout.test.js',
+  '--- a/tests/unit/checkout.test.js',
+  '+++ b/tests/unit/checkout.test.js',
+  "@@ -24,3 +24,3 @@ describe('checkout', () => {",
+  ' ',
+  "-  it('charges the saved card', async () => {",
+  "+  xit('charges the saved card', async () => {",
+  '     await charge(order);'
+), { mode: 'skip', file: 'tests/unit/checkout.test.js', line: 25, text: 'xit(' });
+
+// The near miss that matters: `xit` is a substring of `exit`, so a control that
+// only avoided the prefix would prove nothing. This one puts `process.exit(` and
+// an x-prefixed identifier on ADDED lines and still expects silence — the
+// sub-pattern needs the declaration form, not the letters.
+silent('CONTROL — `process.exit(` and an x-prefixed name, with no test disabled', D(
+  'diff --git a/scripts/report-suite.mjs b/scripts/report-suite.mjs',
+  '--- a/scripts/report-suite.mjs',
+  '+++ b/scripts/report-suite.mjs',
+  '@@ -12,2 +12,5 @@ const results = await runAll(suites);',
+  ' ',
+  "+const xitCount = results.filter((r) => r.kind === 'xit').length;",
+  '+report(results, xitCount);',
+  "+if (results.some((r) => r.status === 'red')) process.exit(1);",
+  ' '
+));
+
 fires('focusing one test, which skips every other one in the file', D(
   'diff --git a/tests/unit/parser.test.ts b/tests/unit/parser.test.ts',
   '--- a/tests/unit/parser.test.ts',
