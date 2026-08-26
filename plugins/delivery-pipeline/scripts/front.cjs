@@ -26,7 +26,9 @@
 //     merge_human — green, out of draft, but the merge is a human action
 //                   (auto-merge off, direct-to-main, or the PR targets the
 //                   integration branch)
-//     human     — a human_checkpoint ticket that has cleared its gate
+//     human     — a human_checkpoint ticket that has cleared its gate and whose
+//                 judgement nobody has supplied yet (a person holds the key), or
+//                 a child held behind an OPEN checkpoint parent until it lands
 //     blocked   — dependencies unsatisfied, or parked by the run (--parked)
 //     done      — merged
 //
@@ -48,6 +50,51 @@ const path = require('path');
 // the file that decides when it actually lifts — says a PR move does not touch
 // it. This module's job for a park is placement; the wording is not its call.
 const { escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'));
+
+// ── the checkpoint predicates, in ONE home ──────────────────────────────────
+//
+// `sentinel.cjs` imports both of these rather than keeping its own copies. Until
+// ADR-001 D6 it kept a `checkpointParentOf` of its own beside an identical
+// closure in computeFront, and the standing rule — the board must never offer
+// what the guard refuses — was held by nothing but the two texts happening to
+// match. Adding a second condition to two copies is how a rule comes to
+// contradict itself; reducing them to one is the point.
+//
+// They live HERE because this module is pure and importable: it reads no file
+// and its CLI is behind `require.main`, while sentinel.cjs parses argv and can
+// exit at load time, so it cannot be required back.
+
+// "Does this ticket still need a person?" — the one question both files ask.
+//
+// `human_checkpoint` says a human must act on this ticket; `preauthorized`
+// (ADR-001 D6, written by validate-graph.cjs) says the human already did, while
+// approving the ticket set. The two are not synonyms and must not collapse:
+// what pre-authorization lifts is the WAIT, never the checkpoint itself.
+//
+// The polarity is deliberately asymmetric. The checkpoint is recognised on a
+// TRUTHY value, so anything that reached the graph looking like a stop still
+// stops the run; only a real unquoted `true` lifts it. Gate 2 refuses every
+// other spelling at plan time — but a field whose whole purpose is to authorize
+// an unattended merge must fail towards the human, not away from them.
+function needsHuman(ticket) {
+  const t = ticket || {};
+  if (!t.human_checkpoint) return false;
+  return t.preauthorized !== true;
+}
+
+// The parent ticket's id when this ticket's base is a checkpoint parent whose PR
+// is still OPEN, else null. Deliberately indifferent to pre-authorization: a
+// child never lands into an open checkpoint parent either way. Un-authorized,
+// the squash would rewrite the diff a person is reading. Pre-authorized, nobody
+// is reading it — but it is still the ticket the checkpoint names, and landing a
+// child into it first changes what lands under that authorization. Callers ask
+// `needsHuman(parent)` to say WHICH of the two they are looking at.
+function checkpointParentOf(id, tickets, state) {
+  const parent = ((tickets && tickets[id]) || {}).primary_parent;
+  if (!parent) return null;
+  if (!((tickets && tickets[parent]) || {}).human_checkpoint) return null;
+  return ((state && state[parent]) || {}).status === 'pr-open' ? parent : null;
+}
 
 const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
 const SENTINEL_BUCKETS = ['fix', 'finalize', 'merge'];
@@ -89,15 +136,9 @@ function computeFront(tickets, state, opts = {}) {
   // not a lookup: computeFront is a pure function over its inputs and reads no
   // file, so the journal is opened by the caller or not at all.
   const ciEst = opts.ci_estimates || {};
-  // The parent ticket id when this child's base is an OPEN human_checkpoint PR,
-  // else null. `sentinel.cjs` computes the same thing for its own gate — the two
-  // must agree, or the front keeps offering a merge the guard refuses.
-  const checkpointParent = (id) => {
-    const parent = ((tickets && tickets[id]) || {}).primary_parent;
-    if (!parent) return null;
-    if (!((tickets && tickets[parent]) || {}).human_checkpoint) return null;
-    return (state[parent] || {}).status === 'pr-open' ? parent : null;
-  };
+  // The parent rule, bound to this call's graph. `sentinel.cjs` binds the SAME
+  // function over its own — the two cannot disagree because there is only one.
+  const checkpointParent = (id) => checkpointParentOf(id, tickets, state);
 
   const actionable = { execute: [], publish: [], fix: [], finalize: [], merge: [] };
   const waiting = { ci: [], merge_human: [], human: [] };
@@ -153,10 +194,14 @@ function computeFront(tickets, state, opts = {}) {
         // are all still ahead, and every one of them is work the run can do now.
         actionable.finalize.push(id);
         why[id] = `PR #${s.pr}: green and still a draft — threads, arch-review, conform gate`;
-      } else if (t.human_checkpoint && green) {
-        // Out of draft on a checkpoint ticket = the gate was cleared and the
-        // approval/merge is the human's. A checkpoint parks the PUBLISH step
-        // only; it never justifies leaving the code unwritten (see deliver.md).
+      } else if (needsHuman(t) && green) {
+        // Out of draft on a checkpoint ticket whose judgement nobody has supplied
+        // = the gate was cleared and the approval/merge is the human's. A
+        // checkpoint parks the PUBLISH step only; it never justifies leaving the
+        // code unwritten (see deliver.md). A PRE-AUTHORIZED one falls through to
+        // the merge branch below: the person answered at plan time, so the wait
+        // has already been served — the gate itself (conform trailer, threads,
+        // stacked base) is still enforced there, exactly as for any other ticket.
         waiting.human.push(id);
         why[id] = `PR #${s.pr}: human_checkpoint — awaiting approval/merge`;
       } else if (autoMerge && gateConform(s) && s.merge_scope === 'stacked' && checkpointParent(id)) {
@@ -168,11 +213,22 @@ function computeFront(tickets, state, opts = {}) {
         // refuses it; the front must not offer what the guard will refuse, or
         // every round re-proposes the same impossible action.
         //
-        // waiting.human, NOT parked: nobody owes work here, a person holds the
-        // key — the same class the front already models. Three of five
-        // escalations in one phase existed only to hold this by hand.
+        // The hold stands whether or not the parent is PRE-AUTHORIZED, and the
+        // choice is deliberate: pre-authorization is a person approving THAT
+        // ticket's diff at plan time, so it covers the parent's own merge and not
+        // merges INTO it — a child squashed in first changes what lands under
+        // that approval, and the retarget incoherence is unchanged. What differs
+        // is only who is being waited for: a person, or the guard's own next
+        // merge. The reason says which, because the remedy is not the same.
+        //
+        // waiting.human, NOT parked: nobody owes work here — the same class the
+        // front already models. Three of five escalations in one phase existed
+        // only to hold this by hand.
+        const parent = checkpointParent(id);
         waiting.human.push(id);
-        why[id] = `PR #${s.pr}: green + conform, but its base is ${checkpointParent(id)} — a human_checkpoint PR still open. It merges once that one lands.`;
+        why[id] = needsHuman(tickets && tickets[parent])
+          ? `PR #${s.pr}: green + conform, but its base is ${parent} — a human_checkpoint PR still open. It merges once that one lands.`
+          : `PR #${s.pr}: green + conform, but its base is ${parent} — a pre-authorized human_checkpoint PR still open. Nobody is reading it, but it lands first; this one follows.`;
       } else if (autoMerge && s.review_decision !== 'CHANGES_REQUESTED' && gateConform(s) && s.merge_scope === 'stacked') {
         // The sentinel's merge: into the epic or a parent ticket branch only.
         // `merge_scope` is set by state-sync; an integration-branch target never
@@ -524,7 +580,7 @@ function formatFront(front) {
   return lines;
 }
 
-module.exports = { computeFront, formatFront, ciEstimates };
+module.exports = { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf };
 
 // ── CLI: read the state files this project already has and print the verdict ──
 if (require.main === module) {

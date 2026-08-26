@@ -6,7 +6,7 @@
 
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
-const { computeFront, formatFront, ciEstimates } = require(path.join(
+const { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf } = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
 ));
 
@@ -807,6 +807,139 @@ test('an ordinary escalation whose reason LOOKS like a plan defect is still an e
     f.why.T,
     `escalated — ${DEFECT_FLAT}. It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear T\` to take it back.`,
     'the kind is the record\'s field, never the reason\'s opening words'
+  );
+});
+
+
+suite('front — a checkpoint a person already answered is the run\'s to land');
+
+// ADR-001 D6. `delivery.preauthorized` records that the judgement a
+// `human_checkpoint` asks for was supplied by a person while the ticket set was
+// approved. The two flags stay distinct: human_checkpoint says a human must
+// act, preauthorized says the human already did.
+
+test('needsHuman is exported, and only an unquoted true lifts the checkpoint', () => {
+  assert.strictEqual(needsHuman({}), false, 'no checkpoint, nobody owed');
+  assert.strictEqual(needsHuman({ human_checkpoint: true }), true);
+  assert.strictEqual(needsHuman({ human_checkpoint: true, preauthorized: true }), false);
+  assert.strictEqual(needsHuman(undefined), false, 'an unknown ticket declares no stop');
+  // The polarity is deliberately ASYMMETRIC. A checkpoint is recognised on a
+  // truthy value, so a hand-edited `"true"` still stops the run; only a real
+  // boolean lifts it. Gate 2 refuses everything else at plan time — if one ever
+  // reaches here it must fail towards the human, never away from them.
+  assert.strictEqual(needsHuman({ human_checkpoint: 'true' }), true);
+  assert.strictEqual(needsHuman({ human_checkpoint: true, preauthorized: 'true' }), true);
+  assert.strictEqual(needsHuman({ human_checkpoint: true, preauthorized: 1 }), true);
+  assert.strictEqual(needsHuman({ human_checkpoint: true, preauthorized: 'yes' }), true);
+  // Pre-authorization without a declared checkpoint authorizes nothing:
+  // validate-graph rejects the pair, and the board must not invent a meaning.
+  assert.strictEqual(needsHuman({ preauthorized: true }), false);
+});
+
+test('a pre-authorized checkpoint, green + conform + stacked, is an actionable merge', () => {
+  const f = computeFront(
+    { T: { human_checkpoint: true, preauthorized: true } },
+    { T: { ...landed } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+  // The behaviour this REPLACES, pinned as absent: it used to sit in
+  // waiting.human however green it was.
+  assert.deepStrictEqual(f.waiting.human, []);
+  assert.strictEqual(f.fixpoint, false, 'a mergeable PR is not a fixpoint');
+});
+
+test('the same ticket WITHOUT the record still waits on a person (the control)', () => {
+  const f = computeFront({ T: { human_checkpoint: true } }, { T: { ...landed } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, []);
+  assert.deepStrictEqual(f.waiting.human, ['T'], 'under waiting — never parked');
+  assert.deepStrictEqual(f.parked.blocked, []);
+});
+
+test('pre-authorization is not a bypass: no conform trailer is still finalize work', () => {
+  const f = computeFront(
+    { T: { human_checkpoint: true, preauthorized: true } },
+    { T: { ...landed, gate: undefined } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.actionable.merge, []);
+  assert.deepStrictEqual(f.actionable.finalize, ['T'], 'the architecture verdict is still owed');
+});
+
+test('pre-authorization never reaches the integration branch on the board either', () => {
+  // The epic → integration PR is never the run's, whatever the config says —
+  // and a pre-authorized ticket set must not make it one. `sentinel.cjs merge`
+  // refuses the same case; the board must not offer what the guard refuses.
+  const f = computeFront(
+    { T: { human_checkpoint: true, preauthorized: true } },
+    { T: { ...landed, merge_scope: 'integration', pr_base: 'main' } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.actionable.merge, []);
+  assert.deepStrictEqual(f.waiting.merge_human, ['T']);
+  assert.ok(/a human/.test(f.why.T), f.why.T);
+});
+
+test('a pre-authorized checkpoint that has NOT been worked on is still executable', () => {
+  // The oldest failure mode in this file: "there is a human gate" read as "do
+  // nothing at all". Lifting the gate must not change the other direction.
+  const f = computeFront(
+    { T: { human_checkpoint: true, preauthorized: true } },
+    { T: { status: 'pending', ready: true } }
+  );
+  assert.deepStrictEqual(f.actionable.execute, ['T']);
+});
+
+suite('front — a child never lands into an OPEN checkpoint parent, authorized or not');
+
+// The reasoning splits, the outcome does not. An un-authorized parent is a diff
+// a person is actively reading, and squashing into it rewrites what they are
+// reading. A pre-authorized parent has no reader — but it is still the ticket
+// the checkpoint names, and landing a child into it first changes what lands
+// under that authorization. So the child waits for the parent to MERGE, which
+// the guard will do by itself; it is not waiting for a person to decide.
+
+const paTickets = {
+  P: { human_checkpoint: true, preauthorized: true, branch: 'ticket/P' },
+  C: { primary_parent: 'P', branch: 'ticket/C' },
+};
+
+test('while a PRE-AUTHORIZED parent PR is open, its child is not offered for merge', () => {
+  const f = computeFront(paTickets, cpState('pr-open'), { autoMerge: true });
+  assert.ok(!f.actionable.merge.includes('C'), 'the child is not offered until the parent has landed');
+  // The parent in this fixture carries no conform trailer, so pre-authorization
+  // hands it to the RUN as finalize work — not a merge, and above all not to a
+  // person. That reassignment is the whole shift this ticket makes.
+  assert.deepStrictEqual(f.actionable.finalize, ['P'], f.why.P);
+  assert.deepStrictEqual(f.waiting.human, ['C'], 'only the child is held; the parent waits on nobody');
+  assert.ok(!f.parked.blocked.includes('C'));
+  assert.ok(/\bP\b/.test(f.why.C), `the reason names WHICH parent: ${f.why.C}`);
+  assert.ok(/pre-authorized/.test(f.why.C), `and says the hold is about order, not a person: ${f.why.C}`);
+});
+
+test('once that pre-authorized parent lands, the same child is a merge (the control)', () => {
+  const f = computeFront(paTickets, cpState('merged'), { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, ['C'], 'the hold is scoped to an OPEN parent');
+});
+
+test('an UN-authorized parent holds its child in exactly today\'s words', () => {
+  const f = computeFront(cpTickets, cpState('pr-open'), { autoMerge: true });
+  assert.ok(f.waiting.human.includes('C'));
+  assert.ok(/human_checkpoint/.test(f.why.C), f.why.C);
+  assert.ok(!/pre-authorized/.test(f.why.C), `an un-authorized hold must not claim one: ${f.why.C}`);
+});
+
+test('checkpointParentOf is the shared rule, and it answers over the caller\'s graph', () => {
+  // One home, two callers: sentinel.cjs imports this same function rather than
+  // keeping the copy that used to live at sentinel.cjs:233. A predicate that
+  // reads its graph from arguments is what makes that possible.
+  assert.strictEqual(checkpointParentOf('C', paTickets, cpState('pr-open')), 'P');
+  assert.strictEqual(checkpointParentOf('C', paTickets, cpState('merged')), null, 'scoped to an OPEN parent');
+  assert.strictEqual(checkpointParentOf('P', paTickets, cpState('pr-open')), null, 'a root has no parent');
+  assert.strictEqual(
+    checkpointParentOf('C', { P: { branch: 'ticket/P' }, C: { primary_parent: 'P' } }, cpState('pr-open')),
+    null,
+    'only a CHECKPOINT parent holds a child'
   );
 });
 

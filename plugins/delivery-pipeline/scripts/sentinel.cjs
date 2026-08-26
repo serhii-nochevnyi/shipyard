@@ -31,6 +31,14 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
+// The checkpoint predicates live in front.cjs and are imported, not copied.
+// A `checkpointParentOf` used to exist here AND there, and the standing rule — the
+// board must never offer what the guard refuses — was held by nothing but the
+// two texts happening to match. front.cjs is the home because it is pure and
+// importable; this file parses argv and can exit at load, so the dependency
+// only runs in one direction. (Its CLI is behind `require.main`, so requiring
+// it here executes nothing.)
+const { needsHuman, checkpointParentOf: checkpointParentIn } = require(path.join(__dirname, 'front.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -227,15 +235,10 @@ function stackDepth(id, seen = new Set()) {
 // A child is deferred while its parent PR is still being driven — but never
 // behind a parent that is waiting on a PERSON, or the whole subtree freezes for
 // as long as the human takes.
-// The parent ticket id when this child's base is an OPEN human_checkpoint PR,
-// else null. Shared by the duty chain and the merge gate so the two cannot
-// disagree about which children are landable.
-function checkpointParentOf(id) {
-  const parent = (tickets[id] || {}).primary_parent;
-  if (!parent) return null;
-  if (!(tickets[parent] || {}).human_checkpoint) return null;
-  return (state[parent] || {}).status === 'pr-open' ? parent : null;
-}
+// The parent rule, bound to this process's graph. The rule itself is front.cjs's
+// — one predicate, two callers — so the duty chain, the merge gate and the board
+// cannot disagree about which children are landable.
+const checkpointParentOf = (id) => checkpointParentIn(id, tickets, state);
 
 function parentIsMoving(id) {
   const parent = (tickets[id] || {}).primary_parent;
@@ -243,6 +246,12 @@ function parentIsMoving(id) {
   const ps = state[parent];
   if (!ps || ps.status !== 'pr-open') return false;
   if (PARKED.has(parent)) return false;
+  // Deliberately `human_checkpoint` and NOT `needsHuman`. This exception is
+  // about driving a child to GREEN, and narrowing it to un-authorized parents
+  // would make the guard answer `wait-parent` for a red child of a
+  // pre-authorized parent while the board still answers `fix` — inventing the
+  // very disagreement the shared predicate exists to remove. The merge-side
+  // hold is enforced below, where it belongs.
   if ((tickets[parent] || {}).human_checkpoint) return false;
   return true;
 }
@@ -319,7 +328,12 @@ function dutyItems() {
     } else if (s.draft) {
       item.action = 'undraft';
       item.why = 'green + conform, still a draft — ready it (`gh pr ready`); nothing else is owed';
-    } else if (t.human_checkpoint) {
+    } else if (needsHuman(t)) {
+      // Only an UNANSWERED checkpoint is the human's. A pre-authorized one
+      // (ADR-001 D6) falls through to the ordinary chain below: the person
+      // supplied that judgement while approving the ticket set, so what is left
+      // is the run's. Nothing else is relaxed for it — the conform trailer, the
+      // review threads and the stacked base are all still ahead.
       item.action = 'human';
       item.why = 'human_checkpoint — the approval and the merge are the human\'s';
     } else if (s.review_decision === 'CHANGES_REQUESTED') {
@@ -333,9 +347,16 @@ function dutyItems() {
       // human_checkpoint parent. `merge` would be refused by the gate anyway —
       // this exists so the duty says the true reason instead of routing it to
       // `human-merge`, whose text ("awaiting merge") hides which human and why.
+      // The hold is the same for a PRE-AUTHORIZED parent — pre-authorization
+      // covers that parent's own merge, never a merge INTO it — but who is being
+      // waited for is not, and the remedies differ, so the reason says which.
+      const cpParent = checkpointParentOf(id);
       item.action = 'wait-parent';
-      item.why = `green + conform, but its base is ${checkpointParentOf(id)} — a human_checkpoint PR still open. `
-        + 'Landing now would rewrite the diff that person is reading; it merges once they land theirs.';
+      item.why = needsHuman(tickets[cpParent])
+        ? `green + conform, but its base is ${cpParent} — a human_checkpoint PR still open. `
+          + 'Landing now would rewrite the diff that person is reading; it merges once they land theirs.'
+        : `green + conform, but its base is ${cpParent} — a pre-authorized human_checkpoint PR still open. `
+          + 'Nobody is reading it, but it lands first; this one follows once it does.';
     } else if (AUTO_MERGE && s.merge_scope === 'stacked') {
       item.action = 'merge';
       item.why = `green + conform → squash into ${base}`;
@@ -434,7 +455,13 @@ function mergeOne(id) {
   if (!AUTO_MERGE) return block(`auto-merge refused: ${AUTO_MERGE_WHY}`);
   if (s.status !== 'pr-open') return block(`status is ${s.status}, not pr-open`);
   if (!s.pr) return block('no PR recorded for the ticket');
-  if (t.human_checkpoint) return block('human_checkpoint ticket — the merge is the human\'s by contract');
+  if (needsHuman(t)) return block('human_checkpoint ticket — the merge is the human\'s by contract');
+  // WHY this checkpoint was passable, recorded on the result and, below, on the
+  // journal line. Design-time authorization is only defensible if it is auditable
+  // afterwards: without this the board cannot tell "a human approved this in
+  // advance" from "the guard merged a checkpoint it should have refused".
+  // Set here rather than at the merge call so a `--dry-run` reports it too.
+  if (t.human_checkpoint && t.preauthorized === true) res.preauthorized = true;
 
   const repo = s.repo || null;
   const view = gh(['pr', 'view', String(s.pr), ...repoArg(repo), '--json',
@@ -483,10 +510,17 @@ function mergeOne(id) {
   if (baseTicket) {
     const [baseId, baseObj] = baseTicket;
     if (baseObj.human_checkpoint && (state[baseId] || {}).status === 'pr-open') {
-      return block(
-        `base "${pr.baseRefName}" is ${baseId}, a human_checkpoint ticket whose PR is still open — ` +
-        'squashing into it would rewrite the diff a person is reviewing. It merges once they land theirs.'
-      );
+      // Pre-authorization does NOT lift this. It is a person approving THAT
+      // ticket's diff at plan time, so it covers the parent's own merge and not
+      // merges INTO it: a child squashed in first changes what lands under that
+      // approval, and the post-merge retarget still sends the grandchildren to
+      // the epic. The wait is the same; only who is being waited for differs, so
+      // the refusal says which — the remedies are not the same.
+      return block(needsHuman(baseObj)
+        ? `base "${pr.baseRefName}" is ${baseId}, a human_checkpoint ticket whose PR is still open — ` +
+          'squashing into it would rewrite the diff a person is reviewing. It merges once they land theirs.'
+        : `base "${pr.baseRefName}" is ${baseId}, a pre-authorized human_checkpoint ticket whose PR is still ` +
+          'open — nothing lands inside the diff that authorization named. It lands first; this one follows.');
     }
   }
 
@@ -564,7 +598,11 @@ function mergeOne(id) {
   const merged = gh(['pr', 'merge', String(s.pr), ...repoArg(repo), '--squash'], { tolerate: true });
   if (typeof merged !== 'string') return block(`gh pr merge failed: ${merged.error}`);
   res.merged = true;
-  journal({ event: 'merge', ticket: id, pr: s.pr, base: pr.baseRefName, repo, by: 'sentinel' });
+  // `preauthorized` is present only when it is WHY the merge was allowed, so a
+  // reader can count design-time approvals without re-deriving them from the
+  // graph — and an ordinary merge never claims one.
+  journal({ event: 'merge', ticket: id, pr: s.pr, base: pr.baseRefName, repo, by: 'sentinel',
+    ...(res.preauthorized ? { preauthorized: true } : {}) });
 
   // Cascade children based on THIS branch now have to move onto the epic —
   // GitHub does it by itself when the head branch is deleted, and we do not
