@@ -59,6 +59,56 @@
     "reapable": true,
     "since": "2026-08-25T09:01:09.731Z"
   },
+  "T-21-01": {
+    "branch": "ticket/T-21-01-pre-authorization-is-recorded-in-the-pla",
+    "pr": 14,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/14",
+    "base": "epic/21-verdicts-a-human-would-have-made-anyway",
+    "epic": "epic/21-verdicts-a-human-would-have-made-anyway",
+    "reapable": true,
+    "since": "2026-08-26T14:10:07.591Z"
+  },
+  "T-21-02": {
+    "branch": "ticket/T-21-02-one-predicate-decides-whether-a-checkpoi",
+    "pr": 17,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/17",
+    "base": "epic/21-verdicts-a-human-would-have-made-anyway",
+    "epic": "epic/21-verdicts-a-human-would-have-made-anyway",
+    "reapable": true,
+    "since": "2026-08-26T16:44:38.248Z"
+  },
+  "T-21-03": {
+    "branch": "ticket/T-21-03-decomposition-asks-for-the-approval-the",
+    "pr": 18,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/18",
+    "base": "epic/21-verdicts-a-human-would-have-made-anyway",
+    "epic": "epic/21-verdicts-a-human-would-have-made-anyway",
+    "reapable": true,
+    "since": "2026-08-26T14:45:49.280Z"
+  },
+  "T-21-04": {
+    "branch": "ticket/T-21-04-degenerate-green-is-detected-on-the-diff",
+    "pr": 15,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/15",
+    "base": "epic/21-verdicts-a-human-would-have-made-anyway",
+    "epic": "epic/21-verdicts-a-human-would-have-made-anyway",
+    "reapable": true,
+    "since": "2026-08-26T14:29:20.564Z"
+  },
+  "T-21-05": {
+    "branch": "ticket/T-21-05-the-degenerate-green-verdict-rides-the-t",
+    "pr": 19,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/19",
+    "base": "epic/21-verdicts-a-human-would-have-made-anyway",
+    "epic": "epic/21-verdicts-a-human-would-have-made-anyway",
+    "reapable": true,
+    "since": "2026-08-26T14:46:41.312Z"
+  },
   "T-22-01": {
     "branch": "ticket/T-22-01-a-park-is-described-by-the-store-that-ow",
     "pr": 8,

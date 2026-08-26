@@ -49,3 +49,22 @@
 {"ts":"2026-08-25T12:23:07.786Z","event":"merge","ticket":"T-22-05","pr":12,"base":"epic/22-close-what-phase-20-left-open","repo":null,"by":"sentinel"}
 {"ts":"2026-08-25T12:23:15.946Z","event":"status_change","ticket":"T-22-04","from":"pr-open","to":"merged","pr":10}
 {"ts":"2026-08-25T12:23:15.946Z","event":"status_change","ticket":"T-22-05","from":"pr-open","to":"merged","pr":12}
+{"ts":"2026-08-26T13:52:20.242Z","event":"status_change","ticket":"T-21-01","from":null,"to":"pr-open","pr":14}
+{"ts":"2026-08-26T13:52:20.242Z","event":"status_change","ticket":"T-21-02","from":null,"to":"pending","pr":null}
+{"ts":"2026-08-26T13:52:20.242Z","event":"status_change","ticket":"T-21-03","from":null,"to":"pending","pr":null}
+{"ts":"2026-08-26T13:52:20.242Z","event":"status_change","ticket":"T-21-04","from":null,"to":"pr-open","pr":15}
+{"ts":"2026-08-26T13:52:20.242Z","event":"status_change","ticket":"T-21-05","from":null,"to":"pending","pr":null}
+{"ts":"2026-08-26T14:10:02.213Z","event":"merge","ticket":"T-21-01","pr":14,"base":"epic/21-verdicts-a-human-would-have-made-anyway","repo":null,"by":"sentinel"}
+{"ts":"2026-08-26T14:10:07.591Z","event":"status_change","ticket":"T-21-01","from":"pr-open","to":"merged","pr":14}
+{"ts":"2026-08-26T14:19:48.360Z","event":"merge","ticket":"T-21-04","pr":15,"base":"epic/21-verdicts-a-human-would-have-made-anyway","repo":null,"by":"sentinel"}
+{"ts":"2026-08-26T14:29:20.564Z","event":"status_change","ticket":"T-21-02","from":"pending","to":"pr-open","pr":17}
+{"ts":"2026-08-26T14:29:20.564Z","event":"status_change","ticket":"T-21-03","from":"pending","to":"pr-open","pr":18}
+{"ts":"2026-08-26T14:29:20.564Z","event":"status_change","ticket":"T-21-04","from":"pr-open","to":"merged","pr":15}
+{"ts":"2026-08-26T14:29:20.564Z","event":"status_change","ticket":"T-21-05","from":"pending","to":"pr-open","pr":19}
+{"ts":"2026-08-26T14:39:06.393Z","event":"attempt","ticket":"T-21-05","pr":19,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","head":"4d60b66a9a44438dec1e420f3fe99e1fdb9e0221","hypothesis":"deliver.md's degenerate_green journal example was missing the modes= field documented in pr-sentinel.md for the same event; added it to match"}
+{"ts":"2026-08-26T14:41:24.617Z","event":"degenerate_green","ticket":"T-21-05","pr":19,"findings":0,"modes":""}
+{"ts":"2026-08-26T14:43:11.169Z","event":"merge","ticket":"T-21-03","pr":18,"base":"epic/21-verdicts-a-human-would-have-made-anyway","repo":null,"by":"sentinel"}
+{"ts":"2026-08-26T14:45:49.280Z","event":"status_change","ticket":"T-21-03","from":"pr-open","to":"merged","pr":18}
+{"ts":"2026-08-26T14:46:26.054Z","event":"merge","ticket":"T-21-05","pr":19,"base":"epic/21-verdicts-a-human-would-have-made-anyway","repo":null,"by":"sentinel"}
+{"ts":"2026-08-26T14:46:41.312Z","event":"status_change","ticket":"T-21-05","from":"pr-open","to":"merged","pr":19}
+{"ts":"2026-08-26T16:44:38.248Z","event":"status_change","ticket":"T-21-02","from":"pr-open","to":"merged","pr":17}
