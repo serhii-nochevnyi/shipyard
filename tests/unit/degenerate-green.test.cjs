@@ -752,6 +752,17 @@ test('--base without --worktree cannot run', () => {
   assert.ok(/--worktree/.test(r.stderr), r.stderr);
 });
 
+test('a value flag with no value does not swallow the next flag as its value', () => {
+  // `--diff --json` used to read `--json` as the diff's FILENAME instead of
+  // naming the mistake — Copilot caught this on PR #15. Same shape for `--base`
+  // and `--worktree`: each needs a real value, never the next flag in line.
+  for (const [name, extra] of [['diff', []], ['base', ['--worktree', TMP]], ['worktree', ['--base', 'epic']]]) {
+    const r = cli(['T-21-04', `--${name}`, '--json', ...extra]);
+    assert.strictEqual(r.status, 2, `--${name} --json should refuse to run:\n${r.stdout}${r.stderr}`);
+    assert.ok(new RegExp(`--${name} needs a value`).test(r.stderr), r.stderr);
+  }
+});
+
 test('a flag-first invocation does not make a flag value the ticket', () => {
   const r = cli(['--diff', dirtyPath, 'T-21-04', '--json']);
   assert.strictEqual(r.status, 0, r.stdout + r.stderr);

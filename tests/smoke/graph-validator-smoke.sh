@@ -16,7 +16,12 @@ trap 'rm -rf "$WORK"' EXIT
 pass=0
 fail=0
 ok()   { pass=$((pass + 1)); echo "  ✓ $1"; }
-bad()  { fail=$((fail + 1)); echo "  ✗ $1"; [[ -n "${2:-}" ]] && echo "$2" | sed 's/^/      /'; }
+# `bad` must end on a ZERO status. Its last command is `[[ -n "${2:-}" ]]`, so a
+# call with no detail argument returned 1 — and with `set -e` on, a failing
+# `... || bad "x"` list then ended the whole run: no summary line, and every case
+# after the first failure silently unreported. The suite collects every failure,
+# like the validator it is testing.
+bad()  { fail=$((fail + 1)); echo "  ✗ $1"; [[ -n "${2:-}" ]] && echo "$2" | sed 's/^/      /'; return 0; }
 
 # plan <project> <file> <ticket> <deps> <files> <reqs> [risk] [checkpoint] \
 #      [extra frontmatter line] [extra line INSIDE the delivery block]
@@ -212,6 +217,127 @@ mkproj badrisk
 mkdir -p "$WORK/badrisk/.planning/phases/01-x"
 plan badrisk '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 critical false
 rejects badrisk 'is not one of low|medium|high' "an unknown delivery.risk blocks Gate 2"
+
+# ── 6b. delivery.preauthorized — the record of a plan-time approval (ADR-001 D6)
+# The field authorizes a merge nobody watches, so every REJECT below is paired
+# with the ACCEPT case it must not catch: a rule that refuses everything reports
+# safety without discriminating.
+
+# ACCEPT: the construct the field exists for — a declared stop, approved early.
+mkproj preauth
+mkdir -p "$WORK/preauth/.planning/phases/01-x"
+plan preauth '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high true '' 'preauthorized: true'
+if out="$(run_validator preauth)"; then
+  ok "preauthorized: true beside human_checkpoint: true validates"
+  node -e '
+    const t = require(process.argv[1]).tickets;
+    if (t["T-01-01"].preauthorized !== true) {
+      throw new Error("preauthorized not carried, got " + JSON.stringify(t["T-01-01"].preauthorized));
+    }
+  ' "$WORK/preauth/.planning/graph/tickets.json" \
+    && ok "preauthorized: true lands in tickets.json" \
+    || bad "preauthorized: true lands in tickets.json"
+  if grep -q '^    preauthorized: true$' "$WORK/preauth/.planning/graph/tickets.yaml"; then
+    ok "preauthorized lands in the tickets.yaml view too"
+  else
+    bad "preauthorized lands in the tickets.yaml view too" \
+      "$(grep preauthorized "$WORK/preauth/.planning/graph/tickets.yaml" || echo '(absent)')"
+  fi
+else
+  bad "preauthorized: true beside human_checkpoint: true validates" "$out"
+fi
+
+# NEGATIVE CONTROL for the whole field: a plan that never mentions it defaults
+# to false and says NOTHING — no error, and no warning either. Without this the
+# checks above would still pass if the validator complained at every plan.
+mkproj nopreauth
+mkdir -p "$WORK/nopreauth/.planning/phases/01-x"
+plan nopreauth '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high true
+if out="$(run_validator nopreauth)"; then
+  node -e '
+    const t = require(process.argv[1]).tickets;
+    if (t["T-01-01"].preauthorized !== false) {
+      throw new Error("an absent field must default to false, got " + JSON.stringify(t["T-01-01"].preauthorized));
+    }
+  ' "$WORK/nopreauth/.planning/graph/tickets.json" \
+    && ok "an absent preauthorized defaults to false in tickets.json" \
+    || bad "an absent preauthorized defaults to false in tickets.json"
+  grep -q 'preauthorized' <<<"$out" \
+    && bad "an absent preauthorized is silent (no error, no warning)" "$out" \
+    || ok "an absent preauthorized is silent (no error, no warning)"
+else
+  bad "a plan without preauthorized still validates" "$out"
+fi
+
+# ACCEPT control for the type check: an explicit false is representable, so it
+# passes. The rule refuses what it cannot represent, not everything != true.
+mkproj preauthfalse
+mkdir -p "$WORK/preauthfalse/.planning/phases/01-x"
+plan preauthfalse '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high true '' 'preauthorized: false'
+if out="$(run_validator preauthfalse)"; then
+  node -e '
+    const t = require(process.argv[1]).tickets;
+    if (t["T-01-01"].preauthorized !== false) throw new Error("an explicit false must survive as false");
+  ' "$WORK/preauthfalse/.planning/graph/tickets.json" \
+    && ok "an explicit preauthorized: false validates and stays false" \
+    || bad "an explicit preauthorized: false validates and stays false"
+else
+  bad "an explicit preauthorized: false validates" "$out"
+fi
+
+# REJECT: `yes` is a plain string to this parser. Read as false it is a silent
+# wait; read as true it merges unapproved work. Refuse it and name it.
+mkproj preauthyes
+mkdir -p "$WORK/preauthyes/.planning/phases/01-x"
+plan preauthyes '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high true '' 'preauthorized: yes'
+rejects preauthyes 'T-01-01: delivery.preauthorized' \
+  "a non-boolean preauthorized blocks Gate 2, naming the ticket and the field"
+rejects preauthyes '"yes"' "and quotes the value it refused back to the author"
+
+# REJECT: a QUOTED true — the spelling most likely to be read as authorization
+mkproj preauthquoted
+mkdir -p "$WORK/preauthquoted/.planning/phases/01-x"
+plan preauthquoted '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high true '' 'preauthorized: "true"'
+rejects preauthquoted 'T-01-01: delivery.preauthorized' "a quoted \"true\" is a string and blocks Gate 2"
+
+# REJECT: a number. The error message claims numbers are refused; pin it.
+mkproj preauthnum
+mkdir -p "$WORK/preauthnum/.planning/phases/01-x"
+plan preauthnum '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high true '' 'preauthorized: 1'
+rejects preauthnum 'got 1' "a numeric preauthorized blocks Gate 2"
+
+# REJECT: a key with no value parses to null, which is not an answer
+mkproj preauthempty
+mkdir -p "$WORK/preauthempty/.planning/phases/01-x"
+plan preauthempty '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high true '' 'preauthorized:'
+rejects preauthempty 'got null' "an empty preauthorized value blocks Gate 2"
+
+# REJECT: authorizing a stop the ticket does not declare
+mkproj preauthnostop
+mkdir -p "$WORK/preauthnostop/.planning/phases/01-x"
+plan preauthnostop '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 low false '' 'preauthorized: true'
+rejects preauthnostop 'delivery.preauthorized is true but delivery.human_checkpoint is not' \
+  "preauthorized without a declared human_checkpoint blocks Gate 2"
+
+# ACCEPT control for that rule: the same low risk, with the stop declared. The
+# rule is about the checkpoint, not about the risk class.
+mkproj preauthlowstop
+mkdir -p "$WORK/preauthlowstop/.planning/phases/01-x"
+plan preauthlowstop '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 low true '' 'preauthorized: true'
+if out="$(run_validator preauthlowstop)"; then
+  ok "a low-risk ticket that declares a checkpoint may pre-authorize it"
+else
+  bad "a low-risk ticket that declares a checkpoint may pre-authorize it" "$out"
+fi
+
+# The two flags stay distinct: pre-authorization records that the judgement was
+# supplied early, it does not remove the ticket's obligation to declare that
+# judgement is needed. High risk without a checkpoint is still the SAME error.
+mkproj preauthhighnostop
+mkdir -p "$WORK/preauthhighnostop/.planning/phases/01-x"
+plan preauthhighnostop '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high false '' 'preauthorized: true'
+rejects preauthhighnostop 'risk is high but delivery.human_checkpoint is not true' \
+  "pre-authorization does not excuse the high-risk checkpoint requirement"
 
 mkproj badbranch
 mkdir -p "$WORK/badbranch/.planning/phases/01-x"
