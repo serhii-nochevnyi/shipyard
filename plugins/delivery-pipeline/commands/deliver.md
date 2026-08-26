@@ -1028,13 +1028,25 @@ loop:
   c. arch-review agent (`model: opus` — judgment, never cheapened)
      (prompt ${CLAUDE_PLUGIN_ROOT}/references/arch-review.md + gh pr diff +
       .planning/architecture/)
+     the same step runs the degenerate-green detector over the diff it judged —
+       `degenerate-green.cjs <T> --base <base> --worktree <wt> --json
+        --graph <project>/.planning/graph`
+       counts.total is the trailer's value (`clean` at zero, `skipped` on exit 2);
+       the findings go in the PR body as a short skimmable list, and into the
+       journal: `log-event.cjs degenerate_green ticket=<T> pr=<N>
+       findings=<n> --graph <project>/.planning/graph`.
+       IT REPORTS AND DECIDES NOTHING — never a reason to withhold `conform`,
+       never a reason to hold a merge. `sentinel.cjs merge` reads `arch-review`
+       and nothing else, pinned by tests/unit/trailer.test.cjs.
      violation    → fix in the worktree → push → step d
      adr-outdated → `escalation-record.cjs mark <T> "adr-outdated: …"` (changing the ADR is a human's call), continue the front
      conform      → check the green criteria:
        all checks passed ∧ unresolved=0 ∧ arch conform
        → record the verdicts in the PR body as a trailer (survives squash-merge):
-         append as the last line of the body via gh pr edit <pr> --body:
-         gate_status: arch-review=conform, drift-check=<fresh|skipped>, checks=green
+         append as the last line of the body via gh pr edit <pr> --body — ONE
+         `gate_status:` line carrying every key, because the reader takes the
+         LAST such line and a second one hides the verdict above it:
+         gate_status: arch-review=conform, drift-check=<fresh|skipped>, degenerate-green=<clean|N|skipped>, checks=green
        → gh pr ready <pr> (remove draft)
        → then split on the checkpoint:
            human_checkpoint: true  → mark `awaiting-human` (green, but the
