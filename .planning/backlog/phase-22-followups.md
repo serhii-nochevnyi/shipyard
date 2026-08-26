@@ -46,3 +46,27 @@ flight before being reported. This is no longer an occasional annoyance; it is
 the normal outcome of following the documented protocol, which is the strongest
 argument yet that the fix belongs in `front.cjs` rather than in operator
 patience.
+
+## 4. The front reads phase ORDER from the phase NUMBER — VERIFIED
+
+Delivering phase 22 before phase 21 (deliberate: 22 was repair debt that 21's
+work should not be built on) makes `state-sync` report, of five live phase-21
+tickets:
+
+    fixpoint: NO — but ALL 4 actionable item(s) are in phases already moved past
+    (T-21-02, T-21-03, T-21-05, T-21-04). Nothing live remains.
+
+Nothing had moved past them; phase 22 merged and 21 < 22. The heuristic treats a
+lower phase number as earlier in time, which is true of most projects and false
+whenever a phase is delivered out of order — which the roadmap here explicitly
+does, and says so in its own phase-22 entry ("Sequenced BEFORE phase 21 despite
+the higher number").
+
+Consequence is narrow but wrong in the dangerous direction: the message invites
+the operator to record why the work is NOT being taken, i.e. to park live work
+as abandoned. It also flips the stop-gate's "all-left-behind" escape hatch on
+for a phase that is mid-delivery.
+
+The graph already knows the truth — a phase whose tickets are unmerged and whose
+epic is open is not "moved past", whatever its number. Judge by state, not by
+ordinal.
