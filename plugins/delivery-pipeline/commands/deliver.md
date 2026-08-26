@@ -52,6 +52,10 @@ actionable now  execute  — ready, no branch yet          → Step 3   [main lo
                            so a faulted verdict cannot ready the PR) [SENTINEL]
                 merge    — green + conform, targets the stack: squash it in [SENTINEL]
 waiting         ci       — checks still running (NOT a fixpoint; NOT a reason to block)
+                dispatched— an agent already holds it (`dispatch-record.cjs`): not
+                           actionable, because handing it out twice is duplicate
+                           work; not parked, because nobody gave up; not a
+                           fixpoint, because the result still has to be collected
                 parent   — stacked on a parent whose PR is still open [SENTINEL]
                            Work it now and you buy a green the base move undoes:
                            CI re-runs on different code, reviewers re-read a
@@ -85,6 +89,12 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
+- `dispatch-record.cjs mark <T> <role>` — an agent is working on it RIGHT NOW.
+  The one fact here that is motion rather than a verdict, and the one the board
+  could not see at all: nothing is pushed yet, so the live state still reads
+  `execute`/`fix` and the stop gate refuses turns over work already in flight.
+  It lifts by itself when the ticket's state moves or when the dispatch times
+  out, so a run that dies mid-wave hides nothing from the next one.
 Reserve `--parked` for what genuinely holds only for this session.
 
 `branched-needs-pr`/`publish` is a real bucket, not a curiosity: a branch that was
@@ -859,12 +869,29 @@ and do not open PRs.
      IN PARALLEL. Put the ticket's `reuse_candidates` INSIDE `<TICKET-CONTRACT>` with
      the instruction to read each one before writing and to build on it rather than
      add a parallel layer — outside the bounds the agent is told to ignore it.
+4a. **Record the dispatch, in the same breath as making it.** For every ticket you
+    just handed to an executor:
+    `dispatch-record.cjs mark <T> executor` (add `--graph <project>/.planning/graph`
+    when you are not standing in the project). It rewrites the board so those
+    tickets read `waiting: dispatched` instead of `execute`, which is what keeps
+    the stop gate from refusing a turn over work that is already running — the
+    board is otherwise recomputed only at step 8, long after the wave is out.
+    The record needs no cleanup to be safe: it lifts when the ticket's state moves
+    and it times out on its own. Clear it explicitly at Phase C, when the work
+    comes back.
+
 4b. (TUNE, optional) Pre-commit/pre-push review with GSD adapters — cheaper to catch
     remarks before the PR bots: `/gsd-code-review <phase> --fix` or
     `/gsd-review --coderabbit --opencode`, if CLI reviewers are configured.
     Unavailable — skip silently.
 
 **Phase C — gate and publish (main loop, per ticket).** Never delegate this.
+
+4c. The executor has returned, so the ticket is yours again:
+   `dispatch-record.cjs clear <T>`. Do this BEFORE the gates below — their verdict
+   (including `blocked`) is a fact about a ticket nobody is working on, and a
+   record left standing over an escalation would hide it from the next run for as
+   long as it takes to time out.
 
 5. **The "did work" gate (MANDATORY, MECHANICAL).** Check the worktree yourself,
    not by the agent's words:
@@ -924,6 +951,14 @@ prompt:        ${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md
                maxAttempts and plan_defect_signatures (the K)
 spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose', model, ... })
 ```
+
+Record that hand-over the same way the executors' was —
+`dispatch-record.cjs mark <T> pr-sentinel` for every ticket on the guarded list —
+and clear each one when the guard's report comes back for it. This half is not an
+optimisation: posting the guard and NOT waiting for it is the documented protocol,
+so `fix`/`finalize`/`merge` are dispatched BY DESIGN, and without the record the
+board mis-reports the guard's buckets on every healthy run. New PRs handed to the
+running guard later get a `mark` of their own.
 
 Then **return to Step 3 immediately.** Do not wait for the guard, do not watch
 CI, do not re-read the PR yourself. New PRs opened later either go to a fresh
@@ -1168,7 +1203,9 @@ stop at that: move on to the recomputation of the front below.
    exhaust the graph wave by wave WITHOUT re-asking the human.
 4. Only `execute`/`publish` are empty but the guard is still working → that is NOT
    a fixpoint. Report the guard's state, and wait for its report rather than
-   ending the run.
+   ending the run. The board says this for itself once the hand-overs are
+   recorded: `sentinel: clear` never appears while a ticket is out with the
+   guard, and `fixpoint` stays NO while anything is dispatched.
 5. Front empty AND the guard has reported → go to Step 5 (fixpoint).
 
 `stop-gate.cjs` exists to enforce this rule, because it was skipped repeatedly and
@@ -1186,7 +1223,10 @@ so assume you are on that side. Either way, two consequences:
   one does not.
 The gate is deliberately narrow: it is silent when only CI is pending, when every
 actionable item is left behind in a phase already moved past, on a stale front,
-and on a stop it has already blocked once. So a verdict from it is real work.
+and on a stop it has already blocked once. It is also silent over a ticket an
+agent already holds — that is `dispatch-record.cjs` doing its job, not a hatch
+being widened, and the record expires by itself so nothing stays hidden. So a
+verdict from it is real work.
 
 **Cascade servicing (epic-stacked).** A ticket-PR merges into ITS base
 (the epic for a root, the parent's branch for a dependent) — a direct merge into main

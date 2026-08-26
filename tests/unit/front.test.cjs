@@ -943,4 +943,99 @@ test('checkpointParentOf is the shared rule, and it answers over the caller\'s g
   );
 });
 
+suite('front — a ticket an agent already holds is waiting, never work to start');
+
+// The board had no state for DISPATCHED AND RUNNING, so a ticket handed to an
+// agent read exactly like one nobody had touched — nothing is pushed yet, so the
+// live state still says `execute`. The stop gate then refused turns over work in
+// flight five times in one session, across both owners' buckets. These pin the
+// three properties that make the new bucket safe: it is not actionable, it is not
+// a park, and it is not an ending.
+
+const dispatchState = () => ({
+  A: { status: 'pending', ready: true },
+  B: { status: 'pr-open', pr: 2, draft: true, checks: checks() },
+});
+
+test('a dispatched ticket leaves the actionable set for waiting.dispatched', () => {
+  const f = computeFront({ A: {}, B: {} }, dispatchState(),
+    { dispatched: { A: { role: 'executor', at: new Date().toISOString() } } });
+  assert.deepStrictEqual(f.waiting.dispatched, ['A']);
+  assert.deepStrictEqual(f.actionable.execute, [], 'nobody else may start it');
+  assert.deepStrictEqual(f.parked.blocked, [], 'and nobody has given up on it either');
+  assert.deepStrictEqual(f.actionable.finalize, ['B'], 'the rest of the front is untouched');
+});
+
+test('the why-message names both ways the record lifts', () => {
+  // The sentence comes from the store that decides when it lifts, not from this
+  // render site. A reader who does not know it expires by itself reaches for
+  // `clear` — and a `clear` that becomes routine clears work that has not
+  // returned.
+  const f = computeFront({ A: {} }, { A: { status: 'pending', ready: true } },
+    { dispatched: { A: { role: 'executor', at: new Date().toISOString() } } });
+  assert.ok(/executor/.test(f.why.A), f.why.A);
+  assert.ok(/state moves/.test(f.why.A), 'the state trigger');
+  assert.ok(/\d+m/.test(f.why.A), 'and the timeout');
+});
+
+test('dispatched is NOT a fixpoint — the round has to collect the result', () => {
+  const f = computeFront({ A: {} }, { A: { status: 'pending', ready: true } },
+    { dispatched: { A: { role: 'executor', at: new Date().toISOString() } } });
+  assert.strictEqual(f.actionable_count, 0, 'there is nothing to start');
+  assert.strictEqual(f.fixpoint, false, 'which is not the same as being finished');
+  const out = formatFront(f).join('\n');
+  assert.ok(/with an agent right now/.test(out), out);
+  assert.ok(!/watch is legal here/.test(out), 'there is no CI queue to watch — that sentence belongs elsewhere');
+});
+
+test('counts still cover every ticket exactly once', () => {
+  const f = computeFront({ A: {}, B: {} }, dispatchState(), { dispatched: { A: 'executor' } });
+  assert.strictEqual(Object.values(f.counts).reduce((a, b) => a + b, 0), 2);
+  assert.strictEqual(f.counts.dispatched, 1);
+});
+
+test('a park outranks a dispatch, and a merge outranks both', () => {
+  // A park is a DECISION; a dispatch is a transient. And whoever was working on a
+  // ticket that has already landed, it is in — so a stale record must not hide a
+  // merged ticket from the `done` tally.
+  const escalated = computeFront({ A: {} }, { A: { status: 'pr-open', pr: 1, draft: true, checks: checks() } },
+    { dispatched: { A: 'review-fix' }, escalated: { A: { kind: 'escalation', reason: 'a human must decide' } } });
+  assert.deepStrictEqual(escalated.parked.blocked, ['A'], 'the escalation still shows');
+  assert.deepStrictEqual(escalated.waiting.dispatched, []);
+
+  const merged = computeFront({ A: {} }, { A: { status: 'merged' } }, { dispatched: { A: 'pr-sentinel' } });
+  assert.deepStrictEqual(merged.parked.done, ['A']);
+  assert.deepStrictEqual(merged.waiting.dispatched, []);
+  assert.strictEqual(merged.fixpoint, true, 'a record over landed work never blocks an ending');
+});
+
+test('the guard\'s own dispatches keep the board from calling it clear', () => {
+  // `sentinel: clear` is one of the two conditions deliver.md reads as "you may
+  // enter completion". A guard mid-round whose tickets have left `duty` must not
+  // produce that line.
+  const state = { A: { status: 'pr-open', pr: 1, checks: checks(1, 0) } };
+  const guarded = computeFront({ A: {} }, state, { dispatched: { A: 'ci-fix' } });
+  assert.deepStrictEqual(guarded.sentinel.duty, [], 'it left the duty list');
+  assert.deepStrictEqual(guarded.sentinel.dispatched, ['A'], 'because the guard has it');
+  assert.strictEqual(guarded.sentinel.clear, false);
+  assert.ok(/already with an agent/.test(formatFront(guarded).join('\n')));
+
+  // …and an EXECUTOR dispatch says nothing about the guard, which owns no part
+  // of that ticket.
+  const mine = computeFront({ A: {} }, { A: { status: 'pending', ready: true } }, { dispatched: { A: 'executor' } });
+  assert.deepStrictEqual(mine.sentinel.dispatched, []);
+  assert.strictEqual(mine.sentinel.clear, true, 'no open PR needs guarding');
+});
+
+test('a dispatched wave and a running CI queue are reported as two different waits', () => {
+  const f = computeFront(
+    { A: {}, B: {} },
+    { A: { status: 'pending', ready: true }, B: { status: 'pr-open', pr: 2, checks: checks(0, 2) } },
+    { dispatched: { A: 'executor' } }
+  );
+  const out = formatFront(f).join('\n');
+  assert.ok(/waiting: ci: B \| dispatched: A/.test(out), out);
+  assert.ok(/1 ticket\(s\) are with an agent right now, and 1 PR\(s\) are running CI/.test(out), out);
+});
+
 done();
