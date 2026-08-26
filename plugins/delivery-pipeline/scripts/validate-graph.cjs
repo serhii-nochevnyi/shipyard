@@ -12,7 +12,9 @@
 // Checks: unique ticket ids, non-empty files_modified (the parallel-safety
 // contract) and non-empty requirements, resolvable deps, no cycles, no
 // files_modified overlap between dependency-unordered tickets, high risk =>
-// human_checkpoint. Exits non-zero with an explicit error list when invalid.
+// human_checkpoint, and a well-formed `delivery.preauthorized` that only ever
+// authorizes a stop the same ticket declares. Exits non-zero with an explicit
+// error list when invalid.
 //
 // A ticket may target ANOTHER repository (`delivery.repo: owner/name`) — a phase
 // that spans a backend and a frontend repo is normal. The repo is part of the
@@ -156,6 +158,13 @@ for (const file of planFiles.sort()) {
     files: Array.isArray(fm.files_modified) ? fm.files_modified.map(String) : [],
     risk: String(delivery.risk ?? 'medium'),
     human_checkpoint: delivery.human_checkpoint === true,
+    // ADR-001 D6: the record that a person approved THIS ticket's risk while
+    // approving the ticket set. It is NOT a synonym for human_checkpoint and
+    // must never collapse into it: human_checkpoint says "a human must act on
+    // this", preauthorized says "the human already did, at plan time". Absent
+    // means false, which is the only safe default for a field whose purpose is
+    // to authorize an unattended merge. Written here, read by nothing yet.
+    preauthorized: delivery.preauthorized === true,
     // default branch is derived from the ticket title (sanitized); an explicit
     // delivery.branch wins but must be a valid git ref chunk
     branch: delivery.branch || branchFor(id, title),
@@ -174,6 +183,19 @@ for (const file of planFiles.sort()) {
   }
   if (!['low', 'medium', 'high'].includes(tickets[id].risk)) {
     errors.push(`${id}: delivery.risk "${tickets[id].risk}" is not one of low|medium|high`);
+  }
+  // frontmatter.cjs either represents a construct or reports an error, and this
+  // is the field where that rule earns its keep: `preauthorized` authorizes a
+  // merge nobody watches. A typo read as "not authorized" costs a wait; a typo
+  // read as "authorized" merges work no one approved. So only a real boolean
+  // passes — `yes`, a quoted "true", a number and an empty value are refused by
+  // name rather than quietly becoming false.
+  if (delivery.preauthorized !== undefined && typeof delivery.preauthorized !== 'boolean') {
+    errors.push(
+      `${id}: delivery.preauthorized must be an unquoted true or false, got ${JSON.stringify(delivery.preauthorized)} — ` +
+      'this field records a human pre-authorizing an unattended merge, so an unrecognized value is refused instead of ' +
+      'being read as either answer'
+    );
   }
   // Gate 2 core guarantee: files_modified is what makes the "dependency-unordered
   // tickets never touch the same paths" check (below) meaningful, and it is the
@@ -374,6 +396,17 @@ for (const t of Object.values(tickets)) {
   if (t.risk === 'high' && !t.human_checkpoint) {
     errors.push(`${t.id}: risk is high but delivery.human_checkpoint is not true`);
   }
+  // Pre-authorization is an answer to a question this ticket must actually ask.
+  // Without a declared checkpoint there is no stop to authorize, so the field
+  // would record an approval that means nothing — and a later reader could take
+  // it for one that does. Say so at plan time instead of ignoring it.
+  if (t.preauthorized && !t.human_checkpoint) {
+    errors.push(
+      `${t.id}: delivery.preauthorized is true but delivery.human_checkpoint is not — pre-authorization records a ` +
+      'human approving a stop THIS ticket declares, and there is no such stop here; either declare ' +
+      'human_checkpoint: true or drop preauthorized'
+    );
+  }
 }
 
 if (errors.length) {
@@ -480,6 +513,7 @@ for (const id of order) {
     risk: t.risk,
     type: t.type,
     human_checkpoint: t.human_checkpoint,
+    preauthorized: t.preauthorized,
     branch: t.branch,
     epic: t.epic,
     primary_parent: t.primary_parent,
@@ -521,6 +555,7 @@ for (const [id, t] of Object.entries(view.tickets)) {
   yaml.push(`    files: ${yamlList(t.files)}`);
   yaml.push(`    risk: ${yamlScalar(t.risk)}`);
   yaml.push(`    human_checkpoint: ${t.human_checkpoint}`);
+  yaml.push(`    preauthorized: ${t.preauthorized}`);
   yaml.push(`    branch: ${yamlScalar(t.branch)}`);
   yaml.push(`    epic: ${yamlScalar(t.epic)}`);
   yaml.push(`    primary_parent: ${yamlScalar(t.primary_parent)}`);
