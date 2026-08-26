@@ -315,9 +315,17 @@ if (require.main === module) {
       // the interval, so a `clear` needs no event of its own.
       return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, by: 'dispatch-record' };
     });
-    refreshFront(cwd);
+    // The record is durable the instant `mutate` above returns — that alone is
+    // what `activeDispatches` reads. `refreshFront` only decides whether the
+    // ON-DISK board reflects it RIGHT NOW or on the next sync; its return value
+    // says which, so the message does not claim a refresh that did not happen
+    // (no board yet, or a state-sync held the lock).
+    const refreshed = refreshFront(cwd) !== null;
     console.log(
-      `dispatch recorded for ${ticket} (${role}) — the front reports it as waiting, not as work to start. ` +
+      `dispatch recorded for ${ticket} (${role}) — ` +
+      (refreshed
+        ? 'the front reports it as waiting, not as work to start. '
+        : 'no board was refreshed just now (none exists yet, or a sync holds the lock); the record is durable and the next state-sync or refresh will apply it. ') +
       `It lifts when the ticket's state moves or after ${Math.round(DISPATCH_TTL_MS / 60000)}m.`
     );
   } else if (cmd === 'clear') {
