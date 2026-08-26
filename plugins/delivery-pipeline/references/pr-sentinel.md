@@ -118,6 +118,28 @@ thread count is already zero. A `violation` or `adr-outdated` verdict ends the
 action — do not undraft a PR the judge just faulted; that is fix work or a human's
 call, and bundling the two used to make both outcomes look alike.
 
+Run the degenerate-green detector over the same diff you just judged, and record
+what it found beside the architecture verdict:
+
+```bash
+node $SHIPYARD_ROOT/scripts/degenerate-green.cjs <T> --base <base> \
+     --worktree <worktree> --json --graph <project>/.planning/graph
+node $SHIPYARD_ROOT/scripts/log-event.cjs degenerate_green ticket=<T> pr=<N> \
+     findings=<counts.total> modes=<mode:count,…> --graph <project>/.planning/graph
+```
+
+`counts.total` is the value that goes in the trailer: `clean` at zero, the number
+otherwise — and `skipped` if the script exited 2, the one non-zero it has, which
+means it could not run at all. **A finding is never a reason to withhold
+`conform`, and never a reason to hold a merge.** The detector reports and decides
+nothing; the merge gate reads `arch-review` and nothing else, and that is pinned
+by `tests/unit/trailer.test.cjs` rather than by this sentence. List the findings
+in the PR body — file, line, what it looks like — as something a person can skim
+beside the diff, and name them in your report. The journal line is what turns "it
+earns blocking status from field data" into a measurable claim instead of a
+promise: with no accumulating record, nobody can say how often it fired or how
+often it was right.
+
 **`undraft`** — green ∧ threads = 0 ∧ arch conform, and the PR is still a draft.
 One `gh pr ready`; no agent and no model are involved. It is a separate action
 precisely because it must be unreachable until the verdict exists.
@@ -127,12 +149,19 @@ The trailer, appended by `arch-review`:
 ```bash
 gh pr edit <pr> --body "<existing body>
 
-gate_status: arch-review=conform, drift-check=<fresh|skipped>, checks=green"
+gate_status: arch-review=conform, drift-check=<fresh|skipped>, degenerate-green=<clean|N|skipped>, checks=green"
 gh pr ready <pr>
 ```
 
 Do not invent that trailer. It IS the merge gate — `sentinel.cjs merge` refuses
 without it, and writing it while a thread is open is falsifying the gate.
+
+**One `gate_status:` line, always.** Every key goes INTO that one line, separated
+by commas; the reader takes the LAST line that starts with `gate_status:`, so a
+report appended as a second trailer line hides the architecture verdict written
+above it and the merge is refused for a verdict that was in fact recorded. That
+failure mode has its own test, because it is the shape a hand-assembled body
+naturally takes.
 
 **`merge`** — land it: `node $SHIPYARD_ROOT/scripts/sentinel.cjs merge <T>`.
 The script re-verifies everything against live GitHub and refuses on anything
