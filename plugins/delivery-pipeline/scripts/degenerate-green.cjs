@@ -604,9 +604,18 @@ function cannotRun(msg) {
 
 function main(argv) {
   const asJson = argv.includes('--json');
+  // A value flag with no value of its own must not silently swallow the NEXT
+  // flag as its value — `--diff --json` would otherwise try to read a file
+  // literally named `--json`, and report a misleading path instead of naming
+  // the actual mistake. Bad usage, so it cannot run rather than mis-parse.
   const flag = (name) => {
     const i = argv.indexOf(`--${name}`);
-    return i === -1 ? null : argv[i + 1] || null;
+    if (i === -1) return null;
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith('--')) {
+      cannotRun(`--${name} needs a value, got ${v === undefined ? 'nothing' : JSON.stringify(v)}`);
+    }
+    return v;
   };
   // Same rule as scope-gate: a flag-first invocation must not make a flag's
   // VALUE the ticket.
