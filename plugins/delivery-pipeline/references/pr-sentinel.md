@@ -21,8 +21,8 @@ else is going to come back for them.
   touches the delivery journal needs it by name once you are standing in a
   worktree — a worktree has no `.planning/` of its own — so pass
   `--graph <project>/.planning/graph` to `failure-signature.cjs verdict|rerun|lift`,
-  `attempt-history.cjs`, `log-event.cjs` and `escalation-record.cjs mark` /
-  `mark-plan-defect`. All of them refuse outright without it — `escalation-record`
+  `attempt-history.cjs`, `log-event.cjs`, `dispatch-record.cjs mark` and
+  `escalation-record.cjs mark` / `mark-plan-defect`. All of them refuse outright without it — `escalation-record`
   gained the same fail-closed `tickets.json` guard as the others this same phase
   (`clear`/`list` stay permissive; they read or no-op, they never park a verdict
   nowhere). None of them answers from nowhere, and on the reading side that is
@@ -234,6 +234,16 @@ optional.
   loop's half of the work, and the two would race on the shared `.git`. You work
   in the worktrees you were handed. (Both sides take the same lock, so a
   legitimate git operation may wait a moment; that is expected.)
+- **Hand a ticket back to the board the moment you stop holding it.** The
+  orchestrator recorded a dispatch for every PR it gave you
+  (`dispatch-record.cjs`), which is what stops the run being told those tickets
+  are un-taken while you work. Run `dispatch-record.cjs clear <T>` as soon as a PR
+  is merged, parked, or handed to a person, and `mark <T> <role>` again if you
+  hand it to a fixer you do not wait for. Neither is a cleanup you can forget
+  safely-but-late: the record lifts by itself when the ticket's state moves and
+  it times out regardless, so the cost of forgetting is a stale line on the board
+  rather than lost work — but a clear at the right moment is what keeps the next
+  round's ordering honest.
 - One PR blocked does NOT end your watch. Park it and serve the rest.
 - A PR with no CI checks reported is not verified — say "nothing ran" in the
   report rather than calling it green.
