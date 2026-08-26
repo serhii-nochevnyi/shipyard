@@ -22,6 +22,10 @@
 //                 the sentinel squashes it in (auto-merge only, see below)
 //   waiting (NOT actionable, and NOT a fixpoint either — motion resumes by itself):
 //     ci        — checks still running
+//     dispatched— an agent already holds this ticket (dispatch-record.cjs): not
+//                 actionable, because taking it again is duplicate work; not
+//                 parked, because nobody has given up; and never a fixpoint,
+//                 because the round has to come back for the result
 //   parked (compatible with a fixpoint — only a human or a replan moves these):
 //     merge_human — green, out of draft, but the merge is a human action
 //                   (auto-merge off, direct-to-main, or the PR targets the
@@ -32,10 +36,11 @@
 //     blocked   — dependencies unsatisfied, or parked by the run (--parked)
 //     done      — merged
 //
-// fixpoint = no actionable work AND nothing waiting on CI. A PR whose checks are
-// still running is NOT a fixpoint: the round has to come back to it. But it is
-// also not a reason to block — the run serves the rest of the front meanwhile,
-// and only ever `--watch`es when that PR is the last thing left.
+// fixpoint = no actionable work, nothing waiting on CI, and nothing out with an
+// agent. A PR whose checks are still running is NOT a fixpoint: the round has to
+// come back to it. But it is also not a reason to block — the run serves the rest
+// of the front meanwhile, and only ever `--watch`es when that PR is the last
+// thing left. A dispatched ticket reads the same way for the same reason.
 //
 // OWNERSHIP. fix/finalize/merge are the PR SENTINEL's duty (sentinel.cjs), which
 // runs alongside the main loop; execute/publish belong to the main loop. The
@@ -50,6 +55,10 @@ const path = require('path');
 // the file that decides when it actually lifts — says a PR move does not touch
 // it. This module's job for a park is placement; the wording is not its call.
 const { escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'));
+// Same rule, second store: a dispatch's lifting sentence is written by the file
+// that decides when it lifts. (dispatch-record.cjs requires front.cjs back, but
+// only lazily and only from its CLI, so there is no half-built module here.)
+const { dispatchWhy, activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
 
 // ── the checkpoint predicates, in ONE home ──────────────────────────────────
 //
@@ -127,6 +136,16 @@ function computeFront(tickets, state, opts = {}) {
   // flat `activeEscalations` view, which has already discarded the kind, so it
   // renders as an ordinary escalation.
   const escalated = opts.escalated || {};
+  // "An agent is already holding this one." The third durable fact GitHub cannot
+  // know, and the only one that is not a park: a dispatch is motion, not a
+  // verdict. Without it a ticket handed to an agent is indistinguishable from one
+  // nobody has touched — nothing is pushed yet, so state-sync still classifies it
+  // `execute` — and the stop gate refuses turns over work already in flight (five
+  // times in one session, on both owners' buckets). The caller supplies the
+  // records `activeDispatches` returns — {ticket: {role, at}} — and that reader
+  // has already dropped everything expired, so nothing here decides how long a
+  // dispatch lives. A bare role string is accepted as the flattened shape.
+  const dispatched = opts.dispatched || {};
   // Auto-merge is a config decision (pipeline.auto_merge) that state-sync passes
   // in; the front never guesses it, because the difference is whether an unmerged
   // green PR is the run's work or a human's.
@@ -141,7 +160,7 @@ function computeFront(tickets, state, opts = {}) {
   const checkpointParent = (id) => checkpointParentOf(id, tickets, state);
 
   const actionable = { execute: [], publish: [], fix: [], finalize: [], merge: [] };
-  const waiting = { ci: [], merge_human: [], human: [] };
+  const waiting = { ci: [], dispatched: [], merge_human: [], human: [] };
   const parked = { blocked: [], done: [] };
   const why = {};
 
@@ -174,6 +193,23 @@ function computeFront(tickets, state, opts = {}) {
     if (escalated[id]) {
       parked.blocked.push(id);
       why[id] = escalationWhy(id, escalated[id]);
+      continue;
+    }
+
+    // After every park and after `merged`, and both placements are deliberate. A
+    // park is a DECISION and outranks a dispatch, which is only a transient; and
+    // a dispatch for a ticket that has already landed must suppress nothing at
+    // all — whoever was working on it, it is in.
+    //
+    // Placed BEFORE the status branches rather than inside them, so it covers
+    // both owners: the main loop's execute/publish and the guard's
+    // fix/finalize/merge. The first sighting of this defect was an executor wave,
+    // but the guard's contract is "post it and do NOT wait", so the front
+    // mis-reported the sentinel's buckets on every healthy run that followed the
+    // documented protocol.
+    if (dispatched[id]) {
+      waiting.dispatched.push(id);
+      why[id] = dispatchWhy(id, dispatched[id]);
       continue;
     }
 
@@ -285,13 +321,17 @@ function computeFront(tickets, state, opts = {}) {
     finalize: actionable.finalize.length,
     merge: actionable.merge.length,
     ci: waiting.ci.length,
+    dispatched: waiting.dispatched.length,
     merge_human: waiting.merge_human.length,
     human: waiting.human.length,
     blocked: parked.blocked.length,
     done: parked.done.length,
   };
   const actionableCount = ORDER.reduce((n, k) => n + actionable[k].length, 0);
-  const fixpoint = actionableCount === 0 && waiting.ci.length === 0;
+  // A dispatch counts against the fixpoint exactly as a running CI queue does:
+  // the work is moving and its result has to be collected. Saying YES here would
+  // hand the human a summary written before the answers came back.
+  const fixpoint = actionableCount === 0 && waiting.ci.length === 0 && waiting.dispatched.length === 0;
   // SHALLOWEST FIRST within a stack — the THIRD sort key now; the full order is
   // stated at the comparator below. A ticket stacked on an open parent is
   // work that will have to be redone: when the parent lands, this branch's base
@@ -391,8 +431,15 @@ function computeFront(tickets, state, opts = {}) {
   const sentinel = {
     duty: SENTINEL_BUCKETS.flatMap((k) => actionable[k]),
     waiting_ci: waiting.ci.slice(),
+    // The guard's share of the dispatched list — the tickets that left `duty`
+    // BECAUSE they were handed to the guard or to one of its fixers. Without
+    // this the board would print `sentinel: clear — no open PR needs guarding`
+    // over a guard that is mid-round, and deliver.md reads that line as one of
+    // the two conditions for entering completion.
+    dispatched: waiting.dispatched.filter((id) => SENTINEL_ROLES.has(roleOfDispatch(dispatched[id]))),
   };
-  sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0;
+  sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0
+    && sentinel.dispatched.length === 0;
 
   // How much of the actionable list is work the run has already moved past. The
   // stop condition has to distinguish "there is live work" from "there is only
@@ -522,6 +569,11 @@ const BUCKET_ROLES = {
   merge: ['pr-sentinel'],
 };
 
+// Which dispatch roles belong to the guard — DERIVED from the table above rather
+// than listed again, so a bucket that changes hands changes both answers at once.
+const SENTINEL_ROLES = new Set(SENTINEL_BUCKETS.flatMap((k) => BUCKET_ROLES[k] || []));
+const roleOfDispatch = (rec) => (typeof rec === 'string' ? rec : ((rec && rec.role) || ''));
+
 function formatFront(front) {
   const lines = [];
   const parts = ORDER.filter((k) => front.actionable[k].length)
@@ -537,16 +589,19 @@ function formatFront(front) {
 
   const wparts = [];
   if (front.waiting.ci.length) wparts.push(`ci: ${front.waiting.ci.join(', ')}`);
+  if ((front.waiting.dispatched || []).length) wparts.push(`dispatched: ${front.waiting.dispatched.join(', ')}`);
   if (front.waiting.merge_human.length) wparts.push(`merge (human): ${front.waiting.merge_human.join(', ')}`);
   if (front.waiting.human.length) wparts.push(`checkpoint (human): ${front.waiting.human.join(', ')}`);
   if (wparts.length) lines.push(`waiting: ${wparts.join(' | ')}`);
 
   // The sentinel's share of the front, named separately: it is the part that a
   // background guard can take over so the main loop keeps cascading.
-  const s = front.sentinel || { duty: [], waiting_ci: [], clear: true };
+  const s = front.sentinel || { duty: [], waiting_ci: [], dispatched: [], clear: true };
+  const sDispatched = s.dispatched || [];
   lines.push(s.clear
     ? 'sentinel: clear — no open PR needs guarding'
     : `sentinel: ${s.duty.length} duty${s.duty.length ? ` (${s.duty.join(', ')})` : ''}` +
+      `${sDispatched.length ? ` + ${sDispatched.length} already with an agent (${sDispatched.join(', ')})` : ''}` +
       `${s.waiting_ci.length ? ` + ${s.waiting_ci.length} waiting on CI` : ''} — post/keep the guard, do NOT wait on it`);
 
   if (front.fixpoint) {
@@ -554,6 +609,17 @@ function formatFront(front) {
       front.counts.blocked || front.counts.merge_human || front.counts.human
         ? 'fixpoint: YES — nothing actionable and no checks running; only human actions and blockers remain → Step 5'
         : 'fixpoint: YES — everything in scope is delivered → Step 5'
+    );
+  } else if (front.actionable_count === 0 && front.counts.dispatched) {
+    // Nothing to start, and the reason is that it has all been started. This
+    // deserves its own sentence: the CI wording below sanctions a `--watch`,
+    // and there is nothing to watch — the result arrives with the agents.
+    lines.push(
+      `fixpoint: NO — ${front.counts.dispatched} ticket(s) are with an agent right now` +
+      `${front.counts.ci ? `, and ${front.counts.ci} PR(s) are running CI` : ''}. ` +
+      'Do NOT hand them out again and do NOT call this an ending: collect the results, then recompute. ' +
+      'Each record also lifts by itself when the ticket\'s state moves or its dispatch times out, ' +
+      'so a run that dies here leaves nothing hidden.'
     );
   } else if (front.actionable_count === 0) {
     lines.push(
@@ -618,6 +684,10 @@ if (require.main === module) {
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
   const front = computeFront(tickets, state, {
     parked, autoMerge, drifted: activeDrift(root), escalated: activeParks(root, state),
+    // Same reason as the two stores above: this CLI is advertised as re-runnable
+    // on its own, and a board that re-offers a ticket an agent is holding is not
+    // the same board.
+    dispatched: activeDispatches(root, state),
     // …and the ORDER has the same requirement as the verdict: state-sync derives
     // this from the journal, so the CLI must too, or the two commands rank the
     // same graph differently.
