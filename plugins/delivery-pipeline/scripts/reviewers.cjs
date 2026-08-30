@@ -7,7 +7,11 @@
 //        re-initialize the bot reviewers after a push: CodeRabbit full re-review
 //        + re-request Copilot. Idempotent by design (see below).
 //   reviewers.cjs unresolved <pr>
-//        print unresolved review threads as JSON (input for the review-fix agent)
+//        print unresolved review threads as JSON (input for the review-fix agent),
+//        plus `review_decision` and a `clean` verdict. A review VERDICT outlives
+//        the threads it was filed with, so "0 unresolved" is not "settled" —
+//        report both or the caller reads a clean board over a standing
+//        CHANGES_REQUESTED.
 //   reviewers.cjs feedback   <pr>
 //        EVERYTHING a reviewer said, in one call: unresolved threads + the bots'
 //        PR-level comments (CodeRabbit's summary/nitpick blocks, Copilot's
@@ -268,7 +272,27 @@ const threadReport = {
 };
 
 if (cmd === 'unresolved') {
-  console.log(JSON.stringify(threadReport, null, 2));
+  // The review DECISION, not just the threads. A verdict lives on the review and
+  // survives every thread being resolved, so "0 unresolved" and
+  // CHANGES_REQUESTED coexist happily — measured on PR #645, which the board
+  // reported as `17/17, 0 threads` and planned to merge while CodeRabbit's
+  // CHANGES_REQUESTED still stood, unmoved by two later commits. `front.cjs` and
+  // `sentinel.cjs` both read this field and both refuse the merge; the command
+  // the loop actually reads before deciding a PR is clean did not report it, so
+  // the only thing that ever saw the verdict was the thing already refusing.
+  const view = ghJson(['pr', 'view', String(pr), '--repo', OWNER_REPO, '--json', 'reviewDecision'], null);
+  console.log(JSON.stringify({
+    ...threadReport,
+    // null is honest for "the query failed" AND for "nobody has reviewed yet";
+    // neither is a clean bill of health, and `clean` below says which is which.
+    review_decision: (view && view.reviewDecision) || null,
+    // The one-line answer to "may this PR be treated as settled". Threads alone
+    // never were — and neither is a query that did not come back: `view === null`
+    // means we do not KNOW the decision, which is not the same as knowing it is
+    // benign. Unknown reads as not-clean, or this field would say `true` loudest
+    // exactly when it has the least evidence.
+    clean: unresolved.length === 0 && view !== null && view.reviewDecision !== 'CHANGES_REQUESTED',
+  }, null, 2));
   process.exit(0);
 }
 

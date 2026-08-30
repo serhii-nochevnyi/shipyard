@@ -254,13 +254,27 @@ installed by the overlay build, so a scope of work is routed through shipyard
 without you invoking anything.
 
 Claude Code also gets the **stop gate**, a `Stop` hook that refuses to end a run
-while `.planning/graph/delivery-front.json` still lists actionable work. Deliver's
-loop-back rule ("never stop while the front is non-empty") was the conveyor's only
-non-mechanical gate, and runs ended early against it — writing a summary looks like
-finishing. The gate stays out of the way otherwise: it is silent outside conveyor
-projects, on a front older than 45 minutes (`SHIPYARD_STOP_GATE_FRESH_MS`), when
-only CI is pending, when every actionable item is left behind in a phase the run
-has moved past, and on a stop it has already blocked once.
+while `delivery-front.json` still lists actionable work. Deliver's loop-back rule
+("never stop while the front is non-empty") was the conveyor's only non-mechanical
+gate, and runs ended early against it — writing a summary looks like finishing.
+
+It looks for the board across **every worktree of the repository the session sits
+in**, newest `generated_at` wins. The hook's cwd is the session's, and the main
+loop `cd`s into a phase worktree inside every command — so resolving
+`.planning/graph/` from the cwd alone reads whatever board that checkout's branch
+happens to carry, which is how the gate once ran on twelve stops in a day and
+blocked none.
+
+Staleness is two different facts and the gate answers them differently. Past
+`SHIPYARD_STOP_GATE_RESYNC_MS` (4h) the board describes a run that ended, and the
+gate is silent. Between `SHIPYARD_STOP_GATE_FRESH_MS` (45m) and that ceiling, a
+board still showing live work means the loop dispatched agents off it and never
+re-derived it — so the gate blocks once and asks for a `state-sync`, rather than
+repeating stale contents as fact.
+
+It stays out of the way otherwise: silent outside conveyor projects, when only CI
+is pending, when every actionable item is left behind in a phase the run has moved
+past, on a stop it has already blocked once, and whenever `SHIPYARD_STOP_GATE=off`.
 
 To get both on your **host** Claude Code (it edits your user settings, not the
 plugin):
