@@ -1206,7 +1206,23 @@ stop at that: move on to the recomputation of the front below.
    ending the run. The board says this for itself once the hand-overs are
    recorded: `sentinel: clear` never appears while a ticket is out with the
    guard, and `fixpoint` stays NO while anything is dispatched.
-5. Front empty AND the guard has reported → go to Step 5 (fixpoint).
+5. Only `waiting.ci` is left → **`ci-wait.cjs` and stay in the turn.** This is the
+   one legitimate wait, and it is a script rather than your judgement because the
+   run cannot come back on its own: the babysit loop is driven by agent-completion
+   wake-ups, and when the only thing left is CI there is no agent to complete.
+   Measured — the operator asked for a phase to be merged, the run landed one
+   ticket, stopped to wait, and sat there with the next PR green and ready until a
+   person came back. Waiting in the foreground closes that hole by construction:
+   the turn never ends, so nothing has to wake it.
+
+   `ci-wait.cjs` **refuses** (exit 3) whenever the board holds actionable work or a
+   ticket is with an agent, so it cannot become the `gh pr checks --watch`
+   serialization this conveyor removed — that rule was about opportunity cost, and
+   there is none when the board has no other move. It returns the moment any
+   watched PR settles, green OR red, and on timeout returns 0 anyway. Either way:
+   re-sync and take the round. Never hand-roll a wait; if it refuses, it is
+   telling you there is work.
+6. Front empty AND the guard has reported → go to Step 5 (fixpoint).
 
 `stop-gate.cjs` exists to enforce this rule, because it was skipped repeatedly and
 always at the same moment: writing the summary. Where the runtime offers a stop
@@ -1221,16 +1237,29 @@ so assume you are on that side. Either way, two consequences:
   `escalation-record.cjs mark` when a human must decide, `drift-record.cjs mark`
   when the plan predates what shipped. A parked item leaves the front; an ignored
   one does not.
-The gate is deliberately narrow: it is silent when only CI is pending, when every
-actionable item is left behind in a phase already moved past, on a stale front,
-and on a stop it has already blocked once. It is also silent over a ticket an
+The gate is deliberately narrow: it is silent when only CI is pending (that case
+is the loop-back's item 5, `ci-wait.cjs` — the gate cannot help you wait), when every actionable
+item is left behind in a phase already moved past, on a board too old to describe
+a live run, and on a stop it has already blocked once. It is NOT silent on a board
+the run has moved past without re-syncing: a journalled merge or push after
+`generated_at` proves the board is behind reality, whatever its age, and that is
+the shape that ended a run mid-cascade with three PRs to go. It is also silent over a ticket an
 agent already holds — that is `dispatch-record.cjs` doing its job, not a hatch
 being widened, and the record expires by itself so nothing stays hidden. So a
 verdict from it is real work.
 
 **Cascade servicing (epic-stacked).** A ticket-PR merges into ITS base
 (the epic for a root, the parent's branch for a dependent) — a direct merge into main
-does not happen. After each parent merge:
+does not happen.
+
+**One merge is not the end of a cascade, and this is the step most often dropped.**
+Each squash-merge rewrites the parent's history, so the next child goes `DIRTY` the
+moment its base lands: base-merge it, push, and the push re-runs every check. An
+N-ticket stack therefore costs **N rounds and N CI waits**, and every one of them
+is `ci-wait.cjs`'s (loop-back item 5) — not a stop. "Merge everything" is done when
+the board says `fixpoint: YES`, not when the first ticket lands.
+
+After each parent merge:
 - rerun `state-sync.cjs` — the children of the merged parent will get the base `epic`;
 - retarget their open PRs: `epic-branch.sh retarget <child-pr> <epic>`
   (GitHub often does this itself, and `sentinel.cjs merge` does it for the children

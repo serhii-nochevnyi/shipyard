@@ -34,8 +34,9 @@ const live = (over = {}) => ({
   ...over,
 });
 
-// project(front) — a scratch cwd; front === null means "no conveyor here".
-function project(front) {
+// project(front, journal) — a scratch cwd; front === null means "no conveyor
+// here". `journal` is an array of events written to delivery-log.jsonl beside it.
+function project(front, journal = null) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-stopgate-'));
   if (front !== null) {
     fs.mkdirSync(path.join(dir, '.planning', 'graph'), { recursive: true });
@@ -44,13 +45,18 @@ function project(front) {
       typeof front === 'string' ? front : JSON.stringify(front)
     );
   }
+  if (journal) {
+    fs.mkdirSync(path.join(dir, '.planning', 'graph'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'graph', 'delivery-log.jsonl'),
+      journal.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  }
   return dir;
 }
 
 // run(front, payload) → the parsed hook verdict, or null when it stayed silent.
-function run(front, payload = {}, env = {}) {
+function run(front, payload = {}, env = {}, journal = null) {
   const r = spawnSync('node', [SCRIPT], {
-    cwd: project(front), input: JSON.stringify(payload), encoding: 'utf8',
+    cwd: project(front, journal), input: JSON.stringify(payload), encoding: 'utf8',
     env: { ...process.env, ...env },
   });
   assert.equal(r.status, 0, `the hook must always exit 0 (stderr: ${r.stderr})`);
@@ -313,6 +319,93 @@ test('a dispatch outliving its run is live work on a stale board', () => {
 test('the stale refusal is capped at one per turn like every other block', () => {
   assert.equal(run(stale(57), { stop_hook_active: true }), null,
     'the anti-loop hatch covers this band too');
+});
+
+suite('stop-gate — the journal is the evidence, the clock is only a guess');
+
+// Measured 2026-08-31, the morning after the fix above shipped. The session
+// resumed from an 11h43m silence, merged a PR, resolved the cascade conflict it
+// created, pushed — and never synced. The board was then 13 hours old: PAST the
+// resync ceiling, so the gate went silent on all three of that morning's stops
+// while the phase sat 1/4 merged with one PR ready and nobody driving it.
+//
+// A board's age is a fact about the last SYNC and says nothing about whether the
+// RUN is over. `delivery-log.jsonl` answers the actual question, and `merge` /
+// `status_change` are owned by sentinel.cjs / state-sync.cjs alone.
+
+const ev = (over) => ({ ts: new Date().toISOString(), ...over });
+const ancient = () => ({ generated_at: agesAgo(), actionable_count: 0, left_behind_count: 0,
+  actionable: {}, fixpoint: true });
+
+test('a merge after the board was computed blocks, however old the board is', () => {
+  // The exact shape of the 2026-08-31 stops: an ancient board that says
+  // `fixpoint: true`, and a merge the board has never heard of.
+  const v = run(ancient(), {}, {}, [ev({ event: 'merge', ticket: 'T-21-01', pr: 645 })]);
+  assert.ok(v && v.decision === 'block', 'age must not be able to silence proof');
+  assert.ok(/T-21-01 was MERGED \(PR #645\)/.test(v.reason), 'the refusal names the event');
+  assert.ok(/provably behind reality/.test(v.reason), 'and says why it is not a judgement call');
+  assert.ok(/one round per ticket/.test(v.reason),
+    'and names the cascade, which is why one merge is not the end');
+});
+
+test('a push after the board was computed blocks too', () => {
+  const v = run(ancient(), {}, {},
+    [ev({ event: 'attempt', ticket: 'T-21-03', pr: 647, outcome: 'pushed' })]);
+  assert.ok(v && v.decision === 'block', 'a push re-runs checks the board still reports');
+  assert.ok(/a push on T-21-03/.test(v.reason), 'the refusal names it');
+});
+
+test('a status_change is not evidence — state-sync writes it', () => {
+  // log-event.cjs refuses `status_change` by hand precisely because state-sync
+  // owns it, so it is contemporaneous with the front by construction. Counting
+  // it would make EVERY board look behind itself the instant it was computed.
+  assert.equal(run(ancient(), {}, {}, [ev({ event: 'status_change', ticket: 'T-21-01', to: 'pr-open' })]),
+    null, 'the sync\'s own bookkeeping is not a reason to re-sync');
+});
+
+test('a dispatch is not evidence — dispatch-record already overlays it', () => {
+  // This is the false block that fired five times across phases 20 and 22, on 3,
+  // 5, 6, 4 and 5 items, every one verified in flight. A gate that reproduces it
+  // gets uninstalled, after which it enforces nothing.
+  assert.equal(run(ancient(), {}, {}, [ev({ event: 'dispatch', ticket: 'T-21-01', role: 'executor' })]),
+    null, 'dispatching is not a state the board is missing');
+});
+
+test('an event OLDER than the board is not evidence', () => {
+  const old = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString();
+  assert.equal(run(ancient(), {}, {}, [{ ts: old, event: 'merge', ticket: 'T-20-01', pr: 600 }]),
+    null, 'the board already knows about it — that is what generated_at means');
+});
+
+test('no journal, or an unreadable one, is no evidence rather than a block', () => {
+  assert.equal(run(ancient()), null, 'a project with no journal is unchanged');
+  assert.equal(run(ancient(), {}, {}, ['{not json']), null, 'a corrupt line is skipped, not fatal');
+});
+
+test('the evidence branch is capped at one block per turn', () => {
+  assert.equal(run(ancient(), { stop_hook_active: true }, {},
+    [ev({ event: 'merge', ticket: 'T-21-01', pr: 645 })]),
+    null, 'the anti-loop hatch covers this branch too');
+});
+
+test('SHIPYARD_STOP_GATE=off silences the evidence branch as well', () => {
+  assert.equal(run(ancient(), {}, { SHIPYARD_STOP_GATE: 'off' },
+    [ev({ event: 'merge', ticket: 'T-21-01', pr: 645 })]),
+    null, 'the off switch stays unconditional');
+});
+
+test('only the journal TAIL is read, so a long-lived project stays fast', () => {
+  // 584 status_changes in the proving ground already, and a hook has ~75ms. The
+  // newest events are at the end, which is the only end that matters — but a
+  // seek into the middle of a file lands mid-line, and that fragment must not be
+  // parsed as an event.
+  const filler = Array.from({ length: 4000 }, (_, i) => ({
+    ts: new Date(Date.now() - (5000 - i) * 1000).toISOString(),
+    event: 'status_change', ticket: `T-99-${i}`, to: 'merged', pad: 'x'.repeat(80),
+  }));
+  const v = run(ancient(), {}, {}, [...filler, ev({ event: 'merge', ticket: 'T-21-04', pr: 648 })]);
+  assert.ok(v && v.decision === 'block', 'the newest event is found past a large journal');
+  assert.ok(/T-21-04 was MERGED/.test(v.reason), 'and it is the right one');
 });
 
 done();

@@ -73,11 +73,37 @@
 //     later reading of it was fiction. Staying silent here is how the gate
 //     abstains at the exact moment its answer matters.
 //
-// Age separates them, so the band between FRESH_MS and RESYNC_MS blocks ONCE and
-// asks for a resync rather than asserting the stale board's contents as fact.
-// `stop_hook_active` caps it at one block per turn: worst case the session spends
-// one `state-sync` and then stops, which is the honest price of not knowing.
-// Past RESYNC_MS the original rule stands untouched.
+// The first cut of this separated them by AGE, and age is the wrong instrument —
+// measured the very next morning, on the run this hook was written for. The
+// session resumed after an 11h43m silence, merged a PR, resolved a cascade
+// conflict, pushed, and never synced. The board was then 13 hours old: past
+// RESYNC_MS, so the gate went silent on all three of that morning's stops while
+// the phase sat 1/4 merged with one PR ready and nobody driving it.
+//
+// A board's AGE is a fact about the last SYNC. It says nothing about whether the
+// RUN is over. So ask the run instead: `delivery-log.jsonl` gets an event on
+// every merge and every push, and `merge`/`status_change` are owned by
+// `sentinel.cjs merge`/`state-sync.cjs` alone (log-event.cjs refuses them by
+// hand). An event that MOVED THE WORLD, timestamped after `generated_at`, is
+// therefore proof the board is behind reality — no estimate involved:
+//
+//   merge                     a PR is gone and its children were retargeted
+//   attempt … outcome=pushed  a branch moved, so checks re-ran
+//   fix_round … pushed=true   the same, from the fix path
+//   escalation                a ticket was parked; the front still offers it
+//
+// `status_change` is EXCLUDED because state-sync writes it, so it is
+// contemporaneous with the front by construction; `dispatch` is excluded because
+// dispatch-record already overlays it onto the front. Counting either would
+// re-create the false block that fired five times across phases 20 and 22 — the
+// failure mode that gets a gate uninstalled.
+//
+// Age still decides the case where the journal offers no evidence: the band
+// between FRESH_MS and RESYNC_MS blocks ONCE and asks for a resync, past
+// RESYNC_MS the original rule stands. Either way the refusal states the age and
+// the shape and never the stale board's contents — those contents are what is
+// wrong. `stop_hook_active` caps it at one block per turn, so the worst case is
+// one `state-sync` and then a stop, which is the honest price of not knowing.
 //
 // `SHIPYARD_STOP_GATE=off` turns the whole hook off in one word. An operator who
 // wants silence should be able to say so plainly, rather than discovering that
@@ -136,6 +162,57 @@ function worktreesOf(cwd) {
     .filter((l) => l.startsWith('worktree '))
     .map((l) => l.slice('worktree '.length).trim())
     .filter(Boolean);
+}
+
+// Only the tail: a hook has a ~75ms budget and this journal grows for the life of
+// the project (584 status_changes in the proving ground already). The newest
+// events are at the end, which is the only end we need.
+const JOURNAL_TAIL_BYTES = 64 * 1024;
+
+// Did the run move the world after this board was computed? Returns the newest
+// such event, or null. See the header for why each event is in or out.
+function movedSince(graphDir, generatedAt) {
+  if (generatedAt === null) return null;
+  const file = path.join(graphDir, 'delivery-log.jsonl');
+  let text;
+  let seeked = false;
+  try {
+    const { size } = fs.statSync(file);
+    const start = Math.max(0, size - JOURNAL_TAIL_BYTES);
+    seeked = start > 0;
+    const fd = fs.openSync(file, 'r');
+    try {
+      const buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      text = buf.toString('utf8');
+    } finally { fs.closeSync(fd); }
+  } catch {
+    return null; // no journal is no evidence, never a reason to block
+  }
+  const lines = text.split('\n');
+  // A seek into the middle of the file lands mid-line, so the first line is a
+  // fragment. ONLY then: dropping it unconditionally ate the only event in a
+  // short journal, which is every project that has not been running for weeks.
+  if (seeked) lines.shift();
+
+  let newest = null;
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    let e;
+    try { e = JSON.parse(t); } catch { continue; }
+    if (!e || typeof e !== 'object') continue;
+    const at = Date.parse(e.ts || '');
+    if (Number.isNaN(at) || at <= generatedAt) continue;
+    const moved =
+      e.event === 'merge' ||
+      e.event === 'escalation' ||
+      (e.event === 'attempt' && e.outcome === 'pushed') ||
+      (e.event === 'fix_round' && (e.pushed === true || e.pushed === 'true'));
+    if (!moved) continue;
+    if (!newest || at > newest.at) newest = { at, event: e };
+  }
+  return newest;
 }
 
 function readFront(file) {
@@ -198,12 +275,37 @@ const dispatched = (front.waiting && front.waiting.dispatched) || [];
 const liveWork = (count > 0 && leftBehind < count) || dispatched.length > 0;
 
 const age = generated === null ? null : Date.now() - generated;
+const mins = age === null ? null : Math.round(age / 60000);
+
+// EVIDENCE FIRST. A journalled merge or push after this board was computed proves
+// the board is behind reality, whatever the clock says — and this is the branch
+// that catches a run which resumed on yesterday's board, which the age bands
+// below cannot see by construction.
+const movedAny = movedSince(graphDir, generated);
+if (movedAny) {
+  const e = movedAny.event;
+  const what = e.event === 'attempt' || e.event === 'fix_round'
+    ? `a push on ${e.ticket || 'a ticket'}${e.pr ? ` (PR #${e.pr})` : ''}`
+    : e.event === 'merge'
+      ? `${e.ticket || 'a ticket'} was MERGED${e.pr ? ` (PR #${e.pr})` : ''}`
+      : `${e.ticket || 'a ticket'} was escalated`;
+  verdict(
+    `shipyard: the board was computed ${mins === null ? 'at an unknown time' : `${mins} minutes ago`}, and the run has ` +
+    `moved the world since — the journal records ${what} at ${e.ts}.\n` +
+    'So the board is provably behind reality: a merge retargets children and rewrites their history, a push\n' +
+    're-runs checks. Whatever it lists now is fiction, including any "nothing left". Do not summarise and stop:\n' +
+    '  1. `state-sync.cjs` — re-derive from GitHub, which is the only place this state is real;\n' +
+    '  2. read the fresh front and take what it offers (the guard owns fix/finalize/merge);\n' +
+    '  3. loop back. Stop only on `fixpoint: YES` against a front you have just regenerated.\n' +
+    'A cascade is not finished when one ticket lands: each merge makes the next child DIRTY, so the phase\n' +
+    'needs one round per ticket and the board is the only thing that knows which round you are on.' + whereToSync
+  );
+}
 
 if (age !== null && age > RESYNC_MS) allow();  // the run ended; nothing to enforce
 
 if (age !== null && age > FRESH_MS) {
   if (!liveWork) allow();
-  const mins = Math.round(age / 60000);
   verdict(
     `shipyard: the delivery board is ${mins} minutes old and the last sync showed live work ` +
     `(${count} actionable, ${dispatched.length} dispatched). It is describing a board that has moved.\n` +
