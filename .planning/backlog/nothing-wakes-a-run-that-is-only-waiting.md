@@ -1,8 +1,16 @@
 # Nothing wakes a run whose only remaining state is "waiting"
 
 **Found:** 2026-08-30, phase 21 of the pdffiller proving ground.
-**Scope:** partially mitigated by the stop gate's resync band (v0.43.0); the
-residual case below is untouched and has no owner.
+**CLOSED 2026-08-31 by `ci-wait.cjs` (v0.44.0).** The answer turned out to be
+simpler than anything sketched below, and it is worth recording why: the fix is
+not a waker at all. **Waiting in the FOREGROUND means the turn never ends, so
+nothing has to wake it** — and blocking is free precisely because this script only
+ever runs when the board has no other move. The `gh pr checks --watch` ban was
+about opportunity cost, and there is none at that moment. The distinction is
+mechanical, not remembered: `ci-wait.cjs` refuses (exit 3) whenever anything is
+actionable or a ticket is with an agent. See `deliver.md` loop-back item 5.
+
+The rest of this entry is kept as the record of the measurement.
 
 ## The mechanism
 
@@ -36,3 +44,14 @@ leaves a timer nagging a board nobody owns.
 Note the asymmetry with the stop gate: the gate can only refuse a stop, and
 refusing is useless here, because there genuinely is nothing to do this second.
 This needs the opposite instrument — something that brings the session BACK.
+
+## What actually shipped, against the shape guessed below
+
+The sketch below reached for a timer — `Monitor`, a self-paced wake-up, something
+that brings the session BACK — and reasoned that a stop gate "can only refuse a
+stop, and refusing is useless here". Both halves were true and the conclusion was
+wrong, because the premise was that the turn had to end. It does not.
+
+Also noted below and now measured: the 12:30 stop had TWO independent halves. The
+stale board is fixed by the journal-evidence branch in `stop-gate.cjs` (same
+release); the wait is fixed here. Neither would have been enough alone.

@@ -119,6 +119,22 @@ actionable RIGHT NOW` or `fixpoint: YES` — computed by
 fixpoint" but never as a reason to block: the run serves the rest of the front and
 only waits when that PR is the last thing left.
 
+**And that last wait is a script too.** The babysit loop is driven by
+agent-completion wake-ups, so when the only thing left is CI there is no agent to
+complete and nothing brings the run back — measured, on a stacked phase that
+landed one ticket of four and then sat with the next PR green and ready until a
+person returned. `scripts/ci-wait.cjs` waits in the foreground, which closes the
+hole by construction: the turn never ends, so nothing has to wake it. It
+**refuses** whenever the board holds actionable work or a ticket is with an agent,
+so it cannot become the `gh pr checks --watch` serialization this conveyor removed
+— that rule is about opportunity cost, and there is none when the board has no
+other move. It returns the moment a watched PR settles, green or red.
+
+A stacked cascade needs one such round **per ticket**: each squash-merge rewrites
+the parent's history, so the next child goes `DIRTY`, gets the base merged in, and
+re-runs every check. "Merge the phase" is finished at `fixpoint: YES`, not when
+the first ticket lands.
+
 **A sentinel guards the PRs while the run cascades on.** The moment tickets have
 PRs, two jobs run at different speeds — opening the next branches (minutes) and
 driving a PR to green (CI rounds, CodeRabbit, Copilot). So the run posts a
