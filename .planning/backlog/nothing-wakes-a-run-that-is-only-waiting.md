@@ -1,14 +1,24 @@
 # Nothing wakes a run whose only remaining state is "waiting"
 
 **Found:** 2026-08-30, phase 21 of the pdffiller proving ground.
-**CLOSED 2026-08-31 by `ci-wait.cjs` (v0.44.0).** The answer turned out to be
-simpler than anything sketched below, and it is worth recording why: the fix is
-not a waker at all. **Waiting in the FOREGROUND means the turn never ends, so
-nothing has to wake it** — and blocking is free precisely because this script only
+**CLOSED 2026-08-31 by `ci-wait.cjs` + the stop gate's CI branch (v0.45.0).**
+The fix is not a waker: **waiting in the FOREGROUND means the turn never ends, so
+nothing has to wake it** — and blocking is free precisely because the script only
 ever runs when the board has no other move. The `gh pr checks --watch` ban was
-about opportunity cost, and there is none at that moment. The distinction is
-mechanical, not remembered: `ci-wait.cjs` refuses (exit 3) whenever anything is
-actionable or a ticket is with an agent. See `deliver.md` loop-back item 5.
+about opportunity cost, and there is none at that moment.
+
+**v0.44.0 shipped only half of this and claimed the whole.** The foreground trick
+holds only WHILE THE SCRIPT IS RUNNING, so something must make the loop call it —
+and v0.44.0 left that in `deliver.md` as prose, i.e. it traded "nothing wakes a
+waiting run" for "the loop must remember to wait", which is the trade this
+repository's own standing lesson forbids. v0.45.0 adds the mechanical half: the
+stop gate refuses a stop whose board holds nothing but `waiting.ci`. Two
+mechanisms, one hole. See `deliver.md` loop-back item 5.
+
+Termination is structural rather than a second special case: `ci-wait.cjs` counts
+empty windows against escalation-record's fingerprint and escalates itself after
+three, and an escalation park drops the ticket from the front — so the CI bucket
+empties and the gate goes quiet through the rule it already had.
 
 The rest of this entry is kept as the record of the measurement.
 

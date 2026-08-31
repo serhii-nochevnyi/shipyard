@@ -119,16 +119,25 @@ actionable RIGHT NOW` or `fixpoint: YES` — computed by
 fixpoint" but never as a reason to block: the run serves the rest of the front and
 only waits when that PR is the last thing left.
 
-**And that last wait is a script too.** The babysit loop is driven by
-agent-completion wake-ups, so when the only thing left is CI there is no agent to
-complete and nothing brings the run back — measured, on a stacked phase that
-landed one ticket of four and then sat with the next PR green and ready until a
-person returned. `scripts/ci-wait.cjs` waits in the foreground, which closes the
-hole by construction: the turn never ends, so nothing has to wake it. It
+**And that last wait is a script, held in place by the gate.** The babysit loop is
+driven by agent-completion wake-ups, so when the only thing left is CI there is no
+agent to complete and nothing brings the run back — measured on a stacked phase
+that landed one ticket of four and then sat with the next PR green and ready until
+a person returned. `scripts/ci-wait.cjs` waits in the **foreground**, which closes
+the hole by construction: the turn never ends, so nothing has to wake it. It
 **refuses** whenever the board holds actionable work or a ticket is with an agent,
 so it cannot become the `gh pr checks --watch` serialization this conveyor removed
 — that rule is about opportunity cost, and there is none when the board has no
 other move. It returns the moment a watched PR settles, green or red.
+
+Waiting in the foreground only helps if the loop actually calls it, and "the loop
+should call it" is prose. So the **stop gate refuses a stop whose board holds
+nothing but `waiting.ci`** and names the script. The pair terminates on its own:
+`ci-wait.cjs` counts empty windows against the delivery-state fingerprint and
+**escalates itself after three** (~45 min of nothing moving), and an escalation
+park drops the ticket from the front — so the CI bucket empties and the gate goes
+quiet through the rule it already had. A stuck pipeline ends with a person, not
+with a gate quietly giving up.
 
 A stacked cascade needs one such round **per ticket**: each squash-merge rewrites
 the parent's history, so the next child goes `DIRTY`, gets the base merged in, and

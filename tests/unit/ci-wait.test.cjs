@@ -42,8 +42,20 @@ function project(front, state) {
   fs.mkdirSync(g, { recursive: true });
   if (front !== null) fs.writeFileSync(path.join(g, 'delivery-front.json'), JSON.stringify(front));
   if (state !== null) fs.writeFileSync(path.join(g, 'delivery-state.json'), JSON.stringify(state));
+  // escalation-record refuses to write beside a graph with no tickets.json — the
+  // guard that stops a record being filed where nobody would read it.
+  fs.writeFileSync(path.join(g, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': {} } }));
   return dir;
 }
+
+const waits = (dir) => {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'graph', 'ci-waits.json'), 'utf8')); }
+  catch { return null; }
+};
+const escalations = (dir) => {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'graph', 'escalations.json'), 'utf8')); }
+  catch { return null; }
+};
 
 // A stub gh answering exactly the one call ci-wait makes. `rows` is the JSON it
 // returns for `pr checks`; `exit` mimics gh's habit of reporting CI state through
@@ -63,7 +75,7 @@ function stubGh(dir, rows, exit = 0) {
 // run(front, state, args, {bin}) → {code, out}
 function run(front, state, args = [], opts = {}) {
   const dir = opts.dir || project(front, state);
-  const env = { ...process.env };
+  const env = { ...process.env, ...(opts.env || {}) };
   if (opts.bin) env.PATH = `${opts.bin}:${env.PATH}`;
   const r = spawnSync('node', [SCRIPT, ...args], { cwd: dir, encoding: 'utf8', env, timeout: 60000 });
   return { code: r.status, out: (r.stdout || '') + (r.stderr || ''), dir };
@@ -197,6 +209,83 @@ test('--graph followed by another flag is a usage error, not a silent cwd fallba
 test('a non-positive timeout or interval is a usage error', () => {
   assert.equal(run(ciOnly(), stateWith(), ['--timeout', '0']).code, 2, 'zero is not a window');
   assert.equal(run(ciOnly(), stateWith(), ['--interval', 'soon']).code, 2, 'nor is a word');
+});
+
+suite('ci-wait — it terminates, and a stuck pipeline ends with a person');
+
+// A stop gate can refuse only once per turn, so the gate/waiter pair has to reach
+// an end on its own — and it must not do so by leaving a stuck pipeline
+// unattended. Three empty windows against escalation-record's fingerprint is ~45m
+// of nothing moving; that ends with a park, and a park drops the ticket from the
+// front, which makes the gate's CI branch stop firing through the rule it already
+// had. No second special case anywhere.
+
+const pending = (dir) => stubGh(dir, [{ name: 'Tests', state: 'IN_PROGRESS' }], 8);
+const shortWait = ['--timeout', '1', '--interval', '1'];
+
+test('an empty window is counted, bound to the delivery-state fingerprint', () => {
+  const dir = project(ciOnly(), stateWith());
+  const bin = pending(dir);
+  const { code, json } = asJson(null, null, shortWait, { dir, bin });
+  assert.equal(code, 0, 'a timeout is a legitimate return');
+  assert.equal(json.timed_out, true, 'nothing settled');
+  const w = waits(dir);
+  assert.equal(w.tickets['T-01-01'].empty_windows, 1, 'the window is on record');
+  assert.ok(w.tickets['T-01-01'].fingerprint, 'bound to a fingerprint, so any real change resets it');
+  assert.equal(escalations(dir), null, 'and one window earns nobody a park');
+});
+
+test('three empty windows escalate, and the reason says how to lift it', () => {
+  const dir = project(ciOnly(), stateWith());
+  const bin = pending(dir);
+  let json;
+  for (let i = 0; i < 3; i += 1) ({ json } = asJson(null, null, shortWait, { dir, bin }));
+  assert.equal(waits(dir).tickets['T-01-01'].empty_windows, 3, 'the count reached the budget');
+  assert.equal(json.escalated.length, 1, 'and the park was filed in the same act');
+  assert.equal(json.escalated[0].ok, true, 'successfully');
+  const e = escalations(dir).tickets['T-01-01'];
+  assert.ok(/not going to settle/.test(e.reason), 'the reason names the judgement');
+  assert.ok(/escalation-record\.cjs clear/.test(e.reason), 'and how a person lifts it by hand');
+  assert.ok(e.fingerprint, 'and it expires by itself once the PR moves');
+});
+
+test('a settle forgets the whole run of empty windows', () => {
+  // Progress means nothing here is stuck, so carrying the count forward would
+  // march a healthy-but-slow pipeline toward a park it never earned.
+  const dir = project(ciOnly(), stateWith());
+  asJson(null, null, shortWait, { dir, bin: pending(dir) });
+  assert.equal(waits(dir).tickets['T-01-01'].empty_windows, 1, 'one window recorded');
+  const green = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS' }]);
+  const { json } = asJson(null, null, ['--interval', '1'], { dir, bin: green });
+  assert.equal(json.settled, 'T-01-01', 'it settled');
+  assert.equal(waits(dir).tickets['T-01-01'], undefined, 'and the record is gone');
+});
+
+test('the budget is tunable, and garbage in the env var does not disable it', () => {
+  const dir = project(ciOnly(), stateWith());
+  const bin = pending(dir);
+  const { json } = asJson(null, null, shortWait, { dir, bin, env: { SHIPYARD_CI_WAIT_MAX_EMPTY: '1' } });
+  assert.equal(json.escalated.length, 1, 'one window is enough when the budget says so');
+
+  const d2 = project(ciOnly(), stateWith());
+  const b2 = pending(d2);
+  const { json: j2 } = asJson(null, null, shortWait, { dir: d2, bin: b2, env: { SHIPYARD_CI_WAIT_MAX_EMPTY: 'three' } });
+  assert.equal(j2.escalated.length, 0, 'a garbage value falls back to the default, it does not park at once');
+});
+
+test('a broken wait record never takes the wait down with it', () => {
+  // Measured while writing this file: an accident left `ci-waits.json` as a
+  // DIRECTORY, and writeAtomic's EISDIR killed the whole script — no exit code
+  // the loop could read, which teaches the loop to stop calling it and puts the
+  // hole straight back. The bookkeeping is not worth that.
+  const dir = project(ciOnly(), stateWith());
+  const bin = pending(dir);
+  fs.mkdirSync(path.join(dir, '.planning', 'graph', 'ci-waits.json'), { recursive: true });
+  const { code, json } = asJson(null, null, shortWait, { dir, bin });
+  assert.equal(code, 0, 'the wait still returns a code the loop can read');
+  assert.equal(json.timed_out, true, 'and its own result stands');
+  assert.equal(json.escalated[0].ok, false, 'while saying the bookkeeping failed');
+  assert.ok(/wait record not updated/.test(json.escalated[0].error), 'and naming what broke');
 });
 
 done();

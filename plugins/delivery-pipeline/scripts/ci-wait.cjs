@@ -38,6 +38,24 @@
 // Under `--json` a refusal is data (`waited: false` + `refusal`), because the
 // caller is a loop, not a person.
 //
+// ── WHAT THE FOREGROUND WAIT DOES *NOT* COVER ────────────────────────────────
+// "The turn never ends, so nothing has to wake it" is only true WHILE THIS SCRIPT
+// IS RUNNING, and that leaves the same rule this repo keeps learning about:
+// something has to make the loop call it. Left as prose in deliver.md, that is a
+// rule which gets skipped — the exact class of failure the stop gate exists for.
+// So the gate now refuses a stop whose board holds nothing but `waiting.ci` and
+// names this script. Two mechanisms, one hole.
+//
+// A stop gate can only refuse once per turn, though, so the pair still has to
+// TERMINATE, and it must not do so by leaving a stuck pipeline unattended. That is
+// what the wait record below is for: three consecutive timeouts with nothing on
+// the board moving is 45 minutes of a pipeline that is not going to settle, and
+// the honest end of that is a person, not more patience. So this script ESCALATES
+// itself at that point — and because an escalation park drops the ticket from the
+// front (`front.cjs` reads `activeParks`), the CI bucket empties and the gate goes
+// quiet through the rule it already had. The loop terminates structurally rather
+// than by a special case.
+//
 // It also refuses when tickets are `waiting.dispatched`: an agent completion is a
 // wake-up the runtime gives for free and gives sooner. Waiting on CI while an
 // agent works would only add latency to a round that was already going to happen.
@@ -52,6 +70,11 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
+// The state-moved rule, taken from the store that already owns it. Never
+// reimplemented: two stores that expire against the same subject must not come to
+// disagree about what "the PR moved" means.
+const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 
 const argv = process.argv.slice(2);
 const JSON_OUT = argv.includes('--json');
@@ -110,6 +133,19 @@ function finish(payload, human) {
   if (JSON_OUT) process.stdout.write(JSON.stringify({ waited: true, ...payload }, null, 2) + '\n');
   else process.stdout.write(human + '\n');
   process.exit(0);
+}
+
+// A park is the one outcome the caller must not miss, so it is said in both forms.
+function parkLines(parked) {
+  return parked.map((p) => {
+    if (p.ok) {
+      return `  ESCALATED ${p.id} (PR #${p.pr}) after ${p.empty_windows} empty windows — a person now owns it,`
+        + ' and the park lifts by itself once the PR moves.';
+    }
+    if (!p.id) return `  WARNING: ${p.error} — the empty-window count did not advance, so no park will be earned.`;
+    return `  WARNING: could not escalate ${p.id} (${p.error}) — record it by hand, or the front keeps offering`
+      + ' a wait that has already failed its window budget.';
+  }).join('\n');
 }
 
 const front = readJson(path.join(GRAPH, 'delivery-front.json'));
@@ -177,6 +213,89 @@ function checksOf({ pr, repo }) {
   return { total: rows.length, pending: pending.length, failing: failing.length };
 }
 
+// HOW MANY EMPTY WINDOWS BEFORE A PERSON IS ASKED. Three at the default 15m is
+// 45 minutes in which nothing on the board moved — not a slow pipeline, a stuck
+// one. Bound to escalation-record's own fingerprint, so ANY real change (a check
+// finishing, a push, a draft lifting, a review landing) resets the count rather
+// than accumulating toward a park nobody has earned.
+const MAX_EMPTY_RAW = Number(process.env.SHIPYARD_CI_WAIT_MAX_EMPTY || 3);
+const MAX_EMPTY = Number.isFinite(MAX_EMPTY_RAW) && MAX_EMPTY_RAW > 0 ? Math.floor(MAX_EMPTY_RAW) : 3;
+
+const WAITS = path.join(GRAPH, 'ci-waits.json');
+// The lock lives beside the store, exactly as drift-record.cjs derives it: a lock
+// taken at some other cwd serializes nothing, which is how six concurrent marks
+// once produced five records.
+const LOCK_ROOT = path.resolve(GRAPH, '..', '..');
+
+// One locked read-modify-write, with the lock BESIDE THE STORE — a lock taken at
+// some other cwd serializes nothing, which is how six concurrent marks once
+// produced five records.
+function recordOutcome(settledId, watched) {
+  try {
+    return recordOutcomeInner(settledId, watched);
+  } catch (e) {
+    // A WAITER MUST NEVER DIE NOISILY — that is this script's own stated
+    // invariant, and the bookkeeping is not worth breaking it for. A held lock,
+    // a read-only graph, a `ci-waits.json` that some accident left as a
+    // DIRECTORY (measured, while writing the test for this): every one of those
+    // took the whole wait down and returned no exit code the loop could read,
+    // which teaches the loop to stop calling this and puts the hole straight
+    // back. Say what broke and let the wait's own result stand.
+    return [{ id: null, pr: null, empty_windows: null, ok: false,
+      error: `wait record not updated (${e.message})` }];
+  }
+}
+
+function recordOutcomeInner(settledId, watched) {
+  const escalations = [];
+  withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
+    let store = { tickets: {} };
+    try { store = JSON.parse(fs.readFileSync(WAITS, 'utf8')) || { tickets: {} }; } catch { /* first wait */ }
+    if (!store.tickets || typeof store.tickets !== 'object') store.tickets = {};
+    const now = new Date().toISOString();
+
+    for (const w of watched) {
+      const fp = fingerprint(state[w.id] || {});
+      if (settledId) {
+        // Progress: something answered, so nothing here is stuck. Forget the
+        // whole run of empty windows rather than carrying it forward.
+        delete store.tickets[w.id];
+        continue;
+      }
+      const prev = store.tickets[w.id];
+      const empties = prev && prev.fingerprint === fp ? Number(prev.empty_windows || 0) + 1 : 1;
+      store.tickets[w.id] = {
+        fingerprint: fp,
+        empty_windows: empties,
+        first_at: (prev && prev.fingerprint === fp && prev.first_at) || now,
+        last_at: now,
+        pr: w.pr,
+      };
+      if (empties >= MAX_EMPTY) escalations.push({ id: w.id, pr: w.pr, empties });
+    }
+    writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
+  });
+
+  // Park OUTSIDE the lock: escalation-record takes its own, beside its own store.
+  const parked = [];
+  for (const e of escalations) {
+    const reason =
+      `CI has not moved for ${e.empties} consecutive ci-wait windows (~${Math.round(e.empties * TIMEOUT_S / 60)}m) ` +
+      `on PR #${e.pr}, with no change to any delivery-state fact a check would touch. ` +
+      'That is a pipeline that is not going to settle on its own, so waiting longer buys nothing. ' +
+      'UNBLOCK: look at the run itself (a queued-forever job, a required check that never reports, a ' +
+      'self-hosted runner that is down are the usual three), then `escalation-record.cjs clear ' +
+      `${e.id}` + '` — or simply answer the PR, since this park lifts by itself once the delivery ' +
+      'facts change.';
+    const r = spawnSync(process.execPath,
+      [path.join(__dirname, 'escalation-record.cjs'), 'mark', e.id, reason, '--graph', GRAPH],
+      { encoding: 'utf8', timeout: 30000 });
+    parked.push({ id: e.id, pr: e.pr, empty_windows: e.empties, ok: r.status === 0,
+      error: r.status === 0 ? null : ((r.stderr || '').trim() || `exit ${r.status}`) });
+  }
+  return parked;
+}
+
 const startedAt = Date.now();
 const deadline = startedAt + TIMEOUT_S * 1000;
 const label = watch.map((w) => `${w.id}#${w.pr}`).join(', ');
@@ -201,18 +320,25 @@ for (;;) {
     // both are the caller's business, not this script's. A waiter that only
     // returned on GREEN would hold a run hostage to a red pipeline.
     if (c && c.total > 0 && c.pending === 0) {
+      // Progress forgets the whole run of empty windows: nothing here is stuck.
+      const parked = recordOutcome(w.id, watch);
       finish(
-        { settled: w.id, pr: w.pr, checks: c, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000), watched: seen },
+        { settled: w.id, pr: w.pr, checks: c, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
+          watched: seen, escalated: parked },
         `ci-wait: ${w.id} (PR #${w.pr}) settled after ${Math.round((Date.now() - startedAt) / 1000)}s — ` +
         `${c.total - c.failing}/${c.total} green${c.failing ? `, ${c.failing} failing` : ''}. ` +
         'Re-sync and take the round.');
     }
   }
   if (Date.now() >= deadline) {
+    const parked = recordOutcome(null, watch);
+    const lines = parkLines(parked);
     finish(
-      { settled: null, timed_out: true, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000), watched: seen },
+      { settled: null, timed_out: true, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
+        watched: seen, escalated: parked },
       `ci-wait: ${Math.round(TIMEOUT_S / 60)}m passed and nothing settled (${label}). ` +
-      'Re-sync anyway — the board may have moved for other reasons — then decide whether to wait again.');
+      'Re-sync anyway — the board may have moved for other reasons — then decide whether to wait again.' +
+      (lines ? `\n${lines}` : ''));
   }
   sleep(Math.min(INTERVAL_S, Math.max(1, (deadline - Date.now()) / 1000)));
 }

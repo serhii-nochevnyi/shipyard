@@ -1222,6 +1222,15 @@ stop at that: move on to the recomputation of the front below.
    watched PR settles, green OR red, and on timeout returns 0 anyway. Either way:
    re-sync and take the round. Never hand-roll a wait; if it refuses, it is
    telling you there is work.
+
+   **This step is enforced, not suggested.** The stop gate refuses a stop whose
+   board holds nothing but `waiting.ci` — because "the loop should call the waiter"
+   is exactly the kind of prose rule that gets skipped. And it ends on its own:
+   `ci-wait.cjs` counts empty windows against the delivery-state fingerprint and
+   escalates itself after three (~45m of nothing moving), which parks the ticket,
+   drops it from the front and stops the refusal. So a pipeline that will not
+   settle ends with a person rather than with you waiting all night — you do not
+   need to decide when to give up.
 6. Front empty AND the guard has reported → go to Step 5 (fixpoint).
 
 `stop-gate.cjs` exists to enforce this rule, because it was skipped repeatedly and

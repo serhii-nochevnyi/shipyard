@@ -21,8 +21,8 @@
 //   * this project has a conveyor front at all;
 //   * the front is FRESH — or stale in the narrow way that means the LOOP forgot
 //     to resync rather than that the run is over (see THE TWO STALE CASES);
-//   * something is actionable, and not merely waiting on CI (the run is allowed
-//     to wait when waiting is all that is left);
+//   * something is actionable, OR the board's only content is `waiting.ci` — the
+//     run is allowed to WAIT, but not to walk away from the wait (see WAITING);
 //   * that work is not entirely left-behind — a phase the run has moved past is
 //     "a decision, not motion" (front.cjs), and demanding motion there is how a
 //     guard starts lying;
@@ -104,6 +104,28 @@
 // the shape and never the stale board's contents — those contents are what is
 // wrong. `stop_hook_active` caps it at one block per turn, so the worst case is
 // one `state-sync` and then a stop, which is the honest price of not knowing.
+//
+// ── WAITING IS ALLOWED; WALKING AWAY FROM IT IS NOT ──────────────────────────
+// This hook used to be silent whenever nothing was actionable, which folded two
+// states into one: a finished run, and a run with PRs still going through CI. The
+// second is where the conveyor bled. The babysit loop is driven by
+// agent-completion wake-ups, so with no agent out and only CI pending, NOTHING
+// WILL EVER WAKE THE SESSION AGAIN — measured twice on the same phase, once for
+// 5h46m and once for 11h43m, and the second time with the next PR green,
+// `conform` and ready to land.
+//
+// `ci-wait.cjs` is the answer and it works by not ending the turn. But something
+// has to make the loop CALL it, and deliver.md saying so is prose — the exact
+// class of rule this hook exists because prose could not hold. So: a board whose
+// only content is `waiting.ci` blocks, and the refusal names the script.
+//
+// It TERMINATES without a second special case here. `ci-wait.cjs` counts empty
+// windows against escalation-record's fingerprint and escalates itself after
+// three; an escalation park drops the ticket from the front, so the CI bucket
+// empties and this branch stops firing through the rule it already had. A stuck
+// pipeline ends with a person, not with a gate quietly giving up.
+//
+// Not fired when a ticket is with an agent: that wake-up is free and sooner.
 //
 // `SHIPYARD_STOP_GATE=off` turns the whole hook off in one word. An operator who
 // wants silence should be able to say so plainly, rather than discovering that
@@ -318,8 +340,27 @@ if (age !== null && age > FRESH_MS) {
   );
 }
 
-if (count <= 0) allow();
-if (leftBehind >= count) allow();
+// The board is fresh (the branches above returned for anything older) and offers
+// no move. If PRs are still in CI, the run may wait — with `ci-wait.cjs`, in the
+// foreground — but it may not stop, because nothing will bring it back.
+if (count <= 0 || leftBehind >= count) {
+  const ci = (front.waiting && front.waiting.ci) || [];
+  if (!ci.length || dispatched.length) allow();
+  verdict(
+    `shipyard: nothing is actionable, but ${ci.length} PR(s) are still in CI (${ci.join(', ')}) — ` +
+    'so this is a WAIT, not a fixpoint, and stopping here ends the run for good.\n' +
+    'The babysit loop is woken by agents finishing. No agent is out, so nothing will wake this session:\n' +
+    'measured at 5h46m once and 11h43m the next night, the second time with the next PR green, conform\n' +
+    'and ready to land. Do not summarise and stop:\n' +
+    '  1. `ci-wait.cjs` — it waits in the FOREGROUND, so the turn never ends and nothing has to wake it;\n' +
+    '     it returns the moment any watched PR settles, green or red, and after ~15m either way;\n' +
+    '  2. `state-sync.cjs`, then take the round the settled PR opened;\n' +
+    '  3. loop back. Stop only on `fixpoint: YES`.\n' +
+    'A cascade needs one such round PER TICKET: each squash-merge makes the next child DIRTY, which\n' +
+    'costs a base-merge, a push and a full CI run. Three empty waits and `ci-wait.cjs` escalates by\n' +
+    'itself, which parks the ticket and makes this refusal stop — a stuck pipeline ends with a person.' + whereToSync
+  );
+}
 
 const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
 const named = ORDER
