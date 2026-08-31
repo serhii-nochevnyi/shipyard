@@ -127,13 +127,70 @@ test('a front of only left-behind work is a decision, not motion', () => {
     'but ONE live item among them still blocks');
 });
 
-test('waiting on CI is not a reason to block', () => {
-  // The conveyor is explicitly allowed to wait; front.cjs keeps ci out of
-  // actionable_count, so an empty count is the whole test.
-  assert.equal(run({
+test('waiting on CI is a reason to WAIT, and that is not the same as stopping', () => {
+  // This assertion is the inverse of the one it replaces, and the reversal was
+  // measured rather than reasoned. "Nothing actionable → the run may stop and
+  // wait" folded two states into one: a finished run, and a run with PRs in CI.
+  // The second is where the conveyor bled — the babysit loop wakes on agents
+  // finishing, so with no agent out and only CI pending nothing ever wakes the
+  // session. 5h46m once, 11h43m the next night, the second time with the next PR
+  // green, conform and ready to land.
+  const v = run({
     generated_at: fresh(), actionable_count: 0, left_behind_count: 0,
-    actionable: {}, waiting: { ci: ['T-01-01'], merge_human: ['T-01-04'] },
-  }), null, 'nothing actionable → the run may stop and wait');
+    actionable: {}, waiting: { ci: ['T-01-01'], dispatched: [], merge_human: ['T-01-04'] },
+  });
+  assert.ok(v && v.decision === 'block', 'a wait the run cannot return from is not a fixpoint');
+  assert.ok(/ci-wait\.cjs/.test(v.reason), 'and the refusal names the script that waits');
+  assert.ok(/T-01-01/.test(v.reason), 'and which PR it is waiting on');
+});
+
+test('a ticket with an agent silences the CI branch — that wake-up is free', () => {
+  assert.equal(run({
+    generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {},
+    waiting: { ci: ['T-01-01'], dispatched: ['T-01-02'], merge_human: [], human: [] },
+  }), null, 'an agent completion comes sooner and costs nothing');
+});
+
+test('a genuine fixpoint is still a fixpoint', () => {
+  // The whole branch must not cost the one thing the gate has to get right:
+  // letting a finished run finish.
+  assert.equal(run({
+    generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {},
+    waiting: { ci: [], dispatched: [], merge_human: [], human: [] }, fixpoint: true,
+  }), null, 'nothing actionable and nothing waiting → stop');
+});
+
+test('all-left-behind work with a PR in CI still blocks on the wait', () => {
+  // Left-behind work is "a decision, not motion", so it does not make the board
+  // actionable — but a PR genuinely in CI is still a wait nobody will return from.
+  const v = run({
+    generated_at: fresh(), actionable_count: 2, left_behind_count: 2,
+    actionable: { execute: ['T-00-01', 'T-00-02'] },
+    waiting: { ci: ['T-01-01'], dispatched: [], merge_human: [], human: [] },
+  });
+  assert.ok(v && v.decision === 'block', 'the wait outlives the left-behind decision');
+  assert.ok(/ci-wait\.cjs/.test(v.reason), 'and it is the wait being named, not the left-behind work');
+});
+
+test('the CI refusal names the cascade cost and its own termination', () => {
+  // Two things the run gets wrong without being told: that one merge ends a
+  // stack, and that an unattended wait could spin forever. It cannot — three
+  // empty windows and ci-wait.cjs escalates, which parks the ticket and empties
+  // this bucket through the rule the gate already had.
+  const { reason } = run({
+    generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {},
+    waiting: { ci: ['T-01-01'], dispatched: [], merge_human: [], human: [] },
+  });
+  assert.ok(/PER TICKET/.test(reason), 'a cascade costs one round per ticket');
+  assert.ok(/escalates by\n *itself/.test(reason) || /escalates by/.test(reason),
+    'and the refusal says how it ends, so it does not read as a trap');
+});
+
+test('the CI refusal is capped at one per turn', () => {
+  assert.equal(run({
+    generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {},
+    waiting: { ci: ['T-01-01'], dispatched: [], merge_human: [], human: [] },
+  }, { stop_hook_active: true }), null, 'the anti-loop hatch covers this branch too');
 });
 
 suite('stop-gate — degrades quietly');
