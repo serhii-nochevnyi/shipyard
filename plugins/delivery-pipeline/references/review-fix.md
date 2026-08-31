@@ -85,6 +85,10 @@ and escalate rather than cycle through one of them again.
 - Re-read `reviewers.cjs unresolved <pr>`: anything still listed is either
   unfinished or something you deliberately escalated. Do not report done over an
   unresolved thread you meant to close — that is the loop above, one round later.
+  Read its `review_decision` too, not only the thread count: a `CHANGES_REQUESTED`
+  verdict outlives the threads it was filed with and is not lifted by resolving
+  them or by pushing. If it still stands with every thread closed, say so — that
+  is a fact for the orchestrator, not a thread you can close.
 
 ## Output (final message, structured)
 - `hypothesis: <one sentence>` — what you believed was wrong and what your
