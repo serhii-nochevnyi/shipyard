@@ -742,3 +742,19 @@ tickets:
     primary_parent: T-26-11
     pr_base: ticket/T-26-11-unavailable-is-not-empty
     jira: null
+  T-26-12:
+    title: A wave is cut to a concurrency the session can afford
+    plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-12-PLAN.md'
+    phase: '26'
+    repo: null
+    wave: 14
+    depends_on: [T-26-02]
+    files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, capabilities/delivery-pipeline/capability.json, tests/unit/pipeline-config.test.cjs, tests/unit/front.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-26-12-a-wave-is-cut-to-a-concurrency-the-sessi
+    epic: epic/26-positive-evidence-before-a-mutation
+    primary_parent: T-26-02
+    pr_base: ticket/T-26-02-a-corrupt-configuration-permits-no-mutat
+    jira: null

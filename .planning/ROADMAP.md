@@ -122,6 +122,9 @@ script — not in a prompt.** Every requirement below is an instance of it.
   pressure, exhausted repair depth, contested judgment) and never by default
   except for the integrator; it is never emitted where the runtime would
   resolve it to Fable 5.
+- **REQ-42** — A wave is cut to a concurrency the session can afford: the front
+  reports capacity, the loop dispatches no more than that, and a front held back
+  by the cap is never a fixpoint.
 
 ## Phases
 
@@ -207,7 +210,7 @@ the board back into `execute: …, finalize: …` until the next `mark` rewrites
 — measured on the first wave of this very phase, with four tickets out.
 
 ### Phase 25: The conveyor follows the models it runs on
-**Requirements**: REQ-26, REQ-27, REQ-28, REQ-40, REQ-41
+**Requirements**: REQ-26, REQ-27, REQ-28, REQ-40, REQ-41, REQ-42
 
 Decomposed from ADR-003. Three things moved under the conveyor within a
 fortnight — Claude Code's aliases (Opus 5 at 2.1.219, Fable 5.1 at 2.1.255, the

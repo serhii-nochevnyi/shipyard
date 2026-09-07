@@ -59,9 +59,13 @@ plans written the same day), executors about 45%, guards about 22%.
   argued: with the floor set through configuration, every role except
   `drift-check` resolved to `xhigh` and `--signature-state repeat` stopped
   deepening anything, leaving `strategy: rethink` as the only surviving signal.
-  The table is `low` for the one mechanical role, `high` for research and the
-  repair roles, `xhigh` for the ordinary executor, and `max` for the judges and
-  for a repair whose signature has repeated. *(Revised twice on 2026-09-07: a
+  The table is `low` for the one mechanical role, `high` for research, and
+  `xhigh` for the executor, the repair roles and the judges — `xhigh` because
+  Anthropic's own effort guidance names it the best setting for most coding and
+  agentic work and it is Claude Code's default, and NOT `max`, because the same
+  guidance says to raise to `max` only when measurement shows headroom at the
+  level below. Nothing here has measured that. A repeated signature deepens a
+  repair to `max` — that IS the measurement, applied to one ticket. *(Revised twice on 2026-09-07: a
   draft of this decision made the two-value Codex rule universal. It is not —
   the operator's measurement that `max` and `xhigh` buy nothing for their cost
   is a CODEX fact, recorded in D6. On Claude the ladder stands.)*
@@ -162,11 +166,29 @@ plans written the same day), executors about 45%, guards about 22%.
   0.153.1, this host runs 0.147.0 and the current release is 0.153.4, so
   selecting Astra at all has a version floor. `gsd-tune` reports that floor
   beside the Fable 5.1 one, in the same check and for the same reason.
-- **Deferred — the concurrency axis.** A per-session budget cannot be expressed
-  as a tier, and the run that proved it also proved the recovery works: the
-  interrupted executors' uncommitted RED tests were handed to their successors
-  and every ticket landed. Revisit with a measured ceiling rather than a guessed
-  one; `dispatch.maxConcurrency` in GSD 1.13 is the shape to borrow.
+- **D10 — The cost that decides the ceiling is the CACHE, not the token price.**
+  Caches are model-scoped, so an escalation that changes model forfeits the
+  prefix a guard has been reusing across rounds — and a guard re-reads the same
+  diff and the same ADR corpus every round. That is why `arch-review` stays on
+  ONE model at `xhigh` and reaches `fable` only through D4's routes, while the
+  integrator takes `fable` unconditionally: one call per phase has no cache to
+  lose. Measured prices make the same point from the other side. Anthropic and
+  OpenAI are within a few percent tier for tier per 1M tokens — Sonnet 5 $2/$10
+  against Terra $2/$12, Opus 5 $5/$25 against Sol $5/$30, Fable 5.1 $10/$50
+  against Astra $10/$50 — so the symmetry in D6 costs the same on both sides and
+  is not a convenience.
+- **D11 — The axis that actually bounds the bill is CONCURRENCY, and it is now a
+  ticket (T-26-12 — phase 26 owns `front.cjs` and `pipeline-config.cjs` to the end of its chain, and a cross-phase contest over a file cannot cascade).** Priced on this session's measured volumes, about thirteen
+  tickets delivered: the current ladder is roughly $78, the sonnet-heavy ladder
+  it replaced about $60, and the most expensive variant considered about $86.
+  Six dollars a ticket, and twenty-six dollars between the cheapest and dearest
+  ladder. The run that died did not die of that. It died with nine `opus`
+  agents and a `fable` guard in flight against a per-session spend limit, which
+  no choice of tier addresses. The executor is 35% of the bill in every variant
+  and is the one role the ladder never varies; `drift-check` was 15% for a
+  two-word verdict, and the operator's decision is to keep the floor without
+  exceptions and fix the CALL COUNT instead — Step 2's own condition did not ask
+  for sixteen of this session's judges.
 
 ## Consequences
 

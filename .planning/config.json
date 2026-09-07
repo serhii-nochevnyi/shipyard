@@ -114,8 +114,8 @@
       "integrator": "fable"
     },
     "effort": {
-      "arch-review": "max",
-      "integrator": "max",
+      "arch-review": "xhigh",
+      "integrator": "xhigh",
       "research": "high"
     }
   }
