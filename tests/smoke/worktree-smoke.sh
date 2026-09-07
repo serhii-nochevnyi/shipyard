@@ -398,6 +398,73 @@ gone="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
   && ok "gc reports a registration whose directory is missing as gone" \
   || bad "gc reports a missing directory as gone" "$gone"
 
+# ── a removal that FAILED is not a removal ──────────────────────────────────
+# Both halves of the removal can fail — `worktree remove --force` on a
+# registration git will not let go of, the `rm -rf` fallback on a non-writable
+# parent, a read-only mount, or a mount point inside the tree — and the outcome
+# was never looked at: `removed` was incremented and "removed <ticket>" printed
+# one line later, under a summary that promises to report what actually
+# happened. Worse, the failing `rm` was the last command of a `||` list, so
+# `set -e` killed the run mid-loop and took the remaining landed worktrees,
+# every skip reason and the summary with it.
+#
+# Injected with PATH stubs, not file permissions: a chmod proves nothing when
+# the suite runs as root, and stubs reproduce identically on macOS and Linux.
+# Both stubs are narrowed to the ONE stuck path — a blanket `rm` stub would
+# also break the lock's EXIT trap and wedge every later gc.
+run_gc create T-05-06 ticket/T-05-06-stuck main >/dev/null 2>&1
+run_gc create T-05-07 ticket/T-05-07-next  main >/dev/null 2>&1
+echo '{"tickets":{"T-05-02":{},"T-05-04":{},"T-05-06":{},"T-05-07":{}}}' \
+  > "$W/gcrepo/.planning/graph/tickets.json"
+cat > "$W/gcrepo/.planning/graph/delivery-state.json" <<'STATE'
+{
+  "T-05-02": { "branch": "ticket/T-05-02-unpushed", "status": "pr-open", "reapable": false },
+  "T-05-06": { "branch": "ticket/T-05-06-stuck", "status": "merged", "reapable": true },
+  "T-05-07": { "branch": "ticket/T-05-07-next", "status": "merged", "reapable": true }
+}
+STATE
+# the script sees the RESOLVED path (git worktree list --porcelain prints those),
+# so the stubs have to match on that spelling, not on $GCWT/T-05-06
+STUCK="$(cd "$GCWT/T-05-06" && pwd -P)"
+STUB="$W/stub"; mkdir -p "$STUB"
+REAL_GIT="$(command -v git)"; REAL_RM="$(command -v rm)"
+cat > "$STUB/git" <<EOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"worktree remove"* && "\$*" == *"$STUCK"* ]]; then
+  echo "stub: refusing to remove the worktree registration" >&2
+  exit 1
+fi
+exec "$REAL_GIT" "\$@"
+EOF
+cat > "$STUB/rm" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  [[ "\$a" == "$STUCK" ]] && { echo "stub: rm: Permission denied" >&2; exit 1; }
+done
+exec "$REAL_RM" "\$@"
+EOF
+chmod +x "$STUB/git" "$STUB/rm"
+( cd "$W/gcrepo" && PATH="$STUB:$PATH" SHIPYARD_WORKTREE_ROOT="$GCWT" \
+    bash "$SCRIPTS/ticket-worktree.sh" gc --prune ) \
+  >"$W/stuck.out" 2>"$W/stuck.err" || true
+if [[ -d "$STUCK" ]]; then
+  ok "gc --prune leaves behind a landed worktree it could not remove"
+else
+  bad "gc --prune leaves behind what it could not remove" "$(cat "$W/stuck.err")"
+fi
+grep -q 'still present' "$W/stuck.err" \
+  && ok "…and reports the failed removal instead of announcing it as removed" \
+  || bad "gc reports a removal that failed" "$(cat "$W/stuck.err")"
+[[ ! -d "$GCWT/T-05-07" ]] \
+  && ok "…and keeps pruning the rest instead of dying on the failure" \
+  || bad "gc --prune continues past a failed removal" "$(cat "$W/stuck.err")"
+grep -q 'gc: removed .*(1 landed' "$W/stuck.err" \
+  && ok "…and the summary counts the one removal that happened, not two" \
+  || bad "gc's summary counts removals, not attempts" "$(cat "$W/stuck.err")"
+grep -q 'could not be removed' "$W/stuck.err" \
+  && ok "…and the summary names the failure a human has to act on" \
+  || bad "gc's summary names failed removals" "$(cat "$W/stuck.err")"
+
 if out="$(run_gc gc bogus 2>&1)"; then
   bad "gc rejects an unknown flag"
 else

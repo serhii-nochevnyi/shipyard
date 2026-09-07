@@ -398,7 +398,7 @@ case "$cmd" in
     acquire_git_lock
     # A registration whose directory is already gone has no tree to lose work in.
     git -C "$repo_root" worktree prune 1>&2 2>/dev/null || true
-    removed=0; skipped=0
+    removed=0; skipped=0; failed=0
     while IFS=$'\t' read -r verdict ticket branch wt_path reason; do
       [[ "$verdict" == "landed" ]] || continue
       # The classification above is a SNAPSHOT, taken before this lock was held,
@@ -424,16 +424,36 @@ case "$cmd" in
           continue
         fi
       fi
-      git -C "$repo_root" worktree remove --force "$wt_path" 1>&2 2>/dev/null || rm -rf "$wt_path"
+      # A removal is a MUTATION, so its OUTCOME is checked and not assumed —
+      # the same rule as the verdict above, one layer later. Both halves can
+      # fail (a registration git will not let go of, then `rm -rf` on a
+      # non-writable parent, a read-only mount, or a mount point inside the
+      # tree), and the exit status of either is the wrong thing to trust: what
+      # matters is whether the directory is still there, which is checkable
+      # without reasoning about how `rm -rf` reports a partial failure on two
+      # platforms. Counting it regardless printed "removed" over a worktree
+      # still on disk, under a summary that promises what actually happened.
+      # The `|| true` is what keeps `set -e` out of it: a failing `rm` is the
+      # last command of the `||` list, so it used to kill the whole prune
+      # mid-loop and take the remaining landed worktrees, every skip reason and
+      # the summary with it. `rm`'s own stderr is deliberately NOT suppressed —
+      # "Permission denied" is the diagnosis.
+      git -C "$repo_root" worktree remove --force "$wt_path" 1>&2 2>/dev/null \
+        || rm -rf "$wt_path" || true
+      if [[ -e "$wt_path" ]]; then
+        failed=$((failed + 1))
+        echo "FAILED to remove $ticket ($wt_path) — it is still present; remove it by hand" >&2
+        continue
+      fi
       removed=$((removed + 1))
       echo "removed $ticket ($wt_path)" >&2
     done < <(printf '%s' "$rows")
     git -C "$repo_root" worktree prune 1>&2 2>/dev/null || true
     # Say what was left behind and why: a gc that reports only its successes reads
     # as "everything is clean" when the interesting cases are the ones it skipped.
-    # Report what was actually removed, not what was classified: with the
-    # re-check above those two numbers differ exactly when a tree changed under
-    # the lock, which is the case worth naming.
+    # Report what was actually removed, not what was classified: those two
+    # numbers differ exactly when a tree changed under the lock or a removal
+    # failed outright, which are the two cases worth naming.
     landed_removed=$removed
     removed=$((landed_removed + gone_count))
     kept=$((total - removed))
@@ -441,7 +461,11 @@ case "$cmd" in
     if (( skipped > 0 )); then
       skipped_note=" skipped $skipped landed worktree(s) that could not be re-proven clean under the lock (see the per-worktree reason above);"
     fi
-    echo "gc: removed $removed ($landed_removed landed, $gone_count stale registration(s)), kept $kept —${skipped_note} dirty/live/review are never removed automatically, inspect them by hand" >&2
+    failed_note=""
+    if (( failed > 0 )); then
+      failed_note=" $failed landed worktree(s) could not be removed and are STILL PRESENT (see the per-worktree line above);"
+    fi
+    echo "gc: removed $removed ($landed_removed landed, $gone_count stale registration(s)), kept $kept —${failed_note}${skipped_note} dirty/live/review are never removed automatically, inspect them by hand" >&2
     ;;
   *)
     echo "usage: ticket-worktree.sh <create|remove|path|root|list [--json]|gc [--prune] [--json]> ..." >&2
