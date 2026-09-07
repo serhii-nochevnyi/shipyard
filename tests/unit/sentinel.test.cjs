@@ -343,7 +343,14 @@ function stubGh() {
     'case "$argv" in',
     '  "pr view "*)',
     '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"gate_status: arch-review=conform, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" ;;',
-    '  "pr checks "*) echo \'[{"name":"test-fast","state":"SUCCESS"}]\' ;;',
+    // The rows carry gh's own `bucket`, because check-state.cjs reads that
+    // field and a row without one is PENDING by its fail-closed rule — a
+    // bucket-less stub would leave every merge case waiting on CI forever.
+    // STUB_CHECKS lets one case hand over a different pipeline; `${VAR:-json}`
+    // cannot carry the default (the first `}` would close the expansion).
+    '  "pr checks "*)',
+    '    if [ -n "${STUB_CHECKS:-}" ]; then echo "$STUB_CHECKS";',
+    '    else echo \'[{"name":"test-fast","state":"SUCCESS","bucket":"pass"}]\'; fi ;;',
     '  "repo view --json owner,name"*) echo \'{"owner":{"login":"acme"},"name":"demo"}\' ;;',
     '  "repo view --json defaultBranchRef"*) echo "main" ;;',
     '  "api graphql"*) echo \'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\' ;;',
@@ -592,6 +599,66 @@ test('the merge event carries preauthorized=true, and only when that is why', ()
   assert.strictEqual(pre.preauthorized, true, JSON.stringify(pre));
   assert.ok(!Object.prototype.hasOwnProperty.call(plain, 'preauthorized'),
     `an ordinary merge must claim no pre-authorization: ${JSON.stringify(plain)}`);
+});
+
+suite('the merge gate reads gh\'s bucket, never a hand-written state list');
+
+// One vocabulary, three consumers. The gate's own copy of the list named
+// FAILURE/ERROR/CANCELLED/TIMED_OUT failing and PENDING/QUEUED/IN_PROGRESS/
+// EXPECTED pending, so every OTHER state gh can report fell through both filters
+// and counted as passed — `failing === 0 && pending === 0` is the green test.
+// The merge path is the only place in this file that calls `gh pr checks` for
+// real (`duty` reads state-sync's cached tallies), so it is where the change is
+// observable.
+const arRoot = () => project({
+  tickets: { 'T-AR': { branch: 'ticket/T-AR', epic: 'epic/21-x' } },
+  state: { 'T-AR': openGreen(9, 'ticket/T-AR', 'epic/21-x') },
+  config: epicConfig,
+});
+const arEnv = (rows) => onPath(stubGh(), {
+  STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-AR', STUB_PR: '9', STUB_CHECKS: JSON.stringify(rows),
+});
+const arMerge = (rows) => JSON.parse(
+  run(arRoot(), ['merge', 'T-AR', '--json', '--dry-run'], { env: arEnv(rows) }).stdout
+).results[0];
+
+test('ACTION_REQUIRED is a failing check, and the merge is refused', () => {
+  // gh calls this row bucket `fail`. The gate's list named neither the state nor
+  // the bucket, saw 0 failing / 0 pending, and MERGED.
+  const r = arMerge([{ name: 'x', state: 'ACTION_REQUIRED', bucket: 'fail' }]);
+  assert.strictEqual(r.merged, false);
+  assert.strictEqual(r.would_merge, undefined, 'not even a dry run may say it would land');
+  assert.ok(r.blockers.some((b) => /1 failing check\(s\)/.test(b)), r.blockers.join('; '));
+});
+
+test('a cancelled check is failing too — no verdict is not a passing verdict', () => {
+  const r = arMerge([{ name: 'x', state: 'CANCELLED', bucket: 'cancel' }]);
+  assert.strictEqual(r.would_merge, undefined);
+  assert.ok(r.blockers.some((b) => /1 failing check\(s\)/.test(b)), r.blockers.join('; '));
+});
+
+test('a row whose bucket the gate cannot read keeps it WAITING, not landing', () => {
+  // Fail closed: an unreadable check cannot be green. Pending costs only time —
+  // the ticket stays in `waiting.ci` and the next sync looks again.
+  const r = arMerge([{ name: 'x', state: 'WAITING' }]);
+  assert.strictEqual(r.would_merge, undefined);
+  assert.ok(r.blockers.some((b) => /1 check\(s\) still running/.test(b)), r.blockers.join('; '));
+});
+
+test('...and a green pipeline still lands (the control)', () => {
+  // Without this the three refusals above prove nothing: a gate that refuses
+  // everything would satisfy them.
+  const r = arMerge([{ name: 'x', state: 'SUCCESS', bucket: 'pass' }]);
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+test('a skipped check is neither failing nor pending, and does not hold the merge', () => {
+  const r = arMerge([
+    { name: 'x', state: 'SUCCESS', bucket: 'pass' },
+    { name: 'y', state: 'SKIPPED', bucket: 'skipping' },
+  ]);
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.checks.total, 2, 'a skip is still a check that existed');
 });
 
 for (const r of roots) {

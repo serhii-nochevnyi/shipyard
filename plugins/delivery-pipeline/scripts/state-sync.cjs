@@ -47,6 +47,7 @@ const { computeFront, formatFront, ciEstimates } = require(path.join(__dirname, 
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
 const { activeEscalations } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
+const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -106,7 +107,7 @@ function gh(args, { tolerate = false } = {}) {
 // an error: reading it through the strict helper above made state-sync abort on
 // exactly the red/pending PRs the babysit loop exists to service.
 function ghChecks(prNumber, repo) {
-  const args = ['pr', 'checks', String(prNumber), '--json', 'name,state'];
+  const args = ['pr', 'checks', String(prNumber), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
   const r = spawnSync('gh', args, { encoding: 'utf8' });
   const stdout = (r.stdout || '').trim();
@@ -276,10 +277,17 @@ for (const [id, t] of Object.entries(tickets)) {
       const gate = parseGate(pr.body);
       if (gate) entry.gate = gate;
       const { rows, none, note } = ghChecks(pr.number, repo);
+      // check-state.cjs classifies; this file only records. The KEYS are the
+      // board's contract — front.cjs's green test, escalation-record's
+      // fingerprint and the stop gate all read exactly these — so the tallies
+      // are copied across by name rather than spread in.
+      const c = classify(rows);
       entry.checks = {
-        total: rows.length,
-        failing: rows.filter((c) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT'].includes(c.state)).length,
-        pending: rows.filter((c) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(c.state)).length,
+        total: c.total,
+        failing: c.failing,
+        pending: c.pending,
+        // `none` comes from ghChecks, which reports it on the unreachable-gh
+        // branch too, where there are no rows to classify.
         none_reported: none,
       };
       if (note) entry.checks.note = note;

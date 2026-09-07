@@ -31,6 +31,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
+const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 // The checkpoint predicates live in front.cjs and are imported, not copied.
 // A `checkpointParentOf` used to exist here AND there, and the standing rule — the
 // board must never offer what the guard refuses — was held by nothing but the
@@ -125,17 +126,18 @@ function behindBy(base, head, repo) {
   return Number.isFinite(n) ? n : null;
 }
 
+// The vocabulary is check-state.cjs's, not this file's: the local list named
+// FAILURE/ERROR/CANCELLED/TIMED_OUT and PENDING/QUEUED/IN_PROGRESS/EXPECTED, so
+// every other state gh reports — ACTION_REQUIRED and STARTUP_FAILURE among them —
+// fell through both filters and the gate below read `0 failing, 0 pending` and
+// MERGED. The returned shape is unchanged; only who decides is.
 function ghChecks(pr, repo) {
-  const r = spawnSync('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', 'name,state'], { encoding: 'utf8' });
+  const r = spawnSync('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', CHECK_FIELDS], { encoding: 'utf8' });
   let rows = [];
   try { rows = JSON.parse((r.stdout || '').trim() || '[]'); } catch { rows = []; }
   if (!Array.isArray(rows)) rows = [];
-  return {
-    failing: rows.filter((c) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT'].includes(c.state)).length,
-    pending: rows.filter((c) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(c.state)).length,
-    total: rows.length,
-    none_reported: rows.length === 0,
-  };
+  const c = classify(rows);
+  return { failing: c.failing, pending: c.pending, total: c.total, none_reported: c.none_reported };
 }
 
 const defaultBranchCache = new Map();
