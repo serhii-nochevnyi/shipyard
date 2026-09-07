@@ -359,3 +359,10 @@
 {"ts":"2026-09-07T15:51:34.699Z","event":"attempt","ticket":"T-24-05","pr":44,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","signature":"none","head":"9345dd8e7eca57a203b3a6b53beafa045034367c","hypothesis":"The T-24-04/T-24-05 collision was a squash artifact rather than a divergence — T-24-04's full delta was already in this branch unsquashed as 753403e, so both rules survive by keeping this branch's edition of the two conflicted files, with the gate verdict deliberately ordered ahead of the no-CI hold; the one genuine merge injury was a silently duplicated smoke block, and the review thread was a real code/comment mismatch fixed inside the shared predicate rather than at its call site."}
 {"ts":"2026-09-07T15:51:39.447Z","event":"dispatch","ticket":"T-24-05","role":"arch-review","pr":44,"by":"dispatch-record"}
 {"ts":"2026-09-07T15:52:33.911Z","event":"degenerate_green","ticket":"T-24-05","pr":44,"findings":0,"modes":"none","head":"9345dd8e7eca57a203b3a6b53beafa045034367c"}
+{"ts":"2026-09-07T15:53:31.569Z","event":"status_change","ticket":"T-26-12","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T15:54:20.782Z","event":"dispatch","ticket":"T-24-05","role":"pr-sentinel","pr":44,"by":"dispatch-record"}
+{"ts":"2026-09-07T15:54:20.823Z","event":"dispatch","ticket":"T-24-06","role":"pr-sentinel","pr":45,"by":"dispatch-record"}
+{"ts":"2026-09-07T15:54:20.859Z","event":"dispatch","ticket":"T-24-07","role":"pr-sentinel","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T15:57:49.619Z","event":"status_change","ticket":"T-24-07","from":"pending","to":"pr-open","pr":46}
+{"ts":"2026-09-07T16:00:14.503Z","event":"flake_rerun","ticket":"T-24-06","signature":"a275aa38eec30f3e","head":"7a41955f62e07bd113b024a0345b6b570d010d75","outcome":"red","by":"failure-signature"}
+{"ts":"2026-09-07T16:00:19.534Z","event":"dispatch","ticket":"T-24-06","role":"ci-fix","pr":45,"by":"dispatch-record"}

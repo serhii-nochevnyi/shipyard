@@ -238,13 +238,19 @@
   since: "2026-09-07T15:16:32.589Z"
 "T-24-07":
   branch: "ticket/T-24-07-the-prose-names-only-what-the-scripts-im"
-  pr: null
-  status: "pending"
+  pr: 46
+  status: "pr-open"
+  draft: true
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/46"
+  pr_base: "ticket/T-24-06-the-guard-names-a-remedy-that-exists"
+  pr_created_at: "2026-09-07T15:53:55Z"
+  checks: {"total":1,"failing":1,"pending":0,"none_reported":false}
   base: "ticket/T-24-06-the-guard-names-a-remedy-that-exists"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
-  ready: true
+  merge_scope: "stacked"
   reapable: false
-  since: "2026-09-07T09:10:42.244Z"
+  since: "2026-09-07T15:57:49.619Z"
 "T-24-08":
   branch: "ticket/T-24-08-a-record-is-lifted-only-by-a-fact-its-ow"
   pr: 28
@@ -278,9 +284,7 @@
   status: "pending"
   base: "ticket/T-24-07-the-prose-names-only-what-the-scripts-im"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
-  ready: false
-  blocked_by: ["T-24-07"]
-  blocked_reasons: {"T-24-07":"parent has no branch yet (nothing to cascade from)"}
+  ready: true
   reapable: false
   since: "2026-09-07T09:49:26.042Z"
 "T-25-01":
@@ -434,3 +438,14 @@
   blocked_reasons: {"T-26-11":"parent has no branch yet (nothing to cascade from)","T-25-04":"cross-phase parent must land on main first (phase 25 epic still ahead)"}
   reapable: false
   since: "2026-09-07T10:25:41.319Z"
+"T-26-12":
+  branch: "ticket/T-26-12-a-wave-is-cut-to-a-concurrency-the-sessi"
+  pr: null
+  status: "pending"
+  base: "ticket/T-26-02-a-corrupt-configuration-permits-no-mutat"
+  epic: "epic/26-positive-evidence-before-a-mutation"
+  ready: false
+  blocked_by: ["T-26-02"]
+  blocked_reasons: {"T-26-02":"parent has no branch yet (nothing to cascade from)"}
+  reapable: false
+  since: "2026-09-07T15:53:31.569Z"

@@ -125,6 +125,10 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-42** — A wave is cut to a concurrency the session can afford: the front
   reports capacity, the loop dispatches no more than that, and a front held back
   by the cap is never a fixpoint.
+- **REQ-43** — Whether a ticket needs a drift check is COMPUTED against the base
+  the ticket is cut from, not judged against the integration branch.
+- **REQ-44** — A workflow returns a reference to a document, not the document:
+  what the orchestrator forwards but never reads must not enter its context.
 
 ## Phases
 

@@ -1,14 +1,20 @@
 {
   "tickets": {
     "T-24-05": {
-      "role": "arch-review",
-      "at": "2026-09-07T15:51:39.447Z",
+      "role": "pr-sentinel",
+      "at": "2026-09-07T15:54:20.782Z",
       "fingerprint": "f582370d91562f87",
       "pr": 44
     },
+    "T-24-06": {
+      "role": "ci-fix",
+      "at": "2026-09-07T16:00:19.534Z",
+      "fingerprint": "d873a81f500c1cac",
+      "pr": 45
+    },
     "T-24-07": {
-      "role": "executor",
-      "at": "2026-09-07T15:35:36.065Z",
+      "role": "pr-sentinel",
+      "at": "2026-09-07T15:54:20.859Z",
       "fingerprint": "95661a75aab94278",
       "pr": null
     }
