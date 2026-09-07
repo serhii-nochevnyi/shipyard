@@ -259,6 +259,68 @@ test('a symlinked config stays a symlink', () => {
   assert.ok(read(real).includes('[agents.shipyard-drift-check]'), 'the merge must reach the target');
 });
 
+// A DANGLING link is the same invariant over a link `realpathSync` refuses.
+// `~/.codex/config.toml` is a path dotfile managers symlink into a repo, and the
+// link dangles whenever that target is not there yet — a fresh checkout, a
+// volume not mounted. The old fallback returned the link's OWN path, so rename
+// replaced the link with a regular file, exit 0, and the config never reached
+// the target the link named.
+
+test('a dangling symlink is written THROUGH, not replaced', () => {
+  const s = scratch(null);
+  fs.mkdirSync(path.join(s.dir, 'dotfiles'));
+  const real = path.join(s.dir, 'dotfiles', 'config.toml');
+  // Relative, the way `stow` writes one: the target resolves against the LINK's
+  // directory, not the process cwd.
+  fs.symlinkSync(path.join('dotfiles', 'config.toml'), s.config);
+  assert.strictEqual(fs.existsSync(real), false, 'the fixture must start dangling');
+  const r = merge(s);
+  assert.strictEqual(r.status, 0, `exit ${r.status}: ${r.stderr}`);
+  assert.ok(fs.lstatSync(s.config).isSymbolicLink(),
+    'the dangling symlink was replaced by a regular file');
+  assert.ok(read(real).includes('[agents.shipyard-drift-check]'),
+    'the merge must land on the file the link names');
+  assert.deepStrictEqual(tmpLeftovers(s.dir), []);
+});
+
+test('a chain of symlinks is followed to its end', () => {
+  const s = scratch(null);
+  fs.mkdirSync(path.join(s.dir, 'dotfiles'));
+  const real = path.join(s.dir, 'dotfiles', 'config.toml');
+  const middle = path.join(s.dir, 'middle.toml');
+  fs.symlinkSync(real, middle);
+  fs.symlinkSync(middle, s.config);
+  const r = merge(s);
+  assert.strictEqual(r.status, 0, `exit ${r.status}: ${r.stderr}`);
+  assert.ok(fs.lstatSync(s.config).isSymbolicLink(), 'the first link must survive');
+  assert.ok(fs.lstatSync(middle).isSymbolicLink(), 'the second link must survive');
+  assert.ok(read(real).includes('[agents.shipyard-drift-check]'), 'the merge must reach the end of the chain');
+});
+
+test('a symlink whose target directory is missing is REFUSED', () => {
+  const s = scratch(null);
+  const real = path.join(s.dir, 'missing', 'config.toml');
+  fs.symlinkSync(real, s.config);
+  const r = merge(s);
+  assert.notStrictEqual(r.status, 0, `the merge must refuse, got exit 0: ${r.stdout}`);
+  assert.ok(/symlink/.test(r.stderr), `stderr must name the symlink, got: ${r.stderr}`);
+  assert.ok(fs.lstatSync(s.config).isSymbolicLink(), 'the symlink must be untouched');
+  assert.strictEqual(fs.existsSync(real), false, 'nothing may be created under a missing directory');
+  assert.deepStrictEqual(tmpLeftovers(s.dir), [], 'no temp file may be left behind');
+});
+
+test('a symlink loop is refused, not walked forever', () => {
+  const s = scratch(null);
+  const other = path.join(s.dir, 'loop.toml');
+  fs.symlinkSync(other, s.config);
+  fs.symlinkSync(s.config, other);
+  const r = merge(s, { timeout: 20000 });
+  assert.strictEqual(r.signal, null, 'the merge hung on the loop instead of refusing');
+  assert.notStrictEqual(r.status, 0, `the merge must refuse, got exit 0: ${r.stdout}`);
+  assert.ok(/symlink/.test(r.stderr), `stderr must name the symlink, got: ${r.stderr}`);
+  assert.ok(fs.lstatSync(s.config).isSymbolicLink(), 'the symlink must be untouched');
+});
+
 suite('merge-codex-config — an unhealthy checker is not evidence');
 
 // A `python3` that exists but cannot answer. On a fresh macOS `/usr/bin/python3`

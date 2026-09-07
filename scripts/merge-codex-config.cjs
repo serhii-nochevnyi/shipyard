@@ -307,10 +307,49 @@ function reparse(file) {
 // The path the bytes must land on. `rename` over a symlink replaces the link
 // with a regular file, so the link is resolved first and the merge reaches the
 // file the user actually keeps their config in.
+//
+// `realpathSync` answers that only for a link that RESOLVES. A DANGLING one — a
+// dotfiles repo not checked out yet, a target on a volume that is not mounted —
+// makes it throw, and the old fallback then named the LINK itself: the rename
+// swapped the dotfile manager's symlink for a regular file, exit 0, and the
+// config it was meant to write never reached the target at all. So the chain is
+// walked by hand: a link is followed to what it NAMES even when that does not
+// exist yet, which is what the ordinary write this rename replaced would have
+// done — only `rename(2)` refuses to follow links.
+//
+// Returns `{ target }` when there is a path the bytes can go to, or
+// `{ dangling, why }` when the walk ends somewhere they cannot. Writing anyway
+// is the one outcome ruled out, because it changes what the config file IS.
+const SYMLINK_HOPS = 40;
+
 function resolveTarget(p) {
-  try { return fs.realpathSync(p); } catch { /* absent, or a dangling link */ }
+  try { return { target: fs.realpathSync(p) }; } catch { /* absent, or a dangling link */ }
   const abs = path.resolve(p);
-  try { return path.join(fs.realpathSync(path.dirname(abs)), path.basename(abs)); } catch { return abs; }
+  let dir = path.dirname(abs);
+  try { dir = fs.realpathSync(dir); } catch { /* the directory is absent too */ }
+  let cur = path.join(dir, path.basename(abs));
+  let link = null;
+  for (let hop = 0; ; hop++) {
+    let st = null;
+    try { st = fs.lstatSync(cur); } catch { break; } // nothing there: the path to create
+    if (!st.isSymbolicLink()) break;                 // a real file: write to it
+    if (link === null) link = cur;
+    // A loop (`a` -> `b` -> `a`) has no end to walk to, and an installer must
+    // refuse rather than spin: lstat never fails on either hop.
+    if (hop >= SYMLINK_HOPS) {
+      return { dangling: link, why: `it never resolves (a symlink loop, or a chain deeper than ${SYMLINK_HOPS})` };
+    }
+    try { cur = path.resolve(path.dirname(cur), fs.readlinkSync(cur)); } catch (e) {
+      return { dangling: link, why: `its target could not be read: ${e && e.message}` };
+    }
+  }
+  // Only the LINK case is refused here. An ordinary absent path under an absent
+  // directory keeps the write's own ENOENT, as before — the installer mkdir -p's
+  // that directory a few lines earlier, so it is not a case we have to explain.
+  if (link !== null && !fs.existsSync(path.dirname(cur))) {
+    return { dangling: link, why: `it points at ${cur}, whose directory does not exist` };
+  }
+  return { target: cur };
 }
 
 // tmp + re-parse + rename. The original is never opened for writing, so every
@@ -387,9 +426,21 @@ function main() {
     );
   }
 
+  const resolved = resolveTarget(args.config);
+  if (resolved.dangling) {
+    fail(
+      `refusing to write ${args.config}: it is a symlink that does not resolve — ${resolved.why}.\n` +
+      '  An atomic write lands with rename(2), which does not follow a symlink, so writing here would\n' +
+      '  replace the link with a regular file — whatever manages it (a dotfiles repo, say) would\n' +
+      `  silently stop owning your config. Nothing was written; ${resolved.dangling} is untouched.\n` +
+      '  Create the target the link names (or fix the link), then re-run.'
+    );
+    return;
+  }
+
   let verdict;
   try {
-    verdict = writeVerified(resolveTarget(args.config), merged);
+    verdict = writeVerified(resolved.target, merged);
   } catch (e) {
     fail(`could not write ${args.config}: ${e && e.message}`);
     return;
