@@ -97,12 +97,17 @@ scope, re-verify locally, commit `fix(<T>): <what was wrong>`, push. A fix that
 needs out-of-scope changes is `escalate: out-of-scope` — park the PR, keep the
 others moving. Follow `references/ci-fix.md` — it is the same contract.
 
-**`base-merge`** — the base moved under the branch: `mergeStateStatus` is
-`DIRTY` or `BEHIND`, or `behind_by` is above zero. Every check on that branch was
-measured against a merge base that no longer exists, so `duty` puts this AHEAD of
-unresolved threads and of a still-running CI — a thread answered now is answered
-against the wrong diff. No agent and no model: run the script in the ticket's
-worktree yourself, then push and go to 1.
+**`base-merge`** — the base moved under the branch. TWO different facts with one
+remedy, and the duty does not blur them: `mergeStateStatus: BEHIND`, or
+`behind_by` above zero, is STALENESS — the branch is simply behind its base;
+`mergeStateStatus: DIRTY` is a merge CONFLICT — the two editions disagree about a
+line. `front.cjs`'s `baseMoved` reports them under different words for that
+reason, and the second is the one that can hand you real work rather than a
+fast-forward. Either way every check on that branch was measured against a merge
+base that no longer exists, so `duty` puts this AHEAD of unresolved threads and
+of a still-running CI — a thread answered now is answered against the wrong diff.
+No agent and no model: run the script in the ticket's worktree yourself, then
+push and go to 1.
 
 ```bash
 node $SHIPYARD_ROOT/scripts/base-merge.cjs <T> --worktree <worktree> --base <base ref>
