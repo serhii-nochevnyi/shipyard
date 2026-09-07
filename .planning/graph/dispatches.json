@@ -1,10 +1,64 @@
 {
   "tickets": {
-    "T-24-03": {
+    "T-24-04": {
       "role": "executor",
-      "at": "2026-09-07T10:13:41.024Z",
-      "fingerprint": "5f3d48bd56194ccc",
+      "at": "2026-09-07T13:33:47.793Z",
+      "fingerprint": "22e3f55dfd156fff",
       "pr": null
+    },
+    "T-24-10": {
+      "role": "executor",
+      "at": "2026-09-07T13:33:47.837Z",
+      "fingerprint": "593091d3643b9c2f",
+      "pr": null
+    },
+    "T-26-01": {
+      "role": "executor",
+      "at": "2026-09-07T13:33:47.877Z",
+      "fingerprint": "f908b8af4414d498",
+      "pr": null
+    },
+    "T-26-04": {
+      "role": "executor",
+      "at": "2026-09-07T13:33:47.915Z",
+      "fingerprint": "08e820e2f397cebd",
+      "pr": null
+    },
+    "T-26-06": {
+      "role": "executor",
+      "at": "2026-09-07T13:33:47.953Z",
+      "fingerprint": "e6953d1985957fb0",
+      "pr": null
+    },
+    "T-24-03": {
+      "role": "pr-sentinel",
+      "at": "2026-09-07T13:33:47.991Z",
+      "fingerprint": "df95e6e5090c22e2",
+      "pr": 32
+    },
+    "T-25-01": {
+      "role": "pr-sentinel",
+      "at": "2026-09-07T13:33:48.028Z",
+      "fingerprint": "c96a9004ac0f9315",
+      "pr": 33
+    },
+    "T-26-07": {
+      "role": "pr-sentinel",
+      "at": "2026-09-07T13:33:48.065Z",
+      "fingerprint": "4a7df2afea3a4cf4",
+      "pr": 34
+    },
+    "T-26-08": {
+      "role": "pr-sentinel",
+      "at": "2026-09-07T13:33:48.108Z",
+      "fingerprint": "daa876761232ad52",
+      "pr": 35
+    },
+    "T-26-09": {
+      "role": "pr-sentinel",
+      "at": "2026-09-07T13:33:48.143Z",
+      "fingerprint": "28d0aa844a5f53ab",
+      "pr": 36
     }
   }
 }

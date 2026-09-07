@@ -190,22 +190,27 @@
   since: "2026-09-07T10:48:12.287Z"
 "T-24-03":
   branch: "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro"
-  pr: null
-  status: "pending"
+  pr: 32
+  status: "pr-open"
+  draft: false
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/32"
+  pr_base: "epic/24-the-conveyor-stops-interrupting-itself"
+  pr_created_at: "2026-09-07T11:00:37Z"
+  gate: {"arch-review":"conform","drift-check":"skipped","degenerate-green":"8","checks":"green"}
+  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
   base: "epic/24-the-conveyor-stops-interrupting-itself"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
-  ready: true
+  merge_scope: "stacked"
   reapable: false
-  since: "2026-09-07T09:10:42.244Z"
+  since: "2026-09-07T11:00:54.452Z"
 "T-24-04":
   branch: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
   pr: null
   status: "pending"
   base: "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
-  ready: false
-  blocked_by: ["T-24-03"]
-  blocked_reasons: {"T-24-03":"parent has no branch yet (nothing to cascade from)"}
+  ready: true
   reapable: false
   since: "2026-09-07T09:10:42.244Z"
 "T-24-05":
@@ -265,9 +270,7 @@
   status: "pending"
   base: "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
-  ready: false
-  blocked_by: ["T-24-03"]
-  blocked_reasons: {"T-24-03":"parent has no branch yet (nothing to cascade from)"}
+  ready: true
   reapable: false
   since: "2026-09-07T09:10:42.244Z"
 "T-24-11":
@@ -283,13 +286,20 @@
   since: "2026-09-07T09:49:26.042Z"
 "T-25-01":
   branch: "ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor"
-  pr: null
-  status: "pending"
+  pr: 33
+  status: "pr-open"
+  draft: false
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/33"
+  pr_base: "epic/25-the-conveyor-follows-the-models-it-runs-on"
+  pr_created_at: "2026-09-07T13:31:33Z"
+  gate: {"arch-review":"conform","drift-check":"skipped","degenerate-green":"clean","checks":"green"}
+  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
   base: "epic/25-the-conveyor-follows-the-models-it-runs-on"
   epic: "epic/25-the-conveyor-follows-the-models-it-runs-on"
-  ready: true
+  merge_scope: "stacked"
   reapable: false
-  since: "2026-09-07T10:25:41.319Z"
+  since: "2026-09-07T13:32:25.968Z"
 "T-25-02":
   branch: "ticket/T-25-02-a-codex-agent-carries-effort-not-a-model"
   pr: null
@@ -297,8 +307,8 @@
   base: "ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor"
   epic: "epic/25-the-conveyor-follows-the-models-it-runs-on"
   ready: false
-  blocked_by: ["T-25-01","T-24-07"]
-  blocked_reasons: {"T-25-01":"parent has no branch yet (nothing to cascade from)","T-24-07":"cross-phase parent must land on main first (phase 24 epic still ahead)"}
+  blocked_by: ["T-24-07"]
+  blocked_reasons: {"T-24-07":"cross-phase parent must land on main first (phase 24 epic still ahead)"}
   reapable: false
   since: "2026-09-07T10:25:41.319Z"
 "T-25-03":
@@ -363,31 +373,50 @@
   since: "2026-09-07T10:25:41.319Z"
 "T-26-07":
   branch: "ticket/T-26-07-tuning-merges-another-owner-s-list-never"
-  pr: null
-  status: "pending"
+  pr: 34
+  status: "pr-open"
+  draft: true
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/34"
+  pr_base: "epic/26-positive-evidence-before-a-mutation"
+  pr_created_at: "2026-09-07T13:31:43Z"
+  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
   base: "epic/26-positive-evidence-before-a-mutation"
   epic: "epic/26-positive-evidence-before-a-mutation"
-  ready: true
+  merge_scope: "stacked"
   reapable: false
-  since: "2026-09-07T10:25:41.319Z"
+  since: "2026-09-07T13:32:25.968Z"
 "T-26-08":
   branch: "ticket/T-26-08-jira-identity-is-namespaced-by-repositor"
-  pr: null
-  status: "pending"
+  pr: 35
+  status: "pr-open"
+  draft: true
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/35"
+  pr_base: "epic/26-positive-evidence-before-a-mutation"
+  pr_created_at: "2026-09-07T13:31:51Z"
+  checks: {"total":1,"failing":0,"pending":1,"none_reported":false}
   base: "epic/26-positive-evidence-before-a-mutation"
   epic: "epic/26-positive-evidence-before-a-mutation"
-  ready: true
+  merge_scope: "stacked"
   reapable: false
-  since: "2026-09-07T10:25:41.319Z"
+  since: "2026-09-07T13:32:25.968Z"
 "T-26-09":
   branch: "ticket/T-26-09-workflow-input-is-validated-before-any-d"
-  pr: null
-  status: "pending"
+  pr: 36
+  status: "pr-open"
+  draft: false
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/36"
+  pr_base: "epic/26-positive-evidence-before-a-mutation"
+  pr_created_at: "2026-09-07T13:32:01Z"
+  gate: {"arch-review":"conform","drift-check":"skipped","degenerate-green":"clean","checks":"green"}
+  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
   base: "epic/26-positive-evidence-before-a-mutation"
   epic: "epic/26-positive-evidence-before-a-mutation"
-  ready: true
+  merge_scope: "stacked"
   reapable: false
-  since: "2026-09-07T10:25:41.319Z"
+  since: "2026-09-07T13:32:25.968Z"
 "T-26-10":
   branch: "ticket/T-26-10-left-behind-is-evidence-not-arithmetic"
   pr: null

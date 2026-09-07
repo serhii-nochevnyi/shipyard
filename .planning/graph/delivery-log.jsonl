@@ -154,3 +154,55 @@
 {"ts":"2026-09-07T10:47:17.375Z","event":"degenerate_green","ticket":"T-24-02","pr":31,"findings":0,"modes":"none"}
 {"ts":"2026-09-07T10:48:07.122Z","event":"merge","ticket":"T-24-02","pr":31,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel"}
 {"ts":"2026-09-07T10:48:12.287Z","event":"status_change","ticket":"T-24-02","from":"pr-open","to":"merged","pr":31}
+{"ts":"2026-09-07T11:00:41.450Z","event":"dispatch","ticket":"T-24-03","role":"pr-sentinel","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:00:54.452Z","event":"status_change","ticket":"T-24-03","from":"pending","to":"pr-open","pr":32}
+{"ts":"2026-09-07T11:02:07.886Z","event":"dispatch","ticket":"T-24-04","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:02:11.297Z","event":"dispatch","ticket":"T-24-10","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:02:14.529Z","event":"dispatch","ticket":"T-25-01","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:02:17.820Z","event":"dispatch","ticket":"T-26-01","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:02:21.076Z","event":"dispatch","ticket":"T-26-04","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:02:24.390Z","event":"dispatch","ticket":"T-26-06","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:02:28.012Z","event":"dispatch","ticket":"T-26-07","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:02:31.206Z","event":"dispatch","ticket":"T-26-08","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:02:34.356Z","event":"dispatch","ticket":"T-26-09","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:03:37.870Z","event":"dispatch","ticket":"T-24-04","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:03:37.912Z","event":"dispatch","ticket":"T-24-10","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:03:37.949Z","event":"dispatch","ticket":"T-25-01","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:03:37.987Z","event":"dispatch","ticket":"T-26-01","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:03:38.026Z","event":"dispatch","ticket":"T-26-04","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:03:38.068Z","event":"dispatch","ticket":"T-26-06","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:03:38.108Z","event":"dispatch","ticket":"T-26-07","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:03:38.152Z","event":"dispatch","ticket":"T-26-08","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:03:38.195Z","event":"dispatch","ticket":"T-26-09","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:03:38.229Z","event":"reuse_scan","ticket":"T-24-04 3","hits":"","verdict":"fresh"}
+{"ts":"2026-09-07T11:03:38.258Z","event":"reuse_scan","ticket":"T-24-10 2","hits":"","verdict":"fresh"}
+{"ts":"2026-09-07T11:03:38.289Z","event":"reuse_scan","ticket":"T-25-01 0","hits":"","verdict":"fresh"}
+{"ts":"2026-09-07T11:03:38.317Z","event":"reuse_scan","ticket":"T-26-01 0","hits":"","verdict":"fresh"}
+{"ts":"2026-09-07T11:03:38.345Z","event":"reuse_scan","ticket":"T-26-04 4","hits":"","verdict":"fresh"}
+{"ts":"2026-09-07T11:03:38.375Z","event":"reuse_scan","ticket":"T-26-06 1","hits":"","verdict":"fresh"}
+{"ts":"2026-09-07T11:03:38.407Z","event":"reuse_scan","ticket":"T-26-07 1","hits":"","verdict":"fresh"}
+{"ts":"2026-09-07T11:03:38.436Z","event":"reuse_scan","ticket":"T-26-08 0","hits":"","verdict":"fresh"}
+{"ts":"2026-09-07T11:03:38.466Z","event":"reuse_scan","ticket":"T-26-09 0","hits":"","verdict":"fresh"}
+{"ts":"2026-09-07T11:03:50.441Z","event":"dispatch","ticket":"T-24-03","role":"pr-sentinel","pr":32,"by":"dispatch-record"}
+{"ts":"2026-09-07T11:04:58.583Z","event":"base_merge","ticket":"T-24-03","pr":32,"base":"epic/24-the-conveyor-stops-interrupting-itself","head":"05f9a92c72055887130807e4a2daaa7872ec643b","note":"caught up on T-24-02 squash; 2 real conflicts in ghChecks/checksOf resolved by taking epic's newer null-vs-unreadable handling"}
+{"ts":"2026-09-07T11:08:31.509Z","event":"attempt","ticket":"T-24-03","pr":32,"n":1,"role":"review-fix","model":"sonnet","outcome":"pushed","signature":"none","head":"3295c70987ad81a01b9858af9d16f80a2463cd0d","hypothesis":"ci-wait.cjs silently drops a waiting.parent ticket with no parent_of entry once another watch target exists; refuse the whole wait on any orphan held ticket instead"}
+{"ts":"2026-09-07T11:10:14.977Z","event":"degenerate_green","ticket":"T-24-03","pr":32,"findings":8,"modes":"weakened_assertion:8"}
+{"ts":"2026-09-07T13:32:25.968Z","event":"status_change","ticket":"T-25-01","from":"pending","to":"pr-open","pr":33}
+{"ts":"2026-09-07T13:32:25.968Z","event":"status_change","ticket":"T-26-07","from":"pending","to":"pr-open","pr":34}
+{"ts":"2026-09-07T13:32:25.968Z","event":"status_change","ticket":"T-26-08","from":"pending","to":"pr-open","pr":35}
+{"ts":"2026-09-07T13:32:25.968Z","event":"status_change","ticket":"T-26-09","from":"pending","to":"pr-open","pr":36}
+{"ts":"2026-09-07T13:33:47.793Z","event":"dispatch","ticket":"T-24-04","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:33:47.837Z","event":"dispatch","ticket":"T-24-10","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:33:47.877Z","event":"dispatch","ticket":"T-26-01","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:33:47.915Z","event":"dispatch","ticket":"T-26-04","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:33:47.953Z","event":"dispatch","ticket":"T-26-06","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:33:47.991Z","event":"dispatch","ticket":"T-24-03","role":"pr-sentinel","pr":32,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:33:48.028Z","event":"dispatch","ticket":"T-25-01","role":"pr-sentinel","pr":33,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:33:48.065Z","event":"dispatch","ticket":"T-26-07","role":"pr-sentinel","pr":34,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:33:48.108Z","event":"dispatch","ticket":"T-26-08","role":"pr-sentinel","pr":35,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:33:48.143Z","event":"dispatch","ticket":"T-26-09","role":"pr-sentinel","pr":36,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:35:01.920Z","event":"degenerate_green","ticket":"T-24-03","pr":32,"findings":8,"modes":"weakened_assertion:8"}
+{"ts":"2026-09-07T13:35:59.907Z","event":"degenerate_green","ticket":"T-25-01","pr":33,"findings":0,"modes":"clean"}
+{"ts":"2026-09-07T13:36:29.507Z","event":"degenerate_green","ticket":"T-26-09","pr":36,"findings":0,"modes":"clean"}
+{"ts":"2026-09-07T13:38:01.254Z","event":"attempt","ticket":"T-26-07","pr":34,"n":1,"role":"review-fix","model":"sonnet","outcome":"pushed","signature":"none","head":"0e439fd73b56cd8138268439d06a08652b55e2f0","hypothesis":"Copilot's coverage gap was real: every agent_skills merge test used gsd-executor only, so a future edit could break gsd-planner unnoticed; added a mirroring test for gsd-planner reproducing the F22 case."}
+{"ts":"2026-09-07T13:41:04.384Z","event":"attempt","ticket":"T-26-08","pr":35,"n":1,"role":"review-fix","model":"sonnet","outcome":"pushed","signature":"none","head":"ddace856675729e74ca03c050f5ef6fdb5869c71","hypothesis":"Both Copilot findings were real: the Source of truth line never carried repo identity so the legacy-match check it described couldn't run, and 'repo slug' was introduced but never used by the label templates which took <owner>/<repo> separately. Rewrote the pointer template to carry <owner>/<repo> (written into legacy issues at migration time so a later run from a different repo sees the claim), and dropped the slug term in favor of <owner>/<repo> throughout."}
