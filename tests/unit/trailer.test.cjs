@@ -60,7 +60,11 @@ fs.writeFileSync(GH, [
   // The merge gate re-reads the PR from live GitHub by design — this IS the body
   // under test.
   '  "pr view 9 --json"*) cat "$SHIPYARD_TRAILER_PRVIEW" ;;',
-  '  "pr checks 9"*) echo \'[{"name":"build","state":"SUCCESS"}]\' ;;',
+  // gh returns its own `bucket` beside `state`, and check-state.cjs reads the
+  // bucket: a row without one is PENDING, so a bucket-less stub would have the
+  // gate refuse "1 check(s) still running" and none of the trailer cases below
+  // would ever reach the trailer.
+  '  "pr checks 9"*) echo \'[{"name":"build","state":"SUCCESS","bucket":"pass"}]\' ;;',
   // behindBy(): head...base, zero means the base has not moved.
   '  "api repos/{owner}/{repo}/compare/"*) echo 0 ;;',
   '  *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;',

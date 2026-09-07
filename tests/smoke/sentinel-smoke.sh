@@ -63,12 +63,19 @@ JSON
   "api repos/{owner}/{repo}/compare/ticket/T-01-02-child...ticket/T-01-01-root"*)
     echo "${SENTINEL_SMOKE_BEHIND:-0}" ;;
   "api repos/{owner}/{repo}/compare"*) echo 0 ;;
-  "pr checks 101"*) echo '[{"name":"build","state":"SUCCESS"}]' ;;
+  # Every row carries gh's own `bucket` beside its `state`. check-state.cjs reads
+  # the bucket and a row WITHOUT one is PENDING by its fail-closed rule, so a
+  # bucket-less fixture would park this whole smoke on "checks still running".
+  "pr checks 101"*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
   # The checkpoint-parent case drives PR 102 to green; the earlier duty cases
   # rely on it being red. Both are served: SENTINEL_SMOKE_GREEN_102 flips it.
   "pr checks 102"*)
-    if [ -n "${SENTINEL_SMOKE_GREEN_102:-}" ]; then echo '[{"name":"build","state":"SUCCESS"}]';
-    else echo '[{"name":"build","state":"FAILURE"}]'; exit 1; fi ;;
+    if [ -n "${SENTINEL_SMOKE_GREEN_102:-}" ]; then echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]';
+    # ACTION_REQUIRED on purpose: gh buckets it `fail`, and it was in NO
+    # hand-written list on the state-sync/sentinel side — it fell through both
+    # filters and the board read the PR as GREEN. This fixture pins the third
+    # consumer on that exact row, end to end (tally → ci-fix duty → refusal).
+    else echo '[{"name":"build","state":"ACTION_REQUIRED","bucket":"fail"}]'; exit 1; fi ;;
   # The merge gate re-reads the PR from live GitHub by design, so the stub has to
   # answer it for any merge-path assertion.
   "pr view 102 --json"*)

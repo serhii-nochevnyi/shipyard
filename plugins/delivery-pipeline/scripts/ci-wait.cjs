@@ -75,6 +75,7 @@ const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock
 // reimplemented: two stores that expire against the same subject must not come to
 // disagree about what "the PR moved" means.
 const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
+const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 
 const argv = process.argv.slice(2);
 const JSON_OUT = argv.includes('--json');
@@ -202,15 +203,32 @@ if (!watch.length) {
 // DATA, not an error. state-sync.cjs carries the same note; getting it wrong
 // makes a pending pipeline look like a broken command.
 function checksOf({ pr, repo }) {
-  const args = ['pr', 'checks', String(pr), '--json', 'state,name'];
+  const args = ['pr', 'checks', String(pr), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
   const r = spawnSync('gh', args, { encoding: 'utf8', timeout: 60000 });
+  const stdout = (r.stdout || '').trim();
   let rows;
-  try { rows = JSON.parse(r.stdout || '[]'); } catch { rows = null; }
+  if (stdout) {
+    try { rows = JSON.parse(stdout); } catch { rows = null; }
+  } else if (r.status === 0) {
+    rows = []; // gh succeeded and printed nothing — genuinely no checks
+  } else {
+    // Empty stdout AND a non-zero exit: gh did not answer at all (a missing
+    // binary, a network blip). `JSON.parse(r.stdout || '[]')` used to read
+    // this as `[]` regardless of status, which is exactly the null-vs-empty
+    // collapse the comment below warns against — fixed by not reaching it.
+    rows = null;
+  }
+  // `null` is UNREACHABLE THIS ROUND and is not the same fact as an empty list —
+  // check-state.cjs would happily count `[]` as "no checks reported", so the
+  // guard stays here, ahead of it.
   if (!Array.isArray(rows)) return null; // unreachable this round; try the next
-  const pending = rows.filter((c) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(c.state));
-  const failing = rows.filter((c) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(c.state));
-  return { total: rows.length, pending: pending.length, failing: failing.length };
+  // The vocabulary lives in check-state.cjs. This function used to carry its own
+  // list, and it was the only one of three that called ACTION_REQUIRED failing —
+  // three copies, three answers. The SHAPE stays {total, pending, failing}: it is
+  // what `--json` reports and what the settle test below reads.
+  const c = classify(rows);
+  return { total: c.total, pending: c.pending, failing: c.failing };
 }
 
 // HOW MANY EMPTY WINDOWS BEFORE A PERSON IS ASKED. Three at the default 15m is
