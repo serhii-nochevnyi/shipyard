@@ -52,6 +52,33 @@ script — not in a prompt.** Every requirement below is an instance of it.
   that has since been fixed is the same class of error the programme exists to
   remove: prose asserting a state the code does not have.
 
+- **REQ-15** — A dispatch or escalation record is lifted only by a fact its
+  OWNER moves: a guard's output for a dispatch, a human's fields for a park —
+  never by CI tallies.
+- **REQ-16** — The stop gate blocks every stop a cascade needs (one per round,
+  under a cap), and never blocks a session for a run that has ended or for a
+  dispatch that outlived a plausible launch.
+- **REQ-17** — Check state has ONE vocabulary, read from gh's own `bucket`;
+  anything unclassified is pending, never green.
+- **REQ-18** — Every wait the guard imposes is a bucket the front reports and an
+  owner the loop can dispatch: `waiting.parent` exists, and a moved base is a
+  `base-merge` duty with a workflow flag.
+- **REQ-19** — A gate verdict is bound to the head it judged; a trailer for a
+  head that is no longer the PR's is absent for duty, merge and front alike.
+- **REQ-20** — Merge verifies what the cache cannot know: no reported checks is
+  not green, the merged head is pinned, the stack is the phase's own, children
+  are retargeted from live PR data.
+- **REQ-21** — Review feedback is the CURRENT state (comments since the last
+  push, last verdict per reviewer), and `CHANGES_REQUESTED` with nothing to
+  resolve belongs to a person, not to a fixer.
+- **REQ-22** — `plan_defect` requires K distinct signatures with no green between
+  them, `unknown` never counts, and the attempt counter survives the session.
+- **REQ-23** — The CI waiter distinguishes a stalled pipeline from an unreachable
+  `gh`, clears only the settled ticket's record, and sizes its window from the
+  observed CI.
+- **REQ-24** — Prose names only what the scripts implement: no instruction
+  sanctions a wait, a bucket or an order of operations the code does not have.
+
 ## Phases
 
 ### Phase 20: Autonomy of the drive-to-green loop
@@ -107,3 +134,24 @@ The backlog lies the other way: six of its seven phase-20 entries describe
 defects that phases 21 and 22 fixed. A reader trusting it would re-do finished
 work — and the entry claiming this repository has no CI is now read by a
 repository that gained CI two releases ago.
+
+### Phase 24: The conveyor stops interrupting itself
+**Requirements**: REQ-15, REQ-16, REQ-17, REQ-18, REQ-19, REQ-20, REQ-21, REQ-22, REQ-23, REQ-24
+
+Decomposed from ADR-002. Phases 20–23 added the mechanisms a night needs; a
+full read of the result found that the interruptions left are mechanisms
+DISAGREEING about one fact, or deciding from the wrong datum. Three stores
+expire against a hash of the CI tallies, so every finished check lifts a
+guard's dispatch and every retarget lifts a human's park (REQ-15). The stop
+gate blocks once per turn where a cascade needs once per round, and reads
+journal events of any age (REQ-16). The guard says `wait-parent`, the front
+says `finalize`, and the waiter refuses to wait (REQ-18). Three hand-written
+check-state lists let `ACTION_REQUIRED` and `STARTUP_FAILURE` read as green
+(REQ-17), no checks at all is green (REQ-20), and a conform verdict outlives
+the diff it judged (REQ-19). `plan_defect` fires on three sequentially FIXED
+failures because the "no green" clause exists only in a comment (REQ-22).
+
+Everything crossing `sentinel.cjs`/`front.cjs` lands as one stacked chain —
+those two files are the seam every finding touches; the stores, the stop gate
+and the CI waiter land beside it. Every ticket carries a unit test that fails
+on the current code.
