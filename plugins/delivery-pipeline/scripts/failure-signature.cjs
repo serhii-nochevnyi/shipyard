@@ -46,10 +46,14 @@
 //     asserted from the day it was written while `computeVerdict` counted every
 //     signature the ticket had ever journalled. Three failures, each FIXED and
 //     each followed by a green, therefore parked a healthy ticket as a plan
-//     defect on the third. A green (ADR-002 D8: an `attempt` that came back
-//     green, a `merge`, a `flake_rerun` that passed) RESETS the set. And a
-//     failure nobody could READ is excluded from it outright: an `unknown-…`
-//     signature is one fact about the log, not a second fact about the plan.
+//     defect on the third. A green RESETS the set — ADR-002 D8 says "a green or
+//     a merge" and names no event, so `isGreen` below owns the list, and every
+//     entry in it is a shape some writer actually appends: a `merge`, an
+//     `attempt … outcome=green`, and a `flake` — what `rerun --outcome green`
+//     records when the one-shot re-run PASSED — until a `flake_lift` withdraws
+//     it. And a failure nobody could READ is excluded from it outright: an
+//     `unknown-…` signature is one fact about the log, not a second fact about
+//     the plan.
 //
 //  4. THE JOURNAL IS THE RECORD. The quarantine has no store of its own (D2's
 //     "no new subsystem", applied one decision over): `flake`, `flake_rerun` and
@@ -262,14 +266,35 @@ function readJournal(ticket) {
 }
 
 // What PROVES a green for this ticket, i.e. that the failures before it were
-// fixed (ADR-002 D8 names exactly these three). `merge` is the strongest form and
-// the only one the conveyor writes today; `attempt … outcome=green` is a round
-// that came back clean, and a `flake_rerun` that passed is a green for the job
-// that produced it. The caller has already filtered to one ticket's events, so a
-// neighbour's merge cannot reset this ticket's window.
-function isGreen(e) {
+// fixed. ADR-002 D8 says "a green or a merge" and names no event, so this list is
+// the file's own — and every entry has to be a shape some writer actually
+// appends: `merge`, the strongest form and the only one the conveyor writes
+// today; `attempt … outcome=green`, a round that came back clean; and `flake`,
+// which is what `rerun --outcome green` records when the one-shot re-run PASSED,
+// i.e. that job going green.
+//
+// It read `flake_rerun … outcome=green` first, and no permitted path can produce
+// that record: `rerun --outcome red` is the only writer of `flake_rerun` and
+// always writes `outcome: 'red'`, while log-event.cjs lists the event under
+// OWNED_BY_SCRIPTS and refuses a hand-written one. So the third reset was dead by
+// construction — the prose claimed it fired and nothing could ever fire it.
+//
+// A `flake` counts only while it STANDS. `flake_lift` says the signature "counts
+// as a real failure again", which withdraws the excuse and with it the green: a
+// lifted quarantine that still emptied the window would leave the very failure
+// it put back on the board reading `first` with `seen: 0` instead of `repeat`,
+// blinding the change-strategy consumer.
+//
+// The caller has already filtered to one ticket's events, so a neighbour's merge
+// cannot reset this ticket's window.
+function isGreen(e, i, lastLiftAt) {
   if (e.event === 'merge') return true;
-  return (e.event === 'attempt' || e.event === 'flake_rerun') && e.outcome === 'green';
+  if (e.event === 'attempt') return e.outcome === 'green';
+  if (e.event === 'flake') {
+    const lift = lastLiftAt.get(e.signature);
+    return lift === undefined || lift < i;
+  }
+  return false;
 }
 
 /**
@@ -299,6 +324,14 @@ function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
   let lastGreen = -1;         // the newest event proving the failures before it were fixed
   const priorAttempts = [];   // { at, signature } for every signed prior attempt
 
+  // A `flake_lift` retracts the green its `flake` recorded, so the lifts have to
+  // be known BEFORE the greens are read — one pass ahead of the main one, rather
+  // than a second lookup per event.
+  const lastLiftAt = new Map();
+  events.forEach((e, i) => {
+    if (e.event === 'flake_lift' && typeof e.signature === 'string') lastLiftAt.set(e.signature, i);
+  });
+
   events.forEach((e, i) => {
     if (e.event === 'flake' && e.signature === signature) lastFlake = i;
     else if (e.event === 'flake_lift' && e.signature === signature) lastLift = i;
@@ -308,7 +341,7 @@ function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
       priorAttempts.push({ at: i, signature: e.signature });
       if (e.signature === signature) lastSame = i;
     }
-    if (isGreen(e)) lastGreen = i;
+    if (isGreen(e, i, lastLiftAt)) lastGreen = i;
   });
 
   // The window is "since the last green", not "the whole journal minus greens":

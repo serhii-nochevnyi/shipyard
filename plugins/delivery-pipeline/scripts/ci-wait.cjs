@@ -218,14 +218,26 @@ if (!ciTickets.length && !heldTickets.length) {
 // refused above) nor in `waiting.ci`, i.e. its merge is a human's — and today the
 // stop gate's CI-only branch reads `waiting.ci` alone, so such a board ends the
 // run rather than spinning on it. T-24-09 owns the gate's half.
+// A held child with NO entry in `parent_of` is a stale or partial front, not a
+// ticket with nothing to watch: `front.cjs` writes `parent_of` for every id it
+// puts in `waiting.parent`, so a miss here means the two disagree about the
+// SAME board. That must refuse even when some other ticket gives this script a
+// watch target — otherwise the missing mapping is silently dropped the moment
+// anything else is waiting on CI, which is exactly the shape that hid a stale
+// front the longest: everything else on the board looked fine.
+const orphanHeld = heldTickets.filter((id) => !parentOf[id]);
+if (orphanHeld.length) {
+  refuse(`held behind a parent the board names no parent_of for (${orphanHeld.join(', ')})`,
+    'That is a board bug, not a wait: re-run state-sync.cjs.');
+}
+
 const watch = [];
 const byPr = new Map();
 const wanted = [
   ...ciTickets.map((id) => ({ ticket: id, via: null })),
-  ...heldTickets.map((id) => ({ ticket: parentOf[id] || null, via: id })),
+  ...heldTickets.map((id) => ({ ticket: parentOf[id], via: id })),
 ];
 for (const w of wanted) {
-  if (!w.ticket) continue; // a held child the board names no parent for — reported below
   const s = state[w.ticket];
   if (!s || !s.pr) continue;
   const key = `${s.repo || ''}#${s.pr}`;
@@ -255,8 +267,19 @@ function checksOf({ pr, repo }) {
   const args = ['pr', 'checks', String(pr), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
   const r = spawnSync('gh', args, { encoding: 'utf8', timeout: 60000 });
+  const stdout = (r.stdout || '').trim();
   let rows;
-  try { rows = JSON.parse(r.stdout || '[]'); } catch { rows = null; }
+  if (stdout) {
+    try { rows = JSON.parse(stdout); } catch { rows = null; }
+  } else if (r.status === 0) {
+    rows = []; // gh succeeded and printed nothing — genuinely no checks
+  } else {
+    // Empty stdout AND a non-zero exit: gh did not answer at all (a missing
+    // binary, a network blip). `JSON.parse(r.stdout || '[]')` used to read
+    // this as `[]` regardless of status, which is exactly the null-vs-empty
+    // collapse the comment below warns against — fixed by not reaching it.
+    rows = null;
+  }
   // `null` is UNREACHABLE THIS ROUND and is not the same fact as an empty list —
   // check-state.cjs would happily count `[]` as "no checks reported", so the
   // guard stays here, ahead of it.

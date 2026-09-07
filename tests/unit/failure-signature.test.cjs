@@ -63,12 +63,14 @@ const attempt = (sig, head, extra = {}) => ({
   ...extra,
 });
 
-// A green is what ENDS a run of failures, and ADR-002 D8 names the three journal
-// events that prove one: an `attempt` that came back green, a `merge`, and a
-// re-run that passed. Any of them RESETS the distinct window — three failures
-// each of which was fixed are not "K distinct signatures with no green between
-// them", which is the sentence failure-signature.cjs's own header has always
-// claimed and the code did not implement.
+// A green is what ENDS a run of failures. ADR-002 D8 says "a green or a merge"
+// and names no event, so the journal shapes that prove one belong to
+// failure-signature.cjs itself: an `attempt` that came back green, a `merge`, and
+// a `flake` — the record a re-run that PASSED leaves behind — for as long as no
+// `flake_lift` withdraws it. Any of them RESETS the distinct window: three
+// failures each of which was fixed are not "K distinct signatures with no green
+// between them", which is the sentence that file's own header has always claimed
+// and the code did not implement.
 const greenAttempt = (extra = {}) => ({
   ts: '2026-08-21T10:00:00.000Z',
   event: 'attempt',
@@ -319,12 +321,22 @@ test('a `merge` resets it too, and so does a green re-run', () => {
   assert.equal(verdict(project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']).distinct, 2,
     'the window starts after the merge: bbbb + cccc');
 
+  // Seeded through the WRITER, not by hand: "the re-run passed" lands on disk as
+  // a `flake` event, and the first cut of this test asserted the reset against a
+  // synthetic `{event: 'flake_rerun', outcome: 'green'}` — a record no permitted
+  // path produces, so it proved a reader branch nothing could ever reach.
   const other = scratch();
-  seed(other.graph, [
-    attempt('aaaa', 'h1'),
-    { ts: '2026-08-21T10:05:00.000Z', event: 'flake_rerun', ticket: 'T-20-01', signature: 'zzzz', head: 'h1', outcome: 'green' },
-    attempt('bbbb', 'h2'),
-  ]);
+  seed(other.graph, [attempt('aaaa', 'h1')]);
+  const r = run(
+    ['rerun', 'T-20-01', '--signature', 'zzzz', '--head', 'h1', '--outcome', 'green', '--job', 'unit'],
+    { cwd: other.project }
+  );
+  assert.equal(r.status, 0, `rerun must succeed (${r.stderr})`);
+  assert.equal(journalLines(other.graph)[1].event, 'flake',
+    'the shape under test is the one the writer appends');
+  fs.appendFileSync(
+    path.join(other.graph, 'delivery-log.jsonl'), JSON.stringify(attempt('bbbb', 'h2')) + '\n'
+  );
   assert.equal(verdict(other.project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']).distinct, 2,
     'a re-run that passed is a green as much as a merge is');
 });
@@ -446,8 +458,12 @@ test('the quarantine is scoped to (ticket, signature)', () => {
   const { project, graph } = scratch();
   seed(graph, [attempt('aaaa', 'h1')]);
   run(['rerun', 'T-20-01', '--signature', 'aaaa', '--head', 'h1', '--outcome', 'green'], { cwd: project, encoding: 'utf8' });
-  assert.equal(verdict(project, ['--signature', 'bbbb', '--head', 'h1']).verdict, 'progress',
+  const got = verdict(project, ['--signature', 'bbbb', '--head', 'h1']);
+  assert.notEqual(got.verdict, 'flake',
     'another signature on the same ticket is not quarantined');
+  // And the re-run that passed is a green, so it emptied the window behind it:
+  // `first`, not `progress`, is what "nothing on record since the green" reads as.
+  assert.equal(got.verdict, 'first');
 });
 
 test('`lift` ends the quarantine', () => {
@@ -456,8 +472,11 @@ test('`lift` ends the quarantine', () => {
   run(['rerun', 'T-20-01', '--signature', 'aaaa', '--head', 'h1', '--outcome', 'green'], { cwd: project, encoding: 'utf8' });
   const l = run(['lift', 'T-20-01', '--signature', 'aaaa'], { cwd: project, encoding: 'utf8' });
   assert.equal(l.status, 0, `lift must succeed (${l.stderr})`);
-  assert.equal(verdict(project, ['--signature', 'aaaa', '--head', 'h2']).verdict, 'repeat',
+  const got = verdict(project, ['--signature', 'aaaa', '--head', 'h2']);
+  assert.equal(got.verdict, 'repeat',
     'the signature is deterministic again, not quarantined');
+  assert.equal(got.seen, 1,
+    'the lift withdrew the green as well, so the failure it excused is back in the window');
 });
 
 test('a quarantine recorded AFTER a lift holds again', () => {
@@ -470,6 +489,33 @@ test('a quarantine recorded AFTER a lift holds again', () => {
     { ts: '2026-08-21T10:06:00.000Z', event: 'flake', ticket: 'T-20-01', signature: 'aaaa', head: 'h1' },
   ]);
   assert.equal(verdict(project, ['--signature', 'aaaa', '--head', 'h2']).verdict, 'flake');
+});
+
+test('a lifted `flake` stops being a green — the window it emptied comes back', () => {
+  // The green a `flake` records IS the re-run passing; `flake_lift` says the
+  // signature counts as a real failure again, which withdraws the excuse and with
+  // it the green. Ticket-wide, not just for the lifted signature: an unretracted
+  // lift would leave the window empty for every other failure too, and three real
+  // ones would read as `progress` while the board says the plan is wrong.
+  const events = [
+    attempt('aaaa', 'h1'),
+    { ts: '2026-08-21T10:05:00.000Z', event: 'flake', ticket: 'T-20-01', signature: 'aaaa', head: 'h1', job: 'unit', by: 'failure-signature' },
+    attempt('bbbb', 'h2'),
+  ];
+
+  const standing = scratch();
+  seed(standing.graph, events);
+  assert.equal(verdict(standing.project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']).distinct, 2,
+    'while the quarantine stands the flake is a green: bbbb + cccc');
+
+  const lifted = scratch();
+  seed(lifted.graph, [
+    ...events,
+    { ts: '2026-08-21T10:07:00.000Z', event: 'flake_lift', ticket: 'T-20-01', signature: 'aaaa' },
+  ]);
+  const got = verdict(lifted.project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']);
+  assert.equal(got.distinct, 3, 'the lift put aaaa back on the board: aaaa + bbbb + cccc');
+  assert.equal(got.verdict, 'plan_defect');
 });
 
 test('pre-phase attempt events with no signature are ignored, not fatal', () => {

@@ -29,15 +29,23 @@
 // EXPIRY, and why it is not optional. drift-record binds its verdict to the plan's
 // content hash so re-planning lifts the park by itself; a verdict that never
 // expired would be worse than none. The same rule applies here, over a different
-// subject: an escalation is a verdict about the PR AS IT STOOD. So it is bound to
-// a fingerprint of the delivery-state facts that a human acting would change —
-// status, draft, review_decision, the check tallies. The human pushes a fix,
-// answers the review, undrafts, and the fingerprint moves: the park lifts itself
-// and the run reconsiders. Nothing moves, and the park holds, because nothing HAS
-// changed since we gave up.
+// subject: an escalation is a verdict about the PR AS IT STOOD, addressed to a
+// PERSON. So it is bound to a fingerprint of the delivery-state facts THAT PERSON
+// would change — status, draft, review_decision, head. They push a fix, answer the
+// review, undraft, and the fingerprint moves: the park lifts itself and the run
+// reconsiders. Nothing moves, and the park holds, because nothing HAS changed
+// since we gave up.
 //
-// A ticket with no PR yet fingerprints over the little it has (status, branch), so
-// it simply stays parked until someone runs `clear`. That is the honest outcome
+// It used to be bound to the fingerprint the CI waiter uses, which hashes the
+// CHECK TALLIES as well — so a parent merging retargeted the child, the whole
+// pipeline re-ran, `pending` moved, and a verdict a human had been asked to give
+// lifted itself. review-fix and arch-review were then re-dispatched at that PR
+// with the reason gone (ADR-002 A8/D1). A tally is the conveyor moving, never the
+// person; the shared hash stays exported for the one consumer whose subject
+// really is the tallies, and the park has its own (`parkFingerprint`).
+//
+// A ticket with no PR yet fingerprints over the little it has (its status), so it
+// simply stays parked until someone runs `clear`. That is the honest outcome
 // for "the executor could not start" — there is no external event to wait for —
 // and it falls out of the same rule rather than needing a special case.
 //
@@ -76,6 +84,14 @@ const PLAN_DEFECT_PREFIX = 'plan_defect — re-decompose: ';
 // re-plan lifts. One home means the next kind cannot be described with another
 // kind's semantics — it either gets an entry here or gets the fallback.
 const LIFTS = {
+  // Byte-identical to what it always said, and deliberately so: the sentence
+  // already named exactly the facts a PERSON moves — a push, a review answer,
+  // undrafting — and never claimed a finished check lifts anything. It was the
+  // CODE that also lifted on a CI tick, so `parkFingerprint` below makes the code
+  // match the promise rather than the promise match the code. (Same class as
+  // `BEHIND` in sentinel.cjs: prose asserting a behaviour the code did not have.)
+  // Three byte-exact assertions in tests/unit/front.test.cjs and two quotations in
+  // deliver.md rest on this string.
   escalation: (id) =>
     `It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear ${id}\` to take it back.`,
   // Deliberately says nothing at all about the PR. A push or an answered review
@@ -128,10 +144,18 @@ function graphDir(cwd = process.cwd()) {
   return path.join(cwd, '.planning', 'graph');
 }
 
-// The facts a human acting on the PR would move. Deliberately built from what
-// delivery-state ALREADY carries: adding a field to state-sync's bulk `gh pr list`
-// window is what made a monorepo sync take 41s instead of 7s, and state-sync runs
-// on every babysit round.
+// THE SHARED HASH, FROZEN. Every delivery-state fact that moves for any reason at
+// all, tallies included. `ci-wait.cjs` counts its empty windows against this and
+// is right to: there, a tally change IS the event being waited for. Nothing else
+// may use it (the park below and dispatch-record each have their own), and its
+// OUTPUT must not change — the waiter's store on disk is keyed by it, so a new
+// field or a reordered element silently resets every count and the waiter then
+// escalates a pipeline that is moving fine. Pinned in
+// tests/unit/escalation-record.test.cjs.
+//
+// Deliberately built from what delivery-state ALREADY carries: adding a field to
+// state-sync's bulk `gh pr list` window is what made a monorepo sync take 41s
+// instead of 7s, and state-sync runs on every babysit round.
 function fingerprint(s = {}) {
   const c = s.checks || {};
   return crypto.createHash('sha256').update(JSON.stringify([
@@ -141,6 +165,33 @@ function fingerprint(s = {}) {
     s.pr || null,
     c.failing || 0, c.pending || 0, c.total || 0,
     s.branch || null,
+  ])).digest('hex').slice(0, 16);
+}
+
+// THE PARK'S OWN HASH: the facts a PERSON moves on a PR they have been asked to
+// judge, and only those.
+//
+//   * `review_decision`, `draft`, `head_sha` — answering the review, undrafting,
+//     pushing. The three acts the park's own sentence names.
+//   * `status` — they closed it, or it landed.
+//   * `pr` — the verdict was about THAT pull request; a different number is a
+//     different subject, not a moved one.
+//
+// Excluded, each for a reason: `checks.*`, because a re-run is the conveyor
+// moving and lifting on it is the defect this function exists to fix; `pr_base`,
+// because the conveyor retargets cascade children; `branch`, because it comes
+// from tickets.json and moves on re-decomposition rather than by anyone's hand.
+//
+// `head_sha` is recorded by state-sync from T-24-04 on. Absent, it hashes as null
+// on both sides, so a park written before it exists simply expires on the other
+// fields — no migration, no special case.
+function parkFingerprint(s = {}) {
+  return crypto.createHash('sha256').update(JSON.stringify([
+    s.status || null,
+    s.draft === true,
+    s.review_decision || null,
+    s.head_sha || null,
+    s.pr || null,
   ])).digest('hex').slice(0, 16);
 }
 
@@ -217,8 +268,18 @@ function activeParks(cwd = process.cwd(), state = null) {
     }
 
     // No kind (every record written before plan_defect existed) — the original
-    // rule, unchanged: the verdict was about the PR as it stood.
-    if (rec.fingerprint && fingerprint(s) !== rec.fingerprint) continue; // a human moved it
+    // rule: the verdict was about the PR as it stood, so it lifts when the PERSON
+    // it was addressed to moves it.
+    //
+    // WHICH hash comes from the record, never from this code's idea of the current
+    // one. A park written before the tallies were split out is bound to the shared
+    // hash, and re-reading it under the new rule would change a verdict already on
+    // disk — it keeps the old rule until it lifts, which is a store migration
+    // avoided rather than deferred.
+    if (rec.fingerprint) {
+      const current = rec.fingerprint_kind === 'park' ? parkFingerprint(s) : fingerprint(s);
+      if (current !== rec.fingerprint) continue; // a human moved it
+    }
     out[id] = { kind: 'escalation', reason: rec.reason || 'escalated to a human' };
   }
   return out;
@@ -330,7 +391,12 @@ if (require.main === module) {
     mutate(cwd, (store) => {
       store.tickets[ticket] = {
         reason: reason.join(' '),
-        fingerprint: fingerprint(s),
+        fingerprint: parkFingerprint(s),
+        // Which hash the line above is, so a reader upgrading over an existing
+        // store compares each record with the rule it was written under. No
+        // `kind` here on purpose: `activeParks` derives `escalation` from the
+        // rule that expired the park, and a stored one could disagree with it.
+        fingerprint_kind: 'park',
         pr: s.pr || null,
         at: new Date().toISOString(),
       };
@@ -344,7 +410,11 @@ if (require.main === module) {
       };
     });
 
-    console.log(`escalation recorded for ${ticket} — it stays parked until a human moves the PR, or you run \`clear\``);
+    console.log(
+      `escalation recorded for ${ticket} — it stays parked until a human moves the PR ` +
+      '(a push, a review answer, an undraft, a close), or you run `clear`. ' +
+      'A finished check does not lift it: that is the conveyor moving, not a person.'
+    );
   } else if (cmd === 'mark-plan-defect') {
     const { rest: positional, signatures } = takeSignatures(rest);
     const [ticket, plan, ...reason] = positional;
@@ -420,4 +490,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { activeParks, activeEscalations, fingerprint, escalationWhy };
+module.exports = { activeParks, activeEscalations, fingerprint, parkFingerprint, escalationWhy };
