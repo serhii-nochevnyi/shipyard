@@ -106,6 +106,17 @@ function gh(args, { tolerate = false } = {}) {
 // printing the requested JSON on stdout. A non-zero exit is therefore DATA, not
 // an error: reading it through the strict helper above made state-sync abort on
 // exactly the red/pending PRs the babysit loop exists to service.
+//
+// But a non-zero exit with NOTHING parseable on stdout is a different fact
+// again: gh itself failed to answer (an old `gh` rejecting `bucket`, a network
+// blip), and that is not "this PR has no checks" either. Collapsing the two
+// into the same `{ rows: [], none: true }` shape made `classify([])` read
+// `none_reported: true, failing: 0, pending: 0` — the exact tally the merge
+// gate treats as unblocked — off a call that never actually answered. Only an
+// exit-0 call with empty output means "no checks"; anything else unreadable
+// returns a synthetic unknown-bucket row, which `classify` already fails
+// closed to `pending`, so the caller waits and re-ticks instead of merging on
+// silence.
 function ghChecks(prNumber, repo) {
   const args = ['pr', 'checks', String(prNumber), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
@@ -119,7 +130,7 @@ function ghChecks(prNumber, repo) {
   }
   if (r.status === 0) return { rows: [], none: true };
   const why = (r.stderr || '').trim().split('\n')[0] || `gh pr checks exited ${r.status}`;
-  return { rows: [], none: true, note: why };
+  return { rows: [{ bucket: 'unreadable' }], none: false, note: why };
 }
 
 const { config: cfg, warnings: cfgWarnings } = loadConfig(ROOT);
@@ -286,8 +297,10 @@ for (const [id, t] of Object.entries(tickets)) {
         total: c.total,
         failing: c.failing,
         pending: c.pending,
-        // `none` comes from ghChecks, which reports it on the unreachable-gh
-        // branch too, where there are no rows to classify.
+        // `none` comes from ghChecks, and is true ONLY for a genuine exit-0
+        // empty answer — an unreachable/unparseable `gh` call now reports a
+        // synthetic unreadable row instead, so it lands in `c.pending`, not
+        // here.
         none_reported: none,
       };
       if (note) entry.checks.note = note;

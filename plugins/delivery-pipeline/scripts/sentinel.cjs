@@ -131,11 +131,28 @@ function behindBy(base, head, repo) {
 // every other state gh reports — ACTION_REQUIRED and STARTUP_FAILURE among them —
 // fell through both filters and the gate below read `0 failing, 0 pending` and
 // MERGED. The returned shape is unchanged; only who decides is.
+//
+// A `gh` invocation that FAILED (non-zero exit with nothing parseable on
+// stdout — an old `gh` rejecting `bucket`, a network blip, a missing binary)
+// is not the same fact as "this PR genuinely has no checks configured", and
+// must not collapse into it: that collapse is what let a startup failure read
+// as green above. Only an exit-0 call with empty/`[]` output means "no
+// checks"; anything else unreadable becomes a single synthetic row with an
+// unknown bucket, which `classify` already fails closed to `pending` — so the
+// merge gate re-ticks instead of merging on silence.
 function ghChecks(pr, repo) {
   const r = spawnSync('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', CHECK_FIELDS], { encoding: 'utf8' });
-  let rows = [];
-  try { rows = JSON.parse((r.stdout || '').trim() || '[]'); } catch { rows = []; }
-  if (!Array.isArray(rows)) rows = [];
+  const stdout = (r.stdout || '').trim();
+  let rows = null;
+  if (stdout) {
+    try {
+      const parsed = JSON.parse(stdout);
+      if (Array.isArray(parsed)) rows = parsed;
+    } catch { /* fall through to the unreadable branch below */ }
+  } else if (r.status === 0) {
+    rows = []; // gh succeeded and reported nothing — genuinely no checks
+  }
+  if (rows === null) rows = [{ bucket: 'unreadable' }];
   const c = classify(rows);
   return { failing: c.failing, pending: c.pending, total: c.total, none_reported: c.none_reported };
 }
