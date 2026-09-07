@@ -136,10 +136,14 @@ function behindBy(base, head, repo) {
 // stdout — an old `gh` rejecting `bucket`, a network blip, a missing binary)
 // is not the same fact as "this PR genuinely has no checks configured", and
 // must not collapse into it: that collapse is what let a startup failure read
-// as green above. Only an exit-0 call with empty/`[]` output means "no
-// checks"; anything else unreadable becomes a single synthetic row with an
-// unknown bucket, which `classify` already fails closed to `pending` — so the
-// merge gate re-ticks instead of merging on silence.
+// as green above. ANY stdout that parses to an array is authoritative and
+// used as-is, EMPTY OR NOT and regardless of exit status — a non-zero exit
+// with valid JSON is normal (the docstring above: exit code is data, not an
+// error). Only when there is nothing parseable to trust does exit status
+// decide: exit 0 with empty output means "no checks"; anything else
+// unreadable becomes a single synthetic row with an unknown bucket, which
+// `classify` already fails closed to `pending` — so the merge gate re-ticks
+// instead of merging on silence.
 function ghChecks(pr, repo) {
   const r = spawnSync('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', CHECK_FIELDS], { encoding: 'utf8' });
   const stdout = (r.stdout || '').trim();

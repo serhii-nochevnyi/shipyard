@@ -206,8 +206,19 @@ function checksOf({ pr, repo }) {
   const args = ['pr', 'checks', String(pr), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
   const r = spawnSync('gh', args, { encoding: 'utf8', timeout: 60000 });
+  const stdout = (r.stdout || '').trim();
   let rows;
-  try { rows = JSON.parse(r.stdout || '[]'); } catch { rows = null; }
+  if (stdout) {
+    try { rows = JSON.parse(stdout); } catch { rows = null; }
+  } else if (r.status === 0) {
+    rows = []; // gh succeeded and printed nothing — genuinely no checks
+  } else {
+    // Empty stdout AND a non-zero exit: gh did not answer at all (a missing
+    // binary, a network blip). `JSON.parse(r.stdout || '[]')` used to read
+    // this as `[]` regardless of status, which is exactly the null-vs-empty
+    // collapse the comment below warns against — fixed by not reaching it.
+    rows = null;
+  }
   // `null` is UNREACHABLE THIS ROUND and is not the same fact as an empty list —
   // check-state.cjs would happily count `[]` as "no checks reported", so the
   // guard stays here, ahead of it.

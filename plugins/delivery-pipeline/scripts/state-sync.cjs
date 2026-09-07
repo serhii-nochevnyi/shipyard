@@ -112,11 +112,13 @@ function gh(args, { tolerate = false } = {}) {
 // blip), and that is not "this PR has no checks" either. Collapsing the two
 // into the same `{ rows: [], none: true }` shape made `classify([])` read
 // `none_reported: true, failing: 0, pending: 0` — the exact tally the merge
-// gate treats as unblocked — off a call that never actually answered. Only an
-// exit-0 call with empty output means "no checks"; anything else unreadable
-// returns a synthetic unknown-bucket row, which `classify` already fails
-// closed to `pending`, so the caller waits and re-ticks instead of merging on
-// silence.
+// gate treats as unblocked — off a call that never actually answered. ANY
+// stdout that parses to an array is trusted as-is, EMPTY OR NOT and whatever
+// the exit code — a non-zero exit with valid JSON is the normal case above,
+// not an error. Only when nothing parses does exit status decide: exit 0 with
+// empty output means "no checks"; anything else unreadable returns a
+// synthetic unknown-bucket row, which `classify` already fails closed to
+// `pending`, so the caller waits and re-ticks instead of merging on silence.
 function ghChecks(prNumber, repo) {
   const args = ['pr', 'checks', String(prNumber), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
