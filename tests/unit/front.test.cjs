@@ -1256,4 +1256,86 @@ test('a checkpoint outranks the no-CI hold — a person holds that one for anoth
   assert.deepStrictEqual(f.waiting.merge_human, []);
 });
 
+suite('front — CHANGES_REQUESTED with no thread left is a person\'s, not a fixer\'s');
+
+// A reviewer who requested changes in a summary comment — or a bot whose threads
+// were all resolved while its verdict stood — leaves ZERO threads. The board
+// called that "review not settled" and offered it as `finalize`, the guard sent
+// review-fix, and review-fix returned having done nothing: the signature
+// repeated until the attempt budget escalated the ticket. Nobody owed work; a
+// person held the key. One predicate, two readers, like checkpointParent.
+
+const crState = (over = {}) => ({
+  T: {
+    ...landed, review_decision: 'CHANGES_REQUESTED', ...over,
+  },
+});
+
+test('threads 0 → waiting.human, and the reason names what a person must do', () => {
+  const f = computeFront({ T: {} }, crState({ unresolved_count: 0 }), { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.human, ['T']);
+  assert.strictEqual(f.actionable_count, 0, 'a fixer has nothing to service here');
+  assert.ok(/re-review or dismiss/.test(f.why.T), f.why.T);
+});
+
+test('threads 1 → unchanged: the review work is still the run\'s', () => {
+  const f = computeFront({ T: {} }, crState({ unresolved_count: 1 }), { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.human, []);
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+});
+
+test('an UNKNOWN thread count is not zero — the board does not park on a guess', () => {
+  const f = computeFront({ T: {} }, crState(), { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.human, []);
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+});
+
+test('and a checkpoint still outranks it — that person is being waited for already', () => {
+  const f = computeFront(
+    { T: { human_checkpoint: true } }, crState({ unresolved_count: 0 }), { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.waiting.human, ['T']);
+  assert.ok(/human_checkpoint/.test(f.why.T), f.why.T);
+});
+
+suite('front — a base that moved is base-merge work, and says so');
+
+// The remedy for a moved base was reachable by prose alone: `mergeOne` refused
+// with a message, the duty had no action for it, and the board offered the merge
+// the gate was about to refuse. Both readers now name the same fix, through the
+// same predicate.
+
+test('GitHub\'s own BEHIND verdict is fix work whose reason names base-merge.cjs', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed, merge_state: 'BEHIND' } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.deepStrictEqual(f.actionable.merge, [], 'the guard would refuse that merge');
+  assert.ok(/base-merge/.test(f.why.T), f.why.T);
+});
+
+test('a commit count alone is enough — a stale-but-clean branch reports CLEAN', () => {
+  // mergeStateStatus only says BEHIND where branch protection requires
+  // up-to-date branches; elsewhere the compare is the only witness.
+  const f = computeFront({ T: {} }, { T: { ...landed, merge_state: 'CLEAN', behind_by: 3 } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.ok(/3 commit/.test(f.why.T), f.why.T);
+});
+
+test('DIRTY is the same duty with a different word — conflicts, not staleness', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed, merge_state: 'DIRTY' } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.ok(/conflict/.test(f.why.T), f.why.T);
+});
+
+test('a red PR is still ci-fix work first — the failing check is the louder fact', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed, checks: checks(2, 0), merge_state: 'BEHIND' } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.ok(/failing check/.test(f.why.T), f.why.T);
+});
+
+test('CLEAN and zero behind is untouched (the control)', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed, merge_state: 'CLEAN', behind_by: 0 } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+  assert.deepStrictEqual(f.actionable.fix, []);
+});
+
 done();

@@ -16,7 +16,10 @@
 //   actionable now (work the run can start this second, no waiting involved):
 //     execute   — undelivered, ready, no branch yet
 //     publish   — branch pushed, PR missing (an executor died between the two)
-//     fix       — open PR with failing checks
+//     fix       — open PR with failing checks, or one whose BASE HAS MOVED (the
+//                 remedy is base-merge, and the guard's duty says so by name:
+//                 every other answer about such a PR measures a merge base that
+//                 no longer exists)
 //     finalize  — open PR, checks green: threads/arch-review/conform gate/undraft
 //     merge     — open PR green + conform, targeting the STACK (epic/parent):
 //                 the sentinel squashes it in (auto-merge only, see below)
@@ -37,8 +40,11 @@
 //                   integration branch, or NO checks were reported at all — see
 //                   noCiHold: "nothing ran" is not a green the run may land on)
 //     human     — a human_checkpoint ticket that has cleared its gate and whose
-//                 judgement nobody has supplied yet (a person holds the key), or
-//                 a child held behind an OPEN checkpoint parent until it lands
+//                 judgement nobody has supplied yet (a person holds the key), a
+//                 child held behind an OPEN checkpoint parent until it lands, or
+//                 a PR whose CHANGES_REQUESTED verdict stands with NO unresolved
+//                 thread left — a fixer has nothing to service there, only a
+//                 reviewer can re-review or dismiss it
 //     blocked   — dependencies unsatisfied, or parked by the run (--parked)
 //     done      — merged
 //
@@ -151,6 +157,79 @@ const NO_CI_WHY = 'no CI checks were reported — nothing ran, so "green" here i
   + 'rather than evidence. Either confirm this repo has no CI '
   + '(`delivery_pipeline.merge_without_ci: true`) or wait for the checks to register; until then the merge '
   + 'is a human\'s.';
+
+// ── the verdict a fixer cannot service, in the same ONE home ────────────────
+//
+// A review DECISION outlives the threads it was filed with: a reviewer who
+// requested changes in a summary comment, or a bot whose threads were all
+// resolved while its verdict stood, leaves CHANGES_REQUESTED with ZERO
+// unresolved threads. Both readers used to send a fixer at that state — the
+// guard as `review-fix`, the board as `finalize` ("review not settled") — and
+// the fixer returned having done nothing, because there was nothing to service:
+// the threads are closed and the verdict is not lifted by resolving them or by
+// pushing. The signature then repeated until the attempt budget escalated a
+// ticket nobody owed work on.
+//
+// The owner is a PERSON, so this is `waiting.human` and not `parked`: nobody
+// owes work, a reviewer holds the key.
+//
+// UNKNOWN is not zero. The count comes from a GraphQL call that can fail, and
+// "we could not read the threads" must fail towards the work — parking a PR on a
+// human over an API hiccup is the more expensive mistake. Only a real 0 routes.
+function reviewStandsAlone(reviewDecision, unresolvedCount) {
+  if (reviewDecision !== 'CHANGES_REQUESTED') return false;
+  return unresolvedCount === 0;
+}
+
+// ONE sentence, quoted by both readers. It has to name the ACT that lifts the
+// state, or the reader is told to wait with no idea for what.
+const REVIEW_STANDS_WHY = 'CHANGES_REQUESTED stands with no unresolved thread — a reviewer must re-review '
+  + 'or dismiss the verdict. A fixer has nothing to service: every thread is closed, and the verdict is '
+  + 'lifted neither by resolving them nor by pushing.';
+
+// ── the base moved under the branch, in the same ONE home again ─────────────
+//
+// A green measured against a base that has since MOVED is not a green:
+// retargeting a cascade child updates where it points and re-runs nothing, so
+// its check result still describes a merge base that no longer exists.
+// `sentinel.cjs merge` has refused on this since T-24-05 — with a message and no
+// action, while the board went on offering the merge that refusal was waiting
+// for. One predicate, two readers, and the remedy is named rather than described.
+//
+// TWO signals, because neither alone suffices (the merge gate's own reasoning):
+// `merge_state` is GitHub's `mergeStateStatus`, authoritative but reported as
+// BEHIND only where branch protection requires up-to-date branches; `behind_by`
+// is our own `gh api compare` count, which works everywhere but is a second
+// opinion rather than a verdict. DIRTY is the third state and a different fact —
+// conflicts, not staleness — with the same remedy and a different sentence.
+function baseMoved(facts) {
+  const f = facts || {};
+  const st = String(f.merge_state || '').toUpperCase();
+  const n = Number(f.behind_by);
+  const behind = Number.isFinite(n) && n > 0 ? n : null;
+  if (st === 'DIRTY') return { kind: 'dirty', behind };
+  if (st === 'BEHIND') return { kind: 'behind', behind };
+  if (behind !== null) return { kind: 'behind', behind };
+  return null;
+}
+
+// The remedy, as a command and not as a description. `base-merge.cjs` takes the
+// base's edition for conflicts in files the ticket does not declare and leaves
+// the real ones for judgement; the anti-rebase rule travels with it, because a
+// pushed branch rebased is a force-push that dismisses approvals and re-anchors
+// every thread the round just resolved.
+function baseMergeWhy(moved, base) {
+  const where = base ? `\`${base}\`` : 'its base';
+  const how = 'In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` '
+    + '(or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a '
+    + 'force-push that dismisses approvals and re-anchors resolved threads.';
+  if (moved.kind === 'dirty') {
+    return `merge conflicts with ${where} — the base moved and the two editions disagree. ${how}`;
+  }
+  const far = moved.behind !== null ? `${moved.behind} commit(s)` : 'some commits';
+  return `the base moved: ${where} is ${far} ahead of this branch, so any green here was measured against a `
+    + `merge base that no longer exists. ${how}`;
+}
 
 const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
 const SENTINEL_BUCKETS = ['fix', 'finalize', 'merge'];
@@ -329,6 +408,16 @@ function computeFront(tickets, state, opts = {}) {
       if ((c.failing || 0) > 0) {
         actionable.fix.push(id);
         why[id] = `PR #${s.pr}: ${c.failing} failing check(s)`;
+      } else if (baseMoved(s)) {
+        // Same bucket as a failing check and the same owner (the guard), because
+        // it is the same shape of work: something has to change on the branch
+        // before anything else about it means anything. Placed AFTER the failing
+        // branch on purpose — a red check is the louder fact and the fixer sees
+        // the stale base in its own dispatch either way — and BEFORE `waiting.ci`,
+        // because a run measuring a moved base is a run to restart, not to wait
+        // for. `dutyItems` orders the same two facts the same way.
+        actionable.fix.push(id);
+        why[id] = `PR #${s.pr}: ${baseMergeWhy(baseMoved(s), s.pr_base || s.base)}`;
       } else if ((c.pending || 0) > 0) {
         waiting.ci.push(id);
         why[id] = `PR #${s.pr}: ${c.pending} check(s) still running`;
@@ -355,6 +444,19 @@ function computeFront(tickets, state, opts = {}) {
         // stacked base) is still enforced there, exactly as for any other ticket.
         waiting.human.push(id);
         why[id] = `PR #${s.pr}: human_checkpoint — awaiting approval/merge`;
+      } else if (reviewStandsAlone(s.review_decision, s.unresolved_count)) {
+        // A verdict with nothing behind it to service. `waiting.human`, NOT
+        // parked: nobody owes work, a reviewer holds the key — the same class as
+        // a child held behind an open checkpoint parent. Placed after the
+        // checkpoint branch because that person is already being waited for, and
+        // after the draft branches because a draft still owes arch-review and the
+        // conform gate, which are real work whatever the reviewer said.
+        //
+        // The thread count is state's (`unresolved_count`); the guard reads it
+        // live off the same `reviewers.cjs unresolved` call it already makes. The
+        // predicate is shared so the two cannot disagree about the same PR.
+        waiting.human.push(id);
+        why[id] = `PR #${s.pr}: ${REVIEW_STANDS_WHY}`;
       } else if (autoMerge && gateConform(s) && s.merge_scope === 'stacked' && checkpointParent(id)) {
         // Ready in every respect, and still not the run's to land: the base is a
         // parent whose ticket is a human_checkpoint with an OPEN PR. Squashing
@@ -812,7 +914,13 @@ function formatFront(front) {
   return lines;
 }
 
-module.exports = { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, noCiHold, NO_CI_WHY };
+module.exports = {
+  computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, noCiHold, NO_CI_WHY,
+  // Shared with sentinel.cjs for the same reason as everything above it: the
+  // board must never offer what the guard refuses, and two texts for one rule is
+  // how they came to disagree in the first place.
+  reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy,
+};
 
 // ── CLI: read the state files this project already has and print the verdict ──
 if (require.main === module) {

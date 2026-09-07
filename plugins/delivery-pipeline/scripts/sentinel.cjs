@@ -43,8 +43,14 @@ const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs
 // is not a green PR" withholds `merge` HERE and its bucket THERE, so the two
 // must read one predicate and quote one sentence or the board offers what the
 // guard refuses.
+// …and `reviewStandsAlone`/`baseMoved` for the third and fourth time: a
+// CHANGES_REQUESTED with no thread left is a PERSON's here and `waiting.human`
+// there, and a base that has MOVED is `base-merge` here and a `fix` entry there.
+// Both were rules the two files could only have held by their texts happening to
+// match, which is the way they have already failed twice.
 const {
   needsHuman, checkpointParentOf: checkpointParentIn, noCiHold, NO_CI_WHY,
+  reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy,
 } = require(path.join(__dirname, 'front.cjs'));
 // …and the second shared predicate, in its own module for the same reason: this
 // file used to own it outright, so `computeFront` had no `waiting.parent` bucket
@@ -247,20 +253,68 @@ for (const [id, park] of Object.entries(ESCALATED)) PARKED_WHY[id] = escalationW
 for (const [id, r] of Object.entries(DRIFTED)) PARKED_WHY[id] = `drifted — ${r} (re-plan it; the park lifts when the plan changes)`;
 const SCOPE = listFlag('scope');
 
-// Unresolved review threads for one PR, or null when they cannot be read.
-// Cached: the duty pass and a later merge check ask about the same PRs, and the
-// GraphQL call is the expensive part of both.
-const threadCache = new Map();
-function unresolvedThreads(pr, repo) {
+// Everything `reviewers.cjs unresolved` knows about one PR, or nulls where it
+// could not be read. Cached: the duty pass and a later merge check ask about the
+// same PRs, and the GraphQL call is the expensive part of both.
+//
+// It carries THREE facts now, and that is why it is one call and not two: the
+// thread count, the review decision, and the PR's merge state (`mergeStateStatus`
+// plus the base/head names), which reviewers.cjs reads off the same `gh pr view`
+// it already makes for the decision. `duty` runs on every babysit round, so a
+// second per-PR query here would be paid on every tick of the conveyor.
+//
+// An unreadable answer stays ALL NULL rather than collapsing into a benign one:
+// "no threads", "no verdict" and "the base is fine" are three claims, and none of
+// them is what a failed call proves.
+const settlementCache = new Map();
+function settlement(pr, repo) {
   const key = `${repo || ''}#${pr}`;
-  if (threadCache.has(key)) return threadCache.get(key);
+  if (settlementCache.has(key)) return settlementCache.get(key);
   const out = spawnSync('node', [path.join(__dirname, 'reviewers.cjs'), 'unresolved', String(pr), ...repoArg(repo)], { encoding: 'utf8' });
-  let n = null;
+  let v = { unresolved: null, review_decision: null, merge_state: null, base: null, head: null };
   if (out.status === 0) {
-    try { const v = JSON.parse(out.stdout).unresolved_count; if (typeof v === 'number') n = v; } catch { n = null; }
+    try {
+      const j = JSON.parse(out.stdout);
+      v = {
+        unresolved: typeof j.unresolved_count === 'number' ? j.unresolved_count : null,
+        review_decision: j.review_decision || null,
+        merge_state: j.merge_state || null,
+        base: j.base || null,
+        head: j.head || null,
+      };
+    } catch { /* keep the all-null answer */ }
   }
-  threadCache.set(key, n);
-  return n;
+  settlementCache.set(key, v);
+  return v;
+}
+
+// "Has the base moved under this branch?" — the guard's reading of the same two
+// signals the merge gate reads, so `duty` stops offering a merge that gate is
+// about to refuse and names the remedy instead of describing it.
+//
+// The merge state rides on `settlement` above and costs nothing. The compare is
+// one extra `gh api` for each PR that gets this far, and it is required rather
+// than optional: GitHub reports BEHIND only where branch protection requires
+// up-to-date branches, so without the second opinion the duty is silent exactly
+// where the repo has not been hardened — and the merge path, which does ask,
+// then refuses what the duty offered. It is not paid for a parked PR, a child
+// behind a moving parent, or a red one: the chain below never reaches here for
+// those.
+//
+// An UNKNOWN answer is never "not behind" (the defect T-24-05 fixed one level
+// up): it reports `known: false`, the chain falls through unchanged, and the
+// merge gate still refuses rather than guessing.
+function baseCheck(s, repo) {
+  const st = settlement(s.pr, repo);
+  if (st.merge_state === 'DIRTY' || st.merge_state === 'BEHIND') {
+    return { moved: baseMoved({ merge_state: st.merge_state }), known: true };
+  }
+  const base = st.base || s.pr_base || s.base || null;
+  const head = st.head || s.branch || null;
+  if (!st.merge_state || !base || !head) return { moved: null, known: false };
+  const cmp = behindBy(base, head, repo);
+  if (typeof cmp.behind !== 'number') return { moved: null, known: false };
+  return { moved: baseMoved({ merge_state: st.merge_state, behind_by: cmp.behind }), known: true };
 }
 
 // How many unmerged tickets this one is stacked on. 0 = its PR targets the epic
@@ -345,8 +399,24 @@ function dutyItems() {
     // review servicing on an API hiccup and walk into the merge gate's refusal
     // later. They fall through to the normal ordering, and the merge gate still
     // refuses to merge blind.
-    const unresolved = unresolvedThreads(s.pr, s.repo || null);
-    if (typeof unresolved === 'number' && unresolved > 0) {
+    const unresolved = settlement(s.pr, s.repo || null).unresolved;
+    // …and the base, read from the same call plus one compare. Recorded on the
+    // item whatever the answer is, so a reader can tell "the base was checked and
+    // is fine" from "nobody could check it" — the two used to look identical, and
+    // one of them is the state the merge gate refuses.
+    const bc = baseCheck(s, s.repo || null);
+    item.base_check = bc.moved ? 'stale' : bc.known ? 'clean' : 'unknown';
+    if (bc.moved) {
+      // FIRST inside this block, ahead of threads and of pending CI. Everything
+      // else here measures the branch against a merge base that no longer exists:
+      // a thread serviced now is answered against the wrong diff, and a run we
+      // wait for is validating code that is about to change anyway. It sits AFTER
+      // `ci-fix` for the mirror-image reason — a failing check is the louder fact,
+      // and that fixer is told to merge the base in as its own step 0.
+      item.action = 'base-merge';
+      if (bc.moved.behind !== null) item.behind_by = bc.moved.behind;
+      item.why = baseMergeWhy(bc.moved, base);
+    } else if (typeof unresolved === 'number' && unresolved > 0) {
       item.action = 'review-fix';
       item.unresolved = unresolved;
       item.why = `${unresolved} unresolved review thread(s)${(c.pending || 0) > 0 ? ` (CI still running — service them NOW: a fix pushes anyway and restarts that run)` : ''} — fix or reply with reasoning, then RESOLVE each one`;
@@ -383,9 +453,22 @@ function dutyItems() {
       // review threads and the stacked base are all still ahead.
       item.action = 'human';
       item.why = 'human_checkpoint — the approval and the merge are the human\'s';
+    } else if (reviewStandsAlone(s.review_decision, unresolved)) {
+      // A verdict with nothing left to service. review-fix was dispatched at it
+      // regardless of the thread count, came back having done nothing, and the
+      // repeated signature escalated the ticket after the attempt budget — paid
+      // work re-deciding a state only a reviewer can move. NOT in ACTIONABLE:
+      // the board answers `waiting.human` for the same PR.
+      item.action = 'wait-human';
+      item.why = REVIEW_STANDS_WHY;
     } else if (s.review_decision === 'CHANGES_REQUESTED') {
+      // Reached only with an UNKNOWN thread count (a real 0 is the branch above,
+      // and >0 was handled at the top of this block). Fail towards the work: the
+      // fixer reads the threads itself, and an API hiccup must not park a PR on a
+      // person.
       item.action = 'review-fix';
-      item.why = 'CHANGES_REQUESTED — service the threads (a bot can be wrong: a reasoned reply is a valid resolution)';
+      item.why = 'CHANGES_REQUESTED, and the thread count could not be read this tick — '
+        + 'read them yourself and service them (a bot can be wrong: a reasoned reply is a valid resolution)';
     } else if (!gateConform(s.gate, s.head_sha)) {
       item.action = 'arch-review';
       item.why = gateKind(s.gate, s.head_sha) === 'unrecorded'
@@ -453,13 +536,24 @@ function dutyItems() {
 // itself (`undraft` — one `gh pr ready`, no agent, no model). The old catch-all
 // `finalize` was neither, which is how it ended up in the journal as a role
 // `model <role>` declines to route.
-const ACTIONABLE = new Set(['ci-fix', 'review-fix', 'arch-review', 'undraft', 'merge']);
+//
+// `base-merge` is the mechanical kind: `base-merge.cjs` does the work and the
+// only judgement left is a conflict inside the ticket's own declared files, so a
+// fixer dispatched for it runs at the `ci-fix` tier (that IS the role to pass to
+// `model <role>` and to record on an attempt — `base-merge` is an action, never a
+// role). It journals itself as `base_merge`, which is deliberately not an
+// `attempt`: charging a mechanical merge to a ticket's repair record would spend
+// its attempt budget on work no hypothesis was ever wrong about.
+const ACTIONABLE = new Set(['ci-fix', 'review-fix', 'arch-review', 'undraft', 'merge', 'base-merge']);
 
 function dutySummary() {
   const items = dutyItems();
   const actionable = items.filter((i) => ACTIONABLE.has(i.action));
   const waiting = items.filter((i) => i.action === 'wait-ci');
-  const human = items.filter((i) => i.action === 'human' || i.action === 'human-merge');
+  // `wait-human` joins them: a standing CHANGES_REQUESTED nobody can service is
+  // a PR waiting on a person exactly as a checkpoint is, and counting it as
+  // anything else would report it as either work or a fixpoint.
+  const human = items.filter((i) => i.action === 'human' || i.action === 'human-merge' || i.action === 'wait-human');
   const parked = items.filter((i) => i.action === 'parked');
   return {
     auto_merge: AUTO_MERGE ? 'epic' : 'off',

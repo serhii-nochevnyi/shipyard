@@ -1114,6 +1114,200 @@ test('when the live query fails the cached board is used, and the result says so
   assert.ok((r.retarget_warnings || []).some((w) => /T-C/.test(w)), JSON.stringify(r.retarget_warnings));
 });
 
+suite('duty — a CHANGES_REQUESTED nobody can service belongs to a person');
+
+// A10. `review_decision === 'CHANGES_REQUESTED'` routed to review-fix regardless
+// of the thread count. A reviewer who requested changes in a summary comment (or
+// a bot whose threads were all resolved while its verdict stood) leaves ZERO
+// threads, so review-fix returned having done nothing, the failure signature
+// repeated, and the attempt budget escalated a ticket nobody owed work on.
+
+const crRoot = () => project({
+  tickets: { 'T-CR': { branch: 'ticket/T-CR', epic: 'epic/24-x' } },
+  state: {
+    'T-CR': {
+      status: 'pr-open', pr: 9, draft: false, checks: checks(), gate: conform,
+      merge_scope: 'stacked', pr_base: 'epic/24-x', epic: 'epic/24-x',
+      branch: 'ticket/T-CR', review_decision: 'CHANGES_REQUESTED',
+    },
+  },
+  config: epicConfig,
+});
+const crEnv = (extra = {}) => onPath(stubGh(), {
+  STUB_BASE: 'epic/24-x', STUB_HEAD: 'ticket/T-CR', STUB_PR: '9', ...extra,
+});
+
+test('zero unresolved threads → wait-human, with the remedy a person can act on', () => {
+  const d = JSON.parse(run(crRoot(), ['duty', '--json'], { env: crEnv() }).stdout);
+  const i = d.items[0];
+  assert.strictEqual(i.action, 'wait-human', i.why);
+  assert.ok(/re-review or dismiss/.test(i.why), i.why);
+  assert.strictEqual(d.actionable_count, 0, 'it must not be offered as work');
+  assert.strictEqual(d.human_count, 1, 'and it is counted as a PR waiting on a human');
+});
+
+test('threads that cannot be read are NOT zero threads — review-fix stands', () => {
+  // Fail towards the work: an API hiccup must not park a PR on a human.
+  const d = JSON.parse(run(crRoot(), ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'review-fix', d.items[0].why);
+});
+
+suite('duty — a base that moved is a duty with a remedy, not a refusal');
+
+// Б7. `mergeOne` refused DIRTY/BEHIND with a message and no action; `duty` had no
+// action for it at all, so the board offered the merge the gate was about to
+// refuse and the documented fix (`base-merge.cjs`) was reachable by prose alone.
+
+const bmRoot = () => project({
+  tickets: { 'T-BM': { branch: 'ticket/T-BM', epic: 'epic/24-x' } },
+  state: {
+    'T-BM': {
+      status: 'pr-open', pr: 9, draft: false, checks: checks(), gate: conform,
+      merge_scope: 'stacked', pr_base: 'epic/24-x', epic: 'epic/24-x', branch: 'ticket/T-BM',
+    },
+  },
+  config: epicConfig,
+});
+const bmDuty = (extra = {}) => JSON.parse(run(bmRoot(), ['duty', '--json'], {
+  env: onPath(stubGh(), { STUB_BASE: 'epic/24-x', STUB_HEAD: 'ticket/T-BM', STUB_PR: '9', ...extra }),
+}).stdout);
+
+test('mergeStateStatus BEHIND is an actionable base-merge naming the script', () => {
+  const d = bmDuty({ STUB_MERGE_STATE: 'BEHIND' });
+  const i = d.items[0];
+  assert.strictEqual(i.action, 'base-merge', i.why);
+  assert.ok(/base-merge\.cjs/.test(i.why), i.why);
+  assert.ok(/NEVER rebase|never rebase/.test(i.why), 'the rule travels with the remedy: ' + i.why);
+  assert.strictEqual(d.actionable_count, 1, 'the guard can do this one now');
+});
+
+test('a stale-but-clean branch is caught by the compare, which reports how far', () => {
+  // GitHub only says BEHIND where branch protection requires up-to-date
+  // branches; everywhere else a stale branch reports CLEAN.
+  const i = bmDuty({ STUB_BEHIND: '3' }).items[0];
+  assert.strictEqual(i.action, 'base-merge', i.why);
+  assert.strictEqual(i.behind_by, 3);
+  assert.ok(/3 commit/.test(i.why), i.why);
+});
+
+test('DIRTY names the conflicts instead of a commit count', () => {
+  const i = bmDuty({ STUB_MERGE_STATE: 'DIRTY' }).items[0];
+  assert.strictEqual(i.action, 'base-merge', i.why);
+  assert.ok(/conflict/.test(i.why), i.why);
+});
+
+test('an up-to-date branch still merges, and says the base was checked', () => {
+  const i = bmDuty().items[0];
+  assert.strictEqual(i.action, 'merge', i.why);
+  assert.strictEqual(i.base_check, 'clean');
+});
+
+test('a base freshness gh could not answer falls through rather than inventing work', () => {
+  const i = JSON.parse(run(bmRoot(), ['duty', '--json'], { env: onPath(denyGh()) }).stdout).items[0];
+  assert.strictEqual(i.action, 'merge', i.why);
+  assert.strictEqual(i.base_check, 'unknown');
+});
+
+test('the board answers the same for the same PR — one predicate, two readers', () => {
+  const tickets = { 'T-BM': { branch: 'ticket/T-BM', epic: 'epic/24-x' } };
+  const state = {
+    'T-BM': {
+      status: 'pr-open', pr: 9, draft: false, checks: checks(), gate: conform,
+      merge_scope: 'stacked', pr_base: 'epic/24-x', epic: 'epic/24-x', branch: 'ticket/T-BM',
+      merge_state: 'BEHIND',
+    },
+  };
+  const f = computeFront(tickets, state, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T-BM']);
+  assert.deepStrictEqual(f.actionable.merge, []);
+  assert.ok(/base-merge/.test(f.why['T-BM']), f.why['T-BM']);
+});
+
+suite('the fix round carries the remedy the duty named');
+
+// The other half of this ticket's rule, and it lives here because the two halves
+// are one rule: a duty answer nobody can act on is the defect, so the `base-merge`
+// action has to reach the fixer as an instruction. The workflow file cannot be
+// imported or `node --check`ed on its own (top-level `return` — the Workflow
+// runtime wraps the body in an async function), so it is evaluated exactly the
+// way that runtime evaluates it, with `agent` stubbed to capture the prompt.
+
+const FIX_ROUND = path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'workflows', 'fix-round.mjs'
+);
+
+function runFixRound(args) {
+  const src = fs.readFileSync(FIX_ROUND, 'utf8').replace(/^export const meta/m, 'const meta');
+  // eslint-disable-next-line no-new-func
+  const wf = new Function('agent', 'parallel', 'phase', 'log', 'args',
+    `return (async () => {\n${src}\n})()`);
+  const prompts = [];
+  const agent = (prompt) => {
+    prompts.push(prompt);
+    return Promise.resolve({ pushed: true, status: 'fixed', notes: 'n', hypothesis: 'h' });
+  };
+  const parallel = (fns) => Promise.all(fns.map((f) => f()));
+  return { prompts, result: wf(agent, parallel, () => {}, () => {}, args) };
+}
+
+const FIX_ARGS = (over = {}) => ({
+  prs: [{
+    id: 'T-24-06', pr: 42, branch: 'ticket/T-24-06', worktreePath: '/wt/T-24-06',
+    planPath: '/proj/.planning/phases/24/24-06-PLAN.md', needsCiFix: true,
+    base: 'epic/24-x', ...over,
+  }],
+  ciFixRefPath: '/refs/ci-fix.md',
+  reviewFixRefPath: '/refs/review-fix.md',
+  reinitScript: '/scripts/reviewers.cjs',
+});
+
+test('args that arrived as an unparseable string THROW instead of no-opping', async () => {
+  // F25 (external audit 2026-09-07). The catch returned `{}`, so `prs` was
+  // empty, the round returned `[]` — and `[]` is exactly what a healthy empty
+  // round returns. A malformed dispatch reported success.
+  // The message must be the PARSE error: "ciFixRefPath is required" is what the
+  // file threw before, and it sent the reader looking at the wrong argument.
+  await assert.rejects(() => runFixRound('{invalid').result, /JSON/);
+});
+
+test('...and so does a dispatch with no prs array at all', async () => {
+  await assert.rejects(() => runFixRound({ ciFixRefPath: 'a', reviewFixRefPath: 'b', reinitScript: 'c' }).result, /prs/);
+});
+
+test('an EXPLICITLY empty round is still a success — two facts, two outcomes', async () => {
+  assert.deepStrictEqual(await runFixRound({ prs: [] }).result, []);
+});
+
+test('needsBaseMerge makes the base merge the FIRST numbered step', async () => {
+  const r = runFixRound(FIX_ARGS({ needsBaseMerge: true }));
+  await r.result;
+  const prompt = r.prompts[0];
+  const first = prompt.split('\n').find((l) => /^\s*\d\)/.test(l));
+  assert.ok(first, prompt);
+  assert.ok(/base-merge\.cjs/.test(first + prompt), first);
+  const cmd = prompt.split('\n').find((l) => /base-merge\.cjs/.test(l));
+  assert.ok(/--worktree \/wt\/T-24-06/.test(cmd), cmd);
+  assert.ok(/--base epic\/24-x/.test(cmd), cmd);
+  // Before A) — the base merge is not one remedy among several, it is the step
+  // that makes the others measure the right thing.
+  assert.ok(prompt.indexOf(cmd) < prompt.indexOf('A) CI is failing'), prompt);
+});
+
+test('without it the prompt is byte-identical to the one the fixer got before', async () => {
+  const plain = runFixRound(FIX_ARGS());
+  await plain.result;
+  const moved = runFixRound(FIX_ARGS({ needsBaseMerge: true }));
+  await moved.result;
+  assert.ok(!/base-merge/.test(plain.prompts[0]), 'no base-merge instruction where the base has not moved');
+  const lines = moved.prompts[0].split('\n');
+  const from = lines.findIndex((l) => /base-merge/.test(l));
+  assert.ok(from >= 0, 'the moved-base prompt must actually carry the instruction');
+  let to = from;
+  while (to < lines.length && /base-merge/.test(lines[to])) to++;
+  if (lines[to] === '') to++;
+  assert.strictEqual(lines.slice(0, from).concat(lines.slice(to)).join('\n'), plain.prompts[0]);
+});
+
 for (const r of roots) {
   try { execFileSync('rm', ['-rf', r]); } catch { /* best effort */ }
 }

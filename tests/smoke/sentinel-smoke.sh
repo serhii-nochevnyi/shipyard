@@ -90,6 +90,11 @@ JSON
   # head binding.
   "pr view 102 --json"*)
     echo '{"number":102,"state":"OPEN","isDraft":false,"baseRefName":"ticket/T-01-01-root","headRefName":"ticket/T-01-02-child","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-01-02\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green"}' ;;
+  # `reviewers.cjs unresolved` reads the review decision AND the merge state off
+  # one PR view — which is how `duty` learns the base moved without a second call
+  # per PR per round. SENTINEL_SMOKE_MERGE_STATE is the moved-base fixture.
+  "pr view 101 --json"*)
+    printf '{"number":101,"state":"OPEN","isDraft":false,"baseRefName":"epic/01-demo","headRefName":"ticket/T-01-01-root","mergeStateStatus":"%s","reviewDecision":null,"body":"Ticket: T-01-01"}\n' "${SENTINEL_SMOKE_MERGE_STATE:-CLEAN}" ;;
   # The merge path's own three calls. The retarget asks GitHub which open PRs
   # each graph child has RIGHT NOW instead of trusting the last sync — a child
   # whose PR opened after it used to be left pointing at a branch that had just
@@ -177,6 +182,37 @@ d() { node -e 'const s=require(process.argv[1]);process.stdout.write(String(s.it
 [[ "$(d T-01-01 depth)" == "0" && "$(d T-01-02 depth)" == "1" ]] \
   && ok "duty carries the stack depth it sorts by" \
   || bad "duty carries the stack depth" "got: $(d T-01-01 depth) / $(d T-01-02 depth)"
+# The guard reads the base's freshness for every PR it is about to walk towards a
+# merge, off the same `reviewers.cjs unresolved` call plus one compare. `clean`
+# and `unknown` are different answers and only one of them may end in `merge`:
+# before this, `duty` said `merge` and the gate — which does ask — refused.
+[[ "$(d T-01-01 base_check)" == "clean" ]] \
+  && ok "duty records that the base WAS checked, not merely that nothing objected" \
+  || bad "duty records the base check" "got: $(d T-01-01 base_check)"
+
+# ── the duty names a remedy that exists ──────────────────────────────────────
+# Same fixture, one fact changed: GitHub reports the PR as BEHIND. `mergeOne`
+# refused this with a message and no action and `duty` had no action for it at
+# all, so the board offered the merge the gate was about to decline and the
+# documented fix was reachable by prose alone.
+bmduty="$W/bm-duty.json"
+( cd "$proj" && SENTINEL_SMOKE_MERGE_STATE=BEHIND \
+    node "$SCRIPTS/sentinel.cjs" duty --json > "$bmduty" 2>/dev/null ) || bad "duty runs against a BEHIND PR"
+if node -e '
+const d = require(process.argv[1]);
+const i = (d.items || []).find((x) => x.ticket === "T-01-01");
+if (!i) { console.error("no duty item"); process.exit(1); }
+if (i.action !== "base-merge") { console.error("action=" + i.action + " why=" + i.why); process.exit(1); }
+if (!/base-merge\.cjs/.test(i.why)) { console.error("the remedy must be a command: " + i.why); process.exit(1); }
+if (!d.items.some((x) => x.action === "base-merge") || d.actionable_count < 1) {
+  console.error("a base merge is work the guard can do NOW: " + JSON.stringify(d.actionable_count)); process.exit(1);
+}
+process.exit(0);
+' "$bmduty" 2>"$W/bm.err"; then
+  ok "duty answers base-merge for a PR whose base moved, and names the script"
+else
+  bad "duty answers base-merge" "$(cat "$W/bm.err"; head -20 "$bmduty")"
+fi
 
 # …and the board's own file must place that same ticket in the bucket the guard's
 # answer implies. One predicate (parent-moving.cjs), two readers, one state file:
