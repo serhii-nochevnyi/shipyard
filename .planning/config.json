@@ -114,8 +114,14 @@
       "integrator": "fable"
     },
     "effort": {
-      "arch-review": "max",
-      "integrator": "max"
+      "executor": "high",
+      "ci-fix": "high",
+      "review-fix": "high",
+      "pr-sentinel": "high",
+      "research": "high",
+      "arch-review": "high",
+      "integrator": "high",
+      "drift-check": "low"
     }
   }
 }

@@ -200,18 +200,12 @@
 "T-24-04":
   branch: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
   pr: 42
-  status: "pr-open"
-  draft: true
-  review_decision: null
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/42"
-  pr_base: "epic/24-the-conveyor-stops-interrupting-itself"
-  pr_created_at: "2026-09-07T14:21:17Z"
-  checks: {"total":1,"failing":0,"pending":1,"none_reported":false}
   base: "epic/24-the-conveyor-stops-interrupting-itself"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
-  merge_scope: "stacked"
-  reapable: false
-  since: "2026-09-07T14:22:02.435Z"
+  reapable: true
+  since: "2026-09-07T15:29:03.099Z"
 "T-24-05":
   branch: "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno"
   pr: 44
@@ -219,10 +213,10 @@
   draft: true
   review_decision: null
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/44"
-  pr_base: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
+  pr_base: "epic/24-the-conveyor-stops-interrupting-itself"
   pr_created_at: "2026-09-07T14:46:24Z"
   checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
-  base: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
+  base: "epic/24-the-conveyor-stops-interrupting-itself"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
   merge_scope: "stacked"
   reapable: false
@@ -236,7 +230,7 @@
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/45"
   pr_base: "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno"
   pr_created_at: "2026-09-07T15:16:09Z"
-  checks: {"total":1,"failing":0,"pending":1,"none_reported":false}
+  checks: {"total":1,"failing":1,"pending":0,"none_reported":false}
   base: "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
   merge_scope: "stacked"
@@ -299,7 +293,7 @@
   reapable: true
   since: "2026-09-07T13:47:20.037Z"
 "T-25-02":
-  branch: "ticket/T-25-02-a-codex-agent-carries-effort-not-a-model"
+  branch: "ticket/T-25-02-a-codex-agent-carries-the-model-its-effo"
   pr: null
   status: "pending"
   base: "epic/25-the-conveyor-follows-the-models-it-runs-on"
@@ -313,7 +307,7 @@
   branch: "ticket/T-25-03-the-prose-names-the-models-the-runtimes"
   pr: null
   status: "pending"
-  base: "ticket/T-25-02-a-codex-agent-carries-effort-not-a-model"
+  base: "ticket/T-25-02-a-codex-agent-carries-the-model-its-effo"
   epic: "epic/25-the-conveyor-follows-the-models-it-runs-on"
   ready: false
   blocked_by: ["T-25-02","T-24-07"]
@@ -355,11 +349,12 @@
   branch: "ticket/T-26-04-gc-removes-only-what-is-proven-landed"
   pr: 38
   status: "pr-open"
-  draft: true
+  draft: false
   review_decision: null
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/38"
   pr_base: "epic/26-positive-evidence-before-a-mutation"
   pr_created_at: "2026-09-07T14:16:54Z"
+  gate: {"arch-review":"conform","drift-check":"skipped","degenerate-green":"clean","checks":"green"}
   checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
   base: "epic/26-positive-evidence-before-a-mutation"
   epic: "epic/26-positive-evidence-before-a-mutation"

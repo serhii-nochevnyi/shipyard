@@ -53,12 +53,19 @@ plans written the same day), executors about 45%, guards about 22%.
   that the conveyor's failure mode is a wrong green reaching an epic, and every
   mechanical gate above the executor costs more to run than the difference
   between tiers.
-- **D2 — Depth is EFFORT, keyed on the role and its signals.** The dependency
-  inverts: today the effort tier is derived from the model, which collapses to a
-  single value the moment the model is constant. Proven, not argued: with the
-  floor set through configuration, every role except `drift-check` resolved to
-  `xhigh` and `--signature-state repeat` stopped deepening anything, leaving
-  `strategy: rethink` as the only surviving signal.
+- **D2 — Depth is the MODEL. Effort has two useful values.** *(Revised
+  2026-09-07, same day, before any code was built. The first draft said depth
+  is effort, keyed on role and signals, and shipped a five-rung table. The
+  operator's measurement retires it: `max` and `xhigh` cost more without
+  producing a better result, on either runtime. So the effort axis is `low` for
+  the one mechanical role and `high` for everything else, and `xhigh`, `max` and
+  `ultra` are used by no built-in path — they stay legal values a person may set
+  through `pipeline.effort.<role>`.)* The consequence is the one the operator
+  wanted from the start: since effort can no longer express depth, the ONLY way
+  the conveyor can escalate is to change the model, which is what D4 makes
+  mechanical. A `repeat` verdict therefore returns `strategy: rethink` at an
+  unchanged model and effort — a different hypothesis, not a deeper burn — and
+  the rung above it is the ceiling model itself.
 - **D3 — A configured effort override must not silently disable the escalation
   it outranks.** `cfg.effort[role]` is read before the signature rule, so
   shipping the effort table as configuration would have disabled the repair
@@ -79,64 +86,69 @@ plans written the same day), executors about 45%, guards about 22%.
   alias to Fable 5, so `gsd-tune` reports that as REQUIRED drift at Step 0 of
   every delivery, naming the floor and `ANTHROPIC_DEFAULT_FABLE_MODEL` as the
   two ways to miss it.
-- **D6 — Codex is the same decision through a different axis, because Astra's
-  effort has a ceiling.** *(Revised the same day, 2026-09-07, before any code was
-  built: the first draft of this decision said D1, D2 and D4 had no Codex
-  counterpart at all. That rested on assuming effort could carry the whole depth
-  range there. It cannot — the operator's palette is `gpt-6-astra` with effort
-  capped at `high`, `gpt-5.6-terra` up to `max`, `gpt-5.6-sol` up to `ultra` —
-  so on Codex the MODEL differentiates again, chosen by the depth the role
-  needs.)* The selection rule mirrors the Claude side exactly: a judgment role
-  takes the DEEPEST entry in the palette, and every other role takes the
-  SHALLOWEST entry whose ceiling covers the effort the table already assigned
-  it. Never the reverse — a role whose effort exceeds a model's ceiling moves UP
-  a model rather than down an effort, because silently losing depth is the
-  defect D7 is about.
+- **D6 — Codex is the same shape as Claude, with two models instead of two
+  aliases.** *(Rewritten twice on 2026-09-07 as the operator corrected the
+  facts; the superseded readings are recorded at the end of this decision,
+  because the mistake behind both is worth keeping.)* The operator's palette is
+  `gpt-6-astra`, the senior and most expensive model, whose best results are at
+  `high` effort; `gpt-5.6-terra`, the workhorse; and `gpt-5.6-sol`. With `max`
+  and `xhigh` retired by D2, **`sol` has no distinct job** — its only
+  distinguishing property in GSD's catalog was advertising `ultra` — so no
+  built-in path selects it, and it stays in the palette as a value a person may
+  configure. The mapping is then the exact mirror of the Claude side:
 
-  | role | effort (D2's table) | Codex model |
+  | | Claude | Codex |
   |---|---|---|
-  | drift-check | low | astra |
-  | research | high | astra |
-  | ci-fix, review-fix, pr-sentinel | high | astra |
-  | executor | xhigh | terra |
-  | arch-review, integrator | max | sol |
+  | mechanical: drift-check | opus / low | terra / low |
+  | every other role | opus / high | terra / high |
+  | integrator, unconditionally | fable / high | astra / high |
+  | the earned ceiling (D4's routes) | fable / high | astra / high |
 
-  Astra therefore takes the roles that need breadth rather than depth, and gives
-  them a 1M window for free; terra carries the single `xhigh` rung; sol is
-  reserved for the two judgment roles, which is also GSD's own posture (it gives
-  sol to exactly two of its thirty-four agents, both planners).
-- **D7 — The palette and its ceilings are CONFIGURATION, not code.**
-  `pipeline.codex_models` declares each usable model with its `max_effort`, in
-  preference order, with the default above shipped in `capability.json`. The
-  operator changes it without a release when OpenAI opens Astra's higher levels
-  or adds a model — which is the whole reason the ceiling is not a constant. The
-  `max` → `xhigh` clamp for `runtime: codex` goes: both halves of its comment
-  are false (verified against GSD's `codexModelEffort._baseline`, which
-  advertises `max` for every model, and `advertisedCodexEffort`, which falls back
-  to that baseline for a model the table does not name — which is what
-  `gpt-6-astra` is). `ultra` joins the effort vocabulary for Codex only, since
-  Workflow's enum has no such value and no Claude alias advertises it. `minimal`
-  keeps its clamp to `low` for that same still-true reason.
+  One sentence in the documentation now describes both runtimes, which is the
+  point: a reader should not have to hold two policies in mind.
+
+  **The mistake behind both superseded readings, stated once because it was
+  made three times in different clothes:** I ranked the Codex models by GSD's
+  `codexModelEffort` table. That table records which effort levels each model
+  SUPPORTS. I read it as an ordering by capability and by cost, and every wrong
+  answer followed from that: first the newest, most expensive model went to the
+  cheapest, highest-volume role (drift-check, sixteen calls this session);
+  then `ultra` on an older model was mistaken for depth above a model that is
+  both better and deeper; then the effort ladder itself turned out to be paying
+  for nothing above `high`. A support matrix is not a quality ranking, and
+  nothing in the catalog claims to be one.
+- **D7 — The palette and its efforts are CONFIGURATION.**
+  `pipeline.codex_models` declares each usable model with the effort its best
+  results are at, in preference order, and the default ships in
+  `capability.json`: `[{gpt-5.6-terra, high}, {gpt-6-astra, high}]`, with
+  `gpt-5.6-sol` present and unselected. The field is named for what it is — the
+  effort to USE, not the deepest the model will accept — so a reader cannot
+  mistake it for a limitation again. The `max` → `xhigh` clamp for
+  `runtime: codex` still goes: both halves of its comment are false, verified
+  against GSD's `codexModelEffort._baseline` (which advertises `max` for every
+  model) and `advertisedCodexEffort` (which returns that baseline for a model
+  it does not name, such as `gpt-6-astra`). `ultra` is NOT added to the effort
+  vocabulary, since no path selects a model that advertises it. `minimal` keeps
+  its clamp to `low`: Workflow's enum has no such value.
 - **D8 — On Codex the escalation needs its own agent, because an agent there is
-  a FILE.** A `~/.codex/agents/<name>.toml` carries exactly one model and one
-  effort, written at install time, and nothing is passed per dispatch. So risk,
-  `repeat`, exhausted depth and a contested verdict — every signal D2 and D4
-  rest on — are unreachable through a single static agent per role. The
-  generator therefore writes a second file for the four roles that escalate:
-  `shipyard-ci-fix-deep`, `shipyard-review-fix-deep`, `shipyard-pr-sentinel-deep`
-  and `shipyard-arch-review-deep`, all at the deepest palette entry and its top
-  effort (sol/ultra), and the generated skill prose names when to invoke them —
-  `repeat_exhausted` for a repair, a journalled prior `violation` for the judge.
-  Eleven agents rather than seven. The integrator gets no variant: it runs once
-  per phase and is already at the deepest entry.
-- **D9 — Astra has a version floor too.** First-class `gpt-6-astra`
-  configuration arrived in Codex CLI 0.153.1; this host runs 0.147.0 and the
-  current release is 0.153.4. That is the Codex mirror of the Fable 5.1 floor,
-  so it belongs in the same `gsd-tune` check rather than in a second mechanism.
-  It is also the most plausible reason the operator's ceiling for Astra is
-  `high` while the Codex release notes advertise `low…max`: a CLI that predates
-  first-class support cannot select the higher levels. Recording both, and
-  taking the operator's ceiling as the rule, is why the ceiling is a setting.
+  a FILE.** A `~/.codex/agents/<name>.toml` carries one model and one effort,
+  written at install time, and nothing is passed per dispatch — so risk,
+  `repeat`, exhausted depth and a contested verdict are all unreachable through
+  a single static agent per role. The generator writes a second file for the
+  four roles that escalate: `shipyard-ci-fix-deep`, `shipyard-review-fix-deep`,
+  `shipyard-pr-sentinel-deep` and `shipyard-arch-review-deep`, each carrying the
+  CEILING model at its own best effort (astra / high), and the generated skill
+  prose names when to invoke them: `repeat_exhausted` for a repair role, a
+  journalled prior `violation` for the judge. Eleven agents rather than seven.
+  The integrator gets no variant: it is already at the ceiling.
+- **D9 — Astra's effort is set by its results, and its availability by the CLI.**
+  Two separate facts that an earlier draft of this ADR conflated. `high` is
+  where Astra performs best, per the operator's measurement, so raising it buys
+  cost and nothing else — that is why D7 names the field for the effort to use.
+  Separately, first-class `gpt-6-astra` configuration arrived in Codex CLI
+  0.153.1, this host runs 0.147.0 and the current release is 0.153.4, so
+  selecting Astra at all has a version floor. `gsd-tune` reports that floor
+  beside the Fable 5.1 one, in the same check and for the same reason.
 - **Deferred — the concurrency axis.** A per-session budget cannot be expressed
   as a tier, and the run that proved it also proved the recovery works: the
   interrupted executors' uncommitted RED tests were handed to their successors
