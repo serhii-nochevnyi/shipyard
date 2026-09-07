@@ -95,10 +95,6 @@
     }
   },
   "runtime": "claude",
-  "model_overrides": {
-    "gsd-planner": "fable",
-    "gsd-code-reviewer": "fable"
-  },
   "pipeline": {
     "jira": {
       "enabled": false

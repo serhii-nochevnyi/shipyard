@@ -449,3 +449,21 @@
   blocked_reasons: {"T-26-02":"parent has no branch yet (nothing to cascade from)"}
   reapable: false
   since: "2026-09-07T15:53:31.569Z"
+"T-26-13":
+  branch: "ticket/T-26-13-drift-is-judged-against-the-base-the-tic"
+  pr: null
+  status: "pending"
+  base: "epic/26-positive-evidence-before-a-mutation"
+  epic: "epic/26-positive-evidence-before-a-mutation"
+  ready: true
+  reapable: false
+  since: "2026-09-07T19:05:37.785Z"
+"T-26-14":
+  branch: "ticket/T-26-14-a-workflow-returns-a-reference-not-a-doc"
+  pr: null
+  status: "pending"
+  base: "epic/26-positive-evidence-before-a-mutation"
+  epic: "epic/26-positive-evidence-before-a-mutation"
+  ready: true
+  reapable: false
+  since: "2026-09-07T19:05:37.785Z"

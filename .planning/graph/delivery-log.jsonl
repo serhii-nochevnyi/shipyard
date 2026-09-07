@@ -366,3 +366,14 @@
 {"ts":"2026-09-07T15:57:49.619Z","event":"status_change","ticket":"T-24-07","from":"pending","to":"pr-open","pr":46}
 {"ts":"2026-09-07T16:00:14.503Z","event":"flake_rerun","ticket":"T-24-06","signature":"a275aa38eec30f3e","head":"7a41955f62e07bd113b024a0345b6b570d010d75","outcome":"red","by":"failure-signature"}
 {"ts":"2026-09-07T16:00:19.534Z","event":"dispatch","ticket":"T-24-06","role":"ci-fix","pr":45,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:05:37.785Z","event":"status_change","ticket":"T-26-13","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T19:05:37.785Z","event":"status_change","ticket":"T-26-14","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T19:09:00.666Z","event":"dispatch","ticket":"T-26-13","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:09:00.708Z","event":"dispatch","ticket":"T-26-14","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:09:52.536Z","event":"dispatch","ticket":"T-24-05","role":"pr-sentinel","pr":44,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:09:52.571Z","event":"dispatch","ticket":"T-24-06","role":"pr-sentinel","pr":45,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:09:52.606Z","event":"dispatch","ticket":"T-24-07","role":"pr-sentinel","pr":46,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:09:52.642Z","event":"dispatch","ticket":"T-24-11","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:10:56.318Z","event":"reuse_scan","ticket":"T-24-11","hits":2,"verdict":"fresh"}
+{"ts":"2026-09-07T19:11:21.954Z","event":"dispatch","ticket":"T-24-11","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:20:50.717Z","event":"attempt","ticket":"T-24-05","pr":44,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","signature":"none","head":"aa44e2daecf083f9fda5e60c5bd3b9503f562cad","hypothesis":"Copilot round 2 named two things: computeFront's merge_without_ci fallback reading loadConfig(process.cwd()) is a real board/guard split because dispatch-record.cjs refreshFront runs from a graphless ticket worktree and rewrites the front from what it computes, so the fallback now resolves the project through graph-dir.cjs; the hard-coded pipeline. prefix in the warning is the file-wide convention for all thirteen warnings and namespace-aware diagnostics is a separate change, so that one is a reasoned decline with a backlog note."}
