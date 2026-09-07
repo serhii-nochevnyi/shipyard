@@ -16,8 +16,17 @@ LOCAL_SSH_DIR="${LOCAL_SSH_DIR:-$HOME/.ssh}" make build-base >/dev/null
 EXPECTED_CLAUDE_VERSION="${CLAUDE_CODE_VERSION:-$(sed -n 's/^CLAUDE_CODE_VERSION ?= //p' Makefile)}"
 [[ -n "$EXPECTED_CLAUDE_VERSION" ]] || { echo "cannot resolve CLAUDE_CODE_VERSION pin"; exit 1; }
 
+# A FLOOR on what the image's tier aliases MEAN, deliberately separate from the
+# pin above. The conveyor emits the aliases `opus`/`fable` and the Agent tool
+# resolves them at run time, so the same alias must name the same model inside
+# the image as it does on the host. Opus 5 requires Claude Code 2.1.219 and
+# Fable 5.1 requires 2.1.255; the higher of the two is the floor. Not
+# overridable and not the pin: a newer pin satisfies it without touching this.
+CLAUDE_VERSION_FLOOR="2.1.255"
+
 docker run --rm \
   -e EXPECTED_CLAUDE_VERSION="$EXPECTED_CLAUDE_VERSION" \
+  -e CLAUDE_VERSION_FLOOR="$CLAUDE_VERSION_FLOOR" \
   -e EXPECTED_GIT_USER_NAME="$GIT_USER_NAME" \
   -e EXPECTED_GIT_USER_EMAIL="$GIT_USER_EMAIL" \
   -v "$PWD/.build/ssh-config:/tmp/expected-ssh:ro" \
@@ -76,6 +85,18 @@ docker run --rm \
   [[ "$(helm version --short | sed "s/+.*//")" == "v3.17.3" ]]
   command -v claude >/dev/null
   [[ "$(claude --version)" == *"$EXPECTED_CLAUDE_VERSION"* ]]
+
+  # >= the floor, not merely equal to it, so the next pin bump needs no edit here.
+  INSTALLED_CLAUDE_VERSION="$(claude --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1 || true)"
+  [[ -n "$INSTALLED_CLAUDE_VERSION" ]] \
+    || { echo "cannot parse a version out of: $(claude --version)"; exit 1; }
+  if [[ "$(printf "%s\n%s\n" "$CLAUDE_VERSION_FLOOR" "$INSTALLED_CLAUDE_VERSION" \
+           | sort -V | head -1)" != "$CLAUDE_VERSION_FLOOR" ]]; then
+    echo "claude $INSTALLED_CLAUDE_VERSION is below the floor $CLAUDE_VERSION_FLOOR:"
+    echo "Opus 5 needs 2.1.219 and Fable 5.1 needs 2.1.255, so below the floor this"
+    echo "image resolves the same tier aliases to older models than the host does."
+    exit 1
+  fi
 '
 
 echo "base image smoke passed"
