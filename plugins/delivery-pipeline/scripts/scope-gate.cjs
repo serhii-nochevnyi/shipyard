@@ -72,15 +72,28 @@ if (!t) fail(`ticket ${ticket} is not in the graph`);
 const declared = Array.isArray(t.files) ? t.files : [];
 if (!declared.length) fail(`ticket ${ticket} declares no files — Gate 2 should have rejected that graph`);
 
-// Same coverage semantics as Gate 2's overlap check, so a path that satisfies
-// one cannot fail the other: a declared entry covers everything at or under its
-// pre-glob prefix.
-function globPrefix(g) {
-  const i = g.search(/[*?[]/);
-  return (i === -1 ? g : g.slice(0, i)).replace(/\/+$/, '');
+// The ONE ownership matcher, shared with Gate 2's overlap check and base-merge,
+// so a path that satisfies one cannot fail another. The old test cut a
+// declaration at its first wildcard and compared the stump as a directory
+// prefix, which rejected this ticket's own legitimate edit to `src/fooBar.ts`
+// under `src/foo*.ts` — a blocker on a correct branch, and the same wrong owner
+// that made base-merge discard that edit (audit F01; ADR-004 D1).
+const { parse: parseDecl, owns, GRAMMAR } = require(path.join(__dirname, 'path-owner.cjs'));
+
+// No certainty, no verdict. Gate 2 rejects an entry the matcher cannot answer,
+// so reaching this gate with one means the graph was never validated — and the
+// same reasoning as the empty-declaration refusal above applies: guessing here
+// either blocks correct work or waves through an undeclared edit.
+const unanswerable = declared.filter((d) => parseDecl(d).error);
+if (unanswerable.length) {
+  fail(
+    `ticket ${ticket} declares ${unanswerable.length} entr${unanswerable.length === 1 ? 'y' : 'ies'} the ownership ` +
+    `matcher cannot answer exactly: ${unanswerable.map((d) => `"${d}"`).join(', ')} — Gate 2 should have rejected ` +
+    `that graph (run validate-graph.cjs). ${GRAMMAR}.`
+  );
 }
-const prefixes = declared.map(globPrefix);
-const covered = (p) => prefixes.some((pre) => !pre || p === pre || p.startsWith(pre + '/'));
+
+const covered = (p) => declared.some((d) => owns(d, p));
 
 let changed;
 try {

@@ -163,6 +163,11 @@ fi
 # `reapable`. gc covers the rest — worktrees the graph forgot, runs that died —
 # so its safety properties are the contract: it must never remove work that
 # exists nowhere else, and it must fail CLOSED when it cannot tell.
+#
+# The verdict that has to be EARNED is `landed`, because it is the only one
+# `--prune` acts on. Positive evidence is delivery-state saying the ticket is
+# merged; the ABSENCE of origin/<branch> is not evidence at all, since that is
+# also what an executor looks like between Phase B and Phase C (audit F08).
 git clone -q "$W/origin" "$W/gcrepo"
 GCWT="$W/gcwt"
 run_gc() { ( cd "$W/gcrepo" && SHIPYARD_WORKTREE_ROOT="$GCWT" bash "$SCRIPTS/ticket-worktree.sh" "$@" ); }
@@ -172,37 +177,67 @@ verdict_of() {  # verdict_of <json> <ticket>
     process.stdout.write(r ? r.verdict : "MISSING");
   ' "$1" "$2"
 }
+reason_of() {  # reason_of <json> <ticket>
+  node -e '
+    const r = JSON.parse(process.argv[1]).worktrees.find((w) => w.ticket === process.argv[2]);
+    process.stdout.write(r ? String(r.reason || "") : "MISSING");
+  ' "$1" "$2"
+}
 
-run_gc create T-05-01 ticket/T-05-01-live   main >/dev/null 2>&1
-run_gc create T-05-02 ticket/T-05-02-landed main >/dev/null 2>&1
-run_gc create T-05-03 ticket/T-05-03-alien  main >/dev/null 2>&1
-run_gc create T-05-04 ticket/T-05-04-dirty  main >/dev/null 2>&1
+run_gc create T-05-01 ticket/T-05-01-live     main >/dev/null 2>&1
+run_gc create T-05-02 ticket/T-05-02-unpushed main >/dev/null 2>&1
+run_gc create T-05-03 ticket/T-05-03-alien    main >/dev/null 2>&1
+run_gc create T-05-04 ticket/T-05-04-dirty    main >/dev/null 2>&1
+run_gc create T-05-05 ticket/T-05-05-merged   main >/dev/null 2>&1
 # only T-05-01 is published, so origin/<branch> exists for it alone
 git -C "$GCWT/T-05-01" push -q -u origin ticket/T-05-01-live >/dev/null 2>&1
+# T-05-02 is the F08 repro: work COMMITTED and not yet pushed — the normal state
+# of every ticket between Phase B and Phase C. Clean tree, no origin/<branch>.
+( cd "$GCWT/T-05-02" && echo unpushed > work.txt && git add work.txt \
+  && git commit -qm 'T-05-02: committed, never pushed' ) >/dev/null 2>&1
 echo 'uncommitted' > "$GCWT/T-05-04/scratch.txt"
 mkdir -p "$W/gcrepo/.planning/graph"
-graph_json='{"tickets":{"T-05-02":{},"T-05-04":{}}}'
-echo "$graph_json" > "$W/gcrepo/.planning/graph/tickets.json"
+echo '{"tickets":{"T-05-02":{},"T-05-04":{},"T-05-05":{}}}' \
+  > "$W/gcrepo/.planning/graph/tickets.json"
+# delivery-state is the positive evidence. Only T-05-05 is merged; T-05-02 is
+# present and NOT merged, which is the whole distinction being pinned here.
+cat > "$W/gcrepo/.planning/graph/delivery-state.json" <<'STATE'
+{
+  "T-05-02": { "branch": "ticket/T-05-02-unpushed", "status": "pr-open", "reapable": false },
+  "T-05-05": { "branch": "ticket/T-05-05-merged", "status": "merged", "reapable": true }
+}
+STATE
 
 report="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
 [[ "$(verdict_of "$report" T-05-01)" == "live" ]] \
   && ok "gc: a worktree whose origin/<branch> still exists is live" \
   || bad "gc: published branch is live" "$report"
-[[ "$(verdict_of "$report" T-05-02)" == "landed" ]] \
-  && ok "gc: in the graph + origin/<branch> gone + clean = landed" \
-  || bad "gc: merged ticket is landed" "$report"
+[[ "$(verdict_of "$report" T-05-02)" == "review" ]] \
+  && ok "gc: a committed-but-unpushed worktree is review, not landed" \
+  || bad "gc: an unpushed commit must not read as landed" "$report"
+grep -q 'push or remove by hand' <<<"$(reason_of "$report" T-05-02)" \
+  && ok "gc: …and the reason names the remedy instead of the missing ref" \
+  || bad "gc: review names the remedy" "$(reason_of "$report" T-05-02)"
 [[ "$(verdict_of "$report" T-05-03)" == "review" ]] \
   && ok "gc: a worktree the graph never heard of is review, not landed" \
   || bad "gc: unknown ticket is review" "$report"
 [[ "$(verdict_of "$report" T-05-04)" == "dirty" ]] \
   && ok "gc: uncommitted changes outrank every other verdict" \
   || bad "gc: dirty wins over landed" "$report"
+[[ "$(verdict_of "$report" T-05-05)" == "landed" ]] \
+  && ok "gc: delivery-state status merged + clean tree = landed" \
+  || bad "gc: a merged ticket is landed" "$report"
+# …and it must be landed FOR that reason. T-05-05's origin branch is absent too,
+# so the verdict alone cannot tell the new rule from the old one it replaces.
+grep -q 'delivery state says merged' <<<"$(reason_of "$report" T-05-05)" \
+  && ok "gc: …and cites the delivery state, not the missing remote branch" \
+  || bad "gc: landed cites positive evidence" "$(reason_of "$report" T-05-05)"
 
 # a report must never mutate anything
-if [[ -d "$GCWT/T-05-02" ]]; then
+if [[ -d "$GCWT/T-05-02" && -d "$GCWT/T-05-05" ]]; then
   ok "gc without --prune removes nothing"
 else
-  bad "gc without --prune removes nothing" "T-05-02 disappeared on a read-only run"
+  bad "gc without --prune removes nothing" "a worktree disappeared on a read-only run"
 fi
 
 warn="$(SHIPYARD_WORKTREE_WARN_AT=0 run_gc gc 2>&1 >/dev/null || true)"
@@ -210,26 +245,147 @@ grep -q 'E2BIG' <<<"$warn" \
   && ok "gc warns past SHIPYARD_WORKTREE_WARN_AT and names the failure it prevents" \
   || bad "gc warns past the threshold" "$warn"
 
-# ── fail closed: no graph means nothing can be proven landed ────────────────
+# ── fail closed: no delivery-state means nothing can be PROVEN landed ───────
+mv "$W/gcrepo/.planning/graph/delivery-state.json" \
+   "$W/gcrepo/.planning/graph/delivery-state.json.bak"
+nostate="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
+[[ "$(verdict_of "$nostate" T-05-05)" == "review" ]] \
+  && ok "gc without delivery-state.json can prove nothing landed" \
+  || bad "gc fails closed without delivery-state" "$nostate"
+run_gc gc --prune >/dev/null 2>&1 || true
+if [[ -d "$GCWT/T-05-05" ]]; then
+  ok "gc --prune with no delivery-state removes nothing"
+else
+  bad "gc --prune with no delivery-state removes nothing" "pruned on the absence of a remote branch"
+fi
+mv "$W/gcrepo/.planning/graph/delivery-state.json.bak" \
+   "$W/gcrepo/.planning/graph/delivery-state.json"
+
+# ── an UNREADABLE store is a different fact from a missing one ──────────────
+# Both prove nothing and both must fail closed, but the reason is read by a
+# human deciding what to do next: "no delivery-state.json" sends them to run a
+# delivery when the actual remedy is to repair a corrupt file.
+mv "$W/gcrepo/.planning/graph/delivery-state.json" \
+   "$W/gcrepo/.planning/graph/delivery-state.json.bak"
+printf '%s\n' '{ this is not json' > "$W/gcrepo/.planning/graph/delivery-state.json"
+badstate="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
+[[ "$(verdict_of "$badstate" T-05-05)" == "review" ]] \
+  && ok "gc with an unreadable delivery-state.json can prove nothing landed" \
+  || bad "gc fails closed on an unreadable delivery-state" "$badstate"
+grep -q 'unreadable' <<<"$(reason_of "$badstate" T-05-05)" \
+  && ok "…and the reason says the store is unreadable, not that it is missing" \
+  || bad "gc tells unreadable state from absent state" "$(reason_of "$badstate" T-05-05)"
+run_gc gc --prune >/dev/null 2>&1 || true
+if [[ -d "$GCWT/T-05-05" ]]; then
+  ok "gc --prune with an unreadable delivery-state removes nothing"
+else
+  bad "gc --prune with an unreadable delivery-state removes nothing" "pruned without evidence"
+fi
+mv -f "$W/gcrepo/.planning/graph/delivery-state.json.bak" \
+   "$W/gcrepo/.planning/graph/delivery-state.json"
+
+# ── fail closed: no graph either ("delete what the graph does not name") ────
 mv "$W/gcrepo/.planning/graph/tickets.json" "$W/gcrepo/.planning/graph/tickets.json.bak"
 nograph="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
-[[ "$(verdict_of "$nograph" T-05-02)" == "review" ]] \
+[[ "$(verdict_of "$nograph" T-05-05)" == "review" ]] \
   && ok "gc without tickets.json downgrades landed to review" \
   || bad "gc fails closed without a graph" "$nograph"
 run_gc gc --prune >/dev/null 2>&1 || true
-if [[ -d "$GCWT/T-05-02" ]]; then
+if [[ -d "$GCWT/T-05-05" ]]; then
   ok "gc --prune with no graph removes nothing"
 else
   bad "gc --prune with no graph removes nothing" "pruned a worktree it could not classify"
 fi
 mv "$W/gcrepo/.planning/graph/tickets.json.bak" "$W/gcrepo/.planning/graph/tickets.json"
 
+# ── cleanliness is re-checked under the lock, immediately before --force ────
+# The classification is a snapshot taken BEFORE the git lock is held, and
+# `worktree remove --force` discards whatever it finds. Deterministic here: the
+# test holds the lock itself, so gc classifies T-05-05 as landed, blocks, and
+# only then does the file appear.
+gc_git_dir="$(git -C "$W/gcrepo" rev-parse --git-common-dir)"
+[[ "$gc_git_dir" = /* ]] || gc_git_dir="$W/gcrepo/$gc_git_dir"
+gc_lock="$gc_git_dir/shipyard-git.lock"
+mkdir -p "$gc_lock"
+( run_gc gc --prune --json >"$W/race.json" 2>"$W/race.err" || true ) &
+racer=$!
+waited=0
+while [[ ! -s "$W/race.json" ]] && (( waited < 150 )); do sleep 0.2; waited=$((waited + 1)); done
+if (( waited >= 150 )); then
+  bad "gc --prune classifies before it takes the git lock" "no report after 30s"
+fi
+echo 'a colleague was mid-edit' > "$GCWT/T-05-05/late.txt"
+rm -rf "$gc_lock"
+wait "$racer" || true
+if [[ -d "$GCWT/T-05-05" ]]; then
+  ok "gc --prune skips a worktree that went dirty after it was classified landed"
+else
+  bad "gc --prune re-checks cleanliness under the lock" "T-05-05 was force-removed with an uncommitted file in it"
+fi
+grep -q 'became dirty' "$W/race.err" \
+  && ok "…and reports the skip with a reason" \
+  || bad "gc reports what it skipped" "$(cat "$W/race.err")"
+rm -f "$GCWT/T-05-05/late.txt"
+
+# ── a status check that FAILS is a different skip from a dirty tree ─────────
+# Same lock trick, different injection: the worktree's gitdir link is pointed at
+# nothing while gc waits, so the re-check cannot answer at all. Silence is not
+# cleanliness — it must still refuse to remove — and it must say WHY, since
+# "became dirty" sends a reader hunting for edits nobody made.
+mkdir -p "$gc_lock"
+rm -f "$W/race2.json" "$W/race2.err"
+( run_gc gc --prune --json >"$W/race2.json" 2>"$W/race2.err" || true ) &
+racer=$!
+waited=0
+while [[ ! -s "$W/race2.json" ]] && (( waited < 150 )); do sleep 0.2; waited=$((waited + 1)); done
+if (( waited >= 150 )); then
+  bad "gc --prune classifies before it takes the git lock" "no second report after 30s"
+fi
+cp "$GCWT/T-05-05/.git" "$W/t0505-gitlink"
+printf 'gitdir: %s\n' "$W/no-such-gitdir" > "$GCWT/T-05-05/.git"
+rm -rf "$gc_lock"
+wait "$racer" || true
+if [[ -d "$GCWT/T-05-05" ]]; then
+  ok "gc --prune skips a landed worktree whose cleanliness it cannot re-check"
+else
+  bad "gc --prune fails closed when git status fails" "T-05-05 was removed on an unanswered check"
+fi
+grep -q 'cannot confirm the tree is clean' "$W/race2.err" \
+  && ok "…and names the check that failed instead of claiming it went dirty" \
+  || bad "gc tells a failed status from a dirty tree" "$(cat "$W/race2.err")"
+cp "$W/t0505-gitlink" "$GCWT/T-05-05/.git"
+
+# ── the CLASSIFICATION fails closed on an unanswered status too ─────────────
+# The re-check above is the last line of defence; this is the first one. Same
+# injection, no lock held, so it is gc's own classification pass that cannot
+# read the porcelain — and `[[ -n "$(git … status --porcelain)" ]]` read that
+# silence as a CLEAN tree, so a ticket delivery-state calls merged came out
+# `landed`, reason "tree clean", counted as removable. A check that could not
+# answer must earn nothing: `review` (kept, reported), and the reason has to
+# name the failed check, because "clean" about an unreadable tree is a lie a
+# reader has no way to catch.
+printf 'gitdir: %s\n' "$W/no-such-gitdir" > "$GCWT/T-05-05/.git"
+blind="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
+[[ "$(verdict_of "$blind" T-05-05)" == "review" ]] \
+  && ok "gc: a worktree whose git status fails is review, not landed" \
+  || bad "gc: an unanswered status check must not read as clean" "$blind"
+grep -q 'cannot confirm the tree is clean' <<<"$(reason_of "$blind" T-05-05)" \
+  && ok "…and the reason names the check that failed, not a clean tree" \
+  || bad "gc: classification names the failed status" "$(reason_of "$blind" T-05-05)"
+run_gc gc --prune >/dev/null 2>&1 || true
+if [[ -d "$GCWT/T-05-05" ]]; then
+  ok "gc --prune removes nothing whose cleanliness classification never established"
+else
+  bad "gc --prune fails closed on a failed status" "T-05-05 was removed on an unanswered check"
+fi
+cp "$W/t0505-gitlink" "$GCWT/T-05-05/.git"
+
 # ── --prune removes exactly the landed one ──────────────────────────────────
 run_gc gc --prune >/dev/null 2>&1 || true
-[[ ! -d "$GCWT/T-05-02" ]] \
+[[ ! -d "$GCWT/T-05-05" ]] \
   && ok "gc --prune removes the landed worktree" \
-  || bad "gc --prune removes the landed worktree" "T-05-02 survived"
-if [[ -d "$GCWT/T-05-01" && -d "$GCWT/T-05-03" && -d "$GCWT/T-05-04" ]]; then
+  || bad "gc --prune removes the landed worktree" "T-05-05 survived"
+if [[ -d "$GCWT/T-05-01" && -d "$GCWT/T-05-02" && -d "$GCWT/T-05-03" && -d "$GCWT/T-05-04" ]]; then
   ok "gc --prune leaves live, review and dirty worktrees untouched"
 else
   bad "gc --prune leaves live/review/dirty alone" "$(ls "$GCWT")"
@@ -241,6 +397,73 @@ gone="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
 [[ "$(verdict_of "$gone" T-05-03)" == "gone" ]] \
   && ok "gc reports a registration whose directory is missing as gone" \
   || bad "gc reports a missing directory as gone" "$gone"
+
+# ── a removal that FAILED is not a removal ──────────────────────────────────
+# Both halves of the removal can fail — `worktree remove --force` on a
+# registration git will not let go of, the `rm -rf` fallback on a non-writable
+# parent, a read-only mount, or a mount point inside the tree — and the outcome
+# was never looked at: `removed` was incremented and "removed <ticket>" printed
+# one line later, under a summary that promises to report what actually
+# happened. Worse, the failing `rm` was the last command of a `||` list, so
+# `set -e` killed the run mid-loop and took the remaining landed worktrees,
+# every skip reason and the summary with it.
+#
+# Injected with PATH stubs, not file permissions: a chmod proves nothing when
+# the suite runs as root, and stubs reproduce identically on macOS and Linux.
+# Both stubs are narrowed to the ONE stuck path — a blanket `rm` stub would
+# also break the lock's EXIT trap and wedge every later gc.
+run_gc create T-05-06 ticket/T-05-06-stuck main >/dev/null 2>&1
+run_gc create T-05-07 ticket/T-05-07-next  main >/dev/null 2>&1
+echo '{"tickets":{"T-05-02":{},"T-05-04":{},"T-05-06":{},"T-05-07":{}}}' \
+  > "$W/gcrepo/.planning/graph/tickets.json"
+cat > "$W/gcrepo/.planning/graph/delivery-state.json" <<'STATE'
+{
+  "T-05-02": { "branch": "ticket/T-05-02-unpushed", "status": "pr-open", "reapable": false },
+  "T-05-06": { "branch": "ticket/T-05-06-stuck", "status": "merged", "reapable": true },
+  "T-05-07": { "branch": "ticket/T-05-07-next", "status": "merged", "reapable": true }
+}
+STATE
+# the script sees the RESOLVED path (git worktree list --porcelain prints those),
+# so the stubs have to match on that spelling, not on $GCWT/T-05-06
+STUCK="$(cd "$GCWT/T-05-06" && pwd -P)"
+STUB="$W/stub"; mkdir -p "$STUB"
+REAL_GIT="$(command -v git)"; REAL_RM="$(command -v rm)"
+cat > "$STUB/git" <<EOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"worktree remove"* && "\$*" == *"$STUCK"* ]]; then
+  echo "stub: refusing to remove the worktree registration" >&2
+  exit 1
+fi
+exec "$REAL_GIT" "\$@"
+EOF
+cat > "$STUB/rm" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  [[ "\$a" == "$STUCK" ]] && { echo "stub: rm: Permission denied" >&2; exit 1; }
+done
+exec "$REAL_RM" "\$@"
+EOF
+chmod +x "$STUB/git" "$STUB/rm"
+( cd "$W/gcrepo" && PATH="$STUB:$PATH" SHIPYARD_WORKTREE_ROOT="$GCWT" \
+    bash "$SCRIPTS/ticket-worktree.sh" gc --prune ) \
+  >"$W/stuck.out" 2>"$W/stuck.err" || true
+if [[ -d "$STUCK" ]]; then
+  ok "gc --prune leaves behind a landed worktree it could not remove"
+else
+  bad "gc --prune leaves behind what it could not remove" "$(cat "$W/stuck.err")"
+fi
+grep -q 'still present' "$W/stuck.err" \
+  && ok "…and reports the failed removal instead of announcing it as removed" \
+  || bad "gc reports a removal that failed" "$(cat "$W/stuck.err")"
+[[ ! -d "$GCWT/T-05-07" ]] \
+  && ok "…and keeps pruning the rest instead of dying on the failure" \
+  || bad "gc --prune continues past a failed removal" "$(cat "$W/stuck.err")"
+grep -q 'gc: removed .*(1 landed' "$W/stuck.err" \
+  && ok "…and the summary counts the one removal that happened, not two" \
+  || bad "gc's summary counts removals, not attempts" "$(cat "$W/stuck.err")"
+grep -q 'could not be removed' "$W/stuck.err" \
+  && ok "…and the summary names the failure a human has to act on" \
+  || bad "gc's summary names failed removals" "$(cat "$W/stuck.err")"
 
 if out="$(run_gc gc bogus 2>&1)"; then
   bad "gc rejects an unknown flag"
