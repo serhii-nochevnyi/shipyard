@@ -161,20 +161,14 @@ function integrationBranchOf(repo) {
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
-// (it survives a squash merge). state-sync parses it into state[id].gate; parse
-// it again here from the LIVE body, because merge must not trust a cache.
-function parseGate(body) {
-  const line = String(body || '').split('\n').reverse().find((l) => /^gate_status:/i.test(l.trim()));
-  if (!line) return {};
-  const out = {};
-  for (const part of line.replace(/^\s*gate_status:/i, '').split(',')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    out[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
-  }
-  return out;
-}
-const gateConform = (gate) => String((gate || {})['arch-review'] || '').toLowerCase() === 'conform';
+// (it survives a squash merge). state-sync parses it into state[id].gate and the
+// head it was rendered against into state[id].head_sha; the merge path re-reads
+// BOTH from the LIVE PR below, because merge must not trust a cache.
+//
+// The parser, the four-state classification and its words are imported from the
+// trailer's own module rather than copied: this file and front.cjs must agree on
+// whether a verdict counts, or the board offers what the guard refuses.
+const { parseGate, gateKind, gateConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
 
 function journal(rec) {
   fs.mkdirSync(GRAPH_DIR, { recursive: true });
@@ -314,13 +308,18 @@ function dutyItems() {
     } else if ((c.pending || 0) > 0) {
       item.action = 'wait-ci';
       item.why = `${c.pending} check(s) still running${unresolved === null ? ' — review threads unreadable this tick' : ''} — re-tick, do not block the main loop`;
-    } else if (s.draft && !gateConform(s.gate)) {
+    } else if (s.draft && !gateConform(s.gate, s.head_sha)) {
       // Certify BEFORE readying. Bundled together as one `finalize` these two
       // could not report separately, so a `violation` verdict and a clean one
       // ended the same way, and the action name itself was not a role the model
       // ladder knows — it got logged as one anyway.
       item.action = 'arch-review';
-      item.why = 'green draft, no `gate_status: arch-review=conform` trailer — judge the diff against the ADRs and record the verdict';
+      // A verdict recorded for another head is not a missing verdict, and saying
+      // "no trailer" about a body that visibly has one sends the agent looking
+      // for the wrong thing. The remedies differ, so the sentences do.
+      item.why = gateKind(s.gate, s.head_sha) === 'unrecorded'
+        ? 'green draft, no `gate_status: arch-review=conform` trailer — judge the diff against the ADRs and record the verdict'
+        : `green draft, ${gateWhy(s.gate, s.head_sha)} — judge THIS head against the ADRs and record the verdict again`;
     } else if (s.draft) {
       item.action = 'undraft';
       item.why = 'green + conform, still a draft — ready it (`gh pr ready`); nothing else is owed';
@@ -335,9 +334,11 @@ function dutyItems() {
     } else if (s.review_decision === 'CHANGES_REQUESTED') {
       item.action = 'review-fix';
       item.why = 'CHANGES_REQUESTED — service the threads (a bot can be wrong: a reasoned reply is a valid resolution)';
-    } else if (!gateConform(s.gate)) {
+    } else if (!gateConform(s.gate, s.head_sha)) {
       item.action = 'arch-review';
-      item.why = 'green and out of draft, but no `gate_status: arch-review=conform` trailer — the architecture verdict was never recorded';
+      item.why = gateKind(s.gate, s.head_sha) === 'unrecorded'
+        ? 'green and out of draft, but no `gate_status: arch-review=conform` trailer — the architecture verdict was never recorded'
+        : `green and out of draft, but ${gateWhy(s.gate, s.head_sha)} — the recorded verdict does not cover what is on the branch; judge THIS head and record it again`;
     } else if (AUTO_MERGE && s.merge_scope === 'stacked' && checkpointParentOf(id)) {
       // Ready in every respect, and still not ours to land: the base is an open
       // human_checkpoint parent. `merge` would be refused by the gate anyway —
@@ -461,7 +462,7 @@ function mergeOne(id) {
 
   const repo = s.repo || null;
   const view = gh(['pr', 'view', String(s.pr), ...repoArg(repo), '--json',
-    'number,state,isDraft,baseRefName,headRefName,mergeStateStatus,reviewDecision,body'], { tolerate: true });
+    'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,body'], { tolerate: true });
   if (typeof view !== 'string') return block(`gh pr view failed: ${view.error}`);
   let pr;
   try { pr = JSON.parse(view); } catch (e) { return block(`gh pr view returned unparseable JSON (${e.message})`); }
@@ -522,9 +523,15 @@ function mergeOne(id) {
 
   if (pr.reviewDecision === 'CHANGES_REQUESTED') return block('review decision is CHANGES_REQUESTED');
 
+  // The trailer AND the head it names, both from the live view: a verdict is
+  // only a verdict about the diff it was rendered against. `head_sha` on the
+  // board is minutes old, and "it was that diff last tick" is the same reasoning
+  // this whole live re-verification exists to refuse.
   const gate = parseGate(pr.body);
-  if (!gateConform(gate)) {
-    return block('the PR body carries no `gate_status: arch-review=conform` trailer — the architecture verdict is not recorded');
+  if (!gateConform(gate, pr.headRefOid)) {
+    return block(gateKind(gate, pr.headRefOid) === 'unrecorded'
+      ? 'the PR body carries no `gate_status: arch-review=conform` trailer — the architecture verdict is not recorded'
+      : `${gateWhy(gate, pr.headRefOid)} — arch-review is owed again on this head before it can land`);
   }
   res.gate = gate;
 

@@ -71,6 +71,9 @@ const { dispatchWhy, activeDispatches } = require(path.join(__dirname, 'dispatch
 // why the board offered tickets the guard was refusing. One home, one direction:
 // this module imports nothing back.
 const { movingParentOf, movingParentWhy } = require(path.join(__dirname, 'parent-moving.cjs'));
+// The trailer's classification comes from its own module — the board and the
+// guard (sentinel.cjs) must never disagree about whether a verdict counts.
+const { gateConform: trailerConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
 
 // ── the checkpoint predicates, in ONE home ──────────────────────────────────
 //
@@ -326,7 +329,11 @@ function computeFront(tickets, state, opts = {}) {
         // recorded on the PR. With auto-merge on that trailer IS the gate, so
         // the run owes the work rather than parking on a human.
         actionable.finalize.push(id);
-        why[id] = `PR #${s.pr}: green, no \`gate_status: arch-review=conform\` trailer — threads + arch-review still owed`;
+        // The words follow the STATE, not just its absence: "no trailer" about a
+        // body that visibly carries one sends the run looking for the wrong
+        // thing, and the stale case has to name both SHAs or the remedy
+        // ("re-judge THIS head") is a guess.
+        why[id] = `PR #${s.pr}: green, ${gateWhy(s.gate, s.head_sha)} — threads + arch-review still owed`;
       } else {
         // Green, out of draft, not approved: bot/human review is still open, so
         // there are threads to service and an arch-review verdict to record.
@@ -507,9 +514,17 @@ function computeFront(tickets, state, opts = {}) {
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
-// (it survives a squash merge) and parsed by state-sync into state[id].gate.
+// (it survives a squash merge) and parsed by state-sync into state[id].gate,
+// beside the head it was rendered against (state[id].head_sha).
+//
+// A verdict for ANOTHER head does not count: the observed sequence is verdict →
+// undraft → a bot review lands on the undrafted PR → review-fix pushes → CI goes
+// green again, and the untouched trailer would otherwise offer a merge of a diff
+// arch-review never saw. `sentinel.cjs merge` refuses that against the LIVE head,
+// so the board has to refuse it too — the front must never offer what the guard
+// declines, or every round re-proposes the same impossible action.
 function gateConform(s) {
-  return String(((s && s.gate) || {})['arch-review'] || '').toLowerCase() === 'conform';
+  return trailerConform((s || {}).gate, (s || {}).head_sha);
 }
 
 // EXPECTED CI LENGTH, as a per-repo median over the delivery journal.

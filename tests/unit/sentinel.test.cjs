@@ -344,8 +344,12 @@ function stubGh() {
     '#!/bin/sh',
     'argv="$*"',
     'case "$argv" in',
+    // `headRefOid` is the live head the conform trailer is bound to, and
+    // STUB_TRAILER_HEAD is the head the trailer CLAIMS. Both are unset by
+    // default — an absent head on both sides is the pre-head-binding case, and
+    // `${VAR:+…}` adds nothing at all rather than an empty `head=`.
     '  "pr view "*)',
-    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"gate_status: arch-review=conform, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" ;;',
+    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
     // The rows carry gh's own `bucket`, because check-state.cjs reads that
     // field and a row without one is PENDING by its fail-closed rule — a
     // bucket-less stub would leave every merge case waiting on CI forever.
@@ -708,6 +712,102 @@ test('a skipped check is neither failing nor pending, and does not hold the merg
   ]);
   assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
   assert.strictEqual(r.checks.total, 2, 'a skip is still a check that existed');
+});
+
+suite('a conform verdict is bound to the head it judged');
+
+// Б1/D5. The trailer says WHICH diff arch-review judged; nothing used to check
+// that the PR still carries that diff. The observed sequence: verdict → undraft
+// → a bot review lands on the now-undrafted PR → review-fix pushes → CI goes
+// green again → the untouched trailer still reads `conform`, and the guard lands
+// a diff the architecture verdict never covered. The T-24-02 guard hit this and
+// stripped the trailer by hand to force a re-review; this is that fix.
+
+const SHA_JUDGED = '1111111111111111111111111111111111111111';
+const SHA_LIVE = '2222222222222222222222222222222222222222';
+
+test('duty: a trailer for a superseded head is arch-review work, not a merge', () => {
+  const root = project({
+    tickets: { A: {} },
+    state: { A: { ...green, gate: { ...conform, head: SHA_JUDGED }, head_sha: SHA_LIVE } },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'arch-review', d.items[0].why);
+  // Both SHAs, or the remedy is a guess: "no conform trailer" would be a lie —
+  // there IS one, for code that is no longer on the branch.
+  assert.ok(/1111111/.test(d.items[0].why), d.items[0].why);
+  assert.ok(/2222222/.test(d.items[0].why), d.items[0].why);
+});
+
+test('duty: the same head is a merge (the control)', () => {
+  const root = project({
+    tickets: { A: {} },
+    state: { A: { ...green, gate: { ...conform, head: SHA_LIVE }, head_sha: SHA_LIVE } },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'merge', d.items[0].why);
+});
+
+test('duty: a headless trailer on a board that knows the head is absent', () => {
+  const root = project({ tickets: { A: {} }, state: { A: { ...green, head_sha: SHA_LIVE } } });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'arch-review', d.items[0].why);
+  assert.ok(/predates head binding/.test(d.items[0].why), d.items[0].why);
+});
+
+test('duty: neither side carries a head — the previous release\'s verdict stands', () => {
+  const root = project({ tickets: { A: {} }, state: { A: { ...green } } });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'merge', d.items[0].why);
+});
+
+// The merge gate compares the trailer against the LIVE head, not against the
+// board's: the cached head is minutes old, and "it was that diff last tick" is
+// the same reasoning the whole live re-verification exists to refuse.
+const hbRoot = () => project({
+  tickets: { 'T-HB': { branch: 'ticket/T-HB', epic: 'epic/21-x' } },
+  state: { 'T-HB': openGreen(9, 'ticket/T-HB', 'epic/21-x') },
+  config: epicConfig,
+});
+const hbMerge = (trailerHead, liveHead) => JSON.parse(run(
+  hbRoot(),
+  ['merge', 'T-HB', '--json', '--dry-run'],
+  {
+    env: onPath(stubGh(), {
+      STUB_BASE: 'epic/21-x',
+      STUB_HEAD: 'ticket/T-HB',
+      STUB_PR: '9',
+      ...(trailerHead ? { STUB_TRAILER_HEAD: trailerHead } : {}),
+      ...(liveHead ? { STUB_HEAD_OID: liveHead } : {}),
+    }),
+  }
+).stdout).results[0];
+
+test('merge refuses a conform trailer that names another head, and names both', () => {
+  const r = hbMerge(SHA_JUDGED, SHA_LIVE);
+  assert.strictEqual(r.merged, false);
+  assert.strictEqual(r.would_merge, undefined, 'not even a dry run may say it would land');
+  const b = r.blockers.join('; ');
+  assert.ok(/1111111/.test(b), b);
+  assert.ok(/2222222/.test(b), b);
+  assert.ok(/arch-review/.test(b), b);
+});
+
+test('...and lands it when the trailer names the live head (the control)', () => {
+  const r = hbMerge(SHA_LIVE, SHA_LIVE);
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+test('merge refuses a headless trailer once the PR reports a head', () => {
+  const r = hbMerge(null, SHA_LIVE);
+  assert.strictEqual(r.would_merge, undefined);
+  assert.ok(r.blockers.some((x) => /predates head binding/.test(x)), r.blockers.join('; '));
+});
+
+test('merge still lands a pre-head-binding PR whose head nothing reports', () => {
+  // The upgrade case, and the only direction compatibility runs in.
+  const r = hbMerge(null, null);
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
 });
 
 for (const r of roots) {

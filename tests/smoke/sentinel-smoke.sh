@@ -36,16 +36,21 @@ argv="$*"
 case "$argv" in
   "repo view --json defaultBranchRef"*) echo "main" ;;
   "pr list --state open"*)
-    # the open-only pass: reviewDecision + body (the gate_status trailer)
+    # the open-only pass: reviewDecision + body (the gate_status trailer). PR
+    # 101's trailer names the SAME head the row below reports, which is the
+    # ordinary path — the mismatch has its own fixture at the end of this file.
     cat <<'JSON'
-[{"number":101,"reviewDecision":null,"body":"Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green"},
+[{"number":101,"reviewDecision":null,"body":"Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=1111111111111111111111111111111111111111"},
  {"number":102,"reviewDecision":"CHANGES_REQUESTED","body":"Ticket: T-01-02\n"}]
 JSON
     ;;
   "pr list --state all"*)
+    # `headRefOid` rides in the bulk window: it is the head the trailer's verdict
+    # is bound to, and state-sync records it as head_sha. Without it the board
+    # reads a conform verdict and cannot tell which diff it covered.
     cat <<'JSON'
-[{"number":101,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-01-root","baseRefName":"epic/01-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/101","title":"T-01-01: root"},
- {"number":102,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-02-child","baseRefName":"ticket/T-01-01-root","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/102","title":"T-01-02: child"}]
+[{"number":101,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-01-root","headRefOid":"1111111111111111111111111111111111111111","baseRefName":"epic/01-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/101","title":"T-01-01: root"},
+ {"number":102,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-02-child","headRefOid":"3333333333333333333333333333333333333333","baseRefName":"ticket/T-01-01-root","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/102","title":"T-01-02: child"}]
 JSON
     ;;
   "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/01-demo\nticket/T-01-01-root\nticket/T-01-02-child\n' ;;
@@ -77,7 +82,12 @@ JSON
     # consumer on that exact row, end to end (tally → ci-fix duty → refusal).
     else echo '[{"name":"build","state":"ACTION_REQUIRED","bucket":"fail"}]'; exit 1; fi ;;
   # The merge gate re-reads the PR from live GitHub by design, so the stub has to
-  # answer it for any merge-path assertion.
+  # answer it for any merge-path assertion. This one reports NO headRefOid and
+  # its trailer names no head — deliberately, because that pair is the
+  # backwards-compatibility case (a PR verdicted by the previous release on a
+  # board synced by it): with nothing to compare, the verdict still stands, and
+  # every merge-path assertion below therefore measures its own rule and not the
+  # head binding.
   "pr view 102 --json"*)
     echo '{"number":102,"state":"OPEN","isDraft":false,"baseRefName":"ticket/T-01-01-root","headRefName":"ticket/T-01-02-child","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-01-02\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green"}' ;;
   *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;
@@ -118,6 +128,10 @@ q() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).re
   && ok "the gate_status trailer is parsed out of the PR body" \
   || bad "the gate_status trailer is parsed out of the PR body" "got: $(q T-01-01 gate arch-review)"
 
+[[ "$(q T-01-01 head_sha)" == "1111111111111111111111111111111111111111" ]] \
+  && ok "the head the verdict is bound to is recorded from the bulk window" \
+  || bad "the head the verdict is bound to is recorded" "got: $(q T-01-01 head_sha)"
+
 [[ "$(q T-01-01 merge_scope)" == "stacked" ]] \
   && ok "a PR targeting the epic is inside the stack" \
   || bad "a PR targeting the epic is inside the stack" "got: $(q T-01-01 merge_scope)"
@@ -128,6 +142,10 @@ q() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).re
 
 has "the board names the auto-merge policy" "$board" "auto-merge: epic"
 has "the board names the sentinel's duty" "$board" "sentinel:"
+# The trailer names the head the PR is actually at, so the verdict counts. This
+# is the control for the mismatch fixture at the end of the file: without it, a
+# `finalize` there would prove nothing about the head and everything about some
+# unrelated gap in the fixture.
 has "the green + conform PR is a merge for the guard" "$board" "merge: T-01-01"
 # The red child is stacked on T-01-01, whose PR is still open — so it is HELD,
 # not offered. The board used to print `fix: T-01-02` here while `duty` (below)
@@ -431,6 +449,97 @@ if blockers_match 'the base moved'; then
   bad "an up-to-date branch is not called stale" "$(head -20 "$mergeout")"
 else
   ok "an up-to-date branch is not called stale"
+fi
+
+# ── a conform verdict is bound to the head it judged ────────────────────────
+# Field-found on PR #31 and twice after it: verdict → undraft → a bot review lands
+# on the now-undrafted PR → review-fix pushes → CI goes green again, and the
+# untouched trailer still read `conform`. The guards were stripping it BY HAND to
+# force a re-review. End to end here, because the defect spanned all three
+# consumers: state-sync must RECORD the head, the board must not offer the merge,
+# the duty must name the work, and the gate must refuse against the LIVE head.
+JUDGED=1111111111111111111111111111111111111111
+LIVE=2222222222222222222222222222222222222222
+hbproj="$W/hbproj"
+mkdir -p "$hbproj/.planning/graph" "$W/bin3"
+cat > "$W/bin3/gh" <<STUB
+#!/usr/bin/env bash
+argv="\$*"
+case "\$argv" in
+  "repo view --json defaultBranchRef"*) echo "main" ;;
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  # The row reports the head the branch is at NOW; the body's trailer names the
+  # head the verdict was rendered against. That is the whole fixture.
+  "pr list --state all"*)
+    echo '[{"number":301,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","baseRefName":"epic/02-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/301","title":"T-02-01: moved"}]' ;;
+  "pr list --state open"*)
+    echo '[{"number":301,"reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=$JUDGED"}]' ;;
+  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/02-demo\nticket/T-02-01-moved\n' ;;
+  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
+  "api graphql"*)
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  "pr checks 301"*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
+  # The merge gate compares against the LIVE head, not the board's — the cached
+  # one is minutes old, which is the same reasoning the whole live
+  # re-verification exists to refuse.
+  "pr view 301 --json"*)
+    echo '{"number":301,"state":"OPEN","isDraft":false,"baseRefName":"epic/02-demo","headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=$JUDGED"}' ;;
+  *) echo "stub gh: unhandled call: \$argv" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin3/gh"
+cat > "$hbproj/.planning/graph/tickets.json" <<'JSON'
+{
+  "epics": { "2": { "branch": "epic/02-demo", "repos": [null] } },
+  "tickets": {
+    "T-02-01": { "phase": "2", "epic": "epic/02-demo", "branch": "ticket/T-02-01-moved",
+                 "title": "moved", "depends_on": [], "risk": "low" }
+  }
+}
+JSON
+echo '{"pipeline":{}}' > "$hbproj/.planning/config.json"
+
+hbboard="$W/hb-board.txt"
+( cd "$hbproj" && PATH="$W/bin3:$PATH" node "$SCRIPTS/state-sync.cjs" > "$hbboard" 2>"$W/hb-err.txt" ) \
+  || bad "state-sync runs against the moved-head stub" "$(cat "$W/hb-err.txt")"
+hbstate="$hbproj/.planning/graph/delivery-state.json"
+hq() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).reduce((o,k)=>o&&o[k],s);process.stdout.write(String(v))' "$hbstate" "$@"; }
+
+[[ "$(hq T-02-01 head_sha)" == "$LIVE" ]] \
+  && ok "state-sync records the PR's current head, not the trailer's" \
+  || bad "state-sync records the current head" "got: $(hq T-02-01 head_sha)"
+[[ "$(hq T-02-01 gate head)" == "$JUDGED" ]] \
+  && ok "and keeps the head the trailer claims, so the two can be compared" \
+  || bad "the trailer's head is parsed" "got: $(hq T-02-01 gate head)"
+
+hasnt "the board does not offer a merge for a verdict about another diff" "$hbboard" "merge: T-02-01"
+has "it offers the arch-review instead" "$hbboard" "finalize: T-02-01"
+
+hbduty="$W/hb-duty.json"
+( cd "$hbproj" && PATH="$W/bin3:$PATH" node "$SCRIPTS/sentinel.cjs" duty --json > "$hbduty" 2>/dev/null ) \
+  || bad "duty runs against the moved-head stub"
+if node -e '
+const i = require(process.argv[1]).items.find((x) => x.ticket === "T-02-01");
+// Both SHAs, or the remedy ("re-judge THIS head") is a guess — and "no conform
+// trailer" would be a lie about a body that visibly carries one.
+process.exit(i && i.action === "arch-review" && /1111111/.test(i.why) && /2222222/.test(i.why) ? 0 : 1);
+' "$hbduty" 2>/dev/null; then
+  ok "duty owes arch-review again and names both heads"
+else
+  bad "duty owes arch-review again" "$(head -20 "$hbduty")"
+fi
+
+hbmerge="$W/hb-merge.json"
+( cd "$hbproj" && PATH="$W/bin3:$PATH" node "$SCRIPTS/sentinel.cjs" merge T-02-01 --dry-run --json > "$hbmerge" 2>/dev/null ) || true
+if node -e '
+const r = require(process.argv[1]).results[0];
+const refused = r && r.merged === false && r.would_merge !== true;
+const named = refused && r.blockers.some((b) => /1111111/.test(b) && /2222222/.test(b) && /arch-review/.test(b));
+process.exit(named ? 0 : 1);
+' "$hbmerge" 2>/dev/null; then
+  ok "the gate refuses the merge against the live head, naming both"
+else
+  bad "the gate refuses a superseded verdict" "$(head -20 "$hbmerge")"
 fi
 
 echo

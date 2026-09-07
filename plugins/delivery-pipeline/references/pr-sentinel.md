@@ -132,8 +132,9 @@ node $SHIPYARD_ROOT/scripts/log-event.cjs degenerate_green ticket=<T> pr=<N> \
 otherwise — and `skipped` if the script exited 2, the one non-zero it has, which
 means it could not run at all. **A finding is never a reason to withhold
 `conform`, and never a reason to hold a merge.** The detector reports and decides
-nothing; the merge gate reads `arch-review` and nothing else, and that is pinned
-by `tests/unit/trailer.test.cjs` rather than by this sentence. List the findings
+nothing; the merge gate reads `arch-review` and the `head` that verdict is bound
+to, and nothing else, and that is pinned by `tests/unit/trailer.test.cjs` rather
+than by this sentence. List the findings
 in the PR body — file, line, what it looks like — as something a person can skim
 beside the diff, and name them in your report. The journal line is what turns "it
 earns blocking status from field data" into a measurable claim instead of a
@@ -144,24 +145,33 @@ often it was right.
 One `gh pr ready`; no agent and no model are involved. It is a separate action
 precisely because it must be unreachable until the verdict exists.
 
-The trailer, appended by `arch-review`:
+The trailer, written by `arch-review` through one script — never by hand:
 
 ```bash
-gh pr edit <pr> --body "<existing body>
-
-gate_status: arch-review=conform, drift-check=<fresh|skipped>, degenerate-green=<clean|N|skipped>, checks=green"
+node $SHIPYARD_ROOT/scripts/gate-trailer.cjs write <pr> --arch-review conform \
+     --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped>
 gh pr ready <pr>
 ```
 
-Do not invent that trailer. It IS the merge gate — `sentinel.cjs merge` refuses
-without it, and writing it while a thread is open is falsifying the gate.
+Do not invent that trailer and do not assemble one yourself. It IS the merge gate
+— `sentinel.cjs merge` refuses without it — and the writer holds three rules that
+prose could not:
 
-**One `gate_status:` line, always.** Every key goes INTO that one line, separated
-by commas; the reader takes the LAST line that starts with `gate_status:`, so a
-report appended as a second trailer line hides the architecture verdict written
-above it and the merge is refused for a verdict that was in fact recorded. That
-failure mode has its own test, because it is the shape a hand-assembled body
-naturally takes.
+* **The verdict is bound to the head it judged.** The line carries `head=<sha>`,
+  read from the live PR, and a trailer naming any other head is ABSENT to every
+  reader: the front says `finalize`, `duty` says `arch-review`, and the merge is
+  refused naming both SHAs. That is what stops the ordinary sequence — verdict →
+  undraft → a bot review lands on the now-undrafted PR → review-fix pushes → green
+  again — from landing a diff nobody judged. So a push after the verdict re-owes
+  arch-review; that cost is the point, not a defect.
+* **One `gate_status:` line, always.** Every key goes into that one line; the
+  reader takes the LAST line that starts with `gate_status:`, so a report appended
+  as a second trailer line hides the architecture verdict above it and the merge is
+  refused for a verdict that was in fact recorded. The writer strips every earlier
+  line, so through it this cannot happen — it is the shape a hand-assembled body
+  naturally takes, and it has its own test.
+* **It refuses while a review thread is unresolved.** Recording the verdict over
+  unanswered feedback falsifies the gate. Service the threads first, then write.
 
 **`merge`** — land it: `node $SHIPYARD_ROOT/scripts/sentinel.cjs merge <T>`.
 The script re-verifies everything against live GitHub and refuses on anything

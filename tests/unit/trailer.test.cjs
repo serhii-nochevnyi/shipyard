@@ -56,10 +56,31 @@ fs.writeFileSync(GH, [
   '  "repo view --json defaultBranchRef"*) echo "main" ;;',
   // reviewers.cjs resolves the repo slug before it can read any thread.
   '  "repo view --json owner,name"*) echo \'{"owner":{"login":"acme"},"name":"demo"}\' ;;',
-  '  "api graphql"*) echo \'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\' ;;',
+  // The review threads: served from a FILE when one is named, so the writer's
+  // refusal case can hand it a real unresolved thread, and the empty answer
+  // otherwise (which is what every merge-gate case here needs).
+  '  "api graphql"*)',
+  '    if [ -n "${SHIPYARD_TRAILER_THREADS:-}" ]; then cat "$SHIPYARD_TRAILER_THREADS";',
+  '    else echo \'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\'; fi ;;',
+  // reviewers.cjs asks for the review DECISION with an explicit --repo, which is
+  // a different argv shape from the body read below. Unanswered it merely warns
+  // (the call is tolerated), but then every writer case would run with a stub
+  // printing errors, and a real refusal would be indistinguishable from noise.
+  '  "pr view 9 --repo"*) echo \'{"reviewDecision":null}\' ;;',
   // The merge gate re-reads the PR from live GitHub by design — this IS the body
-  // under test.
+  // under test. The writer reads the same call for `body,headRefOid`.
   '  "pr view 9 --json"*) cat "$SHIPYARD_TRAILER_PRVIEW" ;;',
+  // The writer's only mutation. The body is captured to a file rather than
+  // echoed, because it is multi-line by definition: asserting on it through the
+  // stub's stdout would depend on shell quoting, which is the thing that made
+  // hand-assembling this trailer unreliable in the first place.
+  '  "pr edit 9"*)',
+  '    prev=""',
+  '    for a in "$@"; do',
+  '      if [ "$prev" = "--body" ]; then printf \'%s\' "$a" > "$SHIPYARD_TRAILER_EDIT"; fi',
+  '      prev="$a"',
+  '    done',
+  '    echo "https://example/pr/9" ;;',
   // gh returns its own `bucket` beside `state`, and check-state.cjs reads the
   // bucket: a row without one is PENDING, so a bucket-less stub would have the
   // gate refuse "1 check(s) still running" and none of the trailer cases below
@@ -252,6 +273,229 @@ test('negative control — duty DOES change when the architecture verdict does',
   );
   assert.strictEqual(violation.items[0].action, 'arch-review', 'a non-conform gate is unrecorded work');
   assert.notDeepStrictEqual(violation, bare, 'the duty comparison must be able to fail');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A CONFORM VERDICT IS BOUND TO THE HEAD IT JUDGED
+//
+// Everything above pins that an EXTRA key changes no verdict. `head=` is the one
+// key that must: it says which diff arch-review actually judged. The sequence
+// that costs the most is ordinary — verdict → undraft → a bot review lands on
+// the now-undrafted PR → review-fix pushes → CI goes green again — and the
+// untouched trailer would otherwise still read `conform` for code that is no
+// longer on the branch. It happened on PR #31 and twice after it, and the guards
+// were stripping the trailer BY HAND to force a re-review.
+//
+// The reader is exercised directly here (it is pure), and the three consumers
+// through their own fixtures in sentinel.test.cjs / front.test.cjs.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const TRAILER = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'gate-trailer.cjs');
+const { USAGE, parseGate, gateKind, gateConform, gateWhy } = require(TRAILER);
+
+const SHA_A = 'abc123abc123abc123abc123abc123abc123abcd';
+const SHA_B = 'def456def456def456def456def456def456defa';
+
+suite('the trailer reader: head= is a key like any other, and a bound verdict');
+
+test('parseGate reads head= out of the line', () => {
+  assert.deepStrictEqual(
+    parseGate('gate_status: arch-review=conform, head=abc123'),
+    { 'arch-review': 'conform', head: 'abc123' }
+  );
+});
+
+test('the LAST gate_status line still wins, head and all', () => {
+  // The property the whole file exists to protect, now over two heads: a
+  // re-verdict appends, so the newest line is the current one.
+  const body = [
+    'gate_status: arch-review=conform, head=aaaaaaa',
+    '',
+    'gate_status: arch-review=conform, head=bbbbbbb',
+  ].join('\n');
+  assert.strictEqual(parseGate(body).head, 'bbbbbbb');
+  // …and an unknown key still passes through untouched beside it.
+  assert.strictEqual(
+    parseGate('gate_status: arch-review=conform, someday=42, head=abc123').someday,
+    '42'
+  );
+});
+
+test('gateKind separates the four states, and only one of them is conform', () => {
+  const conformTrailer = (head) => ({ 'arch-review': 'conform', ...(head ? { head } : {}) });
+  // Same head: the ordinary path.
+  assert.strictEqual(gateKind(conformTrailer(SHA_A), SHA_A), 'conform');
+  // Different head: the verdict is about code that is not on the branch.
+  assert.strictEqual(gateKind(conformTrailer(SHA_A), SHA_B), 'stale');
+  // Neither side knows a head — a trailer from the previous release on a board
+  // synced by it. Nothing to compare, so the verdict stands. This is the only
+  // direction compatibility runs in, and the case that must not regress a board
+  // mid-upgrade.
+  assert.strictEqual(gateKind(conformTrailer(null), null), 'conform');
+  // The board KNOWS the head and the trailer does not: fail-closed, because
+  // nothing can say which diff was judged.
+  assert.strictEqual(gateKind(conformTrailer(null), SHA_B), 'unbound');
+  // No verdict at all, with or without a head on the board.
+  assert.strictEqual(gateKind(null, SHA_B), 'unrecorded');
+  assert.strictEqual(gateKind({ 'arch-review': 'violation', head: SHA_B }, SHA_B), 'unrecorded');
+  // An empty head string is an absent head — gh omits the field, a stub prints
+  // "", a hand-written trailer says `head=`, and all three mean the same thing.
+  assert.strictEqual(gateKind(conformTrailer(SHA_A), ''), 'stale');
+  assert.strictEqual(gateKind({ 'arch-review': 'conform', head: '' }, ''), 'conform');
+  // gateConform is exactly "kind === conform", which is what the three readers
+  // call. Asserted, not assumed: they must not be able to drift apart.
+  for (const [gate, head] of [[conformTrailer(SHA_A), SHA_A], [conformTrailer(SHA_A), SHA_B],
+    [conformTrailer(null), null], [conformTrailer(null), SHA_B], [null, SHA_B]]) {
+    assert.strictEqual(gateConform(gate, head), gateKind(gate, head) === 'conform');
+  }
+});
+
+test('a short-sha trailer counts as stale rather than being prefix-matched', () => {
+  // Fail-CLOSED on the one gate that decides what lands: tolerance would let a
+  // 7-char coincidence pass. It costs one re-review and self-heals the moment
+  // the writer records the full oid.
+  assert.strictEqual(gateKind({ 'arch-review': 'conform', head: SHA_A.slice(0, 7) }, SHA_A), 'stale');
+});
+
+test('gateWhy names BOTH SHAs for a stale verdict, and no remedy', () => {
+  // Both, or the remedy ("re-judge this head") is a guess — and "no conform
+  // trailer" would be a lie about a body that visibly carries one. The remedy is
+  // the caller's to add: the board says what is owed, the guard says why it
+  // refuses, and gateWhy must not force one file's words on the other.
+  const why = gateWhy({ 'arch-review': 'conform', head: SHA_A }, SHA_B);
+  assert.ok(why.includes('abc123a'), why);
+  assert.ok(why.includes('def456d'), why);
+  assert.strictEqual(gateWhy({ 'arch-review': 'conform', head: SHA_A }, SHA_A), null, 'conform has no why');
+});
+
+test('gateWhy says a headless trailer predates head binding', () => {
+  const why = gateWhy({ 'arch-review': 'conform' }, SHA_B);
+  assert.ok(/predates head binding/.test(why), why);
+  // The unrecorded phrase is the one three existing messages embed verbatim, so
+  // it must keep naming the trailer the agent is supposed to look for.
+  assert.ok(gateWhy(null, null).includes('arch-review=conform'), gateWhy(null, null));
+});
+
+suite('gate-trailer write: one line, bound to the live head, never over a thread');
+
+const EDIT = path.join(W, 'edited-body.txt');
+const THREADS = path.join(W, 'threads.json');
+
+// One unresolved thread in the shape reviewers.cjs actually counts (`isResolved:
+// false`, one comment) — a payload it cannot walk would refuse for the wrong
+// reason and the test would pass while measuring nothing.
+const oneOpenThread = JSON.stringify({
+  data: { repository: { pullRequest: { reviewThreads: {
+    pageInfo: { hasNextPage: false, endCursor: null },
+    nodes: [{
+      id: 'T_kw1', isResolved: false, isOutdated: false, path: 'a.js', line: 1,
+      comments: { totalCount: 1, pageInfo: { hasNextPage: false },
+        nodes: [{ author: { login: 'coderabbitai' }, body: 'nit', url: 'https://example/1' }] },
+    }],
+  } } } },
+});
+
+function writeTrailer({ body, headRefOid, threads, args } = {}) {
+  fs.writeFileSync(PRVIEW, JSON.stringify({ number: 9, body: body === undefined ? 'Ticket: T-01-01\n' : body, ...(headRefOid === null ? {} : { headRefOid: headRefOid || SHA_A }) }));
+  try { fs.unlinkSync(EDIT); } catch { /* not written yet */ }
+  const env = { ...process.env, PATH: `${BIN}${path.delimiter}${process.env.PATH}`, SHIPYARD_TRAILER_PRVIEW: PRVIEW, SHIPYARD_TRAILER_EDIT: EDIT };
+  if (threads) { fs.writeFileSync(THREADS, threads); env.SHIPYARD_TRAILER_THREADS = THREADS; }
+  const r = spawnSync(process.execPath, [TRAILER, ...(args || ['write', '9', '--arch-review', 'conform', '--drift-check', 'fresh', '--degenerate-green', 'clean'])], { encoding: 'utf8', env });
+  return { ...r, edited: fs.existsSync(EDIT) ? fs.readFileSync(EDIT, 'utf8') : null };
+}
+
+test('the written trailer carries the live head, and there is exactly ONE of them', () => {
+  // The stale line is STRIPPED, not appended past: a body with two lines hides
+  // the verdict above it, which is the failure mode the suites above pin. Here it
+  // cannot happen by construction.
+  const r = writeTrailer({
+    body: `Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=${SHA_B}`,
+    headRefOid: SHA_A,
+  });
+  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  const lines = r.edited.split('\n').filter((l) => /^\s*gate_status:/i.test(l));
+  assert.strictEqual(lines.length, 1, `expected one trailer, got:\n${r.edited}`);
+  assert.ok(lines[0].includes(`head=${SHA_A}`), lines[0]);
+  assert.ok(!r.edited.includes(SHA_B), `the superseded head survived:\n${r.edited}`);
+  assert.ok(r.edited.startsWith('Ticket: T-01-01'), `the body was not preserved:\n${r.edited}`);
+  // Writer → reader round trip: what this script writes is what the three
+  // readers accept for that head, and reject for any other. Asserting the text
+  // alone would pin the format and not the agreement.
+  assert.strictEqual(gateConform(parseGate(r.edited), SHA_A), true);
+  assert.strictEqual(gateConform(parseGate(r.edited), SHA_B), false);
+});
+
+test('an unresolved thread refuses the write, and nothing is edited', () => {
+  // "Writing it while a thread is open is falsifying the gate" was a sentence in
+  // pr-sentinel.md. It is now a refusal — and the PR body must be untouched,
+  // because a half-written verdict is worse than none.
+  const r = writeTrailer({ threads: oneOpenThread });
+  assert.notStrictEqual(r.status, 0, `expected a refusal, got exit 0:\n${r.stdout}`);
+  assert.strictEqual(r.edited, null, `the body was edited anyway:\n${r.edited}`);
+  assert.ok(/unresolved review thread/.test(r.stderr), r.stderr);
+});
+
+test('a PR reporting no head refuses too, rather than writing a headless trailer', () => {
+  // Otherwise the writer would manufacture the exact legacy shape the readers
+  // now fail closed on, and the next reader would call it `unbound`.
+  const r = writeTrailer({ headRefOid: null });
+  assert.notStrictEqual(r.status, 0, `expected a refusal, got exit 0:\n${r.stdout}`);
+  assert.strictEqual(r.edited, null);
+  assert.ok(/headRefOid/.test(r.stderr), r.stderr);
+});
+
+test('threads it cannot read refuse as well — the writer is not softer than the gate', () => {
+  const r = writeTrailer({ threads: 'not json at all' });
+  assert.notStrictEqual(r.status, 0, `expected a refusal, got exit 0:\n${r.stdout}`);
+  assert.strictEqual(r.edited, null);
+  assert.ok(/review threads/.test(r.stderr), r.stderr);
+});
+
+test('a missing required flag is a usage error, not a trailer with holes in it', () => {
+  const r = writeTrailer({ args: ['write', '9', '--arch-review', 'conform'] });
+  assert.strictEqual(r.status, 2, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null);
+  assert.ok(/--drift-check/.test(r.stderr), r.stderr);
+});
+
+suite('the command docs call the writer instead of assembling a trailer by hand');
+
+// The docs are the delivery channel for anything a dispatched agent does, so a
+// doc still showing `gh pr edit --body "…gate_status…"` keeps producing exactly
+// the trailer this ticket exists to stop: one with no head, and sometimes two of
+// them. Pinned against the script's own USAGE rather than a copy of it.
+const DOCS = [
+  path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'),
+  path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'),
+];
+const REQUIRED_FLAGS = ['--arch-review', '--drift-check', '--degenerate-green'];
+
+test('both docs invoke gate-trailer.cjs write with every flag the script requires', () => {
+  for (const f of REQUIRED_FLAGS) {
+    assert.ok(USAGE.includes(f), `the script's USAGE no longer names ${f} — update REQUIRED_FLAGS and the docs together`);
+  }
+  for (const doc of DOCS) {
+    const text = fs.readFileSync(doc, 'utf8');
+    assert.ok(/gate-trailer\.cjs write/.test(text), `${path.basename(doc)} does not call the trailer writer`);
+    for (const f of REQUIRED_FLAGS) {
+      assert.ok(text.includes(f), `${path.basename(doc)} omits ${f}`);
+    }
+  }
+});
+
+test('neither doc hand-writes a gate_status: line into a gh pr edit body', () => {
+  for (const doc of DOCS) {
+    const lines = fs.readFileSync(doc, 'utf8').split('\n');
+    lines.forEach((line, i) => {
+      if (!/gh pr edit/.test(line)) return;
+      const window = lines.slice(i, i + 4);
+      const hand = window.findIndex((l) => /gate_status:/.test(l));
+      assert.strictEqual(
+        hand, -1,
+        `${path.basename(doc)}:${i + 1} still assembles a trailer by hand:\n${window.join('\n')}`
+      );
+    });
+  }
 });
 
 done();

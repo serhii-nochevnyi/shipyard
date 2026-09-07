@@ -137,6 +137,70 @@ test('a human_checkpoint ticket is never auto-merged, however green', () => {
   assert.deepStrictEqual(f.waiting.human, ['T']);
 });
 
+suite('front — a conform verdict is bound to the head it judged');
+
+// The trailer records WHICH diff arch-review judged. Landing a PR whose head has
+// moved since is landing a diff nobody reviewed: the observed sequence is
+// verdict → undraft → a bot review lands on the undrafted PR → review-fix pushes
+// → CI goes green again → the stale trailer still reads `conform`. The board must
+// owe the verdict again, not offer the merge.
+
+const conformAt = (head) => ({ ...conform, head });
+
+test('a trailer whose head is not the PR head owes arch-review again', () => {
+  const f = computeFront(
+    { T: {} },
+    { T: { ...landed, gate: conformAt('abc123'), head_sha: 'def456' } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.actionable.merge, [], 'a verdict for another diff must not be a merge');
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+  // The reason has to name both SHAs, or the remedy ("re-judge this head") is a
+  // guess: a bare "no conform trailer" is false — there IS one, for other code.
+  assert.ok(/abc123/.test(f.why.T) && /def456/.test(f.why.T), f.why.T);
+  assert.ok(/arch-review/.test(f.why.T), f.why.T);
+});
+
+test('the same head is conform — the ordinary path is unchanged', () => {
+  const f = computeFront(
+    { T: {} },
+    { T: { ...landed, gate: conformAt('abc123'), head_sha: 'abc123' } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+});
+
+test('a stale trailer is absent for the merge_human branch too, not just for merge', () => {
+  // The `merge_scope !== 'stacked'` branch reads the same gate. A stale verdict
+  // leaking through here would tell a human "green + conform" about a diff the
+  // architecture verdict never covered.
+  const f = computeFront(
+    { T: {} },
+    { T: { ...landed, merge_scope: 'integration', pr_base: 'main', gate: conformAt('abc123'), head_sha: 'def456' } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+});
+
+test('a pre-head-binding trailer on a pre-head-binding board is still conform', () => {
+  // Backwards compatibility, and only in this direction: with no head on either
+  // side there is nothing to compare, so the verdict of the previous release
+  // stands. This is the case that must not regress a board mid-upgrade.
+  const f = computeFront({ T: {} }, { T: { ...landed } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+});
+
+test('but a headless trailer on a board that KNOWS the head is absent', () => {
+  // Fail-closed: the board carries a head, the trailer does not, so nothing can
+  // say which diff was judged. It bites only a PR verdicted before the upgrade
+  // and not merged before it — one re-review, never a silent merge.
+  const f = computeFront({ T: {} }, { T: { ...landed, head_sha: 'def456' } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, []);
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+  assert.ok(/predates head binding/.test(f.why.T), f.why.T);
+});
+
 suite('front — sentinel ownership');
 
 test('fix/finalize/merge are the sentinel\'s duty, execute/publish are not', () => {
