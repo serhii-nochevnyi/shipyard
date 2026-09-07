@@ -340,17 +340,28 @@ function globPrefix(g) {
 // a file at the repository root, whose directory IS the repository — measuring
 // that would report every commit anywhere as drift and the ticket would never be
 // fresh, so a root-level declaration is measured as itself.
+//
+// A ROOT-LEVEL glob (`*.ts`, `**`, validate-graph.cjs already accepts these as
+// declarations) is the one shape `globPrefix` cannot turn into a directory: the
+// cut lands at index 0, so the prefix is `''`. Earlier this fell back to
+// pushing the raw glob itself into `scan_paths`, right back into the git-log
+// pathspec this whole rule exists to keep glob-free (Copilot review on PR #48,
+// round 3 — the case this file's own scanPaths comment had not yet named).
+// There is no directory narrower than "the repository" to express that
+// declaration's scope, so it is not a per-file entry at all: it makes the
+// WHOLE SCAN unrestricted, same as the ticket declaring no files.
 function scanPaths(files) {
   const out = new Set();
   for (const f of files || []) {
     const p = String(f).replace(/\\/g, '/').replace(/^\.\//, '');
     if (!p) continue;
-    let d;
     const prefix = globPrefix(p);
+    if (prefix === '' && prefix !== p) return []; // root-level glob: unrestricted, not a path to add
+    let d;
     if (prefix === p) {
       // no wildcard: unchanged behaviour
       d = path.posix.dirname(p);
-    } else if (prefix === '' || prefix.endsWith('/')) {
+    } else if (prefix.endsWith('/')) {
       // the cut landed exactly on a path boundary (`src/` from `src/*.ts` or
       // `src/**/foo.ts`) — the prefix, minus its trailing slash, IS the
       // directory whose siblings matter.
@@ -416,7 +427,11 @@ for (const chunk of records) {
   }
 }
 
-const scope = paths.length ? paths.join(', ') : 'the whole repository (the ticket declares no files)';
+const scope = paths.length
+  ? paths.join(', ')
+  : (ticket.files && ticket.files.length
+    ? 'the whole repository (a declared file resolves to a root-level glob)'
+    : 'the whole repository (the ticket declares no files)');
 
 // `-nLOG_CAP` bounds how much history `git log` walks; hitting that cap means
 // there may be MORE first-parent commits in the `--since` window than were

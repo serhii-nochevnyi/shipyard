@@ -447,6 +447,20 @@ test('a glob that lands mid-filename scopes to the directory above it, not the p
   assert.deepStrictEqual(r.json.scan_paths, ['src/mod01']);
 });
 
+test('a root-level glob has no directory narrower than the whole repository, so it is unrestricted rather than passed to git as-is', () => {
+  // globPrefix('*.ts') is '' — there is no pre-glob directory to cut to, so
+  // the old code fell back to pushing the raw glob into scan_paths, right
+  // back into the git-log pathspec this rule exists to keep glob-free
+  // (Copilot review on PR #48, round 3).
+  const w = build({ tickets: 1, moved: [1], files: () => ['*.ts'] });
+  const r = run(w, ['T-01-01', '--json']);
+  assert.deepStrictEqual(r.json.scan_paths, []);
+  assert.ok(!/\*/.test(r.json.reason), `a glob character leaked into the reason: ${r.json.reason}`);
+  // unrestricted means the WHOLE repo is scanned, so the sibling commit under
+  // src/mod01 (unrelated to any *.ts file) still counts.
+  assert.strictEqual(r.json.needed, true, JSON.stringify(r.json));
+});
+
 // ── the log cap bounds what was READ, not what happened ─────────────────────
 suite('drift-needed — hitting the log cap is unknown, not fresh');
 
