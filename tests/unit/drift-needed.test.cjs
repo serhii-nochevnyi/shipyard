@@ -426,6 +426,80 @@ test('a fetch that FAILED is said out loud, because the answer may then be stale
   assert.ok(/fetch/.test(r.json.reason), r.json.reason);
 });
 
+// ── a glob does not reach git as-is ─────────────────────────────────────────
+suite('drift-needed — a glob in files_modified is scoped, not passed through');
+
+test('a glob path is scoped to its pre-glob-prefix directory, and a sibling under it still counts', () => {
+  // scope-gate.cjs / validate-graph.cjs / base-merge.cjs already cut a
+  // declaration at its first wildcard for ownership purposes (ADR-004 D1);
+  // this proves drift-needed.cjs's OWN scan scope follows the same rule
+  // rather than handing git a pathspec whose glob semantics this script does
+  // not control.
+  const w = build({ tickets: 2, moved: [1], files: (i) => (i === 1 ? ['src/mod01/**/*.ts'] : ['src/mod02/impl.cjs']) });
+  const r = run(w, ['T-01-01', '--json']);
+  assert.deepStrictEqual(r.json.scan_paths, ['src/mod01']);
+  assert.strictEqual(r.json.needed, true, JSON.stringify(r.json));
+});
+
+test('a glob that lands mid-filename scopes to the directory above it, not the partial name', () => {
+  const w = build({ tickets: 1, files: () => ['src/mod01/impl*.cjs'] });
+  const r = run(w, ['T-01-01', '--json']);
+  assert.deepStrictEqual(r.json.scan_paths, ['src/mod01']);
+});
+
+// ── the log cap bounds what was READ, not what happened ─────────────────────
+suite('drift-needed — hitting the log cap is unknown, not fresh');
+
+test('hitting the log cap answers needed, not fresh, when nothing was found in what was read', () => {
+  const w = build({ tickets: 1 });
+  // More than LOG_CAP (500) first-parent commits that GENUINELY touch the
+  // scanned path, all dated BEFORE the plan (so none would set `movedAt` even
+  // if read in full) — enough to fill the `-n500` output on their own. A real
+  // repository could bury a POST-plan match behind that many pre-plan ones
+  // whenever committer dates are not strictly increasing (the same
+  // out-of-order-dates risk `SINCE_MARGIN_SEC`'s own comment already names for
+  // merge commits); this proves the script answers `needed` when the read hit
+  // the cap, rather than trusting a `null` it cannot actually vouch for.
+  //
+  // Built via ONE `git fast-import` stream (505 commits) rather than 505
+  // separate git invocations — the same repository shape at a fraction of the
+  // process-spawn cost, which matters here: `make test-fast` is meant to run
+  // in seconds, and a per-commit subprocess loop at this count alone pushed a
+  // single test past a minute.
+  const ts = w.planTs - 100;
+  const when = `${ts} +0000`;
+  const lines = [];
+  let parentMark = null;
+  const NOISE_COMMITS = 505; // > the script's own LOG_CAP (500)
+  for (let i = 1; i <= NOISE_COMMITS; i++) {
+    lines.push(
+      `commit refs/heads/${EPIC}`,
+      `mark :${i}`,
+      `author Drift Test <drift@example.com> ${when}`,
+      `committer Drift Test <drift@example.com> ${when}`,
+      `data <<COMMITMSG`,
+      `noise ${i}`,
+      `COMMITMSG`,
+      ...(parentMark ? [`from ${parentMark}`] : [`from ${EPIC}^0`]),
+      `M 100644 inline src/mod01/noise.txt`,
+      `data <<BLOB`,
+      `noise ${i}`,
+      `BLOB`,
+      '',
+    );
+    parentMark = `:${i}`;
+  }
+  lines.push(`reset refs/heads/${EPIC}`, `from ${parentMark}`, '');
+  const importStream = lines.join('\n');
+  const imported = spawnSync('git', ['-C', w.proj, 'fast-import', '--quiet'], { input: importStream, env: w.env });
+  assert.strictEqual(imported.status, 0, (imported.stderr || '').toString());
+  const noise = spawnSync('git', ['-C', w.proj, 'push', '-q', 'origin', EPIC], { env: w.env });
+  assert.strictEqual(noise.status, 0, noise.stderr);
+  const r = run(w, ['T-01-01', '--json']);
+  assert.strictEqual(r.json.needed, true, JSON.stringify(r.json));
+  assert.ok(/log cap/.test(r.json.reason), r.json.reason);
+});
+
 // ── the measurement, encoded ────────────────────────────────────────────────
 suite('drift-needed — the measured session (2026-09-07)');
 
@@ -450,10 +524,10 @@ suite('drift-needed — shape');
 test('the JSON carries every field the contract names', () => {
   const w = build({ tickets: 1 });
   const r = run(w, ['T-01-01', '--json']);
-  for (const k of ['needed', 'reason', 'base', 'plan_mtime', 'base_moved_at']) {
+  for (const k of ['needed', 'reason', 'base', 'plan_time', 'base_moved_at']) {
     assert.ok(k in r.json, `missing ${k} in ${JSON.stringify(r.json)}`);
   }
-  assert.ok(/^\d{4}-\d\d-\d\dT/.test(r.json.plan_mtime), r.json.plan_mtime);
+  assert.ok(/^\d{4}-\d\d-\d\dT/.test(r.json.plan_time), r.json.plan_time);
 });
 
 test('without --json it prints a line a human can read, and still exits 0', () => {

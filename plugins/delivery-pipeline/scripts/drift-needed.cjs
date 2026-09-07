@@ -214,7 +214,7 @@ function answer(fields) {
     base_ref: fields.base_ref ?? null,
     base_source: fields.base_source ?? null,
     plan: ticket.plan || null,
-    plan_mtime: fields.plan_mtime ?? null,
+    plan_time: fields.plan_time ?? null,
     plan_time_source: fields.plan_time_source ?? null,
     base_moved_at: fields.base_moved_at ?? null,
     moved_paths: fields.moved_paths ?? [],
@@ -318,6 +318,21 @@ let planTimeSource = null;
 const planIso = new Date(planTs * 1000).toISOString();
 const ageDays = Math.round(((Date.now() / 1000) - planTs) / 864) / 100;
 
+// A glob metacharacter makes a `files_modified` entry's OWN directory
+// ambiguous (`src/**/foo.ts`'s dirname is the glob-laden `src/**`, not a real
+// path), and passing that through to `git log -- <path>` mis-measures drift
+// against whatever git's own (version-dependent) pathspec glob rules happen to
+// do with it (Copilot review on PR #48). `scope-gate.cjs`, `validate-graph.cjs`
+// and `base-merge.cjs` already answer "where does this declaration's ownership
+// end" the same way — cut at the first wildcard character — so this reuses
+// that cut rather than trusting git to interpret the glob itself. ADR-004 D1
+// wants ONE such matcher; until that module exists, this is the same rule
+// duplicated a fourth time, not a fifth DIFFERENT one.
+function globPrefix(g) {
+  const i = g.search(/[*?[]/);
+  return i === -1 ? g : g.slice(0, i);
+}
+
 // ── what the base has taken since ───────────────────────────────────────────
 // The scope is the DIRECTORIES `files_modified` names, not the files: what a
 // drift check is actually looking for is a sibling reorganizing the area the
@@ -330,7 +345,22 @@ function scanPaths(files) {
   for (const f of files || []) {
     const p = String(f).replace(/\\/g, '/').replace(/^\.\//, '');
     if (!p) continue;
-    const d = path.posix.dirname(p);
+    let d;
+    const prefix = globPrefix(p);
+    if (prefix === p) {
+      // no wildcard: unchanged behaviour
+      d = path.posix.dirname(p);
+    } else if (prefix === '' || prefix.endsWith('/')) {
+      // the cut landed exactly on a path boundary (`src/` from `src/*.ts` or
+      // `src/**/foo.ts`) — the prefix, minus its trailing slash, IS the
+      // directory whose siblings matter.
+      d = prefix.replace(/\/+$/, '');
+    } else {
+      // the cut landed mid-segment (`src/foo` from `src/foo*.ts`) — that is a
+      // partial filename, not a directory, so its OWN dirname is the safe
+      // (broader, never narrower) directory to scan.
+      d = path.posix.dirname(prefix);
+    }
     out.add(d === '.' || d === '' || d === '/' ? p : d);
   }
   return [...out];
@@ -359,7 +389,7 @@ if (log.status !== 0) {
     base,
     base_ref: baseRef,
     base_source: baseSource,
-    plan_mtime: planIso,
+    plan_time: planIso,
     plan_time_source: planTimeSource,
     scan_paths: paths,
     age_days: ageDays,
@@ -370,10 +400,10 @@ if (log.status !== 0) {
 }
 
 // `%x00` starts every record, so a filename can never be mistaken for a header.
+const records = (log.stdout || '').split('\0').filter((c) => c.trim());
 const movedPaths = new Set();
 let movedAt = null;
-for (const chunk of (log.stdout || '').split('\0')) {
-  if (!chunk.trim()) continue;
+for (const chunk of records) {
   const lines = chunk.split('\n');
   const ts = Number((lines.shift() || '').trim());
   if (!Number.isFinite(ts) || ts <= planTs) continue;   // strictly newer than the plan; the --since margin is only a bound
@@ -388,13 +418,38 @@ for (const chunk of (log.stdout || '').split('\0')) {
 
 const scope = paths.length ? paths.join(', ') : 'the whole repository (the ticket declares no files)';
 
+// `-nLOG_CAP` bounds how much history `git log` walks; hitting that cap means
+// there may be MORE first-parent commits in the `--since` window than were
+// read, and any of the unread ones could be the sibling that touched the
+// scanned paths (Copilot review on PR #48). Nothing was found in what WAS
+// read, but "nothing found in a truncated read" is not "nothing landed" —
+// unknown is not clean, so a hit at the cap answers `needed` rather than
+// `fresh`. Checked only when nothing already forced `needed: true` above;
+// a real move found within the cap is still reported as itself.
+if (movedAt === null && records.length >= LOG_CAP) {
+  answer({
+    needed: true,
+    base,
+    base_ref: baseRef,
+    base_source: baseSource,
+    plan_time: planIso,
+    plan_time_source: planTimeSource,
+    scan_paths: paths,
+    age_days: ageDays,
+    fetched,
+    reason: `${baseRef}'s first-parent history since the plan was written (${planIso}) hit the `
+      + `${LOG_CAP}-commit log cap with nothing found in what was read — there may be more history `
+      + 'than this scan saw, and unknown is not clean',
+  });
+}
+
 if (movedAt !== null) {
   answer({
     needed: true,
     base,
     base_ref: baseRef,
     base_source: baseSource,
-    plan_mtime: planIso,
+    plan_time: planIso,
     plan_time_source: planTimeSource,
     base_moved_at: new Date(movedAt * 1000).toISOString(),
     moved_paths: [...movedPaths].sort(),
@@ -412,7 +467,7 @@ if (ageDays > MAX_AGE_DAYS) {
     base,
     base_ref: baseRef,
     base_source: baseSource,
-    plan_mtime: planIso,
+    plan_time: planIso,
     plan_time_source: planTimeSource,
     scan_paths: paths,
     age_days: ageDays,
@@ -427,7 +482,7 @@ answer({
   base,
   base_ref: baseRef,
   base_source: baseSource,
-  plan_mtime: planIso,
+  plan_time: planIso,
   plan_time_source: planTimeSource,
   scan_paths: paths,
   age_days: ageDays,
