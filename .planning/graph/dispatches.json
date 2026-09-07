@@ -17,6 +17,36 @@
       "at": "2026-09-07T13:49:43.055Z",
       "fingerprint": "48d82d9e7b12bf07",
       "pr": 34
+    },
+    "T-24-04": {
+      "role": "ci-fix",
+      "at": "2026-09-07T14:20:27.283Z",
+      "fingerprint": "22e3f55dfd156fff",
+      "pr": null
+    },
+    "T-24-10": {
+      "role": "ci-fix",
+      "at": "2026-09-07T14:20:27.354Z",
+      "fingerprint": "593091d3643b9c2f",
+      "pr": null
+    },
+    "T-26-01": {
+      "role": "pr-sentinel",
+      "at": "2026-09-07T14:20:27.422Z",
+      "fingerprint": "19c90911c67d919a",
+      "pr": 37
+    },
+    "T-26-04": {
+      "role": "pr-sentinel",
+      "at": "2026-09-07T14:20:07.665Z",
+      "fingerprint": "21b38c91c22f9930",
+      "pr": 38
+    },
+    "T-26-06": {
+      "role": "pr-sentinel",
+      "at": "2026-09-07T14:20:27.491Z",
+      "fingerprint": "251e61837aabcd77",
+      "pr": 39
     }
   }
 }
