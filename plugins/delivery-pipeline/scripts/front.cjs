@@ -223,18 +223,35 @@ function computeFront(tickets, state, opts = {}) {
   // dispatch-record.cjs and the CLI below) and a board that answered
   // `merge_human` while sentinel.cjs — which reads the config directly — landed
   // the same PR is exactly the board/guard disagreement the shared predicates
-  // above exist to prevent. state-sync and this CLI both run at the project root
-  // (that is their own rule), so they resolve the project's setting; a caller
-  // standing somewhere else — a dispatch mark run from a ticket worktree — reads
-  // no config and gets `false`, which is the conservative answer and never the
-  // permissive one. Passing the option is how such a caller pins it exactly.
+  // above exist to prevent.
+  //
+  // So the fallback must not resolve from `process.cwd()`. state-sync and this
+  // CLI run at the project root and would be served by it, but
+  // `dispatch-record.cjs refreshFront` is DOCUMENTED to run from a ticket
+  // worktree — which has no `.planning/` of its own when the project keeps it
+  // untracked — and it rewrites `delivery-front.json` from what it computes. A
+  // cwd read there would answer `false` on a project that had explicitly set
+  // `merge_without_ci: true`, so every dispatch mark would silently demote the
+  // very PRs the guard is entitled to land: the disagreement, reintroduced by
+  // the fallback meant to prevent it. Calling that "conservative" was the excuse
+  // (reviewer-found on PR #44) — the two answers are not more and less cautious,
+  // they are inconsistent, and the board must never contradict the guard.
+  //
+  // `graph-dir.cjs` is this repo's one answer to "which project does this
+  // invocation belong to": `--graph`/`SHIPYARD_GRAPH_DIR` → cwd → the worktree's
+  // OWN repository. The project root is the graph's grandparent. Only when
+  // nothing resolves does it fall back to the cwd — and an unreadable config is
+  // still `false`, because absence is not consent.
   let mergeWithoutCiCache;
   const mergeWithoutCi = () => {
     if (opts.mergeWithoutCi !== undefined) return opts.mergeWithoutCi === true;
     if (mergeWithoutCiCache === undefined) {
       try {
+        const { resolveGraphDir } = require(path.join(__dirname, 'graph-dir.cjs'));
         const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-        mergeWithoutCiCache = loadConfig(process.cwd()).config.merge_without_ci === true;
+        const { dir, how } = resolveGraphDir(process.argv.slice(2), process.cwd());
+        const root = how === 'none' ? process.cwd() : path.resolve(dir, '..', '..');
+        mergeWithoutCiCache = loadConfig(root).config.merge_without_ci === true;
       } catch (e) {
         mergeWithoutCiCache = false; // unreadable config → the safe answer, never the permissive one
       }

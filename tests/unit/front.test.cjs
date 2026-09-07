@@ -1345,4 +1345,52 @@ test('noCiHold takes the setting as a value or as a thunk, with one meaning', ()
   assert.strictEqual(called, 0, 'auto-merge off and a reported pipeline both answer without it');
 });
 
+// Reviewer-found on PR #44 (round 2). The lazy fallback resolved the project
+// from `process.cwd()`, but `dispatch-record.cjs refreshFront` is documented to
+// run from a ticket worktree — which has no `.planning/` of its own — and it
+// REWRITES delivery-front.json from what it computes. So on a project that had
+// explicitly opted in, every dispatch mark demoted the PRs the guard was
+// entitled to land: the board/guard disagreement, reintroduced by the fallback
+// written to prevent it. It resolves through graph-dir.cjs now, the same way
+// base-merge and scope-gate do.
+test('the fallback resolves the PROJECT, not the cwd — a worktree reads the project setting', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const { execFileSync } = require('child_process');
+  const git = (cwd, ...args) => execFileSync('git', args, {
+    cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+      GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
+  });
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'front-wt-'));
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project, { recursive: true });
+  git(project, 'init', '-q', '-b', 'main', '.');
+  fs.writeFileSync(path.join(project, 'f.txt'), 'x\n');
+  git(project, 'add', '-A');
+  git(project, 'commit', '-qm', 'init');
+  // .planning/ is written AFTER the commit and never tracked: that is the
+  // proving ground's own layout, and it is what makes a worktree graphless.
+  fs.mkdirSync(path.join(project, '.planning', 'graph'), { recursive: true });
+  fs.writeFileSync(path.join(project, '.planning', 'graph', 'tickets.json'),
+    JSON.stringify({ tickets: { T: {} } }));
+  fs.writeFileSync(path.join(project, '.planning', 'config.json'),
+    JSON.stringify({ delivery_pipeline: { merge_without_ci: true } }));
+  const wt = path.join(root, 'wt');
+  git(project, 'worktree', 'add', '-q', '-b', 'ticket/T', wt);
+  assert.ok(!fs.existsSync(path.join(wt, '.planning')), 'fixture: the worktree must carry no graph of its own');
+
+  const cwd = process.cwd();
+  try {
+    process.chdir(wt);
+    const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true });
+    assert.deepStrictEqual(f.actionable.merge, ['T'],
+      'the project said it has no CI; a caller standing in a worktree must read the same answer as the guard');
+    assert.deepStrictEqual(f.waiting.merge_human, []);
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
 done();
