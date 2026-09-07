@@ -342,22 +342,43 @@ Atlassian Rovo: `getVisibleJiraProjects`, `getJiraProjectIssueTypesMetadata`,
 `getIssueLinkTypes`). No Jira MCP available → skip with a note; do not hand-roll
 REST calls.
 
+**Identity is namespaced by repository.** Ticket ids restart at `T-01-01` in
+every repository, so two repositories exporting to the same Jira project must
+never find-and-update each other's issue. Derive a label-safe repo slug once
+per run from `gh repo view --json nameWithOwner` (`owner/name`, lowercased,
+`/` → `-`).
+
 **Idempotency by marker label (survives re-runs and frontmatter edits).** Each
-issue carries a stable label: `shipyard-<ticket-id>` (e.g. `shipyard-T-01-02`),
-the epic carries `shipyard-epic-<phase>`. Always `searchJiraIssuesUsingJql`
-(`project = <KEY> AND labels = "shipyard-<id>"`) FIRST — found → update summary/
-description if changed; not found → create. Never create a duplicate.
+issue carries a stable, repo-namespaced label:
+`shipyard-<owner>-<repo>-T-<phase>-<plan>` (e.g. `shipyard-acme-myproj-T-01-02`),
+the epic carries `shipyard-epic-<owner>-<repo>-<phase>`. Lookup order:
+1. `searchJiraIssuesUsingJql` for the new, namespaced label (e.g.
+   `project = <KEY> AND labels = "shipyard-<owner>-<repo>-T-<phase>-<plan>"`)
+   — found → update summary/description if changed; done.
+2. Not found → fall back to the legacy bare label
+   (`shipyard-<ticket-id>` / `shipyard-epic-<phase>`) ONLY as a candidate, and
+   only treat a match as this repo's issue when its description's "Source of
+   truth" line names THIS repo's plan path. On a legacy match: add the new
+   namespaced label, update summary/description if changed, and add a comment
+   "label migrated". A legacy match whose "Source of truth" line names another
+   repository is never touched — leave it alone and fall through to create.
+3. Neither found → create, with the new namespaced label from the start.
+Never create a duplicate, and never update an issue whose source-of-truth line
+names another repository.
 
 **Procedure** (read `tickets.json` for the validated graph; process in dependency
 order so parents exist before links):
 
 1. Resolve the project (and cloudId) via the MCP; verify it is visible.
+   Resolve the repo slug (see above) once for the run.
 2. Per phase (if `epic_issue_type` set): find-or-create the phase Epic.
-   Summary `[<phase>] <phase title>`, label `shipyard-epic-<phase>`,
-   description: what the phase delivers + its epic branch (`epic/<phase-dir>`).
+   Summary `[<phase>] <phase title>`, label
+   `shipyard-epic-<owner>-<repo>-<phase>`, description: what the phase
+   delivers + its epic branch (`epic/<phase-dir>`).
 3. Per ticket, find-or-create the issue:
    - summary: `<ticket-id>: <title>` (English);
-   - label: `shipyard-<ticket-id>` (+ optional `shipyard` label);
+   - label: `shipyard-<owner>-<repo>-T-<phase>-<plan>` (+ optional `shipyard`
+     label);
    - description (English, concise projection — NOT the whole plan): Goal, Scope,
      Acceptance criteria (from the PLAN body), risk, branch (`ticket/...`),
      `pr_base`, and a pointer line "Source of truth: `<plan path>` (this issue is
