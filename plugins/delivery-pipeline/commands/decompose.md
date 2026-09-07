@@ -344,9 +344,12 @@ REST calls.
 
 **Identity is namespaced by repository.** Ticket ids restart at `T-01-01` in
 every repository, so two repositories exporting to the same Jira project must
-never find-and-update each other's issue. Derive a label-safe repo slug once
-per run from `gh repo view --json nameWithOwner` (`owner/name`, lowercased,
-`/` → `-`).
+never find-and-update each other's issue. Derive `<owner>` and `<repo>` once
+per run from `gh repo view --json nameWithOwner` (split `owner/name` on `/`;
+lowercase each half; sanitize to label-safe characters). Use these two values
+directly everywhere below — they are not collapsed into one slug, because the
+"Source of truth" pointer line needs `<owner>/<repo>` as a separate, checkable
+field (see the lookup order below), not a pre-joined string.
 
 **Idempotency by marker label (survives re-runs and frontmatter edits).** Each
 issue carries a stable, repo-namespaced label:
@@ -356,12 +359,27 @@ the epic carries `shipyard-epic-<owner>-<repo>-<phase>`. Lookup order:
    `project = <KEY> AND labels = "shipyard-<owner>-<repo>-T-<phase>-<plan>"`)
    — found → update summary/description if changed; done.
 2. Not found → fall back to the legacy bare label
-   (`shipyard-<ticket-id>` / `shipyard-epic-<phase>`) ONLY as a candidate, and
-   only treat a match as this repo's issue when its description's "Source of
-   truth" line names THIS repo's plan path. On a legacy match: add the new
-   namespaced label, update summary/description if changed, and add a comment
-   "label migrated". A legacy match whose "Source of truth" line names another
-   repository is never touched — leave it alone and fall through to create.
+   (`shipyard-<ticket-id>` / `shipyard-epic-<phase>`) ONLY as a candidate.
+   A plan path alone (e.g. `.planning/phases/01-x/01-01-PLAN.md`) does NOT
+   prove the issue is this repo's: every GSD project uses the same
+   phase/plan numbering, so two unrelated repositories routinely have
+   byte-identical plan paths. The "Source of truth" line is the disambiguator,
+   and it is checked in two cases:
+   - it already carries an `<owner>/<repo>` prefix (a repo claimed this issue
+     on a prior run) → treat as a match ONLY if that prefix equals the one
+     just derived; a match naming a DIFFERENT `<owner>/<repo>` is never
+     touched — leave it alone and fall through to create.
+   - it carries no prefix yet (a pre-migration issue, written before this rule
+     existed) → the plan path is the only signal available for it, so a path
+     match is treated as this repo's and claimed now. This is a one-time,
+     best-effort migration for the common case of one repository per Jira
+     project; the claim is what makes the ambiguity resolvable for every run
+     after it (below).
+   On a legacy match: add the new namespaced label, update summary/description
+   if changed, REWRITE the "Source of truth" line to add this repo's
+   `<owner>/<repo>` prefix (so a different repository's later run sees the
+   prefix and correctly falls through to create instead of re-claiming this
+   issue), and add a comment "label migrated".
 3. Neither found → create, with the new namespaced label from the start.
 Never create a duplicate, and never update an issue whose source-of-truth line
 names another repository.
@@ -370,7 +388,7 @@ names another repository.
 order so parents exist before links):
 
 1. Resolve the project (and cloudId) via the MCP; verify it is visible.
-   Resolve the repo slug (see above) once for the run.
+   Resolve `<owner>` and `<repo>` (see above) once for the run.
 2. Per phase (if `epic_issue_type` set): find-or-create the phase Epic.
    Summary `[<phase>] <phase title>`, label
    `shipyard-epic-<owner>-<repo>-<phase>`, description: what the phase
@@ -381,8 +399,10 @@ order so parents exist before links):
      label);
    - description (English, concise projection — NOT the whole plan): Goal, Scope,
      Acceptance criteria (from the PLAN body), risk, branch (`ticket/...`),
-     `pr_base`, and a pointer line "Source of truth: `<plan path>` (this issue is
-     a generated projection)";
+     `pr_base`, and a pointer line "Source of truth: `<owner>/<repo>:<plan
+     path>` (this issue is a generated projection)" — the `<owner>/<repo>`
+     prefix is what the legacy-label lookup above matches on, so it is written
+     on every issue from this ticket onward, not only during a migration;
    - parent/epic link to the phase Epic (when epics are enabled);
    - for each `depends_on`, a "is blocked by" issue link to that dependency's
      issue (`createIssueLink`; pick the link type via `getIssueLinkTypes`).
