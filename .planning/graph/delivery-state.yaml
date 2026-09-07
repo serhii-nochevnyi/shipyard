@@ -199,22 +199,26 @@
   since: "2026-09-07T13:47:20.037Z"
 "T-24-04":
   branch: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
-  pr: null
-  status: "pending"
+  pr: 42
+  status: "pr-open"
+  draft: true
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/42"
+  pr_base: "epic/24-the-conveyor-stops-interrupting-itself"
+  pr_created_at: "2026-09-07T14:21:17Z"
+  checks: {"total":1,"failing":0,"pending":1,"none_reported":false}
   base: "epic/24-the-conveyor-stops-interrupting-itself"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
-  ready: true
+  merge_scope: "stacked"
   reapable: false
-  since: "2026-09-07T09:10:42.244Z"
+  since: "2026-09-07T14:22:02.435Z"
 "T-24-05":
   branch: "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno"
   pr: null
   status: "pending"
   base: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
-  ready: false
-  blocked_by: ["T-24-04"]
-  blocked_reasons: {"T-24-04":"parent has no branch yet (nothing to cascade from)"}
+  ready: true
   reapable: false
   since: "2026-09-07T09:10:42.244Z"
 "T-24-06":
