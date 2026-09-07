@@ -231,7 +231,7 @@ test('a throwing judge is a drifted verdict, not a gap', async () => {
 // and `evidence` inline (up to 37k characters), re-sent on every later turn.
 suite('executors.mjs — a returned reference, not a document (T-26-14)');
 
-test('a committed ticket returns paths and a short summary, never the documents, and no field exceeds 500 chars', async () => {
+test('a committed ticket returns paths and a short summary, never the documents, and summary never exceeds 500 chars', async () => {
   const worktreePath = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-executors-'));
   try {
     // Stand-in for the real subagent: it has file access the workflow script
@@ -255,11 +255,12 @@ test('a committed ticket returns paths and a short summary, never the documents,
     const { value } = await run('executors', { tickets: [ticket] }, { agent: stubAgent });
     assert.strictEqual(value.length, 1);
     const r = value[0];
-    for (const [k, v] of Object.entries(r)) {
-      if (typeof v === 'string') {
-        assert.ok(v.length <= 500, `field "${k}" is ${v.length} chars, over the 500-char cap`);
-      }
-    }
+    // Only `summary` carries a length guarantee (Copilot review on PR #49):
+    // `prBodyPath`/`evidencePath` are `worktreePath` plus a fixed suffix, so
+    // their length follows the worktree's own path and is not this script's
+    // to bound — asserting a blanket cap over every string field was true
+    // here only by accident of `worktreePath` being a short mkdtemp path.
+    assert.ok(r.summary.length <= 500, `summary is ${r.summary.length} chars, over the 500-char cap`);
     assert.strictEqual(r.status, 'committed');
     assert.ok(!('prBody' in r), 'prBody must not cross back — that is the whole point of this ticket');
     assert.ok(!('evidence' in r), 'evidence text must not cross back — that is the whole point of this ticket');

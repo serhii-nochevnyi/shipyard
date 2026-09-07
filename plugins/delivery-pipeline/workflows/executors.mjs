@@ -119,8 +119,11 @@ const cap = (s, n = 500) => {
 
 // The ONLY place an agent's raw reply is read. Only `status` and `summary`
 // are consulted — nothing else the agent returns can cross this boundary,
-// which is what makes "no field longer than 500 characters" a property of
-// the script rather than of agent good behavior.
+// which is what makes "summary never exceeds 500 characters" a property of
+// the script rather than of agent good behavior (Copilot review on PR #49:
+// `prBodyPath`/`evidencePath` carry NO such cap — they are `worktreePath`
+// plus a fixed suffix, so their length follows the worktree's own path,
+// which this script neither controls nor needs to bound).
 const toResult = (t, r) => {
   const committed = !!r && r.status === 'committed'
   const paths = committed ? docPaths(t) : { prBodyPath: '', evidencePath: '' }
