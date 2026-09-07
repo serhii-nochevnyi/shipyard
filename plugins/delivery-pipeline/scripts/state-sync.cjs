@@ -48,6 +48,9 @@ const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
 const { activeEscalations } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+// The trailer's parser lives with its writer (gate-trailer.cjs), because a
+// verdict the board and the guard must agree on cannot be held by three copies.
+const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -70,7 +73,11 @@ const RUN_PARKED = parkedArg === -1
 // 7s without — and it is only ever read for OPEN PRs. So the bulk window skips
 // it and a second, open-only pass fills it in (a handful of rows, ~1s). state-sync
 // runs on every babysit round, so its wall time is the conveyor's tick rate.
-const PR_FIELDS = 'number,state,isDraft,headRefName,baseRefName,mergedAt,createdAt,url,title';
+const PR_FIELDS = 'number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title';
+// `headRefOid` is one scalar and carries none of the reviewDecision cost: it is
+// the head the `gate_status:` trailer is bound to, so without it the board can
+// read a conform verdict and not know it was rendered against a diff that has
+// since been pushed over.
 // `body` rides along in the open-only pass for the same reason as reviewDecision:
 // it is only read for OPEN PRs (the `gate_status:` trailer the conform gate
 // writes), and pulling bodies across the whole 1000-row window is expensive.
@@ -240,22 +247,6 @@ function prsForBranch(repo, branch) {
   try { return JSON.parse(out); } catch { return []; }
 }
 
-// The conform gate records its verdicts as a `gate_status:` trailer in the PR
-// body precisely so they survive a squash merge and can be re-read by anything.
-// The front and the sentinel both key the "may this land?" decision on it, so it
-// is parsed here once instead of being re-derived per consumer.
-function parseGate(body) {
-  const line = String(body || '').split('\n').reverse().find((l) => /^\s*gate_status:/i.test(l));
-  if (!line) return null;
-  const out = {};
-  for (const part of line.replace(/^\s*gate_status:/i, '').split(',')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    out[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
-  }
-  return Object.keys(out).length ? out : null;
-}
-
 // ── per-ticket status ───────────────────────────────────────────────────────
 const state = {};
 for (const [id, t] of Object.entries(tickets)) {
@@ -287,6 +278,10 @@ for (const [id, t] of Object.entries(tickets)) {
       entry.url = pr.url;
       entry.pr_base = pr.baseRefName;
       entry.pr_created_at = pr.createdAt;
+      // The head the verdict must be ABOUT, recorded beside the verdict itself:
+      // `gateConform(gate, head_sha)` is absent when they disagree, so a push
+      // after arch-review re-owes the verdict instead of inheriting it.
+      entry.head_sha = pr.headRefOid || null;
       const gate = parseGate(pr.body);
       if (gate) entry.gate = gate;
       const { rows, none, note } = ghChecks(pr.number, repo);

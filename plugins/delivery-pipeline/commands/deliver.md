@@ -1080,16 +1080,24 @@ loop:
        findings=<n> modes=<mode:count,…> --graph <project>/.planning/graph`.
        IT REPORTS AND DECIDES NOTHING — never a reason to withhold `conform`,
        never a reason to hold a merge. `sentinel.cjs merge` reads `arch-review`
-       and nothing else, pinned by tests/unit/trailer.test.cjs.
+       and the `head` that verdict is bound to, and nothing else, pinned by
+       tests/unit/trailer.test.cjs.
      violation    → fix in the worktree → push → step d
      adr-outdated → `escalation-record.cjs mark <T> "adr-outdated: …"` (changing the ADR is a human's call), continue the front
      conform      → check the green criteria:
        all checks passed ∧ unresolved=0 ∧ arch conform
        → record the verdicts in the PR body as a trailer (survives squash-merge):
-         append as the last line of the body via gh pr edit <pr> --body — ONE
-         `gate_status:` line carrying every key, because the reader takes the
-         LAST such line and a second one hides the verdict above it:
-         gate_status: arch-review=conform, drift-check=<fresh|skipped>, degenerate-green=<clean|N|skipped>, checks=green
+         node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs write <pr> [--repo owner/name] --arch-review conform --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped>
+         it reads the live body and the live head, and writes ONE `gate_status:`
+         line carrying every key plus `head=<sha>` — the diff the verdict is
+         about. NEVER hand-assemble that line: a second one hides the verdict
+         above it (the reader takes the LAST), and a trailer with no `head=` is
+         ABSENT to every reader once the board knows the head. The writer also
+         refuses while any review thread is unresolved, because recording a
+         verdict over unanswered feedback falsifies the gate.
+         Consequence to expect: a push AFTER the verdict re-owes arch-review
+         instead of inheriting it — the trailer names the old head, so the front
+         says `finalize` and the guard refuses the merge, naming both SHAs.
        → gh pr ready <pr> (remove draft)
        → then split on the checkpoint:
            human_checkpoint: true  → mark `awaiting-human` (green, but the
