@@ -187,8 +187,9 @@ function mayIntersect(a, b) {
 
 /**
  * The leading LITERAL part of a declaration, for the validator's warnings (a
- * declaration matching everything; a ticket whose paths all live under a
- * top-level directory this repo does not have).
+ * declaration with no literal prefix at all, i.e. one that leads with a wildcard
+ * segment; a ticket whose paths all live under a top-level directory this repo
+ * does not have).
  *
  * It stops at the first wildcard SEGMENT, which is the fix to the old
  * `globPrefix`: cutting at the wildcard CHARACTER produced `src/foo` from

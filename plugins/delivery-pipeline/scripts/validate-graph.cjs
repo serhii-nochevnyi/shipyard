@@ -223,7 +223,18 @@ for (const file of planFiles.sort()) {
           'base-merge keeps on a conflict, so an inexact declaration is refused here rather than guessed at there.'
         );
       } else if (literalPrefix(f) === '') {
-        warnings.push(`${id}: files_modified entry "${f}" is a bare glob matching everything — narrow it (delivery-rules §4: resolve overlap by a dependency or a re-slice, never by widening globs)`);
+        // The condition is "no leading literal segment", and the message has to
+        // say exactly that. It used to say "a bare glob matching everything",
+        // which was true only of `**` — and `**` is now a parse ERROR above, so
+        // the only entries that reach here are leading-wildcard ones (`*.ts`,
+        // `*/x.ts`) that a suffix or a depth still constrains. A warning that
+        // overstates what it found is a warning its reader learns to skip.
+        warnings.push(
+          `${id}: files_modified entry "${f}" begins with a wildcard segment, so it has no literal prefix — ` +
+          'its suffix and its depth may still narrow WHAT it matches, but nothing anchors WHERE it applies: ' +
+          'every path of that depth whose segments match is claimed, in any directory. Give it a literal leading ' +
+          'segment (delivery-rules §4: resolve overlap by a dependency or a re-slice, never by widening globs)'
+        );
       }
       if (/#/.test(f)) {
         errors.push(`${id}: files_modified entry "${f}" contains "#" — a YAML trailing comment leaked into the value; move the comment onto its own line`);
