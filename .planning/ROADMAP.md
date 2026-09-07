@@ -82,6 +82,40 @@ script — not in a prompt.** Every requirement below is an instance of it.
   resync must carry the dispatch overlay, so the board and the stop gate never
   read work in flight as actionable between one `mark` and the next.
 
+- **REQ-26** — The image and the smokes pin the runtimes the conveyor is
+  tested on: Claude Code with Fable 5.1/Opus 5 aliases, gsd-core 1.13.0.
+- **REQ-27** — A Codex agent carries EFFORT, not a model baked from a catalog
+  that can be stale; a `model =` line appears only when the user's GSD remap
+  names one, resolved through GSD's resolver.
+- **REQ-28** — Prose names the runtimes as they are: the Agent tool's accepted
+  values, `opus` = Opus 5 and its version floor, `fable` = Fable 5.1 and its
+  consent hazard, the conveyor's `gate_status:` PR trailer vs GSD's
+  `gate-status:` commit trailer.
+- **REQ-29** — One ownership matcher decides Gate 2 overlap, the scope gate and
+  base-merge conflict resolution; ambiguous declarations are rejected and an
+  uncertain owner never authorizes a mechanical resolution.
+- **REQ-30** — A corrupt configuration permits no mutation: merge, duty,
+  escalation and retarget refuse on an unparseable config and name the file.
+- **REQ-31** — Readiness needs positive evidence: an epic comparison that failed
+  is `unknown`, not `landed`; availability and path reachability are checked in
+  both integration modes.
+- **REQ-32** — Worktree gc removes only a worktree PROVEN landed by delivery
+  state; a clean local-only branch is reported and kept.
+- **REQ-33** — A lock is released only by its owner and taken over atomically;
+  a delivery-state snapshot is never overwritten by an older observation.
+- **REQ-34** — The Codex config merge produces valid TOML for every valid input,
+  detecting headers by grammar and re-parsing before it replaces the file.
+- **REQ-35** — GSD tuning merges the delivery-rules skill into `agent_skills`
+  and preserves every foreign entry; a missing `~/.gsd/` is created.
+- **REQ-36** — Jira idempotency keys are namespaced by repository so two
+  repositories exporting the same ticket id never select one issue.
+- **REQ-37** — Workflow scripts validate `args` before dispatching: malformed
+  input throws, an empty list returns empty, every ticket yields one result.
+- **REQ-38** — "Left behind" is decided by the ticket's own phase having landed
+  without it, never by phase-number arithmetic.
+- **REQ-39** — An unavailable check reading (gh error, malformed JSON) is a
+  state of its own, distinct from an observed empty list, and never green.
+
 ## Phases
 
 ### Phase 20: Autonomy of the drive-to-green loop
@@ -164,3 +198,31 @@ Found while delivering this phase (REQ-25, T-24-11): `state-sync.cjs` writes
 `dispatch-record.cjs` apply, so every resync while agents hold tickets turns
 the board back into `execute: …, finalize: …` until the next `mark` rewrites it
 — measured on the first wave of this very phase, with four tickets out.
+
+### Phase 25: The conveyor follows the models it runs on
+**Requirements**: REQ-26, REQ-27, REQ-28
+
+Decomposed from ADR-003. Three things moved under the conveyor within a
+fortnight — Claude Code's aliases (Opus 5 at 2.1.219, Fable 5.1 at 2.1.255, the
+Agent tool accepting full ids), Codex's `gpt-6-astra`, gsd-core 1.13.0 — and the
+repository records none of them: the image pins Claude Code 2.1.200 and
+gsd-core 1.7.0, the Codex generator bakes `gpt-5.6-terra` into all seven agents
+over the user's newer default, and four documents state a tool constraint that
+no longer exists. The pins ticket runs now; the two prose/generator tickets
+wait for phase 24's epic, because they edit files phase 24 owns.
+
+### Phase 26: Positive evidence before a mutation
+**Requirements**: REQ-29, REQ-30, REQ-31, REQ-32, REQ-33, REQ-34, REQ-35, REQ-36, REQ-37, REQ-38, REQ-39
+
+Decomposed from ADR-004, the external audit of 2026-09-07. Eleven of its
+twenty-eight findings were already phase 24's and were folded into its unstarted
+tickets; the seventeen left share one shape — a mutation that proceeds on the
+ABSENCE of a signal where it needs the PRESENCE of one: a glob stump owning the
+wrong files and base-merge overwriting a ticket's own change on that basis, a
+corrupt config defaulting to auto-merge, a failed epic comparison reading as
+landed, gc deleting a committed-but-unpushed worktree, a stale lock holder
+removing its successor's lock, an installer writing invalid TOML, tuning
+deleting a project's skills, Jira labels colliding across repositories,
+workflow input errors returning an empty success, and "left behind" decided by
+phase arithmetic. Six tickets touch nothing phases 24/25 own and run at once;
+five wait for phase 24's epic as one chain.

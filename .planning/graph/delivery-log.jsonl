@@ -114,3 +114,21 @@
 {"ts":"2026-09-07T09:41:10.700Z","event":"degenerate_green","ticket":"T-24-09","pr":29,"findings":0,"modes":"none"}
 {"ts":"2026-09-07T09:44:42.589Z","event":"dispatch","ticket":"T-24-02","role":"executor","pr":null,"by":"dispatch-record"}
 {"ts":"2026-09-07T09:45:27.773Z","event":"dispatch","ticket":"T-24-02","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T09:49:19.589Z","event":"dispatch","ticket":"T-24-01","role":"review-fix","pr":27,"by":"dispatch-record"}
+{"ts":"2026-09-07T09:49:26.042Z","event":"status_change","ticket":"T-24-11","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T09:50:07.035Z","event":"merge","ticket":"T-24-09","pr":29,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-07T09:51:43.562Z","event":"base_merge","ticket":"T-24-08","pr":28,"head":"03f16d8278d71152ff02df24d597c0dba9f94318","base":"epic/24-the-conveyor-stops-interrupting-itself","outcome":"pushed","reason":"parent T-24-09 squashed into the epic; base merged in, not rebased"}
+{"ts":"2026-09-07T09:52:53.341Z","event":"status_change","ticket":"T-24-09","from":"pr-open","to":"merged","pr":29}
+{"ts":"2026-09-07T09:53:34.690Z","event":"merge","ticket":"T-24-08","pr":28,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T10:02:12.745Z","event":"status_change","ticket":"T-24-08","from":"pr-open","to":"merged","pr":28}
+{"ts":"2026-09-07T10:08:09.022Z","event":"attempt","ticket":"T-24-01","pr":27,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","head":"3684eb19cb550390656f76d2a266fa17352ce0d3","hypothesis":"isGreen keyed the third window reset on flake_rerun outcome=green, a record no permitted writer can produce, so it now reads the flake event that rerun --outcome green actually appends — and only while no later flake_lift for that signature has withdrawn it, which keeps a lifted quarantine reading repeat with seen: 1 instead of collapsing to first with seen: 0."}
+{"ts":"2026-09-07T10:09:02.131Z","event":"dispatch","ticket":"T-24-02","role":"pr-sentinel","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T10:09:02.180Z","event":"status_change","ticket":"T-24-02","from":"pending","to":"pr-open","pr":31}
+{"ts":"2026-09-07T10:09:16.132Z","event":"degenerate_green","ticket":"T-24-01","pr":27,"findings":1,"modes":"weakened_assertion:1","head":"3684eb19cb550390656f76d2a266fa17352ce0d3"}
+{"ts":"2026-09-07T10:09:40.260Z","event":"dispatch","ticket":"T-24-03","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T10:10:37.553Z","event":"dispatch","ticket":"T-24-01","role":"arch-review","pr":27,"by":"dispatch-record"}
+{"ts":"2026-09-07T10:13:36.225Z","event":"merge","ticket":"T-24-01","pr":27,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T10:13:40.993Z","event":"reuse_scan","ticket":"T-24-03","hits":2,"verdict":"fresh"}
+{"ts":"2026-09-07T10:13:41.024Z","event":"dispatch","ticket":"T-24-03","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T10:13:46.386Z","event":"status_change","ticket":"T-24-01","from":"pr-open","to":"merged","pr":27}
+{"ts":"2026-09-07T10:16:59.700Z","event":"dispatch","ticket":"T-24-02","role":"pr-sentinel","pr":31,"by":"dispatch-record"}

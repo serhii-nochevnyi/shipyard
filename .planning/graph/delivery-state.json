@@ -192,12 +192,22 @@
   "T-24-01": {
     "branch": "ticket/T-24-01-a-plan-defect-needs-no-green-between-its",
     "pr": 27,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/27",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
+    "epic": "epic/24-the-conveyor-stops-interrupting-itself",
+    "reapable": true,
+    "since": "2026-09-07T10:13:46.386Z"
+  },
+  "T-24-02": {
+    "branch": "ticket/T-24-02-check-state-has-one-vocabulary",
+    "pr": 31,
     "status": "pr-open",
     "draft": true,
     "review_decision": null,
-    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/27",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/31",
     "pr_base": "epic/24-the-conveyor-stops-interrupting-itself",
-    "pr_created_at": "2026-09-07T09:35:10Z",
+    "pr_created_at": "2026-09-07T10:08:57Z",
     "checks": {
       "total": 1,
       "failing": 0,
@@ -208,17 +218,7 @@
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
     "merge_scope": "stacked",
     "reapable": false,
-    "since": "2026-09-07T09:35:33.906Z"
-  },
-  "T-24-02": {
-    "branch": "ticket/T-24-02-check-state-has-one-vocabulary",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-24-01-a-plan-defect-needs-no-green-between-its",
-    "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T09:10:42.244Z"
+    "since": "2026-09-07T10:09:02.180Z"
   },
   "T-24-03": {
     "branch": "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro",
@@ -226,13 +226,7 @@
     "status": "pending",
     "base": "ticket/T-24-02-check-state-has-one-vocabulary",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": false,
-    "blocked_by": [
-      "T-24-02"
-    ],
-    "blocked_reasons": {
-      "T-24-02": "parent has no branch yet (nothing to cascade from)"
-    },
+    "ready": true,
     "reapable": false,
     "since": "2026-09-07T09:10:42.244Z"
   },
@@ -303,44 +297,22 @@
   "T-24-08": {
     "branch": "ticket/T-24-08-a-record-is-lifted-only-by-a-fact-its-ow",
     "pr": 28,
-    "status": "pr-open",
-    "draft": true,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/28",
-    "pr_base": "epic/24-the-conveyor-stops-interrupting-itself",
-    "pr_created_at": "2026-09-07T09:35:20Z",
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false
-    },
     "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-07T09:35:33.906Z"
+    "reapable": true,
+    "since": "2026-09-07T10:02:12.745Z"
   },
   "T-24-09": {
     "branch": "ticket/T-24-09-the-stop-gate-blocks-as-often-as-the-cas",
     "pr": 29,
-    "status": "pr-open",
-    "draft": true,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/29",
-    "pr_base": "epic/24-the-conveyor-stops-interrupting-itself",
-    "pr_created_at": "2026-09-07T09:35:29Z",
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false
-    },
     "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-07T09:35:33.906Z"
+    "reapable": true,
+    "since": "2026-09-07T09:52:53.341Z"
   },
   "T-24-10": {
     "branch": "ticket/T-24-10-the-ci-waiter-tells-a-stall-from-an-outa",
@@ -357,5 +329,21 @@
     },
     "reapable": false,
     "since": "2026-09-07T09:10:42.244Z"
+  },
+  "T-24-11": {
+    "branch": "ticket/T-24-11-a-resync-writes-the-front-it-means",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-24-07-the-prose-names-only-what-the-scripts-im",
+    "epic": "epic/24-the-conveyor-stops-interrupting-itself",
+    "ready": false,
+    "blocked_by": [
+      "T-24-07"
+    ],
+    "blocked_reasons": {
+      "T-24-07": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-07T09:49:26.042Z"
   }
 }
