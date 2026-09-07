@@ -1,30 +1,23 @@
 {
-  "generated_at": "2026-09-07T13:41:07.174Z",
+  "generated_at": "2026-09-07T14:12:25.709Z",
   "parked_by_run": [],
   "auto_merge": "epic",
+  "dispatches_applied_at": "2026-09-07T14:12:31.338Z",
   "actionable": {
     "execute": [
-      "T-24-04",
-      "T-24-10",
       "T-26-01",
       "T-26-04",
-      "T-26-06"
+      "T-26-06",
+      "T-24-04",
+      "T-24-10"
     ],
     "publish": [],
     "fix": [],
-    "finalize": [
-      "T-26-07"
-    ],
-    "merge": [
-      "T-24-03",
-      "T-25-01",
-      "T-26-09"
-    ]
+    "finalize": [],
+    "merge": []
   },
   "waiting": {
-    "ci": [
-      "T-26-08"
-    ],
+    "ci": [],
     "dispatched": [],
     "merge_human": [],
     "human": []
@@ -65,19 +58,22 @@
       "T-23-03",
       "T-24-01",
       "T-24-02",
+      "T-24-03",
       "T-24-08",
-      "T-24-09"
+      "T-24-09",
+      "T-25-01",
+      "T-26-07",
+      "T-26-08",
+      "T-26-09"
     ]
   },
   "why": {
-    "T-24-03": "PR #32: green + conform — squash into epic/24-the-conveyor-stops-interrupting-itself (sentinel)",
     "T-24-04": "ready — worktree + executor",
     "T-24-05": "T-24-04 (parent has no branch yet (nothing to cascade from))",
     "T-24-06": "T-24-05 (parent has no branch yet (nothing to cascade from))",
     "T-24-07": "T-24-06 (parent has no branch yet (nothing to cascade from))",
     "T-24-10": "ready — worktree + executor",
     "T-24-11": "T-24-07 (parent has no branch yet (nothing to cascade from))",
-    "T-25-01": "PR #33: green + conform — squash into epic/25-the-conveyor-follows-the-models-it-runs-on (sentinel)",
     "T-25-02": "T-24-07 (cross-phase parent must land on main first (phase 24 epic still ahead))",
     "T-25-03": "T-25-02 (parent has no branch yet (nothing to cascade from)); T-24-07 (cross-phase parent must land on main first (phase 24 epic still ahead))",
     "T-26-01": "ready — worktree + executor",
@@ -85,9 +81,6 @@
     "T-26-04": "ready — worktree + executor",
     "T-26-05": "T-26-03 (parent has no branch yet (nothing to cascade from))",
     "T-26-06": "ready — worktree + executor",
-    "T-26-07": "PR #34: green and still a draft — threads, arch-review, conform gate",
-    "T-26-08": "PR #35: 1 check(s) still running",
-    "T-26-09": "PR #36: green + conform — squash into epic/26-positive-evidence-before-a-mutation (sentinel)",
     "T-26-10": "T-26-05 (parent has no branch yet (nothing to cascade from))",
     "T-26-11": "T-26-10 (parent has no branch yet (nothing to cascade from))",
     "T-26-02": "T-26-11 (parent has no branch yet (nothing to cascade from)); T-25-03 (cross-phase parent must land on main first (phase 25 epic still ahead))"
@@ -96,30 +89,23 @@
     "execute": 5,
     "publish": 0,
     "fix": 0,
-    "finalize": 1,
-    "merge": 3,
-    "ci": 1,
+    "finalize": 0,
+    "merge": 0,
+    "ci": 0,
     "dispatched": 0,
     "merge_human": 0,
     "human": 0,
     "blocked": 11,
-    "done": 23
+    "done": 28
   },
-  "actionable_count": 9,
-  "left_behind_count": 0,
+  "actionable_count": 5,
+  "left_behind_count": 2,
   "fixpoint": false,
   "sentinel": {
-    "duty": [
-      "T-26-07",
-      "T-24-03",
-      "T-25-01",
-      "T-26-09"
-    ],
-    "waiting_ci": [
-      "T-26-08"
-    ],
+    "duty": [],
+    "waiting_ci": [],
     "dispatched": [],
-    "clear": false
+    "clear": true
   },
   "roles": {
     "execute": [

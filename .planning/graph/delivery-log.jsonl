@@ -206,3 +206,34 @@
 {"ts":"2026-09-07T13:36:29.507Z","event":"degenerate_green","ticket":"T-26-09","pr":36,"findings":0,"modes":"clean"}
 {"ts":"2026-09-07T13:38:01.254Z","event":"attempt","ticket":"T-26-07","pr":34,"n":1,"role":"review-fix","model":"sonnet","outcome":"pushed","signature":"none","head":"0e439fd73b56cd8138268439d06a08652b55e2f0","hypothesis":"Copilot's coverage gap was real: every agent_skills merge test used gsd-executor only, so a future edit could break gsd-planner unnoticed; added a mirroring test for gsd-planner reproducing the F22 case."}
 {"ts":"2026-09-07T13:41:04.384Z","event":"attempt","ticket":"T-26-08","pr":35,"n":1,"role":"review-fix","model":"sonnet","outcome":"pushed","signature":"none","head":"ddace856675729e74ca03c050f5ef6fdb5869c71","hypothesis":"Both Copilot findings were real: the Source of truth line never carried repo identity so the legacy-match check it described couldn't run, and 'repo slug' was introduced but never used by the label templates which took <owner>/<repo> separately. Rewrote the pointer template to carry <owner>/<repo> (written into legacy issues at migration time so a later run from a different repo sees the claim), and dropped the slug term in favor of <owner>/<repo> throughout."}
+{"ts":"2026-09-07T13:43:51.908Z","event":"attempt","ticket":"T-26-09","pr":36,"n":1,"role":"review-fix","model":"sonnet","outcome":"pushed","signature":"none","head":"d9ea901760c1c92e4bf3462f697816802078559a","hypothesis":"Both Copilot threads were the same real gap in different files: the fan-out accounting checked only that every dispatched id appears exactly once, never that every result id was actually dispatched, so a surplus/foreign result would ride along silently. Added a dispatched-ids Set and a surplus check in both executors.mjs and drift-gate.mjs, plus a regression test per file."}
+{"ts":"2026-09-07T13:44:31.811Z","event":"degenerate_green","ticket":"T-26-07","pr":34,"findings":0,"modes":"clean"}
+{"ts":"2026-09-07T13:45:14.726Z","event":"merge","ticket":"T-24-03","pr":32,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T13:45:24.965Z","event":"merge","ticket":"T-25-01","pr":33,"base":"epic/25-the-conveyor-follows-the-models-it-runs-on","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-07T13:45:34.930Z","event":"merge","ticket":"T-26-07","pr":34,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T13:46:48.972Z","event":"attempt","ticket":"T-26-08","pr":35,"n":2,"role":"review-fix","model":"sonnet","outcome":"pushed","signature":"none","head":"98d8723e5c23b69aeb56aad1b1b07686156a6927","hypothesis":"Both new Copilot threads were real: 'gh repo view --json nameWithOwner' returns a JSON object, not a raw string, so the prose's 'split owner/name on /' skipped an implicit parse step; and the <owner>/<repo>:<plan path> code span was wrapped across a newline, breaking Markdown rendering. Switched to --jq .nameWithOwner and rewrapped the code span onto one line."}
+{"ts":"2026-09-07T13:47:13.285Z","event":"degenerate_green","ticket":"T-26-09","pr":36,"findings":0,"modes":"clean"}
+{"ts":"2026-09-07T13:47:20.037Z","event":"status_change","ticket":"T-24-03","from":"pr-open","to":"merged","pr":32}
+{"ts":"2026-09-07T13:47:20.037Z","event":"status_change","ticket":"T-25-01","from":"pr-open","to":"merged","pr":33}
+{"ts":"2026-09-07T13:47:20.037Z","event":"status_change","ticket":"T-26-07","from":"pr-open","to":"merged","pr":34}
+{"ts":"2026-09-07T13:48:01.921Z","event":"base_merge","ticket":"T-26-09","pr":36,"head":"4c29d8ad7a70115c7dbe6c41caa0971b6296cc12"}
+{"ts":"2026-09-07T13:49:07.036Z","event":"degenerate_green","ticket":"T-26-08","pr":35,"findings":0,"modes":"clean"}
+{"ts":"2026-09-07T13:49:42.814Z","event":"dispatch","ticket":"T-24-04","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:49:42.850Z","event":"dispatch","ticket":"T-24-10","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:49:42.883Z","event":"dispatch","ticket":"T-26-01","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:49:42.918Z","event":"dispatch","ticket":"T-26-04","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:49:42.953Z","event":"dispatch","ticket":"T-26-06","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:49:42.987Z","event":"dispatch","ticket":"T-24-03","role":"pr-sentinel","pr":32,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:49:43.021Z","event":"dispatch","ticket":"T-25-01","role":"pr-sentinel","pr":33,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:49:43.055Z","event":"dispatch","ticket":"T-26-07","role":"pr-sentinel","pr":34,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:49:43.089Z","event":"dispatch","ticket":"T-26-08","role":"pr-sentinel","pr":35,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:49:43.122Z","event":"dispatch","ticket":"T-26-09","role":"pr-sentinel","pr":36,"by":"dispatch-record"}
+{"ts":"2026-09-07T13:51:00.604Z","event":"attempt","ticket":"T-26-08","pr":35,"n":3,"role":"review-fix","model":"sonnet","outcome":"pushed","signature":"none","head":"739be5ccd1086e9ff8781f4c2519ebbc6d06457e","hypothesis":"Copilot's third-round finding was correct: the previous fix moved the pointer template's line break rather than removing it, so 'Source of truth:' still sat on its own line ahead of the value it needs to precede on the same physical line. Rewrapped the whole template onto one unbroken line."}
+{"ts":"2026-09-07T13:51:40.004Z","event":"degenerate_green","ticket":"T-26-09","pr":36,"findings":0,"modes":"clean"}
+{"ts":"2026-09-07T13:52:04.846Z","event":"merge","ticket":"T-26-09","pr":36,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T13:52:10.616Z","event":"status_change","ticket":"T-26-09","from":"pr-open","to":"merged","pr":36}
+{"ts":"2026-09-07T13:52:43.842Z","event":"degenerate_green","ticket":"T-26-08","pr":35,"findings":0,"modes":"clean"}
+{"ts":"2026-09-07T13:53:19.717Z","event":"base_merge","ticket":"T-26-08","pr":35,"head":"316c4841fc327af21a521d7442d53a4186c32859"}
+{"ts":"2026-09-07T13:54:35.357Z","event":"degenerate_green","ticket":"T-26-08","pr":35,"findings":0,"modes":"clean"}
+{"ts":"2026-09-07T13:54:55.036Z","event":"merge","ticket":"T-26-08","pr":35,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T13:54:59.718Z","event":"status_change","ticket":"T-26-08","from":"pr-open","to":"merged","pr":35}

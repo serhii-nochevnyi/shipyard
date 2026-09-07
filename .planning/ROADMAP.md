@@ -115,6 +115,13 @@ script — not in a prompt.** Every requirement below is an instance of it.
   without it, never by phase-number arithmetic.
 - **REQ-39** — An unavailable check reading (gh error, malformed JSON) is a
   state of its own, distinct from an observed empty list, and never green.
+- **REQ-40** — No role is dispatched below `opus`; depth is expressed by EFFORT
+  keyed on the role and its signals, not on the tier, and a configured effort
+  override must not silently disable the signature escalation it outranks.
+- **REQ-41** — `fable` is a ceiling the conveyor reaches mechanically (window
+  pressure, exhausted repair depth, contested judgment) and never by default
+  except for the integrator; it is never emitted where the runtime would
+  resolve it to Fable 5.
 
 ## Phases
 
@@ -200,7 +207,7 @@ the board back into `execute: …, finalize: …` until the next `mark` rewrites
 — measured on the first wave of this very phase, with four tickets out.
 
 ### Phase 25: The conveyor follows the models it runs on
-**Requirements**: REQ-26, REQ-27, REQ-28
+**Requirements**: REQ-26, REQ-27, REQ-28, REQ-40, REQ-41
 
 Decomposed from ADR-003. Three things moved under the conveyor within a
 fortnight — Claude Code's aliases (Opus 5 at 2.1.219, Fable 5.1 at 2.1.255, the
@@ -210,6 +217,13 @@ gsd-core 1.7.0, the Codex generator bakes `gpt-5.6-terra` into all seven agents
 over the user's newer default, and four documents state a tool constraint that
 no longer exists. The pins ticket runs now; the two prose/generator tickets
 wait for phase 24's epic, because they edit files phase 24 owns.
+
+T-25-04 was added on 2026-09-07 from ADR-005, after the releases made the
+ladder's own justification stale: `fable` was chosen for the judges because
+"the 1M window is what distinguishes their work", and Sonnet 5 now has that
+window natively while Anthropic positions Fable 5.1 as the step AFTER Opus 5 at
+higher effort falls short. The decision taken was to raise the floor to `opus`,
+express depth as effort, and make `fable` something the conveyor earns.
 
 ### Phase 26: Positive evidence before a mutation
 **Requirements**: REQ-29, REQ-30, REQ-31, REQ-32, REQ-33, REQ-34, REQ-35, REQ-36, REQ-37, REQ-38, REQ-39

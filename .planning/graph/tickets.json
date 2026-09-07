@@ -974,6 +974,40 @@
       "pr_base": "ticket/T-25-02-a-codex-agent-carries-effort-not-a-model",
       "jira": null
     },
+    "T-25-04": {
+      "title": "The floor is opus, the depth is effort, and fable is earned",
+      "plan": ".planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-04-PLAN.md",
+      "phase": "25",
+      "repo": null,
+      "wave": 10,
+      "depends_on": [
+        "T-25-03"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "plugins/delivery-pipeline/scripts/failure-signature.cjs",
+        "plugins/delivery-pipeline/scripts/gsd-tune.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "capabilities/delivery-pipeline/capability.json",
+        "CLAUDE.md",
+        "README.md",
+        "tests/unit/pipeline-config.test.cjs",
+        "tests/unit/failure-signature.test.cjs",
+        "tests/unit/gsd-tune.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-25-04-the-floor-is-opus-the-depth-is-effort-an",
+      "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
+      "primary_parent": "T-25-03",
+      "pr_base": "ticket/T-25-03-the-prose-names-the-models-the-runtimes",
+      "jira": null
+    },
     "T-26-01": {
       "title": "One ownership matcher, exact by construction",
       "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-01-PLAN.md",
@@ -1255,10 +1289,10 @@
       "wave": 13,
       "depends_on": [
         "T-26-11",
-        "T-25-03"
+        "T-25-04"
       ],
       "cross_phase_deps": [
-        "T-25-03"
+        "T-25-04"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,

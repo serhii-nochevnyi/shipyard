@@ -102,6 +102,20 @@
   "pipeline": {
     "jira": {
       "enabled": false
+    },
+    "models": {
+      "executor": "opus",
+      "ci-fix": "opus",
+      "review-fix": "opus",
+      "pr-sentinel": "opus",
+      "drift-check": "opus",
+      "research": "opus",
+      "arch-review": "opus",
+      "integrator": "fable"
+    },
+    "effort": {
+      "arch-review": "max",
+      "integrator": "max"
     }
   }
 }
