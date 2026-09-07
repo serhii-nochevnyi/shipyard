@@ -728,6 +728,7 @@
         "plugins/delivery-pipeline/scripts/reviewers.cjs",
         "plugins/delivery-pipeline/workflows/fix-round.mjs",
         "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "tests/smoke/docs-smoke.sh",
         "tests/unit/log-event.test.cjs",
         "plugins/delivery-pipeline/references/ci-fix.md",
         "plugins/delivery-pipeline/references/review-fix.md",
@@ -765,7 +766,8 @@
         "capabilities/delivery-pipeline/capability.json",
         "CLAUDE.md",
         "README.md",
-        "tests/unit/files-contract.test.cjs"
+        "tests/unit/files-contract.test.cjs",
+        "tests/smoke/docs-smoke.sh"
       ],
       "risk": "low",
       "type": "implementation",
