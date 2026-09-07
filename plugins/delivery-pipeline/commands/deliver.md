@@ -476,7 +476,7 @@ session:
 
 ```text
 attempt    — each babysit round on a PR:
-             log-event.cjs attempt ticket=<T> pr=<N> n=<attempts> role=<ci-fix|review-fix> model=<tier> \
+             log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<ci-fix|review-fix> model=<tier> \
                outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<sha> hypothesis="<the fixer's own>"
 fix_round  — for EACH item from a fix-round Workflow result:
              log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false>
@@ -969,10 +969,16 @@ same rules for the agent). You run it YOURSELF only on the fallback path — no
 background agents, or `pipeline.sentinel: off` — and there it is a duty pass at
 the top of each round, before you take new work, never a place to camp.
 
-Attempt counter per PR: attempts (start 1, MAX = `pipeline.max_attempts`,
-default 5 — state-sync prints the effective value on every run). **The counter no
-longer routes anything** — the failure signature's verdict does — but it stays, as
-telemetry and as the backstop in step d.
+Attempt number per PR: **read it, never keep it.**
+`attempt-history.cjs <T> --json` → `next_n` is the number this round logs as
+`n=`, and `attempts` is how many rounds are already charged. Both are derived
+from the journal, so a resumed session continues at N+1 instead of restarting at
+1 — which is what a session-held counter did, handing a ticket that had already
+burned four rounds five more. MAX = `pipeline.max_attempts` (default 5 —
+state-sync prints the effective value on every run). **The number no longer
+routes anything** — the failure signature's verdict does — but it stays, as
+telemetry and as the backstop in step d. A round logged `outcome=flake` is not
+charged, and the derived number reflects that by itself.
 
 ```text
 loop:
@@ -991,9 +997,11 @@ loop:
        a3. branch on it. The last three do NOT dispatch a fixer:
 
        flake — already quarantined. Do NOT dispatch a fixer and do NOT CHARGE THE
-         ATTEMPT: `n` stays exactly where it is, and the round is logged as
-         `log-event.cjs attempt … n=<n unchanged> outcome=flake signature=<sig>
-         head=<sha>`. Re-run the job (`gh run rerun <run-id> --failed`) or leave it
+         ATTEMPT: the round is logged as `log-event.cjs attempt … n=<next_n>
+         outcome=flake signature=<sig> head=<sha>`, and `outcome=flake` is the
+         reason `next_n` does not move — `attempt-history.cjs` skips a quarantined
+         round when it counts, so the next real round reuses this number.
+         Re-run the job (`gh run rerun <run-id> --failed`) or leave it
          for the next round, and CONTINUE the front. If the signature turns out to
          be real work after all, `failure-signature.cjs lift <T> --signature <sig>`
          makes it count again.
@@ -1108,16 +1116,18 @@ loop:
        from an agent is a CLAIM: `git -C <worktree> rev-parse HEAD` must equal
        `git -C <worktree> rev-parse origin/<branch>` (or the PR's head SHA)
      reviewers.cjs reinit <pr>
-     attempts += 1
+     the LOG LINE below is what charges the attempt — there is no session counter
+       to increment, and the next round reads the number back with
+       `attempt-history.cjs <T> --json` → `next_n`
      log the round with the keys the NEXT round reads back:
-       `log-event.cjs attempt ticket=<T> pr=<N> n=<n> role=<role> model=<tier>
+       `log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<role> model=<tier>
         outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<sha>
         hypothesis="<the fixer's own one sentence, verbatim>"`
        `signature`+`head` are what the next `verdict` compares; `hypothesis` is
        what `attempt-history.cjs` hands the next fixer so it cannot re-propose what
        this one already ruled out. Never invent a hypothesis the fixer did not
        report — an invented one enters the record as something tried and excluded.
-     attempts > MAX → `escalation-record.cjs mark <T> "<what the N attempts tried and why each failed>"`, continue the front
+     `attempts` (same `attempt-history.cjs <T> --json`) > MAX → `escalation-record.cjs mark <T> "<what the N attempts tried and why each failed>"`, continue the front
        THE ATTEMPT BACKSTOP STAYS, even though the ladder no longer reads the
        counter. A signature that oscillates between two values is never the same
        as the last one, so it never reads `repeat`, and it never reaches K
@@ -1177,7 +1187,9 @@ itself. The round order:
    Skipping it costs the next round the only thing it has: the fixer after this
    one starts from zero and is free to retry what this one just ruled out.
    For `pushed:true` — CONFIRM the push against
-   GitHub first (step d), then `attempts += 1` (MAX = `pipeline.max_attempts`).
+   GitHub first (step d); the attempt event you just logged IS the increment, and
+   the backstop reads `attempt-history.cjs <T> --json` → `attempts`
+   (MAX = `pipeline.max_attempts`).
    Then re-run state-sync: if the front still has actionable items, serve THEM
    while CI runs — only `--watch` when the front is otherwise empty (step a).
 4. Then — step **c** of the cycle (arch-review, `model: opus`), the conform gate

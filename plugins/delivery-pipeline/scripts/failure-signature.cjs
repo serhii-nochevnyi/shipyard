@@ -26,7 +26,7 @@
 //   same at the same HEAD→ flake_candidate; re-run the job once before dispatching
 //   K distinct, no green → plan_defect; a person in the morning, not now (T-20-03)
 //
-// Three properties are load-bearing, and each is pinned by a test:
+// Four properties are load-bearing, and each is pinned by a test:
 //
 //  1. NORMALIZATION BEFORE EXTRACTION. Two prints of one failure differ by
 //     timestamps, ANSI colour, durations, line:column suffixes and the absolute
@@ -41,7 +41,17 @@
 //     It also needs no ticket graph: the fixer that computes a signature stands
 //     in a WORKTREE, which has no `.planning/` at all.
 //
-//  3. THE JOURNAL IS THE RECORD. The quarantine has no store of its own (D2's
+//  3. THE WINDOW, NOT THE WHOLE HISTORY. `plan_defect` reads "K distinct
+//     signatures with NO green between them" — the line above, which this file
+//     asserted from the day it was written while `computeVerdict` counted every
+//     signature the ticket had ever journalled. Three failures, each FIXED and
+//     each followed by a green, therefore parked a healthy ticket as a plan
+//     defect on the third. A green (ADR-002 D8: an `attempt` that came back
+//     green, a `merge`, a `flake_rerun` that passed) RESETS the set. And a
+//     failure nobody could READ is excluded from it outright: an `unknown-…`
+//     signature is one fact about the log, not a second fact about the plan.
+//
+//  4. THE JOURNAL IS THE RECORD. The quarantine has no store of its own (D2's
 //     "no new subsystem", applied one decision over): `flake`, `flake_rerun` and
 //     `flake_lift` events in delivery-log.jsonl are the state, read back in
 //     journal order so the last word wins. The commands that write them run from
@@ -59,6 +69,18 @@ const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 const VERDICTS = ['first', 'progress', 'repeat', 'flake_candidate', 'flake', 'plan_defect'];
 
 const DEFAULT_K = 3; // the same default T-20-02 declares as pipeline.plan_defect_signatures
+
+// A failure nobody could read SAYS SO IN ITS SIGNATURE. The k-rule reads nothing
+// but signature strings back out of the journal — no `error_class` is recorded
+// there — so the fact has to travel in the shape, or the exclusion below can
+// never fire on a real record. The hash stays inside the prefix: "unknown in the
+// unit job" and "unknown in the build job" are still two different things to
+// re-run, which is the discrimination property 2 above is about.
+// The bare word is accepted too: it is what a hand-written or pre-prefix record
+// carries, and reading it as a real signature is the bug, not the record.
+const UNKNOWN_PREFIX = 'unknown-';
+const isUnknownSignature = (sig) =>
+  sig === 'unknown' || String(sig == null ? '' : sig).startsWith(UNKNOWN_PREFIX);
 
 // ── which graph does this invocation belong to ──────────────────────────────
 // Same resolution and the same flag spelling as drift-record.cjs / log-event.cjs
@@ -208,10 +230,13 @@ function computeSignature(rawLog, job = '') {
   const error_class = errorClass(text);
   const test_id = testId(text, job);
   const file = failingFile(text);
-  const signature = crypto.createHash('sha256')
+  const digest = crypto.createHash('sha256')
     .update(`${error_class}\n${test_id}\n${file}`)
     .digest('hex')
     .slice(0, 16);
+  // Only the degraded case changes shape, so every signature already sitting in
+  // a journal still matches the one this computes today.
+  const signature = error_class === 'unknown' ? `${UNKNOWN_PREFIX}${digest}` : digest;
   return { signature, error_class, test_id, file };
 }
 
@@ -236,6 +261,17 @@ function readJournal(ticket) {
   return out;
 }
 
+// What PROVES a green for this ticket, i.e. that the failures before it were
+// fixed (ADR-002 D8 names exactly these three). `merge` is the strongest form and
+// the only one the conveyor writes today; `attempt … outcome=green` is a round
+// that came back clean, and a `flake_rerun` that passed is a green for the job
+// that produced it. The caller has already filtered to one ticket's events, so a
+// neighbour's merge cannot reset this ticket's window.
+function isGreen(e) {
+  if (e.event === 'merge') return true;
+  return (e.event === 'attempt' || e.event === 'flake_rerun') && e.outcome === 'green';
+}
+
 /**
  * One verdict from the pinned enum, by the rules in ADR-001 D1/D3 — in THIS
  * order, because the order is the design:
@@ -253,13 +289,15 @@ function readJournal(ticket) {
  *
  * `seen` is how many prior attempts carried THIS signature — the number the
  * "same twice → change strategy" consumer reads; `distinct` is the breadth the
- * k-rule reads.
+ * k-rule reads. Both are measured over the WINDOW: the failures since the last
+ * green, because that is what "with no green between them" means.
  */
 function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
   let lastFlake = -1;
   let lastLift = -1;
   let lastSame = -1;          // most recent prior attempt carrying THIS signature
-  const priorSignatures = [];
+  let lastGreen = -1;         // the newest event proving the failures before it were fixed
+  const priorAttempts = [];   // { at, signature } for every signed prior attempt
 
   events.forEach((e, i) => {
     if (e.event === 'flake' && e.signature === signature) lastFlake = i;
@@ -267,12 +305,22 @@ function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
     else if (e.event === 'attempt' && typeof e.signature === 'string' && e.signature) {
       // Attempt events from before this phase carry no `signature` key at all.
       // That reads as "no signature recorded", never as an error.
-      priorSignatures.push(e.signature);
+      priorAttempts.push({ at: i, signature: e.signature });
       if (e.signature === signature) lastSame = i;
     }
+    if (isGreen(e)) lastGreen = i;
   });
 
-  const distinct = new Set([...priorSignatures, signature]).size;
+  // The window is "since the last green", not "the whole journal minus greens":
+  // three distinct failures AFTER a green are still a plan defect.
+  const priorSignatures = priorAttempts.filter((a) => a.at > lastGreen).map((a) => a.signature);
+
+  // `lastSame` is deliberately NOT windowed. The candidate rule asks whether the
+  // TREE moved, and a green in between makes "same signature, same head" the
+  // definition of a flake rather than an excuse to dispatch a fixer at one.
+  const distinct = new Set(
+    [...priorSignatures, signature].filter((s) => !isUnknownSignature(s))
+  ).size;
   const seen = priorSignatures.filter((s) => s === signature).length;
   const base = { signature, head, distinct, k, seen };
 
@@ -436,4 +484,7 @@ if (require.main === module) {
   usage('usage: failure-signature.cjs <compute|verdict|rerun|lift> … [--graph <dir>]');
 }
 
-module.exports = { computeSignature, computeVerdict, normalize, relativize, VERDICTS, DEFAULT_K };
+module.exports = {
+  computeSignature, computeVerdict, normalize, relativize,
+  isUnknownSignature, UNKNOWN_PREFIX, VERDICTS, DEFAULT_K,
+};
