@@ -189,20 +189,37 @@ test('every duty action the docs name is one sentinel.cjs can emit', () => {
   );
   assert.ok(emitted.size >= 8, 'cannot read the duty vocabulary out of sentinel.cjs');
 
-  const actionable = (sentinel.match(/const ACTIONABLE = new Set\(\[([^\]]*)\]/) || [])[1];
+  // Read the set as a BLOCK and take the quoted strings out of it, rather than
+  // slicing to the first `]`. Reviewer-found on PR #46: the old
+  // `\[([^\]]*)\]` broke on any formatting-only edit — a set wrapped across
+  // lines, or one that grew a `// why` comment — and a contract test that a
+  // reformat can silently defeat is not a contract. Line comments are stripped
+  // first so a quoted word inside one cannot enter the vocabulary.
+  const actionable = (sentinel.match(/const ACTIONABLE = new Set\(\[([\s\S]*?)\]\s*\)/) || [])[1];
   assert.ok(actionable, 'cannot find the sentinel ACTIONABLE set');
-  const mustAppear = actionable
-    .split(',').map((x) => x.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+  const mustAppear = [
+    ...actionable.replace(/\/\/[^\n]*/g, '').matchAll(/['"]([a-z][a-z-]*)['"]/g),
+  ].map((m) => m[1]);
+  assert.ok(mustAppear.length >= 4, 'cannot read the ACTIONABLE vocabulary out of sentinel.cjs');
+
+  // As its own TOKEN, not as a substring. `includes('merge')` was satisfied by
+  // `mergeStateStatus`, so the docs could stop naming the merge duty entirely and
+  // the test would still pass — the one action it most needed to catch.
+  const names = (a) => new RegExp(`(^|[^A-Za-z0-9_-])${a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_-]|$)`);
 
   for (const [rel, text] of [[DELIVER_MD, readRepo(DELIVER_MD)], [SENTINEL_MD, readRepo(SENTINEL_MD)]]) {
     for (const a of mustAppear) {
-      assert.ok(text.includes(a), `${rel} never names the actionable duty action "${a}"`);
+      assert.ok(names(a).test(text), `${rel} never names the actionable duty action "${a}"`);
     }
     // The reverse direction: a duty name in the docs that the script cannot
-    // emit. Checked over the words the docs present AS actions (backticked and
-    // hyphenated), so ordinary prose is not scanned for a vocabulary it is not
-    // using.
-    for (const m of text.matchAll(/`(wait-[a-z]+|base-merge|arch-review|ci-fix|review-fix|undraft)`/g)) {
+    // emit. Checked over the words the docs present AS actions (backticked), so
+    // ordinary prose is not scanned for a vocabulary it is not using — but over
+    // ALL of them. The old alternation listed only the hyphenated ones, so
+    // `merge`, `human`, `human-merge` and `parked` could be misspelt in the docs
+    // with nothing to catch it; `human-merge` precedes `human` so the longer name
+    // wins. `clear` is deliberately absent: it is `dispatch-record.cjs clear`,
+    // not a duty answer.
+    for (const m of text.matchAll(/`(wait-[a-z]+|base-merge|arch-review|ci-fix|review-fix|undraft|human-merge|human|merge|parked)`/g)) {
       assert.ok(emitted.has(m[1]), `${rel} names duty action "${m[1]}", which sentinel.cjs cannot emit`);
     }
   }
