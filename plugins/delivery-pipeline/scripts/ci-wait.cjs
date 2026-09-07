@@ -48,13 +48,14 @@
 //
 // A stop gate can only refuse once per turn, though, so the pair still has to
 // TERMINATE, and it must not do so by leaving a stuck pipeline unattended. That is
-// what the wait record below is for: three consecutive timeouts with nothing on
-// the board moving is 45 minutes of a pipeline that is not going to settle, and
-// the honest end of that is a person, not more patience. So this script ESCALATES
-// itself at that point — and because an escalation park drops the ticket from the
-// front (`front.cjs` reads `activeParks`), the CI bucket empties and the gate goes
-// quiet through the rule it already had. The loop terminates structurally rather
-// than by a special case.
+// what the wait record below is for: three consecutive timeouts in which one
+// ticket's own pipeline did not move (45m at the default window, longer where
+// the front's `ci_estimates` size it up) is a pipeline that is not going to
+// settle, and the honest end of that is a person, not more patience. So this
+// script ESCALATES itself at that point — and because an escalation park drops
+// the ticket from the front (`front.cjs` reads `activeParks`), the CI bucket
+// empties and the gate goes quiet through the rule it already had. The loop
+// terminates structurally rather than by a special case.
 //
 // It also refuses when tickets are `waiting.dispatched`: an agent completion is a
 // wake-up the runtime gives for free and gives sooner. Waiting on CI while an
@@ -311,10 +312,10 @@ function checksOf({ pr, repo }) {
 }
 
 // HOW MANY EMPTY WINDOWS BEFORE A PERSON IS ASKED. Three at the default 15m is
-// 45 minutes in which nothing on the board moved — not a slow pipeline, a stuck
-// one. Bound to escalation-record's own fingerprint, so ANY real change (a check
-// finishing, a push, a draft lifting, a review landing) resets the count rather
-// than accumulating toward a park nobody has earned.
+// 45 minutes in which that ticket's OWN pipeline did not move — not a slow
+// pipeline, a stuck one. Bound to escalation-record's own fingerprint, so ANY
+// real change (a check finishing, a push, a draft lifting, a review landing)
+// resets the count rather than accumulating toward a park nobody has earned.
 const MAX_EMPTY_RAW = Number(process.env.SHIPYARD_CI_WAIT_MAX_EMPTY || 3);
 const MAX_EMPTY = Number.isFinite(MAX_EMPTY_RAW) && MAX_EMPTY_RAW > 0 ? Math.floor(MAX_EMPTY_RAW) : 3;
 
@@ -468,7 +469,10 @@ for (;;) {
     // both are the caller's business, not this script's. A waiter that only
     // returned on GREEN would hold a run hostage to a red pipeline.
     if (c && c.total > 0 && c.pending === 0) {
-      // Progress forgets the whole run of empty windows: nothing here is stuck.
+      // A settle clears THAT ticket's own record — its whole accumulated run of
+      // empty windows at once, not one decrement off it. Every OTHER watched
+      // ticket keeps its count: one pipeline finishing is no evidence about any
+      // other, and wiping the board here is the defect this call was fixed for.
       const parked = recordOutcome(w.id, watch, goodEver);
       finish(
         { settled: w.id, pr: w.pr, checks: c, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
