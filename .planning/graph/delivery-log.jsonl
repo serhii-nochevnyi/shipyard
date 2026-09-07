@@ -354,3 +354,4 @@
 {"ts":"2026-09-07T15:35:36.065Z","event":"dispatch","ticket":"T-24-07","role":"executor","pr":null,"by":"dispatch-record"}
 {"ts":"2026-09-07T15:35:42.829Z","event":"degenerate_green","ticket":"T-26-04","pr":38,"findings":0,"modes":"none"}
 {"ts":"2026-09-07T15:35:56.069Z","event":"merge","ticket":"T-26-04","pr":38,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T15:36:02.311Z","event":"status_change","ticket":"T-26-04","from":"pr-open","to":"merged","pr":38}

@@ -53,19 +53,18 @@ plans written the same day), executors about 45%, guards about 22%.
   that the conveyor's failure mode is a wrong green reaching an epic, and every
   mechanical gate above the executor costs more to run than the difference
   between tiers.
-- **D2 — Depth is the MODEL. Effort has two useful values.** *(Revised
-  2026-09-07, same day, before any code was built. The first draft said depth
-  is effort, keyed on role and signals, and shipped a five-rung table. The
-  operator's measurement retires it: `max` and `xhigh` cost more without
-  producing a better result, on either runtime. So the effort axis is `low` for
-  the one mechanical role and `high` for everything else, and `xhigh`, `max` and
-  `ultra` are used by no built-in path — they stay legal values a person may set
-  through `pipeline.effort.<role>`.)* The consequence is the one the operator
-  wanted from the start: since effort can no longer express depth, the ONLY way
-  the conveyor can escalate is to change the model, which is what D4 makes
-  mechanical. A `repeat` verdict therefore returns `strategy: rethink` at an
-  unchanged model and effort — a different hypothesis, not a deeper burn — and
-  the rung above it is the ceiling model itself.
+- **D2 — On Claude, depth is EFFORT, keyed on the role and its signals.** The
+  dependency inverts: today the effort tier is derived from the model, which
+  collapses to a single value the moment the model is constant. Proven, not
+  argued: with the floor set through configuration, every role except
+  `drift-check` resolved to `xhigh` and `--signature-state repeat` stopped
+  deepening anything, leaving `strategy: rethink` as the only surviving signal.
+  The table is `low` for the one mechanical role, `high` for research and the
+  repair roles, `xhigh` for the ordinary executor, and `max` for the judges and
+  for a repair whose signature has repeated. *(Revised twice on 2026-09-07: a
+  draft of this decision made the two-value Codex rule universal. It is not —
+  the operator's measurement that `max` and `xhigh` buy nothing for their cost
+  is a CODEX fact, recorded in D6. On Claude the ladder stands.)*
 - **D3 — A configured effort override must not silently disable the escalation
   it outranks.** `cfg.effort[role]` is read before the signature rule, so
   shipping the effort table as configuration would have disabled the repair
@@ -95,17 +94,31 @@ plans written the same day), executors about 45%, guards about 22%.
   and `xhigh` retired by D2, **`sol` has no distinct job** — its only
   distinguishing property in GSD's catalog was advertising `ultra` — so no
   built-in path selects it, and it stays in the palette as a value a person may
-  configure. The mapping is then the exact mirror of the Claude side:
+  configure.
 
-  | | Claude | Codex |
+  **And on Codex ONLY, the effort axis has two values.** The operator's
+  measurement is that `max` and `xhigh` cost more there without producing a
+  better result, and that Astra's best results are at `high` — so `high` is its
+  optimum rather than a limit. D2's ladder therefore does not apply on this
+  runtime: `low` for the one mechanical role, `high` for everything else. The
+  consequence is the interesting one, and it is why the two runtimes reach the
+  same place by different routes: with no depth left on the effort axis, the
+  ONLY escalation available on Codex is the model, which is what D8's variants
+  make reachable.
+
+  | | Claude (D2's ladder) | Codex (two values) |
   |---|---|---|
   | mechanical: drift-check | opus / low | terra / low |
-  | every other role | opus / high | terra / high |
-  | integrator, unconditionally | fable / high | astra / high |
-  | the earned ceiling (D4's routes) | fable / high | astra / high |
+  | research, repair roles | opus / high | terra / high |
+  | ordinary executor | opus / xhigh | terra / high |
+  | judges, and a repeated repair | opus / max | terra / high |
+  | integrator, unconditionally | fable / max | astra / high |
+  | the earned ceiling (D4's routes) | fable | astra / high |
 
-  One sentence in the documentation now describes both runtimes, which is the
-  point: a reader should not have to hold two policies in mind.
+  The MODELS mirror each other exactly — one workhorse floor, one senior
+  ceiling that is earned, one unconditional exception for the integrator. Only
+  the effort column differs, and it differs for a measured reason rather than a
+  structural one.
 
   **The mistake behind both superseded readings, stated once because it was
   made three times in different clothes:** I ranked the Codex models by GSD's

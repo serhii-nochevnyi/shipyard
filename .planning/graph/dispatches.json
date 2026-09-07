@@ -6,12 +6,6 @@
       "fingerprint": "f582370d91562f87",
       "pr": 44
     },
-    "T-26-04": {
-      "role": "pr-sentinel",
-      "at": "2026-09-07T15:32:36.414Z",
-      "fingerprint": "69549f2d48df2bd3",
-      "pr": 38
-    },
     "T-24-07": {
       "role": "executor",
       "at": "2026-09-07T15:35:36.065Z",

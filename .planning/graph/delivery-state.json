@@ -418,29 +418,12 @@
   "T-26-04": {
     "branch": "ticket/T-26-04-gc-removes-only-what-is-proven-landed",
     "pr": 38,
-    "status": "pr-open",
-    "draft": false,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/38",
-    "pr_base": "epic/26-positive-evidence-before-a-mutation",
-    "pr_created_at": "2026-09-07T14:16:54Z",
-    "gate": {
-      "arch-review": "conform",
-      "drift-check": "skipped",
-      "degenerate-green": "clean",
-      "checks": "green"
-    },
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false
-    },
     "base": "epic/26-positive-evidence-before-a-mutation",
     "epic": "epic/26-positive-evidence-before-a-mutation",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-07T14:17:59.561Z"
+    "reapable": true,
+    "since": "2026-09-07T15:36:02.311Z"
   },
   "T-26-05": {
     "branch": "ticket/T-26-05-locks-prove-ownership-snapshots-carry-a",
