@@ -144,10 +144,26 @@ function checkpointParentOf(id, tickets, state) {
 // either case, and readying the PR is a courtesy to them (the duty's
 // `checks_note` already says what "green" meant) — holding the draft there
 // would leave a PR nobody can land at all.
+// The three facts are ANDed, so their ORDER cannot change the answer — but it
+// decides whether the front's config read happens at all, which is why the cheap
+// ones are settled first. `merge_without_ci` is the only expensive input (on the
+// board it comes from the project's config file), so it is consulted LAST and may
+// arrive as a THUNK: a caller that already holds the value passes the value, and
+// one that would have to go and find it passes a function that is never called
+// unless a PR with no reported checks is actually in hand. Reviewer-found on
+// PR #44: front.cjs resolved it eagerly to build this options object, so every
+// `computeFront` opened the file — including the overwhelming majority of boards
+// where no PR has `none_reported` and the answer is `false` either way. The
+// short-circuit lives HERE rather than at the call site on purpose: the rule has
+// two readers (this board and sentinel.cjs's guard) and duplicating any conjunct
+// into one of them is how the two come to disagree.
 function noCiHold(checks, opts = {}) {
   if (opts.autoMerge !== true) return false;
-  if (opts.mergeWithoutCi === true) return false;
-  return (checks || {}).none_reported === true;
+  if ((checks || {}).none_reported !== true) return false;
+  const mergeWithoutCi = typeof opts.mergeWithoutCi === 'function'
+    ? opts.mergeWithoutCi()
+    : opts.mergeWithoutCi;
+  return mergeWithoutCi !== true;
 }
 
 // ONE sentence for the fact, quoted by the board and the guard rather than
@@ -286,25 +302,46 @@ function computeFront(tickets, state, opts = {}) {
   // dispatch-record.cjs and the CLI below) and a board that answered
   // `merge_human` while sentinel.cjs — which reads the config directly — landed
   // the same PR is exactly the board/guard disagreement the shared predicates
-  // above exist to prevent. state-sync and this CLI both run at the project root
-  // (that is their own rule), so they resolve the project's setting; a caller
-  // standing somewhere else — a dispatch mark run from a ticket worktree — reads
-  // no config and gets `false`, which is the conservative answer and never the
-  // permissive one. Passing the option is how such a caller pins it exactly.
+  // above exist to prevent.
+  //
+  // So the fallback must not resolve from `process.cwd()`. state-sync and this
+  // CLI run at the project root and would be served by it, but
+  // `dispatch-record.cjs refreshFront` is DOCUMENTED to run from a ticket
+  // worktree — which has no `.planning/` of its own when the project keeps it
+  // untracked — and it rewrites `delivery-front.json` from what it computes. A
+  // cwd read there would answer `false` on a project that had explicitly set
+  // `merge_without_ci: true`, so every dispatch mark would silently demote the
+  // very PRs the guard is entitled to land: the disagreement, reintroduced by
+  // the fallback meant to prevent it. Calling that "conservative" was the excuse
+  // (reviewer-found on PR #44) — the two answers are not more and less cautious,
+  // they are inconsistent, and the board must never contradict the guard.
+  //
+  // `graph-dir.cjs` is this repo's one answer to "which project does this
+  // invocation belong to": `--graph`/`SHIPYARD_GRAPH_DIR` → cwd → the worktree's
+  // OWN repository. The project root is the graph's grandparent. Only when
+  // nothing resolves does it fall back to the cwd — and an unreadable config is
+  // still `false`, because absence is not consent.
   let mergeWithoutCiCache;
   const mergeWithoutCi = () => {
     if (opts.mergeWithoutCi !== undefined) return opts.mergeWithoutCi === true;
     if (mergeWithoutCiCache === undefined) {
       try {
+        const { resolveGraphDir } = require(path.join(__dirname, 'graph-dir.cjs'));
         const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-        mergeWithoutCiCache = loadConfig(process.cwd()).config.merge_without_ci === true;
+        const { dir, how } = resolveGraphDir(process.argv.slice(2), process.cwd());
+        const root = how === 'none' ? process.cwd() : path.resolve(dir, '..', '..');
+        mergeWithoutCiCache = loadConfig(root).config.merge_without_ci === true;
       } catch (e) {
         mergeWithoutCiCache = false; // unreadable config → the safe answer, never the permissive one
       }
     }
     return mergeWithoutCiCache;
   };
-  const heldForNoCi = (s) => noCiHold(s.checks, { autoMerge, mergeWithoutCi: mergeWithoutCi() });
+  // The resolver is handed over UNCALLED. `noCiHold` settles `autoMerge` and
+  // `none_reported` first and only then asks for it, so the promise the comment
+  // above makes — "an ordinary board still reads no file here" — is kept by the
+  // predicate's own structure rather than by this line remembering to.
+  const heldForNoCi = (s) => noCiHold(s.checks, { autoMerge, mergeWithoutCi });
   // Expected CI length per ticket, in seconds, supplied by the caller —
   // `ciEstimates` below derives it and BOTH entry points pass it in. It is data,
   // not a lookup: computeFront is a pure function over its inputs and reads no

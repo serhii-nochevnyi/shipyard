@@ -168,13 +168,14 @@ precisely because it must be unreachable until the verdict exists.
 The trailer, written by `arch-review` through one script — never by hand:
 
 ```bash
-node $SHIPYARD_ROOT/scripts/gate-trailer.cjs write <pr> --arch-review conform \
+node $SHIPYARD_ROOT/scripts/gate-trailer.cjs write <pr> --repo <owner/name> \
+     --arch-review conform \
      --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped>
-gh pr ready <pr>
+gh pr ready <pr> --repo <owner/name>
 ```
 
 Do not invent that trailer and do not assemble one yourself. It IS the merge gate
-— `sentinel.cjs merge` refuses without it — and the writer holds three rules that
+— `sentinel.cjs merge` refuses without it — and the writer holds four rules that
 prose could not:
 
 * **The verdict is bound to the head it judged.** The line carries `head=<sha>`,
@@ -192,6 +193,13 @@ prose could not:
   naturally takes, and it has its own test.
 * **It refuses while a review thread is unresolved.** Recording the verdict over
   unanswered feedback falsifies the gate. Service the threads first, then write.
+* **`--repo` says which repository, and nothing else can.** Omit it and the
+  writer resolves the repository from the cwd, so a verdict meant for a
+  cross-repo ticket — or one recorded from a worktree that is not the project —
+  lands on whatever same-numbered PR exists next door. The trailer is well-formed
+  there and no reader can tell, which is why it is in the snippet rather than
+  left to the optional-argument brackets: a misspelt `--repo` is refused, an
+  omitted one cannot be. Pass the ticket's own repo on every call.
 
 **`merge`** — land it: `node $SHIPYARD_ROOT/scripts/sentinel.cjs merge <T>`.
 The script re-verifies everything against live GitHub and refuses on anything
