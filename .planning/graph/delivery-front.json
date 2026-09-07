@@ -2,26 +2,27 @@
   "generated_at": "2026-09-07T15:36:02.311Z",
   "parked_by_run": [],
   "auto_merge": "epic",
+  "dispatches_applied_at": "2026-09-07T15:51:39.454Z",
   "actionable": {
-    "execute": [
-      "T-24-07"
-    ],
+    "execute": [],
     "publish": [],
-    "fix": [],
-    "finalize": [
-      "T-24-05"
+    "fix": [
+      "T-24-06"
     ],
+    "finalize": [],
     "merge": []
   },
   "waiting": {
     "ci": [],
-    "dispatched": [],
+    "dispatched": [
+      "T-24-05",
+      "T-24-07"
+    ],
     "merge_human": [],
     "human": []
   },
   "parked": {
     "blocked": [
-      "T-24-06",
       "T-24-11",
       "T-25-02",
       "T-25-03",
@@ -69,9 +70,9 @@
     ]
   },
   "why": {
-    "T-24-05": "PR #44: green and still a draft — threads, arch-review, conform gate",
-    "T-24-06": "escalated — out-of-scope: the only correct fix for the CI failure is one line in tests/smoke/docs-smoke.sh:189 (const MECHANICAL = new Set(['undraft','merge']) needs 'base-merge'), and that file is NOT in 24-06-PLAN.md's files_modified (the plan declared tests/smoke/sentinel-smoke.sh only). The ticket's code is correct and its own suites are green (sentinel 77/0, front 96/0, reviewers 11/0, log-event 11/0, sentinel-smoke 51/0); the docs contract has simply never heard of the base-merge duty. Every in-scope alternative was weighed and is wrong: removing base-merge from ACTIONABLE makes a dead-base PR vanish from all four duty buckets and report the guard 'clear' (the exact hole ADR-002 D4 closes); folding it into the merge action cannot reach the case, because a BEHIND base blocks a PR while it is still draft and in CI, long before merge-eligibility, and duty deliberately places base-merge ahead of threads and pending CI; renaming it to ci-fix breaks the plan's acceptance criterion, D4's naming, and spends the ticket's repair budget on a mechanical merge (which is why log-event.cjs gained base_merge as a NON-attempt event). Needs a human decision: either widen 24-06's files_modified to include tests/smoke/docs-smoke.sh, or add a third docs-smoke category for duty actions that dispatch under a declared role alias (base-merge is a hybrid: base-merge.cjs does the work, but fix-round.mjs needsBaseMerge can dispatch a fixer for an in-scope conflict, resolving at the ci-fix tier).. It lifts by itself once the PR moves (a push, a review answer, undrafting); `escalation-record.cjs clear T-24-06` to take it back.",
-    "T-24-07": "ready — worktree + executor",
+    "T-24-05": "dispatched to arch-review 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-05` returns it now.",
+    "T-24-06": "PR #45: 1 failing check(s)",
+    "T-24-07": "dispatched to executor 16m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-07` returns it now.",
     "T-24-11": "T-24-07 (parent has no branch yet (nothing to cascade from))",
     "T-25-02": "T-24-07 (cross-phase parent must land on main first (phase 24 epic still ahead))",
     "T-25-03": "T-25-02 (parent has no branch yet (nothing to cascade from)); T-24-07 (cross-phase parent must land on main first (phase 24 epic still ahead))",
@@ -83,27 +84,29 @@
     "T-26-02": "T-26-11 (parent has no branch yet (nothing to cascade from)); T-25-04 (cross-phase parent must land on main first (phase 25 epic still ahead))"
   },
   "counts": {
-    "execute": 1,
+    "execute": 0,
     "publish": 0,
-    "fix": 0,
-    "finalize": 1,
+    "fix": 1,
+    "finalize": 0,
     "merge": 0,
     "ci": 0,
-    "dispatched": 0,
+    "dispatched": 2,
     "merge_human": 0,
     "human": 0,
-    "blocked": 10,
+    "blocked": 9,
     "done": 33
   },
-  "actionable_count": 2,
-  "left_behind_count": 2,
+  "actionable_count": 1,
+  "left_behind_count": 1,
   "fixpoint": false,
   "sentinel": {
     "duty": [
-      "T-24-05"
+      "T-24-06"
     ],
     "waiting_ci": [],
-    "dispatched": [],
+    "dispatched": [
+      "T-24-05"
+    ],
     "clear": false
   },
   "roles": {

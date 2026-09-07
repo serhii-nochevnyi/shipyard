@@ -994,6 +994,9 @@
       "cross_repo_deps": [],
       "unreachable_paths": false,
       "files": [
+        ".env.example",
+        "docker-compose.yml",
+        "k8s/configmap.yaml",
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "plugins/delivery-pipeline/scripts/failure-signature.cjs",
         "plugins/delivery-pipeline/scripts/gsd-tune.cjs",

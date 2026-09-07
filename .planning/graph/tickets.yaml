@@ -557,7 +557,7 @@ tickets:
     repo: null
     wave: 10
     depends_on: [T-25-03]
-    files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/commands/deliver.md, capabilities/delivery-pipeline/capability.json, CLAUDE.md, README.md, tests/unit/pipeline-config.test.cjs, tests/unit/failure-signature.test.cjs, tests/unit/gsd-tune.test.cjs]
+    files: ['.env.example', docker-compose.yml, k8s/configmap.yaml, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/commands/deliver.md, capabilities/delivery-pipeline/capability.json, CLAUDE.md, README.md, tests/unit/pipeline-config.test.cjs, tests/unit/failure-signature.test.cjs, tests/unit/gsd-tune.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: false

@@ -1,8 +1,8 @@
 {
   "tickets": {
     "T-24-05": {
-      "role": "pr-sentinel",
-      "at": "2026-09-07T15:32:36.451Z",
+      "role": "arch-review",
+      "at": "2026-09-07T15:51:39.447Z",
       "fingerprint": "f582370d91562f87",
       "pr": 44
     },
