@@ -32,7 +32,10 @@
 // Keying on `files_modified` rather than on "this file is not mine" is what
 // makes the rule safe: a child that legitimately edits a file its parent also
 // touched will have DECLARED it, so the conflict lands in the second branch and
-// nothing of its work is discarded.
+// nothing of its work is discarded. That protection is only as good as the
+// matcher — an inexact "does this declaration own this path" put a declared file
+// in the FIRST branch and discarded exactly the work the rule exists to protect,
+// so ownership is answered by path-owner.cjs and by nothing local to this file.
 
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -66,11 +69,49 @@ if (!t) fail(`ticket ${ticket} is not in the graph`);
 const declared = Array.isArray(t.files) ? t.files : [];
 if (!declared.length) fail(`ticket ${ticket} declares no files — Gate 2 should have rejected that graph`);
 
-// Same coverage semantics as Gate 2 and the scope gate: an entry covers
-// everything at or under its pre-glob prefix.
-const globPrefix = (g) => { const i = g.search(/[*?[]/); return (i === -1 ? g : g.slice(0, i)).replace(/\/+$/, ''); };
-const prefixes = declared.map(globPrefix);
-const owns = (p) => prefixes.some((pre) => !pre || p === pre || p.startsWith(pre + '/'));
+// The ONE ownership matcher, shared with Gate 2's overlap check and the scope
+// gate. The old test cut a declaration at its first wildcard and compared the
+// stump as a directory prefix, so `src/foo*.ts` did not own `src/fooBar.ts`: the
+// conflict fell into the branch below, this script took the BASE's edition over
+// the ticket's implementation, committed it and exited 0 reporting `resolved
+// mechanically` (audit F01; ADR-004 D1). An inexact owner here is not a bad
+// message — it is a silent mutation.
+const { parse: parseDecl, owns: ownsPath, isGlob, GRAMMAR } = require(path.join(__dirname, 'path-owner.cjs'));
+
+// No certainty, no mutation. Refused BEFORE the merge starts, like the dirty
+// worktree above: the alternative — merging and then leaving every conflict
+// unresolved — hands back a half-merged tree for a graph that was never
+// validated. Gate 2 rejects such an entry, so getting here means it never ran.
+const unanswerable = declared.filter((d) => parseDecl(d).error);
+if (unanswerable.length) {
+  fail(
+    `ticket ${ticket} declares ${unanswerable.length} entr${unanswerable.length === 1 ? 'y' : 'ies'} the ownership ` +
+    `matcher cannot answer exactly: ${unanswerable.map((d) => `"${d}"`).join(', ')} — Gate 2 should have rejected ` +
+    `that graph (run validate-graph.cjs). ${GRAMMAR}. Nothing was merged: which side of a conflict wins is a ` +
+    'mutation, and it is not decided from a declaration nobody can resolve.'
+  );
+}
+const owns = (p) => declared.some((d) => ownsPath(d, p));
+
+// Who ELSE in the graph claims this path through a wildcard declaration. A
+// conflict in a file the ticket owns is already left for judgement; when a
+// sibling's glob matches it too, the agent resolving it is looking at a path two
+// tickets claim, and the other side may be that sibling's work rather than a
+// stale snapshot. Gate 2 now rejects such a pair when the two are unordered, so
+// this is the ordered case — and worth saying out loud either way.
+function contestedBy(p) {
+  const out = [];
+  for (const [id, row] of Object.entries(tickets)) {
+    if (id === ticket) continue;
+    // Different repositories are different file systems (state-sync and Gate 2
+    // draw the same boundary): an identical path in two repos is not the same file.
+    if ((row.repo || null) !== (t.repo || null)) continue;
+    for (const d of Array.isArray(row.files) ? row.files : []) {
+      if (isGlob(d) && ownsPath(d, p)) out.push(`${id} via "${d}"`);
+    }
+  }
+  return out;
+}
 
 const git = (args, { tolerate = false } = {}) => {
   const r = spawnSync('git', ['-C', worktree, ...args], { encoding: 'utf8' });
@@ -94,7 +135,7 @@ const baseRef = resolveBaseRef(worktree, base);
 const merge = git(['merge', '--no-edit', baseRef], { tolerate: true });
 if (merge.status === 0) {
   const msg = /Already up to date/i.test(merge.out) ? 'already up to date' : 'merged cleanly';
-  if (asJson) console.log(JSON.stringify({ ticket, base: baseRef, requested_base: base, result: msg, taken_from_base: [], unresolved: [] }, null, 2));
+  if (asJson) console.log(JSON.stringify({ ticket, base: baseRef, requested_base: base, result: msg, taken_from_base: [], unresolved: [], contested: [] }, null, 2));
   else console.log(`base-merge: ${ticket} — ${msg} with ${baseRef}`);
   process.exit(0);
 }
@@ -107,8 +148,14 @@ if (!conflicted.length) {
 
 const taken = [];
 const real = [];
+const contested = [];
 for (const p of conflicted) {
-  if (owns(p)) { real.push(p); continue; }
+  if (owns(p)) {
+    real.push(p);
+    const claims = contestedBy(p);
+    if (claims.length) contested.push({ path: p, also_claimed_by: claims });
+    continue;
+  }
   // Take the base's edition wholesale. `checkout <ref> -- <path>` also covers
   // add/add, where `--theirs` has no stage to read; a path the base deleted is
   // removed instead, which is the same rule applied to a file that no longer
@@ -121,7 +168,7 @@ for (const p of conflicted) {
 }
 
 if (real.length) {
-  const payload = { ticket, base: baseRef, requested_base: base, result: 'conflicts remain', taken_from_base: taken, unresolved: real };
+  const payload = { ticket, base: baseRef, requested_base: base, result: 'conflicts remain', taken_from_base: taken, unresolved: real, contested };
   if (asJson) console.log(JSON.stringify(payload, null, 2));
   else {
     console.error(`base-merge: ${ticket} — ${taken.length} path(s) taken from ${baseRef}, ${real.length} REAL conflict(s) left:`);
@@ -130,12 +177,19 @@ if (real.length) {
     console.error('These are files the ticket declares, so its side is not a stale snapshot —');
     console.error('resolve them on their merits, then `git add` and commit the merge.');
     console.error('The merge is deliberately left in progress; nothing was committed.');
+    if (contested.length) {
+      console.error('');
+      console.error('Ownership of these is CONTESTED — another ticket claims them through a wildcard');
+      console.error('declaration, so the other side of the conflict may be its work and not a stale');
+      console.error('snapshot. Read it before you pick a side:');
+      for (const c of contested) console.error(`  - ${c.path}: also claimed by ${c.also_claimed_by.join(', ')}`);
+    }
   }
   process.exit(1);
 }
 
 git(['commit', '--no-edit']);
-const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved mechanically', taken_from_base: taken, unresolved: [] };
+const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved mechanically', taken_from_base: taken, unresolved: [], contested: [] };
 if (asJson) console.log(JSON.stringify(payload, null, 2));
 else {
   console.log(`base-merge: ${ticket} — merged ${baseRef}; ${taken.length} undeclared path(s) taken from the base:`);
