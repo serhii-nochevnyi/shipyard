@@ -33,8 +33,9 @@
 //                 the guard's) and the guard would not do either
 //   parked (compatible with a fixpoint — only a human or a replan moves these):
 //     merge_human — green, out of draft, but the merge is a human action
-//                   (auto-merge off, direct-to-main, or the PR targets the
-//                   integration branch)
+//                   (auto-merge off, direct-to-main, the PR targets the
+//                   integration branch, or NO checks were reported at all — see
+//                   noCiHold: "nothing ran" is not a green the run may land on)
 //     human     — a human_checkpoint ticket that has cleared its gate and whose
 //                 judgement nobody has supplied yet (a person holds the key), or
 //                 a child held behind an OPEN checkpoint parent until it lands
@@ -120,6 +121,53 @@ function checkpointParentOf(id, tickets, state) {
   return ((state && state[parent]) || {}).status === 'pr-open' ? parent : null;
 }
 
+// ── the NO-CI hold, in the same ONE home, for the same reason ───────────────
+//
+// `none_reported` means nothing ran, not that everything passed. It used to
+// count as green all the way into `actionable.merge`, so a PR in a repo whose
+// pipeline never registered was squashed into the epic with no test having run;
+// state-sync warns about it in a line nobody reads at 3am.
+//
+// So both readers withhold the two actions that walk such a PR towards landing —
+// the squash itself, and the mechanical `undraft` that readies it for one — and
+// report the merge as a human's. Only those two: the architecture verdict and
+// the review threads are real work whatever CI did, and a `finalize` withheld
+// there would strand a PR nobody is servicing.
+//
+// Gated on `autoMerge` deliberately. With auto-merge off the human merges it in
+// either case, and readying the PR is a courtesy to them (the duty's
+// `checks_note` already says what "green" meant) — holding the draft there
+// would leave a PR nobody can land at all.
+// The three facts are ANDed, so their ORDER cannot change the answer — but it
+// decides whether the front's config read happens at all, which is why the cheap
+// ones are settled first. `merge_without_ci` is the only expensive input (on the
+// board it comes from the project's config file), so it is consulted LAST and may
+// arrive as a THUNK: a caller that already holds the value passes the value, and
+// one that would have to go and find it passes a function that is never called
+// unless a PR with no reported checks is actually in hand. Reviewer-found on
+// PR #44: front.cjs resolved it eagerly to build this options object, so every
+// `computeFront` opened the file — including the overwhelming majority of boards
+// where no PR has `none_reported` and the answer is `false` either way. The
+// short-circuit lives HERE rather than at the call site on purpose: the rule has
+// two readers (this board and sentinel.cjs's guard) and duplicating any conjunct
+// into one of them is how the two come to disagree.
+function noCiHold(checks, opts = {}) {
+  if (opts.autoMerge !== true) return false;
+  if ((checks || {}).none_reported !== true) return false;
+  const mergeWithoutCi = typeof opts.mergeWithoutCi === 'function'
+    ? opts.mergeWithoutCi()
+    : opts.mergeWithoutCi;
+  return mergeWithoutCi !== true;
+}
+
+// ONE sentence for the fact, quoted by the board and the guard rather than
+// written twice: the remedy is a decision with two branches, and a reader who is
+// told only one of them ("wait") never reaches for the setting.
+const NO_CI_WHY = 'no CI checks were reported — nothing ran, so "green" here is the absence of evidence '
+  + 'rather than evidence. Either confirm this repo has no CI '
+  + '(`delivery_pipeline.merge_without_ci: true`) or wait for the checks to register; until then the merge '
+  + 'is a human\'s.';
+
 const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
 const SENTINEL_BUCKETS = ['fix', 'finalize', 'merge'];
 
@@ -165,6 +213,56 @@ function computeFront(tickets, state, opts = {}) {
   // in; the front never guesses it, because the difference is whether an unmerged
   // green PR is the run's work or a human's.
   const autoMerge = opts.autoMerge === true;
+  // "This repo has no CI" is a claim only the PROJECT can make, so it is a
+  // config knob (`delivery_pipeline.merge_without_ci`) and never an inference.
+  // The caller may pass it and that always wins; otherwise it is resolved from
+  // the project's own config the first time a PR with no checks is actually
+  // seen — lazily, so an ordinary board still reads no file here.
+  //
+  // The fallback exists because computeFront has THREE callers (state-sync.cjs,
+  // dispatch-record.cjs and the CLI below) and a board that answered
+  // `merge_human` while sentinel.cjs — which reads the config directly — landed
+  // the same PR is exactly the board/guard disagreement the shared predicates
+  // above exist to prevent.
+  //
+  // So the fallback must not resolve from `process.cwd()`. state-sync and this
+  // CLI run at the project root and would be served by it, but
+  // `dispatch-record.cjs refreshFront` is DOCUMENTED to run from a ticket
+  // worktree — which has no `.planning/` of its own when the project keeps it
+  // untracked — and it rewrites `delivery-front.json` from what it computes. A
+  // cwd read there would answer `false` on a project that had explicitly set
+  // `merge_without_ci: true`, so every dispatch mark would silently demote the
+  // very PRs the guard is entitled to land: the disagreement, reintroduced by
+  // the fallback meant to prevent it. Calling that "conservative" was the excuse
+  // (reviewer-found on PR #44) — the two answers are not more and less cautious,
+  // they are inconsistent, and the board must never contradict the guard.
+  //
+  // `graph-dir.cjs` is this repo's one answer to "which project does this
+  // invocation belong to": `--graph`/`SHIPYARD_GRAPH_DIR` → cwd → the worktree's
+  // OWN repository. The project root is the graph's grandparent. Only when
+  // nothing resolves does it fall back to the cwd — and an unreadable config is
+  // still `false`, because absence is not consent.
+  let mergeWithoutCiCache;
+  const mergeWithoutCi = () => {
+    if (opts.mergeWithoutCi !== undefined) return opts.mergeWithoutCi === true;
+    if (mergeWithoutCiCache === undefined) {
+      try {
+        const { resolveGraphDir } = require(path.join(__dirname, 'graph-dir.cjs'));
+        const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
+        const { dir, how } = resolveGraphDir(process.argv.slice(2), process.cwd());
+        const root = how === 'none' ? process.cwd() : path.resolve(dir, '..', '..');
+        mergeWithoutCiCache = loadConfig(root).config.merge_without_ci === true;
+      } catch (e) {
+        mergeWithoutCiCache = false; // unreadable config → the safe answer, never the permissive one
+      }
+    }
+    return mergeWithoutCiCache;
+  };
+  // The resolver is handed over UNCALLED. `noCiHold` settles `autoMerge` and
+  // `none_reported` first and only then asks for it, so the promise the comment
+  // above makes — "an ordinary board still reads no file here" — is kept by the
+  // predicate's own structure rather than by this line remembering to.
+  const heldForNoCi = (s) => noCiHold(s.checks, { autoMerge, mergeWithoutCi });
   // Expected CI length per ticket, in seconds, supplied by the caller —
   // `ciEstimates` below derives it and BOTH entry points pass it in. It is data,
   // not a lookup: computeFront is a pure function over its inputs and reads no
@@ -271,6 +369,14 @@ function computeFront(tickets, state, opts = {}) {
       } else if ((c.pending || 0) > 0) {
         waiting.ci.push(id);
         why[id] = `PR #${s.pr}: ${c.pending} check(s) still running`;
+      } else if (s.draft && gateConform(s) && heldForNoCi(s)) {
+        // A certified draft with nothing left but the readying, in a repo where
+        // nothing ran. `finalize` here would be dispatched every round to do that
+        // one mechanical step the guard now withholds — "every round re-proposes
+        // the same impossible action", which is the loop this bucket exists to
+        // end. An UNCERTIFIED draft falls through: arch-review is still owed.
+        waiting.merge_human.push(id);
+        why[id] = `PR #${s.pr}: ${NO_CI_WHY} It is left as a draft, which is what a draft says.`;
       } else if (s.draft) {
         // Draft is the pre-gate state: threads, arch-review and the conform gate
         // are all still ahead, and every one of them is work the run can do now.
@@ -311,6 +417,12 @@ function computeFront(tickets, state, opts = {}) {
         why[id] = needsHuman(tickets && tickets[parent])
           ? `PR #${s.pr}: green + conform, but its base is ${parent} — a human_checkpoint PR still open. It merges once that one lands.`
           : `PR #${s.pr}: green + conform, but its base is ${parent} — a pre-authorized human_checkpoint PR still open. Nobody is reading it, but it lands first; this one follows.`;
+      } else if (autoMerge && gateConform(s) && s.merge_scope === 'stacked' && heldForNoCi(s)) {
+        // Ready in every other respect, and nothing verified it. `sentinel.cjs
+        // merge` refuses this against LIVE GitHub, so the board must not offer
+        // it — the front must never offer what the guard declines.
+        waiting.merge_human.push(id);
+        why[id] = `PR #${s.pr}: ${NO_CI_WHY}`;
       } else if (autoMerge && s.review_decision !== 'CHANGES_REQUESTED' && gateConform(s) && s.merge_scope === 'stacked') {
         // The sentinel's merge: into the epic or a parent ticket branch only.
         // `merge_scope` is set by state-sync; an integration-branch target never
@@ -737,7 +849,7 @@ function formatFront(front) {
   return lines;
 }
 
-module.exports = { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf };
+module.exports = { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, noCiHold, NO_CI_WHY };
 
 // ── CLI: read the state files this project already has and print the verdict ──
 if (require.main === module) {
@@ -763,6 +875,9 @@ if (require.main === module) {
   const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
   const { config } = loadConfig(root);
   const autoMerge = config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
+  // Passed explicitly here because this CLI has already paid for the config —
+  // computeFront's own lazy fallback serves the callers that have not.
+  const mergeWithoutCi = config.merge_without_ci === true;
   // The durable parks — drift verdicts and escalations — must be read here too.
   // deliver.md advertises this CLI as "re-runnable on its own", and it silently
   // was not equivalent: state-sync passed both in, so the same graph produced two
@@ -774,7 +889,7 @@ if (require.main === module) {
   // park's kind, and the flat map keeps the kind only as a text prefix.
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
   const front = computeFront(tickets, state, {
-    parked, autoMerge, drifted: activeDrift(root), escalated: activeParks(root, state),
+    parked, autoMerge, mergeWithoutCi, drifted: activeDrift(root), escalated: activeParks(root, state),
     // Same reason as the two stores above: this CLI is advertised as re-runnable
     // on its own, and a board that re-offers a ticket an agent is holding is not
     // the same board.

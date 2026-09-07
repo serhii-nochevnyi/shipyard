@@ -1192,4 +1192,205 @@ test('a dispatched wave and a running CI queue are reported as two different wai
   assert.ok(/1 ticket\(s\) are with an agent right now, and 1 PR\(s\) are running CI/.test(out), out);
 });
 
+suite('front — a PR where nothing ran is not a green PR');
+
+// Б3. `none_reported` used to count as green all the way into `actionable.merge`,
+// so a PR in a repo whose CI never registered was squashed into the epic with no
+// test having run. state-sync warns about it in a line nobody reads at 3am; the
+// honest bucket is `waiting.merge_human`, unless the project SAYS it has no CI.
+
+const noCi = { total: 0, failing: 0, pending: 0, none_reported: true };
+const noCiLanded = { ...landed, checks: noCi };
+
+test('green + conform + stacked, but nothing ran → waiting.merge_human', () => {
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, [], 'nothing verified this branch');
+  assert.deepStrictEqual(f.waiting.merge_human, ['T']);
+  // The remedy is a decision, so the reason has to name both halves of it.
+  assert.ok(/merge_without_ci/.test(f.why.T), f.why.T);
+  assert.ok(/register/.test(f.why.T), f.why.T);
+  assert.strictEqual(f.fixpoint, true, 'nobody owes work — a person holds this one');
+});
+
+test('...and the same PR merges when the project says it has no CI (the control)', () => {
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true, mergeWithoutCi: true });
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+});
+
+test('a pipeline that reported is untouched (the second control)', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+});
+
+test('a certified draft where nothing ran is held too, not finalized', () => {
+  // `finalize` would be dispatched every round to do the one mechanical thing
+  // left (ready the PR) — the "every round re-proposes the same impossible
+  // action" loop. The guard withholds that `undraft`, so the board must not
+  // offer it.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.finalize, []);
+  assert.deepStrictEqual(f.waiting.merge_human, ['T']);
+  assert.ok(/merge_without_ci/.test(f.why.T), f.why.T);
+});
+
+test('an UNCERTIFIED draft where nothing ran is still finalize work', () => {
+  // The architecture verdict and the review threads are real work whatever CI
+  // did, so only the two landing actions are withheld.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded, draft: true, gate: undefined } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+});
+
+test('with auto-merge off nothing is withheld — the human merges it either way', () => {
+  // Readying a PR nobody may auto-merge is a courtesy to the person who will,
+  // and the duty's `checks_note` already tells them what "green" meant. Holding
+  // the draft here would leave a PR nobody can land.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } });
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+});
+
+test('a checkpoint outranks the no-CI hold — a person holds that one for another reason', () => {
+  const f = computeFront({ T: { human_checkpoint: true } }, { T: { ...noCiLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.human, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+});
+
+suite('front — the project config is consulted only when a no-CI PR is on the board');
+
+// Reviewer-found on PR #44. `heldForNoCi` resolved `merge_without_ci` EAGERLY to
+// build noCiHold's options object, so every `computeFront` opened the project's
+// config file — including the ordinary board where no PR reports `none_reported`
+// and the setting cannot change a single answer. What makes it worth a test
+// rather than a shrug is that the comment beside the resolver already promised
+// the opposite ("lazily, so an ordinary board still reads no file here"): the
+// file asserted a behaviour the code did not have. These pin the promise so it
+// cannot rot back, and they measure the READ, not the clock.
+const cfgMod = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
+));
+
+// front.cjs requires pipeline-config.cjs lazily, INSIDE the resolver, so the
+// spy goes on the cached module object it looks the export up on.
+function configReadsDuring(fn) {
+  const real = cfgMod.loadConfig;
+  let reads = 0;
+  cfgMod.loadConfig = (...args) => { reads += 1; return real(...args); };
+  try { fn(); } finally { cfgMod.loadConfig = real; }
+  return reads;
+}
+
+test('an ordinary board reads no config at all', () => {
+  const reads = configReadsDuring(() => {
+    const f = computeFront(
+      { A: {}, B: {}, C: {} },
+      {
+        A: { ...landed }, B: { ...landed },
+        C: { status: 'pr-open', pr: 11, draft: true, checks: checks() },
+      },
+      { autoMerge: true }
+    );
+    assert.deepStrictEqual(f.actionable.merge.slice().sort(), ['A', 'B']);
+  });
+  assert.strictEqual(reads, 0, 'nothing reports none_reported, so merge_without_ci cannot change an answer');
+});
+
+test('a board with no-CI PRs reads it ONCE, however many of them there are', () => {
+  const reads = configReadsDuring(() => {
+    const f = computeFront(
+      { A: {}, B: {} },
+      { A: { ...noCiLanded }, B: { ...noCiLanded } },
+      { autoMerge: true }
+    );
+    assert.deepStrictEqual(f.waiting.merge_human.slice().sort(), ['A', 'B']);
+  });
+  assert.strictEqual(reads, 1, 'resolved on first need, memoized for the rest of the call');
+});
+
+test('a caller that pins the setting reads nothing, even with a no-CI PR', () => {
+  const reads = configReadsDuring(() => {
+    const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true, mergeWithoutCi: true });
+    assert.deepStrictEqual(f.actionable.merge, ['T']);
+  });
+  assert.strictEqual(reads, 0, 'the passed option always wins, so there is nothing to look up');
+});
+
+test('with auto-merge off the config is not consulted either', () => {
+  // The hold is gated on autoMerge, and that is the cheapest fact of the three,
+  // so it is settled before anything goes looking for a file.
+  const reads = configReadsDuring(() => {
+    computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } });
+  });
+  assert.strictEqual(reads, 0);
+});
+
+// The predicate is shared with sentinel.cjs, which passes the resolved VALUE
+// rather than a resolver. Both spellings must mean the same thing or the board
+// and the guard disagree about the PR in front of them.
+test('noCiHold takes the setting as a value or as a thunk, with one meaning', () => {
+  const { noCiHold } = require(path.join(
+    __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
+  ));
+  const held = (mergeWithoutCi) => noCiHold(noCi, { autoMerge: true, mergeWithoutCi });
+  assert.strictEqual(held(false), true, 'value: not allowed → held');
+  assert.strictEqual(held(() => false), true, 'thunk: same');
+  assert.strictEqual(held(true), false, 'value: allowed → not held');
+  assert.strictEqual(held(() => true), false, 'thunk: same');
+  assert.strictEqual(held(undefined), true, 'absent is not permission (sentinel passes cfg.merge_without_ci raw)');
+  // And the thunk is never called when a cheaper fact already settles it.
+  let called = 0;
+  const counting = () => { called += 1; return true; };
+  assert.strictEqual(noCiHold(noCi, { autoMerge: false, mergeWithoutCi: counting }), false);
+  assert.strictEqual(noCiHold(checks(), { autoMerge: true, mergeWithoutCi: counting }), false);
+  assert.strictEqual(called, 0, 'auto-merge off and a reported pipeline both answer without it');
+});
+
+// Reviewer-found on PR #44 (round 2). The lazy fallback resolved the project
+// from `process.cwd()`, but `dispatch-record.cjs refreshFront` is documented to
+// run from a ticket worktree — which has no `.planning/` of its own — and it
+// REWRITES delivery-front.json from what it computes. So on a project that had
+// explicitly opted in, every dispatch mark demoted the PRs the guard was
+// entitled to land: the board/guard disagreement, reintroduced by the fallback
+// written to prevent it. It resolves through graph-dir.cjs now, the same way
+// base-merge and scope-gate do.
+test('the fallback resolves the PROJECT, not the cwd — a worktree reads the project setting', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const { execFileSync } = require('child_process');
+  const git = (cwd, ...args) => execFileSync('git', args, {
+    cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+      GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
+  });
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'front-wt-'));
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project, { recursive: true });
+  git(project, 'init', '-q', '-b', 'main', '.');
+  fs.writeFileSync(path.join(project, 'f.txt'), 'x\n');
+  git(project, 'add', '-A');
+  git(project, 'commit', '-qm', 'init');
+  // .planning/ is written AFTER the commit and never tracked: that is the
+  // proving ground's own layout, and it is what makes a worktree graphless.
+  fs.mkdirSync(path.join(project, '.planning', 'graph'), { recursive: true });
+  fs.writeFileSync(path.join(project, '.planning', 'graph', 'tickets.json'),
+    JSON.stringify({ tickets: { T: {} } }));
+  fs.writeFileSync(path.join(project, '.planning', 'config.json'),
+    JSON.stringify({ delivery_pipeline: { merge_without_ci: true } }));
+  const wt = path.join(root, 'wt');
+  git(project, 'worktree', 'add', '-q', '-b', 'ticket/T', wt);
+  assert.ok(!fs.existsSync(path.join(wt, '.planning')), 'fixture: the worktree must carry no graph of its own');
+
+  const cwd = process.cwd();
+  try {
+    process.chdir(wt);
+    const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true });
+    assert.deepStrictEqual(f.actionable.merge, ['T'],
+      'the project said it has no CI; a caller standing in a worktree must read the same answer as the guard');
+    assert.deepStrictEqual(f.waiting.merge_human, []);
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
 done();
