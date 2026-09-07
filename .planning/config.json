@@ -92,6 +92,10 @@
       "light": "low",
       "standard": "high",
       "heavy": "xhigh"
+    },
+    "agent_overrides": {
+      "gsd-planner": "xhigh",
+      "gsd-code-reviewer": "xhigh"
     }
   },
   "runtime": "claude",
@@ -99,5 +103,9 @@
     "jira": {
       "enabled": false
     }
+  },
+  "model_overrides": {
+    "gsd-planner": "fable",
+    "gsd-code-reviewer": "fable"
   }
 }
