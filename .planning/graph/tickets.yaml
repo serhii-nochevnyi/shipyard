@@ -763,30 +763,30 @@ tickets:
     plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-13-PLAN.md'
     phase: '26'
     repo: null
-    wave: 15
-    depends_on: [T-26-12]
-    files: [plugins/delivery-pipeline/scripts/drift-needed.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/drift-needed.test.cjs]
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/drift-needed.cjs, tests/unit/drift-needed.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false
     branch: ticket/T-26-13-drift-is-judged-against-the-base-the-tic
     epic: epic/26-positive-evidence-before-a-mutation
-    primary_parent: T-26-12
-    pr_base: ticket/T-26-12-a-wave-is-cut-to-a-concurrency-the-sessi
+    primary_parent: null
+    pr_base: epic/26-positive-evidence-before-a-mutation
     jira: null
   T-26-14:
     title: 'A workflow returns a reference, not a document'
     plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-14-PLAN.md'
     phase: '26'
     repo: null
-    wave: 16
-    depends_on: [T-26-13]
-    files: [plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/workflows-args.test.cjs]
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/workflows/executors.mjs, tests/unit/workflows-args.test.cjs]
     risk: low
     human_checkpoint: false
     preauthorized: false
     branch: ticket/T-26-14-a-workflow-returns-a-reference-not-a-doc
     epic: epic/26-positive-evidence-before-a-mutation
-    primary_parent: T-26-13
-    pr_base: ticket/T-26-13-drift-is-judged-against-the-base-the-tic
+    primary_parent: null
+    pr_base: epic/26-positive-evidence-before-a-mutation
     jira: null
