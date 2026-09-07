@@ -200,6 +200,21 @@ test('a held child whose board names no parent is a board bug, not a wait', () =
   assert.ok(/state-sync/.test(json.hint), 'and the remedy is a re-sync, not patience');
 });
 
+test('an orphan held child is refused even when another ticket gives the script a watch target', () => {
+  // The dangerous shape: T-01-01 is legitimately in `waiting.ci`, so `watch` is
+  // non-empty on its own — the old code let that mask a SEPARATE held ticket with
+  // no `parent_of` entry, silently dropping it instead of surfacing the stale
+  // front. Everything else on the board looking fine is exactly what must not
+  // hide this.
+  const { code, json } = asJson(heldOnly({
+    waiting: { ci: ['T-01-01'], dispatched: [], parent: ['T-01-02'], merge_human: [], human: [] },
+    parent_of: {},
+  }), heldState());
+  assert.equal(code, 3, 'one orphan held ticket refuses the whole wait, not just its own entry');
+  assert.ok(/T-01-02/.test(json.refusal), 'the refusal names the orphan ticket');
+  assert.ok(/state-sync/.test(json.hint), 'and the remedy is a re-sync, not patience');
+});
+
 suite('ci-wait — the wait itself');
 
 test('it returns the moment a PR settles, green', () => {

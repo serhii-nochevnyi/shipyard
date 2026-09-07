@@ -29,13 +29,21 @@
 // run must pick up — trading a spurious block for a SILENT STALL, which is the
 // worse of the two outcomes and the one this store must never produce:
 //
-//   1. THE STATE MOVED. The dispatch is a claim about the ticket as it stood when
-//      the work was handed over; the moment its delivery state moves (a branch
-//      appears, a PR opens, checks change, it comes out of draft) the dispatch
-//      has done its job and the board owns the ticket again. Bound to
-//      escalation-record's own `fingerprint` — REQUIRED, never reimplemented, so
-//      two stores that expire against the same subject cannot come to disagree
-//      about what "the PR moved" means.
+//   1. THE OWNER'S OUTPUT EXISTS. The dispatch is a claim that an agent is
+//      PRODUCING something; the moment that output appears in delivery state — a
+//      branch or a PR for an executor, a new head for a fixer, a gate trailer for
+//      arch-review, a merge or a retarget for the guard — the dispatch has done
+//      its job and the board owns the ticket again.
+//
+//      It used to be bound to escalation-record's shared `fingerprint`, which
+//      hashes the CHECK TALLIES: a guard's dispatch therefore expired the moment
+//      ANY check finished, which is minutes after the fixer was handed the work
+//      and long before it has pushed. The front re-offered the PR, the stop gate
+//      blocked over it, and a second fixer could be dispatched at the same PR
+//      (ADR-002 A1/D1). "The PR moved" is not one fact: three stores needed three
+//      meanings of it, so each owns its own — `dispatchFingerprint` below, keyed
+//      by ROLE, and no role's fields include a tally. The shared hash is still
+//      imported, for records written before the split.
 //   2. A TTL, so a killed session cannot park a ticket forever. See below.
 //
 // Neither needs a second command to remember, which is the property that makes
@@ -43,8 +51,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
-// The state-moved rule, taken from the store that already owns it.
+// Only for records written before this store had its own per-role rule; see
+// `activeDispatches`. Never reimplemented, so a legacy record is read with exactly
+// the hash it was written with.
 const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 // One role vocabulary for the whole conveyor: the same names `pipeline-config.cjs
 // model <role>` resolves a model for. A dispatch filed under a name the ladder
@@ -70,6 +81,66 @@ const TTL_RAW = Number(process.env.SHIPYARD_DISPATCH_TTL_MS || 90 * 60 * 1000);
 // Garbage in the env var must not disable the backstop: NaN poisons every
 // comparison into "never expired", which is precisely the silent stall.
 const DISPATCH_TTL_MS = Number.isFinite(TTL_RAW) && TTL_RAW > 0 ? TTL_RAW : 90 * 60 * 1000;
+
+// WHAT EACH ROLE'S OUTPUT LOOKS LIKE IN DELIVERY STATE — one table, because the
+// per-role rule and the per-role sentence on the board must not be able to
+// disagree, and because everything the skills are told to "decide" that can be
+// computed belongs in a script.
+//
+// Keyed by the ladder's own role names (`ROLES`, the vocabulary `mark` already
+// validates against), so a role added there cannot silently inherit a list that
+// describes somebody else's output; tests/unit/dispatch-record.test.cjs iterates
+// ROLES and fails if one has no entry. `checks.*` appears in NO entry, by design
+// and by test — a tally is the pipeline moving, never an agent's output.
+//
+// `head_sha` is recorded by state-sync from T-24-04 on. Absent, it hashes as null
+// on both sides, so a fixer dispatched before it exists expires on status/pr and
+// on the TTL exactly as it did — graceful by construction, no special case.
+const DISPATCH_SUBJECT = {
+  // The main loop's own: nothing is pushed when the work is handed over, so the
+  // first branch or PR to appear IS the output.
+  executor: { fields: ['status', 'pr', 'branch'], lifts: 'a branch or a PR appears' },
+  // A fixer's whole product is a new commit on the PR. Before head_sha existed
+  // its push was visible only as status/pr, which is why both are still here.
+  'ci-fix': { fields: ['head_sha', 'status', 'pr'], lifts: "the PR's head moves (a push)" },
+  'review-fix': { fields: ['head_sha', 'status', 'pr'], lifts: "the PR's head moves (a push)" },
+  // A judge writes a verdict into the PR body (`gate_status:`) and may undraft.
+  'arch-review': { fields: ['gate', 'draft', 'status'], lifts: 'the gate trailer or the draft state changes' },
+  // The guard's output is a merge, or the retarget that follows one.
+  'pr-sentinel': { fields: ['status', 'pr_base', 'pr'], lifts: 'the PR merges, or its base moves' },
+  integrator: {
+    fields: ['status', 'pr', 'pr_base', 'gate', 'draft'],
+    lifts: 'the integration PR appears, its gate changes, or it lands',
+  },
+  // Neither leaves a mark in delivery state at all — a drift verdict goes to
+  // drift.json, research to a document — so in practice the TTL is what returns
+  // these. Any motion of the ticket still counts, and no tally does.
+  'drift-check': { fields: ['status', 'pr', 'branch'], lifts: "the ticket's status, PR or branch changes" },
+  research: { fields: ['status', 'pr', 'branch'], lifts: "the ticket's status, PR or branch changes" },
+};
+
+// A role the table does not know keeps the executor's list: motion of the ticket
+// itself, no tallies. It must never be the shared hash again.
+const DEFAULT_SUBJECT = DISPATCH_SUBJECT.executor;
+
+const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
+
+// `draft` is normalized so `undefined` and `false` are one state; everything else
+// is compared as it stands, with an absent field as null.
+function fieldValue(s, field) {
+  if (field === 'draft') return s[field] === true;
+  return s[field] === undefined ? null : s[field];
+}
+
+// The role is part of the payload on purpose: a record whose `role` was edited by
+// hand then matches nothing and reads as expired, and every branch in this store
+// fails TOWARDS offering the work.
+function dispatchFingerprint(role, s = {}) {
+  const fields = subjectOf(role).fields;
+  return crypto.createHash('sha256')
+    .update(JSON.stringify([role, ...fields.map((f) => fieldValue(s, f))]))
+    .digest('hex').slice(0, 16);
+}
 
 // Same resolution and the same flag spelling as drift-record.cjs/log-event.cjs —
 // one convention for "which graph does this belong to", stripped from ANY
@@ -163,9 +234,14 @@ function ageMinutes(rec) {
 function dispatchWhy(id, rec) {
   const mins = ageMinutes(rec);
   const age = mins === null ? '' : ` ${mins}m ago`;
-  return `dispatched to ${roleOf(rec)}${age} — an agent holds it, so it is nobody else's to start. ` +
-    'It returns to the board by itself when the ticket\'s delivery state moves (a branch, a PR, a check, an undraft) ' +
-    `or after ${Math.round(DISPATCH_TTL_MS / 60000)}m; \`dispatch-record.cjs clear ${id}\` returns it now.`;
+  const role = roleOf(rec);
+  // The fact is quoted from the same table the expiry rule reads, so the board
+  // cannot name one trigger while the code waits for another. The old sentence
+  // listed "a check" among them, which was exactly the wrong claim.
+  return `dispatched to ${role}${age} — an agent holds it, so it is nobody else's to start. ` +
+    `It returns to the board by itself when the delivery state moves in the way this role's own output moves it ` +
+    `(${subjectOf(role).lifts}) or after ${Math.round(DISPATCH_TTL_MS / 60000)}m; ` +
+    `\`dispatch-record.cjs clear ${id}\` returns it now.`;
 }
 
 /**
@@ -192,8 +268,21 @@ function activeDispatches(cwd = process.cwd(), state = null) {
     const at = Date.parse(rec.at || '');
     // An undateable record has an unknown age, and an unknown age is expired.
     if (!Number.isFinite(at) || now - at >= DISPATCH_TTL_MS) continue;
-    // Trigger 1 — the state moved, so the dispatch did its job.
-    if (rec.fingerprint && fingerprint(s) !== rec.fingerprint) continue;
+    // Trigger 1 — the ROLE's own output appeared, so the dispatch did its job.
+    // WHICH hash comes from the record: one written before this store had a
+    // per-role rule is bound to the shared hash and keeps expiring against that
+    // one, so an upgrade mid-flight neither hides a ticket nor re-reads an old
+    // record under a rule it was not written under. Both lift inside the TTL
+    // either way.
+    if (rec.fingerprint) {
+      // Named `current`, not `now`: `now` in this scope is the clock the TTL above
+      // reads, and shadowing it with a hash is how the two triggers would come to
+      // be confused by the next reader.
+      const current = rec.fingerprint_kind === 'role'
+        ? dispatchFingerprint(roleOf(rec), s)
+        : fingerprint(s);
+      if (current !== rec.fingerprint) continue;
+    }
     out[id] = { role: roleOf(rec), at: rec.at };
   }
   return out;
@@ -273,7 +362,7 @@ function refreshFront(cwd) {
   }
 }
 
-module.exports = { activeDispatches, dispatchWhy, DISPATCH_TTL_MS };
+module.exports = { activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DISPATCH_TTL_MS };
 
 if (require.main === module) {
   const [cmd, ...rest] = ARGV;
@@ -308,7 +397,15 @@ if (require.main === module) {
     mutate(cwd, (store) => {
       // A re-dispatch restarts the clock: the previous agent is not the one
       // holding it now.
-      store.tickets[ticket] = { role, at, fingerprint: fingerprint(s), pr: s.pr || null };
+      store.tickets[ticket] = {
+        role,
+        at,
+        fingerprint: dispatchFingerprint(role, s),
+        // Which hash the line above is, so a reader upgrading over an existing
+        // store compares each record with the rule it was written under.
+        fingerprint_kind: 'role',
+        pr: s.pr || null,
+      };
       // Journalled because nothing else records WHEN work was handed over. The
       // TTL above had to be inferred from PR timestamps for want of this line;
       // the next one can be measured. The ticket's next `status_change` closes
@@ -326,7 +423,7 @@ if (require.main === module) {
       (refreshed
         ? 'the front reports it as waiting, not as work to start. '
         : 'no board was refreshed just now (none exists yet, or a sync holds the lock); the record is durable and the next state-sync or refresh will apply it. ') +
-      `It lifts when the ticket's state moves or after ${Math.round(DISPATCH_TTL_MS / 60000)}m.`
+      `It lifts when ${subjectOf(role).lifts}, or after ${Math.round(DISPATCH_TTL_MS / 60000)}m.`
     );
   } else if (cmd === 'clear') {
     const [ticket] = rest;
