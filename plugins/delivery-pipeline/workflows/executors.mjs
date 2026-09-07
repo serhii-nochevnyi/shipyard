@@ -161,13 +161,24 @@ const results = await parallel(
 // silently shorter list is indistinguishable from a shorter wave, which is the
 // whole failure: a ticket that never reported is a FAILED run, not a smaller
 // one. Counted by id, so the order the results come back in does not matter.
+// The check runs BOTH directions: a dispatched id absent or duplicated in the
+// results, AND a result id the fan-out never dispatched. Checking only the
+// first direction would let a surplus/foreign id ride along silently — every
+// requested ticket present exactly once, plus one more the caller never asked
+// for — which is still a broken 1:1 contract and a ticket status downstream
+// code has no dispatch record for (Copilot review on PR #36).
+const dispatchedIds = new Set(tickets.map((t) => t && t.id))
 const accounted = new Map()
 for (const r of Array.isArray(results) ? results : []) {
   if (r && typeof r.id === 'string') accounted.set(r.id, (accounted.get(r.id) || 0) + 1)
 }
 const unaccounted = tickets.map((t) => t && t.id).filter((id) => accounted.get(id) !== 1)
-if (unaccounted.length) {
-  throw new Error(`executors: dispatched ${tickets.length} ticket(s); the fan-out returned no single result for: ${unaccounted.join(', ')}`)
+const surplus = [...accounted.keys()].filter((id) => !dispatchedIds.has(id))
+if (unaccounted.length || surplus.length) {
+  const parts = []
+  if (unaccounted.length) parts.push(`no single result for: ${unaccounted.join(', ')}`)
+  if (surplus.length) parts.push(`result(s) for id(s) never dispatched: ${surplus.join(', ')}`)
+  throw new Error(`executors: dispatched ${tickets.length} ticket(s); the fan-out returned ${parts.join('; ')}`)
 }
 
 return results

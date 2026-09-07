@@ -185,6 +185,20 @@ for (const { name, base } of SCRIPTS) {
     const e = await rejects(name, args(TICKETS), { results: () => undefined });
     assert.match(e.message, /T-99-01/);
   });
+
+  test('a surplus result the caller never dispatched fails the run, even with every requested id present', async () => {
+    // Copilot review on PR #36: the "exactly once" check only walked the
+    // DISPATCHED ids, so an extra result riding along beside all three
+    // correct ones passed silently — every requested ticket accounted for,
+    // plus a foreign id nothing downstream has a dispatch record for.
+    const h = { results: (all) => [...all, { id: 'T-99-99' }] };
+    const e = await rejects(name, args(TICKETS), h);
+    assert.match(e.message, /T-99-99/);
+    // the three legitimately dispatched tickets are not blamed
+    assert.ok(!/T-99-01/.test(e.message), `wrongly named T-99-01: ${e.message}`);
+    assert.ok(!/T-99-02/.test(e.message), `wrongly named T-99-02: ${e.message}`);
+    assert.ok(!/T-99-03/.test(e.message), `wrongly named T-99-03: ${e.message}`);
+  });
 }
 
 suite('executors.mjs — a dead or throwing agent is still a result');
