@@ -358,6 +358,28 @@ test('an unknown ticket is an error, not a verdict', () => {
   assert.ok(/T-99-99/.test(r.stderr), r.stderr);
 });
 
+test('a corrupt delivery-state.json answers needed, not a silent fallback to pr_base', () => {
+  // A file that exists but fails to parse is a DIFFERENT fact than a file that
+  // is simply absent: the latter has a defined fallback (pr_base/epic), the
+  // former means the recorded base is unknown, and unknown is not clean —
+  // exactly the rule this whole ticket exists to apply consistently.
+  const w = build({ tickets: 1 });
+  fs.writeFileSync(path.join(w.graph, 'delivery-state.json'), '{ this is not json');
+  const r = run(w, ['T-01-01', '--json']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.json.needed, true, JSON.stringify(r.json));
+  assert.ok(/delivery-state\.json/.test(r.json.reason), r.json.reason);
+  assert.ok(/not valid JSON/.test(r.json.reason), r.json.reason);
+});
+
+test('a second positional argument is a caller mistake, not a second ticket to ignore', () => {
+  const w = build({ tickets: 2 });
+  const r = run(w, ['T-01-01', 'T-01-02', '--json']);
+  assert.strictEqual(r.status, 1);
+  assert.ok(/unexpected argument/.test(r.stderr), r.stderr);
+  assert.ok(/T-01-02/.test(r.stderr), r.stderr);
+});
+
 test('no ticket graph at all exits 2 with the flag that fixes it', () => {
   const w = build({ tickets: 1 });
   const r = spawnSync(process.execPath, [SCRIPT, 'T-01-01', '--json'], {

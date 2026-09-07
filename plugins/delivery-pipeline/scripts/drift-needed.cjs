@@ -123,6 +123,10 @@ for (let i = 0; i < ARGV.length; i++) {
 }
 const TICKET = positional[0];
 if (!TICKET) die(1, 'usage: drift-needed.cjs <ticket> [--graph <dir>] [--json] [--no-fetch]');
+// A second positional is a caller mistake, not a second ticket to ignore —
+// `attempt-history.cjs` rejects the same shape the same way, and this script
+// answers about exactly one ticket.
+if (positional.length > 1) die(1, `unexpected argument "${positional[1]}" (usage: drift-needed.cjs <ticket> [--graph <dir>] [--json] [--no-fetch])`);
 
 // ── the graph ───────────────────────────────────────────────────────────────
 const { dir: GRAPH_DIR, how } = resolveGraphDir(ARGV);
@@ -138,18 +142,30 @@ function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 
+// A file that EXISTS but fails to parse is not the same fact as a file that
+// is simply absent — the former means whatever it recorded is unknown, not
+// that it recorded nothing. `readJson` above conflates the two into one
+// fallback value, which is fine for `tickets.json` (an unknown ticket already
+// dies) and for the one config knob below (a bad default is not a bad
+// verdict), but `delivery-state.json` feeds the `base` this script measures
+// against, and a corrupt read there must not silently fall back to
+// `pr_base`/`epic` as if the ticket had simply never synced — "unknown is not
+// clean" applies to reading the state, not only to what it says.
+function readJsonDistinct(file) {
+  if (!fs.existsSync(file)) return { data: null, corrupt: false };
+  try { return { data: JSON.parse(fs.readFileSync(file, 'utf8')), corrupt: false }; }
+  catch { return { data: null, corrupt: true }; }
+}
+
 const tickets = (readJson(path.join(GRAPH_DIR, 'tickets.json'), {}) || {}).tickets || {};
 const ticket = tickets[TICKET];
 if (!ticket) die(1, `unknown ticket ${TICKET} in ${path.join(GRAPH_DIR, 'tickets.json')}`);
 
-// delivery-state.json is keyed by ticket id at the TOP level (state-sync writes
-// it that way); a `.tickets` wrapper is accepted so a future reshape does not
-// silently read as "no state".
-const rawState = readJson(path.join(GRAPH_DIR, 'delivery-state.json'), {}) || {};
-const state = (rawState && typeof rawState.tickets === 'object' && rawState.tickets) || rawState;
-const entry = (state && state[TICKET]) || null;
-
 // ── config: only this one knob, read raw (see the header) ───────────────────
+// Computed BEFORE the delivery-state read below: a corrupt-state early exit
+// calls `answer()`, whose output always carries `max_age_days`, so that
+// constant must already exist by then rather than sitting in the temporal
+// dead zone of a `const` declared further down the file.
 function pipelineConfig() {
   const raw = readJson(path.join(PROJECT_ROOT, '.planning', 'config.json'), {}) || {};
   const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
@@ -161,6 +177,22 @@ const MAX_AGE_DAYS = (typeof CFG.drift_max_age_days === 'number'
   && CFG.drift_max_age_days > 0)
   ? CFG.drift_max_age_days
   : DEFAULT_MAX_AGE_DAYS;
+
+// delivery-state.json is keyed by ticket id at the TOP level (state-sync writes
+// it that way); a `.tickets` wrapper is accepted so a future reshape does not
+// silently read as "no state".
+const stateFile = path.join(GRAPH_DIR, 'delivery-state.json');
+const stateRead = readJsonDistinct(stateFile);
+if (stateRead.corrupt) {
+  answer({
+    needed: true,
+    reason: `${stateFile} exists but is not valid JSON — its \`base\` is unknown, not absent, `
+      + 'and unknown is not clean; run state-sync to regenerate it',
+  });
+}
+const rawState = stateRead.data || {};
+const state = (rawState && typeof rawState.tickets === 'object' && rawState.tickets) || rawState;
+const entry = (state && state[TICKET]) || null;
 
 // ── git ─────────────────────────────────────────────────────────────────────
 const git = (cwd, args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
