@@ -909,7 +909,7 @@
       "jira": null
     },
     "T-25-02": {
-      "title": "A Codex agent carries effort, not a model",
+      "title": "A Codex agent carries the model its effort needs",
       "plan": ".planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-02-PLAN.md",
       "phase": "25",
       "repo": null,
@@ -925,8 +925,13 @@
       "unreachable_paths": false,
       "files": [
         "scripts/gen-codex-shipyard.cjs",
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "capabilities/delivery-pipeline/capability.json",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/references/pr-sentinel.md",
         "tests/smoke/codex-shipyard-smoke.sh",
         "tests/unit/gen-codex-shipyard.test.cjs",
+        "tests/unit/pipeline-config.test.cjs",
         "CLAUDE.md",
         "README.md"
       ],
@@ -934,7 +939,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-25-02-a-codex-agent-carries-effort-not-a-model",
+      "branch": "ticket/T-25-02-a-codex-agent-carries-the-model-its-effo",
       "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
       "primary_parent": "T-25-01",
       "pr_base": "ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor",
@@ -971,7 +976,7 @@
       "branch": "ticket/T-25-03-the-prose-names-the-models-the-runtimes",
       "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
       "primary_parent": "T-25-02",
-      "pr_base": "ticket/T-25-02-a-codex-agent-carries-effort-not-a-model",
+      "pr_base": "ticket/T-25-02-a-codex-agent-carries-the-model-its-effo",
       "jira": null
     },
     "T-25-04": {

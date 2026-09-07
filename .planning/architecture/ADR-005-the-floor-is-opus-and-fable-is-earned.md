@@ -79,33 +79,64 @@ plans written the same day), executors about 45%, guards about 22%.
   alias to Fable 5, so `gsd-tune` reports that as REQUIRED drift at Step 0 of
   every delivery, naming the floor and `ANTHROPIC_DEFAULT_FABLE_MODEL` as the
   two ways to miss it.
-- **D6 — Codex is not the same decision, because it is not the same surface.**
-  On Claude shipyard emits a tier alias per dispatch and the tool resolves it.
-  On Codex an agent is a STATIC `~/.codex/agents/<name>.toml` written at install
-  time, and no dispatch carries a model at all. So D1 has no Codex counterpart:
-  `capForRuntime` already flattens every role to the workhorse tier, so all
-  seven agents carry one model (`gpt-5.6-terra` on this host) and there is no
-  floor to raise. D2 is the WHOLE mechanism there rather than half of it, which
-  is what T-25-02 already delivers by writing effort and no model, so the user's
-  own `config.toml` default applies — `gpt-6-astra` here, with a 1M window. And
-  D4 has no counterpart either: with Astra as the default, every Codex role
-  already has the window that R1 exists to reach for.
-- **D7 — The `max` clamp on Codex goes; both halves of its premise are false.**
-  `resolveEffort` reads `if (level === 'max' && runtime === 'codex') return
-  'xhigh'`, commented "`max` is Anthropic-only; GSD clamps it to xhigh on
-  Codex". Verified against GSD 1.12/1.13's catalog: `codexModelEffort._baseline`
-  advertises `low, medium, high, xhigh, max`, `advertisedCodexEffort` falls back
-  to that baseline for any model the table does not name (which is what
-  `gpt-6-astra` is), and the resolver's only downgrade is "the nearest
-  advertised level below" for a level a model does not support. GSD accepts
-  `max` on Codex; shipyard invented the clamp and attributed it to GSD. Under
-  D2 that costs the judgment roles their top rung on the one axis Codex has.
-  `minimal` keeps its clamp to `low`, for a different and still-true reason:
-  Workflow's enum has no such value.
-- **D8 — Astra has a version floor too.** First-class `gpt-6-astra`
+- **D6 — Codex is the same decision through a different axis, because Astra's
+  effort has a ceiling.** *(Revised the same day, 2026-09-07, before any code was
+  built: the first draft of this decision said D1, D2 and D4 had no Codex
+  counterpart at all. That rested on assuming effort could carry the whole depth
+  range there. It cannot — the operator's palette is `gpt-6-astra` with effort
+  capped at `high`, `gpt-5.6-terra` up to `max`, `gpt-5.6-sol` up to `ultra` —
+  so on Codex the MODEL differentiates again, chosen by the depth the role
+  needs.)* The selection rule mirrors the Claude side exactly: a judgment role
+  takes the DEEPEST entry in the palette, and every other role takes the
+  SHALLOWEST entry whose ceiling covers the effort the table already assigned
+  it. Never the reverse — a role whose effort exceeds a model's ceiling moves UP
+  a model rather than down an effort, because silently losing depth is the
+  defect D7 is about.
+
+  | role | effort (D2's table) | Codex model |
+  |---|---|---|
+  | drift-check | low | astra |
+  | research | high | astra |
+  | ci-fix, review-fix, pr-sentinel | high | astra |
+  | executor | xhigh | terra |
+  | arch-review, integrator | max | sol |
+
+  Astra therefore takes the roles that need breadth rather than depth, and gives
+  them a 1M window for free; terra carries the single `xhigh` rung; sol is
+  reserved for the two judgment roles, which is also GSD's own posture (it gives
+  sol to exactly two of its thirty-four agents, both planners).
+- **D7 — The palette and its ceilings are CONFIGURATION, not code.**
+  `pipeline.codex_models` declares each usable model with its `max_effort`, in
+  preference order, with the default above shipped in `capability.json`. The
+  operator changes it without a release when OpenAI opens Astra's higher levels
+  or adds a model — which is the whole reason the ceiling is not a constant. The
+  `max` → `xhigh` clamp for `runtime: codex` goes: both halves of its comment
+  are false (verified against GSD's `codexModelEffort._baseline`, which
+  advertises `max` for every model, and `advertisedCodexEffort`, which falls back
+  to that baseline for a model the table does not name — which is what
+  `gpt-6-astra` is). `ultra` joins the effort vocabulary for Codex only, since
+  Workflow's enum has no such value and no Claude alias advertises it. `minimal`
+  keeps its clamp to `low` for that same still-true reason.
+- **D8 — On Codex the escalation needs its own agent, because an agent there is
+  a FILE.** A `~/.codex/agents/<name>.toml` carries exactly one model and one
+  effort, written at install time, and nothing is passed per dispatch. So risk,
+  `repeat`, exhausted depth and a contested verdict — every signal D2 and D4
+  rest on — are unreachable through a single static agent per role. The
+  generator therefore writes a second file for the four roles that escalate:
+  `shipyard-ci-fix-deep`, `shipyard-review-fix-deep`, `shipyard-pr-sentinel-deep`
+  and `shipyard-arch-review-deep`, all at the deepest palette entry and its top
+  effort (sol/ultra), and the generated skill prose names when to invoke them —
+  `repeat_exhausted` for a repair, a journalled prior `violation` for the judge.
+  Eleven agents rather than seven. The integrator gets no variant: it runs once
+  per phase and is already at the deepest entry.
+- **D9 — Astra has a version floor too.** First-class `gpt-6-astra`
   configuration arrived in Codex CLI 0.153.1; this host runs 0.147.0 and the
   current release is 0.153.4. That is the Codex mirror of the Fable 5.1 floor,
   so it belongs in the same `gsd-tune` check rather than in a second mechanism.
+  It is also the most plausible reason the operator's ceiling for Astra is
+  `high` while the Codex release notes advertise `low…max`: a CLI that predates
+  first-class support cannot select the higher levels. Recording both, and
+  taking the operator's ceiling as the rule, is why the ceiling is a setting.
 - **Deferred — the concurrency axis.** A per-session budget cannot be expressed
   as a tier, and the run that proved it also proved the recovery works: the
   interrupted executors' uncommitted RED tests were handed to their successors

@@ -320,3 +320,20 @@
 {"ts":"2026-09-07T14:52:53.970Z","event":"base_merge","ticket":"T-26-06","pr":39,"base":"epic/26-positive-evidence-before-a-mutation","head":"a622bf0a1d2998abe093f4ea8896512f1b26c122","result":"merged-cleanly","trailer":"stripped"}
 {"ts":"2026-09-07T14:54:12.321Z","event":"dispatch","ticket":"T-26-06","role":"arch-review","pr":39,"by":"dispatch-record"}
 {"ts":"2026-09-07T14:55:11.251Z","event":"dispatch","ticket":"T-26-04","role":"review-fix","pr":38,"by":"dispatch-record"}
+{"ts":"2026-09-07T14:56:31.931Z","event":"status_change","ticket":"T-26-01","from":"pr-open","to":"merged","pr":37}
+{"ts":"2026-09-07T14:56:50.475Z","event":"dispatch","ticket":"T-24-05","role":"pr-sentinel","pr":44,"by":"dispatch-record"}
+{"ts":"2026-09-07T14:56:58.536Z","event":"base_merge","ticket":"T-24-04","pr":42,"base":"epic/24-the-conveyor-stops-interrupting-itself","head":"de819c1c3b982eb85a74d389778f3ceb2fc31b41"}
+{"ts":"2026-09-07T14:57:37.116Z","event":"degenerate_green","ticket":"T-26-06","pr":39,"findings":0,"modes":"none"}
+{"ts":"2026-09-07T14:57:39.452Z","event":"degenerate_green","ticket":"T-24-04","pr":42,"findings":0,"modes":"none","head":"de819c1c3b982eb85a74d389778f3ceb2fc31b41"}
+{"ts":"2026-09-07T14:59:36.354Z","event":"merge","ticket":"T-26-06","pr":39,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T14:59:43.919Z","event":"status_change","ticket":"T-26-06","from":"pr-open","to":"merged","pr":39}
+{"ts":"2026-09-07T15:04:10.568Z","event":"dispatch","ticket":"T-24-04","role":"review-fix","pr":42,"by":"dispatch-record"}
+{"ts":"2026-09-07T15:05:12.055Z","event":"attempt","ticket":"T-26-04","pr":38,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","head":"9efa07d2a2fa4ea6a45f07f44b58c539b4ca72d3","hypothesis":"gc's classification pass used [[ -n $(git status --porcelain) ]], which sees only output and not the exit status, so a git status that FAILED printed nothing and was read as a clean tree — falling through to live/landed/review with a reason asserting 'tree clean' about a tree nothing had established anything about; the fix makes the exit status a third outcome beside empty and non-empty and resolves it to review"}
+{"ts":"2026-09-07T15:05:23.003Z","event":"base_merge","ticket":"T-26-04","pr":38,"base":"epic/26-positive-evidence-before-a-mutation","head":"f01e7c6546db030a690ca681168dd61b05fde59d","result":"merged-cleanly"}
+{"ts":"2026-09-07T15:09:45.546Z","event":"dispatch","ticket":"T-26-04","role":"review-fix","pr":38,"by":"dispatch-record"}
+{"ts":"2026-09-07T15:16:32.550Z","event":"dispatch","ticket":"T-24-06","role":"pr-sentinel","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T15:16:32.589Z","event":"status_change","ticket":"T-24-06","from":"pending","to":"pr-open","pr":45}
+{"ts":"2026-09-07T15:16:41.718Z","event":"dispatch","ticket":"T-24-04","role":"review-fix","pr":42,"by":"dispatch-record"}
+{"ts":"2026-09-07T15:16:41.781Z","event":"dispatch","ticket":"T-24-05","role":"pr-sentinel","pr":44,"by":"dispatch-record"}
+{"ts":"2026-09-07T15:16:41.842Z","event":"dispatch","ticket":"T-26-04","role":"review-fix","pr":38,"by":"dispatch-record"}
+{"ts":"2026-09-07T15:16:41.905Z","event":"dispatch","ticket":"T-24-06","role":"pr-sentinel","pr":45,"by":"dispatch-record"}

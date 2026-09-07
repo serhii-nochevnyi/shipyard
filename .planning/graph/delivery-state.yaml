@@ -206,7 +206,7 @@
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/42"
   pr_base: "epic/24-the-conveyor-stops-interrupting-itself"
   pr_created_at: "2026-09-07T14:21:17Z"
-  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
+  checks: {"total":1,"failing":0,"pending":1,"none_reported":false}
   base: "epic/24-the-conveyor-stops-interrupting-itself"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
   merge_scope: "stacked"
@@ -229,22 +229,26 @@
   since: "2026-09-07T14:46:57.493Z"
 "T-24-06":
   branch: "ticket/T-24-06-the-guard-names-a-remedy-that-exists"
-  pr: null
-  status: "pending"
+  pr: 45
+  status: "pr-open"
+  draft: true
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/45"
+  pr_base: "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno"
+  pr_created_at: "2026-09-07T15:16:09Z"
+  checks: {"total":1,"failing":0,"pending":1,"none_reported":false}
   base: "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
-  ready: true
+  merge_scope: "stacked"
   reapable: false
-  since: "2026-09-07T09:10:42.244Z"
+  since: "2026-09-07T15:16:32.589Z"
 "T-24-07":
   branch: "ticket/T-24-07-the-prose-names-only-what-the-scripts-im"
   pr: null
   status: "pending"
   base: "ticket/T-24-06-the-guard-names-a-remedy-that-exists"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
-  ready: false
-  blocked_by: ["T-24-06"]
-  blocked_reasons: {"T-24-06":"parent has no branch yet (nothing to cascade from)"}
+  ready: true
   reapable: false
   since: "2026-09-07T09:10:42.244Z"
 "T-24-08":
@@ -330,19 +334,12 @@
 "T-26-01":
   branch: "ticket/T-26-01-one-ownership-matcher-exact-by-construct"
   pr: 37
-  status: "pr-open"
-  draft: false
-  review_decision: null
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/37"
-  pr_base: "epic/26-positive-evidence-before-a-mutation"
-  pr_created_at: "2026-09-07T14:16:45Z"
-  gate: {"arch-review":"conform","drift-check":"skipped","degenerate-green":"clean","checks":"green"}
-  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
   base: "epic/26-positive-evidence-before-a-mutation"
   epic: "epic/26-positive-evidence-before-a-mutation"
-  merge_scope: "stacked"
-  reapable: false
-  since: "2026-09-07T14:17:59.561Z"
+  reapable: true
+  since: "2026-09-07T14:56:31.931Z"
 "T-26-03":
   branch: "ticket/T-26-03-readiness-needs-positive-evidence"
   pr: null
@@ -383,19 +380,12 @@
 "T-26-06":
   branch: "ticket/T-26-06-the-codex-config-merge-writes-toml-the-r"
   pr: 39
-  status: "pr-open"
-  draft: true
-  review_decision: null
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/39"
-  pr_base: "epic/26-positive-evidence-before-a-mutation"
-  pr_created_at: "2026-09-07T14:17:02Z"
-  gate: {"arch-review":"conform","drift-check":"skipped","degenerate-green":"clean","checks":"green"}
-  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
   base: "epic/26-positive-evidence-before-a-mutation"
   epic: "epic/26-positive-evidence-before-a-mutation"
-  merge_scope: "stacked"
-  reapable: false
-  since: "2026-09-07T14:17:59.561Z"
+  reapable: true
+  since: "2026-09-07T14:59:43.919Z"
 "T-26-07":
   branch: "ticket/T-26-07-tuning-merges-another-owner-s-list-never"
   pr: 34
