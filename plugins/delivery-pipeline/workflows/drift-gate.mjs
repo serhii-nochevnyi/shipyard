@@ -56,12 +56,30 @@ const VERDICT = {
 
 // The Workflow runtime may hand `args` over as a JSON STRING rather than an
 // object (observed 2026-07-28). Reading `args.x` then silently yields undefined
-// and the script no-ops with zero agents. Normalize once, tolerate both.
-const argv = typeof args === 'string'
-  ? (() => { try { return JSON.parse(args) } catch { return {} } })()
-  : (args || {})
+// and the script no-ops with zero agents. Normalize once, tolerate both — but a
+// parse FAILURE is not an empty wave. The previous shape swallowed it
+// (`catch { return {} }`) and `argv.tickets || []` then turned
+// `args = '{invalid'` into `return []`: no agent dispatched, no error raised,
+// a board that reads as finished. Malformed input throws WITH the parse error,
+// and `[]` is returned only for an EXPLICITLY empty list.
+let argv
+if (typeof args === 'string') {
+  try {
+    argv = JSON.parse(args)
+  } catch (e) {
+    throw new Error(`drift-gate: args is not valid JSON — ${e && e.message ? e.message : e}`)
+  }
+} else {
+  argv = args
+}
+if (argv === null || typeof argv !== 'object' || Array.isArray(argv)) {
+  throw new Error(`drift-gate: args must be an object — got ${argv === null ? 'null' : Array.isArray(argv) ? 'array' : typeof argv}`)
+}
+if (!Array.isArray(argv.tickets)) {
+  throw new Error(`drift-gate: args.tickets must be an array (pass [] for a deliberately empty wave) — got ${argv.tickets === null ? 'null' : typeof argv.tickets}`)
+}
 
-const tickets = (argv && argv.tickets) || []
+const tickets = argv.tickets
 const refPath = argv && argv.driftRefPath
 
 if (!refPath) throw new Error('drift-gate: args.driftRefPath is required')
@@ -73,7 +91,7 @@ phase('Drift')
 // orchestrator never runs an unchecked ticket on a silent judge failure.
 const driftFallback = (id, why) => ({ id, verdict: 'drifted', moved: [why], reuse_candidates: [] })
 
-return await parallel(
+const results = await parallel(
   tickets.map((t) => () =>
     agent(
       [
@@ -101,3 +119,20 @@ return await parallel(
       .catch((e) => driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`))
   )
 )
+
+// Every dispatch above resolves to exactly one object — a dead or throwing
+// judge becomes a verdict of its own rather than a gap — so an id that is
+// missing here, or present twice, can only come from the fan-out itself. A
+// silently shorter list is indistinguishable from a shorter wave, which is the
+// whole failure: a ticket that never reported is a FAILED run, not a smaller
+// one. Counted by id, so the order the results come back in does not matter.
+const accounted = new Map()
+for (const r of Array.isArray(results) ? results : []) {
+  if (r && typeof r.id === 'string') accounted.set(r.id, (accounted.get(r.id) || 0) + 1)
+}
+const unaccounted = tickets.map((t) => t && t.id).filter((id) => accounted.get(id) !== 1)
+if (unaccounted.length) {
+  throw new Error(`drift-gate: dispatched ${tickets.length} ticket(s); the fan-out returned no single result for: ${unaccounted.join(', ')}`)
+}
+
+return results
