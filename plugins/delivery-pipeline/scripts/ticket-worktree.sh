@@ -28,8 +28,10 @@ set -euo pipefail
 # phase delivered months ago is invisible to it and accumulates forever. That is
 # not cosmetic — a large enough worktree set makes the sandbox profile exceed the
 # argv limit (E2BIG) and every sandboxed command starts failing. gc reports by
-# default and prunes only what it can PROVE is safe; SHIPYARD_WORKTREE_WARN_AT
-# (default 20) is when it starts saying the set is too big.
+# default and prunes only what it can PROVE is safe — delivery-state saying the
+# ticket is merged, never the mere absence of a remote branch, which is also what
+# an unpushed commit looks like; SHIPYARD_WORKTREE_WARN_AT (default 20) is when
+# it starts saying the set is too big.
 
 cmd="${1:-}"
 ticket="${2:-}"
@@ -47,12 +49,37 @@ git_dir="$(git -C "$repo_root" rev-parse --git-common-dir)"
 [[ "$git_dir" = /* ]] || git_dir="$repo_root/$git_dir"
 git_lock="$git_dir/shipyard-git.lock"
 
-lock_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# `stat` disagrees about `-f` across platforms, and the disagreement is NOT a
+# clean failure: BSD/macOS reads it as the FORMAT flag, GNU reads it as
+# --file-system, so on Linux `stat -f %m <dir>` fails on the operand `%m` and
+# STILL prints the filesystem report for <dir> — to STDOUT. Chaining the two
+# spellings with `||` therefore concatenates that report onto the real answer,
+# and the caller's arithmetic then evaluates the word `File` from `File: "<dir>"`
+# as a variable: "File: unbound variable" under `set -u`, which killed the whole
+# run the first time anything ever contended this lock. So each spelling is tried
+# in isolation and only an all-digits answer is accepted; an unreadable mtime is
+# reported as such (non-zero) rather than smuggled through as 0.
+lock_mtime() {
+  local out
+  if out="$(stat -c %Y "$1" 2>/dev/null)" && [[ "$out" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$out"; return 0
+  fi
+  if out="$(stat -f %m "$1" 2>/dev/null)" && [[ "$out" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$out"; return 0
+  fi
+  return 1
+}
 
 acquire_git_lock() {
-  local ttl=120 waited=0
+  local ttl=120 waited=0 mtime
   while ! mkdir "$git_lock" 2>/dev/null; do
-    if [[ -d "$git_lock" ]] && (( $(date +%s) - $(lock_mtime "$git_lock") > ttl )); then
+    # Stealing the lock is a mutation (`rm -rf`) on another process's state, so it
+    # needs positive evidence that the holder is gone: an mtime we could actually
+    # READ, older than the TTL. An unreadable one used to come back as 0 — epoch,
+    # which reads as "ancient" — and would force-remove a live holder's lock.
+    # Unknown means keep waiting; the 60s ceiling below is the bounded way out.
+    if [[ -d "$git_lock" ]] && mtime="$(lock_mtime "$git_lock")" \
+       && (( $(date +%s) - mtime > ttl )); then
       rm -rf "$git_lock"
       continue
     fi
@@ -228,6 +255,44 @@ case "$cmd" in
       fi
     fi
 
+    # POSITIVE EVIDENCE that a worktree's work has landed. The absence of
+    # origin/<branch> is not evidence of anything: it is equally what an executor
+    # looks like between committing its work and pushing it, which is the normal
+    # mid-ticket state of EVERY ticket — so the rule that read "in the graph,
+    # clean, no remote branch" as landed force-removed unpushed commits that
+    # existed nowhere else. Only delivery-state saying the ticket is merged proves
+    # it landed, and when there is no delivery-state nothing is provable, so
+    # nothing is landed. (`reapable` is state-sync's stricter flag — merged AND no
+    # open PR still hanging off the branch — so it implies `merged`; both are
+    # accepted because either one is the store asserting the work is in.)
+    # `state_note` is what a ticket's reason says when the store could not answer
+    # for it, and MISSING and UNREADABLE are different facts with different
+    # remedies — one is "no delivery has run here", the other is "the store is
+    # corrupt, repair it". Both mean nothing is provable, so both still fail
+    # closed; only the wording differs, and this verdict exists to be read.
+    dstate="$repo_root/.planning/graph/delivery-state.json"
+    state_rows=""; merged_ids=""; state_present=false
+    state_note="no delivery-state.json"
+    if [[ -f "$dstate" ]]; then
+      if state_rows="$(node -e '
+        const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+        const rows = [];
+        for (const [id, r] of Object.entries(s && typeof s === "object" ? s : {})) {
+          if (!r || typeof r !== "object") continue;
+          const status = typeof r.status === "string" ? r.status : "unknown";
+          const landed = status === "merged" || r.reapable === true;
+          rows.push([id, status, landed ? "landed" : "-"].join("\t"));
+        }
+        process.stdout.write(rows.join("\n"));
+      ' "$dstate" 2>/dev/null)"; then
+        state_present=true
+        merged_ids="$(printf '%s\n' "$state_rows" | awk -F'\t' '$3 == "landed" { print $1 }')"
+      else
+        state_note="delivery-state.json present but unreadable"
+        echo "warning: $dstate is unreadable — nothing can be proven landed, so nothing will be pruned" >&2
+      fi
+    fi
+
     # Refresh remote refs once: the whole classification turns on whether
     # origin/<branch> still exists, and a stale remote-tracking ref would make a
     # merged-and-deleted branch look alive (nothing pruned, silently).
@@ -238,17 +303,41 @@ case "$cmd" in
     while IFS=$'\t' read -r ticket wt_path branch; do
       [[ -n "$ticket" ]] || continue
       total=$((total + 1))
-      verdict=""; reason=""
+      verdict=""; reason=""; porcelain=""
       if [[ ! -d "$wt_path" ]]; then
         verdict="gone"; reason="registered but the directory is missing"
-      elif [[ -n "$(git -C "$wt_path" status --porcelain 2>/dev/null)" ]]; then
+      elif ! porcelain="$(git -C "$wt_path" status --porcelain 2>/dev/null)"; then
+        # A `git status` that FAILS prints nothing, and the old
+        # `[[ -n "$(git … status --porcelain)" ]]` read that silence as a clean
+        # tree: a broken worktree, an unreadable gitdir link, an IO error or a
+        # permission fault fell through to `live`/`landed`/`review` while the
+        # reason claimed "tree clean" about a tree nothing had established
+        # anything about. `landed` is the one verdict `--prune` acts on, so it
+        # must be EARNED by a check that ANSWERED — the same rule the under-lock
+        # re-check below applies one layer later, and this is the layer that
+        # decides. Deliberately NOT `dirty`: nobody made any edits to go looking
+        # for, and that conflation is exactly what the prune path stopped doing.
+        # `review` is the honest verdict — reported, kept, a human's call.
+        verdict="review"; reason="git status failed — cannot confirm the tree is clean; inspect by hand"
+      elif [[ -n "$porcelain" ]]; then
         verdict="dirty"; reason="uncommitted changes — never removed by gc"
       elif [[ -n "$branch" ]] && git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
         verdict="live"; reason="origin/$branch still exists"
       elif $graph_present && printf '%s\n' "$known" | grep -qxF "$ticket"; then
-        # The conveyor deletes a ticket's remote branch only after it has landed,
-        # so "in the graph, clean, and origin/<branch> gone" is a merged ticket.
-        verdict="landed"; reason="origin/${branch:-?} gone and the tree is clean"
+        if printf '%s\n' "$merged_ids" | grep -qxF "$ticket"; then
+          verdict="landed"; reason="delivery state says merged; tree clean"
+        else
+          # Known, clean, no remote — and nothing says it landed. The commits on
+          # this branch may exist nowhere else, so name the remedy rather than the
+          # missing ref: a push makes it `live`, and removing it is a human's call.
+          st="$state_note"
+          if $state_present; then
+            st="$(printf '%s\n' "$state_rows" | awk -F'\t' -v t="$ticket" '$1 == t { print $2; exit }')"
+            [[ -n "$st" ]] || st="not in delivery-state"
+          fi
+          verdict="review"
+          reason="committed work not on origin — push or remove by hand (origin/${branch:-?} gone; delivery state: $st)"
+        fi
       else
         # Foreign or abandoned: possibly the only copy of real commits. gc reports
         # it and stops — deciding this is a human's call, not a script's.
@@ -309,19 +398,74 @@ case "$cmd" in
     acquire_git_lock
     # A registration whose directory is already gone has no tree to lose work in.
     git -C "$repo_root" worktree prune 1>&2 2>/dev/null || true
-    removed=0
+    removed=0; skipped=0; failed=0
     while IFS=$'\t' read -r verdict ticket branch wt_path reason; do
       [[ "$verdict" == "landed" ]] || continue
-      git -C "$repo_root" worktree remove --force "$wt_path" 1>&2 2>/dev/null || rm -rf "$wt_path"
+      # The classification above is a SNAPSHOT, taken before this lock was held,
+      # and `worktree remove --force` discards whatever it finds. Re-read the
+      # porcelain here, inside the lock, immediately before the removal: a tree
+      # that gained work while gc was deciding is skipped, not destroyed. The exit
+      # status is a SEPARATE outcome from a non-empty tree — a `git status` that
+      # FAILS prints nothing, and reading that silence as "clean" would fail open
+      # straight into `rm -rf` — and it gets its own reason, because "became
+      # dirty" sends a reader looking for edits that were never made when the
+      # real fault is a permission, an IO error or a broken worktree.
+      if [[ -d "$wt_path" ]]; then
+        skip_reason=""
+        if porcelain="$(git -C "$wt_path" status --porcelain 2>/dev/null)"; then
+          [[ -z "$porcelain" ]] \
+            || skip_reason="became dirty after it was classified landed"
+        else
+          skip_reason="git status failed — cannot confirm the tree is clean"
+        fi
+        if [[ -n "$skip_reason" ]]; then
+          skipped=$((skipped + 1))
+          echo "skipped $ticket ($wt_path) — $skip_reason; inspect it by hand" >&2
+          continue
+        fi
+      fi
+      # A removal is a MUTATION, so its OUTCOME is checked and not assumed —
+      # the same rule as the verdict above, one layer later. Both halves can
+      # fail (a registration git will not let go of, then `rm -rf` on a
+      # non-writable parent, a read-only mount, or a mount point inside the
+      # tree), and the exit status of either is the wrong thing to trust: what
+      # matters is whether the directory is still there, which is checkable
+      # without reasoning about how `rm -rf` reports a partial failure on two
+      # platforms. Counting it regardless printed "removed" over a worktree
+      # still on disk, under a summary that promises what actually happened.
+      # The `|| true` is what keeps `set -e` out of it: a failing `rm` is the
+      # last command of the `||` list, so it used to kill the whole prune
+      # mid-loop and take the remaining landed worktrees, every skip reason and
+      # the summary with it. `rm`'s own stderr is deliberately NOT suppressed —
+      # "Permission denied" is the diagnosis.
+      git -C "$repo_root" worktree remove --force "$wt_path" 1>&2 2>/dev/null \
+        || rm -rf "$wt_path" || true
+      if [[ -e "$wt_path" ]]; then
+        failed=$((failed + 1))
+        echo "FAILED to remove $ticket ($wt_path) — it is still present; remove it by hand" >&2
+        continue
+      fi
       removed=$((removed + 1))
       echo "removed $ticket ($wt_path)" >&2
     done < <(printf '%s' "$rows")
     git -C "$repo_root" worktree prune 1>&2 2>/dev/null || true
     # Say what was left behind and why: a gc that reports only its successes reads
     # as "everything is clean" when the interesting cases are the ones it skipped.
-    removed=$((removed + gone_count))
+    # Report what was actually removed, not what was classified: those two
+    # numbers differ exactly when a tree changed under the lock or a removal
+    # failed outright, which are the two cases worth naming.
+    landed_removed=$removed
+    removed=$((landed_removed + gone_count))
     kept=$((total - removed))
-    echo "gc: removed $removed ($landed_count landed, $gone_count stale registration(s)), kept $kept — dirty/live/review are never removed automatically, inspect them by hand" >&2
+    skipped_note=""
+    if (( skipped > 0 )); then
+      skipped_note=" skipped $skipped landed worktree(s) that could not be re-proven clean under the lock (see the per-worktree reason above);"
+    fi
+    failed_note=""
+    if (( failed > 0 )); then
+      failed_note=" $failed landed worktree(s) could not be removed and are STILL PRESENT (see the per-worktree line above);"
+    fi
+    echo "gc: removed $removed ($landed_removed landed, $gone_count stale registration(s)), kept $kept —${failed_note}${skipped_note} dirty/live/review are never removed automatically, inspect them by hand" >&2
     ;;
   *)
     echo "usage: ticket-worktree.sh <create|remove|path|root|list [--json]|gc [--prune] [--json]> ..." >&2
