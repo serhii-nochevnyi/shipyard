@@ -28,8 +28,10 @@ set -euo pipefail
 # phase delivered months ago is invisible to it and accumulates forever. That is
 # not cosmetic — a large enough worktree set makes the sandbox profile exceed the
 # argv limit (E2BIG) and every sandboxed command starts failing. gc reports by
-# default and prunes only what it can PROVE is safe; SHIPYARD_WORKTREE_WARN_AT
-# (default 20) is when it starts saying the set is too big.
+# default and prunes only what it can PROVE is safe — delivery-state saying the
+# ticket is merged, never the mere absence of a remote branch, which is also what
+# an unpushed commit looks like; SHIPYARD_WORKTREE_WARN_AT (default 20) is when
+# it starts saying the set is too big.
 
 cmd="${1:-}"
 ticket="${2:-}"
@@ -228,6 +230,37 @@ case "$cmd" in
       fi
     fi
 
+    # POSITIVE EVIDENCE that a worktree's work has landed. The absence of
+    # origin/<branch> is not evidence of anything: it is equally what an executor
+    # looks like between committing its work and pushing it, which is the normal
+    # mid-ticket state of EVERY ticket — so the rule that read "in the graph,
+    # clean, no remote branch" as landed force-removed unpushed commits that
+    # existed nowhere else. Only delivery-state saying the ticket is merged proves
+    # it landed, and when there is no delivery-state nothing is provable, so
+    # nothing is landed. (`reapable` is state-sync's stricter flag — merged AND no
+    # open PR still hanging off the branch — so it implies `merged`; both are
+    # accepted because either one is the store asserting the work is in.)
+    dstate="$repo_root/.planning/graph/delivery-state.json"
+    state_rows=""; merged_ids=""; state_present=false
+    if [[ -f "$dstate" ]]; then
+      if state_rows="$(node -e '
+        const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+        const rows = [];
+        for (const [id, r] of Object.entries(s && typeof s === "object" ? s : {})) {
+          if (!r || typeof r !== "object") continue;
+          const status = typeof r.status === "string" ? r.status : "unknown";
+          const landed = status === "merged" || r.reapable === true;
+          rows.push([id, status, landed ? "landed" : "-"].join("\t"));
+        }
+        process.stdout.write(rows.join("\n"));
+      ' "$dstate" 2>/dev/null)"; then
+        state_present=true
+        merged_ids="$(printf '%s\n' "$state_rows" | awk -F'\t' '$3 == "landed" { print $1 }')"
+      else
+        echo "warning: $dstate is unreadable — nothing can be proven landed, so nothing will be pruned" >&2
+      fi
+    fi
+
     # Refresh remote refs once: the whole classification turns on whether
     # origin/<branch> still exists, and a stale remote-tracking ref would make a
     # merged-and-deleted branch look alive (nothing pruned, silently).
@@ -246,9 +279,20 @@ case "$cmd" in
       elif [[ -n "$branch" ]] && git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
         verdict="live"; reason="origin/$branch still exists"
       elif $graph_present && printf '%s\n' "$known" | grep -qxF "$ticket"; then
-        # The conveyor deletes a ticket's remote branch only after it has landed,
-        # so "in the graph, clean, and origin/<branch> gone" is a merged ticket.
-        verdict="landed"; reason="origin/${branch:-?} gone and the tree is clean"
+        if printf '%s\n' "$merged_ids" | grep -qxF "$ticket"; then
+          verdict="landed"; reason="delivery state says merged; tree clean"
+        else
+          # Known, clean, no remote — and nothing says it landed. The commits on
+          # this branch may exist nowhere else, so name the remedy rather than the
+          # missing ref: a push makes it `live`, and removing it is a human's call.
+          st="no delivery-state.json"
+          if $state_present; then
+            st="$(printf '%s\n' "$state_rows" | awk -F'\t' -v t="$ticket" '$1 == t { print $2; exit }')"
+            [[ -n "$st" ]] || st="not in delivery-state"
+          fi
+          verdict="review"
+          reason="committed work not on origin — push or remove by hand (origin/${branch:-?} gone; delivery state: $st)"
+        fi
       else
         # Foreign or abandoned: possibly the only copy of real commits. gc reports
         # it and stops — deciding this is a human's call, not a script's.
@@ -309,9 +353,24 @@ case "$cmd" in
     acquire_git_lock
     # A registration whose directory is already gone has no tree to lose work in.
     git -C "$repo_root" worktree prune 1>&2 2>/dev/null || true
-    removed=0
+    removed=0; skipped=0
     while IFS=$'\t' read -r verdict ticket branch wt_path reason; do
       [[ "$verdict" == "landed" ]] || continue
+      # The classification above is a SNAPSHOT, taken before this lock was held,
+      # and `worktree remove --force` discards whatever it finds. Re-read the
+      # porcelain here, inside the lock, immediately before the removal: a tree
+      # that gained work while gc was deciding is skipped, not destroyed. The exit
+      # status is captured too — a `git status` that FAILS prints nothing, and
+      # reading that silence as "clean" would fail open straight into `rm -rf`.
+      if [[ -d "$wt_path" ]]; then
+        porcelain="$(git -C "$wt_path" status --porcelain 2>/dev/null)" \
+          || porcelain="(git status failed — cannot confirm the tree is clean)"
+        if [[ -n "$porcelain" ]]; then
+          skipped=$((skipped + 1))
+          echo "skipped $ticket ($wt_path) — became dirty after it was classified landed; inspect it by hand" >&2
+          continue
+        fi
+      fi
       git -C "$repo_root" worktree remove --force "$wt_path" 1>&2 2>/dev/null || rm -rf "$wt_path"
       removed=$((removed + 1))
       echo "removed $ticket ($wt_path)" >&2
@@ -319,9 +378,17 @@ case "$cmd" in
     git -C "$repo_root" worktree prune 1>&2 2>/dev/null || true
     # Say what was left behind and why: a gc that reports only its successes reads
     # as "everything is clean" when the interesting cases are the ones it skipped.
-    removed=$((removed + gone_count))
+    # Report what was actually removed, not what was classified: with the
+    # re-check above those two numbers differ exactly when a tree changed under
+    # the lock, which is the case worth naming.
+    landed_removed=$removed
+    removed=$((landed_removed + gone_count))
     kept=$((total - removed))
-    echo "gc: removed $removed ($landed_count landed, $gone_count stale registration(s)), kept $kept — dirty/live/review are never removed automatically, inspect them by hand" >&2
+    skipped_note=""
+    if (( skipped > 0 )); then
+      skipped_note=" skipped $skipped landed worktree(s) that went dirty under the lock;"
+    fi
+    echo "gc: removed $removed ($landed_removed landed, $gone_count stale registration(s)), kept $kept —${skipped_note} dirty/live/review are never removed automatically, inspect them by hand" >&2
     ;;
   *)
     echo "usage: ticket-worktree.sh <create|remove|path|root|list [--json]|gc [--prune] [--json]> ..." >&2
