@@ -102,6 +102,10 @@
   "pipeline": {
     "jira": {
       "enabled": false
+    },
+    "models": {
+      "arch-review": "opus",
+      "integrator": "opus"
     }
   },
   "model_overrides": {
