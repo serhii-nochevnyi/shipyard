@@ -261,6 +261,29 @@ fi
 mv "$W/gcrepo/.planning/graph/delivery-state.json.bak" \
    "$W/gcrepo/.planning/graph/delivery-state.json"
 
+# ── an UNREADABLE store is a different fact from a missing one ──────────────
+# Both prove nothing and both must fail closed, but the reason is read by a
+# human deciding what to do next: "no delivery-state.json" sends them to run a
+# delivery when the actual remedy is to repair a corrupt file.
+mv "$W/gcrepo/.planning/graph/delivery-state.json" \
+   "$W/gcrepo/.planning/graph/delivery-state.json.bak"
+printf '%s\n' '{ this is not json' > "$W/gcrepo/.planning/graph/delivery-state.json"
+badstate="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
+[[ "$(verdict_of "$badstate" T-05-05)" == "review" ]] \
+  && ok "gc with an unreadable delivery-state.json can prove nothing landed" \
+  || bad "gc fails closed on an unreadable delivery-state" "$badstate"
+grep -q 'unreadable' <<<"$(reason_of "$badstate" T-05-05)" \
+  && ok "…and the reason says the store is unreadable, not that it is missing" \
+  || bad "gc tells unreadable state from absent state" "$(reason_of "$badstate" T-05-05)"
+run_gc gc --prune >/dev/null 2>&1 || true
+if [[ -d "$GCWT/T-05-05" ]]; then
+  ok "gc --prune with an unreadable delivery-state removes nothing"
+else
+  bad "gc --prune with an unreadable delivery-state removes nothing" "pruned without evidence"
+fi
+mv -f "$W/gcrepo/.planning/graph/delivery-state.json.bak" \
+   "$W/gcrepo/.planning/graph/delivery-state.json"
+
 # ── fail closed: no graph either ("delete what the graph does not name") ────
 mv "$W/gcrepo/.planning/graph/tickets.json" "$W/gcrepo/.planning/graph/tickets.json.bak"
 nograph="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
@@ -303,6 +326,34 @@ grep -q 'became dirty' "$W/race.err" \
   && ok "…and reports the skip with a reason" \
   || bad "gc reports what it skipped" "$(cat "$W/race.err")"
 rm -f "$GCWT/T-05-05/late.txt"
+
+# ── a status check that FAILS is a different skip from a dirty tree ─────────
+# Same lock trick, different injection: the worktree's gitdir link is pointed at
+# nothing while gc waits, so the re-check cannot answer at all. Silence is not
+# cleanliness — it must still refuse to remove — and it must say WHY, since
+# "became dirty" sends a reader hunting for edits nobody made.
+mkdir -p "$gc_lock"
+rm -f "$W/race2.json" "$W/race2.err"
+( run_gc gc --prune --json >"$W/race2.json" 2>"$W/race2.err" || true ) &
+racer=$!
+waited=0
+while [[ ! -s "$W/race2.json" ]] && (( waited < 150 )); do sleep 0.2; waited=$((waited + 1)); done
+if (( waited >= 150 )); then
+  bad "gc --prune classifies before it takes the git lock" "no second report after 30s"
+fi
+cp "$GCWT/T-05-05/.git" "$W/t0505-gitlink"
+printf 'gitdir: %s\n' "$W/no-such-gitdir" > "$GCWT/T-05-05/.git"
+rm -rf "$gc_lock"
+wait "$racer" || true
+if [[ -d "$GCWT/T-05-05" ]]; then
+  ok "gc --prune skips a landed worktree whose cleanliness it cannot re-check"
+else
+  bad "gc --prune fails closed when git status fails" "T-05-05 was removed on an unanswered check"
+fi
+grep -q 'cannot confirm the tree is clean' "$W/race2.err" \
+  && ok "…and names the check that failed instead of claiming it went dirty" \
+  || bad "gc tells a failed status from a dirty tree" "$(cat "$W/race2.err")"
+cp "$W/t0505-gitlink" "$GCWT/T-05-05/.git"
 
 # ── --prune removes exactly the landed one ──────────────────────────────────
 run_gc gc --prune >/dev/null 2>&1 || true

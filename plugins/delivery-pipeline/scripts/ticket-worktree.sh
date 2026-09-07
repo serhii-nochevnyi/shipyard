@@ -49,12 +49,37 @@ git_dir="$(git -C "$repo_root" rev-parse --git-common-dir)"
 [[ "$git_dir" = /* ]] || git_dir="$repo_root/$git_dir"
 git_lock="$git_dir/shipyard-git.lock"
 
-lock_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# `stat` disagrees about `-f` across platforms, and the disagreement is NOT a
+# clean failure: BSD/macOS reads it as the FORMAT flag, GNU reads it as
+# --file-system, so on Linux `stat -f %m <dir>` fails on the operand `%m` and
+# STILL prints the filesystem report for <dir> — to STDOUT. Chaining the two
+# spellings with `||` therefore concatenates that report onto the real answer,
+# and the caller's arithmetic then evaluates the word `File` from `File: "<dir>"`
+# as a variable: "File: unbound variable" under `set -u`, which killed the whole
+# run the first time anything ever contended this lock. So each spelling is tried
+# in isolation and only an all-digits answer is accepted; an unreadable mtime is
+# reported as such (non-zero) rather than smuggled through as 0.
+lock_mtime() {
+  local out
+  if out="$(stat -c %Y "$1" 2>/dev/null)" && [[ "$out" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$out"; return 0
+  fi
+  if out="$(stat -f %m "$1" 2>/dev/null)" && [[ "$out" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$out"; return 0
+  fi
+  return 1
+}
 
 acquire_git_lock() {
-  local ttl=120 waited=0
+  local ttl=120 waited=0 mtime
   while ! mkdir "$git_lock" 2>/dev/null; do
-    if [[ -d "$git_lock" ]] && (( $(date +%s) - $(lock_mtime "$git_lock") > ttl )); then
+    # Stealing the lock is a mutation (`rm -rf`) on another process's state, so it
+    # needs positive evidence that the holder is gone: an mtime we could actually
+    # READ, older than the TTL. An unreadable one used to come back as 0 — epoch,
+    # which reads as "ancient" — and would force-remove a live holder's lock.
+    # Unknown means keep waiting; the 60s ceiling below is the bounded way out.
+    if [[ -d "$git_lock" ]] && mtime="$(lock_mtime "$git_lock")" \
+       && (( $(date +%s) - mtime > ttl )); then
       rm -rf "$git_lock"
       continue
     fi
@@ -240,8 +265,14 @@ case "$cmd" in
     # nothing is landed. (`reapable` is state-sync's stricter flag — merged AND no
     # open PR still hanging off the branch — so it implies `merged`; both are
     # accepted because either one is the store asserting the work is in.)
+    # `state_note` is what a ticket's reason says when the store could not answer
+    # for it, and MISSING and UNREADABLE are different facts with different
+    # remedies — one is "no delivery has run here", the other is "the store is
+    # corrupt, repair it". Both mean nothing is provable, so both still fail
+    # closed; only the wording differs, and this verdict exists to be read.
     dstate="$repo_root/.planning/graph/delivery-state.json"
     state_rows=""; merged_ids=""; state_present=false
+    state_note="no delivery-state.json"
     if [[ -f "$dstate" ]]; then
       if state_rows="$(node -e '
         const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
@@ -257,6 +288,7 @@ case "$cmd" in
         state_present=true
         merged_ids="$(printf '%s\n' "$state_rows" | awk -F'\t' '$3 == "landed" { print $1 }')"
       else
+        state_note="delivery-state.json present but unreadable"
         echo "warning: $dstate is unreadable — nothing can be proven landed, so nothing will be pruned" >&2
       fi
     fi
@@ -285,7 +317,7 @@ case "$cmd" in
           # Known, clean, no remote — and nothing says it landed. The commits on
           # this branch may exist nowhere else, so name the remedy rather than the
           # missing ref: a push makes it `live`, and removing it is a human's call.
-          st="no delivery-state.json"
+          st="$state_note"
           if $state_present; then
             st="$(printf '%s\n' "$state_rows" | awk -F'\t' -v t="$ticket" '$1 == t { print $2; exit }')"
             [[ -n "$st" ]] || st="not in delivery-state"
@@ -360,14 +392,22 @@ case "$cmd" in
       # and `worktree remove --force` discards whatever it finds. Re-read the
       # porcelain here, inside the lock, immediately before the removal: a tree
       # that gained work while gc was deciding is skipped, not destroyed. The exit
-      # status is captured too — a `git status` that FAILS prints nothing, and
-      # reading that silence as "clean" would fail open straight into `rm -rf`.
+      # status is a SEPARATE outcome from a non-empty tree — a `git status` that
+      # FAILS prints nothing, and reading that silence as "clean" would fail open
+      # straight into `rm -rf` — and it gets its own reason, because "became
+      # dirty" sends a reader looking for edits that were never made when the
+      # real fault is a permission, an IO error or a broken worktree.
       if [[ -d "$wt_path" ]]; then
-        porcelain="$(git -C "$wt_path" status --porcelain 2>/dev/null)" \
-          || porcelain="(git status failed — cannot confirm the tree is clean)"
-        if [[ -n "$porcelain" ]]; then
+        skip_reason=""
+        if porcelain="$(git -C "$wt_path" status --porcelain 2>/dev/null)"; then
+          [[ -z "$porcelain" ]] \
+            || skip_reason="became dirty after it was classified landed"
+        else
+          skip_reason="git status failed — cannot confirm the tree is clean"
+        fi
+        if [[ -n "$skip_reason" ]]; then
           skipped=$((skipped + 1))
-          echo "skipped $ticket ($wt_path) — became dirty after it was classified landed; inspect it by hand" >&2
+          echo "skipped $ticket ($wt_path) — $skip_reason; inspect it by hand" >&2
           continue
         fi
       fi
@@ -386,7 +426,7 @@ case "$cmd" in
     kept=$((total - removed))
     skipped_note=""
     if (( skipped > 0 )); then
-      skipped_note=" skipped $skipped landed worktree(s) that went dirty under the lock;"
+      skipped_note=" skipped $skipped landed worktree(s) that could not be re-proven clean under the lock (see the per-worktree reason above);"
     fi
     echo "gc: removed $removed ($landed_removed landed, $gone_count stale registration(s)), kept $kept —${skipped_note} dirty/live/review are never removed automatically, inspect them by hand" >&2
     ;;
