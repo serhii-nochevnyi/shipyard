@@ -1256,4 +1256,93 @@ test('a checkpoint outranks the no-CI hold — a person holds that one for anoth
   assert.deepStrictEqual(f.waiting.merge_human, []);
 });
 
+suite('front — the project config is consulted only when a no-CI PR is on the board');
+
+// Reviewer-found on PR #44. `heldForNoCi` resolved `merge_without_ci` EAGERLY to
+// build noCiHold's options object, so every `computeFront` opened the project's
+// config file — including the ordinary board where no PR reports `none_reported`
+// and the setting cannot change a single answer. What makes it worth a test
+// rather than a shrug is that the comment beside the resolver already promised
+// the opposite ("lazily, so an ordinary board still reads no file here"): the
+// file asserted a behaviour the code did not have. These pin the promise so it
+// cannot rot back, and they measure the READ, not the clock.
+const cfgMod = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
+));
+
+// front.cjs requires pipeline-config.cjs lazily, INSIDE the resolver, so the
+// spy goes on the cached module object it looks the export up on.
+function configReadsDuring(fn) {
+  const real = cfgMod.loadConfig;
+  let reads = 0;
+  cfgMod.loadConfig = (...args) => { reads += 1; return real(...args); };
+  try { fn(); } finally { cfgMod.loadConfig = real; }
+  return reads;
+}
+
+test('an ordinary board reads no config at all', () => {
+  const reads = configReadsDuring(() => {
+    const f = computeFront(
+      { A: {}, B: {}, C: {} },
+      {
+        A: { ...landed }, B: { ...landed },
+        C: { status: 'pr-open', pr: 11, draft: true, checks: checks() },
+      },
+      { autoMerge: true }
+    );
+    assert.deepStrictEqual(f.actionable.merge.slice().sort(), ['A', 'B']);
+  });
+  assert.strictEqual(reads, 0, 'nothing reports none_reported, so merge_without_ci cannot change an answer');
+});
+
+test('a board with no-CI PRs reads it ONCE, however many of them there are', () => {
+  const reads = configReadsDuring(() => {
+    const f = computeFront(
+      { A: {}, B: {} },
+      { A: { ...noCiLanded }, B: { ...noCiLanded } },
+      { autoMerge: true }
+    );
+    assert.deepStrictEqual(f.waiting.merge_human.slice().sort(), ['A', 'B']);
+  });
+  assert.strictEqual(reads, 1, 'resolved on first need, memoized for the rest of the call');
+});
+
+test('a caller that pins the setting reads nothing, even with a no-CI PR', () => {
+  const reads = configReadsDuring(() => {
+    const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true, mergeWithoutCi: true });
+    assert.deepStrictEqual(f.actionable.merge, ['T']);
+  });
+  assert.strictEqual(reads, 0, 'the passed option always wins, so there is nothing to look up');
+});
+
+test('with auto-merge off the config is not consulted either', () => {
+  // The hold is gated on autoMerge, and that is the cheapest fact of the three,
+  // so it is settled before anything goes looking for a file.
+  const reads = configReadsDuring(() => {
+    computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } });
+  });
+  assert.strictEqual(reads, 0);
+});
+
+// The predicate is shared with sentinel.cjs, which passes the resolved VALUE
+// rather than a resolver. Both spellings must mean the same thing or the board
+// and the guard disagree about the PR in front of them.
+test('noCiHold takes the setting as a value or as a thunk, with one meaning', () => {
+  const { noCiHold } = require(path.join(
+    __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
+  ));
+  const held = (mergeWithoutCi) => noCiHold(noCi, { autoMerge: true, mergeWithoutCi });
+  assert.strictEqual(held(false), true, 'value: not allowed → held');
+  assert.strictEqual(held(() => false), true, 'thunk: same');
+  assert.strictEqual(held(true), false, 'value: allowed → not held');
+  assert.strictEqual(held(() => true), false, 'thunk: same');
+  assert.strictEqual(held(undefined), true, 'absent is not permission (sentinel passes cfg.merge_without_ci raw)');
+  // And the thunk is never called when a cheaper fact already settles it.
+  let called = 0;
+  const counting = () => { called += 1; return true; };
+  assert.strictEqual(noCiHold(noCi, { autoMerge: false, mergeWithoutCi: counting }), false);
+  assert.strictEqual(noCiHold(checks(), { autoMerge: true, mergeWithoutCi: counting }), false);
+  assert.strictEqual(called, 0, 'auto-merge off and a reported pipeline both answer without it');
+});
+
 done();

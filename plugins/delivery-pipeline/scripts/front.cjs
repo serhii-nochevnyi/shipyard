@@ -138,10 +138,26 @@ function checkpointParentOf(id, tickets, state) {
 // either case, and readying the PR is a courtesy to them (the duty's
 // `checks_note` already says what "green" meant) — holding the draft there
 // would leave a PR nobody can land at all.
+// The three facts are ANDed, so their ORDER cannot change the answer — but it
+// decides whether the front's config read happens at all, which is why the cheap
+// ones are settled first. `merge_without_ci` is the only expensive input (on the
+// board it comes from the project's config file), so it is consulted LAST and may
+// arrive as a THUNK: a caller that already holds the value passes the value, and
+// one that would have to go and find it passes a function that is never called
+// unless a PR with no reported checks is actually in hand. Reviewer-found on
+// PR #44: front.cjs resolved it eagerly to build this options object, so every
+// `computeFront` opened the file — including the overwhelming majority of boards
+// where no PR has `none_reported` and the answer is `false` either way. The
+// short-circuit lives HERE rather than at the call site on purpose: the rule has
+// two readers (this board and sentinel.cjs's guard) and duplicating any conjunct
+// into one of them is how the two come to disagree.
 function noCiHold(checks, opts = {}) {
   if (opts.autoMerge !== true) return false;
-  if (opts.mergeWithoutCi === true) return false;
-  return (checks || {}).none_reported === true;
+  if ((checks || {}).none_reported !== true) return false;
+  const mergeWithoutCi = typeof opts.mergeWithoutCi === 'function'
+    ? opts.mergeWithoutCi()
+    : opts.mergeWithoutCi;
+  return mergeWithoutCi !== true;
 }
 
 // ONE sentence for the fact, quoted by the board and the guard rather than
@@ -225,7 +241,11 @@ function computeFront(tickets, state, opts = {}) {
     }
     return mergeWithoutCiCache;
   };
-  const heldForNoCi = (s) => noCiHold(s.checks, { autoMerge, mergeWithoutCi: mergeWithoutCi() });
+  // The resolver is handed over UNCALLED. `noCiHold` settles `autoMerge` and
+  // `none_reported` first and only then asks for it, so the promise the comment
+  // above makes — "an ordinary board still reads no file here" — is kept by the
+  // predicate's own structure rather than by this line remembering to.
+  const heldForNoCi = (s) => noCiHold(s.checks, { autoMerge, mergeWithoutCi });
   // Expected CI length per ticket, in seconds, supplied by the caller —
   // `ciEstimates` below derives it and BOTH entry points pass it in. It is data,
   // not a lookup: computeFront is a pure function over its inputs and reads no
