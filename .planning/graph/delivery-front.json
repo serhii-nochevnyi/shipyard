@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-09-07T14:22:02.435Z",
+  "generated_at": "2026-09-07T14:24:46.738Z",
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-07T14:22:49.960Z",
+  "dispatches_applied_at": "2026-09-07T14:25:27.067Z",
   "actionable": {
     "execute": [],
     "publish": [],
@@ -69,20 +69,20 @@
     ]
   },
   "why": {
-    "T-24-04": "dispatched to pr-sentinel 1m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-04` returns it now.",
-    "T-24-05": "dispatched to drift-check 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-05` returns it now.",
+    "T-24-04": "dispatched to arch-review 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-04` returns it now.",
+    "T-24-05": "dispatched to executor 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-05` returns it now.",
     "T-24-06": "T-24-05 (parent has no branch yet (nothing to cascade from))",
     "T-24-07": "T-24-06 (parent has no branch yet (nothing to cascade from))",
-    "T-24-10": "dispatched to ci-fix 1m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-10` returns it now.",
+    "T-24-10": "dispatched to arch-review 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-10` returns it now.",
     "T-24-11": "T-24-07 (parent has no branch yet (nothing to cascade from))",
     "T-25-02": "T-24-07 (cross-phase parent must land on main first (phase 24 epic still ahead))",
     "T-25-03": "T-25-02 (parent has no branch yet (nothing to cascade from)); T-24-07 (cross-phase parent must land on main first (phase 24 epic still ahead))",
     "T-25-04": "T-25-03 (parent has no branch yet (nothing to cascade from))",
-    "T-26-01": "dispatched to review-fix 1m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-26-01` returns it now.",
+    "T-26-01": "dispatched to review-fix 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-26-01` returns it now.",
     "T-26-03": "T-24-11 (cross-phase parent must land on main first (phase 24 epic still ahead)); T-24-10 (cross-phase parent must land on main first (phase 24 epic still ahead))",
-    "T-26-04": "dispatched to ci-fix 1m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-26-04` returns it now.",
+    "T-26-04": "dispatched to ci-fix 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-26-04` returns it now.",
     "T-26-05": "T-26-03 (parent has no branch yet (nothing to cascade from))",
-    "T-26-06": "dispatched to review-fix 1m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-26-06` returns it now.",
+    "T-26-06": "dispatched to review-fix 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-26-06` returns it now.",
     "T-26-10": "T-26-05 (parent has no branch yet (nothing to cascade from))",
     "T-26-11": "T-26-10 (parent has no branch yet (nothing to cascade from))",
     "T-26-02": "T-26-11 (parent has no branch yet (nothing to cascade from)); T-25-04 (cross-phase parent must land on main first (phase 25 epic still ahead))"

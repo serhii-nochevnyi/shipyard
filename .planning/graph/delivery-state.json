@@ -231,7 +231,7 @@
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false
     },
     "base": "epic/24-the-conveyor-stops-interrupting-itself",
@@ -304,13 +304,24 @@
   },
   "T-24-10": {
     "branch": "ticket/T-24-10-the-ci-waiter-tells-a-stall-from-an-outa",
-    "pr": null,
-    "status": "pending",
+    "pr": 43,
+    "status": "pr-open",
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/43",
+    "pr_base": "epic/24-the-conveyor-stops-interrupting-itself",
+    "pr_created_at": "2026-09-07T14:23:10Z",
+    "checks": {
+      "total": 1,
+      "failing": 0,
+      "pending": 0,
+      "none_reported": false
+    },
     "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": true,
+    "merge_scope": "stacked",
     "reapable": false,
-    "since": "2026-09-07T09:10:42.244Z"
+    "since": "2026-09-07T14:24:12.835Z"
   },
   "T-24-11": {
     "branch": "ticket/T-24-11-a-resync-writes-the-front-it-means",
@@ -398,10 +409,11 @@
     "pr_base": "epic/26-positive-evidence-before-a-mutation",
     "pr_created_at": "2026-09-07T14:16:45Z",
     "checks": {
-      "total": 1,
+      "total": 0,
       "failing": 0,
       "pending": 0,
-      "none_reported": false
+      "none_reported": true,
+      "note": "no checks reported on the 'ticket/T-26-01-one-ownership-matcher-exact-by-construct' branch"
     },
     "base": "epic/26-positive-evidence-before-a-mutation",
     "epic": "epic/26-positive-evidence-before-a-mutation",
