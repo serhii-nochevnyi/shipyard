@@ -113,6 +113,51 @@ else
     || bad "an unordered overlapping pair is rejected (wrong reason)" "$out"
 fi
 
+# ── 2b. F01: ownership is EXACT, so overlap is decided on real intersection ──
+# The old matcher cut a declaration at its first wildcard and compared the stump
+# as a directory prefix, which was wrong in BOTH directions. `src/foo*.ts` became
+# `src/foo`, so it did not contest `src/fooBar.ts` — two unordered tickets that
+# genuinely collide passed. And `src/*.ts` became `src`, so it contested
+# `src/a/b.ts` — two tickets that cannot collide were rejected.
+mkproj f01pair
+mkdir -p "$WORK/f01pair/.planning/phases/01-x"
+plan f01pair '01-x/01-PLAN.md' T-01-01 '' '"src/foo*.ts"'  REQ-1
+plan f01pair '01-x/02-PLAN.md' T-01-02 '' '"src/fooBar.ts"' REQ-2
+rejects f01pair 'dependency-unordered' \
+  "a segment glob and a path it matches are a contested pair"
+
+# ...and the same pair, properly ordered, still passes: the fix must not turn a
+# legitimate dependency into an error.
+mkproj f01ordered
+mkdir -p "$WORK/f01ordered/.planning/phases/01-x"
+plan f01ordered '01-x/01-PLAN.md' T-01-01 ''          '"src/foo*.ts"'  REQ-1
+plan f01ordered '01-x/02-PLAN.md' T-01-02 'T-01-01'   '"src/fooBar.ts"' REQ-2
+if out="$(run_validator f01ordered)"; then
+  ok "the same intersecting pair passes when it is dependency-ordered"
+else
+  bad "the same intersecting pair passes when it is dependency-ordered" "$out"
+fi
+
+# The other direction: a single-segment glob does NOT reach into a subdirectory,
+# so these two tickets can never write the same path.
+mkproj f01nested
+mkdir -p "$WORK/f01nested/.planning/phases/01-x"
+plan f01nested '01-x/01-PLAN.md' T-01-01 '' '"src/*.ts"'    REQ-1
+plan f01nested '01-x/02-PLAN.md' T-01-02 '' '"src/a/b.ts"'  REQ-2
+if out="$(run_validator f01nested)"; then
+  ok "a one-segment glob does not contest a path in a subdirectory"
+else
+  bad "a one-segment glob does not contest a path in a subdirectory" "$out"
+fi
+
+# A declaration the matcher cannot answer EXACTLY is a Gate 2 error naming the
+# entry — the same declaration decides overlap, the scope gate and base-merge's
+# conflict resolution, so a guess there is a silent mutation (ADR-004 D1).
+mkproj f01grammar
+mkdir -p "$WORK/f01grammar/.planning/phases/01-x"
+plan f01grammar '01-x/01-PLAN.md' T-01-01 '' '"src/**/x.ts"' REQ-1
+rejects f01grammar 'src/\*\*/x\.ts' "a declaration outside the grammar is rejected, naming the entry"
+
 # ── 3. trailing comments must not corrupt values ────────────────────────────
 mkproj comments
 mkdir -p "$WORK/comments/.planning/phases/01-x"
@@ -550,7 +595,7 @@ rejects badrepo 'is not an owner/name slug' "an invalid delivery.repo value is r
 # ── 8. the generated YAML view must be parseable ────────────────────────────
 mkproj globs
 mkdir -p "$WORK/globs/.planning/phases/01-x"
-plan globs '01-x/01-PLAN.md' T-01-01 '' '"src/**/*.ts", "docs/*.md"' REQ-1
+plan globs '01-x/01-PLAN.md' T-01-01 '' '"*.ts", "docs/*.md"' REQ-1
 if run_validator globs >/dev/null 2>&1; then
   y="$WORK/globs/.planning/graph/tickets.yaml"
   files_line="$(grep '    files:' "$y" || true)"
@@ -560,7 +605,7 @@ if run_validator globs >/dev/null 2>&1; then
   else
     ok "generated tickets.yaml quotes glob values"
   fi
-  if grep -q "^    files: \['src/\*\*/\*\.ts', 'docs/\*\.md'\]$" <<<"$files_line"; then
+  if grep -q "^    files: \['\*\.ts', 'docs/\*\.md'\]$" <<<"$files_line"; then
     ok "generated tickets.yaml renders globs as single-quoted scalars"
   else
     bad "generated tickets.yaml renders globs as single-quoted scalars" "$files_line"
