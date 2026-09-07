@@ -62,7 +62,13 @@ test('watching CI is only sanctioned when nothing else is actionable', () => {
   );
   assert.ok(formatFront(busy).join('\n').includes('actionable RIGHT NOW'));
   const idle = computeFront({ A: {} }, { A: { status: 'pr-open', pr: 1, checks: checks(0, 2) } });
-  assert.ok(formatFront(idle).join('\n').includes('watch is legal here'));
+  // …and when it IS the only thing left, the sanctioned move is `ci-wait.cjs` —
+  // a foreground wait that returns on the first PR to settle. `gh pr checks
+  // --watch` is never named again: it blocks the session with no budget, no
+  // record and no way for the loop to read what happened.
+  const out = formatFront(idle).join('\n');
+  assert.ok(/ci-wait\.cjs/.test(out), out);
+  assert.ok(!/watch is legal/.test(out), 'the old wording sanctioned the very thing this repo removed');
 });
 
 test('approved + green + out of draft is a human merge when auto-merge is off', () => {
@@ -355,10 +361,94 @@ test('once the parent lands, the same child is a merge again', () => {
   assert.deepStrictEqual(f.actionable.merge, ['C'], 'the hold is scoped to an OPEN parent');
 });
 
-test('a non-checkpoint parent does not hold the child', () => {
+test('a non-checkpoint parent holds the child too — as waiting.parent, not as a person\'s move', () => {
+  // The OTHER shared test, and the disagreement it hid. `sentinel.cjs` has
+  // answered `wait-parent` here since it was written; the board offered the very
+  // same ticket as a merge. The loop dispatched nothing (the bucket is the
+  // guard's), the guard declined the work the board offered, `ci-wait.cjs`
+  // refused because something was "actionable", and the stop gate blocked over
+  // it — round after round on the proving ground.
   const t = { P: { branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } };
   const f = computeFront(t, cpState('pr-open'), { autoMerge: true });
-  assert.deepStrictEqual(f.actionable.merge, ['C'], 'only a CHECKPOINT parent holds it');
+  assert.deepStrictEqual(f.actionable.merge, [], 'the front must never offer what the guard refuses');
+  assert.deepStrictEqual(f.waiting.parent, ['C'], 'it is held behind a parent that is still moving');
+  assert.deepStrictEqual(f.waiting.human, [], 'and nobody is waited FOR: the guard drives the parent itself');
+  assert.strictEqual(f.parent_of.C, 'P', 'the board names the parent, so ci-wait.cjs need not re-derive it');
+  assert.ok(/\bP\b/.test(f.why.C), f.why.C);
+});
+
+suite('front — a parent that is still moving is a bucket, not work');
+
+// D4. The guard's `wait-parent` had no counterpart on the board, so a held child
+// read as `finalize`/`fix`/`merge`: work the main loop would not take (the bucket
+// belongs to the guard) and the guard would not do either. Everything downstream
+// then read the board wrong — `ci-wait.cjs` refused ("something is actionable"),
+// and the stop gate blocked on a front whose only content was a wait.
+const mvTickets = { P: { branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } };
+// A parent whose own CI is still running, and a child green + conform behind it.
+const mvState = (childOver = {}) => ({
+  P: { status: 'pr-open', pr: 1, draft: false, checks: checks(0, 2), branch: 'ticket/P' },
+  C: {
+    status: 'pr-open', pr: 2, draft: false, checks: checks(), gate: conform,
+    merge_scope: 'stacked', pr_base: 'ticket/P', branch: 'ticket/C', ...childOver,
+  },
+});
+
+test('a board whose only move is a moving parent has nothing actionable and is not a fixpoint', () => {
+  const f = computeFront(mvTickets, mvState(), { autoMerge: true });
+  assert.strictEqual(f.actionable_count, 0, 'nothing here is the run\'s to start');
+  assert.deepStrictEqual(f.waiting.parent, ['C']);
+  assert.deepStrictEqual(f.waiting.ci, ['P'], 'the parent is the pipeline being waited for');
+  assert.strictEqual(f.counts.parent, 1, 'counted, so a board summary cannot omit it');
+  assert.strictEqual(f.fixpoint, false, 'a parent still moving is never an ending');
+});
+
+test('a RED child of a moving parent is held as well — the guard orders it that way', () => {
+  // `dutyItems` tests `parentIsMoving` BEFORE the failing-checks branch: fixing a
+  // child now buys a green the base move undoes. The board must order it the
+  // same way or the two disagree on exactly the tickets that cost CI twice.
+  const f = computeFront(mvTickets, mvState({ checks: checks(2, 0) }), { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, [], 'not fix work while the base is about to move');
+  assert.deepStrictEqual(f.waiting.parent, ['C']);
+});
+
+test('the reason names the parent AND what it is doing', () => {
+  const f = computeFront(mvTickets, mvState(), { autoMerge: true });
+  assert.ok(/\bP\b/.test(f.why.C), f.why.C);
+  assert.ok(/check/.test(f.why.C), `it says what the parent is doing: ${f.why.C}`);
+});
+
+test('a PARKED parent is not a moving parent — the child is offered again', () => {
+  // `parentIsMoving`'s exact semantics, parked half: the guard reads its own
+  // PARKED set (flag + escalations + drift verdicts), so the board must build
+  // the same set or the two disagree the moment a human parks a parent.
+  const f = computeFront(mvTickets, mvState(), { autoMerge: true, parked: ['P'] });
+  assert.deepStrictEqual(f.waiting.parent, [], 'nothing is moving behind a parked parent');
+  assert.deepStrictEqual(f.actionable.merge, ['C']);
+});
+
+test('a CHECKPOINT parent still routes to waiting.human, not to waiting.parent', () => {
+  // The two holds are different facts with different remedies: a person holds
+  // the key in one, the guard drives the parent in the other.
+  const f = computeFront(cpTickets, cpState('pr-open'), { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.parent, [], 'a checkpoint parent is not a parent being DRIVEN');
+  assert.ok(f.waiting.human.includes('C'), 'the child waits on the person holding the parent');
+  // …and the parent itself is that person's, which is why it is here too: the
+  // fixture's P is green and out of draft, so its own checkpoint is what is left.
+  assert.ok(f.waiting.human.includes('P'), f.why.P);
+});
+
+test('the held child is the guard\'s share, so the board never calls it clear', () => {
+  const f = computeFront(mvTickets, mvState(), { autoMerge: true });
+  assert.deepStrictEqual(f.sentinel.waiting_parent, ['C']);
+  assert.strictEqual(f.sentinel.clear, false, 'the guard has to come back when the parent lands');
+});
+
+test('formatFront renders it under waiting, and the verdict names ci-wait.cjs', () => {
+  const out = formatFront(computeFront(mvTickets, mvState(), { autoMerge: true })).join('\n');
+  assert.ok(/waiting: [^\n]*parent: C/.test(out), out);
+  assert.ok(/fixpoint: NO/.test(out), out);
+  assert.ok(/ci-wait\.cjs/.test(out), 'the one legitimate wait is a script, not a `--watch`');
 });
 
 suite('front — the standalone CLI is equivalent to state-sync');

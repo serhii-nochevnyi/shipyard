@@ -176,8 +176,23 @@ if (dispatched.length) {
     'An agent completion wakes the run for free and sooner; this would only add latency.');
 }
 
+// WHAT COUNTS AS A WAIT ON A PIPELINE — two buckets, not one:
+//
+//   waiting.ci     — the ticket's own checks are still running;
+//   waiting.parent — the ticket is stacked on a parent whose PR is still open, so
+//                    the pipeline it is actually waiting for is the PARENT's.
+//
+// Reading only the first is what let a board full of held children report
+// "nothing is waiting on CI": this script refused, the stop gate's CI-only branch
+// saw the same empty bucket and allowed the stop, and the one thing that would
+// ever have released those children was a pipeline nobody was watching.
 const ciTickets = (front.waiting && front.waiting.ci) || [];
-if (!ciTickets.length) {
+const heldTickets = (front.waiting && front.waiting.parent) || [];
+// WHO the parent is comes from the BOARD (`front.cjs` writes `parent_of`), never
+// from tickets.json: re-deriving the graph here is exactly the duplication that
+// let the guard and the board disagree about this bucket in the first place.
+const parentOf = (front.parent_of && typeof front.parent_of === 'object') ? front.parent_of : {};
+if (!ciTickets.length && !heldTickets.length) {
   refuse('nothing is waiting on CI',
     front.fixpoint === true
       ? 'The board reports a fixpoint — this run is done.'
@@ -187,14 +202,48 @@ if (!ciTickets.length) {
 // One watch target per ticket, scoped to the ticket's OWN repo — the same rule
 // state-sync obeys, and for the same reason: watching the wrong repository
 // reports a foreign PR as pending forever.
+//
+// DEDUPLICATED BY PR, because the usual shape has a parent in `waiting.ci` AND a
+// child held behind it: two entries would poll the same PR twice a round and
+// count the same empty window twice against the same budget. The entry keeps the
+// PARENT's ticket id — the record and any escalation belong to the ticket whose
+// pipeline is stuck, and parking it is what lifts the hold on its children
+// (`parentIsMoving` reads its caller's parked set) — with `via` naming who else
+// is waiting on it.
+//
+// A parent that is already GREEN settles on the first poll and this returns at
+// once. That is the normal return path and is deliberately not filtered: a check
+// that finished between the sync and the wait looks identical from here. It can
+// only happen when the parent is neither actionable (the board would have been
+// refused above) nor in `waiting.ci`, i.e. its merge is a human's — and today the
+// stop gate's CI-only branch reads `waiting.ci` alone, so such a board ends the
+// run rather than spinning on it. T-24-09 owns the gate's half.
 const watch = [];
-for (const id of ciTickets) {
-  const s = state[id];
+const byPr = new Map();
+const wanted = [
+  ...ciTickets.map((id) => ({ ticket: id, via: null })),
+  ...heldTickets.map((id) => ({ ticket: parentOf[id] || null, via: id })),
+];
+for (const w of wanted) {
+  if (!w.ticket) continue; // a held child the board names no parent for — reported below
+  const s = state[w.ticket];
   if (!s || !s.pr) continue;
-  watch.push({ id, pr: s.pr, repo: s.repo || null });
+  const key = `${s.repo || ''}#${s.pr}`;
+  const seen = byPr.get(key);
+  if (seen) {
+    if (w.via && !seen.via.includes(w.via)) seen.via.push(w.via);
+    continue;
+  }
+  const entry = { id: w.ticket, pr: s.pr, repo: s.repo || null, via: w.via ? [w.via] : [] };
+  byPr.set(key, entry);
+  watch.push(entry);
 }
 if (!watch.length) {
-  refuse(`the ${ciTickets.length} ticket(s) waiting on CI have no PR recorded (${ciTickets.join(', ')})`,
+  const named = [
+    ...(ciTickets.length ? [`waiting on CI: ${ciTickets.join(', ')}`] : []),
+    ...(heldTickets.length ? [`held behind a parent: ${heldTickets.join(', ')}`] : []),
+  ].join(' | ');
+  refuse(`no PR to watch for any ticket the board says is waiting (${named})`,
     'That is a board bug, not a wait: re-run state-sync.cjs.');
 }
 
@@ -305,10 +354,10 @@ function recordOutcomeInner(settledId, watched) {
 
 const startedAt = Date.now();
 const deadline = startedAt + TIMEOUT_S * 1000;
-const label = watch.map((w) => `${w.id}#${w.pr}`).join(', ');
+const label = watch.map((w) => `${w.id}#${w.pr}${w.via.length ? ` (holding ${w.via.join(', ')})` : ''}`).join(', ');
 if (!JSON_OUT) {
   process.stdout.write(
-    `ci-wait: the board offers nothing but CI — waiting on ${label}\n` +
+    `ci-wait: the board offers nothing but pipelines — waiting on ${label}\n` +
     `  up to ${Math.round(TIMEOUT_S / 60)}m, polling every ${INTERVAL_S}s; returns the moment one settles\n`);
 }
 

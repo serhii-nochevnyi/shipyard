@@ -129,7 +129,13 @@ q() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).re
 has "the board names the auto-merge policy" "$board" "auto-merge: epic"
 has "the board names the sentinel's duty" "$board" "sentinel:"
 has "the green + conform PR is a merge for the guard" "$board" "merge: T-01-01"
-has "the red PR is fix work" "$board" "fix: T-01-02"
+# The red child is stacked on T-01-01, whose PR is still open — so it is HELD,
+# not offered. The board used to print `fix: T-01-02` here while `duty` (below)
+# answered `wait-parent` for the same ticket: the loop dispatched nothing (the
+# bucket is the guard's), the guard declined the work the board offered, and the
+# run had no move it could take. This pair of assertions is that defect.
+has "a red child of an open parent is held behind it, and the parent is named" "$board" "parent: T-01-02→T-01-01"
+hasnt "and is never offered as fix while the base is about to move" "$board" "fix: T-01-02"
 has "an unmerged mergeable PR is not a fixpoint" "$board" "fixpoint: NO"
 
 # the guard's own view of the same state
@@ -146,6 +152,27 @@ d() { node -e 'const s=require(process.argv[1]);process.stdout.write(String(s.it
 [[ "$(d T-01-01 depth)" == "0" && "$(d T-01-02 depth)" == "1" ]] \
   && ok "duty carries the stack depth it sorts by" \
   || bad "duty carries the stack depth" "got: $(d T-01-01 depth) / $(d T-01-02 depth)"
+
+# …and the board's own file must place that same ticket in the bucket the guard's
+# answer implies. One predicate (parent-moving.cjs), two readers, one state file:
+# asserted end to end rather than trusted, because this is the pair that drifted.
+front="$proj/.planning/graph/delivery-front.json"
+if node -e '
+const f = require(process.argv[1]);
+const held = (f.waiting && f.waiting.parent) || [];
+const actionable = Object.values(f.actionable || {}).flat();
+if (!held.includes("T-01-02")) { console.error("waiting.parent=" + JSON.stringify(held)); process.exit(1); }
+if (actionable.includes("T-01-02")) { console.error("still actionable: " + actionable.join(", ")); process.exit(1); }
+if ((f.parent_of || {})["T-01-02"] !== "T-01-01") { console.error("parent_of=" + JSON.stringify(f.parent_of)); process.exit(1); }
+if (!(f.sentinel || {}).waiting_parent || !f.sentinel.waiting_parent.includes("T-01-02")) {
+  console.error("sentinel=" + JSON.stringify(f.sentinel)); process.exit(1);
+}
+process.exit(0);
+' "$front" 2>"$W/front.err"; then
+  ok "the board file agrees with duty: the child is waiting.parent, and the guard owns it"
+else
+  bad "the board file agrees with duty" "$(cat "$W/front.err")"
+fi
 
 # auto_merge: off must hand the same PR back to a human, and restore the old
 # fixpoint semantics (nothing actionable → the run may end)

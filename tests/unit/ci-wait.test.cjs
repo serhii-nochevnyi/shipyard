@@ -36,6 +36,19 @@ const stateWith = (over = {}) => ({
   ...over,
 });
 
+// A board whose only content is a child HELD BEHIND A MOVING PARENT. The child's
+// own checks are green; the pipeline it is actually waiting for is the parent's,
+// and the board says which parent that is (`parent_of`, written by front.cjs).
+const heldOnly = (over = {}) => ciOnly({
+  waiting: { ci: [], dispatched: [], parent: ['T-01-02'], merge_human: [], human: [] },
+  parent_of: { 'T-01-02': 'T-01-01' },
+  ...over,
+});
+const heldState = (over = {}) => stateWith({
+  'T-01-02': { pr: 102, repo: 'acme/widgets', status: 'pr-open' },
+  ...over,
+});
+
 function project(front, state) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-ciwait-'));
   const g = path.join(dir, '.planning', 'graph');
@@ -141,6 +154,50 @@ test('no board at all is refused with the directory it looked in', () => {
   const { code, json } = asJson(null, null);
   assert.equal(code, 3, 'no board, no wait');
   assert.ok(/\.planning\/graph/.test(json.refusal), 'and it names where it looked');
+});
+
+suite('ci-wait — a wait on the parent is a wait, and the parent is what it watches');
+
+// D4. `waiting.parent` is a child whose base is about to move: the only thing that
+// will ever release it is the PARENT's pipeline. A waiter that reads `waiting.ci`
+// alone called that board "nothing is waiting on CI" and refused — while the stop
+// gate's CI-only branch, reading the same empty bucket, allowed the stop. Between
+// the two, the one thing that would have moved the board was a pipeline nobody
+// watched.
+
+test('a held child is a legitimate wait, and it watches the PARENT\'s PR', () => {
+  const dir = project(heldOnly(), heldState());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }], 8);
+  const { code, json } = asJson(null, null, ['--timeout', '2', '--interval', '1'], { dir, bin });
+  assert.equal(code, 0, 'this is a wait, not a refusal');
+  assert.equal(json.waited, true);
+  assert.deepEqual(json.watched.map((w) => w.pr), [101], 'the PARENT\'s PR, not the child\'s');
+  assert.equal(json.watched[0].id, 'T-01-01', 'and the record belongs to the ticket whose pipeline it is');
+  assert.deepEqual(json.watched[0].via, ['T-01-02'], 'naming who is held behind it');
+});
+
+test('a parent already in waiting.ci is watched ONCE', () => {
+  // The common shape: the parent's checks are running, so the parent is in
+  // `waiting.ci` and is also what its child waits for. Two entries would poll the
+  // same PR twice per round and record the same empty window twice.
+  const dir = project(
+    heldOnly({ waiting: { ci: ['T-01-01'], dispatched: [], parent: ['T-01-02'], merge_human: [], human: [] } }),
+    heldState());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }], 8);
+  const { json } = asJson(null, null, ['--timeout', '2', '--interval', '1'], { dir, bin });
+  assert.deepEqual(json.watched.map((w) => w.pr), [101]);
+  assert.deepEqual(json.watched[0].via, ['T-01-02'], 'and it still says who else is waiting on it');
+  assert.equal(waits(dir).tickets['T-01-01'].empty_windows, 1, 'one window, not two');
+});
+
+test('a held child whose board names no parent is a board bug, not a wait', () => {
+  // An older front on disk carries `waiting.parent` with no `parent_of`. Guessing
+  // the parent here would mean re-deriving graph semantics in the waiter — the
+  // duplication this ticket exists to remove. Say so and name the re-sync.
+  const { code, json } = asJson(heldOnly({ parent_of: {} }), heldState());
+  assert.equal(code, 3);
+  assert.ok(/T-01-02/.test(json.refusal), 'the refusal names the held ticket');
+  assert.ok(/state-sync/.test(json.hint), 'and the remedy is a re-sync, not patience');
 });
 
 suite('ci-wait — the wait itself');

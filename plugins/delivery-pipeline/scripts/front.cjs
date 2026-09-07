@@ -26,6 +26,11 @@
 //                 actionable, because taking it again is duplicate work; not
 //                 parked, because nobody has given up; and never a fixpoint,
 //                 because the round has to come back for the result
+//     parent    — stacked on a parent whose PR is still open (parent-moving.cjs).
+//                 The guard has answered `wait-parent` here since it was written;
+//                 the board had no such bucket, so the same ticket read as
+//                 fix/finalize/merge — work the loop would not take (the bucket is
+//                 the guard's) and the guard would not do either
 //   parked (compatible with a fixpoint — only a human or a replan moves these):
 //     merge_human — green, out of draft, but the merge is a human action
 //                   (auto-merge off, direct-to-main, or the PR targets the
@@ -36,11 +41,13 @@
 //     blocked   — dependencies unsatisfied, or parked by the run (--parked)
 //     done      — merged
 //
-// fixpoint = no actionable work, nothing waiting on CI, and nothing out with an
-// agent. A PR whose checks are still running is NOT a fixpoint: the round has to
-// come back to it. But it is also not a reason to block — the run serves the rest
-// of the front meanwhile, and only ever `--watch`es when that PR is the last
-// thing left. A dispatched ticket reads the same way for the same reason.
+// fixpoint = no actionable work, nothing waiting on CI, nothing held behind a
+// moving parent, and nothing out with an agent. A PR whose checks are still
+// running is NOT a fixpoint: the round has to come back to it. But it is also not
+// a reason to block — the run serves the rest of the front meanwhile, and when a
+// wait IS all that is left the sanctioned move is `ci-wait.cjs`, a foreground wait
+// with a budget that returns on the first PR to settle. A dispatched ticket and a
+// child held behind a moving parent read the same way for the same reason.
 //
 // OWNERSHIP. fix/finalize/merge are the PR SENTINEL's duty (sentinel.cjs), which
 // runs alongside the main loop; execute/publish belong to the main loop. The
@@ -59,6 +66,11 @@ const { escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'))
 // that decides when it lifts. (dispatch-record.cjs requires front.cjs back, but
 // only lazily and only from its CLI, so there is no half-built module here.)
 const { dispatchWhy, activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
+// The OTHER predicate the guard and the board must not spell twice — "is this
+// ticket's parent still being driven?". It lived in sentinel.cjs alone, which is
+// why the board offered tickets the guard was refusing. One home, one direction:
+// this module imports nothing back.
+const { movingParentOf, movingParentWhy } = require(path.join(__dirname, 'parent-moving.cjs'));
 
 // ── the checkpoint predicates, in ONE home ──────────────────────────────────
 //
@@ -155,14 +167,26 @@ function computeFront(tickets, state, opts = {}) {
   // not a lookup: computeFront is a pure function over its inputs and reads no
   // file, so the journal is opened by the caller or not at all.
   const ciEst = opts.ci_estimates || {};
-  // The parent rule, bound to this call's graph. `sentinel.cjs` binds the SAME
-  // function over its own — the two cannot disagree because there is only one.
+  // The parent rules, bound to this call's graph. `sentinel.cjs` binds the SAME
+  // functions over its own — the two cannot disagree because there is only one of
+  // each.
   const checkpointParent = (id) => checkpointParentOf(id, tickets, state);
+  // The guard's parked set is `--parked` ∪ escalations ∪ drift verdicts (see
+  // sentinel.cjs's PARKED). The board holds the same three facts under three
+  // names, so the union is built here rather than passed: a narrower set on
+  // either side means the two disagree the moment a human parks a parent.
+  const parkedForParent = new Set([...parkedIds, ...Object.keys(drifted), ...Object.keys(escalated)]);
+  const movingParent = (id) => movingParentOf(id, { tickets, state, parked: parkedForParent });
 
   const actionable = { execute: [], publish: [], fix: [], finalize: [], merge: [] };
-  const waiting = { ci: [], dispatched: [], merge_human: [], human: [] };
+  const waiting = { ci: [], dispatched: [], parent: [], merge_human: [], human: [] };
   const parked = { blocked: [], done: [] };
   const why = {};
+  // Which parent each `waiting.parent` child is held behind. The FRONT decides
+  // who that is, so `ci-wait.cjs` can watch the parent's pipeline without
+  // re-deriving graph semantics from tickets.json — the board is the one place
+  // that answers "what is this run waiting for".
+  const parentOf = {};
 
   for (const id of Object.keys(state)) {
     const s = state[id] || {};
@@ -214,6 +238,25 @@ function computeFront(tickets, state, opts = {}) {
     }
 
     if (s.status === 'pr-open') {
+      // FIRST inside the branch, and the position is the whole point: `dutyItems`
+      // tests `parentIsMoving` BEFORE the failing-checks branch, so a red child of
+      // an open parent is `wait-parent` and not `ci-fix`. Placed after the checks
+      // chain instead, the board would still offer `fix`/`finalize`/`merge` on
+      // exactly the tickets that cost a second CI round — which is the
+      // disagreement this bucket exists to end. Do not reorder.
+      //
+      // NOTE for T-24-09: the stop gate's CI-only branch reads `waiting.ci`
+      // alone, so a board holding nothing but `waiting.parent` still permits a
+      // stop today. That ticket extends the gate; this one gives it the bucket to
+      // read.
+      const movingBase = movingParent(id);
+      if (movingBase) {
+        waiting.parent.push(id);
+        parentOf[id] = movingBase;
+        why[id] = `PR #${s.pr}: stacked on ${movingParentWhy(movingBase, state)} — driving this one to green now `
+          + 'buys a green the base move will undo. Drive the parent; this follows when it lands.';
+        continue;
+      }
       const c = s.checks || {};
       // `none_reported` means nothing ran, not that everything passed —
       // state-sync warns about it separately; for the front it counts as green
@@ -322,6 +365,7 @@ function computeFront(tickets, state, opts = {}) {
     merge: actionable.merge.length,
     ci: waiting.ci.length,
     dispatched: waiting.dispatched.length,
+    parent: waiting.parent.length,
     merge_human: waiting.merge_human.length,
     human: waiting.human.length,
     blocked: parked.blocked.length,
@@ -330,8 +374,12 @@ function computeFront(tickets, state, opts = {}) {
   const actionableCount = ORDER.reduce((n, k) => n + actionable[k].length, 0);
   // A dispatch counts against the fixpoint exactly as a running CI queue does:
   // the work is moving and its result has to be collected. Saying YES here would
-  // hand the human a summary written before the answers came back.
-  const fixpoint = actionableCount === 0 && waiting.ci.length === 0 && waiting.dispatched.length === 0;
+  // hand the human a summary written before the answers came back. A child held
+  // behind a moving parent is the same class of fact: the parent is being driven,
+  // and when it lands this ticket becomes work again — so the round has to come
+  // back for it.
+  const fixpoint = actionableCount === 0 && waiting.ci.length === 0
+    && waiting.dispatched.length === 0 && waiting.parent.length === 0;
   // SHALLOWEST FIRST within a stack — the THIRD sort key now; the full order is
   // stated at the comparator below. A ticket stacked on an open parent is
   // work that will have to be redone: when the parent lands, this branch's base
@@ -431,6 +479,12 @@ function computeFront(tickets, state, opts = {}) {
   const sentinel = {
     duty: SENTINEL_BUCKETS.flatMap((k) => actionable[k]),
     waiting_ci: waiting.ci.slice(),
+    // Held children are the guard's too (deliver.md's bucket table marks
+    // `parent` [SENTINEL]) and count exactly as `waiting_ci` does: the guard has
+    // to come back when the parent lands. Without this the board would print
+    // `sentinel: clear` over a guard that still owes a whole subtree, and
+    // deliver.md reads that line as one of the two conditions for completion.
+    waiting_parent: waiting.parent.slice(),
     // The guard's share of the dispatched list — the tickets that left `duty`
     // BECAUSE they were handed to the guard or to one of its fixers. Without
     // this the board would print `sentinel: clear — no open PR needs guarding`
@@ -439,7 +493,7 @@ function computeFront(tickets, state, opts = {}) {
     dispatched: waiting.dispatched.filter((id) => SENTINEL_ROLES.has(roleOfDispatch(dispatched[id]))),
   };
   sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0
-    && sentinel.dispatched.length === 0;
+    && sentinel.dispatched.length === 0 && sentinel.waiting_parent.length === 0;
 
   // How much of the actionable list is work the run has already moved past. The
   // stop condition has to distinguish "there is live work" from "there is only
@@ -449,7 +503,7 @@ function computeFront(tickets, state, opts = {}) {
   const actionableIds = ORDER.flatMap((k) => actionable[k]);
   const leftBehindCount = actionableIds.filter((id) => leftBehind(id)).length;
 
-  return { actionable, waiting, parked, why, counts, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, sentinel, roles: BUCKET_ROLES };
+  return { actionable, waiting, parked, why, counts, parent_of: parentOf, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, sentinel, roles: BUCKET_ROLES };
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
@@ -590,19 +644,30 @@ function formatFront(front) {
   const wparts = [];
   if (front.waiting.ci.length) wparts.push(`ci: ${front.waiting.ci.join(', ')}`);
   if ((front.waiting.dispatched || []).length) wparts.push(`dispatched: ${front.waiting.dispatched.join(', ')}`);
+  // Rendered with the parent it is held behind: "parent: C" alone sends the
+  // reader to the graph to find out WHICH pipeline they are waiting for.
+  if ((front.waiting.parent || []).length) {
+    const held = front.waiting.parent
+      .map((id) => `${id}→${(front.parent_of || {})[id] || '?'}`)
+      .join(', ');
+    wparts.push(`parent: ${held}`);
+  }
   if (front.waiting.merge_human.length) wparts.push(`merge (human): ${front.waiting.merge_human.join(', ')}`);
   if (front.waiting.human.length) wparts.push(`checkpoint (human): ${front.waiting.human.join(', ')}`);
   if (wparts.length) lines.push(`waiting: ${wparts.join(' | ')}`);
 
   // The sentinel's share of the front, named separately: it is the part that a
   // background guard can take over so the main loop keeps cascading.
-  const s = front.sentinel || { duty: [], waiting_ci: [], dispatched: [], clear: true };
+  const s = front.sentinel || { duty: [], waiting_ci: [], dispatched: [], waiting_parent: [], clear: true };
   const sDispatched = s.dispatched || [];
+  const sHeld = s.waiting_parent || [];
   lines.push(s.clear
     ? 'sentinel: clear — no open PR needs guarding'
     : `sentinel: ${s.duty.length} duty${s.duty.length ? ` (${s.duty.join(', ')})` : ''}` +
       `${sDispatched.length ? ` + ${sDispatched.length} already with an agent (${sDispatched.join(', ')})` : ''}` +
-      `${s.waiting_ci.length ? ` + ${s.waiting_ci.length} waiting on CI` : ''} — post/keep the guard, do NOT wait on it`);
+      `${s.waiting_ci.length ? ` + ${s.waiting_ci.length} waiting on CI` : ''}` +
+      `${sHeld.length ? ` + ${sHeld.length} held behind a moving parent (${sHeld.join(', ')})` : ''}` +
+      ' — post/keep the guard, do NOT wait on it');
 
   if (front.fixpoint) {
     lines.push(
@@ -612,8 +677,9 @@ function formatFront(front) {
     );
   } else if (front.actionable_count === 0 && front.counts.dispatched) {
     // Nothing to start, and the reason is that it has all been started. This
-    // deserves its own sentence: the CI wording below sanctions a `--watch`,
-    // and there is nothing to watch — the result arrives with the agents.
+    // deserves its own sentence: the wording below sends the run to `ci-wait.cjs`,
+    // and there is nothing there to wait for — the result arrives with the agents,
+    // and that wake-up is free and sooner (ci-wait.cjs refuses for this reason).
     lines.push(
       `fixpoint: NO — ${front.counts.dispatched} ticket(s) are with an agent right now` +
       `${front.counts.ci ? `, and ${front.counts.ci} PR(s) are running CI` : ''}. ` +
@@ -622,9 +688,19 @@ function formatFront(front) {
       'so a run that dies here leaves nothing hidden.'
     );
   } else if (front.actionable_count === 0) {
+    // Nothing to start, and what is left is a pipeline. Both waits belong here:
+    // a ticket's own checks, and a ticket held behind a parent whose checks are
+    // the thing it is actually waiting for. Naming `gh pr checks --watch` was the
+    // old wording and it sanctioned exactly what this repo removed — a block with
+    // no budget, no record and no result the loop can read. `ci-wait.cjs` is the
+    // one legitimate wait: it refuses whenever the board has a move, watches the
+    // parents of anything held, and returns on the first PR to settle.
+    const waits = [];
+    if (front.counts.ci) waits.push(`${front.counts.ci} PR(s) still running CI`);
+    if (front.counts.parent) waits.push(`${front.counts.parent} PR(s) held behind a parent still being driven`);
     lines.push(
-      `fixpoint: NO — ${front.counts.ci} PR(s) still running CI. Do NOT end the run: serve them when they report ` +
-      '(watch is legal here — they are the only thing left).'
+      `fixpoint: NO — ${waits.join(' + ')}. Do NOT end the run: serve them when they report ` +
+      '(run ci-wait.cjs — it waits in the foreground and returns on the first PR to settle).'
     );
   } else if (front.left_behind_count && front.left_behind_count === front.actionable_count) {
     // Every actionable item is in a phase the run has already moved past. Saying

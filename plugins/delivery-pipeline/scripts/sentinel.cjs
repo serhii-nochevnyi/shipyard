@@ -40,6 +40,12 @@ const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs
 // only runs in one direction. (Its CLI is behind `require.main`, so requiring
 // it here executes nothing.)
 const { needsHuman, checkpointParentOf: checkpointParentIn } = require(path.join(__dirname, 'front.cjs'));
+// …and the second shared predicate, in its own module for the same reason: this
+// file used to own it outright, so `computeFront` had no `waiting.parent` bucket
+// and offered the tickets the guard was refusing. It lives next door rather than
+// in front.cjs because front.cjs imports it too, and one direction is the whole
+// property. The binding is below, where PARKED exists.
+const { parentIsMoving: parentIsMovingIn } = require(path.join(__dirname, 'parent-moving.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -234,29 +240,17 @@ function stackDepth(id, seen = new Set()) {
   return 1 + stackDepth(parent, seen);
 }
 
-// A child is deferred while its parent PR is still being driven — but never
-// behind a parent that is waiting on a PERSON, or the whole subtree freezes for
-// as long as the human takes.
-// The parent rule, bound to this process's graph. The rule itself is front.cjs's
-// — one predicate, two callers — so the duty chain, the merge gate and the board
-// cannot disagree about which children are landable.
+// The two parent rules, bound to this process's graph. Neither rule is this
+// file's any more — one predicate, two callers — so the duty chain, the merge
+// gate and the board cannot disagree about which children are landable or which
+// are still waiting. `checkpointParentOf` is front.cjs's; `parentIsMoving` is
+// parent-moving.cjs's, including its checkpoint exception (a child is deferred
+// while its parent PR is still being DRIVEN, but never behind a parent that is
+// waiting on a PERSON, or the whole subtree freezes for as long as the human
+// takes) and its PARKED clause, which is why the binding sits here rather than
+// beside the import.
 const checkpointParentOf = (id) => checkpointParentIn(id, tickets, state);
-
-function parentIsMoving(id) {
-  const parent = (tickets[id] || {}).primary_parent;
-  if (!parent) return false;
-  const ps = state[parent];
-  if (!ps || ps.status !== 'pr-open') return false;
-  if (PARKED.has(parent)) return false;
-  // Deliberately `human_checkpoint` and NOT `needsHuman`. This exception is
-  // about driving a child to GREEN, and narrowing it to un-authorized parents
-  // would make the guard answer `wait-parent` for a red child of a
-  // pre-authorized parent while the board still answers `fix` — inventing the
-  // very disagreement the shared predicate exists to remove. The merge-side
-  // hold is enforced below, where it belongs.
-  if ((tickets[parent] || {}).human_checkpoint) return false;
-  return true;
-}
+const parentIsMoving = (id) => parentIsMovingIn(id, { tickets, state, parked: PARKED });
 
 function dutyItems() {
   const items = [];

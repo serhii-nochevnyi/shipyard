@@ -326,6 +326,9 @@ test('missing state is an actionable error, not a crash', () => {
 // combination the same way — through the same predicate, not through two copies
 // of it.
 
+const { parentIsMoving } = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'parent-moving.cjs'
+));
 const { computeFront, needsHuman } = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
 ));
@@ -393,6 +396,12 @@ const agreeTickets = {
   'T-PLAIN': { branch: 'ticket/T-PLAIN', epic: 'epic/21-x' },
   'C-PRE': { primary_parent: 'T-PRE', branch: 'ticket/C-PRE', epic: 'epic/21-x' },
   'C-HOLD': { primary_parent: 'T-HOLD', branch: 'ticket/C-HOLD', epic: 'epic/21-x' },
+  // The ORDINARY hold, added when `parentIsMoving` moved into its own module:
+  // a child of a parent nobody is waiting on personally. The guard has always
+  // answered `wait-parent` here; the board used to answer `merge`, so this row
+  // is what puts the new `waiting.parent` bucket under the agreement invariant
+  // below rather than under a table of its own.
+  'C-PLAIN': { primary_parent: 'T-PLAIN', branch: 'ticket/C-PLAIN', epic: 'epic/21-x' },
 };
 const openGreen = (pr, branch, base) => ({
   status: 'pr-open', pr, draft: false, checks: checks(), gate: conform,
@@ -404,6 +413,7 @@ const agreeState = {
   'T-PLAIN': openGreen(13, 'ticket/T-PLAIN', 'epic/21-x'),
   'C-PRE': openGreen(14, 'ticket/C-PRE', 'ticket/T-PRE'),
   'C-HOLD': openGreen(15, 'ticket/C-HOLD', 'ticket/T-HOLD'),
+  'C-PLAIN': openGreen(16, 'ticket/C-PLAIN', 'ticket/T-PLAIN'),
 };
 
 test('front and sentinel agree on every pre-authorization combination', () => {
@@ -436,6 +446,11 @@ test('front and sentinel agree on every pre-authorization combination', () => {
     // pre-authorization covers that parent's own merge, not merges INTO it
     'C-PRE': { action: 'wait-parent', bucket: 'waiting.human' },
     'C-HOLD': { action: 'wait-parent', bucket: 'waiting.human' },
+    // …and a child of an ORDINARY open parent is the same refusal for a
+    // different reason: nobody is being waited FOR, the guard is driving the
+    // parent itself. Same action, a different bucket, because the remedies are
+    // not the same.
+    'C-PLAIN': { action: 'wait-parent', bucket: 'waiting.parent' },
   };
   for (const [id, want] of Object.entries(expected)) {
     assert.strictEqual(duty[id].action, want.action, `${id} duty says ${duty[id].action}: ${duty[id].why}`);
@@ -472,6 +487,40 @@ test('front and sentinel agree on every pre-authorization combination', () => {
   assert.ok(/pre-authorized/.test(duty['C-PRE'].why), duty['C-PRE'].why);
   assert.ok(/T-HOLD/.test(f.why['C-HOLD']), f.why['C-HOLD']);
   assert.ok(/human_checkpoint/.test(f.why['C-HOLD']), f.why['C-HOLD']);
+  // The ordinary hold names its parent too, and the board says which parent
+  // ci-wait.cjs should be watching.
+  assert.ok(/T-PLAIN/.test(f.why['C-PLAIN']), f.why['C-PLAIN']);
+  assert.strictEqual(f.parent_of['C-PLAIN'], 'T-PLAIN');
+});
+
+test('parentIsMoving is the one both files ask, and it answers over the caller\'s graph', () => {
+  // The extraction's own assertion. Paired with the agreement test above, which
+  // is what actually catches a second copy being reintroduced.
+  assert.strictEqual(parentIsMoving('C-PLAIN', { tickets: agreeTickets, state: agreeState }), true);
+  assert.strictEqual(parentIsMoving('T-PLAIN', { tickets: agreeTickets, state: agreeState }), false,
+    'a root has no parent');
+  assert.strictEqual(parentIsMoving('C-HOLD', { tickets: agreeTickets, state: agreeState }), false,
+    'a checkpoint parent never holds its child from being driven to green');
+  assert.strictEqual(parentIsMoving('C-PRE', { tickets: agreeTickets, state: agreeState }), false,
+    'nor a PRE-AUTHORIZED one: the exception reads human_checkpoint, not needsHuman');
+  assert.strictEqual(
+    parentIsMoving('C-PLAIN', { tickets: agreeTickets, state: agreeState, parked: new Set(['T-PLAIN']) }),
+    false,
+    'a parked parent is not being driven — the guard reads its own PARKED set here',
+  );
+  assert.strictEqual(
+    parentIsMoving('C-PLAIN', { tickets: agreeTickets, state: agreeState, parked: ['T-PLAIN'] }),
+    false,
+    'and an array is accepted as well as a Set, because the two callers hold it differently',
+  );
+  assert.strictEqual(
+    parentIsMoving('C-PLAIN', {
+      tickets: agreeTickets,
+      state: { ...agreeState, 'T-PLAIN': { ...agreeState['T-PLAIN'], status: 'merged' } },
+    }),
+    false,
+    'a landed parent has already moved the base',
+  );
 });
 
 test('the shared predicate is the one both files import', () => {
