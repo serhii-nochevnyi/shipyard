@@ -11,6 +11,10 @@ workspace/
 .claude-state/
 # Legacy single-file credentials location, migrated by `make runtime-dirs`
 .claude-credentials.json
+# Per-session state of the stop-gate hook: how many rounds of THIS run it has
+# already refused. `.planning/graph/` is otherwise tracked, and a session id
+# belongs in no commit.
+.planning/graph/stop-gate-ledger.json
 .copilot-mcp-oauth/
 
 # OS cruft
