@@ -10,6 +10,16 @@
 //   log-event.cjs attempt ticket=T-02-03 pr=445 n=2 role=ci-fix model=opus signature=9f2a outcome=pushed
 //   log-event.cjs fix_round ticket=T-02-05 pr=447 outcome=no-op pushed=false
 //   log-event.cjs reuse_scan ticket=T-02-03 hits=2 verdict=fresh
+//   log-event.cjs base_merge ticket=T-02-03 pr=445 base=epic/02-x head=9f2ab1c
+//
+// `base_merge` is the guard's `base-merge` duty recording itself: a moved base
+// merged into a ticket branch. It went out under an ad-hoc slug for a while
+// because the alternative was logging it as an `attempt` — which would charge a
+// mechanical merge to the ticket's REPAIR record, spending an attempt from the
+// budget on work no hypothesis was ever wrong about (`attempt-history.cjs`
+// deliberately does not count it). Declared here so the name is one every reader
+// already knows, and so the four fields that make it readable are named
+// somewhere other than a prompt.
 //
 // Some events belong to a script and are refused here — see OWNED_BY_SCRIPTS
 // below, which says for each one what writing it by hand would break. The journal
@@ -185,6 +195,27 @@ for (const pair of pairs) {
     process.exit(2);
   }
   rec[key] = coerce(pair.slice(eq + 1));
+}
+
+// The fields a DECLARED event needs to be worth reading back. Warned about, not
+// refused — same rule as the role check below, and for the same reason: losing a
+// real event over its label is the more expensive mistake, and a half-labelled
+// line is still evidence that the act happened. But `base_merge` with no `base`
+// cannot answer the one question anyone asks of it ("which base moved in, into
+// which head"), so it stops being silent.
+const DECLARED_FIELDS = {
+  base_merge: ['ticket', 'pr', 'base', 'head'],
+};
+const declared = DECLARED_FIELDS[event];
+if (declared) {
+  const missing = declared.filter((k) => rec[k] === undefined || rec[k] === '');
+  if (missing.length) {
+    console.error(
+      `log-event: WARNING ${event} declares ${declared.join(', ')} and this one is missing ` +
+      `${missing.join(', ')} — logging it anyway, but a reader cannot reconstruct what happened. ` +
+      `Full form: log-event.cjs ${event} ${declared.map((k) => `${k}=…`).join(' ')}`
+    );
+  }
 }
 
 // An invented role is not a labelling nit: `pipeline-config.cjs model <role>`
