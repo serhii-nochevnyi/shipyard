@@ -512,7 +512,7 @@ tickets:
     files: [Dockerfile.base, Dockerfile, Makefile, tests/smoke/codex-shipyard-smoke.sh, tests/smoke/base-image-smoke.sh]
     risk: medium
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor
     epic: epic/25-the-conveyor-follows-the-models-it-runs-on
     primary_parent: null
@@ -560,7 +560,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/path-owner.cjs, plugins/delivery-pipeline/scripts/validate-graph.cjs, plugins/delivery-pipeline/scripts/scope-gate.cjs, plugins/delivery-pipeline/scripts/base-merge.cjs, tests/unit/path-owner.test.cjs, tests/smoke/graph-validator-smoke.sh, tests/smoke/worktree-gates-smoke.sh, tests/fixtures]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-26-01-one-ownership-matcher-exact-by-construct
     epic: epic/26-positive-evidence-before-a-mutation
     primary_parent: null

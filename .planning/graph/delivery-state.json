@@ -202,29 +202,18 @@
   "T-24-02": {
     "branch": "ticket/T-24-02-check-state-has-one-vocabulary",
     "pr": 31,
-    "status": "pr-open",
-    "draft": true,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/31",
-    "pr_base": "epic/24-the-conveyor-stops-interrupting-itself",
-    "pr_created_at": "2026-09-07T10:08:57Z",
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false
-    },
     "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-07T10:09:02.180Z"
+    "reapable": true,
+    "since": "2026-09-07T10:48:12.287Z"
   },
   "T-24-03": {
     "branch": "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro",
     "pr": null,
     "status": "pending",
-    "base": "ticket/T-24-02-check-state-has-one-vocabulary",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
     "ready": true,
     "reapable": false,
@@ -345,5 +334,195 @@
     },
     "reapable": false,
     "since": "2026-09-07T09:49:26.042Z"
+  },
+  "T-25-01": {
+    "branch": "ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/25-the-conveyor-follows-the-models-it-runs-on",
+    "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-25-02": {
+    "branch": "ticket/T-25-02-a-codex-agent-carries-effort-not-a-model",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor",
+    "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
+    "ready": false,
+    "blocked_by": [
+      "T-25-01",
+      "T-24-07"
+    ],
+    "blocked_reasons": {
+      "T-25-01": "parent has no branch yet (nothing to cascade from)",
+      "T-24-07": "cross-phase parent must land on main first (phase 24 epic still ahead)"
+    },
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-25-03": {
+    "branch": "ticket/T-25-03-the-prose-names-the-models-the-runtimes",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-25-02-a-codex-agent-carries-effort-not-a-model",
+    "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
+    "ready": false,
+    "blocked_by": [
+      "T-25-02",
+      "T-24-07"
+    ],
+    "blocked_reasons": {
+      "T-25-02": "parent has no branch yet (nothing to cascade from)",
+      "T-24-07": "cross-phase parent must land on main first (phase 24 epic still ahead)"
+    },
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-01": {
+    "branch": "ticket/T-26-01-one-ownership-matcher-exact-by-construct",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/26-positive-evidence-before-a-mutation",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-03": {
+    "branch": "ticket/T-26-03-readiness-needs-positive-evidence",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/26-positive-evidence-before-a-mutation",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": false,
+    "blocked_by": [
+      "T-24-11",
+      "T-24-10"
+    ],
+    "blocked_reasons": {
+      "T-24-11": "cross-phase parent must land on main first (phase 24 epic still ahead)",
+      "T-24-10": "cross-phase parent must land on main first (phase 24 epic still ahead)"
+    },
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-04": {
+    "branch": "ticket/T-26-04-gc-removes-only-what-is-proven-landed",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/26-positive-evidence-before-a-mutation",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-05": {
+    "branch": "ticket/T-26-05-locks-prove-ownership-snapshots-carry-a",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-26-03-readiness-needs-positive-evidence",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": false,
+    "blocked_by": [
+      "T-26-03"
+    ],
+    "blocked_reasons": {
+      "T-26-03": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-06": {
+    "branch": "ticket/T-26-06-the-codex-config-merge-writes-toml-the-r",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/26-positive-evidence-before-a-mutation",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-07": {
+    "branch": "ticket/T-26-07-tuning-merges-another-owner-s-list-never",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/26-positive-evidence-before-a-mutation",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-08": {
+    "branch": "ticket/T-26-08-jira-identity-is-namespaced-by-repositor",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/26-positive-evidence-before-a-mutation",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-09": {
+    "branch": "ticket/T-26-09-workflow-input-is-validated-before-any-d",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/26-positive-evidence-before-a-mutation",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-10": {
+    "branch": "ticket/T-26-10-left-behind-is-evidence-not-arithmetic",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-26-05-locks-prove-ownership-snapshots-carry-a",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": false,
+    "blocked_by": [
+      "T-26-05"
+    ],
+    "blocked_reasons": {
+      "T-26-05": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-11": {
+    "branch": "ticket/T-26-11-unavailable-is-not-empty",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-26-10-left-behind-is-evidence-not-arithmetic",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": false,
+    "blocked_by": [
+      "T-26-10"
+    ],
+    "blocked_reasons": {
+      "T-26-10": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-02": {
+    "branch": "ticket/T-26-02-a-corrupt-configuration-permits-no-mutat",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-26-11-unavailable-is-not-empty",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": false,
+    "blocked_by": [
+      "T-26-11",
+      "T-25-03"
+    ],
+    "blocked_reasons": {
+      "T-26-11": "parent has no branch yet (nothing to cascade from)",
+      "T-25-03": "cross-phase parent must land on main first (phase 25 epic still ahead)"
+    },
+    "reapable": false,
+    "since": "2026-09-07T10:25:41.319Z"
   }
 }

@@ -132,3 +132,25 @@
 {"ts":"2026-09-07T10:13:41.024Z","event":"dispatch","ticket":"T-24-03","role":"executor","pr":null,"by":"dispatch-record"}
 {"ts":"2026-09-07T10:13:46.386Z","event":"status_change","ticket":"T-24-01","from":"pr-open","to":"merged","pr":27}
 {"ts":"2026-09-07T10:16:59.700Z","event":"dispatch","ticket":"T-24-02","role":"pr-sentinel","pr":31,"by":"dispatch-record"}
+{"ts":"2026-09-07T10:25:38.251Z","event":"attempt","ticket":"T-24-02","pr":31,"n":1,"role":"review-fix","model":"sonnet","outcome":"pushed","signature":"none","head":"381903a754cc10d2aa2f07bbc7d6c2702676ab0f","hypothesis":"ghChecks() in sentinel.cjs and state-sync.cjs collapsed a failed/unreadable gh pr checks call into the same shape as a genuine zero-checks answer, so none_reported read true off a call that never answered; fixed by returning a synthetic unreadable row that classify() fails closed to pending"}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-25-01","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-25-02","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-25-03","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-01","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-03","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-04","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-05","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-06","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-07","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-08","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-09","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-10","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-11","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:25:41.319Z","event":"status_change","ticket":"T-26-02","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-07T10:27:04.456Z","event":"dispatch","ticket":"T-24-02","role":"arch-review","pr":31,"by":"dispatch-record"}
+{"ts":"2026-09-07T10:33:02.813Z","event":"degenerate_green","ticket":"T-24-02","pr":31,"findings":0,"modes":"none"}
+{"ts":"2026-09-07T10:37:58.888Z","event":"attempt","ticket":"T-24-02","pr":31,"n":2,"role":"review-fix","model":"sonnet","outcome":"pushed","signature":"none","head":"45303ae1b2f2333c8432dbf8dbfc60b492b8cb3f","hypothesis":"ci-wait.cjs's checksOf() had the identical null-vs-empty collapse as the two files fixed in n=1: JSON.parse(r.stdout || '[]') parsed a failed gh call's empty stdout the same as a genuine empty answer; fixed to only treat empty stdout as no-checks when exit status is 0, else null/unreachable. Also clarified two imprecise comments Copilot flagged as suppressed in sentinel.cjs/state-sync.cjs"}
+{"ts":"2026-09-07T10:42:09.473Z","event":"dispatch","ticket":"T-24-02","role":"arch-review","pr":31,"by":"dispatch-record"}
+{"ts":"2026-09-07T10:47:17.375Z","event":"degenerate_green","ticket":"T-24-02","pr":31,"findings":0,"modes":"none"}
+{"ts":"2026-09-07T10:48:07.122Z","event":"merge","ticket":"T-24-02","pr":31,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T10:48:12.287Z","event":"status_change","ticket":"T-24-02","from":"pr-open","to":"merged","pr":31}

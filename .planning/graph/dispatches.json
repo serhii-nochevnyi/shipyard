@@ -1,11 +1,5 @@
 {
   "tickets": {
-    "T-24-02": {
-      "role": "pr-sentinel",
-      "at": "2026-09-07T10:16:59.700Z",
-      "fingerprint": "6beb31281399c0e0",
-      "pr": 31
-    },
     "T-24-03": {
       "role": "executor",
       "at": "2026-09-07T10:13:41.024Z",
