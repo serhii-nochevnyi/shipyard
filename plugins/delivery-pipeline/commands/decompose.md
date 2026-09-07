@@ -401,11 +401,11 @@ order so parents exist before links):
      label);
    - description (English, concise projection — NOT the whole plan): Goal, Scope,
      Acceptance criteria (from the PLAN body), risk, branch (`ticket/...`),
-     `pr_base`, and a pointer line "Source of truth:
-     `<owner>/<repo>:<plan path>` (this issue is a generated projection)" —
-     the `<owner>/<repo>` prefix is what the legacy-label lookup above
-     matches on, so it is written on every issue from this ticket onward,
-     not only during a migration;
+     `pr_base`, and a pointer line written as ONE line, with no break inside
+     it: `Source of truth: <owner>/<repo>:<plan path> (this issue is a generated projection)`.
+     The `<owner>/<repo>` prefix is what the legacy-label lookup above matches
+     on, so it is written on every issue from this ticket onward, not only
+     during a migration;
    - parent/epic link to the phase Epic (when epics are enabled);
    - for each `depends_on`, a "is blocked by" issue link to that dependency's
      issue (`createIssueLink`; pick the link type via `getIssueLinkTypes`).
