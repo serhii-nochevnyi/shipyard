@@ -45,8 +45,9 @@ The same structure is written to `.planning/graph/delivery-front.json`
 ```text
 actionable now  execute  — ready, no branch yet          → Step 3   [main loop]
                 publish  — branch pushed, PR missing     → Step 3 phase C [main loop]
-                fix      — open PR with failing checks, or unresolved review
-                           threads (serviced AHEAD of a running CI)  [SENTINEL]
+                fix      — open PR with failing checks, a base that MOVED under
+                           it (`base-merge`), or unresolved review threads
+                           (both serviced AHEAD of a running CI)  [SENTINEL]
                 finalize — green: arch-review verdict, conform trailer, undraft
                            (the guard splits it into `arch-review` + `undraft`,
                            so a faulted verdict cannot ready the PR) [SENTINEL]
@@ -56,14 +57,20 @@ waiting         ci       — checks still running (NOT a fixpoint; NOT a reason 
                            actionable, because handing it out twice is duplicate
                            work; not parked, because nobody gave up; not a
                            fixpoint, because the result still has to be collected
-                parent   — stacked on a parent whose PR is still open [SENTINEL]
+                parent   — stacked on a parent whose PR is still open; `duty`
+                           answers `wait-parent` for the same PR [SENTINEL]
                            Work it now and you buy a green the base move undoes:
                            CI re-runs on different code, reviewers re-read a
                            changed diff, resolved threads can reopen. Both the
                            front and `duty` come back shallowest-first so the
                            roots are reached first by default. A parent waiting
                            on a PERSON never holds its children.
-                merge (human)/checkpoint — a human's move (fixpoint-compatible)
+                merge (human)/checkpoint — a human's move (fixpoint-compatible):
+                           an unanswered `human_checkpoint`, a certified draft in
+                           a repo where no check ran, or `CHANGES_REQUESTED`
+                           standing with ZERO unresolved threads (`wait-human` —
+                           a fixer has nothing to service, so a reviewer must
+                           re-review or dismiss it)
 parked          blocked  — deps unsatisfied, or parked by this run
 ```
 
@@ -112,11 +119,14 @@ only when the front is empty: everything is delivered OR only blockers remain.
 **The two ways runs have actually broken this rule** (both observed, both cost a
 whole session's motion — recognize them in yourself):
 
-1. **Serializing on CI.** You push a fix and then wait for `gh pr checks --watch`
-   while `execute:`/`fix:` items sit untouched. That wait belongs to the SENTINEL,
-   never to the main loop: leave the PR to the guard, go serve `execute`/`publish`,
-   and read the guard's report when it lands. "I'll do the rest after the merge"
-   is the same defect wearing a different hat.
+1. **Serializing on CI.** You push a fix and then camp on that one PR's checks
+   while `execute:`/`fix:` items sit untouched. Nobody watches a PR by hand — not
+   you and not the guard, which serves every PR it holds and would serialize all
+   of them on one. Leave the PR to the guard, go serve `execute`/`publish`, and
+   read its report when it lands. The one legitimate wait is `ci-wait.cjs`, and
+   it is a script precisely so this stays mechanical: it REFUSES while anything
+   is actionable or a ticket is with an agent (loop-back item 5 below). "I'll do
+   the rest after the merge" is the same defect wearing a different hat.
 2. **Reading a human gate as "do nothing".** `human_checkpoint: true` and
    "show me before you open the PR" gate the **publish/merge step only** — never
    the work. Drive the ticket all the way to the gate: worktree, code, verify,
@@ -146,8 +156,8 @@ above. So they are split:
 
 ```text
 main loop   execute / publish  — worktrees, executors, new PRs, the cascade
-SENTINEL    ci-fix / review-fix / arch-review / undraft / merge / wait-ci
-            — everything about an OPEN PR,
+SENTINEL    ci-fix / base-merge / review-fix / arch-review / undraft / merge
+            / wait-ci / wait-parent / wait-human — everything about an OPEN PR,
             until it is merged into the epic, parked, or handed to a human
 ```
 
@@ -170,10 +180,13 @@ SENTINEL    ci-fix / review-fix / arch-review / undraft / merge / wait-ci
 - **Fallback: a duty pass every round (Codex, or no background agents).** The
   mandate does not change, only who executes it: at the TOP of each round, before
   taking new work, run `sentinel.cjs duty` and serve every actionable item —
-  ci-fix, review-fix, arch-review, undraft, merge — then continue with
-  `execute`/`publish`. Every one of those except `undraft` (a bare `gh pr ready`,
-  no agent) is a role `pipeline-config.cjs model <role>` resolves — pass THAT,
-  never the front's bucket name.
+  ci-fix, base-merge, review-fix, arch-review, undraft, merge — then continue with
+  `execute`/`publish`. Three of those are MECHANICAL steps you run yourself, with
+  no agent and no model to resolve: `undraft` is a bare `gh pr ready`, `merge` is
+  `sentinel.cjs merge`, `base-merge` is `base-merge.cjs` in the ticket's worktree.
+  The rest — ci-fix, review-fix, arch-review — are roles
+  `pipeline-config.cjs model <role>` resolves: pass THAT, never the front's
+  bucket name.
   Announce it: `⚠ no background agent → sentinel duty runs inline each round`.
   `pipeline.sentinel: off` also lands here (no guard, main loop does everything).
 
@@ -869,16 +882,27 @@ and do not open PRs.
      IN PARALLEL. Put the ticket's `reuse_candidates` INSIDE `<TICKET-CONTRACT>` with
      the instruction to read each one before writing and to build on it rather than
      add a parallel layer — outside the bounds the agent is told to ignore it.
-4a. **Record the dispatch, in the same breath as making it.** For every ticket you
-    just handed to an executor:
+4a. **Record the dispatch — AFTER the launch returned, never before.** The launch
+    above returns immediately with an id (the Workflow tool a task id, the Agent
+    tool an agent id); once you hold that id the agent exists, and only then, for
+    every ticket you just handed out:
     `dispatch-record.cjs mark <T> executor` (add `--graph <project>/.planning/graph`
-    when you are not standing in the project). It rewrites the board so those
-    tickets read `waiting: dispatched` instead of `execute`, which is what keeps
-    the stop gate from refusing a turn over work that is already running — the
-    board is otherwise recomputed only at step 8, long after the wave is out.
-    The record needs no cleanup to be safe: it lifts when the ticket's state moves
-    and it times out on its own. Clear it explicitly at Phase C, when the work
-    comes back.
+    when you are not standing in the project). Keep the id in your own turn — the
+    record stores the ticket, the role and the time, and nothing else — because it
+    is what you collect and clear against.
+    **Marking first is how the board comes to describe an agent that does not
+    exist**: a launch that fails (the tool refused, Workflow is absent on this
+    runtime and the Agent fallback was not taken) leaves a 90-minute dispatch the
+    front reports as `waiting: dispatched` — work in flight that is not. The stop
+    gate stops honouring a mark that old for exactly this reason
+    (`SHIPYARD_STOP_GATE_DISPATCH_SUSPECT_MS`, 45m), and that is a backstop, not a
+    licence to mark early.
+    The mark rewrites the board so those tickets read `waiting: dispatched`
+    instead of `execute`, which is what keeps the stop gate from refusing a turn
+    over work that is already running — the board is otherwise recomputed only at
+    step 8, long after the wave is out. It needs no cleanup to be safe: an
+    executor's record lifts when a branch or a PR appears, and it times out on its
+    own. Clear it explicitly at Phase C, when the work comes back.
 
 4b. (TUNE, optional) Pre-commit/pre-push review with GSD adapters — cheaper to catch
     remarks before the PR bots: `/gsd-code-review <phase> --fix` or
@@ -952,9 +976,12 @@ prompt:        ${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md
 spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose', model, ... })
 ```
 
-Record that hand-over the same way the executors' was —
-`dispatch-record.cjs mark <T> pr-sentinel` for every ticket on the guarded list —
-and clear each one when the guard's report comes back for it. This half is not an
+Record that hand-over the same way the executors' was, and in the same order —
+the `Agent` call returns an agent id, and THEN
+`dispatch-record.cjs mark <T> pr-sentinel` for every ticket on the guarded list;
+a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
+one when the guard's report comes back for it — a `pr-sentinel` record also lifts
+by itself when the PR merges or its base moves. This half is not an
 optimisation: posting the guard and NOT waiting for it is the documented protocol,
 so `fix`/`finalize`/`merge` are dispatched BY DESIGN, and without the record the
 board mis-reports the guard's buckets on every healthy run. New PRs handed to the
@@ -1040,13 +1067,13 @@ loop:
            - the prior-attempt record: the output of `attempt-history.cjs <T>`
        'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
        a push happened → step d
-     pending → the SENTINEL waits here (`gh pr checks <pr> --watch`) — that is its
-       job. On the fallback path YOU do not: leave the PR in `waiting: ci`, EXIT
-       this PR's cycle, serve the rest of the front, and pick it up next round.
-       Watching is legal for the main loop only when state-sync says
-       `front: 0 actionable now` and no guard is running. Serializing the whole
-       run behind one CI queue is the single most expensive stall this pipeline
-       has produced.
+     pending → nobody watches this PR: leave it in `waiting: ci`, EXIT this PR's
+       cycle, serve the rest of the front, and pick it up next round. The guard
+       does the same — it holds every guarded PR, so a wait on one is a wait on
+       all of them, and its step 4 hands them back instead. The ONE legitimate
+       wait is `ci-wait.cjs` (loop-back item 5), which refuses unless the board
+       has no other move. Serializing the whole run behind one CI queue is the
+       single most expensive stall this pipeline has produced.
      no checks reported at all → state-sync flags it; treat "green" as "nothing ran"
        and say so to the human rather than reporting the PR as verified
 
@@ -1164,7 +1191,7 @@ itself. The round order:
 
 1. `state-sync.cjs` → for each open PR determine `needsCiFix` (checks
    failing) and `needsReviewFix` (`reviewers.cjs unresolved` > 0). Those that are waiting
-   on pending checks — skip them this round (the next one after watch will pick them up).
+   on pending checks — skip them this round; the next round picks them up.
 2. Sign each failing PR and take its verdict FIRST (a1–a3). A `flake`, a
    `flake_candidate` or a `plan_defect` is served THERE and does not enter the
    round — a quarantined or plan-defective PR handed to a fixer is the dispatch
@@ -1199,7 +1226,8 @@ itself. The round order:
    the backstop reads `attempt-history.cjs <T> --json` → `attempts`
    (MAX = `pipeline.max_attempts`).
    Then re-run state-sync: if the front still has actionable items, serve THEM
-   while CI runs — only `--watch` when the front is otherwise empty (step a).
+   while CI runs — `ci-wait.cjs` (loop-back item 5) is the wait, and only once the
+   front has no other move: it refuses while it has.
 4. Then — step **c** of the cycle (arch-review, `model: opus`), the conform gate
    and the `sentinel.cjs merge` for each PR in the main loop, as above. This is
    judgment, finalization and a merge — do NOT hand any of it to Workflow.
@@ -1266,10 +1294,14 @@ so assume you are on that side. Either way, two consequences:
   `escalation-record.cjs mark` when a human must decide, `drift-record.cjs mark`
   when the plan predates what shipped. A parked item leaves the front; an ignored
   one does not.
-The gate is deliberately narrow: it is silent when only CI is pending (that case
-is the loop-back's item 5, `ci-wait.cjs` — the gate cannot help you wait), when every actionable
-item is left behind in a phase already moved past, on a board too old to describe
-a live run, and on a stop it has already blocked once. It is NOT silent on a board
+The gate is deliberately narrow: it is silent when every actionable item is left
+behind in a phase already moved past, on a board too old to describe a live run,
+and once a session has spent its refusals — one per cascade ROUND (a refusal
+repeats only after the board advanced: a newer `generated_at`, or a journalled
+merge/push since the last one), capped by `SHIPYARD_STOP_GATE_MAX_BLOCKS` (12),
+and falling back to one per turn wherever a round cannot be proven. It is NOT
+silent when only CI is pending — that board is a WAIT, not a fixpoint, so it
+blocks and names `ci-wait.cjs` (the loop-back's item 5). It is NOT silent on a board
 the run has moved past without re-syncing: a journalled merge or push after
 `generated_at` proves the board is behind reality, whatever its age, and that is
 the shape that ended a run mid-cascade with three PRs to go. It is also silent over a ticket an

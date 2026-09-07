@@ -41,9 +41,12 @@ guessing, but the message names a missing graph, which is not what went wrong.
 2. node $SHIPYARD_ROOT/scripts/sentinel.cjs duty --json  # what each PR needs now
 3. serve every actionable item (below); items are independent — order them by
    what is unblocked, not by ticket number
-4. nothing actionable but something is still `wait-ci` → wait for CI and re-tick:
-   `gh pr checks <pr> --watch` on the PR whose checks are running (this is your
-   job, not a stall: the main loop is elsewhere), then go to 1
+4. nothing actionable but something is still `wait-ci` → your watch is over FOR
+   NOW: write the report and RETURN. Do NOT wait on a PR's checks. You are ONE
+   agent serving every guarded PR, so a wait on one of them is a wait on all of
+   them — the opportunity cost `ci-wait.cjs` was written to avoid. The main loop
+   owns that one legitimate wait and re-posts a guard once the checks settle, so
+   name every still-moving PR in the report: that list is what it waits for.
 5. `sentinel: clear` → write the report and finish
 ```
 
@@ -93,6 +96,28 @@ Verification commands, make the SMALLEST fix inside the ticket's `files_modified
 scope, re-verify locally, commit `fix(<T>): <what was wrong>`, push. A fix that
 needs out-of-scope changes is `escalate: out-of-scope` — park the PR, keep the
 others moving. Follow `references/ci-fix.md` — it is the same contract.
+
+**`base-merge`** — the base moved under the branch. TWO different facts with one
+remedy, and the duty does not blur them: `mergeStateStatus: BEHIND`, or
+`behind_by` above zero, is STALENESS — the branch is simply behind its base;
+`mergeStateStatus: DIRTY` is a merge CONFLICT — the two editions disagree about a
+line. `front.cjs`'s `baseMoved` reports them under different words for that
+reason, and the second is the one that can hand you real work rather than a
+fast-forward. Either way every check on that branch was measured against a merge
+base that no longer exists, so `duty` puts this AHEAD of unresolved threads and
+of a still-running CI — a thread answered now is answered against the wrong diff.
+No agent and no model: run the script in the ticket's worktree yourself, then
+push and go to 1.
+
+```bash
+node $SHIPYARD_ROOT/scripts/base-merge.cjs <T> --worktree <worktree> --base <base ref>
+```
+
+It takes the BASE's edition for a conflict in a file the ticket does not declare
+and stops on a conflict in a DECLARED one, which is real work: serve that half as
+`ci-fix` (`references/ci-fix.md` names this merge as its step 0). **Never
+rebase** — see the hard rule below; the PR is pushed, so a rebase is a
+force-push.
 
 **`review-fix`** — reviewer feedback. Read ALL of it in one call:
 `node $SHIPYARD_ROOT/scripts/reviewers.cjs feedback <pr> [--repo owner/name]`.
@@ -193,16 +218,25 @@ does not exist) and a base outside the stack. Park those as `awaiting-human`,
 name them in the report, and stop offering them — a guard that re-attempts an
 impossible merge every tick never finishes its watch.
 
-**`wait-ci`** — nothing to do but come back. It is not a fixpoint.
+**`wait-ci`** — nothing to do on this PR. It is not a fixpoint, and it is not
+yours to sit on either: hand it back per step 4 above.
 
-**`human` / `human-merge`** — out of your hands (a `human_checkpoint` ticket, or
-a PR targeting the integration branch). Record it in the report and move on.
+**`wait-human`** — `CHANGES_REQUESTED` stands with ZERO unresolved threads. A
+fixer has nothing to service — every thread is closed, and the verdict is lifted
+neither by resolving them nor by pushing — so a reviewer must re-review or
+dismiss it. Nobody owes work here, which is why the board answers `waiting.human`
+and not `parked`. Name it in the report and move on; do NOT dispatch review-fix
+at it.
+
+**`human` / `human-merge`** — out of your hands (a `human_checkpoint` ticket, a
+certified draft in a repo where nothing ran, or a PR targeting the integration
+branch). Record it in the report and move on.
 
 ## After EVERY push
 ```bash
 git -C <worktree> rev-parse HEAD                     # must equal the pushed head
 node $SHIPYARD_ROOT/scripts/reviewers.cjs reinit <pr> [--repo owner/name]
-node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<attempts> \
+node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> \
      role=<ci-fix|review-fix> model=<tier> outcome=<pushed|no-op|escalate|flake> \
      signature=<sig> head=<sha> hypothesis="<one sentence: what you believed was wrong>" \
      --graph <project>/.planning/graph
@@ -214,15 +248,20 @@ re-propose what this one already ruled out. Write the fixer's own sentence, neve
 an invented one: an invented hypothesis enters the record as something tried and
 excluded. `outcome=flake` is logged at an UNCHANGED `n`.
 
-attempts += 1 per round on a PR; `attempts > maxAttempts` → park it `blocked`
-with a summary of what was tried and keep guarding the rest. **That backstop stays
-even though the ladder no longer reads the counter:** a signature that oscillates
-between two values is never the same as the last one, so it never reads `repeat`,
-and it never reaches K distinct, so it never reads `plan_defect` — it dodges both
-rules, and nothing else would ever stop it. Copilot does not
-re-review a push on its own, and CodeRabbit needs the explicit ask — a fix that
-is never re-reviewed sits at "unresolved" forever, which is why reinit is not
-optional.
+The attempt number is READ, never kept: `attempt-history.cjs <T> --json --graph
+<project>/.planning/graph` gives `next_n` (the `n=` this round logs) and
+`attempts` (how many are already charged). The log line above IS the increment —
+you hold no counter of your own, so a re-posted guard continues at N+1 instead of
+handing a PR that already burned four rounds five more. `attempts > maxAttempts`
+→ park it `blocked` with a summary of what was tried and keep guarding the rest.
+**That backstop stays even though the ladder no longer reads the counter:** a
+signature that oscillates between two values is never the same as the last one,
+so it never reads `repeat`, and it never reaches K distinct, so it never reads
+`plan_defect` — it dodges both rules, and nothing else would ever stop it.
+
+Copilot does not re-review a push on its own, and CodeRabbit needs the explicit
+ask — a fix that is never re-reviewed sits at "unresolved" forever, which is why
+reinit is not optional.
 
 ## Hard rules
 - **Never merge the epic → integration PR.** The phase lands on the default
@@ -257,11 +296,18 @@ optional.
   (`dispatch-record.cjs`), which is what stops the run being told those tickets
   are un-taken while you work. Run `dispatch-record.cjs clear <T>` as soon as a PR
   is merged, parked, or handed to a person, and `mark <T> <role>` again if you
-  hand it to a fixer you do not wait for. Neither is a cleanup you can forget
-  safely-but-late: the record lifts by itself when the ticket's state moves and
-  it times out regardless, so the cost of forgetting is a stale line on the board
-  rather than lost work — but a clear at the right moment is what keeps the next
-  round's ordering honest.
+  hand it to a fixer you do not wait for — **after that fixer is actually
+  launched, never before.** A mark ahead of a launch that then fails (the tool
+  refused, the fallback was not taken) leaves a dispatch the front reports as
+  `waiting.dispatched` for 90 minutes: work in flight that is not. The launch's
+  own id (the task id the Workflow tool returns, or the agent id the Agent tool
+  returns) belongs in your report — `mark` stores the ticket, the role and the
+  time, and nothing else. Neither call is a cleanup you can forget
+  safely-but-late: the record lifts on the OWNER'S OUTPUT — your own dispatch
+  when the PR merges or its base moves, a fixer's when the PR's head moves — and
+  it times out regardless, so the cost of forgetting is a stale line on the
+  board rather than lost work. A clear at the right moment is what keeps the
+  next round's ordering honest.
 - One PR blocked does NOT end your watch. Park it and serve the rest.
 - A PR with no CI checks reported is not verified — say "nothing ran" in the
   report rather than calling it green.
