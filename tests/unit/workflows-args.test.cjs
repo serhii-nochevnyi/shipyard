@@ -24,6 +24,7 @@
 // parallel(...)` outright. Same wrap, same five bindings.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 
@@ -219,6 +220,89 @@ test('a throwing judge is a drifted verdict, not a gap', async () => {
   );
   assert.strictEqual(value.length, 3);
   assert.deepStrictEqual([...new Set(value.map((v) => v.verdict))], ['drifted']);
+});
+
+// T-26-14 — executors.mjs returns a REFERENCE to the two documents it makes
+// the agent write in its own worktree (the workflow script itself has no
+// filesystem access — the dispatched subagent does, and it is the one
+// writing them), not the documents themselves. Measured 2026-09-07: the
+// twenty largest tool results in an 8.8MB orchestrator transcript were 38%
+// of all tool-result bytes, every one a workflow completion carrying `prBody`
+// and `evidence` inline (up to 37k characters), re-sent on every later turn.
+suite('executors.mjs — a returned reference, not a document (T-26-14)');
+
+test('a committed ticket returns paths and a short summary, never the documents, and no field exceeds 500 chars', async () => {
+  const worktreePath = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-executors-'));
+  try {
+    // Stand-in for the real subagent: it has file access the workflow script
+    // does not, so it writes the two documents; the workflow only ever gets
+    // paths and a short summary back. Sized past today's observed 11k-char
+    // prBody and the 500-char cap on `summary`, to prove both boundaries hold.
+    const longPrBody = `Ticket: T-99-01\n${'x'.repeat(11000)}`;
+    const longEvidence = `$ node tests/unit/x.test.cjs\n${'y'.repeat(9000)}`;
+    const longSummary = 'z'.repeat(900);
+    const ticket = { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath };
+    const stubAgent = async (prompt) => {
+      // The real agent is told exactly where to write — assert the prompt
+      // actually names both paths, so a future edit can't drop the instruction
+      // while leaving the workflow's own path formula unchanged.
+      assert.ok(prompt.includes(path.join(worktreePath, '.shipyard-pr-body.md')), 'prompt must name the PR-body path');
+      assert.ok(prompt.includes(path.join(worktreePath, '.shipyard-evidence.md')), 'prompt must name the evidence path');
+      fs.writeFileSync(path.join(worktreePath, '.shipyard-pr-body.md'), longPrBody);
+      fs.writeFileSync(path.join(worktreePath, '.shipyard-evidence.md'), longEvidence);
+      return { id: ticket.id, status: 'committed', summary: longSummary };
+    };
+    const { value } = await run('executors', { tickets: [ticket] }, { agent: stubAgent });
+    assert.strictEqual(value.length, 1);
+    const r = value[0];
+    for (const [k, v] of Object.entries(r)) {
+      if (typeof v === 'string') {
+        assert.ok(v.length <= 500, `field "${k}" is ${v.length} chars, over the 500-char cap`);
+      }
+    }
+    assert.strictEqual(r.status, 'committed');
+    assert.ok(!('prBody' in r), 'prBody must not cross back — that is the whole point of this ticket');
+    assert.ok(!('evidence' in r), 'evidence text must not cross back — that is the whole point of this ticket');
+    assert.ok(path.isAbsolute(r.prBodyPath), `prBodyPath must be absolute: ${r.prBodyPath}`);
+    assert.ok(r.prBodyPath.startsWith(worktreePath), `prBodyPath must be inside the worktree: ${r.prBodyPath}`);
+    assert.ok(r.evidencePath.startsWith(worktreePath), `evidencePath must be inside the worktree: ${r.evidencePath}`);
+    assert.strictEqual(
+      fs.readFileSync(r.prBodyPath, 'utf8'), longPrBody,
+      'prBodyPath content must be byte-identical to what prBody used to carry, so gh pr create --body-file needs no other change'
+    );
+    assert.strictEqual(
+      fs.readFileSync(r.evidencePath, 'utf8'), longEvidence,
+      'evidencePath content must be byte-identical to what evidence used to carry'
+    );
+  } finally {
+    fs.rmSync(worktreePath, { recursive: true, force: true });
+  }
+});
+
+test('a blocked ticket returns its reason inline — no file, no path, the loop acts without a file read', async () => {
+  const ticket = { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', worktreePath: '/does/not/exist' };
+  const reason = 'the plan requires editing deliver.md, which is out of files_modified';
+  const { value } = await run('executors', { tickets: [ticket] }, {
+    agent: async () => ({ id: ticket.id, status: 'blocked', summary: reason }),
+  });
+  assert.strictEqual(value.length, 1);
+  const r = value[0];
+  assert.strictEqual(r.status, 'blocked');
+  assert.strictEqual(r.summary, reason);
+  assert.strictEqual(r.prBodyPath, '', 'a blocked ticket writes no PR body');
+  assert.strictEqual(r.evidencePath, '', 'a blocked ticket writes no evidence file');
+});
+
+test('a dead or throwing agent still returns a capped reason inline, with no worktreePath required', async () => {
+  const ticket = { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99' };
+  const dead = await run('executors', { tickets: [ticket] }, { agent: async () => null });
+  assert.strictEqual(dead.value[0].status, 'blocked');
+  assert.ok(dead.value[0].summary.length <= 500);
+  assert.strictEqual(dead.value[0].prBodyPath, '');
+
+  const threw = await run('executors', { tickets: [ticket] }, { agent: async () => { throw new Error('boom'); } });
+  assert.strictEqual(threw.value[0].status, 'blocked');
+  assert.match(threw.value[0].summary, /boom/);
 });
 
 done();
