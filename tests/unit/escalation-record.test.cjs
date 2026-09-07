@@ -20,7 +20,7 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 
 const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
 const SCRIPT = path.join(SCRIPTS, 'escalation-record.cjs');
-const { activeParks, activeEscalations, fingerprint } = require(SCRIPT);
+const { activeParks, activeEscalations, fingerprint, parkFingerprint } = require(SCRIPT);
 
 // A ticket mid-flight: PR open, green, still a draft — the front calls this
 // `finalize`, i.e. actionable, which is exactly what must NOT happen once parked.
@@ -28,6 +28,10 @@ const OPEN_PR = {
   branch: 'ticket/T-16-05-x', pr: 606, status: 'pr-open', draft: true,
   review_decision: 'CHANGES_REQUESTED',
   checks: { total: 4, failing: 0, pending: 0, none_reported: false },
+  // The head the PR points at. state-sync only starts recording it in T-24-04,
+  // so every suite here must hold with it AND without it — the park's own
+  // fingerprint reads it when present and treats its absence as null.
+  head_sha: 'aaaa1111bbbb2222',
 };
 
 function project(state = { 'T-16-05': { ...OPEN_PR } }) {
@@ -129,7 +133,7 @@ test('it holds while nothing about the PR moves', () => {
 for (const [what, mutate] of [
   ['the human answers the review', (t) => { t.review_decision = 'APPROVED'; }],
   ['the human undrafts it', (t) => { t.draft = false; }],
-  ['someone pushes and CI re-runs', (t) => { t.checks = { total: 4, failing: 0, pending: 2 }; }],
+  ['the human pushes a new head', (t) => { t.head_sha = 'cccc3333dddd4444'; }],
   ['the PR is superseded by another', (t) => { t.pr = 700; }],
 ]) {
   test(`it lifts when ${what}`, () => {
@@ -166,6 +170,137 @@ test('a ticket with no PR stays parked until cleared — there is nothing to wai
   const s = stateOf(dir); s['T-07-01'].status = 'branched'; setState(dir, s);
   assert.equal(activeEscalations(dir)['T-07-01'], undefined,
     'but real movement still lifts it — the rule is one rule');
+});
+
+suite('escalation-record — a park lifts on a HUMAN\'s move, never on a CI re-run');
+
+// A1/A8, ADR-002 D1. The park was bound to a fingerprint that hashes the check
+// TALLIES, so the CI re-run a retarget triggers — a fact no human touched — lifted
+// a verdict a person had been asked to give: review-fix and arch-review were
+// re-dispatched at that PR, with the reason gone.
+//
+// The store's own prose was already right ("it lifts once the PR moves — a push, a
+// review answer, undrafting"): it never claimed a check lifts anything. The CODE
+// was what disagreed, which is the class CLAUDE.md records for `BEHIND` in
+// sentinel.cjs. So these tests pin the code against the sentence that was already
+// there, and the sentence is unchanged.
+
+test('a CI re-run after a retarget does NOT lift the park', () => {
+  // The measured sequence: a parent merges, the child is retargeted, and the whole
+  // pipeline re-runs — 17 checks become 34. Nobody looked at the PR.
+  const dir = project();
+  run(dir, ['mark', 'T-16-05', 'a', 'human', 'must', 'judge', 'this', 'diff']);
+  const s = stateOf(dir);
+  s['T-16-05'].checks = { total: 34, failing: 0, pending: 12, none_reported: false };
+  setState(dir, s);
+  assert.ok(activeEscalations(dir)['T-16-05'],
+    'the tallies are the conveyor moving, not the human — the park must hold');
+});
+
+test('nor does the retarget itself — the conveyor owns the base', () => {
+  const dir = project();
+  run(dir, ['mark', 'T-16-05', 'a', 'human', 'must', 'judge', 'this', 'diff']);
+  const s = stateOf(dir); s['T-16-05'].pr_base = 'epic/24-the-conveyor'; setState(dir, s);
+  assert.ok(activeEscalations(dir)['T-16-05'], 'nobody the park waits for has acted');
+});
+
+test('the review decision moving from nothing to APPROVED lifts it', () => {
+  const dir = project({ 'T-16-05': { ...OPEN_PR, review_decision: null } });
+  run(dir, ['mark', 'T-16-05', 'a', 'human', 'must', 'judge', 'this', 'diff']);
+  assert.ok(activeEscalations(dir)['T-16-05'], 'parked while nobody has answered');
+  const s = stateOf(dir); s['T-16-05'].review_decision = 'APPROVED'; setState(dir, s);
+  assert.equal(activeEscalations(dir)['T-16-05'], undefined,
+    'the person answered — the run must reconsider');
+});
+
+test('parkFingerprint moves with the human\'s fields and with nothing else', () => {
+  const base = { ...OPEN_PR, review_decision: null };
+  const at = parkFingerprint(base);
+  const moved = (move) => { const t = { ...base, checks: { ...base.checks } }; move(t); return parkFingerprint(t); };
+  for (const [what, move] of [
+    ['a review answer', (t) => { t.review_decision = 'APPROVED'; }],
+    ['an undraft', (t) => { t.draft = false; }],
+    ['a push', (t) => { t.head_sha = 'ffff9999'; }],
+    ['a close', (t) => { t.status = 'closed'; }],
+    ['a different PR', (t) => { t.pr = 700; }],
+  ]) {
+    assert.notEqual(moved(move), at, `${what} must move it`);
+  }
+  for (const [what, move] of [
+    ['one check finishing', (t) => { t.checks = { total: 4, failing: 0, pending: 3 }; }],
+    ['a whole pipeline re-run', (t) => { t.checks = { total: 34, failing: 1, pending: 12 }; }],
+    ['a retarget', (t) => { t.pr_base = 'epic/24-x'; }],
+    ['a gate trailer landing', (t) => { t.gate = { 'arch-review': 'conform' }; }],
+  ]) {
+    assert.equal(moved(move), at, `${what} must NOT move it`);
+  }
+});
+
+test('a state with no head_sha at all is still fingerprintable', () => {
+  // state-sync only starts recording head_sha in T-24-04; until then every park is
+  // written against a state that has none, and must not throw or collapse.
+  const noHead = { ...OPEN_PR }; delete noHead.head_sha;
+  assert.equal(typeof parkFingerprint(noHead), 'string');
+  assert.notEqual(parkFingerprint(noHead), parkFingerprint(OPEN_PR),
+    'absent and present are different states, and neither throws');
+});
+
+test('mark binds the park to the human-moved fields and records which rule it used', () => {
+  const dir = project();
+  run(dir, ['mark', 'T-16-05', 'a', 'human', 'must', 'judge', 'this', 'diff']);
+  const rec = JSON.parse(
+    fs.readFileSync(path.join(dir, '.planning', 'graph', 'escalations.json'), 'utf8')
+  ).tickets['T-16-05'];
+  const s = stateOf(dir)['T-16-05'];
+  assert.equal(rec.fingerprint_kind, 'park', 'the record says which hash it is bound to');
+  assert.equal(rec.fingerprint, parkFingerprint(s));
+  assert.notEqual(rec.fingerprint, fingerprint(s), 'and it is not the shared hash any more');
+  assert.ok(!rec.kind, 'the ordinary kind stays absent — activeParks derives it');
+});
+
+test('a record with no fingerprint_kind is compared with the FULL hash, exactly as before', () => {
+  // Every record written before this split is bound to the shared hash, tallies
+  // included. Re-reading one under the new rule would change a verdict already on
+  // disk, so an old record keeps the old rule until it lifts — no store migration.
+  const dir = project();
+  fs.writeFileSync(path.join(dir, '.planning', 'graph', 'escalations.json'), JSON.stringify({
+    tickets: {
+      'T-16-05': {
+        reason: 'recorded by an older shipyard',
+        fingerprint: fingerprint(stateOf(dir)['T-16-05']),
+        pr: 606,
+        at: '2026-08-01T00:00:00.000Z',
+      },
+    },
+  }));
+  assert.ok(activeEscalations(dir)['T-16-05'], 'in force');
+  const s = stateOf(dir);
+  s['T-16-05'].checks = { total: 34, failing: 0, pending: 12, none_reported: false };
+  setState(dir, s);
+  assert.equal(activeEscalations(dir)['T-16-05'], undefined,
+    'and it still lifts on a tally change — the old rule, byte for byte');
+});
+
+suite('escalation-record — the shared fingerprint is frozen for ci-wait.cjs');
+
+test('fingerprint() is byte-identical to the value ci-wait\'s store was built against', () => {
+  // ci-wait.cjs counts EMPTY WINDOWS against this hash, and there a tally change IS
+  // the event being waited for — so the shared function is kept exactly as it was.
+  // The value below was read out of the code BEFORE the park was split off it; a
+  // change to it silently resets every empty-window count on disk, and the waiter
+  // then escalates a pipeline that is moving fine.
+  assert.equal(fingerprint({
+    branch: 'ticket/T-16-05-x', pr: 606, status: 'pr-open', draft: true,
+    review_decision: 'CHANGES_REQUESTED',
+    checks: { total: 4, failing: 0, pending: 0, none_reported: false },
+    head_sha: 'abc1234',
+  }), '3f9f0dbf37842cf7', 'the CI waiter\'s subject must not move under it');
+});
+
+test('head_sha is not part of it, so T-24-04 cannot move it either', () => {
+  const s = { status: 'pr-open', pr: 1, checks: { total: 1, failing: 0, pending: 1 } };
+  assert.equal(fingerprint(s), fingerprint({ ...s, head_sha: 'deadbeef' }),
+    'a field added to delivery-state must not re-key the waiter\'s store');
 });
 
 suite('escalation-record — the front and the guard agree');
