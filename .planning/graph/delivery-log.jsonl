@@ -377,3 +377,68 @@
 {"ts":"2026-09-07T19:10:56.318Z","event":"reuse_scan","ticket":"T-24-11","hits":2,"verdict":"fresh"}
 {"ts":"2026-09-07T19:11:21.954Z","event":"dispatch","ticket":"T-24-11","role":"executor","pr":null,"by":"dispatch-record"}
 {"ts":"2026-09-07T19:20:50.717Z","event":"attempt","ticket":"T-24-05","pr":44,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","signature":"none","head":"aa44e2daecf083f9fda5e60c5bd3b9503f562cad","hypothesis":"Copilot round 2 named two things: computeFront's merge_without_ci fallback reading loadConfig(process.cwd()) is a real board/guard split because dispatch-record.cjs refreshFront runs from a graphless ticket worktree and rewrites the front from what it computes, so the fallback now resolves the project through graph-dir.cjs; the hard-coded pipeline. prefix in the warning is the file-wide convention for all thirteen warnings and namespace-aware diagnostics is a separate change, so that one is a reasoned decline with a backlog note."}
+{"ts":"2026-09-07T19:22:29.034Z","event":"dispatch","ticket":"T-24-05","role":"pr-sentinel","pr":44,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:22:29.126Z","event":"dispatch","ticket":"T-24-06","role":"pr-sentinel","pr":45,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:22:29.195Z","event":"dispatch","ticket":"T-24-07","role":"pr-sentinel","pr":46,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:22:29.262Z","event":"dispatch","ticket":"T-26-13","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:22:29.331Z","event":"dispatch","ticket":"T-26-14","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:22:29.397Z","event":"dispatch","ticket":"T-24-11","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:23:42.789Z","event":"attempt","ticket":"T-24-06","pr":45,"n":2,"role":"ci-fix","model":"opus","outcome":"pushed","signature":"a275aa38eec30f3e","head":"61c7a2db5b32f9412a553723613e0cbb2bfd2836","hypothesis":"Round 1 read this as out-of-scope because tests/smoke/docs-smoke.sh was not in files_modified; the plan has since been widened to include it, so the different hypothesis this round is that the failure is not out-of-scope at all but a one-line allow-list omission inside the ticket's own contract file — base-merge is mechanical (base-merge.cjs does the work, no ladder role, journalled as the non-attempt event base_merge), so it belongs in docs-smoke's MECHANICAL set and not in ROLES."}
+{"ts":"2026-09-07T19:24:33.420Z","event":"dispatch","ticket":"T-24-11","role":"pr-sentinel","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:28:14.497Z","event":"degenerate_green","ticket":"T-24-05","pr":44,"findings":0,"modes":"none"}
+{"ts":"2026-09-07T19:28:14.534Z","event":"dispatch","ticket":"T-24-06","role":"pr-sentinel","pr":45,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:28:40.659Z","event":"status_change","ticket":"T-24-11","from":"pending","to":"pr-open","pr":47}
+{"ts":"2026-09-07T19:30:31.023Z","event":"dispatch","ticket":"T-26-13","role":"pr-sentinel","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:30:31.063Z","event":"dispatch","ticket":"T-26-14","role":"pr-sentinel","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:30:31.035Z","event":"status_change","ticket":"T-26-13","from":"pending","to":"pr-open","pr":48}
+{"ts":"2026-09-07T19:30:31.035Z","event":"status_change","ticket":"T-26-14","from":"pending","to":"pr-open","pr":49}
+{"ts":"2026-09-07T19:30:31.101Z","event":"status_change","ticket":"T-26-13","from":"pending","to":"pr-open","pr":48}
+{"ts":"2026-09-07T19:30:31.101Z","event":"status_change","ticket":"T-26-14","from":"pending","to":"pr-open","pr":49}
+{"ts":"2026-09-07T19:30:44.570Z","event":"dispatch","ticket":"T-24-05","role":"pr-sentinel","pr":44,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:30:44.631Z","event":"dispatch","ticket":"T-24-06","role":"pr-sentinel","pr":45,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:30:44.689Z","event":"dispatch","ticket":"T-24-07","role":"pr-sentinel","pr":46,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:30:44.750Z","event":"dispatch","ticket":"T-24-11","role":"pr-sentinel","pr":47,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:30:44.816Z","event":"dispatch","ticket":"T-26-13","role":"pr-sentinel","pr":48,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:30:44.876Z","event":"dispatch","ticket":"T-26-14","role":"pr-sentinel","pr":49,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:33:04.600Z","event":"merge","ticket":"T-24-05","pr":44,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-07T19:34:09.861Z","event":"degenerate_green","ticket":"T-26-13","pr":48,"findings":0,"modes":""}
+{"ts":"2026-09-07T19:34:09.893Z","event":"degenerate_green","ticket":"T-26-14","pr":49,"findings":0,"modes":""}
+{"ts":"2026-09-07T19:35:52.586Z","event":"status_change","ticket":"T-24-05","from":"pr-open","to":"merged","pr":44}
+{"ts":"2026-09-07T19:41:55.699Z","event":"base_merge","ticket":"T-24-06","pr":45,"base":"epic/24-the-conveyor-stops-interrupting-itself","head":"b23e96bb50e3b9de9b379f7946ec04e43ed1e6b9"}
+{"ts":"2026-09-07T19:41:57.070Z","event":"attempt","ticket":"T-26-13","pr":48,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","head":"2951078283812901e37d05a2c4b90f26182b7c74","hypothesis":"Copilot flagged a corrupt delivery-state.json silently falling back to pr_base/epic instead of answering unknown, and a second positional arg being silently ignored"}
+{"ts":"2026-09-07T19:42:59.664Z","event":"dispatch","ticket":"T-24-06","role":"pr-sentinel","pr":45,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:42:59.706Z","event":"dispatch","ticket":"T-24-07","role":"pr-sentinel","pr":46,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:42:59.744Z","event":"dispatch","ticket":"T-24-11","role":"pr-sentinel","pr":47,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:42:59.782Z","event":"dispatch","ticket":"T-26-13","role":"pr-sentinel","pr":48,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:42:59.820Z","event":"dispatch","ticket":"T-26-14","role":"pr-sentinel","pr":49,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:43:19.150Z","event":"dispatch","ticket":"T-24-11","role":"pr-sentinel","pr":47,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:45:26.635Z","event":"base_merge","ticket":"T-24-07","pr":46,"base":"ticket/T-24-06-the-guard-names-a-remedy-that-exists","head":"d9df7bd874d931e107b0cea2e7098d8d6022981b"}
+{"ts":"2026-09-07T19:47:10.924Z","event":"attempt","ticket":"T-26-14","pr":49,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","head":"bff465e5e66098ba0623ea9542f1678088377a27","hypothesis":"Copilot flagged that only summary is capped at 500 chars, not prBodyPath/evidencePath, and that docPaths should validate worktreePath before dispatch; fixed the misleading doc/test claim, but rejected the pre-dispatch validation gate because it breaks the shared drift-gate.mjs fan-out fixture and this ticket's own no-worktreePath-required dead-agent test"}
+{"ts":"2026-09-07T19:47:26.938Z","event":"base_merge","ticket":"T-24-11","pr":47,"base":"ticket/T-24-07-the-prose-names-only-what-the-scripts-im","head":"c0352fd0dd678574efb86cbd435414953304ae16"}
+{"ts":"2026-09-07T19:48:04.257Z","event":"degenerate_green","ticket":"T-24-06","pr":45,"findings":1,"modes":"any_or_ts_ignore:1"}
+{"ts":"2026-09-07T19:55:39.224Z","event":"merge","ticket":"T-24-06","pr":45,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T19:57:33.500Z","event":"base_merge","ticket":"T-24-07","pr":46,"base":"epic/24-the-conveyor-stops-interrupting-itself","head":"7d7f5f8ca2c1fe875caf2a799a970ff0d204f3c8"}
+{"ts":"2026-09-07T19:58:00.710Z","event":"status_change","ticket":"T-24-06","from":"pr-open","to":"merged","pr":45}
+{"ts":"2026-09-07T19:58:46.081Z","event":"dispatch","ticket":"T-24-07","role":"pr-sentinel","pr":46,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:58:46.123Z","event":"dispatch","ticket":"T-24-11","role":"pr-sentinel","pr":47,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:58:46.160Z","event":"dispatch","ticket":"T-26-13","role":"pr-sentinel","pr":48,"by":"dispatch-record"}
+{"ts":"2026-09-07T19:58:46.196Z","event":"dispatch","ticket":"T-26-14","role":"pr-sentinel","pr":49,"by":"dispatch-record"}
+{"ts":"2026-09-07T20:02:50.658Z","event":"attempt","ticket":"T-24-07","pr":46,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","signature":"none","head":"d240ff7bea480ce31c82a8ceb4d53f1036055210","hypothesis":"All three Copilot threads named the same class of weakness in this ticket's own contract test rather than in the prose it pins: the ACTIONABLE vocabulary was read with a regex a reformat defeats, the doc check was a substring match that mergeStateStatus satisfied for the merge duty, and the reverse scan enumerated only the hyphenated action names — so the fix is to read the set as a block, match each action as its own token with a boundary that excludes capitals and digits, and widen the reverse alternation to every emittable action except clear, which is not a duty answer."}
+{"ts":"2026-09-07T20:07:55.396Z","event":"attempt","ticket":"T-24-07","pr":46,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","signature":"none","head":"e58f322f14c7b37ec3333f4a4148c297d050a647","hypothesis":"Copilot's second round found the same defect class as the first but in the prose rather than the test: the base-merge section named DIRTY and BEHIND together under one heading that describes only staleness, while front.cjs's baseMoved already returns two kinds and baseMergeWhy already writes two sentences — so the docs under-described a distinction the code makes, which is precisely what this ticket exists to remove, and the fix is to name both facts in the section rather than to defer it."}
+{"ts":"2026-09-07T20:09:54.552Z","event":"attempt","ticket":"T-26-13","pr":48,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","head":"f0289f0fd9675024f9413fef7ec6e5c314650754","hypothesis":"Copilot's second round flagged log-cap truncation not being detected (silent needed:false when more history exists than LOG_CAP reads), a glob in files_modified reaching git log unstripped, and a misleading plan_mtime field name; fixed all three with regression tests"}
+{"ts":"2026-09-07T20:10:50.318Z","event":"merge","ticket":"T-26-14","pr":49,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T20:10:58.505Z","event":"status_change","ticket":"T-26-14","from":"pr-open","to":"merged","pr":49}
+{"ts":"2026-09-07T20:11:19.747Z","event":"degenerate_green","ticket":"T-24-07","pr":46,"findings":0,"modes":"none"}
+{"ts":"2026-09-07T20:11:42.164Z","event":"base_merge","ticket":"T-26-13","pr":48,"base":"epic/26-positive-evidence-before-a-mutation","head":"72b141ecacb035b1855e998cbdd097d92075a049"}
+{"ts":"2026-09-07T20:12:30.938Z","event":"merge","ticket":"T-24-07","pr":46,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T20:13:11.811Z","event":"status_change","ticket":"T-24-07","from":"pr-open","to":"merged","pr":46}
+{"ts":"2026-09-07T20:13:44.672Z","event":"dispatch","ticket":"T-24-11","role":"pr-sentinel","pr":47,"by":"dispatch-record"}
+{"ts":"2026-09-07T20:13:44.708Z","event":"dispatch","ticket":"T-26-13","role":"pr-sentinel","pr":48,"by":"dispatch-record"}
+{"ts":"2026-09-07T20:14:41.941Z","event":"base_merge","ticket":"T-24-11","pr":47,"base":"epic/24-the-conveyor-stops-interrupting-itself","head":"79dc83c0a1903df771b46019aab69d98a063ad1f"}
+{"ts":"2026-09-07T20:17:37.961Z","event":"degenerate_green","ticket":"T-24-11","pr":47,"findings":0,"modes":"none"}
+{"ts":"2026-09-07T20:18:19.891Z","event":"attempt","ticket":"T-26-13","pr":48,"n":3,"role":"review-fix","model":"opus","outcome":"pushed","head":"0efd58f290f80ab863c2b75a0a11cd65c42ad161","hypothesis":"Copilot's third round flagged that a root-level glob still fell back to pushing the raw glob string into scan_paths since globPrefix returns '' with nowhere narrower to cut to; fixed by making scanPaths return unrestricted ([]) for that case instead of naming a path"}
+{"ts":"2026-09-07T20:19:54.974Z","event":"degenerate_green","ticket":"T-26-13","pr":48,"findings":0,"modes":""}
+{"ts":"2026-09-07T20:20:23.156Z","event":"merge","ticket":"T-26-13","pr":48,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T20:20:26.325Z","event":"status_change","ticket":"T-26-13","from":"pr-open","to":"merged","pr":48}
+{"ts":"2026-09-07T20:21:38.184Z","event":"merge","ticket":"T-24-11","pr":47,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel"}
+{"ts":"2026-09-07T20:21:49.178Z","event":"status_change","ticket":"T-24-11","from":"pr-open","to":"merged","pr":47}

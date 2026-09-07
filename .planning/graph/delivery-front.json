@@ -1,8 +1,7 @@
 {
-  "generated_at": "2026-09-07T19:09:51.738Z",
+  "generated_at": "2026-09-07T20:21:55.819Z",
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-07T19:11:21.960Z",
   "actionable": {
     "execute": [],
     "publish": [],
@@ -12,14 +11,7 @@
   },
   "waiting": {
     "ci": [],
-    "dispatched": [
-      "T-24-05",
-      "T-24-06",
-      "T-24-07",
-      "T-24-11",
-      "T-26-13",
-      "T-26-14"
-    ],
+    "dispatched": [],
     "merge_human": [],
     "human": []
   },
@@ -59,23 +51,25 @@
       "T-24-02",
       "T-24-03",
       "T-24-04",
+      "T-24-05",
+      "T-24-06",
+      "T-24-07",
       "T-24-08",
       "T-24-09",
       "T-24-10",
+      "T-24-11",
       "T-25-01",
       "T-26-01",
       "T-26-04",
       "T-26-06",
       "T-26-07",
       "T-26-08",
-      "T-26-09"
+      "T-26-09",
+      "T-26-13",
+      "T-26-14"
     ]
   },
   "why": {
-    "T-24-05": "dispatched to pr-sentinel 1m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-05` returns it now.",
-    "T-24-06": "dispatched to pr-sentinel 1m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-06` returns it now.",
-    "T-24-07": "dispatched to pr-sentinel 1m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-07` returns it now.",
-    "T-24-11": "dispatched to executor 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-24-11` returns it now.",
     "T-25-02": "T-24-07 (cross-phase parent must land on main first (phase 24 epic still ahead))",
     "T-25-03": "T-25-02 (parent has no branch yet (nothing to cascade from)); T-24-07 (cross-phase parent must land on main first (phase 24 epic still ahead))",
     "T-25-04": "T-25-03 (parent has no branch yet (nothing to cascade from))",
@@ -84,9 +78,7 @@
     "T-26-10": "T-26-05 (parent has no branch yet (nothing to cascade from))",
     "T-26-11": "T-26-10 (parent has no branch yet (nothing to cascade from))",
     "T-26-02": "T-26-11 (parent has no branch yet (nothing to cascade from)); T-25-04 (cross-phase parent must land on main first (phase 25 epic still ahead))",
-    "T-26-12": "T-26-02 (parent has no branch yet (nothing to cascade from))",
-    "T-26-13": "dispatched to executor 2m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-26-13` returns it now.",
-    "T-26-14": "dispatched to executor 2m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the ticket's delivery state moves (a branch, a PR, a check, an undraft) or after 90m; `dispatch-record.cjs clear T-26-14` returns it now."
+    "T-26-12": "T-26-02 (parent has no branch yet (nothing to cascade from))"
   },
   "counts": {
     "execute": 0,
@@ -95,24 +87,20 @@
     "finalize": 0,
     "merge": 0,
     "ci": 0,
-    "dispatched": 6,
+    "dispatched": 0,
     "merge_human": 0,
     "human": 0,
     "blocked": 9,
-    "done": 33
+    "done": 39
   },
   "actionable_count": 0,
   "left_behind_count": 0,
-  "fixpoint": false,
+  "fixpoint": true,
   "sentinel": {
     "duty": [],
     "waiting_ci": [],
-    "dispatched": [
-      "T-24-05",
-      "T-24-06",
-      "T-24-07"
-    ],
-    "clear": false
+    "dispatched": [],
+    "clear": true
   },
   "roles": {
     "execute": [

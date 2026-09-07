@@ -1048,38 +1048,6 @@
       "pr_base": "epic/26-positive-evidence-before-a-mutation",
       "jira": null
     },
-    "T-26-03": {
-      "title": "Readiness needs positive evidence",
-      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-03-PLAN.md",
-      "phase": "26",
-      "repo": null,
-      "wave": 9,
-      "depends_on": [
-        "T-24-11",
-        "T-24-10"
-      ],
-      "cross_phase_deps": [
-        "T-24-11",
-        "T-24-10"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/state-sync.cjs",
-        "plugins/delivery-pipeline/scripts/front.cjs",
-        "tests/unit/front.test.cjs",
-        "tests/smoke/sentinel-smoke.sh"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-26-03-readiness-needs-positive-evidence",
-      "epic": "epic/26-positive-evidence-before-a-mutation",
-      "primary_parent": null,
-      "pr_base": "epic/26-positive-evidence-before-a-mutation",
-      "jira": null
-    },
     "T-26-04": {
       "title": "gc removes only what is proven landed",
       "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-04-PLAN.md",
@@ -1102,34 +1070,6 @@
       "epic": "epic/26-positive-evidence-before-a-mutation",
       "primary_parent": null,
       "pr_base": "epic/26-positive-evidence-before-a-mutation",
-      "jira": null
-    },
-    "T-26-05": {
-      "title": "Locks prove ownership; snapshots carry a generation",
-      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-05-PLAN.md",
-      "phase": "26",
-      "repo": null,
-      "wave": 10,
-      "depends_on": [
-        "T-26-03"
-      ],
-      "cross_phase_deps": [],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/lock.cjs",
-        "plugins/delivery-pipeline/scripts/state-sync.cjs",
-        "tests/unit/lock.test.cjs",
-        "tests/smoke/sentinel-smoke.sh"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-26-05-locks-prove-ownership-snapshots-carry-a",
-      "epic": "epic/26-positive-evidence-before-a-mutation",
-      "primary_parent": "T-26-03",
-      "pr_base": "ticket/T-26-03-readiness-needs-positive-evidence",
       "jira": null
     },
     "T-26-06": {
@@ -1228,134 +1168,6 @@
       "pr_base": "epic/26-positive-evidence-before-a-mutation",
       "jira": null
     },
-    "T-26-10": {
-      "title": "Left behind is evidence, not arithmetic",
-      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-10-PLAN.md",
-      "phase": "26",
-      "repo": null,
-      "wave": 11,
-      "depends_on": [
-        "T-26-05"
-      ],
-      "cross_phase_deps": [],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/front.cjs",
-        "plugins/delivery-pipeline/scripts/stop-gate.cjs",
-        "plugins/delivery-pipeline/scripts/ci-wait.cjs",
-        "plugins/delivery-pipeline/scripts/state-sync.cjs",
-        "tests/unit/front.test.cjs",
-        "tests/unit/stop-gate.test.cjs",
-        "tests/unit/ci-wait.test.cjs"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-26-10-left-behind-is-evidence-not-arithmetic",
-      "epic": "epic/26-positive-evidence-before-a-mutation",
-      "primary_parent": "T-26-05",
-      "pr_base": "ticket/T-26-05-locks-prove-ownership-snapshots-carry-a",
-      "jira": null
-    },
-    "T-26-11": {
-      "title": "Unavailable is not empty",
-      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-11-PLAN.md",
-      "phase": "26",
-      "repo": null,
-      "wave": 12,
-      "depends_on": [
-        "T-26-10"
-      ],
-      "cross_phase_deps": [],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/check-state.cjs",
-        "plugins/delivery-pipeline/scripts/state-sync.cjs",
-        "plugins/delivery-pipeline/scripts/front.cjs",
-        "plugins/delivery-pipeline/scripts/sentinel.cjs",
-        "tests/unit/check-state.test.cjs",
-        "tests/unit/front.test.cjs",
-        "tests/unit/sentinel.test.cjs",
-        "tests/smoke/sentinel-smoke.sh"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-26-11-unavailable-is-not-empty",
-      "epic": "epic/26-positive-evidence-before-a-mutation",
-      "primary_parent": "T-26-10",
-      "pr_base": "ticket/T-26-10-left-behind-is-evidence-not-arithmetic",
-      "jira": null
-    },
-    "T-26-02": {
-      "title": "A corrupt configuration permits no mutation",
-      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-02-PLAN.md",
-      "phase": "26",
-      "repo": null,
-      "wave": 13,
-      "depends_on": [
-        "T-26-11",
-        "T-25-04"
-      ],
-      "cross_phase_deps": [
-        "T-25-04"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
-        "plugins/delivery-pipeline/scripts/sentinel.cjs",
-        "plugins/delivery-pipeline/scripts/ci-wait.cjs",
-        "plugins/delivery-pipeline/scripts/state-sync.cjs",
-        "tests/unit/pipeline-config.test.cjs",
-        "tests/unit/sentinel.test.cjs",
-        "tests/unit/ci-wait.test.cjs",
-        "tests/smoke/sentinel-smoke.sh"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-26-02-a-corrupt-configuration-permits-no-mutat",
-      "epic": "epic/26-positive-evidence-before-a-mutation",
-      "primary_parent": "T-26-11",
-      "pr_base": "ticket/T-26-11-unavailable-is-not-empty",
-      "jira": null
-    },
-    "T-26-12": {
-      "title": "A wave is cut to a concurrency the session can afford",
-      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-12-PLAN.md",
-      "phase": "26",
-      "repo": null,
-      "wave": 14,
-      "depends_on": [
-        "T-26-02"
-      ],
-      "cross_phase_deps": [],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
-        "plugins/delivery-pipeline/scripts/front.cjs",
-        "plugins/delivery-pipeline/commands/deliver.md",
-        "capabilities/delivery-pipeline/capability.json",
-        "tests/unit/pipeline-config.test.cjs",
-        "tests/unit/front.test.cjs"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-26-12-a-wave-is-cut-to-a-concurrency-the-sessi",
-      "epic": "epic/26-positive-evidence-before-a-mutation",
-      "primary_parent": "T-26-02",
-      "pr_base": "ticket/T-26-02-a-corrupt-configuration-permits-no-mutat",
-      "jira": null
-    },
     "T-26-13": {
       "title": "Drift is judged against the base the ticket is cut from",
       "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-13-PLAN.md",
@@ -1402,6 +1214,222 @@
       "epic": "epic/26-positive-evidence-before-a-mutation",
       "primary_parent": null,
       "pr_base": "epic/26-positive-evidence-before-a-mutation",
+      "jira": null
+    },
+    "T-26-15": {
+      "title": "The board is given the facts its predicates read",
+      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-15-PLAN.md",
+      "phase": "26",
+      "repo": null,
+      "wave": 9,
+      "depends_on": [
+        "T-24-11"
+      ],
+      "cross_phase_deps": [
+        "T-24-11"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "tests/smoke/sentinel-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-26-15-the-board-is-given-the-facts-its-predica",
+      "epic": "epic/26-positive-evidence-before-a-mutation",
+      "primary_parent": null,
+      "pr_base": "epic/26-positive-evidence-before-a-mutation",
+      "jira": null
+    },
+    "T-26-03": {
+      "title": "Readiness needs positive evidence",
+      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-03-PLAN.md",
+      "phase": "26",
+      "repo": null,
+      "wave": 10,
+      "depends_on": [
+        "T-26-15",
+        "T-24-10"
+      ],
+      "cross_phase_deps": [
+        "T-24-10"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "tests/unit/front.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-26-03-readiness-needs-positive-evidence",
+      "epic": "epic/26-positive-evidence-before-a-mutation",
+      "primary_parent": "T-26-15",
+      "pr_base": "ticket/T-26-15-the-board-is-given-the-facts-its-predica",
+      "jira": null
+    },
+    "T-26-05": {
+      "title": "Locks prove ownership; snapshots carry a generation",
+      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-05-PLAN.md",
+      "phase": "26",
+      "repo": null,
+      "wave": 11,
+      "depends_on": [
+        "T-26-03"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/lock.cjs",
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "tests/unit/lock.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-26-05-locks-prove-ownership-snapshots-carry-a",
+      "epic": "epic/26-positive-evidence-before-a-mutation",
+      "primary_parent": "T-26-03",
+      "pr_base": "ticket/T-26-03-readiness-needs-positive-evidence",
+      "jira": null
+    },
+    "T-26-10": {
+      "title": "Left behind is evidence, not arithmetic",
+      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-10-PLAN.md",
+      "phase": "26",
+      "repo": null,
+      "wave": 12,
+      "depends_on": [
+        "T-26-05"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "plugins/delivery-pipeline/scripts/stop-gate.cjs",
+        "plugins/delivery-pipeline/scripts/ci-wait.cjs",
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "tests/unit/front.test.cjs",
+        "tests/unit/stop-gate.test.cjs",
+        "tests/unit/ci-wait.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-26-10-left-behind-is-evidence-not-arithmetic",
+      "epic": "epic/26-positive-evidence-before-a-mutation",
+      "primary_parent": "T-26-05",
+      "pr_base": "ticket/T-26-05-locks-prove-ownership-snapshots-carry-a",
+      "jira": null
+    },
+    "T-26-11": {
+      "title": "Unavailable is not empty",
+      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-11-PLAN.md",
+      "phase": "26",
+      "repo": null,
+      "wave": 13,
+      "depends_on": [
+        "T-26-10"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/check-state.cjs",
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/unit/check-state.test.cjs",
+        "tests/unit/front.test.cjs",
+        "tests/unit/sentinel.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-26-11-unavailable-is-not-empty",
+      "epic": "epic/26-positive-evidence-before-a-mutation",
+      "primary_parent": "T-26-10",
+      "pr_base": "ticket/T-26-10-left-behind-is-evidence-not-arithmetic",
+      "jira": null
+    },
+    "T-26-02": {
+      "title": "A corrupt configuration permits no mutation",
+      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-02-PLAN.md",
+      "phase": "26",
+      "repo": null,
+      "wave": 14,
+      "depends_on": [
+        "T-26-11",
+        "T-25-04"
+      ],
+      "cross_phase_deps": [
+        "T-25-04"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "plugins/delivery-pipeline/scripts/ci-wait.cjs",
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "tests/unit/pipeline-config.test.cjs",
+        "tests/unit/sentinel.test.cjs",
+        "tests/unit/ci-wait.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-26-02-a-corrupt-configuration-permits-no-mutat",
+      "epic": "epic/26-positive-evidence-before-a-mutation",
+      "primary_parent": "T-26-11",
+      "pr_base": "ticket/T-26-11-unavailable-is-not-empty",
+      "jira": null
+    },
+    "T-26-12": {
+      "title": "A wave is cut to a concurrency the session can afford",
+      "plan": ".planning/phases/26-positive-evidence-before-a-mutation/26-12-PLAN.md",
+      "phase": "26",
+      "repo": null,
+      "wave": 15,
+      "depends_on": [
+        "T-26-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "capabilities/delivery-pipeline/capability.json",
+        "tests/unit/pipeline-config.test.cjs",
+        "tests/unit/front.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-26-12-a-wave-is-cut-to-a-concurrency-the-sessi",
+      "epic": "epic/26-positive-evidence-before-a-mutation",
+      "primary_parent": "T-26-02",
+      "pr_base": "ticket/T-26-02-a-corrupt-configuration-permits-no-mutat",
       "jira": null
     }
   }

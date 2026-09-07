@@ -232,65 +232,32 @@
   "T-24-05": {
     "branch": "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno",
     "pr": 44,
-    "status": "pr-open",
-    "draft": true,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/44",
-    "pr_base": "epic/24-the-conveyor-stops-interrupting-itself",
-    "pr_created_at": "2026-09-07T14:46:24Z",
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false
-    },
     "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-07T14:46:57.493Z"
+    "reapable": true,
+    "since": "2026-09-07T19:35:52.586Z"
   },
   "T-24-06": {
     "branch": "ticket/T-24-06-the-guard-names-a-remedy-that-exists",
     "pr": 45,
-    "status": "pr-open",
-    "draft": true,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/45",
-    "pr_base": "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno",
-    "pr_created_at": "2026-09-07T15:16:09Z",
-    "checks": {
-      "total": 1,
-      "failing": 1,
-      "pending": 0,
-      "none_reported": false
-    },
-    "base": "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-07T15:16:32.589Z"
+    "reapable": true,
+    "since": "2026-09-07T19:58:00.710Z"
   },
   "T-24-07": {
     "branch": "ticket/T-24-07-the-prose-names-only-what-the-scripts-im",
     "pr": 46,
-    "status": "pr-open",
-    "draft": true,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/46",
-    "pr_base": "ticket/T-24-06-the-guard-names-a-remedy-that-exists",
-    "pr_created_at": "2026-09-07T15:53:55Z",
-    "checks": {
-      "total": 1,
-      "failing": 1,
-      "pending": 0,
-      "none_reported": false
-    },
-    "base": "ticket/T-24-06-the-guard-names-a-remedy-that-exists",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-07T15:57:49.619Z"
+    "reapable": true,
+    "since": "2026-09-07T20:13:11.811Z"
   },
   "T-24-08": {
     "branch": "ticket/T-24-08-a-record-is-lifted-only-by-a-fact-its-ow",
@@ -324,13 +291,13 @@
   },
   "T-24-11": {
     "branch": "ticket/T-24-11-a-resync-writes-the-front-it-means",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-24-07-the-prose-names-only-what-the-scripts-im",
+    "pr": 47,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/47",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T09:49:26.042Z"
+    "reapable": true,
+    "since": "2026-09-07T20:21:49.178Z"
   },
   "T-25-01": {
     "branch": "ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor",
@@ -554,22 +521,22 @@
   },
   "T-26-13": {
     "branch": "ticket/T-26-13-drift-is-judged-against-the-base-the-tic",
-    "pr": null,
-    "status": "pending",
+    "pr": 48,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/48",
     "base": "epic/26-positive-evidence-before-a-mutation",
     "epic": "epic/26-positive-evidence-before-a-mutation",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T19:05:37.785Z"
+    "reapable": true,
+    "since": "2026-09-07T20:20:26.325Z"
   },
   "T-26-14": {
     "branch": "ticket/T-26-14-a-workflow-returns-a-reference-not-a-doc",
-    "pr": null,
-    "status": "pending",
+    "pr": 49,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/49",
     "base": "epic/26-positive-evidence-before-a-mutation",
     "epic": "epic/26-positive-evidence-before-a-mutation",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T19:05:37.785Z"
+    "reapable": true,
+    "since": "2026-09-07T20:10:58.505Z"
   }
 }

@@ -65,3 +65,35 @@ and state-sync's wall time is the conveyor's tick rate.
 
 Also front.cjs's own prose already names `unresolved_count` as "state's", which
 is true of the reader and not yet of the writer.
+
+## From the integrator, 2026-09-07 (verdict `needs-fix` on epic head `35de683`)
+
+The load-bearing finding became **T-26-15** — `state-sync.cjs` writes none of
+`merge_state`, `behind_by` or `unresolved_count`, which two of T-24-06's shared
+predicates read. Two smaller ones stayed here because they are prose and
+comments with no behavioural bite of their own:
+
+**F3 — two comments name a fix that landed before them.** `front.cjs:428` and
+`ci-wait.cjs:235` both assign the stop gate's `waiting.parent` half to T-24-09,
+which landed FIRST. The gate still reads `waiting.ci` alone. The integrator's
+warning is the useful half: that omission is currently LOAD-BEARING, because
+`ci-wait` returns instantly on an already-green parent and depends on the gate
+letting such a board end. So fix both comments or delete both forward
+references — fixing one alone changes behaviour nobody asked to change.
+
+**F4 + F5 — the base-merge duty cannot be dispatched through the Workflow
+path.** `deliver.md`'s Workflow dispatch never passes `needsBaseMerge` or the
+base, so the argument T-24-06 added to `fix-round.mjs` has no caller. And the
+`base_merge` journal event has a writer contract and a docs-smoke exemption
+claiming the script "journals itself", with no caller anywhere either. Both are
+`deliver.md`'s, which phase 25's chain owns.
+
+**Not run by the integrator, owed before a release:** `make test-codex-shipyard`
+and the container targets. `deliver.md` gained paragraphs contrasting the
+Workflow and Agent paths, and the Codex generator rewrites the word "Claude" in
+prose, so the generated `SKILL.md` must be re-read after regeneration.
+
+**A sweep hazard for whoever re-checks this:** `state-sync.cjs` carries a
+deliberate NUL byte at `epicKey`'s separator, so plain `grep` SILENTLY SKIPS it.
+Any repeat of these seam sweeps needs `grep -a`, or the one file that decides
+what the board can know drops out of the results without a word.
