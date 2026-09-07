@@ -142,6 +142,23 @@ test('reproduces ADR-004 D7 / audit F22 exactly: custom entries survive apply', 
     'F22: these became just [global:shipyard-delivery-rules] before this fix');
 });
 
+test('gsd-planner merges too — not just the executor path', () => {
+  // Copilot review on PR #34: the merge is implemented identically for both
+  // TUNING_ALL entries, but every case above exercises only gsd-executor. A
+  // future edit that touches one entry and not the other would pass every
+  // test here without this one.
+  const dir = project({
+    agent_skills: { 'gsd-planner': ['custom-test-contract', 'custom-quality'] },
+  });
+  const d = keyed(driftOf(dir, ['--runtime', 'claude']));
+  assert.deepEqual(d['agent_skills.gsd-planner'].want,
+    ['custom-test-contract', 'custom-quality', 'global:shipyard:delivery-rules']);
+  run(dir, ['--runtime', 'claude', '--apply']);
+  assert.deepEqual(readCfg(dir).agent_skills['gsd-planner'],
+    ['custom-test-contract', 'custom-quality', 'global:shipyard:delivery-rules'],
+    'F22 applies equally to gsd-planner: this must not collapse to [global:shipyard:delivery-rules]');
+});
+
 test('the OTHER runtime\'s form is removed while everything else is kept', () => {
   const dir = project({
     agent_skills: {
