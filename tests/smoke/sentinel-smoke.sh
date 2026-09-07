@@ -695,6 +695,96 @@ else
   bad "the squash pins the verified head" "$(grep '^pr merge' "$W/nc-argv.log" || echo 'no pr merge call logged')"
 fi
 
+# ── a resync writes the front it means ───────────────────────────────────────
+# THREE writers produce delivery-front.json — front.cjs's CLI, dispatch-record's
+# `refreshFront` and state-sync — and only the last one was blind to the two
+# durable overlays. Measured 2026-09-07 while delivering this phase: a background
+# guard ran state-sync while six to ten tickets were with agents, the board came
+# back `execute: …/finalize: …` with `waiting.dispatched: []`, and the stop gate
+# blocked over work in flight THREE times in one session — each time repaired by
+# hand with `dispatch-record.cjs mark`. The guards sync on their own schedule, so
+# no sequencing of the main loop's calls closes that window; only state-sync
+# applying the overlay itself does.
+#
+# Its own fixture, deliberately: the assertions above share `$proj` and this case
+# has to run state-sync three times over a mutating store.
+dproj="$W/dispproj"
+mkdir -p "$dproj/.planning/graph"
+cp "$proj/.planning/graph/tickets.json" "$dproj/.planning/graph/tickets.json"
+echo '{"pipeline":{}}' > "$dproj/.planning/config.json"
+dfront="$dproj/.planning/graph/delivery-front.json"
+dstore="$dproj/.planning/graph/dispatches.json"
+dboard="$W/disp-board.txt"
+sync_d() { ( cd "$dproj" && node "$SCRIPTS/state-sync.cjs" > "$dboard" 2>"$W/disp-err.txt" ) \
+  || bad "state-sync runs on the dispatch fixture" "$(cat "$W/disp-err.txt")"; }
+
+# The control, and acceptance criterion "without a dispatch record the board is
+# unchanged": the same verdict the shared fixture produces at the top of the file.
+sync_d
+has "no dispatch record: the board offers the merge as before" "$dboard" "merge: T-01-01"
+has "no dispatch record: one item is actionable" "$dboard" "front: 1 actionable now"
+
+# A live record for the ticket the board would otherwise offer.
+node -e '
+const fs = require("fs");
+fs.writeFileSync(process.argv[1], JSON.stringify({
+  tickets: { "T-01-01": { role: "pr-sentinel", at: new Date().toISOString() } },
+}, null, 2) + "\n");
+' "$dstore"
+sync_d
+has "a resync keeps a dispatched ticket off the board" "$dboard" "dispatched: T-01-01"
+has "…and reports nothing actionable rather than re-offering it" "$dboard" "front: 0 actionable now"
+if node -e '
+const f = require(process.argv[1]);
+if (!f.dispatches_applied_at) { console.error("no dispatches_applied_at: " + Object.keys(f).join(", ")); process.exit(1); }
+if (!((f.waiting || {}).dispatched || []).includes("T-01-01")) { console.error("waiting=" + JSON.stringify(f.waiting)); process.exit(1); }
+const actionable = Object.values(f.actionable || {}).flat();
+if (actionable.includes("T-01-01")) { console.error("still actionable: " + actionable.join(", ")); process.exit(1); }
+process.exit(0);
+' "$dfront" 2>"$W/disp-front.err"; then
+  ok "the written front carries the overlay and stamps when it was applied"
+else
+  bad "the written front carries the overlay" "$(cat "$W/disp-front.err")"
+fi
+
+# Expiry stays the store's decision and nothing else's: an out-of-TTL record must
+# suppress nothing, or a killed session parks a ticket forever.
+node -e '
+const fs = require("fs");
+fs.writeFileSync(process.argv[1], JSON.stringify({
+  tickets: { "T-01-01": { role: "pr-sentinel", at: "2020-01-01T00:00:00Z" } },
+}, null, 2) + "\n");
+' "$dstore"
+sync_d
+has "an expired dispatch suppresses nothing" "$dboard" "merge: T-01-01"
+hasnt "…and never reaches the waiting line" "$dboard" "dispatched: T-01-01"
+
+# ── the same sync must not flatten a park's lifetime ─────────────────────────
+# state-sync read `activeEscalations` — the flat {ticket: reason} view, which has
+# already discarded the kind — where both other writers read `activeParks`. A
+# plan_defect park therefore reached the board wearing the ESCALATION sentence
+# ("it lifts once the PR moves"), which is false for a verdict bound to the plan
+# hash: pushing to the PR lifts nothing, and the person told otherwise waits.
+# `formatFront` never prints `why`, so the board being asserted here is the FILE.
+rm -f "$dstore"
+mkdir -p "$dproj/.planning/phases/01-demo"
+dplan="$dproj/.planning/phases/01-demo/01-01-PLAN.md"
+printf -- '---\nphase: 1\nplan: 1\n---\n\n## Goal\n\nroot\n' > "$dplan"
+( cd "$dproj" && node "$SCRIPTS/escalation-record.cjs" mark-plan-defect T-01-01 "$dplan" \
+    "the plan names an endpoint that does not exist" > /dev/null 2>"$W/disp-park.err" ) \
+  || bad "mark-plan-defect records the park" "$(cat "$W/disp-park.err")"
+sync_d
+if node -e '
+const why = (require(process.argv[1]).why || {})["T-01-01"] || "";
+if (!/the park lifts when the plan file changes/.test(why)) { console.error("why=" + why); process.exit(1); }
+if (/It lifts by itself once the PR moves/.test(why)) { console.error("the PR sentence: " + why); process.exit(1); }
+process.exit(0);
+' "$dfront" 2>"$W/disp-park2.err"; then
+  ok "a plan_defect park is described by the rule that actually expires it"
+else
+  bad "a plan_defect park keeps its own lifetime through a resync" "$(cat "$W/disp-park2.err")"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" == 0 ]] || exit 1
