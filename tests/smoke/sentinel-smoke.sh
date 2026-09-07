@@ -90,6 +90,13 @@ JSON
   # head binding.
   "pr view 102 --json"*)
     echo '{"number":102,"state":"OPEN","isDraft":false,"baseRefName":"ticket/T-01-01-root","headRefName":"ticket/T-01-02-child","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-01-02\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green"}' ;;
+  # The merge path's own three calls. The retarget asks GitHub which open PRs
+  # each graph child has RIGHT NOW instead of trusting the last sync — a child
+  # whose PR opened after it used to be left pointing at a branch that had just
+  # been squashed away. One call per child, on the merge path only.
+  "pr list --head "*) echo "${SENTINEL_SMOKE_CHILD_PRS:-[]}" ;;
+  "pr merge "*) echo "squash-merged" ;;
+  "pr edit "*) echo "retargeted" ;;
   *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;
 esac
 STUB
@@ -450,6 +457,17 @@ if blockers_match 'the base moved'; then
 else
   ok "an up-to-date branch is not called stale"
 fi
+# …and it actually LANDS, end to end through the stub. The negative assertion
+# above passed for years while the merge died one line later on a `gh pr merge`
+# the stub did not answer, which proved only that the refusal text differed.
+if node -e '
+const r = require(process.argv[1]).results[0];
+process.exit(r && r.merged === true ? 0 : 1);
+' "$mergeout" 2>/dev/null; then
+  ok "an up-to-date, green, conform PR inside the stack is squashed in"
+else
+  bad "the guard lands the PR it accepted" "$(head -20 "$mergeout")"
+fi
 
 # ── a conform verdict is bound to the head it judged ────────────────────────
 # Field-found on PR #31 and twice after it: verdict → undraft → a bot review lands
@@ -540,6 +558,105 @@ process.exit(named ? 0 : 1);
   ok "the gate refuses the merge against the live head, naming both"
 else
   bad "the gate refuses a superseded verdict" "$(head -20 "$hbmerge")"
+fi
+
+# ── a PR where nothing ran is not a green PR ─────────────────────────────────
+# Б3, end to end across the three readers. `failing === 0 && pending === 0` is
+# the green test, and an EMPTY check list satisfies it without anything having
+# run: such a PR reached `actionable.merge` and was squashed into the epic with
+# no test having executed. state-sync warns about it in a line nobody reads at
+# 3am, so the board, the duty and the gate now all answer "a human's merge"
+# unless the project has declared the repo has no CI.
+NCHEAD=4444444444444444444444444444444444444444
+ncproj="$W/nociproj"
+mkdir -p "$ncproj/.planning/graph" "$W/bin4"
+cat > "$ncproj/.planning/graph/tickets.json" <<'JSON'
+{ "epics": { "3": { "branch": "epic/03-demo", "repos": [null] } },
+  "tickets": { "T-03-01": { "phase": "3", "epic": "epic/03-demo", "branch": "ticket/T-03-01-noci",
+                            "title": "no ci here", "depends_on": [], "risk": "low" } } }
+JSON
+cat > "$ncproj/.planning/graph/delivery-state.json" <<JSON
+{ "T-03-01": { "status": "pr-open", "pr": 401, "draft": false, "branch": "ticket/T-03-01-noci",
+               "epic": "epic/03-demo", "pr_base": "epic/03-demo", "merge_scope": "stacked",
+               "gate": { "arch-review": "conform", "head": "$NCHEAD" }, "head_sha": "$NCHEAD",
+               "checks": { "total": 0, "failing": 0, "pending": 0, "none_reported": true } } }
+JSON
+echo '{"pipeline":{}}' > "$ncproj/.planning/config.json"
+cat > "$W/bin4/gh" <<STUB
+#!/usr/bin/env bash
+argv="\$*"
+if [ -n "\${SENTINEL_SMOKE_LOG:-}" ]; then printf '%s\n' "\$argv" >> "\$SENTINEL_SMOKE_LOG"; fi
+case "\$argv" in
+  "repo view --json defaultBranchRef"*) echo "main" ;;
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  # The repo has no CI configured at all: gh exits 0 and reports nothing, which
+  # is the one case that genuinely means "no checks" (see sentinel.cjs ghChecks).
+  "pr checks 401"*) echo -n "" ;;
+  "pr view 401 --json"*)
+    echo '{"number":401,"state":"OPEN","isDraft":false,"baseRefName":"epic/03-demo","headRefName":"ticket/T-03-01-noci","headRefOid":"$NCHEAD","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-03-01\n\ngate_status: arch-review=conform, checks=green, head=$NCHEAD"}' ;;
+  "api graphql"*)
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  "api repos/"*"/compare/"*) echo 0 ;;
+  "pr list --head "*) echo "[]" ;;
+  "pr merge "*) echo "squash-merged" ;;
+  *) echo "stub gh4: unhandled call: \$argv" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin4/gh"
+
+# The board, from the state file alone — front.cjs needs no GitHub at all.
+( cd "$ncproj" && node "$SCRIPTS/front.cjs" --json > "$W/nc-front.json" 2>"$W/nc-front.err" ) \
+  || bad "front.cjs runs on the no-CI fixture" "$(cat "$W/nc-front.err")"
+if node -e '
+const f = require(process.argv[1]);
+const actionable = Object.values(f.actionable || {}).flat();
+if (actionable.includes("T-03-01")) { console.error("still actionable: " + actionable.join(", ")); process.exit(1); }
+if (!((f.waiting || {}).merge_human || []).includes("T-03-01")) { console.error("waiting=" + JSON.stringify(f.waiting)); process.exit(1); }
+if (!/merge_without_ci/.test(f.why["T-03-01"] || "")) { console.error("why=" + f.why["T-03-01"]); process.exit(1); }
+process.exit(0);
+' "$W/nc-front.json" 2>"$W/nc-front.err2"; then
+  ok "the board calls a PR with no reported checks a human's merge, and names the setting"
+else
+  bad "the board holds the no-CI PR" "$(cat "$W/nc-front.err2")"
+fi
+
+( cd "$ncproj" && PATH="$W/bin4:$PATH" node "$SCRIPTS/sentinel.cjs" duty --json > "$W/nc-duty.json" 2>/dev/null ) || true
+if node -e '
+const i = require(process.argv[1]).items.find((x) => x.ticket === "T-03-01");
+process.exit(i && i.action === "human-merge" && /merge_without_ci/.test(i.why) ? 0 : 1);
+' "$W/nc-duty.json" 2>/dev/null; then
+  ok "duty agrees with the board rather than offering the merge it would refuse"
+else
+  bad "duty holds the no-CI PR" "$(head -30 "$W/nc-duty.json")"
+fi
+
+( cd "$ncproj" && PATH="$W/bin4:$PATH" node "$SCRIPTS/sentinel.cjs" merge T-03-01 --json > "$W/nc-merge.json" 2>/dev/null ) || true
+if node -e '
+const r = require(process.argv[1]).results[0];
+process.exit(r && r.merged === false && r.blockers.some((b) => /merge_without_ci/.test(b)) ? 0 : 1);
+' "$W/nc-merge.json" 2>/dev/null; then
+  ok "the gate refuses to land a PR where nothing ran"
+else
+  bad "the gate refuses the no-CI merge" "$(head -30 "$W/nc-merge.json")"
+fi
+
+# …and the project that genuinely has no CI says so and gets its merge — with
+# the squash pinned to the head every gate above it was checked against.
+echo '{"pipeline":{"merge_without_ci":true}}' > "$ncproj/.planning/config.json"
+( cd "$ncproj" && PATH="$W/bin4:$PATH" SENTINEL_SMOKE_LOG="$W/nc-argv.log" \
+    node "$SCRIPTS/sentinel.cjs" merge T-03-01 --json > "$W/nc-merge2.json" 2>/dev/null ) || true
+if node -e '
+const r = require(process.argv[1]).results[0];
+process.exit(r && r.merged === true ? 0 : 1);
+' "$W/nc-merge2.json" 2>/dev/null; then
+  ok "merge_without_ci lets the same PR land (the control)"
+else
+  bad "merge_without_ci lets the PR land" "$(head -30 "$W/nc-merge2.json")"
+fi
+if grep -q -- "pr merge 401 --squash --match-head-commit $NCHEAD" "$W/nc-argv.log"; then
+  ok "the squash pins the head the gate was checked against"
+else
+  bad "the squash pins the verified head" "$(grep '^pr merge' "$W/nc-argv.log" || echo 'no pr merge call logged')"
 fi
 
 echo

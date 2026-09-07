@@ -343,13 +343,18 @@ function stubGh() {
   const script = [
     '#!/bin/sh',
     'argv="$*"',
+    // Two of this ticket's rules are about the ARGUMENTS of a gh call — the
+    // `--match-head-commit` on the squash, and the ABSENCE of `--repo` on the
+    // compare (`gh api` does not accept it) — and an argv log is the only place
+    // a test can see them. Written only when a case asks for one.
+    'if [ -n "${STUB_LOG:-}" ]; then printf \'%s\\n\' "$argv" >> "$STUB_LOG"; fi',
     'case "$argv" in',
     // `headRefOid` is the live head the conform trailer is bound to, and
     // STUB_TRAILER_HEAD is the head the trailer CLAIMS. Both are unset by
     // default — an absent head on both sides is the pre-head-binding case, and
     // `${VAR:+…}` adds nothing at all rather than an empty `head=`.
     '  "pr view "*)',
-    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
+    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeStateStatus":"%s","reviewDecision":null,"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
     // The rows carry gh's own `bucket`, because check-state.cjs reads that
     // field and a row without one is PENDING by its fail-closed rule — a
     // bucket-less stub would leave every merge case waiting on CI forever.
@@ -359,9 +364,23 @@ function stubGh() {
     '    if [ -n "${STUB_CHECKS:-}" ]; then echo "$STUB_CHECKS";',
     '    else echo \'[{"name":"test-fast","state":"SUCCESS","bucket":"pass"}]\'; fi ;;',
     '  "repo view --json owner,name"*) echo \'{"owner":{"login":"acme"},"name":"demo"}\' ;;',
-    '  "repo view --json defaultBranchRef"*) echo "main" ;;',
+    // Matches both the local form (`repo view --json …`) and the foreign one
+    // (`repo view acme/other --json …`) — a ticket in a sibling repository asks
+    // that repository for its default branch.
+    '  "repo view "*"defaultBranchRef"*) echo "${STUB_DEFAULT_BRANCH:-main}" ;;',
     '  "api graphql"*) echo \'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\' ;;',
-    '  "api repos/{owner}/{repo}/compare/"*) echo "${STUB_BEHIND:-0}" ;;',
+    // The compare endpoint is repo-QUALIFIED now (`repos/<owner>/<name>/…`), so
+    // the pattern must not name the `{owner}/{repo}` placeholders. STUB_COMPARE_FAIL
+    // is the "gh could not answer" case, which must refuse rather than pass.
+    '  "api repos/"*"/compare/"*)',
+    '    if [ -n "${STUB_COMPARE_FAIL:-}" ]; then echo "gh: HTTP 404: Not Found" >&2; exit 1; fi',
+    '    echo "${STUB_BEHIND:-0}" ;;',
+    // The post-merge retarget asks GitHub for each child's OPEN PR instead of
+    // trusting the last sync. STUB_CHILD_FAIL is the unreachable case, which
+    // falls back to the cached board and says so.
+    '  "pr list --head "*)',
+    '    if [ -n "${STUB_CHILD_FAIL:-}" ]; then echo "gh: could not list" >&2; exit 1; fi',
+    '    echo "${STUB_CHILD_PRS:-[]}" ;;',
     '  "pr merge "*) echo "squash-merged" ;;',
     '  "pr edit "*) echo "retargeted" ;;',
     '  *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;',
@@ -808,6 +827,291 @@ test('merge still lands a pre-head-binding PR whose head nothing reports', () =>
   // The upgrade case, and the only direction compatibility runs in.
   const r = hbMerge(null, null);
   assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+suite('a PR where nothing ran is not a green PR');
+
+// Б3. `none_reported` counted as green all the way through the duty and the
+// merge gate, so a PR in a repo whose CI never registered was squashed into the
+// epic with no test having run — state-sync's warning about it is a line nobody
+// reads at 3am. The honest answer is that the merge is a human's, unless the
+// project SAYS it has no CI.
+
+const noCiChecks = { total: 0, failing: 0, pending: 0, none_reported: true };
+
+test('duty: a green + conform PR where nothing ran is a human\'s merge', () => {
+  const root = project({ tickets: { A: {} }, state: { A: { ...green, checks: noCiChecks } } });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'human-merge', d.items[0].why);
+  assert.ok(/merge_without_ci/.test(d.items[0].why), d.items[0].why);
+  assert.strictEqual(d.actionable_count, 0, 'the guard has nothing it may do here');
+});
+
+test('duty: merge_without_ci hands the same PR back to the guard (the control)', () => {
+  const root = project({
+    tickets: { A: {} },
+    state: { A: { ...green, checks: noCiChecks } },
+    config: { pipeline: { merge_without_ci: true } },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'merge', d.items[0].why);
+});
+
+test('duty: a certified draft where nothing ran is not readied either', () => {
+  // `undraft` is one `gh pr ready`, and readying is the step that hands the PR
+  // to the guard's own merge. Withholding it leaves the draft flag saying what a
+  // draft says while nothing has verified the branch.
+  const root = project({ tickets: { A: {} }, state: { A: { ...green, checks: noCiChecks, draft: true } } });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'human-merge', d.items[0].why);
+  assert.ok(/merge_without_ci/.test(d.items[0].why), d.items[0].why);
+});
+
+test('duty: an UNCERTIFIED draft where nothing ran still owes the arch-review', () => {
+  // Only the two LANDING actions are withheld. The architecture verdict and the
+  // review threads are real work whatever CI did.
+  const root = project({
+    tickets: { A: {} },
+    state: { A: { ...green, checks: noCiChecks, draft: true, gate: undefined } },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'arch-review', d.items[0].why);
+});
+
+test('duty: with auto-merge off the draft is still readied for the human who will merge it', () => {
+  const root = project({
+    tickets: { A: {} },
+    state: { A: { ...green, checks: noCiChecks, draft: true } },
+    config: { pipeline: { auto_merge: 'off' } },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'undraft', d.items[0].why);
+});
+
+const noCiEnv = () => onPath(stubGh(), {
+  STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-NC', STUB_PR: '9', STUB_CHECKS: '[]',
+});
+const noCiMerge = (config) => JSON.parse(run(
+  project({
+    tickets: { 'T-NC': { branch: 'ticket/T-NC', epic: 'epic/21-x' } },
+    state: { 'T-NC': openGreen(9, 'ticket/T-NC', 'epic/21-x') },
+    config,
+  }),
+  ['merge', 'T-NC', '--json', '--dry-run'],
+  { env: noCiEnv() }
+).stdout).results[0];
+
+test('merge refuses a PR with no reported checks, and names the setting that would allow it', () => {
+  const r = noCiMerge(epicConfig);
+  assert.strictEqual(r.merged, false);
+  assert.strictEqual(r.would_merge, undefined, 'not even a dry run may say it would land');
+  assert.ok(r.blockers.some((b) => /merge_without_ci/.test(b)), r.blockers.join('; '));
+});
+
+test('...and lands it when the project has declared it has no CI (the control)', () => {
+  const r = noCiMerge({ ...epicConfig, pipeline: { merge_without_ci: true } });
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+  assert.ok(/nothing ran/.test(r.checks_note || ''), r.checks_note);
+});
+
+suite('the squash pins the head the gate was checked against');
+
+// Б5. Every gate above the merge was measured against a head a concurrent push
+// can replace between the check and the `gh pr merge`. `gh` has the flag for
+// exactly this race, and after T-24-04 the head is already in hand.
+
+function logFile(tag) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `shipyard-ghlog-${tag}-`));
+  roots.push(dir);
+  return path.join(dir, 'argv.log');
+}
+const callsIn = (log) => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : []);
+
+test('gh pr merge carries --match-head-commit for the head the live view reported', () => {
+  const root = project({
+    tickets: { 'T-MH': { branch: 'ticket/T-MH', epic: 'epic/21-x' } },
+    state: { 'T-MH': openGreen(9, 'ticket/T-MH', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const log = logFile('match');
+  const r = JSON.parse(run(root, ['merge', 'T-MH', '--json'], {
+    env: onPath(stubGh(), {
+      STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-MH', STUB_PR: '9',
+      STUB_HEAD_OID: SHA_LIVE, STUB_TRAILER_HEAD: SHA_LIVE, STUB_LOG: log,
+    }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  const merge = callsIn(log).find((c) => c.startsWith('pr merge '));
+  assert.ok(merge, callsIn(log).join(' | '));
+  assert.ok(merge.includes(`--match-head-commit ${SHA_LIVE}`), merge);
+});
+
+test('a PR whose head nothing reports still merges — the flag needs a value to pin', () => {
+  // The upgrade case: `--match-head-commit ''` would be a malformed call, and a
+  // pre-head-binding PR is the one direction compatibility runs in.
+  const root = project({
+    tickets: { 'T-MH': { branch: 'ticket/T-MH', epic: 'epic/21-x' } },
+    state: { 'T-MH': openGreen(9, 'ticket/T-MH', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const log = logFile('nomatch');
+  const r = JSON.parse(run(root, ['merge', 'T-MH', '--json'], {
+    env: onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-MH', STUB_PR: '9', STUB_LOG: log }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  const merge = callsIn(log).find((c) => c.startsWith('pr merge '));
+  assert.ok(!/--match-head-commit/.test(merge), merge);
+});
+
+suite('the stack a child may land into is its OWN phase\'s stack');
+
+// The allowed set was every ticket branch in the repository, from every phase. A
+// `pr_base` naming another phase's branch — hand-edited, or read off a stale
+// graph by a resumed run — passed the stack check and would have been squashed
+// there. A phase is the unit the epic quarantines, so it is the unit the
+// boundary measures.
+
+const phaseTickets = {
+  'T-24-01': { phase: 24, branch: 'ticket/T-24-01', epic: 'epic/24-x' },
+  'T-24-02': { phase: 24, branch: 'ticket/T-24-02', epic: 'epic/24-x', primary_parent: 'T-24-01' },
+  'T-23-09': { phase: 23, branch: 'ticket/T-23-09', epic: 'epic/23-x' },
+};
+const inPhase = (pr, branch, base, epic) => ({ ...openGreen(pr, branch, base), epic });
+const phaseMerge = (base) => JSON.parse(run(
+  project({
+    tickets: phaseTickets,
+    state: {
+      'T-24-01': inPhase(1, 'ticket/T-24-01', 'epic/24-x', 'epic/24-x'),
+      'T-24-02': inPhase(2, 'ticket/T-24-02', base, 'epic/24-x'),
+      'T-23-09': inPhase(3, 'ticket/T-23-09', 'epic/23-x', 'epic/23-x'),
+    },
+    config: epicConfig,
+  }),
+  ['merge', 'T-24-02', '--json', '--dry-run'],
+  { env: onPath(stubGh(), { STUB_BASE: base, STUB_HEAD: 'ticket/T-24-02', STUB_PR: '2' }) }
+).stdout).results[0];
+
+test('a base that is another phase\'s ticket branch is outside the stack', () => {
+  const r = phaseMerge('ticket/T-23-09');
+  assert.strictEqual(r.would_merge, undefined, 'not even a dry run may say it would land');
+  assert.ok(r.blockers.some((b) => /outside the stack/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /ticket\/T-23-09/.test(b)), r.blockers.join('; '));
+});
+
+test('...and a parent branch from its own phase is accepted (the control)', () => {
+  const r = phaseMerge('ticket/T-24-01');
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+suite('base freshness is measured in the ticket\'s OWN repository, and an unknown answer refuses');
+
+// External audit 2026-09-07, F06. `behindBy` ran `gh api repos/{owner}/{repo}/…
+// --repo <o/n>`: `gh api` does not accept `--repo`, and the placeholders resolve
+// from the CURRENT repository — so the call errored, `behindBy` returned null,
+// and the gate read null as "not behind". The stale-base check was silently
+// absent for every foreign-repo ticket.
+
+const foreignRoot = () => project({
+  tickets: { 'T-FR': { phase: 24, branch: 'ticket/T-FR', epic: 'epic/24-x', repo: 'acme/other' } },
+  state: { 'T-FR': { ...inPhase(9, 'ticket/T-FR', 'epic/24-x', 'epic/24-x'), repo: 'acme/other' } },
+  config: epicConfig,
+});
+const foreignMerge = (env) => JSON.parse(run(foreignRoot(), ['merge', 'T-FR', '--json', '--dry-run'], {
+  env: onPath(stubGh(), { STUB_BASE: 'epic/24-x', STUB_HEAD: 'ticket/T-FR', STUB_PR: '9', ...env }),
+}).stdout).results[0];
+
+test('the compare is repo-qualified and passes no --repo flag', () => {
+  const log = logFile('compare');
+  const r = foreignMerge({ STUB_LOG: log });
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+  const cmp = callsIn(log).find((c) => c.startsWith('api repos/') && c.includes('/compare/'));
+  assert.ok(cmp, callsIn(log).join(' | '));
+  assert.ok(cmp.startsWith('api repos/acme/other/compare/'), `the ticket's own repo, not {owner}/{repo}: ${cmp}`);
+  assert.ok(!/--repo/.test(cmp), `gh api does not accept --repo: ${cmp}`);
+});
+
+test('a compare gh cannot answer refuses the merge instead of reading as "not behind"', () => {
+  const r = foreignMerge({ STUB_COMPARE_FAIL: '1' });
+  assert.strictEqual(r.merged, false);
+  assert.strictEqual(r.would_merge, undefined);
+  assert.ok(r.blockers.some((b) => /base freshness unproven/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /404/.test(b)), 'the gh error itself, or the reason is unactionable');
+});
+
+test('GitHub\'s own BEHIND verdict still refuses when the compare cannot be read', () => {
+  const r = foreignMerge({ STUB_COMPARE_FAIL: '1', STUB_MERGE_STATE: 'BEHIND' });
+  assert.strictEqual(r.would_merge, undefined);
+  assert.ok(r.blockers.some((b) => /the base moved/.test(b)), r.blockers.join('; '));
+});
+
+suite('the children retargeted after a merge are the ones GitHub has NOW');
+
+// The loop walked cached `state`, so a child whose PR opened after the last sync
+// was never retargeted: it went DIRTY on the next sync and waited for a person.
+// One `gh pr list --head` per child, on the merge path only — the conveyor's tick
+// rate is state-sync's, and this is not it.
+
+const cascadeTickets = {
+  'T-P': { phase: 24, branch: 'ticket/T-P', epic: 'epic/24-x' },
+  'T-C': { phase: 24, branch: 'ticket/T-C', epic: 'epic/24-x', primary_parent: 'T-P' },
+};
+const cascadeRoot = (childState) => project({
+  tickets: cascadeTickets,
+  state: { 'T-P': inPhase(9, 'ticket/T-P', 'epic/24-x', 'epic/24-x'), 'T-C': childState },
+  config: epicConfig,
+});
+const cascadeMerge = (root, log, env) => JSON.parse(run(root, ['merge', 'T-P', '--json'], {
+  env: onPath(stubGh(), {
+    STUB_BASE: 'epic/24-x', STUB_HEAD: 'ticket/T-P', STUB_PR: '9', STUB_LOG: log, ...env,
+  }),
+}).stdout).results[0];
+
+test('a child whose PR the board has never seen is retargeted from the live query', () => {
+  // As far as the board knows T-C is only branched — its PR is younger than the
+  // last sync, which is precisely the case the cached loop could not see.
+  const log = logFile('cascade');
+  const r = cascadeMerge(
+    cascadeRoot({ status: 'branched', branch: 'ticket/T-C', epic: 'epic/24-x', ready: true }),
+    log,
+    { STUB_CHILD_PRS: JSON.stringify([{ number: 77, baseRefName: 'ticket/T-P' }]) }
+  );
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.deepStrictEqual(
+    r.retargeted.map((x) => [x.ticket, x.pr, x.base, x.ok, x.from]),
+    [['T-C', 77, 'epic/24-x', true, 'live']]
+  );
+  const calls = callsIn(log).join('\n');
+  assert.ok(/pr list --head ticket\/T-C/.test(calls), calls);
+  assert.ok(/pr edit 77 --base epic\/24-x/.test(calls), calls);
+});
+
+test('a child already pointed elsewhere is left alone', () => {
+  const log = logFile('cascade-elsewhere');
+  const r = cascadeMerge(
+    cascadeRoot({ status: 'branched', branch: 'ticket/T-C', epic: 'epic/24-x', ready: true }),
+    log,
+    { STUB_CHILD_PRS: JSON.stringify([{ number: 77, baseRefName: 'epic/24-x' }]) }
+  );
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.deepStrictEqual(r.retargeted, [], 'it is already on the epic — retargeting is idempotent, not repeated');
+});
+
+test('when the live query fails the cached board is used, and the result says so', () => {
+  const log = logFile('cascade-fallback');
+  const r = cascadeMerge(
+    cascadeRoot({
+      status: 'pr-open', pr: 88, branch: 'ticket/T-C', epic: 'epic/24-x', pr_base: 'ticket/T-P', draft: false,
+    }),
+    log,
+    { STUB_CHILD_FAIL: '1' }
+  );
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.deepStrictEqual(
+    r.retargeted.map((x) => [x.ticket, x.pr, x.base, x.ok, x.from]),
+    [['T-C', 88, 'epic/24-x', true, 'cache']]
+  );
+  // A silent fallback is how a stale base becomes a person's problem.
+  assert.ok((r.retarget_warnings || []).some((w) => /T-C/.test(w)), JSON.stringify(r.retarget_warnings));
 });
 
 for (const r of roots) {

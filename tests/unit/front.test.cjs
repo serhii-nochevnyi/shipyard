@@ -1192,4 +1192,68 @@ test('a dispatched wave and a running CI queue are reported as two different wai
   assert.ok(/1 ticket\(s\) are with an agent right now, and 1 PR\(s\) are running CI/.test(out), out);
 });
 
+suite('front — a PR where nothing ran is not a green PR');
+
+// Б3. `none_reported` used to count as green all the way into `actionable.merge`,
+// so a PR in a repo whose CI never registered was squashed into the epic with no
+// test having run. state-sync warns about it in a line nobody reads at 3am; the
+// honest bucket is `waiting.merge_human`, unless the project SAYS it has no CI.
+
+const noCi = { total: 0, failing: 0, pending: 0, none_reported: true };
+const noCiLanded = { ...landed, checks: noCi };
+
+test('green + conform + stacked, but nothing ran → waiting.merge_human', () => {
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, [], 'nothing verified this branch');
+  assert.deepStrictEqual(f.waiting.merge_human, ['T']);
+  // The remedy is a decision, so the reason has to name both halves of it.
+  assert.ok(/merge_without_ci/.test(f.why.T), f.why.T);
+  assert.ok(/register/.test(f.why.T), f.why.T);
+  assert.strictEqual(f.fixpoint, true, 'nobody owes work — a person holds this one');
+});
+
+test('...and the same PR merges when the project says it has no CI (the control)', () => {
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true, mergeWithoutCi: true });
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+});
+
+test('a pipeline that reported is untouched (the second control)', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+});
+
+test('a certified draft where nothing ran is held too, not finalized', () => {
+  // `finalize` would be dispatched every round to do the one mechanical thing
+  // left (ready the PR) — the "every round re-proposes the same impossible
+  // action" loop. The guard withholds that `undraft`, so the board must not
+  // offer it.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.finalize, []);
+  assert.deepStrictEqual(f.waiting.merge_human, ['T']);
+  assert.ok(/merge_without_ci/.test(f.why.T), f.why.T);
+});
+
+test('an UNCERTIFIED draft where nothing ran is still finalize work', () => {
+  // The architecture verdict and the review threads are real work whatever CI
+  // did, so only the two landing actions are withheld.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded, draft: true, gate: undefined } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+});
+
+test('with auto-merge off nothing is withheld — the human merges it either way', () => {
+  // Readying a PR nobody may auto-merge is a courtesy to the person who will,
+  // and the duty's `checks_note` already tells them what "green" meant. Holding
+  // the draft here would leave a PR nobody can land.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } });
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+});
+
+test('a checkpoint outranks the no-CI hold — a person holds that one for another reason', () => {
+  const f = computeFront({ T: { human_checkpoint: true } }, { T: { ...noCiLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.human, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+});
+
 done();
