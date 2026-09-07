@@ -116,6 +116,77 @@ test('the config\'s own runtime is honoured when no flag is given', () => {
     'and the skill form follows that runtime');
 });
 
+suite('gsd-tune — agent_skills is merged into, never replaced');
+
+// ADR-004 D7, audit F22, reproduced: a project's own executor skills
+// [custom-test-contract, custom-quality] became [global:shipyard-delivery-rules]
+// after a successful --apply. The desired value was a one-element array and the
+// generic `set()` replaced the whole key with it.
+
+test('an existing list gains the delivery-rules entry, appended last', () => {
+  const dir = project({ agent_skills: { 'gsd-executor': ['a', 'b'] } });
+  const d = keyed(driftOf(dir, ['--runtime', 'claude']));
+  assert.deepEqual(d['agent_skills.gsd-executor'].want, ['a', 'b', 'global:shipyard:delivery-rules'],
+    'today this reports just [global:shipyard:delivery-rules] and the fixture entries are lost');
+  run(dir, ['--runtime', 'claude', '--apply']);
+  assert.deepEqual(readCfg(dir).agent_skills['gsd-executor'], ['a', 'b', 'global:shipyard:delivery-rules']);
+});
+
+test('reproduces ADR-004 D7 / audit F22 exactly: custom entries survive apply', () => {
+  const dir = project({
+    agent_skills: { 'gsd-executor': ['custom-test-contract', 'custom-quality'] },
+  });
+  run(dir, ['--runtime', 'claude', '--apply']);
+  assert.deepEqual(readCfg(dir).agent_skills['gsd-executor'],
+    ['custom-test-contract', 'custom-quality', 'global:shipyard:delivery-rules'],
+    'F22: these became just [global:shipyard-delivery-rules] before this fix');
+});
+
+test('the OTHER runtime\'s form is removed while everything else is kept', () => {
+  const dir = project({
+    agent_skills: {
+      'gsd-executor': ['custom-test-contract', 'global:shipyard-delivery-rules', 'custom-quality'],
+    },
+  });
+  const d = keyed(driftOf(dir, ['--runtime', 'claude']));
+  assert.deepEqual(d['agent_skills.gsd-executor'].want,
+    ['custom-test-contract', 'custom-quality', 'global:shipyard:delivery-rules']);
+  run(dir, ['--runtime', 'claude', '--apply']);
+  assert.deepEqual(readCfg(dir).agent_skills['gsd-executor'],
+    ['custom-test-contract', 'custom-quality', 'global:shipyard:delivery-rules']);
+});
+
+test('a list that already has our form and nothing else reports no drift', () => {
+  const dir = project({ agent_skills: { 'gsd-executor': ['x', 'global:shipyard:delivery-rules'] } });
+  const d = keyed(driftOf(dir, ['--runtime', 'claude']));
+  assert.equal(d['agent_skills.gsd-executor'], undefined, 'nothing to add, nothing to remove');
+});
+
+test('the report names additions and removals, never a wholesale "set"', () => {
+  const dir = project({
+    agent_skills: {
+      'gsd-executor': ['custom-test-contract', 'global:shipyard-delivery-rules'],
+    },
+  });
+  const r = run(dir, ['--runtime', 'claude']);
+  assert.ok(/\+ global:shipyard:delivery-rules/.test(r.stdout), r.stdout);
+  assert.ok(/- global:shipyard-delivery-rules/.test(r.stdout), r.stdout);
+  assert.ok(!/agent_skills\.gsd-executor →/.test(r.stdout),
+    'must not read as a wholesale replacement of the list');
+});
+
+suite('gsd-tune --global — creates a missing ~/.gsd directory, not just the file');
+
+test('--global with no ~/.gsd directory at all still succeeds', () => {
+  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsdhome-nodir-'));
+  assert.ok(!fs.existsSync(path.join(h, '.gsd')), 'precondition: not even the directory exists');
+  const r = spawnSync('node', [SCRIPT, '--global', '--runtime', 'claude', '--apply'],
+    { cwd: h, encoding: 'utf8', env: { ...process.env, HOME: h } });
+  assert.equal(r.status, 0, r.stderr);
+  const cfg = JSON.parse(fs.readFileSync(path.join(h, '.gsd', 'defaults.json'), 'utf8'));
+  assert.equal(cfg.runtime, 'claude');
+});
+
 suite('gsd-tune — restraint');
 
 test('nothing is written without --apply, and the exit code reports drift', () => {
