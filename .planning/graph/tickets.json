@@ -583,7 +583,9 @@
         "plugins/delivery-pipeline/scripts/ci-wait.cjs",
         "tests/unit/check-state.test.cjs",
         "tests/unit/sentinel.test.cjs",
-        "tests/unit/ci-wait.test.cjs"
+        "tests/unit/ci-wait.test.cjs",
+        "tests/unit/trailer.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
       ],
       "risk": "medium",
       "type": "implementation",

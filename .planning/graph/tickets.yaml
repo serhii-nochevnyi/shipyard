@@ -343,7 +343,7 @@ tickets:
     repo: null
     wave: 2
     depends_on: [T-24-01]
-    files: [plugins/delivery-pipeline/scripts/check-state.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, tests/unit/check-state.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/ci-wait.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/check-state.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, tests/unit/check-state.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/ci-wait.test.cjs, tests/unit/trailer.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
     preauthorized: false
