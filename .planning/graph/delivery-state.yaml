@@ -170,3 +170,123 @@
   epic: "epic/23-the-board-tells-the-truth-about-itself"
   reapable: true
   since: "2026-08-26T18:05:56.845Z"
+"T-24-01":
+  branch: "ticket/T-24-01-a-plan-defect-needs-no-green-between-its"
+  pr: 27
+  status: "pr-open"
+  draft: true
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/27"
+  pr_base: "epic/24-the-conveyor-stops-interrupting-itself"
+  pr_created_at: "2026-09-07T09:35:10Z"
+  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
+  base: "epic/24-the-conveyor-stops-interrupting-itself"
+  epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merge_scope: "stacked"
+  reapable: false
+  since: "2026-09-07T09:35:33.906Z"
+"T-24-02":
+  branch: "ticket/T-24-02-check-state-has-one-vocabulary"
+  pr: null
+  status: "pending"
+  base: "ticket/T-24-01-a-plan-defect-needs-no-green-between-its"
+  epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  ready: true
+  reapable: false
+  since: "2026-09-07T09:10:42.244Z"
+"T-24-03":
+  branch: "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro"
+  pr: null
+  status: "pending"
+  base: "ticket/T-24-02-check-state-has-one-vocabulary"
+  epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  ready: false
+  blocked_by: ["T-24-02"]
+  blocked_reasons: {"T-24-02":"parent has no branch yet (nothing to cascade from)"}
+  reapable: false
+  since: "2026-09-07T09:10:42.244Z"
+"T-24-04":
+  branch: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
+  pr: null
+  status: "pending"
+  base: "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro"
+  epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  ready: false
+  blocked_by: ["T-24-03"]
+  blocked_reasons: {"T-24-03":"parent has no branch yet (nothing to cascade from)"}
+  reapable: false
+  since: "2026-09-07T09:10:42.244Z"
+"T-24-05":
+  branch: "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno"
+  pr: null
+  status: "pending"
+  base: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
+  epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  ready: false
+  blocked_by: ["T-24-04"]
+  blocked_reasons: {"T-24-04":"parent has no branch yet (nothing to cascade from)"}
+  reapable: false
+  since: "2026-09-07T09:10:42.244Z"
+"T-24-06":
+  branch: "ticket/T-24-06-the-guard-names-a-remedy-that-exists"
+  pr: null
+  status: "pending"
+  base: "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno"
+  epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  ready: false
+  blocked_by: ["T-24-05"]
+  blocked_reasons: {"T-24-05":"parent has no branch yet (nothing to cascade from)"}
+  reapable: false
+  since: "2026-09-07T09:10:42.244Z"
+"T-24-07":
+  branch: "ticket/T-24-07-the-prose-names-only-what-the-scripts-im"
+  pr: null
+  status: "pending"
+  base: "ticket/T-24-06-the-guard-names-a-remedy-that-exists"
+  epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  ready: false
+  blocked_by: ["T-24-06"]
+  blocked_reasons: {"T-24-06":"parent has no branch yet (nothing to cascade from)"}
+  reapable: false
+  since: "2026-09-07T09:10:42.244Z"
+"T-24-08":
+  branch: "ticket/T-24-08-a-record-is-lifted-only-by-a-fact-its-ow"
+  pr: 28
+  status: "pr-open"
+  draft: true
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/28"
+  pr_base: "epic/24-the-conveyor-stops-interrupting-itself"
+  pr_created_at: "2026-09-07T09:35:20Z"
+  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
+  base: "epic/24-the-conveyor-stops-interrupting-itself"
+  epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merge_scope: "stacked"
+  reapable: false
+  since: "2026-09-07T09:35:33.906Z"
+"T-24-09":
+  branch: "ticket/T-24-09-the-stop-gate-blocks-as-often-as-the-cas"
+  pr: 29
+  status: "pr-open"
+  draft: true
+  review_decision: null
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/29"
+  pr_base: "epic/24-the-conveyor-stops-interrupting-itself"
+  pr_created_at: "2026-09-07T09:35:29Z"
+  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
+  base: "epic/24-the-conveyor-stops-interrupting-itself"
+  epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merge_scope: "stacked"
+  reapable: false
+  since: "2026-09-07T09:35:33.906Z"
+"T-24-10":
+  branch: "ticket/T-24-10-the-ci-waiter-tells-a-stall-from-an-outa"
+  pr: null
+  status: "pending"
+  base: "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro"
+  epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  ready: false
+  blocked_by: ["T-24-03"]
+  blocked_reasons: {"T-24-03":"parent has no branch yet (nothing to cascade from)"}
+  reapable: false
+  since: "2026-09-07T09:10:42.244Z"

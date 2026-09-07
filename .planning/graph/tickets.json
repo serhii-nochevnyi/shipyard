@@ -617,7 +617,8 @@
         "tests/unit/parent-moving.test.cjs",
         "tests/unit/front.test.cjs",
         "tests/unit/sentinel.test.cjs",
-        "tests/unit/ci-wait.test.cjs"
+        "tests/unit/ci-wait.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
       ],
       "risk": "medium",
       "type": "implementation",
@@ -650,7 +651,8 @@
         "plugins/delivery-pipeline/references/pr-sentinel.md",
         "tests/unit/trailer.test.cjs",
         "tests/unit/sentinel.test.cjs",
-        "tests/unit/front.test.cjs"
+        "tests/unit/front.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
       ],
       "risk": "medium",
       "type": "implementation",
@@ -681,7 +683,8 @@
         "capabilities/delivery-pipeline/capability.json",
         "tests/unit/sentinel.test.cjs",
         "tests/unit/front.test.cjs",
-        "tests/unit/pipeline-config.test.cjs"
+        "tests/unit/pipeline-config.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
       ],
       "risk": "high",
       "type": "implementation",
@@ -714,7 +717,8 @@
         "plugins/delivery-pipeline/references/review-fix.md",
         "tests/unit/sentinel.test.cjs",
         "tests/unit/front.test.cjs",
-        "tests/unit/reviewers.test.cjs"
+        "tests/unit/reviewers.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
       ],
       "risk": "medium",
       "type": "implementation",
@@ -831,6 +835,32 @@
       "epic": "epic/24-the-conveyor-stops-interrupting-itself",
       "primary_parent": "T-24-03",
       "pr_base": "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro",
+      "jira": null
+    },
+    "T-24-11": {
+      "title": "A resync writes the front it means",
+      "plan": ".planning/phases/24-the-conveyor-stops-interrupting-itself/24-11-PLAN.md",
+      "phase": "24",
+      "repo": null,
+      "wave": 8,
+      "depends_on": [
+        "T-24-07"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "tests/smoke/sentinel-smoke.sh"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-24-11-a-resync-writes-the-front-it-means",
+      "epic": "epic/24-the-conveyor-stops-interrupting-itself",
+      "primary_parent": "T-24-07",
+      "pr_base": "ticket/T-24-07-the-prose-names-only-what-the-scripts-im",
       "jira": null
     }
   }

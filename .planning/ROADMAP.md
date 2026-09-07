@@ -78,6 +78,9 @@ script — not in a prompt.** Every requirement below is an instance of it.
   observed CI.
 - **REQ-24** — Prose names only what the scripts implement: no instruction
   sanctions a wait, a bucket or an order of operations the code does not have.
+- **REQ-25** — Every writer of `delivery-front.json` writes the SAME front: a
+  resync must carry the dispatch overlay, so the board and the stop gate never
+  read work in flight as actionable between one `mark` and the next.
 
 ## Phases
 
@@ -136,7 +139,7 @@ work — and the entry claiming this repository has no CI is now read by a
 repository that gained CI two releases ago.
 
 ### Phase 24: The conveyor stops interrupting itself
-**Requirements**: REQ-15, REQ-16, REQ-17, REQ-18, REQ-19, REQ-20, REQ-21, REQ-22, REQ-23, REQ-24
+**Requirements**: REQ-15, REQ-16, REQ-17, REQ-18, REQ-19, REQ-20, REQ-21, REQ-22, REQ-23, REQ-24, REQ-25
 
 Decomposed from ADR-002. Phases 20–23 added the mechanisms a night needs; a
 full read of the result found that the interruptions left are mechanisms
@@ -155,3 +158,9 @@ Everything crossing `sentinel.cjs`/`front.cjs` lands as one stacked chain —
 those two files are the seam every finding touches; the stores, the stop gate
 and the CI waiter land beside it. Every ticket carries a unit test that fails
 on the current code.
+
+Found while delivering this phase (REQ-25, T-24-11): `state-sync.cjs` writes
+`delivery-front.json` WITHOUT the dispatch overlay that `front.cjs` and
+`dispatch-record.cjs` apply, so every resync while agents hold tickets turns
+the board back into `execute: …, finalize: …` until the next `mark` rewrites it
+— measured on the first wave of this very phase, with four tickets out.
