@@ -345,8 +345,10 @@ REST calls.
 **Identity is namespaced by repository.** Ticket ids restart at `T-01-01` in
 every repository, so two repositories exporting to the same Jira project must
 never find-and-update each other's issue. Derive `<owner>` and `<repo>` once
-per run from `gh repo view --json nameWithOwner` (split `owner/name` on `/`;
-lowercase each half; sanitize to label-safe characters). Use these two values
+per run from `gh repo view --json nameWithOwner --jq .nameWithOwner` (a raw
+`owner/repo` string, not the JSON object `--json` alone would return); split
+it on `/`, lowercase each half, sanitize to label-safe characters. Use these
+two values
 directly everywhere below — they are not collapsed into one slug, because the
 "Source of truth" pointer line needs `<owner>/<repo>` as a separate, checkable
 field (see the lookup order below), not a pre-joined string.
@@ -399,10 +401,11 @@ order so parents exist before links):
      label);
    - description (English, concise projection — NOT the whole plan): Goal, Scope,
      Acceptance criteria (from the PLAN body), risk, branch (`ticket/...`),
-     `pr_base`, and a pointer line "Source of truth: `<owner>/<repo>:<plan
-     path>` (this issue is a generated projection)" — the `<owner>/<repo>`
-     prefix is what the legacy-label lookup above matches on, so it is written
-     on every issue from this ticket onward, not only during a migration;
+     `pr_base`, and a pointer line "Source of truth:
+     `<owner>/<repo>:<plan path>` (this issue is a generated projection)" —
+     the `<owner>/<repo>` prefix is what the legacy-label lookup above
+     matches on, so it is written on every issue from this ticket onward,
+     not only during a migration;
    - parent/epic link to the phase Epic (when epics are enabled);
    - for each `depends_on`, a "is blocked by" issue link to that dependency's
      issue (`createIssueLink`; pick the link type via `getIssueLinkTypes`).
