@@ -26,8 +26,38 @@
 //   * that work is not entirely left-behind — a phase the run has moved past is
 //     "a decision, not motion" (front.cjs), and demanding motion there is how a
 //     guard starts lying;
-//   * we have not already blocked this stop (`stop_hook_active`), which is what
-//     keeps a refusal from becoming a loop.
+//   * we have not already refused this same ROUND — see the ledger below, which
+//     is what keeps a refusal from becoming a loop without also capping the
+//     number of legitimate refusals a cascade needs.
+//
+// ── ONE BLOCK PER ROUND, NOT ONE PER TURN ────────────────────────────────────
+// `stop_hook_active` was the whole anti-loop rule, and it answers the wrong
+// question. It bounds the cost of a FALSE block to one per TURN — which is why
+// it exists and why it stays — but it also bounded the number of TRUE ones, and
+// a stacked cascade needs one per ROUND: merge, the next child goes BEHIND,
+// base-merge, push, CI, merge. The loop legitimately tries to end the turn after
+// each dispatch, so the gate refused once, the loop resumed, dispatched, tried
+// to stop again — and that stop went through with three tickets still to land.
+//
+// So a per-session ledger sits beside the chosen front:
+//
+//   stop-gate-ledger.json  { session_id, blocks, last_generated_at, last_moved_at }
+//
+// and a refusal repeats only when the BOARD ADVANCED since the last one: a newer
+// `generated_at` (the loop resynced) or a qualifying journal event newer than
+// the one current at that block (the world moved). Nothing advanced means
+// nothing new to say, and the anti-loop rule stands exactly as before.
+//
+// Every path that cannot prove a round has passed falls back to that old rule —
+// no `session_id` in the payload, a ledger this session does not own, an
+// unreadable one, a graph directory that cannot be written. That fallback is
+// load-bearing rather than tidy: without it, a ledger that never persists would
+// read as "always advanced" and refuse a session forever, which is the one
+// outcome this hook must never produce.
+//
+// `SHIPYARD_STOP_GATE_MAX_BLOCKS` (12) caps the lot. A cascade deeper than that
+// in one turn is a phase to resume deliberately, not to be pushed through; past
+// the cap the gate allows the stop and says on stderr which knob decided.
 //
 // ── WHICH FRONT (measured, 2026-08-30) ───────────────────────────────────────
 // The hook's cwd is the SESSION's cwd, and the conveyor does not run there. The
@@ -98,6 +128,13 @@
 // re-create the false block that fired five times across phases 20 and 22 — the
 // failure mode that gets a gate uninstalled.
 //
+// An event is evidence only while it is YOUNGER THAN THE RESYNC CEILING. A run
+// that ended on a sentinel merge leaves such an event in the journal for good,
+// and this hook is GLOBAL — so an unbounded rule blocked the first stop of every
+// later session in that repository, citing a merge from a run that was over.
+// Same ceiling as the stale-board rule, so one knob moves both and no second
+// number can drift out of step with it.
+//
 // Age still decides the case where the journal offers no evidence: the band
 // between FRESH_MS and RESYNC_MS blocks ONCE and asks for a resync, past
 // RESYNC_MS the original rule stands. Either way the refusal states the age and
@@ -125,7 +162,15 @@
 // empties and this branch stops firing through the rule it already had. A stuck
 // pipeline ends with a person, not with a gate quietly giving up.
 //
-// Not fired when a ticket is with an agent: that wake-up is free and sooner.
+// Not fired when a ticket is with an agent: that wake-up is free and sooner — but
+// a dispatch MARK is not that claim. The mark can be written before the launch,
+// so a launch that never happened kept this branch quiet for a whole dispatch
+// TTL: 90 minutes of silence with nothing coming. The hatch therefore asks
+// `dispatches.json` how old the mark is, and a mark past
+// `SHIPYARD_STOP_GATE_DISPATCH_SUSPECT_MS` (45m — longer than any fix round the
+// proving ground has measured, shorter than the TTL) no longer opens it. POSITIVE
+// EVIDENCE ONLY: no record, or one that cannot be dated, is not proof the agent
+// is gone.
 //
 // `SHIPYARD_STOP_GATE=off` turns the whole hook off in one word. An operator who
 // wants silence should be able to say so plainly, rather than discovering that
@@ -148,9 +193,31 @@ function envMs(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// HOW MANY TIMES ONE SESSION MAY BE REFUSED. The ledger un-bounds the refusals a
+// cascade legitimately needs, so something has to bound them instead — and it is
+// a count of rounds, not of turns.
+// Never below 1: a cap of zero would be an off switch by accident, and this hook
+// already has an explicit one (`SHIPYARD_STOP_GATE=off`).
+const MAX_BLOCKS = Math.max(1, Math.floor(envMs('SHIPYARD_STOP_GATE_MAX_BLOCKS', 12)));
+
+// AFTER THIS A DISPATCH MARK IS NOT AN AGENT AT WORK. Measured against the same
+// journal dispatch-record.cjs sized its TTL from: the worst silent
+// dispatch→publish stretch on record is 37 minutes, and the TTL is 90.
+const DISPATCH_SUSPECT_MS = envMs('SHIPYARD_STOP_GATE_DISPATCH_SUSPECT_MS', 45 * 60 * 1000);
+
+const LEDGER_NAME = 'stop-gate-ledger.json';
+
 function allow() { process.exit(0); }
 
+// The refusal, gated by the ledger. Every branch below calls this rather than
+// deciding for itself whether a repeat is legitimate — one place asks that
+// question, which is why `stop_hook_active` could be replaced without touching a
+// single hatch.
 function verdict(reason) {
+  const gate = blockAllowance();
+  if (gate.note) process.stderr.write(gate.note);
+  if (!gate.mayBlock) allow();
+  if (gate.blocks) recordBlock(gate.blocks);
   process.stdout.write(JSON.stringify({ decision: 'block', reason }) + '\n');
   process.exit(0);
 }
@@ -163,9 +230,19 @@ try {
   if (raw.trim()) payload = JSON.parse(raw);
 } catch { /* no payload is not a reason to block */ }
 
-// Claude Code sets this when the stop was already blocked once. Ignoring it
-// would turn "you still have work" into a session that can never end.
-if (payload.stop_hook_active) allow();
+// WHO IS STOPPING. The ledger counts rounds against this; a payload without one
+// falls back to the old `stop_hook_active` rule, because a key we invented would
+// make every stop in the repository look like a single run.
+const sessionId = typeof payload.session_id === 'string' && payload.session_id.trim()
+  ? payload.session_id.trim()
+  : null;
+
+// `payload.stop_hook_active` — Claude Code sets it when this stop was already
+// refused once, and ignoring it would turn "you still have work" into a session
+// that can never end. It is no longer read HERE, though: on its own it also
+// capped the refusals a cascade needs to one per turn, so the decision moved into
+// `blockAllowance()` below, where it is weighed against whether the board has
+// actually advanced. Everything else in this file is unchanged by that move.
 
 // ── candidate fronts ─────────────────────────────────────────────────────────
 
@@ -218,6 +295,7 @@ function movedSince(graphDir, generatedAt) {
   if (seeked) lines.shift();
 
   let newest = null;
+  const now = Date.now();
   for (const line of lines) {
     const t = line.trim();
     if (!t) continue;
@@ -226,6 +304,12 @@ function movedSince(graphDir, generatedAt) {
     if (!e || typeof e !== 'object') continue;
     const at = Date.parse(e.ts || '');
     if (Number.isNaN(at) || at <= generatedAt) continue;
+    // Newer than the board, AND young enough to belong to a run that is still
+    // happening. A merge is in the journal forever and this hook is global, so
+    // without this bound the first stop of every later session in the repository
+    // was refused over a run that ended days ago. Same ceiling as the
+    // stale-board rule — one knob, so the two can never disagree.
+    if (now - at > RESYNC_MS) continue;
     const moved =
       e.event === 'merge' ||
       e.event === 'escalation' ||
@@ -235,6 +319,123 @@ function movedSince(graphDir, generatedAt) {
     if (!newest || at > newest.at) newest = { at, event: e };
   }
   return newest;
+}
+
+// ── THE LEDGER: one refusal per ROUND ───────────────────────────────────────
+// These four read module state (`graphDir`, `generated`, `movedAny`, `sessionId`)
+// that is resolved further down; they are only ever called from `verdict()`,
+// which runs after all of it exists.
+
+function readLedger() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(graphDir, LEDGER_NAME), 'utf8'));
+    return raw && typeof raw === 'object' ? raw : null;
+  } catch {
+    return null; // absent, corrupt, or a directory some accident left behind
+  }
+}
+
+// Wrapped the way ci-wait.cjs wraps its own store write, and for the same reason:
+// the bookkeeping is never worth breaking the decision for. A read-only graph
+// dir, a ledger left as a DIRECTORY (measured on ci-waits.json), a rename that
+// loses a race — say one line and let the verdict stand. This hook always exits 0.
+function recordBlock(blocks) {
+  const file = path.join(graphDir, LEDGER_NAME);
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({
+      session_id: sessionId,
+      blocks,
+      last_generated_at: generated === null ? null : new Date(generated).toISOString(),
+      last_moved_at: movedAny ? new Date(movedAny.at).toISOString() : null,
+    }, null, 2) + '\n');
+    // Replaced rather than rewritten in place: a torn ledger is a ledger this
+    // session does not own, which costs a round rather than nothing.
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    process.stderr.write(
+      `stop-gate: the block ledger at ${file} was not updated (${e.message}).\n` +
+      '  The refusal stands. Without the record this session falls back to one refusal per turn,\n' +
+      '  so a deep cascade may need the loop to be nudged by hand.\n'
+    );
+  }
+}
+
+// Has the world moved since the refusal this ledger records? Two independent
+// facts, because either alone leaves a round unrefused: a NEWER board (the loop
+// resynced) or a qualifying journal event newer than the one current at that
+// block (a merge or a push the board has not seen). `dispatches_applied_at` is
+// never consulted, for the same reason front selection ignores it — a dispatch
+// mark rewrites the file without re-deriving anything from GitHub.
+function advancedSince(rec) {
+  const lastGen = Date.parse(rec.last_generated_at || '');
+  if (generated !== null && (!Number.isFinite(lastGen) || generated > lastGen)) return true;
+  if (movedAny) {
+    const lastMoved = Date.parse(rec.last_moved_at || '');
+    if (!Number.isFinite(lastMoved) || movedAny.at > lastMoved) return true;
+  }
+  return false;
+}
+
+// May this stop be refused? Returns `{mayBlock, blocks?, note?}` — `blocks` is
+// the count to record when it may, `note` a line for stderr either way.
+function blockAllowance() {
+  const active = !!payload.stop_hook_active;
+  if (!sessionId) return { mayBlock: !active }; // the old rule, verbatim
+
+  const prev = readLedger();
+  const mine = prev && prev.session_id === sessionId ? prev : null;
+  // No record for this session — absent, unreadable, or another run's. We cannot
+  // prove a round has passed, and "already refused once, with nothing new to
+  // show" is honestly the old rule. This branch is what keeps an unwritable
+  // ledger from becoming a session that can never end: without it, a ledger that
+  // never persists would read as "always advanced" and refuse forever.
+  if (!mine) return active ? { mayBlock: false } : { mayBlock: true, blocks: 1 };
+
+  const blocks = Math.max(0, Math.floor(Number(mine.blocks) || 0));
+  if (blocks >= MAX_BLOCKS) {
+    return {
+      mayBlock: false,
+      note:
+        `stop-gate: ${blocks} refusals in this session already ` +
+        `(SHIPYARD_STOP_GATE_MAX_BLOCKS=${MAX_BLOCKS}) — allowing this stop.\n` +
+        `  The board at ${graphDir} may still hold work: a cascade needs one round per ticket, and this\n` +
+        '  phase has needed more rounds than one turn should carry. Resume it deliberately, or raise the\n' +
+        '  cap if the depth is real.\n',
+    };
+  }
+  if (active && !advancedSince(mine)) return { mayBlock: false };
+  return { mayBlock: true, blocks: blocks + 1 };
+}
+
+// ── IS ANYONE ACTUALLY WORKING? ─────────────────────────────────────────────
+// The CI-only branch stays silent when a ticket is with an agent, because that
+// wake-up is free and sooner. A dispatch MARK is a weaker claim than that: it can
+// be written before the launch, so a launch that never happened held this branch
+// quiet for the whole dispatch TTL.
+//
+// POSITIVE EVIDENCE ONLY. No record, or one that cannot be dated, is not proof
+// the agent is gone — and between a spurious refusal and a silent stall, only one
+// of the two gets this hook uninstalled.
+function dispatchAges(dir, ids) {
+  let recs = {};
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, 'dispatches.json'), 'utf8'));
+    if (raw && typeof raw === 'object' && raw.tickets && typeof raw.tickets === 'object') {
+      recs = raw.tickets;
+    }
+  } catch { /* no store is no suspicion */ }
+  const now = Date.now();
+  const plausible = [];
+  const suspect = [];
+  for (const id of ids) {
+    const rec = recs[id];
+    const at = Date.parse((rec && rec.at) || '');
+    if (!Number.isFinite(at) || now - at < DISPATCH_SUSPECT_MS) { plausible.push(id); continue; }
+    suspect.push({ id, role: (rec && rec.role) || 'an agent', mins: Math.round((now - at) / 60000) });
+  }
+  return { plausible, suspect };
 }
 
 function readFront(file) {
@@ -345,7 +546,22 @@ if (age !== null && age > FRESH_MS) {
 // foreground — but it may not stop, because nothing will bring it back.
 if (count <= 0 || leftBehind >= count) {
   const ci = (front.waiting && front.waiting.ci) || [];
-  if (!ci.length || dispatched.length) allow();
+  if (!ci.length) allow();
+  // A dispatch opens this hatch only while it can still plausibly have an agent
+  // behind it. See dispatchAges: a mark can be written before the launch, so a
+  // launch that never happened was 90 minutes of silence with nothing coming.
+  const { plausible, suspect } = dispatchAges(graphDir, dispatched);
+  if (plausible.length) allow();
+  const gone = suspect.length
+    ? '\nThe dispatch mark(s) on this board did NOT keep this quiet: ' +
+      `${suspect.map((d) => `${d.id} → ${d.role}, marked ${d.mins}m ago`).join('; ')}.\n` +
+      'A mark that old is not an agent at work — it is what a mark written before a launch that never\n' +
+      'happened looks like. If that work really is out it will wake you; if it is gone, return the\n' +
+      'ticket to the board with\n' +
+      `  \`dispatch-record.cjs clear ${suspect[0].id} --graph ${graphDir}\`\n` +
+      'The --graph is not optional: this hook\'s cwd is the SESSION\'s, and a clear run from the wrong\n' +
+      'one reports "no dispatch recorded" and changes nothing.'
+    : '';
   verdict(
     `shipyard: nothing is actionable, but ${ci.length} PR(s) are still in CI (${ci.join(', ')}) — ` +
     'so this is a WAIT, not a fixpoint, and stopping here ends the run for good.\n' +
@@ -358,7 +574,8 @@ if (count <= 0 || leftBehind >= count) {
     '  3. loop back. Stop only on `fixpoint: YES`.\n' +
     'A cascade needs one such round PER TICKET: each squash-merge makes the next child DIRTY, which\n' +
     'costs a base-merge, a push and a full CI run. Three empty waits and `ci-wait.cjs` escalates by\n' +
-    'itself, which parks the ticket and makes this refusal stop — a stuck pipeline ends with a person.' + whereToSync
+    'itself, which parks the ticket and makes this refusal stop — a stuck pipeline ends with a person.' +
+    gone + whereToSync
   );
 }
 
