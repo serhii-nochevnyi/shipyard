@@ -303,10 +303,23 @@ case "$cmd" in
     while IFS=$'\t' read -r ticket wt_path branch; do
       [[ -n "$ticket" ]] || continue
       total=$((total + 1))
-      verdict=""; reason=""
+      verdict=""; reason=""; porcelain=""
       if [[ ! -d "$wt_path" ]]; then
         verdict="gone"; reason="registered but the directory is missing"
-      elif [[ -n "$(git -C "$wt_path" status --porcelain 2>/dev/null)" ]]; then
+      elif ! porcelain="$(git -C "$wt_path" status --porcelain 2>/dev/null)"; then
+        # A `git status` that FAILS prints nothing, and the old
+        # `[[ -n "$(git … status --porcelain)" ]]` read that silence as a clean
+        # tree: a broken worktree, an unreadable gitdir link, an IO error or a
+        # permission fault fell through to `live`/`landed`/`review` while the
+        # reason claimed "tree clean" about a tree nothing had established
+        # anything about. `landed` is the one verdict `--prune` acts on, so it
+        # must be EARNED by a check that ANSWERED — the same rule the under-lock
+        # re-check below applies one layer later, and this is the layer that
+        # decides. Deliberately NOT `dirty`: nobody made any edits to go looking
+        # for, and that conflation is exactly what the prune path stopped doing.
+        # `review` is the honest verdict — reported, kept, a human's call.
+        verdict="review"; reason="git status failed — cannot confirm the tree is clean; inspect by hand"
+      elif [[ -n "$porcelain" ]]; then
         verdict="dirty"; reason="uncommitted changes — never removed by gc"
       elif [[ -n "$branch" ]] && git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
         verdict="live"; reason="origin/$branch still exists"

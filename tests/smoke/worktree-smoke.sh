@@ -355,6 +355,31 @@ grep -q 'cannot confirm the tree is clean' "$W/race2.err" \
   || bad "gc tells a failed status from a dirty tree" "$(cat "$W/race2.err")"
 cp "$W/t0505-gitlink" "$GCWT/T-05-05/.git"
 
+# ── the CLASSIFICATION fails closed on an unanswered status too ─────────────
+# The re-check above is the last line of defence; this is the first one. Same
+# injection, no lock held, so it is gc's own classification pass that cannot
+# read the porcelain — and `[[ -n "$(git … status --porcelain)" ]]` read that
+# silence as a CLEAN tree, so a ticket delivery-state calls merged came out
+# `landed`, reason "tree clean", counted as removable. A check that could not
+# answer must earn nothing: `review` (kept, reported), and the reason has to
+# name the failed check, because "clean" about an unreadable tree is a lie a
+# reader has no way to catch.
+printf 'gitdir: %s\n' "$W/no-such-gitdir" > "$GCWT/T-05-05/.git"
+blind="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
+[[ "$(verdict_of "$blind" T-05-05)" == "review" ]] \
+  && ok "gc: a worktree whose git status fails is review, not landed" \
+  || bad "gc: an unanswered status check must not read as clean" "$blind"
+grep -q 'cannot confirm the tree is clean' <<<"$(reason_of "$blind" T-05-05)" \
+  && ok "…and the reason names the check that failed, not a clean tree" \
+  || bad "gc: classification names the failed status" "$(reason_of "$blind" T-05-05)"
+run_gc gc --prune >/dev/null 2>&1 || true
+if [[ -d "$GCWT/T-05-05" ]]; then
+  ok "gc --prune removes nothing whose cleanliness classification never established"
+else
+  bad "gc --prune fails closed on a failed status" "T-05-05 was removed on an unanswered check"
+fi
+cp "$W/t0505-gitlink" "$GCWT/T-05-05/.git"
+
 # ── --prune removes exactly the landed one ──────────────────────────────────
 run_gc gc --prune >/dev/null 2>&1 || true
 [[ ! -d "$GCWT/T-05-05" ]] \
