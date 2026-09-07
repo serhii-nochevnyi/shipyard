@@ -297,9 +297,16 @@ board still showing live work means the loop dispatched agents off it and never
 re-derived it — so the gate blocks once and asks for a `state-sync`, rather than
 repeating stale contents as fact.
 
-It stays out of the way otherwise: silent outside conveyor projects, when only CI
-is pending, when every actionable item is left behind in a phase the run has moved
-past, on a stop it has already blocked once, and whenever `SHIPYARD_STOP_GATE=off`.
+A board holding nothing but PRs in CI is a **wait, not a fixpoint**: the babysit
+loop is woken by agents finishing, so with no agent out nothing would ever wake
+the session. The gate blocks there and names `ci-wait.cjs`, which waits in the
+foreground and terminates by itself.
+
+It stays out of the way otherwise: silent outside conveyor projects, when every
+actionable item is left behind in a phase the run has moved past, once a session
+has spent its refusals — one per cascade ROUND, and a refusal repeats only after
+the board advanced, up to `SHIPYARD_STOP_GATE_MAX_BLOCKS` (12) — and whenever
+`SHIPYARD_STOP_GATE=off`.
 
 To get both on your **host** Claude Code (it edits your user settings, not the
 plugin):
