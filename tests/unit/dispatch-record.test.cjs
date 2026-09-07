@@ -23,7 +23,11 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
 const DISPATCH = path.join(SCRIPTS, 'dispatch-record.cjs');
 const STOP_GATE = path.join(SCRIPTS, 'stop-gate.cjs');
-const { activeDispatches, DISPATCH_TTL_MS } = require(DISPATCH);
+const { activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DISPATCH_TTL_MS } = require(DISPATCH);
+// One role vocabulary for the whole conveyor — the same list `mark` validates
+// against. The per-role subject table below is checked against IT, not against a
+// second list written out here.
+const { ROLES } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
 
 // SHIPYARD_GRAPH_DIR is the other explicit channel for "which graph"; a value
 // inherited from the runner would decide these cases instead of the flag.
@@ -56,7 +60,12 @@ const store = (graph) => {
 };
 
 const READY = { status: 'pending', ready: true };
-const OPEN_PR = { status: 'pr-open', pr: 7, draft: true, checks: { total: 2, failing: 0, pending: 0 } };
+// `head_sha` is what a fixer's push moves. state-sync starts recording it in
+// T-24-04, so every case here must hold with it and without it.
+const OPEN_PR = {
+  status: 'pr-open', pr: 7, draft: true, head_sha: 'aaaa1111',
+  checks: { total: 2, failing: 0, pending: 0 },
+};
 
 suite('dispatch-record — a dispatched ticket stops being offered');
 
@@ -162,6 +171,150 @@ test('a dispatch for a MERGED ticket suppresses nothing', () => {
   execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'pr-sentinel'], { cwd: project });
   writeState(graph, { 'T-01-01': { status: 'merged', pr: 7 } });
   assert.deepStrictEqual(activeDispatches(project), {}, 'whoever was working on it, it landed');
+});
+
+suite('dispatch-record — the record lifts on the OWNER\'s output, never on a CI tick');
+
+// A1, ADR-002 D1. Trigger 1 was bound to escalation-record's shared fingerprint,
+// which hashes the check TALLIES — so a guard's dispatch expired the moment ANY
+// check finished, which is minutes after the fixer was handed the work and long
+// before it has pushed anything. The front then re-offered the PR, the stop gate
+// blocked over it, and a second fixer could be dispatched at the same PR.
+//
+// A dispatch is a claim that an agent is producing something. It ends when THAT
+// OUTPUT exists, and the output is different per role — so the field list is per
+// role too, and no role's list names a tally.
+
+const markFor = (project, ticket, role) =>
+  execFileSync('node', [DISPATCH, 'mark', ticket, role], { cwd: project });
+
+test('a finished check does NOT lift a fixer\'s dispatch', () => {
+  // The measured shape: review-fix is dispatched at a PR with three checks still
+  // running; one finishes 40 seconds later, having nothing to do with the fixer.
+  const { project, graph } = scratch({
+    'T-01-01': { ...OPEN_PR, draft: false, checks: { total: 17, failing: 1, pending: 3 } },
+  });
+  markFor(project, 'T-01-01', 'review-fix');
+  assert.ok(activeDispatches(project)['T-01-01'], 'held while the fixer works');
+
+  const s = readState(graph);
+  s['T-01-01'].checks = { total: 17, failing: 1, pending: 2 };
+  writeState(graph, s);
+  assert.ok(activeDispatches(project)['T-01-01'],
+    'a check finishing is not the fixer\'s output — the dispatch must hold');
+
+  s['T-01-01'].head_sha = 'bbbb2222';
+  writeState(graph, s);
+  assert.deepStrictEqual(activeDispatches(project), {},
+    'a new head IS the fixer\'s output — the board owns the ticket again');
+});
+
+test('an executor\'s dispatch still lifts the moment a branch or a PR appears', () => {
+  // Unchanged behaviour, pinned beside the change: the executor's output is
+  // visible as status/branch/pr, and none of that is a tally.
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  markFor(project, 'T-01-01', 'executor');
+  const s = readState(graph);
+  s['T-01-01'] = { status: 'branched', ready: true, branch: 'ticket/T-01-01-x' };
+  writeState(graph, s);
+  assert.deepStrictEqual(activeDispatches(project), {}, 'lifted, with no clear call');
+});
+
+test('arch-review holds through a re-run and lifts on the trailer it writes', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...OPEN_PR, draft: false } });
+  markFor(project, 'T-01-01', 'arch-review');
+  const s = readState(graph);
+  s['T-01-01'].checks = { total: 34, failing: 0, pending: 12 };
+  writeState(graph, s);
+  assert.ok(activeDispatches(project)['T-01-01'], 'a whole pipeline re-run is not a verdict');
+  s['T-01-01'].gate = { 'arch-review': 'conform' };
+  writeState(graph, s);
+  assert.deepStrictEqual(activeDispatches(project), {}, 'the trailer is the judge\'s output');
+});
+
+test('pr-sentinel holds through a re-run and lifts when the base moves', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...OPEN_PR, draft: false, pr_base: 'ticket/T-01-00-x' } });
+  markFor(project, 'T-01-01', 'pr-sentinel');
+  const s = readState(graph);
+  s['T-01-01'].checks = { total: 3, failing: 0, pending: 1 };
+  writeState(graph, s);
+  assert.ok(activeDispatches(project)['T-01-01'], 'the guard has not merged or retargeted anything yet');
+  s['T-01-01'].pr_base = 'epic/24-the-conveyor';
+  writeState(graph, s);
+  assert.deepStrictEqual(activeDispatches(project), {}, 'the retarget is the guard\'s own output');
+});
+
+test('every role in the ladder has a subject, and no subject names a check tally', () => {
+  // The table is keyed off `ROLES` — the vocabulary `mark` already validates
+  // against — so a role added to the ladder cannot silently fall back to a list
+  // that describes somebody else's output. And the whole point of the ticket: a
+  // tally appears in NO role's fields.
+  for (const role of ROLES) {
+    const spec = DISPATCH_SUBJECT[role];
+    assert.ok(spec, `${role} has no dispatch subject`);
+    assert.ok(spec.fields.length, `${role}'s subject names no field`);
+    assert.ok(spec.lifts, `${role}'s subject has no sentence for the board`);
+    for (const f of spec.fields) {
+      assert.ok(!/^checks/.test(f), `${role} must not expire against ${f}`);
+    }
+  }
+});
+
+test('a role\'s fingerprint moves only for that role\'s own output', () => {
+  const base = { ...OPEN_PR, draft: false, pr_base: 'epic/24-x' };
+  const tick = { ...base, checks: { total: 17, failing: 1, pending: 9 } };
+  for (const role of ROLES) {
+    assert.equal(dispatchFingerprint(role, tick), dispatchFingerprint(role, base),
+      `${role}'s dispatch must survive a CI tick`);
+  }
+  assert.notEqual(dispatchFingerprint('review-fix', { ...base, head_sha: 'zzzz' }),
+    dispatchFingerprint('review-fix', base), 'a push is the fixer\'s output');
+  assert.notEqual(dispatchFingerprint('executor', { ...base, status: 'branched' }),
+    dispatchFingerprint('executor', base), 'a branch is the executor\'s');
+});
+
+test('a kind-less record from the previous release keeps the shared hash', () => {
+  // No store migration: a dispatch written before this split is bound to the hash
+  // that includes the tallies, and it keeps expiring against that one until it
+  // lifts — within the TTL either way.
+  const { project, graph } = scratch({ 'T-01-01': { ...OPEN_PR, draft: false } });
+  const { fingerprint } = require(path.join(SCRIPTS, 'escalation-record.cjs'));
+  fs.writeFileSync(path.join(graph, 'dispatches.json'), JSON.stringify({
+    tickets: {
+      'T-01-01': {
+        role: 'review-fix', at: new Date().toISOString(),
+        fingerprint: fingerprint(readState(graph)['T-01-01']), pr: 7,
+      },
+    },
+  }));
+  assert.ok(activeDispatches(project)['T-01-01'], 'in force');
+  const s = readState(graph);
+  s['T-01-01'].checks = { total: 2, failing: 0, pending: 1 };
+  writeState(graph, s);
+  assert.deepStrictEqual(activeDispatches(project), {},
+    'and it still lifts on a tally change — the old rule, unchanged');
+});
+
+test('mark records which hash the dispatch is bound to', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...OPEN_PR, draft: false } });
+  markFor(project, 'T-01-01', 'review-fix');
+  const rec = store(graph)['T-01-01'];
+  assert.equal(rec.fingerprint_kind, 'role', 'so the reader knows which rule to compare with');
+  assert.equal(rec.fingerprint, dispatchFingerprint('review-fix', readState(graph)['T-01-01']));
+});
+
+test('the board\'s sentence names the output that will lift it, and not a check', () => {
+  // The reader who does not know what ends the dispatch reaches for `clear`, and a
+  // `clear` that becomes routine clears work that has not returned. The old
+  // sentence listed "a check" among the things that return the ticket, which was
+  // both wrong and an invitation to distrust the board.
+  const why = dispatchWhy('T-01-01', { role: 'review-fix', at: new Date().toISOString() });
+  assert.ok(/review-fix/.test(why), why);
+  assert.ok(/head/.test(why), `it must name the fixer's own output: ${why}`);
+  assert.ok(!/a check/.test(why), `and must not promise a check lifts it: ${why}`);
+  assert.ok(/\d+m/.test(why), 'the timeout is still named');
+  assert.ok(/branch/.test(dispatchWhy('T', { role: 'executor', at: new Date().toISOString() })),
+    'and each role gets its own output named');
 });
 
 suite('dispatch-record — the stop gate goes silent, measured end to end');
