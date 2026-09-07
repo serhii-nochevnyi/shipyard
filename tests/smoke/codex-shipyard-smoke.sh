@@ -20,7 +20,7 @@ node --check scripts/merge-codex-config.cjs
 bash -n scripts/install-shipyard-codex.sh
 
 # ── isolate: throwaway HOME so ~/.codex and ~/.agents never touch the host ────
-GSD_CORE_VERSION="${GSD_CORE_VERSION:-1.9.1}"
+GSD_CORE_VERSION="${GSD_CORE_VERSION:-1.13.0}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK"
