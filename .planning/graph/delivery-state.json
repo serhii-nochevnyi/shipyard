@@ -252,7 +252,7 @@
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false
     },
     "base": "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i",
@@ -402,10 +402,16 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/37",
     "pr_base": "epic/26-positive-evidence-before-a-mutation",
     "pr_created_at": "2026-09-07T14:16:45Z",
+    "gate": {
+      "arch-review": "conform",
+      "drift-check": "skipped",
+      "degenerate-green": "clean",
+      "checks": "green"
+    },
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false
     },
     "base": "epic/26-positive-evidence-before-a-mutation",

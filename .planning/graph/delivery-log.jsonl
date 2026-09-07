@@ -315,3 +315,8 @@
 {"ts":"2026-09-07T14:48:02.217Z","event":"dispatch","ticket":"T-26-06","role":"pr-sentinel","pr":39,"by":"dispatch-record"}
 {"ts":"2026-09-07T14:49:11.779Z","event":"reuse_scan","ticket":"T-24-06","hits":6,"verdict":"fresh"}
 {"ts":"2026-09-07T14:49:11.813Z","event":"dispatch","ticket":"T-24-06","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-07T14:50:59.973Z","event":"degenerate_green","ticket":"T-26-01","pr":37,"findings":0,"modes":"none"}
+{"ts":"2026-09-07T14:52:31.361Z","event":"merge","ticket":"T-26-01","pr":37,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-07T14:52:53.970Z","event":"base_merge","ticket":"T-26-06","pr":39,"base":"epic/26-positive-evidence-before-a-mutation","head":"a622bf0a1d2998abe093f4ea8896512f1b26c122","result":"merged-cleanly","trailer":"stripped"}
+{"ts":"2026-09-07T14:54:12.321Z","event":"dispatch","ticket":"T-26-06","role":"arch-review","pr":39,"by":"dispatch-record"}
+{"ts":"2026-09-07T14:55:11.251Z","event":"dispatch","ticket":"T-26-04","role":"review-fix","pr":38,"by":"dispatch-record"}

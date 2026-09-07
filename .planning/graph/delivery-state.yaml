@@ -221,7 +221,7 @@
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/44"
   pr_base: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
   pr_created_at: "2026-09-07T14:46:24Z"
-  checks: {"total":1,"failing":0,"pending":1,"none_reported":false}
+  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
   base: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
   merge_scope: "stacked"
@@ -336,7 +336,8 @@
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/37"
   pr_base: "epic/26-positive-evidence-before-a-mutation"
   pr_created_at: "2026-09-07T14:16:45Z"
-  checks: {"total":1,"failing":0,"pending":1,"none_reported":false}
+  gate: {"arch-review":"conform","drift-check":"skipped","degenerate-green":"clean","checks":"green"}
+  checks: {"total":1,"failing":0,"pending":0,"none_reported":false}
   base: "epic/26-positive-evidence-before-a-mutation"
   epic: "epic/26-positive-evidence-before-a-mutation"
   merge_scope: "stacked"

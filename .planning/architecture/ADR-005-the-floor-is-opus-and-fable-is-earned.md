@@ -79,6 +79,33 @@ plans written the same day), executors about 45%, guards about 22%.
   alias to Fable 5, so `gsd-tune` reports that as REQUIRED drift at Step 0 of
   every delivery, naming the floor and `ANTHROPIC_DEFAULT_FABLE_MODEL` as the
   two ways to miss it.
+- **D6 — Codex is not the same decision, because it is not the same surface.**
+  On Claude shipyard emits a tier alias per dispatch and the tool resolves it.
+  On Codex an agent is a STATIC `~/.codex/agents/<name>.toml` written at install
+  time, and no dispatch carries a model at all. So D1 has no Codex counterpart:
+  `capForRuntime` already flattens every role to the workhorse tier, so all
+  seven agents carry one model (`gpt-5.6-terra` on this host) and there is no
+  floor to raise. D2 is the WHOLE mechanism there rather than half of it, which
+  is what T-25-02 already delivers by writing effort and no model, so the user's
+  own `config.toml` default applies — `gpt-6-astra` here, with a 1M window. And
+  D4 has no counterpart either: with Astra as the default, every Codex role
+  already has the window that R1 exists to reach for.
+- **D7 — The `max` clamp on Codex goes; both halves of its premise are false.**
+  `resolveEffort` reads `if (level === 'max' && runtime === 'codex') return
+  'xhigh'`, commented "`max` is Anthropic-only; GSD clamps it to xhigh on
+  Codex". Verified against GSD 1.12/1.13's catalog: `codexModelEffort._baseline`
+  advertises `low, medium, high, xhigh, max`, `advertisedCodexEffort` falls back
+  to that baseline for any model the table does not name (which is what
+  `gpt-6-astra` is), and the resolver's only downgrade is "the nearest
+  advertised level below" for a level a model does not support. GSD accepts
+  `max` on Codex; shipyard invented the clamp and attributed it to GSD. Under
+  D2 that costs the judgment roles their top rung on the one axis Codex has.
+  `minimal` keeps its clamp to `low`, for a different and still-true reason:
+  Workflow's enum has no such value.
+- **D8 — Astra has a version floor too.** First-class `gpt-6-astra`
+  configuration arrived in Codex CLI 0.153.1; this host runs 0.147.0 and the
+  current release is 0.153.4. That is the Codex mirror of the Fable 5.1 floor,
+  so it belongs in the same `gsd-tune` check rather than in a second mechanism.
 - **Deferred — the concurrency axis.** A per-session budget cannot be expressed
   as a tier, and the run that proved it also proved the recovery works: the
   interrupted executors' uncommitted RED tests were handed to their successors

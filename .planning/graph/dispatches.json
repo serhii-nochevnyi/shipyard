@@ -18,21 +18,15 @@
       "fingerprint": "983114aada72751a",
       "pr": null
     },
-    "T-26-01": {
-      "role": "arch-review",
-      "at": "2026-09-07T14:47:31.949Z",
-      "fingerprint": "5f8433d99a74c09b",
-      "pr": 37
-    },
     "T-26-04": {
-      "role": "pr-sentinel",
-      "at": "2026-09-07T14:48:02.176Z",
+      "role": "review-fix",
+      "at": "2026-09-07T14:55:11.251Z",
       "fingerprint": "69549f2d48df2bd3",
       "pr": 38
     },
     "T-26-06": {
-      "role": "pr-sentinel",
-      "at": "2026-09-07T14:48:02.217Z",
+      "role": "arch-review",
+      "at": "2026-09-07T14:54:12.321Z",
       "fingerprint": "251e61837aabcd77",
       "pr": 39
     }
