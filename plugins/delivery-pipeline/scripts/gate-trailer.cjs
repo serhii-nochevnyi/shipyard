@@ -10,7 +10,7 @@
 //
 // WHY A SCRIPT. The trailer IS the merge gate: `sentinel.cjs merge` refuses
 // without it. It was assembled by hand in two prompts (`deliver.md`,
-// `pr-sentinel.md`) via `gh pr edit --body`, which left three defects that no
+// `pr-sentinel.md`) via `gh pr edit --body`, which left four defects that no
 // amount of prose could hold:
 //
 //   1. IT NAMED NO DIFF. The sequence that costs the most is ordinary: record
@@ -28,6 +28,12 @@
 //      and it never has a stale head underneath.
 //   3. "WRITING IT WHILE A THREAD IS OPEN IS FALSIFYING THE GATE" was a
 //      sentence. It is now a refusal.
+//   4. IT ACCEPTED WHAT ITS OWN USAGE DOES NOT NAME. The four keys took any
+//      string, so `--arch-review confrom` recorded a verdict no reader counts,
+//      and a misspelt `--rep` wrote the trailer onto a same-numbered PR in
+//      another repository. The vocabulary is enforced below, at exit 2 and
+//      before any `gh` call — the single writer of the gate must not accept
+//      input its own usage does not document.
 //
 // The three readers (`state-sync.cjs`, `sentinel.cjs`, `front.cjs`) had three
 // copies of the parser and two of the conform test. The parser, the
@@ -146,21 +152,82 @@ if (require.main === module) {
     return v;
   };
 
+  // THE VOCABULARY, AS CODE. `flag()` checks only that a value exists and does
+  // not itself start with `--`, which left every one of the four keys accepting
+  // any string and writing it into the trailer verbatim. The gate is fail-CLOSED
+  // on that axis — `gateKind` compares against `conform`, so a typo reads as
+  // `unrecorded` and costs one extra arch-review, never a merge — but a single
+  // writer whose accepted input is wider than its own USAGE is a contract held by
+  // prose, and prose rules get skipped. Two shapes, deliberately different:
+  //
+  //   CLOSED — a fixed set of words, compared case-insensitively BECAUSE the
+  //            readers lowercase before comparing. A writer stricter than the
+  //            gate it writes for would refuse a trailer the gate accepts, which
+  //            is the same disagreement in the other direction.
+  //   SHAPED — `--degenerate-green` carries the detector's `counts.total`, so its
+  //            vocabulary is unbounded and only its shape can be stated: `clean`
+  //            at zero, the count otherwise, `skipped` when the detector exited 2
+  //            (`references/pr-sentinel.md`). A numeric value is legitimate.
+  const CLOSED = {
+    'arch-review': {
+      allowed: ['conform'],
+      why: 'a `violation` or `adr-outdated` verdict ENDS the action — the fixer pushes, or the '
+        + 'ticket is escalated — and no trailer is written at all (references/pr-sentinel.md), '
+        + 'so nothing may ever record a non-conform verdict through this script',
+    },
+    'drift-check': {
+      allowed: ['fresh', 'skipped'],
+      why: 'a `drifted` ticket is parked before it is executed, so it has no PR to record against',
+    },
+    checks: { allowed: ['green'], why: 'the trailer is only ever written on a green PR' },
+  };
+  const DEGENERATE_GREEN = /^(?:clean|skipped|\d+)$/i;
+
+  const closed = (name, value) => {
+    const { allowed, why } = CLOSED[name];
+    if (allowed.includes(String(value).toLowerCase())) return value;
+    die(`--${name} does not accept "${value}" — expected `
+      + `${allowed.map((v) => `\`${v}\``).join(' or ')}; ${why}\nusage: ${USAGE}`, 2);
+    return null; // unreachable: die() exits.
+  };
+
   if (argv[0] !== 'write') die(`unknown command "${argv[0] || ''}"\nusage: ${USAGE}`, 2);
   const pr = Number(argv[1]);
   if (!Number.isInteger(pr) || pr <= 0) die(`write needs a PR number\nusage: ${USAGE}`, 2);
 
+  // Every flag the writer knows. An argument outside this list is REFUSED rather
+  // than ignored, because the one that matters is invisible to every reader:
+  // `--rep acme/other` does not fail, it leaves `--repo` unset, and the verdict is
+  // then written onto whatever repository the cwd resolves to — a same-numbered PR
+  // next door. A silently misrouted trailer is worse than a typo inside one.
+  const FLAGS = ['repo', 'arch-review', 'drift-check', 'degenerate-green', 'checks'];
+  for (let i = 2; i < argv.length; i += 2) {
+    const name = String(argv[i]);
+    if (!name.startsWith('--') || !FLAGS.includes(name.slice(2))) {
+      die(`unexpected argument "${name}"\nusage: ${USAGE}`, 2);
+    }
+  }
+
+  // Values are validated HERE, ahead of every `gh` call: a usage error must cost
+  // no network round trip, and must never be discovered between reading the body
+  // and writing it back.
   const repo = flag('repo');
   const repoArg = repo ? ['--repo', repo] : [];
   const archReview = flag('arch-review');
   if (!archReview) die(`--arch-review is required (the verdict IS the gate)\nusage: ${USAGE}`, 2);
+  closed('arch-review', archReview);
   const driftCheck = flag('drift-check');
   if (!driftCheck) die(`--drift-check is required\nusage: ${USAGE}`, 2);
+  closed('drift-check', driftCheck);
   const degenerateGreen = flag('degenerate-green');
   if (!degenerateGreen) die(`--degenerate-green is required\nusage: ${USAGE}`, 2);
+  if (!DEGENERATE_GREEN.test(degenerateGreen)) {
+    die(`--degenerate-green does not accept "${degenerateGreen}" — expected \`clean\`, \`skipped\`, or `
+      + `the detector's finding count (a non-negative integer)\nusage: ${USAGE}`, 2);
+  }
   // The trailer is only ever written on a green PR, so `green` is the default
   // rather than a thing every caller has to remember to say.
-  const checks = flag('checks') || 'green';
+  const checks = closed('checks', flag('checks') || 'green');
 
   // The live PR: the body to rewrite and the head the verdict is about. A head
   // the writer cannot read is fatal — writing a head-less trailer would have

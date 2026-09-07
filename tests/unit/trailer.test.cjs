@@ -62,6 +62,11 @@ fs.writeFileSync(GH, [
   '  "api graphql"*)',
   '    if [ -n "${SHIPYARD_TRAILER_THREADS:-}" ]; then cat "$SHIPYARD_TRAILER_THREADS";',
   '    else echo \'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\'; fi ;;',
+  // The writer's own view is matched by its FIELD LIST, not by the absence of
+  // `--repo`: with `--repo acme/demo` its argv starts `pr view 9 --repo` too, the
+  // same prefix as the reviewers.cjs call below, and the first matching case wins.
+  // No other stubbed call asks for `body,headRefOid`.
+  '  *"--json body,headRefOid"*) cat "$SHIPYARD_TRAILER_PRVIEW" ;;',
   // reviewers.cjs asks for the review DECISION with an explicit --repo, which is
   // a different argv shape from the body read below. Unanswered it merely warns
   // (the call is tolerated), but then every writer case would run with a stub
@@ -496,6 +501,122 @@ test('neither doc hand-writes a gate_status: line into a gh pr edit body', () =>
       );
     });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE WRITER ACCEPTS ONLY WHAT ITS USAGE NAMES
+//
+// This script is THE single writer of the merge gate, and its argv parsing used
+// to check only that a flag was present with a value not itself starting with
+// `--`. So `--arch-review confrom --drift-check freshh --checks red` exited 0 and
+// wrote all three into the trailer verbatim, and `--rep acme/other` left `--repo`
+// unset and recorded the verdict against whatever repository the cwd resolved to.
+//
+// The severity is NOT a hole in the merge gate: `gateKind` compares
+// `arch-review` against `conform` case-insensitively, so a typo reads as
+// `unrecorded` and costs an extra arch-review — the fail-CLOSED direction. What
+// it was is a single writer whose contract lived in its USAGE string instead of
+// in its code, which is this repository's standing defect class. So the
+// vocabulary is now enforced, at exit 2 (a usage error) and before any `gh` call.
+//
+// The two directions are tested together on purpose: a writer stricter than the
+// readers would refuse a trailer the gate accepts, and a writer looser than its
+// own docs is where this started.
+// ═══════════════════════════════════════════════════════════════════════════
+
+suite('gate-trailer write: the vocabulary its USAGE names, and nothing else');
+
+// The three required flags, as a baseline the cases below override one key of.
+const REQUIRED = { 'arch-review': 'conform', 'drift-check': 'fresh', 'degenerate-green': 'clean' };
+const argsWith = (over = {}, extra = []) => {
+  const out = ['write', '9'];
+  for (const [k, v] of Object.entries({ ...REQUIRED, ...over })) out.push(`--${k}`, v);
+  return out.concat(extra);
+};
+
+// REFUSED. Each row is a value (or an argument) the USAGE does not name.
+for (const [what, over, extra, expected] of [
+  // A typo in any of the four keys.
+  ['a misspelt conform verdict', { 'arch-review': 'confrom' }, [], /--arch-review/],
+  ['a misspelt drift verdict', { 'drift-check': 'freshh' }, [], /--drift-check/],
+  ['a misspelt degenerate-green report', { 'degenerate-green': 'cleen' }, [], /--degenerate-green/],
+  ['a misspelt check state', {}, ['--checks', 'greeen'], /--checks/],
+  // A verdict that is real but must never be written: `violation` and
+  // `adr-outdated` END the action (pr-sentinel.md / deliver.md) — the fixer
+  // pushes or the ticket is escalated, and no trailer is written at all. So the
+  // refusal is a documented rule, not only a typo guard.
+  ['the violation verdict, which ends the action instead', { 'arch-review': 'violation' }, [], /violation|conform/],
+  ['the adr-outdated verdict, which escalates instead', { 'arch-review': 'adr-outdated' }, [], /conform/],
+  // `drifted` never reaches a PR: a drifted ticket is PARKED by drift-record
+  // before it is executed, so it has no branch, no PR and no verdict to record.
+  ['a drifted verdict, which parks the ticket rather than reaching a PR', { 'drift-check': 'drifted' }, [], /--drift-check/],
+  // `--degenerate-green` is closed in SHAPE, not in vocabulary: `counts.total`
+  // is any non-negative integer. These are outside the shape.
+  ['a negative finding count', { 'degenerate-green': '-1' }, [], /--degenerate-green/],
+  ['a fractional finding count', { 'degenerate-green': '3.5' }, [], /--degenerate-green/],
+  ['a check state other than green, on a trailer only written for a green PR', {}, ['--checks', 'red'], /--checks/],
+  // The argument the readers can never notice: a misspelt `--repo` used to be
+  // ignored, leaving the repo to be resolved from the cwd — a verdict written
+  // onto a same-numbered PR in the wrong repository. Silently misrouting the
+  // trailer is worse than a typo inside one.
+  ['a misspelt --repo, which used to silently retarget the write', {}, ['--rep', 'acme/other'], /--rep\b/],
+  ['a stray positional argument', {}, ['oops'], /oops/],
+]) {
+  test(`refused: ${what}`, () => {
+    const r = writeTrailer({ args: argsWith(over, extra) });
+    assert.strictEqual(r.status, 2, `expected a usage refusal (exit 2), got ${r.status}\n${r.stdout}\n${r.stderr}`);
+    assert.strictEqual(r.edited, null, `the PR body was edited anyway:\n${r.edited}`);
+    assert.ok(expected.test(r.stderr), `refusal does not name the offending input: ${r.stderr}`);
+    assert.ok(/usage: /.test(r.stderr), `a usage error must print the usage: ${r.stderr}`);
+  });
+}
+
+// ACCEPTED. Every value the current callers legitimately pass must still write.
+// Without these the refusals above could be satisfied by a writer that refuses
+// everything, which would take the conveyor down rather than tighten it.
+for (const [what, over, extra, expected] of [
+  ['the detector reporting a count', { 'degenerate-green': '3' }, [], 'degenerate-green=3'],
+  ['a two-digit count', { 'degenerate-green': '12' }, [], 'degenerate-green=12'],
+  ['zero findings written as a number rather than `clean`', { 'degenerate-green': '0' }, [], 'degenerate-green=0'],
+  ['the detector having exited 2', { 'degenerate-green': 'skipped' }, [], 'degenerate-green=skipped'],
+  ['drift-check not having run for this ticket', { 'drift-check': 'skipped' }, [], 'drift-check=skipped'],
+  ['--checks green stated explicitly', {}, ['--checks', 'green'], 'checks=green'],
+  ['--checks omitted, which defaults to green', {}, [], 'checks=green'],
+  // The sentinel passes `--repo` on every call (without it a cross-repo ticket
+  // resolves to the wrong repository), so the argument scan must not eat it.
+  ['--repo, which the sentinel passes on every call', {}, ['--repo', 'acme/demo'], 'arch-review=conform'],
+]) {
+  test(`accepted: ${what}`, () => {
+    const r = writeTrailer({ args: argsWith(over, extra) });
+    assert.strictEqual(r.status, 0, `expected the write to succeed\n${r.stdout}\n${r.stderr}`);
+    const lines = r.edited.split('\n').filter((l) => /^\s*gate_status:/i.test(l));
+    assert.strictEqual(lines.length, 1, `expected one trailer, got:\n${r.edited}`);
+    assert.ok(lines[0].includes(expected), `expected \`${expected}\` in: ${lines[0]}`);
+  });
+}
+
+test('the writer accepts exactly the casing the readers do, and no other', () => {
+  // `gateKind` lowercases before comparing, so `CONFORM` IS a conform verdict to
+  // all three readers. A writer that refused it would be stricter than the gate
+  // it writes for; one that accepted `confrom` would be looser than its own docs.
+  const r = writeTrailer({ args: argsWith({ 'arch-review': 'CONFORM', 'drift-check': 'Skipped' }) });
+  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(gateConform(parseGate(r.edited), SHA_A), true, `the reader must accept what was written:\n${r.edited}`);
+  assert.strictEqual(gateKind(parseGate(r.edited), SHA_B), 'stale', 'and still bind it to the head it judged');
+});
+
+test('a rejected value is refused BEFORE the PR is read, not after', () => {
+  // A usage error must cost no network round trip and must never be discovered
+  // between reading the body and writing it back. With no PR view file present
+  // at all, the stub would fail loudly on any `gh pr view`; the refusal must
+  // still be the vocabulary one.
+  const r = spawnSync(process.execPath, [TRAILER, ...argsWith({ 'arch-review': 'confrom' })], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${BIN}${path.delimiter}${process.env.PATH}`, SHIPYARD_TRAILER_PRVIEW: path.join(W, 'does-not-exist.json') },
+  });
+  assert.strictEqual(r.status, 2, `${r.stdout}\n${r.stderr}`);
+  assert.ok(/--arch-review/.test(r.stderr), r.stderr);
+  assert.ok(!/gh pr view/.test(r.stderr), `the PR was read before the argv was checked: ${r.stderr}`);
 });
 
 done();
