@@ -36,12 +36,25 @@ argv="$*"
 case "$argv" in
   "repo view --json defaultBranchRef"*) echo "main" ;;
   "pr list --state open"*)
-    # the open-only pass: reviewDecision + body (the gate_status trailer). PR
-    # 101's trailer names the SAME head the row below reports, which is the
-    # ordinary path — the mismatch has its own fixture at the end of this file.
-    cat <<'JSON'
-[{"number":101,"reviewDecision":null,"body":"Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=1111111111111111111111111111111111111111"},
- {"number":102,"reviewDecision":"CHANGES_REQUESTED","body":"Ticket: T-01-02\n"}]
+    # the open-only pass: reviewDecision + body (the gate_status trailer) + the
+    # merge state. PR 101's trailer names the SAME head the row below reports,
+    # which is the ordinary path — the mismatch has its own fixture at the end of
+    # this file.
+    #
+    # `mergeStateStatus` is answered HERE and NOWHERE ELSE, deliberately: the bulk
+    # `pr list --state all` row below does not carry it, so a `merge_state` in the
+    # written board can only have come from this open-only pass — which is the
+    # rule ADR-002 imposes (never a new field in the bulk window) expressed as a
+    # fixture rather than as a comment.
+    #
+    # UNQUOTED heredoc: SENTINEL_SMOKE_MERGE_STATE has to reach the SYNC and not
+    # only `pr view 101` below, because one fact read two ways — by the board and
+    # by the guard — is what this whole file is about. (`\n` survives an unquoted
+    # heredoc; printf would turn it into a real newline and the JSON would stop
+    # parsing.)
+    cat <<JSON
+[{"number":101,"reviewDecision":null,"mergeStateStatus":"${SENTINEL_SMOKE_MERGE_STATE:-CLEAN}","body":"Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=1111111111111111111111111111111111111111"},
+ {"number":102,"reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"CLEAN","body":"Ticket: T-01-02\n"}]
 JSON
     ;;
   "pr list --state all"*)
@@ -144,6 +157,13 @@ q() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).re
   && ok "the head the verdict is bound to is recorded from the bulk window" \
   || bad "the head the verdict is bound to is recorded" "got: $(q T-01-01 head_sha)"
 
+# The bulk window does not carry mergeStateStatus (see the stub), so a value here
+# proves the open-only pass attached it — and that the board's `baseMoved` is
+# finally fed. It shipped reading a field nothing wrote.
+[[ "$(q T-01-01 merge_state)" == "CLEAN" ]] \
+  && ok "the merge state rides the open-only pass into the board" \
+  || bad "the merge state is recorded from the open-only pass" "got: $(q T-01-01 merge_state)"
+
 [[ "$(q T-01-01 merge_scope)" == "stacked" ]] \
   && ok "a PR targeting the epic is inside the stack" \
   || bad "a PR targeting the epic is inside the stack" "got: $(q T-01-01 merge_scope)"
@@ -234,6 +254,41 @@ process.exit(0);
 else
   bad "the board file agrees with duty" "$(cat "$W/front.err")"
 fi
+
+# ── …and the board written by a REAL sync says the same about a moved base ────
+# The duty assertion above passed for a whole epic while the BOARD still offered
+# the merge, because `front.cjs baseMoved` reads `merge_state`/`behind_by` and
+# `state-sync.cjs` wrote neither: the guard refused what the board offered, every
+# round, until the stop-gate ledger ran out of refusals. `front.test.cjs` injects
+# those fields by hand, which is exactly how it shipped dead — so this case goes
+# through a real state-sync and asserts the FILE the stop gate reads.
+bmboard="$W/bm-board.txt"
+( cd "$proj" && SENTINEL_SMOKE_MERGE_STATE=BEHIND \
+    node "$SCRIPTS/state-sync.cjs" > "$bmboard" 2>"$W/bm-sync.err" ) \
+  || bad "state-sync runs against a BEHIND PR" "$(cat "$W/bm-sync.err")"
+
+[[ "$(q T-01-01 merge_state)" == "BEHIND" ]] \
+  && ok "state-sync records GitHub's BEHIND verdict" \
+  || bad "state-sync records the BEHIND verdict" "got: $(q T-01-01 merge_state)"
+
+if node -e '
+const f = require(process.argv[1]);
+const fix = (f.actionable || {}).fix || [];
+const merge = (f.actionable || {}).merge || [];
+if (!fix.includes("T-01-01")) { console.error("actionable.fix=" + JSON.stringify(fix)); process.exit(1); }
+if (merge.includes("T-01-01")) { console.error("still offered as a merge the guard refuses"); process.exit(1); }
+if (!/base-merge\.cjs/.test(f.why["T-01-01"] || "")) { console.error("why=" + f.why["T-01-01"]); process.exit(1); }
+// The guard owns the bucket, so the board must say so — the main loop dispatches
+// nothing here and a fix filed under the wrong owner is a fix nobody performs.
+if (!((f.sentinel || {}).duty || []).includes("T-01-01")) { console.error("sentinel=" + JSON.stringify(f.sentinel)); process.exit(1); }
+process.exit(0);
+' "$front" 2>"$W/bm-front.err"; then
+  ok "the board files a stale-base PR as the guard's fix work, naming base-merge.cjs"
+else
+  bad "the board files a stale-base PR as fix work" "$(cat "$W/bm-front.err")"
+fi
+has "…and the board's own printout says fix, not merge" "$bmboard" "fix: T-01-01"
+hasnt "…and never offers the merge alongside it" "$bmboard" "merge: T-01-01"
 
 # auto_merge: off must hand the same PR back to a human, and restore the old
 # fixpoint semantics (nothing actionable → the run may end)
@@ -784,6 +839,162 @@ process.exit(0);
 else
   bad "a plan_defect park keeps its own lifetime through a resync" "$(cat "$W/disp-park2.err")"
 fi
+
+# ── a review verdict with nothing behind it, through a real sync ─────────────
+# The other half of the pair T-24-06 shared between the board and the guard, and
+# deliberately NOT symmetrical with the case above. `front.cjs reviewStandsAlone`
+# reads `unresolved_count`, and state-sync does not write it and must not: a
+# thread count is a per-PR GraphQL query, the class of field that made a monorepo
+# sync cost 41s instead of 7s, and this sync runs on every babysit round. So the
+# board cannot see a real zero at all — the guard reads it live, answers
+# `wait-human`, and the DURABLE form of that answer is a park the board then
+# reads like any other park. All of it asserted through a real state-sync,
+# because `front.test.cjs` injects the field by hand and that is precisely how
+# the dead branch passed eleven reviews.
+rsproj="$W/reviewstands"
+RSHEAD=5555555555555555555555555555555555555555
+mkdir -p "$rsproj/.planning/graph" "$W/bin5"
+cat > "$W/bin5/gh" <<'STUB'
+#!/usr/bin/env bash
+argv="$*"
+case "$argv" in
+  "repo view --json defaultBranchRef"*) echo "main" ;;
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  "pr list --state all"*)
+    echo '[{"number":501,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-04-01-x","headRefOid":"5555555555555555555555555555555555555555","baseRefName":"epic/04-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/501","title":"T-04-01: x"}]' ;;
+  # The review verdict is the ONE fact this fixture varies, and it is answered on
+  # both calls that read it — the sync's open-only pass and the guard's own PR
+  # view — because a fixture where the two disagree tests neither.
+  "pr list --state open"*)
+    cat <<JSON
+[{"number":501,"reviewDecision":"${SENTINEL_SMOKE_REVIEW:-CHANGES_REQUESTED}","mergeStateStatus":"CLEAN","body":"Ticket: T-04-01\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=5555555555555555555555555555555555555555"}]
+JSON
+    ;;
+  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/04-demo\nticket/T-04-01-x\n' ;;
+  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
+  # ZERO review threads: every thread the reviewer filed is resolved and the
+  # verdict still stands. This is the state a fixer cannot service — the threads
+  # are closed, and the verdict is lifted neither by resolving them nor by
+  # pushing.
+  "api graphql"*)
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  "pr checks 501"*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
+  "pr view 501 --json"*)
+    cat <<JSON
+{"number":501,"state":"OPEN","isDraft":false,"baseRefName":"epic/04-demo","headRefName":"ticket/T-04-01-x","headRefOid":"5555555555555555555555555555555555555555","mergeStateStatus":"CLEAN","reviewDecision":"${SENTINEL_SMOKE_REVIEW:-CHANGES_REQUESTED}","body":"Ticket: T-04-01\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=5555555555555555555555555555555555555555"}
+JSON
+    ;;
+  "pr list --head "*) echo "[]" ;;
+  *) echo "stub gh5: unhandled call: $argv" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin5/gh"
+cat > "$rsproj/.planning/graph/tickets.json" <<'JSON'
+{ "epics": { "4": { "branch": "epic/04-demo", "repos": [null] } },
+  "tickets": { "T-04-01": { "phase": "4", "epic": "epic/04-demo", "branch": "ticket/T-04-01-x",
+                            "title": "x", "depends_on": [], "risk": "low" } } }
+JSON
+echo '{"pipeline":{}}' > "$rsproj/.planning/config.json"
+rsstate="$rsproj/.planning/graph/delivery-state.json"
+rsfront="$rsproj/.planning/graph/delivery-front.json"
+rssync() { ( cd "$rsproj" && PATH="$W/bin5:$PATH" env "$@" node "$SCRIPTS/state-sync.cjs" \
+    > "$W/rs-board.txt" 2>"$W/rs-sync.err" ) \
+  || bad "state-sync runs on the review-stands fixture" "$(cat "$W/rs-sync.err")"; }
+rsduty() { ( cd "$rsproj" && PATH="$W/bin5:$PATH" env "$@" node "$SCRIPTS/sentinel.cjs" duty --json \
+    > "$W/rs-duty.json" 2>"$W/rs-duty.err" ) || true; }
+rsitem() { node -e '
+const d = require(process.argv[1]);
+const i = (d.items || []).find((x) => x.ticket === "T-04-01");
+if (!i) { console.error("no duty item: " + JSON.stringify(d.items)); process.exit(1); }
+if (i.action !== process.argv[2]) { console.error("action=" + i.action + " why=" + i.why); process.exit(1); }
+if (process.argv[3] && !new RegExp(process.argv[3]).test(i.why)) { console.error("why=" + i.why); process.exit(1); }
+process.exit(0);
+' "$W/rs-duty.json" "$@" 2>>"$W/rs-duty.err"; }
+
+rssync
+# The design fork, as an assertion rather than a comment: whatever else this sync
+# grows, it never grows a per-PR thread query.
+if node -e '
+const s = require(process.argv[1]);
+const carriers = Object.entries(s).filter(([, v]) => v && Object.prototype.hasOwnProperty.call(v, "unresolved_count"));
+if (carriers.length) { console.error("unresolved_count written for: " + carriers.map(([k]) => k).join(", ")); process.exit(1); }
+process.exit(0);
+' "$rsstate" 2>"$W/rs-uc.err"; then
+  ok "the thread count is never a sync field — it would cost a GraphQL call per PR per round"
+else
+  bad "the sync must not grow a per-PR thread query" "$(cat "$W/rs-uc.err")"
+fi
+
+# The guard, live: zero threads behind a standing verdict is nobody's work.
+rsduty
+if rsitem wait-human 're-review or dismiss'; then
+  ok "duty: CHANGES_REQUESTED with zero threads is a reviewer's, not a fixer's"
+else
+  bad "duty answers wait-human" "$(cat "$W/rs-duty.err"; head -20 "$W/rs-duty.json")"
+fi
+
+# …and the board, which cannot read the threads, keeps the work rather than
+# parking on a guess. This is the disagreement, and it is the correct half of it:
+# "we could not read the threads" must fail towards the work.
+if node -e '
+const f = require(process.argv[1]);
+const actionable = Object.values(f.actionable || {}).flat();
+if (!actionable.includes("T-04-01")) { console.error("actionable=" + JSON.stringify(f.actionable)); process.exit(1); }
+if (((f.waiting || {}).human || []).includes("T-04-01")) { console.error("the board parked on a guess"); process.exit(1); }
+process.exit(0);
+' "$rsfront" 2>"$W/rs-front.err"; then
+  ok "the board does not invent the count it cannot read (it keeps the work)"
+else
+  bad "the board must not park on a guess" "$(cat "$W/rs-front.err")"
+fi
+
+# The durable form of the guard's answer. This is the act the design fork names,
+# and it is what makes the fact reach a board rebuilt from GitHub.
+( cd "$rsproj" && node "$SCRIPTS/escalation-record.cjs" mark T-04-01 \
+    "CHANGES_REQUESTED stands with no unresolved thread — a reviewer must re-review or dismiss the verdict" \
+    > /dev/null 2>"$W/rs-park.err" ) || bad "the park is recorded" "$(cat "$W/rs-park.err")"
+
+rssync
+if node -e '
+const f = require(process.argv[1]);
+const actionable = Object.values(f.actionable || {}).flat();
+if (actionable.includes("T-04-01")) { console.error("still actionable: " + actionable.join(", ")); process.exit(1); }
+if (!((f.parked || {}).blocked || []).includes("T-04-01")) { console.error("parked=" + JSON.stringify(f.parked)); process.exit(1); }
+if (!/re-review or dismiss/.test(f.why["T-04-01"] || "")) { console.error("why=" + f.why["T-04-01"]); process.exit(1); }
+process.exit(0);
+' "$rsfront" 2>"$W/rs-front2.err"; then
+  ok "the board reads the guard's park like any other park, and quotes its reason"
+else
+  bad "the board reads the park" "$(cat "$W/rs-front2.err")"
+fi
+rsduty
+if rsitem parked 're-review or dismiss'; then
+  ok "…and the guard holds the same PR on the same reason — one fact, two readers"
+else
+  bad "the guard holds the parked PR" "$(cat "$W/rs-duty.err"; head -20 "$W/rs-duty.json")"
+fi
+
+# The lifting rule is the whole reason a park is the right channel for this fact:
+# the reviewer answers, and the board learns it from GitHub on the next sync with
+# nobody remembering to unpark anything (parkFingerprint hashes review_decision).
+rssync SENTINEL_SMOKE_REVIEW=APPROVED
+if node -e '
+const f = require(process.argv[1]);
+if (((f.parked || {}).blocked || []).includes("T-04-01")) { console.error("still parked: " + JSON.stringify(f.parked)); process.exit(1); }
+if (!((f.actionable || {}).merge || []).includes("T-04-01")) { console.error("actionable=" + JSON.stringify(f.actionable)); process.exit(1); }
+process.exit(0);
+' "$rsfront" 2>"$W/rs-front3.err"; then
+  ok "answering the review lifts the park by itself — the board offers the merge again"
+else
+  bad "the park lifts when the verdict moves" "$(cat "$W/rs-front3.err")"
+fi
+rsduty SENTINEL_SMOKE_REVIEW=APPROVED
+if rsitem merge; then
+  ok "…and the guard agrees it is landable again"
+else
+  bad "the guard agrees the park lifted" "$(cat "$W/rs-duty.err"; head -20 "$W/rs-duty.json")"
+fi
+
 
 echo
 echo "$pass passed, $fail failed"

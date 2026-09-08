@@ -88,7 +88,24 @@ const PR_FIELDS = 'number,state,isDraft,headRefName,headRefOid,baseRefName,merge
 // `body` rides along in the open-only pass for the same reason as reviewDecision:
 // it is only read for OPEN PRs (the `gate_status:` trailer the conform gate
 // writes), and pulling bodies across the whole 1000-row window is expensive.
-const REVIEW_FIELDS = 'number,reviewDecision,body';
+// `mergeStateStatus` rides the SAME open-only pass, and it is the fact
+// `front.cjs`'s `baseMoved` reads: a green measured against a base that has since
+// MOVED is not a green, so the board was offering exactly the merges
+// `sentinel.cjs merge` refuses. The integrator found that predicate DEAD on the
+// board (2026-09-07) for one reason — nothing wrote the field it reads. It is one
+// scalar on a call that is already open-only and already asking for the two
+// expensive fields, so it is paid where the answer is read and nowhere else;
+// never add it to the bulk window above.
+//
+// `behind_by` — the mirror signal, and the reason neither alone suffices
+// (GitHub reports BEHIND only where branch protection requires up-to-date
+// branches) — is deliberately NOT here: no `gh pr list` field carries it, so it
+// would cost one `gh api compare` PER PR PER ROUND, and state-sync's wall time is
+// the conveyor's tick rate. The guard pays that compare on the duty/merge path
+// only (`sentinel.cjs baseCheck`), where the answer is about to be acted on. A
+// board with no `behind_by` therefore says "GitHub did not report BEHIND", which
+// is exactly what `baseMoved` treats it as.
+const REVIEW_FIELDS = 'number,reviewDecision,body,mergeStateStatus';
 
 function fail(msg) {
   console.error(`state-sync: ${msg}`);
@@ -230,6 +247,7 @@ function loadRepo(repo) {
         const r = byNumber.get(p.number);
         p.reviewDecision = r.reviewDecision || null;
         p.body = r.body || '';
+        p.mergeStateStatus = r.mergeStateStatus || null;
       }
     }
   }
@@ -247,9 +265,12 @@ const repoData = new Map();
 for (const r of REPO_IDS) repoData.set(r, loadRepo(r));
 
 function prsForBranch(repo, branch) {
-  // branch-scoped, so a handful of rows: asking for reviewDecision here is cheap
-  // and keeps a fallback-matched open PR from looking like it has no review.
-  const out = gh(['pr', 'list', ...repoArg(repo), '--state', 'all', '--head', branch, '--limit', '50', '--json', `${PR_FIELDS},reviewDecision,body`], { tolerate: true });
+  // branch-scoped, so a handful of rows: asking for the open-only fields here is
+  // cheap and keeps a fallback-matched open PR from looking like it has no review,
+  // no trailer and no merge state — left out, a PR reached only through this
+  // fallback would arrive with `merge_state: null`, which every reader treats as
+  // "GitHub did not report BEHIND".
+  const out = gh(['pr', 'list', ...repoArg(repo), '--state', 'all', '--head', branch, '--limit', '50', '--json', `${PR_FIELDS},reviewDecision,body,mergeStateStatus`], { tolerate: true });
   if (!out) return [];
   try { return JSON.parse(out); } catch { return []; }
 }
@@ -289,6 +310,13 @@ for (const [id, t] of Object.entries(tickets)) {
       // `gateConform(gate, head_sha)` is absent when they disagree, so a push
       // after arch-review re-owes the verdict instead of inheriting it.
       entry.head_sha = pr.headRefOid || null;
+      // GitHub's own verdict on whether this branch can still land where it
+      // points, recorded under the name both readers use (`sentinel.cjs`'s
+      // `settlement` reads the identical field off its own PR view). BEHIND and
+      // DIRTY are what `front.cjs baseMoved` acts on; UNKNOWN — which GitHub
+      // returns while it computes mergeability — is neither, and falls through to
+      // the work, because "we could not tell" must never park a PR.
+      entry.merge_state = pr.mergeStateStatus || null;
       const gate = parseGate(pr.body);
       if (gate) entry.gate = gate;
       const { rows, none, note } = ghChecks(pr.number, repo);

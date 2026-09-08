@@ -489,9 +489,30 @@ function computeFront(tickets, state, opts = {}) {
         // after the draft branches because a draft still owes arch-review and the
         // conform gate, which are real work whatever the reviewer said.
         //
-        // The thread count is state's (`unresolved_count`); the guard reads it
-        // live off the same `reviewers.cjs unresolved` call it already makes. The
-        // predicate is shared so the two cannot disagree about the same PR.
+        // WHERE THE COUNT COMES FROM — and it is not the sync. An unresolved
+        // thread count is a per-PR GraphQL query, the class of field that made a
+        // monorepo sync cost 41s instead of 7s, so it never enters the sync
+        // window: `unresolved_count` is NOT a field state-sync writes, and this
+        // comment used to say it was. (`merge_state`, the other half of the pair
+        // this branch was shipped with, DOES ride the open-only pass — one scalar
+        // on a call already being made — which is why that predicate is fed and
+        // this one is not.) So the branch fires for a caller that already HOLDS
+        // the count, and for nobody else: on a board rebuilt from GitHub it is
+        // unreachable BY DESIGN, and the integrator reading it as dead was right.
+        //
+        // A synced board learns a real zero the way it learns every other fact a
+        // live query owns — as a PARK. The guard reads the count off the
+        // `reviewers.cjs unresolved` call it already makes, answers `wait-human`
+        // for this exact state, and the durable form of that answer is
+        // `escalation-record.cjs mark <T> <reason>`; `activeParks` then routes the
+        // ticket above this whole chain, and the park lifts by itself when the
+        // review verdict moves (`parkFingerprint` hashes `review_decision`), so
+        // nothing has to remember to unpark it.
+        //
+        // An UNKNOWN count is not a disagreement either, which is why no fallback
+        // is owed here: the guard's own answer for it is `review-fix`, whose
+        // bucket on this board is `finalize` — where the final branch below
+        // already puts exactly that PR.
         waiting.human.push(id);
         why[id] = `PR #${s.pr}: ${REVIEW_STANDS_WHY}`;
       } else if (autoMerge && gateConform(s) && s.merge_scope === 'stacked' && checkpointParent(id)) {
