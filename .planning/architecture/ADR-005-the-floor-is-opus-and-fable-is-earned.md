@@ -130,9 +130,27 @@ plans written the same day), executors about 45%, guards about 22%.
   repair depth, read from the journal as a third occurrence of one signature
   after a `rethink` at `max`; and contested judgment, meaning the journal
   already holds a `violation` for this ticket. Each is computable; none is a
-  prompt rule. The integrator is the single standing exception and takes `fable`
-  unconditionally: largest input in the system, one call per phase, last
-  mechanical judgment before a person merges.
+  prompt rule.
+
+  **Amended 2026-09-08 — there is no standing exception; the integrator goes
+  through the window route like every other role.** An earlier form of this
+  decision gave it `fable` unconditionally on the grounds that it reads the
+  largest input in the system, runs once per phase, and is the last mechanical
+  judgment before a person merges. All three are true and none is a
+  measurement. The measurement: its single run on 2026-09-08 consumed 291k
+  tokens end to end, against a 1M window, at exactly 2× `opus` on every
+  component. So it is `opus`/`xhigh` by default and earns `fable` when R1's
+  threshold says its input has actually grown — which at 291k measured is a
+  route that will sometimes fire, on evidence, which is the point. The
+  "last judgment before a human merge" argument survives as the reason its
+  EFFORT is `xhigh` and never drops.
+
+  *This paragraph was inconsistent with D2's amendment for several hours after
+  that amendment landed, and it is worth saying why that matters rather than
+  just fixing it: a stale sentence in the governing record is how the old
+  behaviour comes back. A generator, a reviewer or a later ticket reads the ADR,
+  finds the exception still stated, and restores it in good faith. Caught by an
+  external audit, not by us.*
 - **D5 — Fable 5.1 or nothing.** `pipeline.fable` defaults to `off`; `auto` is a
   person's signature that consent was given, because an unconsented Fable
   request in a background session waits out `dialogExpiry` and then ends the
