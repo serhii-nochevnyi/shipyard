@@ -519,4 +519,43 @@ test('a broken wait record never takes the wait down with it', () => {
   assert.ok(/wait record not updated/.test(json.escalated[0].error), 'and naming what broke');
 });
 
+suite('ci-wait — the left-behind adjustment reads a front built from evidence');
+
+// The guard subtracts `left_behind_count` from the actionable count, and that is
+// the right arithmetic over the wrong input for as long as the count is derived
+// from phase NUMBERS. Measured on 2026-09-07: three phase-26 tickets merged into
+// their epic, so phase 24's live, high-risk, pre-authorized head counted as
+// left behind — a board with one real move would then have waited on somebody
+// else's CI instead of taking it. So this fixture is the real computed front.
+
+test('a lower-numbered phase still in flight is a move, and the wait is refused', () => {
+  const { computeFront, epicKey } = require(path.join(
+    __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
+  ));
+  const epic = (phase, over) => ({
+    phase: String(phase), repo: null, branch: `epic/${phase}-x`, base: 'main',
+    exists: true, ahead: 0, pr: null, landed: true, landed_reason: 'whole diff is in', ...over,
+  });
+  const tickets = { 'T-24-05': { phase: '24' }, 'T-26-01': { phase: '26' }, 'T-26-02': { phase: '26' } };
+  const state = {
+    'T-24-05': { status: 'pending', ready: true },
+    'T-26-01': { status: 'merged' },
+    'T-26-02': { status: 'pr-open', pr: 102, repo: 'acme/widgets', checks: { total: 3, failing: 0, pending: 3, none_reported: false } },
+  };
+  const records = [
+    epic(24, { ahead: 7, landed: false, pr: { number: 824, state: 'OPEN' } }),
+    epic(26, { pr: { number: 926, state: 'MERGED' } }),
+  ];
+  const front = {
+    generated_at: new Date().toISOString(),
+    ...computeFront(tickets, state, { epics: Object.fromEntries(records.map((r) => [epicKey(r.phase, r.repo), r])) }),
+  };
+  assert.equal(front.left_behind_count, 0, 'the fixture must be the defect, not a hand-written count');
+  assert.deepEqual(front.waiting.ci, ['T-26-02'], 'and there is a genuine wait to be tempted by');
+
+  const { code, json } = asJson(front, state);
+  assert.equal(code, 3, 'a board with a move must not be waited on');
+  assert.ok(/T-24-05/.test(json.refusal), 'and the refusal names the work that was nearly skipped');
+});
+
 done();

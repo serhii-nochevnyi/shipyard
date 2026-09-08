@@ -82,6 +82,23 @@ const { movingParentOf, movingParentWhy } = require(path.join(__dirname, 'parent
 // guard (sentinel.cjs) must never disagree about whether a verdict counts.
 const { gateConform: trailerConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
 
+// ── the identity of one phase's epic, in ONE home ───────────────────────────
+//
+// The key `state-sync.cjs`'s `epicInfo` is keyed by, and it lives here for the
+// same reason the predicates below do: two files have to agree about it, so only
+// one of them may own it. `state-sync` imports it (this module is pure and
+// importable; that one parses argv and can exit at load time, so it cannot be
+// imported back). One epic NAME per phase, but a separate branch — and a
+// separate integration PR — in every repository the phase touches, so the repo
+// is part of the identity and not a detail of it.
+//
+// The separator is written as the ESCAPE `\0` and never as the byte itself. It
+// is the one character neither a phase number nor an `owner/name` slug can
+// contain, so no two pairs collide on a key; a literal NUL in the source, on the
+// other hand, makes the whole file binary to `grep`, which is how state-sync.cjs
+// came to answer nothing at all to `grep -n require`.
+const epicKey = (phase, repo) => `${String(phase ?? '')}\0${repo || ''}`;
+
 // ── the checkpoint predicates, in ONE home ──────────────────────────────────
 //
 // `sentinel.cjs` imports both of these rather than keeping its own copies. Until
@@ -641,20 +658,73 @@ function computeFront(tickets, state, opts = {}) {
   // tickets judged stale six days earlier sat first under `execute`, and a run
   // that takes the head of the list would have taken one.
   //
-  // "Left behind" is a phase the run has already moved past: something newer has
-  // landed. Those go LAST — still listed, because the fixpoint must not lie about
-  // them, but never ahead of work that is actually in flight.
-  const phaseNum = (id) => Number.parseInt(String(((tickets && tickets[id]) || {}).phase ?? ''), 10) || 0;
-  const newestLandedPhase = Object.keys(state)
-    .filter((id) => (state[id] || {}).status === 'merged')
-    .reduce((max, id) => Math.max(max, phaseNum(id)), 0);
-  const leftBehind = (id) => (phaseNum(id) < newestLandedPhase ? 1 : 0);
+  // "Left behind" is a ticket its OWN phase shipped WITHOUT: the phase's epic has
+  // landed on the integration branch and this ticket is not in it. Those go LAST
+  // — still listed, because the fixpoint must not lie about them, but never ahead
+  // of work that is actually in flight.
+  //
+  // It used to be ARITHMETIC over phase numbers — `phase(id) < max(phase of any
+  // merged ticket)` — which is a different claim entirely: it says a HIGHER
+  // NUMBER landed, not that THIS phase did. This repository delivered phase 22
+  // before 21 on purpose (ROADMAP §22), so every phase-21 ticket read as left
+  // behind while it was the live work. Measured on 2026-09-07: three phase-26
+  // tickets merged into their epic, `max` became 26, and the board reported
+  // phase 24's T-24-05 — high risk, pre-authorized, the live head of that
+  // phase's chain — as `ALL 1 actionable item(s) are in phases already moved
+  // past`; the stop gate's all-left-behind hatch then exited 0 over it. Nothing
+  // about phase 24 had been abandoned. The only fact behind the verdict was that
+  // 26 is greater than 24.
+  //
+  // So the flag needs POSITIVE EVIDENCE of an integration event, and the caller
+  // supplies it rather than this file inferring it: `opts.epics` is
+  // state-sync.cjs's own `epicInfo` — `landed | not-landed | unknown` per phase
+  // per repo, keyed by `epicKey`, and the only place in the conveyor that has
+  // actually asked GitHub. A caller that cannot supply the observation
+  // (front.cjs's own CLI, `dispatch-record.cjs refreshFront`) gets NO left-behind
+  // at all, deliberately: the hatch this feeds must never fire on a fact nobody
+  // measured, and "no evidence" has to mean "keep driving".
+  const epics = opts.epics || {};
+  const keyOf = (id) => {
+    const t = (tickets && tickets[id]) || {};
+    return epicKey(t.phase, t.repo);
+  };
+  // `landed === true` ALONE is not that evidence, and reading it as such would be
+  // a worse defect than the arithmetic it replaces. It means "nothing from this
+  // phase is outside the base" — a READINESS fact (state-sync blocks cross-phase
+  // dependents on it) — and it is deliberately true in two states where nothing
+  // has landed: a phase whose epic BRANCH does not exist yet (every decomposed
+  // phase has an `epics` entry from the moment it is planned, long before its
+  // branch is cut), and an epic freshly cut from the base with no ticket merged
+  // into it. Either would flag a whole phase at the instant its delivery began.
+  //
+  // The integration event is therefore observed two ways. The epic's own PR
+  // being MERGED is the direct signal. A ticket of that phase having reached
+  // `merged` while the epic is level with its base is the same fact from the
+  // other side — that ticket's work is in the base — and it is what survives a
+  // truncated PR window or an epic a human merged and reaped by hand.
+  const phasesWithMerged = new Set(
+    Object.keys(tickets || {}).filter((tid) => (state[tid] || {}).status === 'merged').map(keyOf)
+  );
+  const leftBehind = (id) => {
+    // A merged ticket is IN the phase that landed; it is the evidence, not a
+    // casualty. (It is never actionable either, so this is the definition
+    // holding rather than a bucket being filtered.)
+    if ((state[id] || {}).status === 'merged') return 0;
+    const key = keyOf(id);
+    const info = epics[key];
+    // No record (direct-to-main, or a phase this graph knows no epic for) and
+    // `landed: null` (the compare did not answer) are both 0 — one has no epic
+    // that could land, the other has an answer nobody received.
+    if (!info || info.landed !== true) return 0;
+    const prMerged = !!(info.pr && String(info.pr.state || '').toUpperCase() === 'MERGED');
+    return prMerged || phasesWithMerged.has(key) ? 1 : 0;
+  };
 
   // UNBLOCKING POWER — how much other work this ticket is holding up. Depth
-  // orders a stack and left-behind demotes an abandoned phase, but neither says
-  // which of two live roots to take, and unattended that is the decision that
-  // matters: the head of the list is what the 04:00 round picks up, so it should
-  // be the ticket that leaves the most work available behind it.
+  // orders a stack and left-behind demotes a phase that shipped without it, but
+  // neither says which of two live roots to take, and unattended that is the
+  // decision that matters: the head of the list is what the 04:00 round picks up,
+  // so it should be the ticket that leaves the most work available behind it.
   //
   // Counted over `depends_on` (the whole DAG) rather than `primary_parent` (the
   // branch stack): a ticket can gate work it was never going to be the base of.
@@ -696,7 +766,7 @@ function computeFront(tickets, state, opts = {}) {
   const ciLen = (id) => Number(ciEst[id]) || 0;
 
   // The order inside every actionable bucket:
-  //   leftBehind  ASC   an abandoned phase never leads (unchanged, still first)
+  //   leftBehind  ASC   a phase that shipped without it never leads (still first)
   //   descendants DESC  the widest unblocker first
   //   depth       ASC   then top-down within a stack
   //   ciLen       DESC  then the longest pipeline, started earliest
@@ -737,11 +807,14 @@ function computeFront(tickets, state, opts = {}) {
   sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0
     && sentinel.dispatched.length === 0 && sentinel.waiting_parent.length === 0;
 
-  // How much of the actionable list is work the run has already moved past. The
-  // stop condition has to distinguish "there is live work" from "there is only
-  // abandoned work": on a real board `fixpoint: NO — 4 actionable` was held
-  // ENTIRELY by two tickets judged stale six days earlier, so the run was being
-  // told that stopping is a defect on account of work it would never take.
+  // How much of the actionable list is work its own phase already shipped
+  // without. The stop condition has to distinguish "there is live work" from
+  // "there is only work left behind": on a real board `fixpoint: NO — 4
+  // actionable` was held ENTIRELY by two tickets judged stale six days earlier,
+  // so the run was being told that stopping is a defect on account of work it
+  // would never take. Both readers of the count (`stop-gate.cjs`'s
+  // all-left-behind hatch, `ci-wait.cjs`'s refusal) act on it unchanged — what
+  // changed underneath them is that it is now evidence rather than arithmetic.
   const actionableIds = ORDER.flatMap((k) => actionable[k]);
   const leftBehindCount = actionableIds.filter((id) => leftBehind(id)).length;
 
@@ -953,12 +1026,15 @@ function formatFront(front) {
       '(run ci-wait.cjs — it waits in the foreground and returns on the first PR to settle).'
     );
   } else if (front.left_behind_count && front.left_behind_count === front.actionable_count) {
-    // Every actionable item is in a phase the run has already moved past. Saying
-    // "ending the run is a defect" here is false: continuing would mean taking
-    // work that has been offered and declined every round for days. The honest
-    // verdict names the two exits instead of demanding motion.
+    // Every actionable item is in a phase that has already landed without it.
+    // Saying "ending the run is a defect" here is false: continuing would mean
+    // taking work that has been offered and declined every round for days. The
+    // honest verdict names the two exits instead of demanding motion — and it
+    // names the EVIDENCE, because "moved past" was the old arithmetic's wording
+    // and it read as a verdict about phase numbers rather than about an epic.
     lines.push(
-      `fixpoint: NO — but ALL ${front.actionable_count} actionable item(s) are in phases already moved past ` +
+      `fixpoint: NO — but ALL ${front.actionable_count} actionable item(s) are in phases whose own epic ` +
+      'already landed without them ' +
       `(${front.actionable.execute.concat(front.actionable.fix, front.actionable.finalize).slice(0, 6).join(', ')}). ` +
       'Nothing live remains. These are a decision, not motion: take them, or record why not ' +
       '(`drift-record.cjs mark` when the plan predates what shipped) — after which this reads `fixpoint: YES`.'
@@ -974,6 +1050,10 @@ function formatFront(front) {
 
 module.exports = {
   computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, noCiHold, NO_CI_WHY,
+  // Shared with state-sync.cjs, which BUILDS the `epics` records computeFront
+  // reads: one key function, so a phase's epic cannot be filed under one name
+  // and looked up under another.
+  epicKey,
   // Shared with sentinel.cjs for the same reason as everything above it: the
   // board must never offer what the guard refuses, and two texts for one rule is
   // how they came to disagree in the first place.

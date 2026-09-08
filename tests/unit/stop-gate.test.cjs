@@ -21,6 +21,23 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 const SCRIPT = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'stop-gate.cjs'
 );
+// The gate reads `left_behind_count` off the board and acts on it; the board is
+// front.cjs's. Most tests here hand-write a front, which is right for testing the
+// gate's own arithmetic and wrong for the one question below — whether the hatch
+// opens over a phase that is merely NUMBERED lower than one that landed. That
+// answer is a collaboration, so the fixture is the real computed front.
+const { computeFront, epicKey } = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
+));
+const epicOf = (phase, over = {}) => ({
+  phase: String(phase), repo: null, branch: `epic/${phase}-x`, base: 'main',
+  exists: true, ahead: 0, pr: null, landed: true, landed_reason: 'whole diff is in', ...over,
+});
+const epics = (...records) => Object.fromEntries(records.map((r) => [epicKey(r.phase, r.repo), r]));
+const boardOf = (tickets, state, epicRecords) => ({
+  generated_at: fresh(),
+  ...computeFront(tickets, state, { epics: epics(...epicRecords) }),
+});
 
 const fresh = () => new Date().toISOString();
 const agesAgo = () => new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
@@ -764,6 +781,45 @@ test('the two new reads stay inside the hook budget', () => {
   const b = timed(loaded);
   console.log(`      bare ${a}ms, with journal+ledger+dispatches ${b}ms`);
   assert.ok(b - a < 400, `the extra reads cost ${b - a}ms, which is not "one small JSON read"`);
+});
+
+suite('stop-gate — the all-left-behind hatch, over a board built from evidence');
+
+// The hatch is the gate's most dangerous exit: it exits 0 on a front that HAS
+// actionable work. Measured on 2026-09-07 — three phase-26 tickets merged into
+// their epic, and the board then called phase 24's live, high-risk,
+// pre-authorized head "a phase already moved past" purely because 26 > 24. The
+// gate's own arithmetic was right; what it read was wrong. So these two run the
+// real front rather than a hand-written count.
+
+test('a lower-numbered phase still in flight is live work, and the stop is refused', () => {
+  const tickets = { 'T-24-05': { phase: '24' }, 'T-26-01': { phase: '26' } };
+  const state = {
+    'T-24-05': { status: 'pending', ready: true },
+    'T-26-01': { status: 'merged' },
+  };
+  const board = boardOf(tickets, state, [
+    epicOf(24, { ahead: 7, landed: false, pr: { number: 824, state: 'OPEN' } }),
+    epicOf(26, { pr: { number: 926, state: 'MERGED' } }),
+  ]);
+  assert.strictEqual(board.left_behind_count, 0, 'the fixture must be the defect, not a hand-written count');
+  const v = run(board);
+  assert.ok(v && v.decision === 'block', 'phase 24 is the live work — this stop cost 5h46m once');
+  assert.ok(/T-24-05/.test(v.reason), 'and the refusal names the ticket that was skipped');
+});
+
+test('a phase that really did land without a ticket still opens the hatch', () => {
+  // The other direction, and the reason the hatch exists: work its own phase
+  // shipped without is a decision, not motion, and demanding it is how a gate
+  // starts lying.
+  const tickets = { 'T-20-01': { phase: '20' }, 'T-20-02': { phase: '20' } };
+  const state = {
+    'T-20-01': { status: 'merged' },
+    'T-20-02': { status: 'pending', ready: true },
+  };
+  const board = boardOf(tickets, state, [epicOf(20, { pr: { number: 920, state: 'MERGED' } })]);
+  assert.strictEqual(board.left_behind_count, board.actionable_count, 'all of it is left behind');
+  assert.equal(run(board), null, 'a board of only left-behind work must not trap the session');
 });
 
 done();
