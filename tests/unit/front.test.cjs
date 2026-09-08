@@ -6,11 +6,49 @@
 
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
-const { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf } = require(path.join(
+const { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, epicKey } = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
 ));
 
 const checks = (failing = 0, pending = 0, total = 3) => ({ total, failing, pending, none_reported: total === 0 });
+
+// ── the epic records state-sync.cjs publishes ───────────────────────────────
+//
+// Built in ITS shape (`epicInfo[epicKey(phase, repo)]`) and filed under ITS key,
+// which is imported rather than spelled again: a fixture that invents a key of
+// its own proves only that the test agrees with itself.
+//
+// The DEFAULT is the trap this ticket exists for — an epic that exists and is 0
+// commits ahead of its base, which state-sync calls `landed: true` because
+// nothing of the phase is outside the base. That is equally true of an epic
+// whose whole diff went in and of one freshly cut with nothing in it yet, so it
+// is a readiness fact and never, on its own, evidence that a phase shipped.
+const epicRecord = (phase, over = {}) => ({
+  phase: String(phase),
+  repo: null,
+  branch: `epic/${phase}-x`,
+  base: 'main',
+  exists: true,
+  ahead: 0,
+  pr: null,
+  landed: true,
+  landed_reason: `epic epic/${phase}-x is 0 commits ahead of main — its whole diff is in`,
+  ...over,
+});
+// A phase that DID land: its integration PR is merged. This is the positive
+// evidence, and the only difference from the record above.
+const landedEpic = (phase, over = {}) =>
+  epicRecord(phase, { pr: { number: 900 + Number(phase), state: 'MERGED' }, ...over });
+// A phase still being delivered: its epic is ahead of the base with an open
+// integration PR.
+const openEpic = (phase, over = {}) => epicRecord(phase, {
+  ahead: 7,
+  landed: false,
+  pr: { number: 800 + Number(phase), state: 'OPEN' },
+  landed_reason: `epic epic/${phase}-x is 7 commit(s) ahead of main`,
+  ...over,
+});
+const epicsOf = (...records) => Object.fromEntries(records.map((r) => [epicKey(r.phase, r.repo), r]));
 
 suite('front — actionable buckets');
 
@@ -301,7 +339,7 @@ test('counts cover every ticket exactly once', () => {
 
 test('parents come before children, but a left-behind phase never comes first', () => {
   const tickets = {
-    'T-02-01': { phase: '2' },                              // left behind: 14 has landed
+    'T-02-01': { phase: '2' },                              // left behind: phase 2's own epic went in
     'T-14-02': { phase: '14' },                              // live root
     'T-14-07': { phase: '14', primary_parent: 'T-14-02' },   // live child
     'T-14-09': { phase: '14', primary_parent: 'T-14-07' },   // live grandchild
@@ -314,7 +352,7 @@ test('parents come before children, but a left-behind phase never comes first', 
     'T-14-09': { status: 'pending', ready: true },
     'T-14-01': { status: 'merged' },
   };
-  const f = computeFront(tickets, state, {});
+  const f = computeFront(tickets, state, { epics: epicsOf(landedEpic(2), openEpic(14)) });
   // Depth orders a stack; it says nothing across phases. Sorting by depth alone
   // put a phase-2 root (depth 0) ahead of every live phase-14 child — observed on
   // a real board right after the sort shipped, with two tickets judged stale six
@@ -334,7 +372,8 @@ test('when only left-behind work remains, the verdict stops demanding motion', (
     'T-02-01': { status: 'pending', ready: true },
     'T-14-01': { status: 'merged' },
   };
-  const out = formatFront(computeFront(tickets, state, {})).join('\n');
+  const epics = epicsOf(landedEpic(2), openEpic(14));
+  const out = formatFront(computeFront(tickets, state, { epics })).join('\n');
   // "Ending the run is a defect" is false when the only thing left has been
   // offered and declined every round for days: continuing means taking abandoned
   // work. Observed on a real board, where two such tickets held `fixpoint: NO`
@@ -713,10 +752,14 @@ test('left-behind still sorts last, however much it would unblock', () => {
     'T-14-02': { status: 'pending', ready: true },
     'T-14-01': { status: 'merged' },
   };
-  const f = computeFront(tickets, state, {});
+  // Phase 2 shipped without these four — its own epic went in. That is now the
+  // fixture's job to SAY: the merged phase-14 ticket beside them used to be the
+  // whole reason they read as left behind, and a higher number landing is not a
+  // fact about phase 2.
+  const f = computeFront(tickets, state, { epics: epicsOf(landedEpic(2), openEpic(14)) });
   assert.deepStrictEqual(
     f.actionable.execute, ['T-14-02', 'T-02-01'],
-    'unblocking power must never promote a phase the run has already moved past'
+    'unblocking power must never promote a phase that shipped without the ticket'
   );
   assert.strictEqual(f.left_behind_count, 1, 'and the count is unchanged');
 });
@@ -772,6 +815,194 @@ test('computeFront stays a pure function over its inputs — no filesystem acces
     !/\b(readFileSync|existsSync|readdirSync|writeFileSync|appendFileSync)\b/.test(src),
     'computeFront must not touch the filesystem'
   );
+});
+
+suite('front — left behind is evidence, not arithmetic');
+
+// The flag used to be `phase(id) < max(phase of any merged ticket)`, which is a
+// claim about NUMBERS. Measured on 2026-09-07: three phase-26 tickets merged into
+// their epic, so the board called phase 24's live, high-risk, pre-authorized head
+// `ALL 1 actionable item(s) are in phases already moved past` and the stop gate's
+// all-left-behind hatch exited 0 over it. Every test here is one reading of "its
+// own phase landed without it" that the arithmetic got wrong in one direction or
+// the other.
+
+test('a phase delivered out of order is not left behind by a newer one', () => {
+  // ROADMAP §22: this repository shipped phase 22 before 21 on purpose. Phase 21
+  // is the live work, and the only thing 22's landing proves is that 22 landed.
+  const tickets = {
+    'T-21-01': { phase: '21' },
+    'T-21-02': { phase: '21', depends_on: ['T-21-01'] },
+    'T-22-01': { phase: '22' },
+  };
+  const state = {
+    'T-21-01': { status: 'pending', ready: true },
+    'T-21-02': held('T-21-01'),
+    'T-22-01': { status: 'merged' },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(openEpic(21), landedEpic(22)) });
+  assert.deepStrictEqual(f.actionable.execute, ['T-21-01'], 'the live phase is work');
+  assert.strictEqual(
+    f.left_behind_count, 0,
+    'phase 21 is being delivered — 21 < 22 is arithmetic, not an abandonment'
+  );
+  // …and the verdict a run reads must not offer the all-left-behind exit either.
+  assert.ok(
+    formatFront(f).some((l) => /1 item\(s\) are actionable RIGHT NOW/.test(l)),
+    'the fixpoint line must demand motion, not a decision'
+  );
+});
+
+test("a ticket its own phase's epic landed without IS left behind", () => {
+  const tickets = { 'T-20-01': { phase: '20' }, 'T-20-02': { phase: '20' } };
+  const state = {
+    'T-20-01': { status: 'merged' },
+    'T-20-02': { status: 'pr-open', pr: 4, draft: true, checks: checks() },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(landedEpic(20)) });
+  assert.deepStrictEqual(f.actionable.finalize, ['T-20-02'], 'still listed — the fixpoint must not lie');
+  assert.strictEqual(f.left_behind_count, 1, 'the phase integrated without it');
+  assert.ok(f.parked.done.includes('T-20-01'), 'and the merged one is the evidence, not a casualty');
+});
+
+test('an epic freshly cut from its base has landed nothing at all', () => {
+  // `exists` + 0 ahead is `landed: true`, and it is exactly as true of an empty
+  // new epic as of one whose whole diff is in. Reading that alone as evidence
+  // would flag an entire phase at the instant its delivery began — a worse
+  // defect than the arithmetic it replaces, and reachable on every phase.
+  const tickets = { 'T-27-01': { phase: '27' }, 'T-27-02': { phase: '27' } };
+  const state = {
+    'T-27-01': { status: 'pending', ready: true },
+    'T-27-02': { status: 'pending', ready: true },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(epicRecord(27)) });
+  assert.strictEqual(f.left_behind_count, 0, 'no integration event has happened yet');
+});
+
+test('a phase whose epic branch does not exist yet has not shipped', () => {
+  // Every decomposed phase has an `epics` entry from the moment it is planned,
+  // long before its branch is cut — and a missing branch is `landed: true` for
+  // the honest reason that nothing of the phase is outside the base.
+  const tickets = { 'T-28-01': { phase: '28' } };
+  const state = { 'T-28-01': { status: 'pending', ready: true } };
+  const f = computeFront(tickets, state, {
+    epics: epicsOf(epicRecord(28, {
+      exists: false,
+      landed_reason: 'epic epic/28-x does not exist — nothing from this phase is outside main',
+    })),
+  });
+  assert.strictEqual(f.left_behind_count, 0, 'an unstarted phase is not one that moved on');
+});
+
+test('an epic reaped after its integration PR merged still proves the landing', () => {
+  // The mirror of the case above: the branch is gone, but the merged epic PR is
+  // the integration event and it is what the record still carries.
+  const tickets = { 'T-19-01': { phase: '19' } };
+  const state = { 'T-19-01': { status: 'pr-open', pr: 3, draft: true, checks: checks() } };
+  const f = computeFront(tickets, state, {
+    epics: epicsOf(landedEpic(19, {
+      exists: false,
+      landed_reason: 'epic epic/19-x does not exist — nothing from this phase is outside main',
+    })),
+  });
+  assert.strictEqual(f.left_behind_count, 1, 'the phase landed and this ticket was not in it');
+});
+
+test('a merged TICKET is not the phase landing — it may have merged into a parent', () => {
+  // The tempting second signal, and it re-creates this ticket's defect. A
+  // `merged` status means the PR went into ITS OWN base, and in a stack that
+  // base is legitimately a parent TICKET branch; `pr_base` — the only field
+  // that tells the two apart — is recorded for OPEN PRs alone, so a merged
+  // entry cannot say which it was. Here the epic is freshly cut (level with its
+  // base, no integration PR), the parent is green and ready, and a child was
+  // squash-merged into the parent by hand: counting that child would call the
+  // parent left behind and let the stop gate exit over it.
+  const tickets = {
+    'T-27-01': { phase: '27' },
+    'T-27-02': { phase: '27', depends_on: ['T-27-01'], primary_parent: 'T-27-01' },
+  };
+  const state = {
+    'T-27-01': { status: 'pr-open', pr: 4, draft: true, checks: checks() },
+    'T-27-02': { status: 'merged' },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(epicRecord(27, { pr: null })) });
+  assert.deepStrictEqual(f.actionable.finalize, ['T-27-01'], 'the parent is live work');
+  assert.strictEqual(f.left_behind_count, 0, 'nothing has been observed to integrate');
+});
+
+test('an unanswered comparison is not evidence, even beside a merged epic PR', () => {
+  // T-26-03 made `landed` tri-state precisely so a failed compare stops reading
+  // as a zero nobody measured. A merged epic PR does not overrule it: commits
+  // pushed to the epic after that merge are exactly what the compare would have
+  // seen, and this file must not guess on a fact whose measurement failed.
+  const tickets = { 'T-23-01': { phase: '23' } };
+  const state = { 'T-23-01': { status: 'pr-open', pr: 5, draft: true, checks: checks() } };
+  const f = computeFront(tickets, state, {
+    epics: epicsOf(landedEpic(23, {
+      ahead: null,
+      landed: null,
+      landed_reason: 'gh compare failed: rate limited',
+    })),
+  });
+  assert.strictEqual(f.left_behind_count, 0, 'unknown is not landed — it is retried');
+});
+
+test('a phase whose epic is still ahead of its base is nobody\'s casualty', () => {
+  const tickets = { 'T-24-05': { phase: '24' } };
+  const state = { 'T-24-05': { status: 'pending', ready: true } };
+  const f = computeFront(tickets, state, { epics: epicsOf(openEpic(24)) });
+  assert.strictEqual(f.left_behind_count, 0, '7 commits outside the base is a phase in flight');
+});
+
+test('with no epic observation at all, nothing is left behind', () => {
+  // front.cjs's own CLI and `dispatch-record.cjs refreshFront` cannot ask GitHub,
+  // so they pass none. The hatch this count feeds (stop-gate.cjs) must never fire
+  // on a fact nobody measured: with no evidence the run keeps driving.
+  const tickets = { 'T-20-01': { phase: '20' }, 'T-20-02': { phase: '20' } };
+  const state = {
+    'T-20-01': { status: 'merged' },
+    'T-20-02': { status: 'pr-open', pr: 4, draft: true, checks: checks() },
+  };
+  assert.strictEqual(computeFront(tickets, state, {}).left_behind_count, 0, 'absence of evidence is not evidence');
+  assert.strictEqual(
+    computeFront(tickets, state, { epics: {} }).left_behind_count, 0,
+    'an empty observation reads the same as none — direct-to-main has no epics at all'
+  );
+});
+
+test("another repository's epic does not speak for this one", () => {
+  // One epic NAME per phase, but a separate branch and integration PR per repo —
+  // which is why the record is keyed by both. A phase that landed in the API repo
+  // says nothing about its own web-repo half.
+  const tickets = {
+    'T-30-01': { phase: '30', repo: 'acme/api' },
+    'T-30-02': { phase: '30', repo: 'acme/web' },
+  };
+  const state = {
+    'T-30-01': { status: 'pr-open', pr: 1, draft: true, checks: checks() },
+    'T-30-02': { status: 'pr-open', pr: 2, draft: true, checks: checks() },
+  };
+  const f = computeFront(tickets, state, {
+    epics: epicsOf(landedEpic(30, { repo: 'acme/api' }), openEpic(30, { repo: 'acme/web' })),
+  });
+  assert.strictEqual(f.left_behind_count, 1, 'one repo integrated, the other is still ahead');
+  assert.deepStrictEqual(
+    f.actionable.finalize, ['T-30-02', 'T-30-01'],
+    'and the left-behind half sorts last within the bucket'
+  );
+});
+
+test('a board of nothing but left-behind work still says so, in the new words', () => {
+  const tickets = { 'T-20-01': { phase: '20' }, 'T-20-02': { phase: '20' } };
+  const state = {
+    'T-20-01': { status: 'merged' },
+    'T-20-02': { status: 'pr-open', pr: 4, draft: true, checks: checks() },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(landedEpic(20)) });
+  const line = formatFront(f).find((l) => /^fixpoint:/.test(l));
+  assert.ok(/ALL 1 actionable item\(s\)/.test(line), line);
+  assert.ok(/own epic\s+already landed without them/.test(line.replace(/\s+/g, ' ')), line);
+  assert.ok(/decision, not motion/.test(line), 'the two exits are still named');
 });
 
 suite('front — ciEstimates: a per-repo PR-lifetime proxy from the journal');

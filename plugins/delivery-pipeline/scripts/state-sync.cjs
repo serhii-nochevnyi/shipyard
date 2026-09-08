@@ -43,7 +43,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-const { computeFront, formatFront, ciEstimates } = require(path.join(__dirname, 'front.cjs'));
+const { computeFront, formatFront, ciEstimates, epicKey } = require(path.join(__dirname, 'front.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
 // The park RECORDS, never the flat `activeEscalations` view: the board's lifting
 // sentence is chosen from the park's KIND, and the flat map keeps the kind only
@@ -415,8 +415,10 @@ for (const [id, t] of Object.entries(tickets)) {
 // ── epic state (needed BEFORE readiness: a cross-phase dependency is only
 //    satisfied once its own phase's epic has landed on the default branch) ────
 // Keyed per phase AND repo: one epic NAME per phase, but a separate branch (and
-// integration PR) in every repository the phase touches.
-const epicKey = (phase, repo) => `${phase} ${repo || ''}`;
+// integration PR) in every repository the phase touches. `epicKey` comes from
+// front.cjs and is not spelled again here: `computeFront` LOOKS UP these very
+// records to decide whether a ticket was left behind by its own phase, and a
+// key written twice is a lookup that can miss while both spellings look right.
 const epicInfo = {};
 if (mode === 'epic-stacked') {
   for (const [phase, e] of Object.entries(epics)) {
@@ -744,6 +746,15 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
     // NOT feed it: no per-PR `gh` field. Adding one to the bulk window is the
     // 41s-vs-7s regression this file already carries a warning about.
     ci_estimates: ciEstimates(GRAPH_DIR, tickets),
+    // The epic observations THIS sync just made — `landed | not-landed | unknown`
+    // per phase per repo, keyed by front.cjs's own `epicKey`. It is what makes
+    // `left_behind` evidence instead of arithmetic: the board used to call a
+    // ticket left behind whenever some HIGHER-NUMBERED phase had a merged ticket,
+    // which said nothing about the ticket's own phase and mislabelled phase 24's
+    // live chain the moment phase 26 landed three tickets (2026-09-07). This file
+    // is the only one that has asked GitHub, so it is the only one that can
+    // answer; a caller with no such observation gets no left-behind at all.
+    epics: epicInfo,
   });
   writeAtomic(STATE, JSON.stringify(state, null, 2) + '\n');
   // The generation rides the human mirror as a comment: the yaml is keyed by
