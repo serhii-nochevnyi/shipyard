@@ -50,3 +50,23 @@ and its enforcing test's `COMMENT` regex exempts markdown headings, blockquotes
 and `*` bullets, so the prose is slightly ahead of what the test checks; the
 tree is clean today, so this is a contract to tighten rather than a defect to
 chase.
+
+## 3. ADR-003's own Context still holds the sentence its ticket was written to fix
+
+Found by `arch-review` on PR #53 (T-25-03), 2026-09-08. ADR-003's Context reads
+"the Agent tool's `model` field now accepts full model ids and `inherit` as well
+as the four aliases". That is false — the tool's schema is
+`model: enum ["sonnet","opus","haiku","fable"]`, verified first-hand against the
+live schema twice in this session; full ids and `inherit` belong to the SUBAGENT
+DEFINITION surface, which is a different thing entirely.
+
+T-25-03 corrected the sentence everywhere it ships (`CLAUDE.md`, `README.md`,
+`docs/`, both `commands/`), and it could not touch the ADR because
+`.planning/architecture/` is not in its `files_modified`. So the governing
+record still carries the claim the code contradicts — the same shape as item 2
+above, one document over.
+
+Both belong in one small ticket that owns `.planning/architecture/`: amend
+ADR-003's Context (the tool is enum-validated; the definition file is the other
+surface), amend ADR-003 D2 (no model id in a DISPATCH path), and extend
+ADR-005's `Supersedes` to name D2 as well as D3.
