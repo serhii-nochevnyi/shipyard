@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-// Single deterministic reader for the conveyor's configuration, plus the
-// role × risk model policy, the matching reasoning effort, and the repair
-// STRATEGY a failure signature's history implies.
+// Single deterministic reader for the conveyor's configuration, plus the model
+// policy — a floor, a role-keyed effort table and an earned ceiling — and the
+// repair STRATEGY a failure signature's history implies.
 //
 // Before this module the policy lived only as prose inside the skills, so it was
 // unenforceable and drifted (it named model IDs the Agent tool does not accept).
@@ -14,20 +14,58 @@
 //   node pipeline-config.cjs model <role> --json [flags]  # {model, effort}
 //                                                        # + strategy, with --signature-state
 //
-//   flags: --risk low|medium|high  --type <plan type>  --files <n>
-//          --checkpoint  --code-change|--no-code-change
-//          --signature-state first|progress|repeat|flake_candidate|flake|plan_defect
-//          --attempt <n>  --previous-failed   ← accepted, but INERT (see below)
+//   flags: --risk low|medium|high  --type <plan type>  --checkpoint
+//          --input-tokens <n>   the caller's own measurement of this dispatch's
+//                               input; the ceiling's window route reads it
+//          --contested          this judgement has already been contested once
+//          --signature-state first|progress|repeat|repeat_exhausted|
+//                            flake_candidate|flake|plan_defect
+//          --files <n>  --code-change|--no-code-change
+//          --attempt <n>  --previous-failed   ← all accepted, but INERT (see below)
 //
-// REPAIRS ESCALATE BY STRATEGY, NOT BY TIER (ADR-001 D1). The repair roles
-// (ci-fix, review-fix, pr-sentinel) used to read `attempt >= 2 → opus`, which is
-// "try harder": the observed loss is one wrong hypothesis re-tried by three
-// models in sequence. Their tier is now role × risk alone, and the failure
+// THE FLOOR IS `opus`, THE DEPTH IS EFFORT, AND `fable` IS EARNED (ADR-005 D1/D2
+// as amended 2026-09-08, D4/D5). Three layers, in this order:
+//
+//   1. the FLOOR — every role that writes code or renders a judgement resolves to
+//      `opus`. Two roles are exempt and stay on `sonnet`, each for a measured
+//      reason recorded beside it (see SONNET_ROLES): `pr-sentinel`, whose merge
+//      decision sentinel.cjs enforces mechanically, and `drift-check`, which
+//      returns a file list. No built-in path returns `haiku` any more.
+//   2. the DEPTH — a role-keyed EFFORT table (EFFORT_ROWS), because with the tier
+//      constant the old "effort follows the model" derivation collapsed to one
+//      value and `--signature-state repeat` stopped deepening anything. Measured
+//      2026-09-07 with the floor set through configuration: every role except
+//      drift-check came out `opus`/`xhigh`, so the repair ladder's depth rung had
+//      quietly gone.
+//   3. the CEILING — `fable` is reached by three mechanical routes and never by
+//      default (fableRoute): a measured input over `fable_window_tokens`, a
+//      repair whose signature came back a third time, or a contested judgement.
+//      `pipeline.fable` must be `auto` for any of them to be honoured; `off` (the
+//      default) degrades the route to `opus` at `max` effort and says why.
+//
+// EFFORT IS A QUALITY KNOB, NOT A PRICE ONE, and no row here may be justified as
+// a saving. Reconstructed from this project's usage ledger: output is 12–19% of a
+// model line and cache read+write are 82–87%, so `xhigh` → `high` moves about
+// 3.4% of a run against ≈2.5× for a tier step. An effort row buys or gives up
+// QUALITY at approximately constant price.
+//
+// AND EFFORT IS ONLY ENFORCED ON THE WORKFLOW PATH. The Agent tool takes no
+// `effort` parameter at all (verified against the live schema, CLI 2.1.263): only
+// Workflow's `agent()` carries it. So the table governs executors, drift judges
+// and fix rounds, and is a sentence in the prompt for an Agent-spawned background
+// guard.
+//
+// REPAIRS ESCALATE BY STRATEGY AND DEPTH, NOT BY TIER (ADR-001 D1). The repair
+// roles (ci-fix, review-fix, pr-sentinel) used to read `attempt >= 2 → opus`,
+// which is "try harder": the observed loss is one wrong hypothesis re-tried by
+// three models in sequence. Their tier is now the floor alone, and the failure
 // SIGNATURE's history — computed by failure-signature.cjs, passed in as
-// `--signature-state` — decides what to do differently, plus how deep to think
-// at the same tier. `--attempt` and `--previous-failed` remain accepted for the
-// callers and docs that still pass them (and the attempt counter remains as
-// telemetry), but they no longer route anything.
+// `--signature-state` — decides what to do differently, plus how deep to think at
+// that tier. Only its last rung moves the model, and it moves it to the CEILING
+// rather than up a tier: `repeat_exhausted` means the depth has already been
+// spent. `--attempt` and `--previous-failed` remain accepted for the callers and
+// docs that still pass them (and the attempt counter remains as telemetry), but
+// they no longer route anything.
 //
 // TWO CONFIG NAMESPACES, both in .planning/config.json:
 //
@@ -56,11 +94,13 @@ const path = require('path');
 // `opus` is Opus 5 from Claude Code 2.1.219 on. `fable` is Claude Fable 5.1 from
 // 2.1.255 on: Opus-tier, 1M-token context, adaptive thinking at xhigh effort, and
 // the only alias that expresses "top tier WITH a 1M window" — which is what this
-// repo's long-broken `opus[1m]` was reaching for. It is the DEFAULT for the two
-// judgment roles (see `ladderTier`), not an opt-in. It is a paid model that may
-// bill usage credits and asks for consent once, so the hatch is opt-OUT: set
-// `models.arch-review` / `models.integrator` to `opus` until a human has answered
-// that prompt interactively.
+// repo's long-broken `opus[1m]` was reaching for. It is a CEILING the conveyor
+// reaches by itself through the three routes in `fableRoute`, and no role's
+// default: measured on this repository, the largest input in the whole system is
+// the phase epic diff at ~52k tokens, which Opus 5's ordinary window swallows.
+// Below CLI 2.1.255 the alias resolves to Fable 5 instead — ruled out — so
+// `pipeline.fable: auto` is a person's consent AND `gsd-tune.cjs` reports the
+// version floor at Step 0 of every delivery.
 const TIERS = ['opus', 'sonnet', 'haiku', 'fable'];
 const TOP_TIERS = new Set(['opus', 'fable']);
 
@@ -68,9 +108,16 @@ const TOP_TIERS = new Set(['opus', 'fable']);
 // Codex-only and clamps to `low`. `ultra` is deliberately NOT here: it is
 // advertised by one Codex model that no built-in path selects (ADR-005 D6/D7).
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-const EFFORT_TIER_DEFAULTS = { light: 'low', standard: 'high', heavy: 'xhigh' };
-// Roles whose work is mechanical reconciliation: they stay cheap on effort even
-// when the model tier is raised by an override.
+// GSD's light/standard/heavy tier defaults used to be mirrored here and mapped
+// from the resolved model. That derivation is gone (see resolveEffort): with the
+// floor at `opus` it collapsed to one value. The names survive only in GSD's own
+// `effort.routing_tier_defaults`, which `gsd-tune` mirrors for GSD's agents.
+
+// Roles whose work is mechanical reconciliation. On the runtime whose effort axis
+// is flat (Codex) this is still the one distinction the axis makes; on Claude the
+// role's own row in EFFORT_ROWS decides, and drift-check's row is no longer the
+// cheapest one — it now carries the plan-defect burden the executor stopped
+// carrying (ADR-005 D2 as amended).
 const MECHANICAL_ROLES = new Set(['drift-check']);
 
 // ── the Codex model palette (ADR-005 D6/D7) ──────────────────────────────────
@@ -191,6 +238,13 @@ const STRATEGIES = {
   // Hold the tier, change the approach: re-read the plan, widen the context,
   // raise the hypothesis above the symptom.
   repeat: 'rethink',
+  // The same instruction, one rung up: the deeper effort has already been spent
+  // on this signature, so what changes is the MODEL (the ceiling's second route
+  // — see fableRoute), not the advice to the fixer. Deliberately NOT a new
+  // strategy word: `references/pr-sentinel.md` and `references/ci-fix.md` are
+  // what a fixer actually reads, and a seventh verb would be a contract only the
+  // resolver knew about.
+  repeat_exhausted: 'rethink',
   flake_candidate: 'rerun',
   flake: 'quarantine',
   plan_defect: 'park',
@@ -234,6 +288,19 @@ const DEFAULTS = {
   graph_gate: true,                   // mirrors the capability's declared key
   models: {},                         // per-role override → tier alias
   effort: {},                         // per-role override → effort level
+  // The CEILING, and the consent that unlocks it (ADR-005 D5). `off` is the
+  // default because an unconsented Fable request in a background session waits
+  // out `dialogExpiry` and then ends the turn WITHOUT SENDING: silence is not
+  // consent, exactly as decomposition treats pre-authorization. Under `off`
+  // every ceiling route degrades to `opus` at `max` and prints the reason, so
+  // the escalation still happens — one rung lower and visibly.
+  fable: 'off',                       // off | auto
+  // The window route's threshold: five times the largest input measured on this
+  // repository (the phase-24 epic diff, the integrator's own input, at 210 KB
+  // ≈ 52k tokens). The caller MEASURES and passes `--input-tokens`; the resolver
+  // only decides. Absent, the route cannot fire — an absent signal must never
+  // resolve upward.
+  fable_window_tokens: 250000,
   // The Codex model palette, in preference order (see DEFAULT_CODEX_MODELS).
   // Mirrors the capability's declared `delivery_pipeline.codex_models`.
   codex_models: DEFAULT_CODEX_MODELS,
@@ -251,7 +318,90 @@ const ROLES = ['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 
 
 // Judgment roles are never cheapened: there is no mechanical safety net above
 // them, so a false verdict is the most expensive kind of error in the pipeline.
+// The floor covers every role now, so this set no longer decides a TIER — it has
+// exactly one reader, `fableRoute`'s contested route, because a re-judgement is
+// the only thing `--contested` can mean. The other half of the invariant (neither
+// of these may ever join SONNET_ROLES) is asserted in the unit test.
 const JUDGMENT_ROLES = new Set(['integrator', 'arch-review']);
+// ── the floor, and its two named exemptions (ADR-005 D1, amended D2) ─────────
+//
+// The floor is `opus`: the conveyor's failure mode is a wrong green reaching an
+// epic, and every mechanical gate above the executor costs more to run than the
+// difference between tiers. `haiku` is therefore returned by NO built-in path —
+// it stays in TIERS because a user override may still name it.
+//
+// Two roles stay below it, and the reason travels WITH the exemption: a bare one
+// is the thing a later reader deletes, and these two are 57% of all dispatches in
+// the journal, so nobody should have to re-derive them from a bill.
+const SONNET_ROLES = new Map([
+  // The guard's merge decision is MECHANICAL. `sentinel.cjs mergeOne` re-verifies
+  // every condition against live GitHub — open, undrafted, checks green, zero
+  // unresolved threads, a conform trailer bound to this head, not
+  // CHANGES_REQUESTED, not a checkpoint, base inside the stack — and refuses on
+  // anything unproven, so the MODEL is not the gate. 44% of all dispatches.
+  ['pr-sentinel', 'the merge decision is enforced by sentinel.cjs against live GitHub, not by the model'],
+  // It returns a file list and a set of reuse pointers. The plan-defect burden it
+  // inherited from the executor is bought with EFFORT instead (its row below is
+  // `high`, up from `low`) — effort is ~12% of a line, which makes this the
+  // cheapest possible home for that work rather than a saving on the work itself.
+  ['drift-check', 'it returns a file list and reuse pointers; its new plan-defect burden is bought with effort, not with a tier'],
+]);
+
+// ── the depth: one EFFORT row per role (ADR-005 D2 as amended 2026-09-08) ────
+//
+// Read this table beside `tests/unit/pipeline-config.test.cjs`'s EFFORT_MATRIX,
+// which asserts it row for row so no later edit can move one quietly.
+//
+//   drift-check                  high    (was `low`; it is now the role expected
+//                                        to notice a plan that no longer matches
+//                                        the codebase, and it runs BEFORE an
+//                                        executor is paid)
+//   research                     high    xhigh with --type alternatives
+//   executor                     high    xhigh at risk: high or a checkpoint
+//   ci-fix, review-fix,
+//     pr-sentinel                high
+//   arch-review, integrator      xhigh
+//   any repair role on a
+//     repeated signature         max     (see resolveEffort — it outranks this
+//                                        table, and it is the ONLY built-in path
+//                                        to `max`)
+//
+// `xhigh` and not `max` for the judges, DELIBERATELY: Anthropic's effort guidance
+// names `xhigh` the best setting for most coding and agentic work (it is Claude
+// Code's own default) and says to reach `max` only when measurement shows headroom
+// at the level below. Nothing has measured that here, so `max` is reserved for the
+// one case that IS a measurement — a signature that has repeated on one ticket.
+// Raising the judges by argument instead is what this sentence exists to prevent.
+//
+// The three rows that changed on 2026-09-08, each of which LOOKS like a saving
+// and is not (effort is 12–19% of a line):
+//
+//   * executor → high. Its job is to implement a contract; catching a defect in
+//     that contract is not its job. `xhigh` is kept where a defect is EXPENSIVE
+//     rather than merely possible — risk: high or a checkpoint, 6 of this
+//     project's 49 tickets. What this gives up, stated so nobody is surprised:
+//     on 2026-09-08 four of five executors corrected their own plan, and one of
+//     those four could only have been found by BUILDING AN EXPERIMENT against the
+//     code (a forty-round race probe that disproved the plan's prescribed atomic
+//     step). No upstream role does that, and this row accepts it.
+//   * drift-check → high, from low. It inherits the burden above, at the cheapest
+//     place in the system to put it.
+//   * pr-sentinel → high rather than xhigh, on the same reading as its tier: the
+//     merge decision is enforced by sentinel.cjs, not by the model.
+//
+// Codex is NOT this table: there the axis is two values wide by measurement
+// (ADR-005 D6) and RUNTIMES_WITH_FLAT_EFFORT answers first, above.
+const EFFORT_ROWS = {
+  'drift-check': () => 'high',
+  research: (s) => (s.type === 'alternatives' ? 'xhigh' : 'high'),
+  executor: (s) => (s.risk === 'high' || s.checkpoint === true ? 'xhigh' : 'high'),
+  'ci-fix': () => 'high',
+  'review-fix': () => 'high',
+  'pr-sentinel': () => 'high',
+  'arch-review': () => 'xhigh',
+  integrator: () => 'xhigh',
+};
+const DEFAULT_EFFORT_ROW = 'high';
 
 // GSD's own model_profile vocabulary, accepted as an alias for ours so a user who
 // knows GSD does not get a "not one of economy|balanced|premium" warning.
@@ -379,6 +529,18 @@ function loadConfig(root) {
           warnings.push(`pipeline.effort."${role}" = "${level}" is not an effort level — ignored (${EFFORTS.join('|')})`);
           continue;
         }
+        // ADR-005 D3: the override is read BEFORE the signature rule, so on a
+        // repair role it also switches off the depth rung a repeated failure
+        // earns. It keeps its precedence — a person who measured something wins —
+        // but it no longer does that silently, because shipping the effort table
+        // as configuration is exactly how the repair ladder was disabled once.
+        if (REPAIR_ROLES.has(role)) {
+          warnings.push(
+            `pipeline.effort."${role}" = "${level}" outranks the repair ladder's depth rung: a repeated ` +
+            'failure signature would otherwise raise this role to "max". It is honoured, but the escalation ' +
+            'is now off for this role — remove the key to get it back.'
+          );
+        }
         cfg.effort[role] = level;
       }
       continue;
@@ -420,6 +582,20 @@ function loadConfig(root) {
     );
     cfg.merge_without_ci = false;
   }
+  // The consent knob for the paid ceiling, with `sentinel`'s polarity and for a
+  // sharper reason: this one authorizes a model that may bill usage credits and
+  // whose consent prompt an unattended session cannot answer. So only a real
+  // `auto` opts in, and anything else is reported rather than honoured — a
+  // misspelling must never read as consent.
+  if (cfg.fable === true) cfg.fable = 'auto';
+  if (cfg.fable === false) cfg.fable = 'off';
+  if (!['auto', 'off'].includes(cfg.fable)) {
+    warnings.push(
+      `pipeline.fable "${cfg.fable}" is unknown — falling back to off (values: auto | off), ` +
+      'so the ceiling routes degrade to opus at max effort'
+    );
+    cfg.fable = 'off';
+  }
   if (!['epic-stacked', 'direct-to-main'].includes(cfg.integration_mode)) {
     warnings.push(`pipeline.integration_mode "${cfg.integration_mode}" is unknown — falling back to epic-stacked`);
     cfg.integration_mode = 'epic-stacked';
@@ -430,7 +606,7 @@ function loadConfig(root) {
     warnings.push(`pipeline.model_policy "${cfg.model_policy}" is unknown — falling back to balanced`);
     cfg.model_policy = 'balanced';
   }
-  for (const numeric of ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours', 'plan_defect_signatures']) {
+  for (const numeric of ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours', 'plan_defect_signatures', 'fable_window_tokens']) {
     const n = Number(cfg[numeric]);
     if (!Number.isFinite(n) || n <= 0) {
       warnings.push(`pipeline.${numeric} must be a positive number — using ${DEFAULTS[numeric]}`);
@@ -548,79 +724,115 @@ function capForRuntime(tier, cfg) {
   return TOP_TIERS.has(tier) ? 'sonnet' : tier;
 }
 
-// The ladder BEFORE the runtime cap — the strength this role deserves. Kept
-// separate so the effort rule can see the escalation the cap swallowed.
+// ── the ceiling: three mechanical routes to `fable` (ADR-005 D4) ─────────────
+//
+// Each route is COMPUTABLE from something the caller measured or the journal
+// recorded; none is a prompt rule, and none of them is a role's default. There is
+// no standing exception any more — the integrator goes through R1 like everything
+// else. (An earlier draft gave it `fable` unconditionally because it "reads the
+// largest input in the system, runs once per phase, and is the last mechanical
+// judgment before a person merges": all true, and none of it a measurement. Its
+// single run on 2026-09-08 consumed 291k tokens end to end, against `fable`
+// costing exactly 2× `opus` on every component. Being the last judgement before a
+// human merge is why its EFFORT is `xhigh` and never drops — not why it would
+// take the bigger model.)
+//
+// Returns null when no route fires, or {route, why, model, degraded, reason}.
+// `degraded` means the route fired and could NOT be honoured: the answer is then
+// `opus` at `max` effort, which is the ADR's own escalation ORDER (opus at depth
+// first, fable after) with the reason printed rather than silently swallowed.
+function fableRoute(role, signals = {}, cfg = DEFAULTS) {
+  let route = null;
+  let why = '';
+  // R1 — window pressure. The CALLER measures its own input and passes the
+  // number; the resolver only compares. Absent (`undefined`, or anything
+  // non-numeric) cannot fire: an absent signal must never resolve upward.
+  const tokens = Number(signals.inputTokens);
+  const threshold = Number(cfg.fable_window_tokens) || DEFAULTS.fable_window_tokens;
+  if (Number.isFinite(tokens) && tokens > threshold) {
+    route = 'window';
+    why = `--input-tokens ${tokens} is over pipeline.fable_window_tokens (${threshold})`;
+  } else if (REPAIR_ROLES.has(role) && signals.signatureState === 'repeat_exhausted') {
+    // R2 — exhausted depth. The same failure a third time, after a `rethink` at
+    // `max` (Claude) or at the same effort (Codex) already failed. The verdict is
+    // computed once, by `failure-signature.cjs computeVerdict`, so the journal
+    // stays the single source and this stays a pure function.
+    route = 'exhausted';
+    why = 'the same failure signature came back after the deeper effort was already spent on it';
+  } else if (signals.contested === true && JUDGMENT_ROLES.has(role)) {
+    // R3 — contested JUDGMENT, and the role is part of the condition. Both facts
+    // that set this flag are a judge's own prior verdict: the journal already
+    // holds an `arch_review … verdict=violation` for this ticket, or the
+    // integrator has returned `needs-fix` on this epic before — a second reading
+    // at the same depth is what produced the contested verdict in the first
+    // place. A fixer carrying the flag is not a re-judgement, and a route that
+    // any role could open with one flag is not a ceiling that has to be earned.
+    route = 'contested';
+    why = 'this judgement has already been contested once (--contested)';
+  }
+  if (!route) return null;
+
+  const consented = cfg.fable === 'auto';
+  const runtimeHasIt = topTier(cfg) === 'fable';
+  if (consented && runtimeHasIt) return { route, why, model: 'fable', degraded: false, reason: null };
+  return {
+    route,
+    why,
+    model: 'opus',
+    degraded: true,
+    reason: !consented
+      ? `pipeline.fable is "${cfg.fable}", so the ceiling stays closed — opus at max effort instead ` +
+        '(set it to "auto" once a person has answered Fable\'s consent prompt interactively)'
+      : `the "${(cfg.gsd && cfg.gsd.runtime) || 'unset'}" runtime has no 1M-context tier, so the ` +
+        'ceiling is opus at max effort (on Codex the escalation is a `-deep` agent file — ADR-005 D8)',
+  };
+}
+
+// The ladder BEFORE the runtime cap — the strength this role deserves.
+//
+// Order: an explicit override, then the earned CEILING, then the FLOOR. The
+// ceiling sits ABOVE the floor deliberately: expressing the floor through
+// `pipeline.models.*` instead (which is how it was piloted) short-circuits this
+// function at the override and no escalation could ever fire.
 function ladderTier(role, signals = {}, cfg = DEFAULTS) {
   const override = cfg.models && cfg.models[role];
   if (override) return override;
 
-  const profile = cfg.model_policy || 'balanced';
-  // The two judgment roles are never cheapened — top tier under EVERY profile —
-  // and on a runtime that HAS a 1M-context tier they take it, because the window
-  // is what actually distinguishes their work: arch-review reads the whole diff
-  // against every ADR/INTERFACES/DATA-MODEL at once, and the integrator
-  // reconciles across repositories. Everywhere else `fable` would only be a more
-  // expensive `opus` — an executor on a three-file ticket gains nothing from it.
-  // Elsewhere (Codex) there is no such tier: GSD's tier set is opus|sonnet|haiku,
-  // so this must degrade to `opus` rather than emit a name the runtime rejects.
-  if (JUDGMENT_ROLES.has(role)) return topTier(cfg);
+  // A fired route overrides the two sonnet exemptions as well: they say "the
+  // model is not the gate here", and a route firing is the measured evidence
+  // that on THIS dispatch it is.
+  const ceiling = fableRoute(role, signals, cfg);
+  if (ceiling) return ceiling.model;
 
-  const risk = signals.risk || 'medium';
-
-  if (profile === 'premium') return role === 'drift-check' ? 'sonnet' : 'opus';
-
-  switch (role) {
-    case 'executor': {
-      if (risk === 'high' || signals.checkpoint) return 'opus';
-      const light = risk === 'low' && (signals.type === 'research' || Number(signals.files) <= 2);
-      if (light) return 'sonnet';
-      if (risk === 'medium' && profile === 'economy') return 'sonnet'; // escalates via the babysit ladder
-      return 'opus';
-    }
-    case 'ci-fix':
-      // Role × risk, and nothing else. This used to read
-      // `attempt >= 2 || previousFailed → opus`; ADR-001 D1 removed it, because
-      // a bigger model on the same wrong hypothesis is the failure mode, not the
-      // remedy. A repeat now changes strategy and effort (see resolveEffort).
-      return risk === 'high' ? 'opus' : 'sonnet';
-    case 'review-fix':
-      return signals.codeChange === false ? 'sonnet' : 'opus';
-    case 'pr-sentinel':
-      // The guard judges bot feedback AND edits code, but its merge decision is
-      // mechanical (sentinel.cjs enforces the gate), so it follows ci-fix's
-      // ladder — including D1: the attempt count is gone, what is left is the
-      // stakes of the PR in front of it.
-      return risk === 'high' || signals.checkpoint ? 'opus' : 'sonnet';
-    case 'drift-check':
-      return 'sonnet';
-    case 'research':
-      return signals.type === 'alternatives' ? 'opus' : 'sonnet';
-    default:
-      return 'opus';
-  }
+  // The floor. `model_policy` deliberately does not appear: the floor is not a
+  // preference (ADR-005 D1), so no profile moves it in either direction. The key
+  // survives because `gsd-tune` mirrors it onto GSD's own `model_profile`, which
+  // governs GSD's agents rather than the conveyor's roles.
+  return SONNET_ROLES.has(role) ? 'sonnet' : 'opus';
 }
 
-// role × risk × attempt routing. Returns a tier alias the Agent tool accepts.
+// role × signals routing. Returns a tier alias the Agent tool accepts.
 function resolveModel(role, signals = {}, cfg = DEFAULTS) {
   return capForRuntime(ladderTier(role, signals, cfg), cfg);
 }
 
-// Reasoning effort, mirroring GSD's light/standard/heavy tier defaults. Effort
-// follows the RESOLVED model, so escalating a repair to the top tier raises its
-// effort too — except for mechanical roles, which stay cheap either way.
+// Reasoning effort — the axis the policy now rests on, keyed on the ROLE and its
+// signals rather than on the resolved model (ADR-005 D2). The dependency had to
+// invert: the old rule derived the effort tier FROM the model, so the moment the
+// floor made the model constant everything collapsed to `xhigh` and
+// `--signature-state repeat` stopped deepening anything. `model` stays in the
+// signature for the callers that pass it, and drives nothing.
 //
-// `signals` is optional and carries two things. First, the signature state: on a
-// REPEAT the tier holds and the effort deepens (ADR-001 D1) — the model stays
-// where it is and thinks harder about a different hypothesis, rather than the
-// rejected "same hypothesis, bigger model". Second, the escalation the runtime
-// cap swallowed: where the cap demoted the model, the escalation must not vanish
-// with it. GSD does exactly this — `gsd-debugger` is its executor's model at a
-// higher effort — so a capped repair runs the workhorse at heavy rather than the
-// premium model at heavy.
-//
-// Both of those are the ladder on a runtime that HAS depth on this axis. Where
-// the axis is flat (ADR-005 D6) neither applies and the answer is two-valued;
-// that branch is first below, right after the explicit override.
+// Order, and every step of it is load-bearing:
+//   1. an explicit `pipeline.effort.<role>` override (warned about at load time
+//      when it shadows a repair role — ADR-005 D3);
+//   2. the flat-effort runtime (Codex), where the axis is two values wide by
+//      measurement and there is no deeper rung to escalate INTO;
+//   3. a repair role whose signature came back — `max`, the only built-in path to
+//      it, and earned by a repeated failure rather than chosen;
+//   4. a ceiling route that fired but could not be honoured — `max` at the floor
+//      model, which is the escalation the closed ceiling still owes;
+//   5. the role's own row in EFFORT_ROWS.
 function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
   const clamp = (level) => {
@@ -645,36 +857,84 @@ function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   // is no deeper rung here to escalate INTO — a repeat still changes strategy
   // (`rethink`), which is the half that survives.
   if (RUNTIMES_WITH_FLAT_EFFORT.has(runtime)) return MECHANICAL_ROLES.has(role) ? 'low' : 'high';
-  // The same failure came back: hold the tier, deepen the thinking. Placed after
-  // the override so an explicit configuration still wins, and before the tier
-  // table because it outranks every signal below it. No mechanical-role guard is
-  // needed — no repair role is mechanical, and drift-check is not a repair.
-  if (signals && REPAIR_ROLES.has(role) && signals.signatureState === 'repeat') return clamp('xhigh');
-  // On a capped runtime the model can no longer express depth, so effort has to —
-  // the same way GSD does it. Two things earn heavy there:
-  //   * judgment, which is heavy by its nature and not by its signals;
-  //   * an ESCALATION — the ladder raised this role ABOVE its own baseline
-  //     (a high-risk or checkpointed ticket, an economy-profile executor on a
-  //     risky one, `alternatives` research). Comparing against the role's
-  //     baseline rather than against "is it top tier" is what separates a repair
-  //     on a high-risk ticket (heavy) from an executor whose baseline was top
-  //     tier all along (standard) — on a capped runtime both arrive as the same
-  //     alias and would otherwise be indistinguishable.
-  const escalated = signals
-    && ladderTier(role, signals, cfg) !== ladderTier(role, {}, cfg)
-    && TOP_TIERS.has(ladderTier(role, signals, cfg));
-  const tier = MECHANICAL_ROLES.has(role)
-    ? 'light'
-    : (JUDGMENT_ROLES.has(role) || TOP_TIERS.has(model) || escalated) ? 'heavy'
-      : model === 'haiku' ? 'light' : 'standard';
-  return clamp(EFFORT_TIER_DEFAULTS[tier]);
+  // The same failure came back: hold the tier, deepen the thinking (ADR-001 D1).
+  // `max` and not `xhigh` — under the opus floor `xhigh` is where the judges
+  // already sit, so it stopped being a raise at all, which is the regression this
+  // rung is being restored from. Both repeat states qualify: on `repeat_exhausted`
+  // the MODEL moves (fableRoute's R2) and the depth stays at the deepest rung,
+  // because backing the thinking off while raising the model is neither ladder.
+  // No mechanical-role guard is needed — no repair role is mechanical, and
+  // drift-check is not a repair.
+  if (signals && REPAIR_ROLES.has(role)
+      && (signals.signatureState === 'repeat' || signals.signatureState === 'repeat_exhausted')) {
+    return clamp('max');
+  }
+  // A ceiling route fired and the ceiling is shut (no consent, or a runtime with
+  // no 1M tier). The escalation does not simply vanish: it lands on the axis that
+  // IS available, which is depth at the floor model — ADR-005's own reading of
+  // Fable's positioning ("opus at higher effort first, fable after"), applied in
+  // the direction the config allows.
+  if (signals) {
+    const ceiling = fableRoute(role, signals, cfg);
+    if (ceiling && ceiling.degraded) return clamp('max');
+  }
+  const row = Object.prototype.hasOwnProperty.call(EFFORT_ROWS, role) ? EFFORT_ROWS[role] : null;
+  return clamp(row ? row(signals || {}) : DEFAULT_EFFORT_ROW);
+}
+
+// ── the signals a role's rows actually read, and what silence costs ──────────
+//
+// ADR-004's principle, turned on the ladder: A SIGNAL THAT IS ABSENT MUST NEVER
+// RESOLVE UPWARD. Under this table every signal-keyed row is an UPGRADE, so
+// silence resolves to the cheaper row by construction — which is the opposite of
+// the defect that produced this rule (`Number(undefined) <= 2` is false, so the
+// executor's light path never fired once in 173 dispatches and every one of them
+// silently bought the dearer answer).
+//
+// The direction inverts with it: a missing signal is no longer a cost surprise,
+// it is a DEPTH the dispatch quietly declined. So the resolver still says so on
+// stderr — the same channel the config warnings use, so the gap shows up in a
+// dispatch line rather than only in a bill or in a shallow verdict.
+//
+// Only signals that a row READS are listed. `--files`, `--code-change` /
+// `--no-code-change`, `--attempt` and `--previous-failed` are accepted and inert
+// (the floor removed the rows they used to gate), and warning about those would
+// fire on every dispatch — which is how a warning teaches its reader to ignore
+// warnings.
+const SIGNAL_GAPS = {
+  executor: [{
+    flag: '--risk <low|medium|high>',
+    absent: (s) => s.risk === undefined,
+    cost: 'assuming medium → effort high; the xhigh row needs --risk high or --checkpoint',
+  }],
+  research: [{
+    flag: '--type <plan type>',
+    absent: (s) => s.type === undefined,
+    cost: 'assuming facts → effort high; --type alternatives is the xhigh row',
+  }],
+  'arch-review': [{
+    flag: '--input-tokens <n>',
+    absent: (s) => !Number.isFinite(Number(s.inputTokens)),
+    cost: 'the ceiling\'s window route cannot fire without a measured input',
+  }],
+  integrator: [{
+    flag: '--input-tokens <n>',
+    absent: (s) => !Number.isFinite(Number(s.inputTokens)),
+    cost: 'the ceiling\'s window route cannot fire without a measured input',
+  }],
+};
+
+// The rows this dispatch could not reach for want of a signal, as sentences.
+function signalGaps(role, signals = {}) {
+  const rows = Object.prototype.hasOwnProperty.call(SIGNAL_GAPS, role) ? SIGNAL_GAPS[role] : [];
+  return rows.filter((r) => r.absent(signals)).map((r) => `${role} reads ${r.flag} and did not get it — ${r.cost}`);
 }
 
 module.exports = {
-  loadConfig, resolveModel, resolveEffort, strategyFor,
+  loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
   parseCodexModelEntry, normalizeCodexModels,
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
-  DEFAULT_CODEX_MODELS,
+  DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS,
 };
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
@@ -720,18 +980,52 @@ if (require.main === module) {
     const signals = {
       risk: flag('risk'),
       type: flag('type'),
+      // The caller's own measurement of this dispatch's input. Read by the
+      // ceiling's window route; anything non-numeric is the same as absent, and
+      // absent cannot fire it.
+      inputTokens: flag('input-tokens'),
+      contested: rest.includes('--contested'),
+      // Accepted, recorded, and INERT (ADR-001 D1 for the attempt pair; the opus
+      // floor for the other two — it removed the cheaper rows `files` and
+      // `codeChange` used to gate, so neither routes anything now). They stay
+      // because deliver.md and references/ still spell them and telemetry still
+      // passes them; passing one is not an error, so it does not warn. Both
+      // spellings of the code-change signal are parsed so that "no flag" and
+      // "yes, code changed" stop being the same value on the record.
       files: flag('files'),
-      // Accepted, recorded, and INERT for the repair roles (ADR-001 D1). They
-      // stay because deliver.md still documents them and telemetry still passes
-      // them; passing one is not an error, so it does not warn.
+      codeChange: rest.includes('--code-change') ? true : rest.includes('--no-code-change') ? false : undefined,
       attempt: flag('attempt'),
       previousFailed: rest.includes('--previous-failed'),
       signatureState,
       checkpoint: rest.includes('--checkpoint'),
-      codeChange: rest.includes('--no-code-change') ? false : undefined,
     };
     for (const w of warnings) process.stderr.write(`pipeline-config: warning: ${w}\n`);
     if (signatureStateWarning) process.stderr.write(`pipeline-config: warning: ${signatureStateWarning}\n`);
+    // A row this dispatch could not reach for want of a signal (see SIGNAL_GAPS):
+    // it resolves DOWNWARD, which is correct, and it says so rather than leaving
+    // the gap visible only in a shallow verdict.
+    for (const gap of signalGaps(role, signals)) {
+      process.stderr.write(`pipeline-config: warning: ${gap}\n`);
+    }
+    // The ceiling, and the two ways it can be missed: a shut gate, or an override
+    // that outranks it. Both are legitimate; both are silent by default, and this
+    // is the one moment a reader can act on them.
+    const ceiling = fableRoute(role, signals, config);
+    if (ceiling) {
+      const override = config.models && config.models[role];
+      if (override) {
+        process.stderr.write(
+          `pipeline-config: warning: the ${ceiling.route} ceiling route fired for ${role} ` +
+          `(${ceiling.why}) but pipeline.models."${role}" = "${override}" outranks it — remove the ` +
+          'override to let the escalation through\n'
+        );
+      } else if (ceiling.degraded) {
+        process.stderr.write(
+          `pipeline-config: warning: the ${ceiling.route} ceiling route fired for ${role} ` +
+          `(${ceiling.why}) — ${ceiling.reason}\n`
+        );
+      }
+    }
     const model = resolveModel(role, signals, config);
     if (rest.includes('--json')) {
       const out = { model, effort: resolveEffort(role, model, config, signals) };
@@ -747,11 +1041,15 @@ if (require.main === module) {
 
   process.stderr.write(
     'usage: pipeline-config.cjs <resolve | model <role> [--json] [flags]>\n' +
-    '  flags: --risk low|medium|high  --type <plan type>  --files <n>  --checkpoint\n' +
-    '         --code-change|--no-code-change\n' +
+    '  flags: --risk low|medium|high  --type <plan type>  --checkpoint\n' +
+    '         --input-tokens <n>   the caller\'s measurement of this dispatch\'s input;\n' +
+    '                              over pipeline.fable_window_tokens it earns the ceiling\n' +
+    '         --contested          this judgement was already contested once\n' +
     '         --signature-state ' + SIGNATURE_STATES.join('|') + '\n' +
-    '         --attempt <n>  --previous-failed  (accepted, telemetry only: they no\n' +
-    '           longer route the repair roles — a repeat changes strategy, not tier)\n'
+    '         --files <n>  --code-change|--no-code-change  --attempt <n>  --previous-failed\n' +
+    '           (all accepted, telemetry only: the attempt pair never routed a repair\n' +
+    '            tier since ADR-001 D1, and the opus floor removed the cheaper rows the\n' +
+    '            other two used to gate)\n'
   );
   process.exit(2);
 }

@@ -230,17 +230,22 @@ writes the shared `.git`. Consequences you must honour:
 
 ## Agent models — ASK the resolver, do not reason it out
 
-The policy is **role × risk** routing — plus, for the repair roles, the failure
-SIGNATURE's history instead of an attempt count — and it is CODE, not prose:
+The policy is a **floor** (every role that writes code or renders a judgement),
+a **depth** expressed as effort per role, and a **ceiling** the conveyor reaches
+by itself through three mechanical routes. It is CODE, not prose:
 
 ```text
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs model <role> [--json] [flags]
   roles: integrator | arch-review | executor | ci-fix | review-fix | pr-sentinel
          | drift-check | research
-  flags: --risk low|medium|high  --type <plan type>  --files <n>
-         --checkpoint  --code-change|--no-code-change
-         --signature-state first|progress|repeat|flake_candidate|flake|plan_defect
-         --attempt <n>  --previous-failed   ← accepted, telemetry only (see below)
+  flags: --risk low|medium|high  --type <plan type>  --checkpoint
+         --input-tokens <n>   YOUR measurement of this dispatch's input; over
+                              pipeline.fable_window_tokens it earns the ceiling
+         --contested          this judgement has already been faulted once
+         --signature-state first|progress|repeat|repeat_exhausted|
+                           flake_candidate|flake|plan_defect
+         --files <n>  --code-change|--no-code-change  --attempt <n>
+         --previous-failed    ← all accepted, telemetry only (see below)
 ```
 
 Without `--json` it prints one **tier alias**; with `--json` it prints
@@ -260,71 +265,121 @@ itself.
 
 `fable` is Fable 5.1: Opus-tier, **1M-token context**, adaptive thinking at
 xhigh effort — the only alias that expresses "top tier with a 1M window", which is
-what the old `opus[1m]` was reaching for. That window is why the resolver makes it
-the DEFAULT for the two judgment roles, `arch-review` and `integrator`: both read a
-whole diff against every ADR at once. It is not an opt-in — where GSD's configured
-`runtime` has no such tier (`RUNTIMES_WITH_1M_TIER` in `pipeline-config.cjs`) the
-ladder degrades to `opus` and the runtime cap takes it from there, which is one
-more reason to ASK the resolver rather than assume a value. It is a paid model: it
-may bill usage credits and asks for consent ONCE, and an unattended session waits
-out that prompt (`dialogExpiry`, 5 min) and then ends the turn without sending — so
-a project where nobody has answered it opts OUT per role until someone has:
-`{"pipeline": {"models": {"integrator": "opus", "arch-review": "opus"}}}`.
+what the old `opus[1m]` was reaching for. **It is a CEILING and nobody's default,
+the integrator included.** The window argument was retired on a measurement: the
+ADR corpus a judge re-reads every round is ~8k tokens, the largest ticket diff of
+a phase ~16k, and the phase epic diff — the integrator's own input and the largest
+in the whole system — ~52k. Opus 5's ordinary window swallows all of it, and
+`fable` costs exactly 2× `opus` on every component. So it is reached only through
+the three routes below, and only when `pipeline.fable` is `auto`: a paid model may
+bill usage credits and asks for consent ONCE, and an unattended session waits out
+that prompt (`dialogExpiry`, 5 min) and then ends the turn without sending, so
+silence must not read as consent. With the ceiling shut, a fired route degrades to
+`opus` at `max` effort and the resolver prints why. Below CLI 2.1.255 the alias
+resolves to Fable 5 instead, which is why `gsd-tune` reports that floor at Step 0
+and the deployment files pin `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1`.
 
-Effort follows the RESOLVED tier (GSD's ladder: light→low, standard→high,
-heavy→xhigh), so escalating a repair to the top tier raises its effort with it.
-Mechanical roles stay cheap regardless. `minimal` is clamped to `low` (it is not
-in Workflow's enum). On the Codex runtime that ladder does NOT apply: the effort
-axis there is two values wide by measurement — `low` for the mechanical role,
-`high` for everything else — and depth comes from the model instead (ADR-005 D6,
-and the `-deep` agents below).
+Effort is keyed on the ROLE and its signals, not on the resolved model — the
+dependency had to invert, because with the floor at `opus` the old rule ("effort
+follows the tier") collapsed to one value and `--signature-state repeat` stopped
+deepening anything. **Effort is a QUALITY knob, not a price one:** output is 12–19%
+of a model line and cache read+write 82–87%, so `xhigh` → `high` moves ~3.4% of a
+run against ≈2.5× for a tier step. Never argue an effort row as a saving.
+`minimal` is clamped to `low` (it is not in Workflow's enum). On the Codex runtime
+this table does NOT apply: the effort axis there is two values wide by measurement
+— `low` for the mechanical role, `high` for everything else — and depth comes from
+the model instead (ADR-005 D6, and the `-deep` agents below).
+
+**The Agent tool takes no `effort` parameter at all** (verified against the live
+schema, CLI 2.1.263): only Workflow's `agent()` carries it. So effort is ENFORCED
+on the Workflow path — executors, drift judges, fix rounds — and for an
+Agent-spawned background guard it is a sentence in the prompt ("think at <effort>
+effort"). Pass the resolved `model` either way; do not read the guard's behaviour
+as if the number were enforced there.
 
 The signals the resolver needs are already deterministic: `risk`/`type`/`files`
-from tickets.json (validated by Gate 2), and — for a repair — the verdict
-`failure-signature.cjs verdict` computed from the journal. The shape of the
-policy it implements:
+from tickets.json (validated by Gate 2), the verdict `failure-signature.cjs
+verdict` computed from the journal for a repair, and a measured `--input-tokens`
+for a judge. The shape of the policy it implements:
 
 ```text
-integrator     → opus     ALWAYS (emergent violations, most expensive errors)
-arch-review    → opus     ALWAYS (verdict against the ADR — judgment)
+TIER — the floor is opus, with exactly two exemptions:
 
-executor       → opus     risk high/human_checkpoint, or medium (default)
-               → sonnet   risk low AND (type research OR files_modified ≤ 2);
-                          if its PR later fails in babysit the repair goes down
-                          the ladder below, so underestimation self-corrects
+  every role                → opus     writing code or rendering a judgement
+  pr-sentinel               → sonnet   the merge decision is MECHANICAL:
+                                       sentinel.cjs re-verifies every condition
+                                       against live GitHub and refuses on
+                                       anything unproven, so the model is not
+                                       the gate. 44% of all dispatches.
+  drift-check               → sonnet   it returns a file list and reuse
+                                       pointers; its plan-defect burden is
+                                       bought with EFFORT below, not a tier.
+  haiku                     → nobody   no built-in path returns it any more
 
-ci-fix         → sonnet   risk low/medium (lint/snapshots/trivial)
-               → opus     risk high
-     signature-state repeat → SAME tier, effort xhigh, strategy `rethink`
+EFFORT — one row per role, and the row is chosen for the WORK:
 
-review-fix     → sonnet   threads with no code change (reply/explanation)
-               → opus     threads that require a code change
-     signature-state repeat → SAME tier, effort xhigh, strategy `rethink`
+  drift-check               high    it is now the role expected to notice a plan
+                                    that no longer matches the codebase, and it
+                                    runs BEFORE an executor is paid
+  research                  high    xhigh with --type alternatives
+  executor                  high    xhigh at --risk high or --checkpoint, where a
+                                    defect is expensive rather than merely
+                                    possible. Its job is to implement a contract;
+                                    falsifying that contract belongs upstream.
+  ci-fix / review-fix /
+    pr-sentinel             high
+  arch-review / integrator  xhigh   NOT max: xhigh is the best setting for most
+                                    coding and agentic work, and `max` is for
+                                    where measurement shows headroom below it
+  any repair role on a
+    repeated signature      max     the ONE built-in path to max, and it is
+                                    EARNED by a repeated failure
 
-pr-sentinel    → sonnet   the ordinary watch (same cheap first strike)
-               → opus     risk high, or a checkpoint ticket in the set
-     signature-state repeat → SAME tier, effort xhigh, strategy `rethink`
+CEILING — fable, only under `pipeline.fable: auto`, only via these routes:
 
-drift-check    → sonnet   mechanical reconciliation
+  R1 window       --input-tokens over pipeline.fable_window_tokens (250k)
+  R2 exhausted    a repair role at --signature-state repeat_exhausted: the same
+                  failure a third time, after `rethink` at max already failed
+  R3 contested    --contested: the journal holds an `arch_review …
+                  verdict=violation` for this ticket, or the integrator has
+                  returned needs-fix on this epic before
+  shut ceiling    every route above → opus at max effort, with the reason
+                  (`pipeline.fable` off, or a runtime whose tier vocabulary has no
+                  such alias — where an agent is a static file, the SAME two
+                  triggers select a `-deep` agent instead; see below)
 ```
 
-**A repeat escalates the STRATEGY, not the tier.** The repair roles used to read
-`attempt ≥ 2 → opus`, which is "try harder", and what it bought was one wrong
-hypothesis re-tried by three models in sequence. `--attempt` and
-`--previous-failed` are still ACCEPTED — telemetry passes them and older callers
-still spell them, so passing one is neither an error nor a warning — but they no
-longer route a repair tier. What routes it is `--signature-state`, whose verdict
-comes from `failure-signature.cjs verdict`, and whose K — how many DISTINCT
-signatures with no green mean the plan is wrong rather than the fix — is
-`plan_defect_signatures` (default 3). The returned `strategy` is the instruction:
-`fix` / `continue` (proceed), `rethink` (same tier, deeper effort, a different
-hypothesis), `rerun` / `quarantine` / `park` (do not dispatch a fixer at all).
+**PASS THE SIGNALS THE TABLE READS, or the row is decoration.** This was measured
+twice on this repository: the executor's old light path read
+`Number(signals.files) <= 2`, and because the documented dispatch omitted
+`--files`, that row never fired once in 173 dispatches — every one of them
+silently bought the dearer answer. So: `--risk`/`--type`/`--checkpoint` from the
+ticket record on every executor dispatch, `--signature-state` on every repair, and
+`--input-tokens` on the two judgment roles, measured by you (`gh pr diff | wc -c`
+÷ 4 plus the ADR corpus; for the integrator, the epic diff). **A signal that is
+ABSENT must never resolve UPWARD** — every row above is an upgrade, so silence
+resolves to the cheaper one — and the resolver WARNS on stderr when a row could
+not be reached for want of a signal. Read those warnings: they name a depth the
+dispatch declined.
 
-Why a cheap first strike is safe: green still goes through arch-review (opus) +
-the mechanical "did work" gate + bot review — a false green from a cheap model is
-caught upstream. Judgment (integrator/arch-review) is NOT cheapened under any
-profile — there is no mechanical safety net above it there, and the resolver
-enforces that regardless of configuration.
+**A repeat escalates the STRATEGY and the DEPTH, not the tier.** The repair roles
+used to read `attempt ≥ 2 → opus`, which is "try harder", and what it bought was
+one wrong hypothesis re-tried by three models in sequence. `--attempt`,
+`--previous-failed`, `--files` and `--code-change` are still ACCEPTED — telemetry
+passes them and older callers still spell them, so passing one is neither an error
+nor a warning — but none of them routes anything now. What routes a repair is
+`--signature-state`, whose verdict comes from `failure-signature.cjs verdict`, and
+whose K — how many DISTINCT signatures with no green mean the plan is wrong rather
+than the fix — is `plan_defect_signatures` (default 3). The returned `strategy` is
+the instruction: `fix` / `continue` (proceed), `rethink` (a different hypothesis;
+on `repeat` at a deeper effort, on `repeat_exhausted` at the ceiling model),
+`rerun` / `quarantine` / `park` (do not dispatch a fixer at all).
+
+Why the floor is worth its price: the conveyor's failure mode is a wrong green
+reaching an epic, and every mechanical gate above the executor costs more to run
+than the difference between two tiers. That is also why the two exemptions are
+exemptions rather than the start of a list — each names what actually decides, and
+neither is about how much is at stake.
 
 Config lives in `.planning/config.json` under **two** namespaces, both read by
 `pipeline-config.cjs` and echoed by `state-sync` on every run:
@@ -335,9 +390,13 @@ Config lives in `.planning/config.json` under **two** namespaces, both read by
   config key, so `/gsd-config --set pipeline.x` is rejected; edit the file.
 
 Keys: `model_policy` (`economy | balanced (default) | premium`; GSD's own
-`budget`/`quality` names are accepted as aliases), `models`, `effort`,
-`max_attempts` (5), `plan_defect_signatures` (3), `pr_fetch_limit`,
-`stale_merge_hours`, `stale_draft_hours`,
+`budget`/`quality` names are accepted as aliases — it mirrors GSD's own
+`model_profile` and no longer routes any conveyor role, since the floor is not a
+preference), `models`, `effort` (a per-role override; on a REPAIR role it also
+switches off the depth rung a repeated failure earns, and the reader says so),
+`fable` (`off` (default) | `auto` — consent for the paid ceiling),
+`fable_window_tokens` (250000), `max_attempts` (5), `plan_defect_signatures` (3),
+`pr_fetch_limit`, `stale_merge_hours`, `stale_draft_hours`,
 `integration_mode`, `use_workflow`, `sentinel` (`auto` | `off`), `auto_merge`
 (`epic` | `off`), `graph_gate`, `jira`, `repos`
 (`{"owner/name": "/abs/path/to/checkout"}` — see the multi-repo section).
@@ -797,14 +856,21 @@ attempts and landing nothing. When in doubt, RUN the check: it is a cheap
 read-only judge, and the failure it prevents is the most expensive one there is.
 
 - **Workflow path** (available and `use_workflow ≠ false`): `Workflow({scriptPath:
-  <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, model: "sonnet",
-  effort: "low"}], driftRefPath: <references/drift-check.md>,
+  <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, model, effort}],
+  driftRefPath: <references/drift-check.md>,
   baseRef: "origin/<the configured base>",
   recordCmd: "node <plugin-root>/scripts/drift-record.cjs",
-  graphDir: "<project>/.planning/graph"}})`. The script is
-  fail-safe: an agent that crashed is treated as `drifted`.
-- **Fallback**: several drift-check `Agent`s in one message (`model: sonnet`;
-  prompt `${CLAUDE_PLUGIN_ROOT}/references/drift-check.md` + the ticket contract).
+  graphDir: "<project>/.planning/graph"}})`.
+  `model` and `effort` come from `pipeline-config.cjs model drift-check --json`
+  — today `sonnet`/`high`, and the `high` is deliberate: this is the role expected
+  to notice a plan that no longer matches the codebase, which is the work the
+  executor stopped doing, and effort is ~12% of a line while a tier step is 2.5×.
+  Ask the resolver rather than pasting the pair, or this ladder drifts here first.
+  The script is fail-safe: an agent that crashed is treated as `drifted`.
+- **Fallback**: several drift-check `Agent`s in one message (the same resolved
+  `model`; the Agent tool carries no `effort`, so say "think at <effort> effort" in
+  the prompt — `${CLAUDE_PLUGIN_ROOT}/references/drift-check.md` + the ticket
+  contract).
 
 **Always pass the base ref, on either path.** Without it the judge reasons about
 the working tree, and the working tree is whatever branch the session is on —
@@ -1050,7 +1116,8 @@ loop:
              round, and it needs no ticket graph, so it runs in the worktree.
        a2. failure-signature.cjs verdict <T> --signature <sig> --head <head sha>
              --k <pipeline.plan_defect_signatures> --json
-           → one of: first | progress | repeat | flake_candidate | flake | plan_defect
+           → one of: first | progress | repeat | repeat_exhausted |
+             flake_candidate | flake | plan_defect
        a3. branch on it. The last three do NOT dispatch a fixer:
 
        flake — already quarantined. Do NOT dispatch a fixer and do NOT CHARGE THE
@@ -1083,13 +1150,17 @@ loop:
          PLAN — a push or an answered review does NOT lift it; re-decomposing the
          plan file does.
 
-       first | progress | repeat — dispatch ci-fix in the ticket's worktree.
-         model+effort+strategy from `pipeline-config.cjs model ci-fix --json
-         --risk <r> --signature-state <verdict>`
+       first | progress | repeat | repeat_exhausted — dispatch ci-fix in the
+         ticket's worktree. model+effort+strategy from `pipeline-config.cjs model
+         ci-fix --json --risk <r> --signature-state <verdict>`
          → {"model": …, "effort": …, "strategy": fix|continue|rethink}.
-         On `repeat` the strategy is `rethink`: SAME tier, deeper effort, a
-         DIFFERENT approach — re-read the plan, widen the context, raise the
-         hypothesis above the symptom.
+         On `repeat` the strategy is `rethink`: SAME tier, deeper effort (`max`),
+         a DIFFERENT approach — re-read the plan, widen the context, raise the
+         hypothesis above the symptom. On `repeat_exhausted` — the same failure a
+         THIRD time, after that deeper effort already failed — the advice is
+         unchanged and the resolver raises the MODEL instead (the ceiling's R2).
+         Pass whatever it returns; after one such round the ticket is a person's
+         (`escalation-record.cjs mark`), never a third model at the same depth.
          Hand the agent, as INPUT and not as background:
            - prompt ${CLAUDE_PLUGIN_ROOT}/references/ci-fix.md + the ticket contract
            - the failure log (gh run view --log-failed) and its signature
@@ -1112,12 +1183,15 @@ loop:
      and Copilot actually said, and the half they file as issue comments is the
      half that silently went unaddressed)
      there is feedback → review-fix agent in the worktree; model+effort from
-       `pipeline-config.cjs model review-fix --json [--no-code-change]
+       `pipeline-config.cjs model review-fix --json [--code-change|--no-code-change]
         [--signature-state <verdict>]`
-       (reply/explanation only → sonnet; anything needing a code change, or when
-        you cannot tell → opus. Pass the signature state when this PR already has
-        a signed failure history: it is a repair role, so a `repeat` deepens its
-        effort to xhigh at the same tier, exactly as it does for ci-fix)
+       (`opus`/`high` either way — the tier no longer turns on whether a thread
+        needs code, because a reasoned disagreement with a bot is a judgement too.
+        Pass the flag anyway when you know it: it is recorded, and "no flag" must
+        stop meaning the same thing as "yes, code changed". Pass the signature
+        state when this PR already has a signed failure history: it is a repair
+        role, so a `repeat` deepens its effort to `max` at the same tier, exactly
+        as it does for ci-fix)
        (prompt ${CLAUDE_PLUGIN_ROOT}/references/review-fix.md + the JSON of the
         threads + the prior-attempt record, `attempt-history.cjs <T>` — the
         reference tells the fixer to treat a hypothesis already in that record as
@@ -1125,7 +1199,15 @@ loop:
        the agent either fixes (push → step d), or replies to invalid ones
        (no push → mark the threads processed, b again)
 
-  c. arch-review agent (`model: opus` — judgment, never cheapened)
+  c. arch-review agent — judgment, never cheapened. Resolve it, do not assume it:
+     `pipeline-config.cjs model arch-review --json --input-tokens <n>
+      [--contested]` → `opus`/`xhigh` ordinarily, and the ceiling when the input
+     it is about has actually grown. MEASURE `<n>` yourself — bytes ÷ 4 over
+     `gh pr diff` plus the ADR corpus it re-reads — because an absent measurement
+     cannot fire that route, by design. Pass `--contested` when the journal
+     already holds an `arch_review … verdict=violation` for this ticket
+     (`grep '"event":"arch_review"' .planning/graph/delivery-log.jsonl`): a second
+     reading at the same depth is what produced the contested verdict.
      (prompt ${CLAUDE_PLUGIN_ROOT}/references/arch-review.md + gh pr diff +
       .planning/architecture/)
      the same step runs the degenerate-green detector over the diff it judged —
@@ -1139,6 +1221,10 @@ loop:
        never a reason to hold a merge. `sentinel.cjs merge` reads `arch-review`
        and the `head` that verdict is bound to, and nothing else, pinned by
        tests/unit/trailer.test.cjs.
+     record the verdict in the journal either way, because it is what a later
+       `--contested` reads: `log-event.cjs arch_review ticket=<T> pr=<N>
+       verdict=<conform|violation|adr-outdated> head=<sha>
+       --graph <project>/.planning/graph`
      violation    → fix in the worktree → push → step d
      adr-outdated → `escalation-record.cjs mark <T> "adr-outdated: …"` (changing the ADR is a human's call), continue the front
      conform      → check the green criteria:
@@ -1261,7 +1347,8 @@ itself. The round order:
    Then re-run state-sync: if the front still has actionable items, serve THEM
    while CI runs — `ci-wait.cjs` (loop-back item 5) is the wait, and only once the
    front has no other move: it refuses while it has.
-4. Then — step **c** of the cycle (arch-review, `model: opus`), the conform gate
+4. Then — step **c** of the cycle (arch-review, resolved with a measured
+   `--input-tokens`), the conform gate
    and the `sentinel.cjs merge` for each PR in the main loop, as above. This is
    judgment, finalization and a merge — do NOT hand any of it to Workflow.
 
@@ -1391,9 +1478,16 @@ driving PRs hands the user a half-truth.
    - make sure the integration PR exists: `epic-branch.sh pr <epic>` (in each repo's
      checkout; state-sync's `⚠ epic … has N commit(s) but no PR` line is the trigger
      and it is actionable work, not a note);
-   - an integrator run per `${CLAUDE_PLUGIN_ROOT}/references/integrator.md`
-     (`model: opus` — judgment) — the epic diff against the default branch, not the
-     individual ticket-PRs → `INTEGRATION.md`;
+   - an integrator run per `${CLAUDE_PLUGIN_ROOT}/references/integrator.md` — the
+     epic diff against the default branch, not the individual ticket-PRs →
+     `INTEGRATION.md`. Resolve it: `pipeline-config.cjs model integrator --json
+     --input-tokens <n>`, measuring `<n>` over that epic diff (bytes ÷ 4). It is
+     `opus`/`xhigh` — no standing exception any more, because its input was
+     measured at 291k tokens end to end against `fable` costing exactly twice as
+     much; `xhigh` is what its being the last mechanical judgement before a person
+     merges actually buys, and it never drops. The window route is what raises it
+     when the epic diff has genuinely grown, which is why the measurement is not
+     optional;
    - `passed` → remove draft from the epic-PR (`gh pr ready`) and hand it to the human to
      merge epic → default branch (the phase lands as one PR);
    - `needs-fix` → fix tickets as new plans in the same phase (their base — the epic) →

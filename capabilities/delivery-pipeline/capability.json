@@ -58,6 +58,16 @@
       "default": "gpt-5.6-terra:high, gpt-6-astra:high@0.153.1",
       "description": "The Codex model palette, in preference order: 'model[:effort][@min_cli]' per entry, comma separated. The effort is the one to USE for that model, never the deepest it accepts; min_cli is the Codex CLI version that can first configure it, below which the generator writes the previous entry instead. First entry is the workhorse floor every agent gets; last is the ceiling, taken statically by the integrator and reachable elsewhere through the '-deep' escalation agents. An empty value writes no model at all, leaving every agent on the CLI default. 'gpt-5.6-sol' is a valid entry no built-in path selects: with the deeper efforts retired on this runtime, advertising 'ultra' was its only distinguishing property."
     },
+    "delivery_pipeline.fable": {
+      "type": "string",
+      "default": "off",
+      "description": "Consent for the paid 1M-context ceiling (Claude Fable 5.1). 'off' - the conveyor never emits the 'fable' alias: the three escalation routes (a measured input over fable_window_tokens, a repair whose failure signature came back a third time, a contested judgement) degrade to 'opus' at 'max' effort and print the reason. 'auto' - a person has answered Fable's consent prompt interactively, so those routes are honoured. It defaults to off because an unconsented request in a background session waits out dialogExpiry and then ends the turn without sending, and silence is not consent. No role takes it by default, the integrator included."
+    },
+    "delivery_pipeline.fable_window_tokens": {
+      "type": "number",
+      "default": 250000,
+      "description": "The window route's threshold: a dispatch whose caller-measured input exceeds this many tokens earns the 1M-context ceiling (when delivery_pipeline.fable is 'auto'). The default is five times the largest input measured on this repository - the phase epic diff, which is the integrator's own input, at 210 KB or about 52k tokens. The caller measures and passes --input-tokens; the resolver only compares, and an absent measurement can never fire the route."
+    },
     "delivery_pipeline.merge_without_ci": {
       "type": "boolean",
       "default": false,
