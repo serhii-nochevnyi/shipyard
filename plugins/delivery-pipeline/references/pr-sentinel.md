@@ -314,14 +314,25 @@ reinit is not optional.
   orchestrator recorded a dispatch for every PR it gave you
   (`dispatch-record.cjs`), which is what stops the run being told those tickets
   are un-taken while you work. Run `dispatch-record.cjs clear <T>` as soon as a PR
-  is merged, parked, or handed to a person, and `mark <T> <role>` again if you
-  hand it to a fixer you do not wait for — **after that fixer is actually
-  launched, never before.** A mark ahead of a launch that then fails (the tool
-  refused, the fallback was not taken) leaves a dispatch the front reports as
+  is merged, parked, or handed to a person, and
+  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --reason "<branch>"`
+  again if you hand it to a fixer you do not wait for — **after that fixer is
+  actually launched, never before.** A mark ahead of a launch that then fails (the
+  tool refused, the fallback was not taken) leaves a dispatch the front reports as
   `waiting.dispatched` for 90 minutes: work in flight that is not. The launch's
   own id (the task id the Workflow tool returns, or the agent id the Agent tool
-  returns) belongs in your report — `mark` stores the ticket, the role and the
-  time, and nothing else. Neither call is a cleanup you can forget
+  returns) belongs in your report — `mark` stores the ticket, the role, the time
+  and what you dispatched it at, and no id.
+  **The pair is the one `pipeline-config.cjs model <role> --json …` just gave you**,
+  including the `rethink` deepening — re-deriving it here would record the ladder's
+  opinion instead of your dispatch, and recording nothing is why the journal cannot
+  today say what any fix round ran at. Add `--effort-applied <effort>` only when the
+  Workflow tool carried the fixer (its `agent()` takes an effort); an `Agent`-spawned
+  fixer runs at the session's own depth, so the flag is OMITTED and its absence is
+  the honest "unmeasured". On the Codex bundle add
+  `--agent-file shipyard-<role>[-deep]`, which is where that runtime's model choice
+  lives — the `-deep` file is a different model, so a dispatch that does not name
+  the file does not record the escalation. Neither call is a cleanup you can forget
   safely-but-late: the record lifts on the OWNER'S OUTPUT — your own dispatch
   when the PR merges or its base moves, a fixer's when the PR's head moves — and
   it times out regardless, so the cost of forgetting is a stale line on the

@@ -96,13 +96,50 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role>` — an agent is working on it RIGHT NOW.
-  The one fact here that is motion rather than a verdict, and the one the board
-  could not see at all: nothing is pushed yet, so the live state still reads
-  `execute`/`fix` and the stop gate refuses turns over work already in flight.
-  It lifts by itself when the ticket's state moves or when the dispatch times
-  out, so a run that dies mid-wave hides nothing from the next one.
+- `dispatch-record.cjs mark <T> <role> --model <alias> --effort <level>` — an agent
+  is working on it RIGHT NOW. The one fact here that is motion rather than a
+  verdict, and the one the board could not see at all: nothing is pushed yet, so
+  the live state still reads `execute`/`fix` and the stop gate refuses turns over
+  work already in flight. It lifts by itself when the ticket's state moves or when
+  the dispatch times out, so a run that dies mid-wave hides nothing from the next
+  one.
+  **Pass what the resolver decided, every time** — the values you already hold from
+  the `pipeline-config.cjs model <role> --json` call you made to launch, plus
+  `--reason "<the branch that fired>"` (`risk: high`, `signature repeat`,
+  `role baseline`). It is the whole reason the record exists: without them the
+  journal can say a judge was dispatched and not what it ran at, so every row of
+  the ladder stays a matter of argument. With them a ladder review is one query
+  (below).
+  Add `--effort-applied <level>` **on the Workflow path only** — `agent()` carries
+  an effort, the Agent tool has no such parameter, so an Agent-dispatched role runs
+  at the session's own effort whatever the ladder chose. Omitting the flag is the
+  honest record of that: absence means UNMEASURED, and the recorder will not fill
+  it in. Never pass the resolved value as the applied one.
+  On the Codex bundle add `--agent-file shipyard-<role>[-deep]` — the file you
+  actually dispatched, which is where that runtime's model choice lives.
 Reserve `--parked` for what genuinely holds only for this session.
+
+**The ladder review, as one query.** Run it from the project (not a worktree) when
+somebody asks whether a role is over- or under-powered — the answer is then read
+rather than argued:
+
+```bash
+# shipyard:ladder-query — what was dispatched, at what tier, at what depth
+node -e 'const fs=require("fs");
+  const d=fs.readFileSync(".planning/graph/delivery-log.jsonl","utf8")
+    .trim().split("\n").map(JSON.parse).filter(e=>e.event==="dispatch");
+  const k={}; for (const e of d) {
+    const applied = "effort_applied" in e ? e.effort_applied : "UNCONFIRMED";
+    const s=`${e.role} ${e.model||"?"} resolved:${e.effort||"?"} applied:${applied}`;
+    k[s]=(k[s]||0)+1; } console.log(k);'
+```
+
+The token counts are NOT in this journal — they live in the harness's task
+notifications — but the pairing is, and joined against these role counts it is what
+a ladder revision needs. The `UNCONFIRMED` bucket is not a defect in the data: it
+is the Agent path telling the truth about itself, and its SIZE is how much of the
+ladder is currently unverifiable. If it ever reads zero for `arch-review` or
+`pr-sentinel`, somebody has started filling the field in.
 
 `branched-needs-pr`/`publish` is a real bucket, not a curiosity: a branch that was
 pushed before its PR was opened (an executor died between the two) is unfinished
@@ -982,9 +1019,15 @@ and do not open PRs.
     above returns immediately with an id (the Workflow tool a task id, the Agent
     tool an agent id); once you hold that id the agent exists, and only then, for
     every ticket you just handed out:
-    `dispatch-record.cjs mark <T> executor` (add `--graph <project>/.planning/graph`
-    when you are not standing in the project). Keep the id in your own turn — the
-    record stores the ticket, the role and the time, and nothing else — because it
+    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --reason "<branch>"`
+    (add `--effort-applied <effort>` when you took the Workflow path — it carries an
+    effort into the spawn and the Agent fallback cannot, so on the fallback the flag
+    is OMITTED, never guessed; add `--graph <project>/.planning/graph` when you are
+    not standing in the project). `<model>`, `<effort>` and the branch are the ones
+    the `pipeline-config.cjs model executor --json …` call above already returned —
+    nothing is re-derived here, or the record would hold the ladder's opinion instead
+    of what was dispatched. Keep the launch id in your own turn — the record stores
+    the ticket, the role, the time and the resolved pair, and no id — because the id
     is what you collect and clear against.
     **Marking first is how the board comes to describe an agent that does not
     exist**: a launch that fails (the tool refused, Workflow is absent on this
@@ -1074,7 +1117,11 @@ spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose'
 
 Record that hand-over the same way the executors' was, and in the same order —
 the `Agent` call returns an agent id, and THEN
-`dispatch-record.cjs mark <T> pr-sentinel` for every ticket on the guarded list;
+`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --reason "<branch>"`
+for every ticket on the guarded list, taking the pair from the `model pr-sentinel`
+call above. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
+which carries no effort, so the applied depth is genuinely unmeasured and the
+record says so by leaving the key out;
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
 one when the guard's report comes back for it — a `pr-sentinel` record also lifts
 by itself when the PR merges or its base moves. This half is not an

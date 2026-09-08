@@ -491,4 +491,259 @@ test('every dispatch reaches the journal exactly once', () => {
   assert.equal(new Set(log.map((e) => e.ticket)).size, 3, 'no ticket logged twice');
 });
 
+suite('dispatch-record — a dispatch records WHAT it dispatched, or says it does not know');
+
+// The whole value of these fields is that a later ladder review reads the journal
+// instead of arguing from judgement. That only holds if the record is honest about
+// the half nobody measured: the Agent tool takes no effort, so an Agent-dispatched
+// judge runs at the SESSION's depth whatever the ladder chose. A recorder that
+// helpfully filled the field in would make those rows indistinguishable from the
+// Workflow rows that really did carry it — and a review comparing the two would
+// conclude something false about both.
+//
+// So the ABSENCE test comes first: it is the case a later convenience default
+// breaks, and it is the only thing standing between this journal and a plausible
+// fiction.
+
+const journal = (graph) => fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8')
+  .trim().split('\n').map(JSON.parse);
+const lastDispatch = (graph) => journal(graph).filter((e) => e.event === 'dispatch').pop();
+const DECIDED_KEYS = ['model', 'effort', 'effort_applied', 'reason', 'agent_file'];
+
+test('a mark with no flags writes NO such key at all — not null', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  assert.equal(run(['mark', 'T-01-01', 'executor'], project).status, 0);
+  const rec = store(graph)['T-01-01'];
+  const ev = lastDispatch(graph);
+  for (const k of DECIDED_KEYS) {
+    assert.ok(!(k in rec), `the record must not carry "${k}" at all (got ${JSON.stringify(rec[k])})`);
+    assert.ok(!(k in ev), `the journal line must not carry "${k}" at all (got ${JSON.stringify(ev[k])})`);
+  }
+});
+
+test('the Agent path omits --effort-applied and the key STAYS out', () => {
+  // The ticket's reason for existing. `arch-review` is dispatched with the Agent
+  // tool, which has no effort parameter, so `xhigh` is what the ladder decided and
+  // nothing observed what ran. A `null` here would read as a measured unknown.
+  const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
+  const r = run(['mark', 'T-01-02', 'arch-review', '--model', 'opus', '--effort', 'xhigh'], project);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  const rec = store(graph)['T-01-02'];
+  const ev = lastDispatch(graph);
+  assert.equal(rec.effort, 'xhigh', 'what the resolver decided is recorded');
+  assert.equal(ev.effort, 'xhigh');
+  assert.ok(!('effort_applied' in rec), 'and what the spawn carried is UNRECORDED, not null');
+  assert.ok(!('effort_applied' in ev), 'in the journal too — the query reads that key by presence');
+});
+
+test('the two claims are never collapsed into one', () => {
+  // Not a hypothetical: the deepening the ladder chooses and the depth a spawn can
+  // carry are different numbers, and the only implementation that can prove it
+  // never copies one into the other is one that records them apart.
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  assert.equal(run(['mark', 'T-01-01', 'executor', '--effort', 'high', '--effort-applied', 'low'], project).status, 0);
+  const rec = store(graph)['T-01-01'];
+  assert.equal(rec.effort, 'high', 'the resolver\'s decision, verbatim');
+  assert.equal(rec.effort_applied, 'low', 'and the spawn\'s, verbatim — neither borrowed from the other');
+});
+
+test('the full round trip reaches the store AND the journal', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run([
+    'mark', 'T-01-01', 'executor',
+    '--model', 'opus', '--effort', 'high', '--effort-applied', 'high', '--reason', 'role baseline',
+  ], project);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  const expect = { model: 'opus', effort: 'high', effort_applied: 'high', reason: 'role baseline' };
+  const rec = store(graph)['T-01-01'];
+  for (const [k, v] of Object.entries(expect)) assert.equal(rec[k], v, `record.${k}`);
+  const ev = lastDispatch(graph);
+  for (const [k, v] of Object.entries(expect)) assert.equal(ev[k], v, `journal.${k}`);
+  assert.equal(ev.role, 'executor', 'and the fields the event already had are untouched');
+  assert.equal(ev.by, 'dispatch-record');
+});
+
+test('the flags survive --graph in any position, from a foreign cwd', () => {
+  // The guard marks its fixers from inside a ticket worktree, so the two parsers
+  // have to coexist: one --graph spelling, stripped anywhere, and the strip must
+  // not eat a value flag or the subcommand.
+  const s = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['--graph', s.graph, 'mark', 'T-01-01', 'ci-fix', '--model', 'sonnet', '--effort', 'high'], s.worktree);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  assert.equal(store(s.graph)['T-01-01'].model, 'sonnet');
+  assert.equal(store(s.graph)['T-01-01'].effort, 'high');
+});
+
+test('a value outside TIERS/EFFORTS is refused by name, in the role refusal\'s shape', () => {
+  // A mis-spelled alias recorded silently is worse than no field: it would be
+  // counted later as fact. The message therefore names the rejected value and
+  // prints the accepted set, exactly as the unknown-role refusal does.
+  const cases = [
+    [['--model', 'gpt-5.6-sol'], 'gpt-5.6-sol', /tiers:/],
+    [['--effort', 'ultra'], 'ultra', /efforts:/],
+    [['--effort-applied', 'ultra'], 'ultra', /efforts:/],
+  ];
+  for (const [flags, value, vocabulary] of cases) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const r = run(['mark', 'T-01-01', 'arch-review', ...flags], project);
+    assert.equal(r.status, 1, `${flags[0]} must refuse (${r.stderr})`);
+    assert.ok(r.stderr.includes(`"${value}"`), `${flags[0]} names the rejected value: ${r.stderr}`);
+    assert.ok(vocabulary.test(r.stderr), `${flags[0]} prints the accepted set: ${r.stderr}`);
+    assert.deepStrictEqual(store(graph), {}, 'and nothing at all is recorded');
+    assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'no half-written journal line either');
+  }
+});
+
+test('an unknown flag, a duplicate and a missing value are all refused', () => {
+  // gate-trailer.cjs's three holes, inherited on purpose. `--modle opus` does not
+  // fail on its own: it records a dispatch with no model, which is the silent
+  // omission this ticket exists to end.
+  const cases = [
+    [['--modle', 'opus'], /flags:/],
+    [['--model', 'opus', '--model', 'sonnet'], /more than once/],
+    [['--model'], /needs a value/],
+    [['--effort', '--reason', 'x'], /needs a value/],
+    [['--reason', ''], /needs text/],
+    [['opus'], /unexpected argument/],
+  ];
+  for (const [flags, expected] of cases) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const r = run(['mark', 'T-01-01', 'executor', ...flags], project);
+    assert.equal(r.status, 1, `${flags.join(' ')} must refuse (${r.stdout}${r.stderr})`);
+    assert.ok(expected.test(r.stderr), `${flags.join(' ')} says why: ${r.stderr}`);
+    assert.deepStrictEqual(store(graph), {}, `${flags.join(' ')} records nothing`);
+  }
+});
+
+test('--agent-file records the Codex file that ran, and refuses one nothing produces', () => {
+  // On Codex the model lives IN the file, so the ordinary/-deep choice IS the
+  // dispatch's decision. A name the generator does not produce is unverifiable,
+  // and an unverifiable name is worse than none.
+  const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
+  const ok = run(['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-deep'], project);
+  assert.equal(ok.status, 0, `must succeed (${ok.stderr})`);
+  assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-deep', 'verbatim');
+  assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-deep');
+
+  for (const bad of ['shipyard-nope', 'arch-review', 'shipyard-integrator-deep']) {
+    const s = scratch({ 'T-01-02': { ...OPEN_PR } });
+    const r = run(['mark', 'T-01-02', 'arch-review', '--agent-file', bad], s.project);
+    assert.equal(r.status, 1, `"${bad}" must refuse (${r.stderr})`);
+    assert.ok(r.stderr.includes(`"${bad}"`), 'and names it');
+    assert.deepStrictEqual(store(s.graph), {}, 'nothing recorded');
+  }
+});
+
+test('the accepted agent files ARE the ones the generator emits', () => {
+  // The recorder cannot require the generator — it lives in scripts/ at the repo
+  // root and never ships inside the bundle — so the deep set is a local copy. This
+  // is the test that stops the copy drifting, the same way DISPATCH_SUBJECT is
+  // checked against ROLES rather than against a second list.
+  const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
+  const { codexAgentFiles, CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX } = require(DISPATCH);
+  assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), [...gen.DEEP_ROLES].sort(),
+    'the deep-eligible roles must be the generator\'s own');
+  assert.equal(CODEX_DEEP_SUFFIX, gen.DEEP_SUFFIX);
+
+  // And the ordinary names are one per shipped reference — the generator's own
+  // filter — so a reference added there is accepted here without an edit.
+  const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
+    .filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
+  const files = codexAgentFiles();
+  for (const role of refs) assert.ok(files.has(`shipyard-${role}`), `shipyard-${role} must be accepted`);
+  assert.equal(files.size, refs.length + gen.DEEP_ROLES.size, 'and nothing else is');
+});
+
+test('the front does not gain a field — the overlay is byte-identical', () => {
+  // The stop gate reads delivery-front.json, and `refreshFront` rewrites it from a
+  // FIXED key list. A new field smuggled into the overlay would either vanish
+  // (harmless but a lie in the caller's head) or change the board's shape for a
+  // reader that is not ours.
+  const seed = (project) => board(project, {
+    actionable_count: 1,
+    actionable: { execute: ['T-01-01'], publish: [], fix: [], finalize: [], merge: [] },
+  });
+  const strip = (raw) => {
+    const f = JSON.parse(raw);
+    // Stamped from the clock on every refresh, so it can never match across two
+    // runs; everything else must.
+    delete f.dispatches_applied_at;
+    delete f.generated_at;
+    return f;
+  };
+  const bare = scratch({ 'T-01-01': { ...READY } });
+  seed(bare.project);
+  assert.equal(run(['mark', 'T-01-01', 'executor'], bare.project).status, 0);
+
+  const rich = scratch({ 'T-01-01': { ...READY } });
+  seed(rich.project);
+  assert.equal(run([
+    'mark', 'T-01-01', 'executor', '--model', 'fable', '--effort', 'max',
+    '--effort-applied', 'max', '--reason', 'signature repeat', '--agent-file', 'shipyard-ci-fix-deep',
+  ], rich.project).status, 0);
+
+  const richRaw = fs.readFileSync(path.join(rich.graph, 'delivery-front.json'), 'utf8');
+  assert.deepStrictEqual(
+    strip(richRaw),
+    strip(fs.readFileSync(path.join(bare.graph, 'delivery-front.json'), 'utf8')),
+    'the flags must change nothing about the board'
+  );
+  for (const k of DECIDED_KEYS) {
+    assert.ok(!richRaw.includes(`"${k}"`), `the front must not carry "${k}"`);
+  }
+  assert.ok(!richRaw.includes('signature repeat'), 'nor a reason string');
+});
+
+suite('dispatch-record — the docs pass what the record needs, and the query reads it back');
+
+const DOC_MARKS = [
+  [path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 3],
+  [path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 1],
+];
+
+test('every documented mark invocation passes the resolved pair', () => {
+  // Asserted as a COUNT, not as a spot check: a dispatch added later must not be
+  // able to forget the flags, and that is only enforceable if the number of
+  // invocation lines and the number of lines carrying `--model` are compared. The
+  // corollary is a discipline on the prose — the literal token appears on
+  // invocation lines only, and the fields are named without their dashes when a
+  // sentence explains them.
+  for (const [file, expected] of DOC_MARKS) {
+    const lines = fs.readFileSync(file, 'utf8').split('\n');
+    const marks = lines.filter((l) => /dispatch-record\.cjs mark <T>/.test(l));
+    const rel = path.basename(file);
+    assert.ok(marks.length >= expected, `${rel}: expected at least ${expected} mark invocations, found ${marks.length}`);
+    for (const l of marks) {
+      assert.ok(/--model /.test(l), `${rel}: a mark invocation with no --model: ${l.trim()}`);
+      assert.ok(/--effort /.test(l), `${rel}: a mark invocation with no --effort: ${l.trim()}`);
+    }
+    assert.equal(lines.filter((l) => /--model /.test(l)).length, marks.length,
+      `${rel}: --model must appear on the mark invocation lines and nowhere else`);
+  }
+});
+
+test('deliver.md\'s ladder query runs, and UNCONFIRMED is a bucket rather than a hole', () => {
+  // The doc's own block is executed, not a copy of it: a query that has drifted
+  // from the field names is the one thing that makes this evidence unreadable at
+  // the moment somebody needs it.
+  const doc = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
+  const block = (doc.match(/```bash\n([\s\S]*?)```/g) || [])
+    .map((b) => b.replace(/^```bash\n/, '').replace(/```$/, ''))
+    .find((b) => b.includes('delivery-log.jsonl') && b.includes('effort_applied'));
+  assert.ok(block, 'deliver.md must carry the ladder query beside the flags');
+
+  const { project } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...OPEN_PR } });
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor',
+    '--model', 'opus', '--effort', 'high', '--effort-applied', 'high'], { cwd: project });
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-02', 'arch-review',
+    '--model', 'opus', '--effort', 'xhigh'], { cwd: project });
+
+  const r = spawnSync('bash', ['-c', block], { cwd: project, encoding: 'utf8' });
+  assert.equal(r.status, 0, `the query must run (${r.stderr})`);
+  assert.ok(/executor opus resolved:high applied:high': 1/.test(r.stdout),
+    `the Workflow row is counted: ${r.stdout}`);
+  assert.ok(/arch-review opus resolved:xhigh applied:UNCONFIRMED': 1/.test(r.stdout),
+    `and the Agent row reads UNCONFIRMED rather than a guess: ${r.stdout}`);
+});
+
 done();
