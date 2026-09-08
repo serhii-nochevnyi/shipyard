@@ -1734,6 +1734,31 @@
       "primary_parent": "T-27-06",
       "pr_base": "ticket/T-27-06-the-front-says-when-it-is-behind-and-one",
       "jira": null
+    },
+    "T-27-09": {
+      "title": "The judge's base tree reaches the trailer, so a carry can fire",
+      "plan": ".planning/phases/27-the-conveyor-measures-its-own-state/27-09-PLAN.md",
+      "phase": "27",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/references/pr-sentinel.md",
+        "tests/unit/trailer.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-27-09-the-judge-s-base-tree-reaches-the-traile",
+      "epic": "epic/27-the-conveyor-measures-its-own-state",
+      "primary_parent": null,
+      "pr_base": "epic/27-the-conveyor-measures-its-own-state",
+      "jira": null
     }
   }
 }
