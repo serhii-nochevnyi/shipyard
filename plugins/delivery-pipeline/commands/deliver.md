@@ -105,18 +105,34 @@ instead, and the front reads it back by itself:
   one.
   **Pass what the resolver decided, every time** — the values you already hold from
   the `pipeline-config.cjs model <role> --json` call you made to launch, plus
-  `--reason "<the branch that fired>"` (`risk: high`, `signature repeat`,
-  `role baseline`). It is the whole reason the record exists: without them the
+  `--route "<its route field, verbatim>"`. That call now returns a third field,
+  `route`, naming which rule chose the tier and which chose the effort
+  (`tier=floor(opus) effort=row(high)`); pass it unchanged. **Do not compose a
+  sentence about the ladder** — the old `--reason` took one and is now refused,
+  because a caller's reading of the mechanism and the mechanism's own answer are
+  indistinguishable once they share a field, and this field exists to be counted.
+  It is the whole reason the record exists: without them the
   journal can say a judge was dispatched and not what it ran at, so every row of
   the ladder stays a matter of argument. With them a ladder review is one query
   (below).
+  **A sha the journal records is the full forty characters** — `$(git rev-parse HEAD)`,
+  never `--short` and never an abbreviation pasted from a PR page. `log-event.cjs`
+  refuses a shorter one outright: `gate_status` records a head that way, and a
+  reader holding only the journal cannot lengthen an abbreviation, so the two
+  formats never compare and a live architecture verdict reads as stale.
   Add `--effort-applied <level>` **on the Workflow path only** — `agent()` carries
   an effort, the Agent tool has no such parameter, so an Agent-dispatched role runs
   at the session's own effort whatever the ladder chose. Omitting the flag is the
   honest record of that: absence means UNMEASURED, and the recorder will not fill
   it in. Never pass the resolved value as the applied one.
   On the Codex bundle add `--agent-file shipyard-<role>[-deep]` — the file you
-  actually dispatched, which is where that runtime's model choice lives.
+  actually dispatched, which is where that runtime's model choice lives. That
+  pattern is not 1:1 for every role, so check `dispatch-record.cjs`'s own mapping
+  rather than assuming it: `research` dispatches ship as `shipyard-inv-research`
+  (the investigation loop's own name for it, not `shipyard-research`), and
+  `executor` has no agent file at all — an executor is dispatched by the main
+  loop, not a `.toml`, so its `mark` omits `--agent-file` rather than naming a
+  file nothing ships. Naming a file the role does not claim is refused.
 Reserve `--parked` for what genuinely holds only for this session.
 
 **The ladder review, as one query.** Run it from the project (not a worktree) when
@@ -616,7 +632,7 @@ session:
 ```text
 attempt    — each babysit round on a PR:
              log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<ci-fix|review-fix> model=<tier> \
-               outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<sha> hypothesis="<the fixer's own>"
+               outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha> hypothesis="<the fixer's own>"
 fix_round  — for EACH item from a fix-round Workflow result:
              log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false>
 escalation — any escalation to a human — NOT through log-event:
@@ -1083,14 +1099,16 @@ may be dispatched at all: fix the file.
     above returns immediately with an id (the Workflow tool a task id, the Agent
     tool an agent id); once you hold that id the agent exists, and only then, for
     every ticket you just handed out:
-    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --reason "<branch>"`
+    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --route "<route>"`
     (add `--effort-applied <effort>` when you took the Workflow path — it carries an
     effort into the spawn and the Agent fallback cannot, so on the fallback the flag
     is OMITTED, never guessed; add `--graph <project>/.planning/graph` when you are
-    not standing in the project). `<model>`, `<effort>` and the branch are the ones
-    the `pipeline-config.cjs model executor --json …` call above already returned —
-    nothing is re-derived here, or the record would hold the ladder's opinion instead
-    of what was dispatched. Keep the launch id in your own turn — the record stores
+    not standing in the project). `<model>`, `<effort>` and `<route>` are all three
+    fields the `pipeline-config.cjs model executor --json …` call above already
+    returned — nothing is re-derived and nothing is paraphrased here, or the record
+    would hold your reading of the ladder instead of the ladder's own answer. The
+    recorder checks the route against the pair, so a route copied from the previous
+    round is refused rather than filed. Keep the launch id in your own turn — the record stores
     the ticket, the role, the time and the resolved pair, and no id — because the id
     is what you collect and clear against.
     **Marking first is how the board comes to describe an agent that does not
@@ -1202,9 +1220,9 @@ spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose'
 
 Record that hand-over the same way the executors' was, and in the same order —
 the `Agent` call returns an agent id, and THEN
-`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --reason "<branch>"`
-for every ticket on the guarded list, taking the pair from the `model pr-sentinel`
-call above. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
+`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>"`
+for every ticket on the guarded list, taking all three fields from the
+`model pr-sentinel` call above — the route included, verbatim. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
 which carries no effort, so the applied depth is genuinely unmeasured and the
 record says so by leaving the key out;
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
@@ -1254,7 +1272,7 @@ loop:
 
        flake — already quarantined. Do NOT dispatch a fixer and do NOT CHARGE THE
          ATTEMPT: the round is logged as `log-event.cjs attempt … n=<next_n>
-         outcome=flake signature=<sig> head=<sha>`, and `outcome=flake` is the
+         outcome=flake signature=<sig> head=<full 40-char sha>`, and `outcome=flake` is the
          reason `next_n` does not move — `attempt-history.cjs` skips a quarantined
          round when it counts, so the next real round reuses this number.
          Re-run the job (`gh run rerun <run-id> --failed`) or leave it
@@ -1355,7 +1373,7 @@ loop:
        tests/unit/trailer.test.cjs.
      record the verdict in the journal either way, because it is what a later
        `--contested` reads: `log-event.cjs arch_review ticket=<T> pr=<N>
-       verdict=<conform|violation|adr-outdated> head=<sha>
+       verdict=<conform|violation|adr-outdated> head=<full 40-char sha>
        --graph <project>/.planning/graph`
      violation    → fix in the worktree → push → step d
      adr-outdated → `escalation-record.cjs mark <T> "adr-outdated: …"` (changing the ADR is a human's call), continue the front
@@ -1364,7 +1382,7 @@ loop:
        → record the verdicts in the PR body as a trailer (survives squash-merge):
          node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs write <pr> [--repo owner/name] --arch-review conform --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped>
          it reads the live body and the live head, and writes ONE `gate_status:`
-         line carrying every key plus `head=<sha>` — the diff the verdict is
+         line carrying every key plus `head=<full 40-char sha>` — the diff the verdict is
          about. NEVER hand-assemble that line: a second one hides the verdict
          above it (the reader takes the LAST), and a trailer with no `head=` is
          ABSENT to every reader once the board knows the head. The writer also
@@ -1407,7 +1425,7 @@ loop:
        `attempt-history.cjs <T> --json` → `next_n`
      log the round with the keys the NEXT round reads back:
        `log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<role> model=<tier>
-        outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<sha>
+        outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha>
         hypothesis="<the fixer's own one sentence, verbatim>"`
        `signature`+`head` are what the next `verdict` compares; `hypothesis` is
        what `attempt-history.cjs` hands the next fixer so it cannot re-propose what

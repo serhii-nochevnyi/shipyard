@@ -1066,13 +1066,20 @@ function runCli(args, raw) {
 // The ceiling exists only where the runtime declares the 1M tier AND a person has
 // consented, so every route test needs both. Anything less is the DEGRADED path,
 // which is asserted separately — on purpose: that asymmetry is the design.
+// The resolver emits `route` beside the pair now (ADR-006 D5): the RULE that chose
+// each half, which `dispatch-record.cjs mark --route` records as the journal's
+// `reason`. The assertions that pin a DECISION compare the pair and nothing else —
+// folding the route into them would make each one a test of two things, and the
+// route has its own suite below.
+const pair = (j) => { const { route, ...rest } = j; return rest; };
+
 const CONSENTED = { runtime: 'claude', pipeline: { fable: 'auto' } };
 
-test('without --signature-state the --json shape is unchanged from today', () => {
+test('without --signature-state the model/effort pair is unchanged, and route is added beside it', () => {
   const r = runCli(['model', 'ci-fix', '--json']);
   assert.strictEqual(r.status, 0, r.err);
-  assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model']);
-  assert.deepStrictEqual(r.json(), { model: 'opus', effort: 'high' });
+  assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model', 'route']);
+  assert.deepStrictEqual(pair(r.json()), { model: 'opus', effort: 'high' });
 });
 
 test('--attempt/--previous-failed are still accepted and resolve the same tier', () => {
@@ -1087,9 +1094,9 @@ test('--attempt/--previous-failed are still accepted and resolve the same tier',
 });
 
 test('--signature-state repeat: same tier, deeper effort, a strategy to change', () => {
-  assert.deepStrictEqual(runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat']).json(),
+  assert.deepStrictEqual(pair(runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat']).json()),
     { model: 'opus', effort: 'max', strategy: 'rethink' });
-  assert.deepStrictEqual(runCli(['model', 'ci-fix', '--json', '--signature-state', 'first']).json(),
+  assert.deepStrictEqual(pair(runCli(['model', 'ci-fix', '--json', '--signature-state', 'first']).json()),
     { model: 'opus', effort: 'high', strategy: 'fix' });
 });
 
@@ -1105,14 +1112,14 @@ test('an unknown state warns on stderr, omits strategy, and still exits 0', () =
   const r = runCli(['model', 'ci-fix', '--json', '--signature-state', 'bogus']);
   assert.strictEqual(r.status, 0, 'a resolver that exits non-zero at 3am stops the round');
   assert.ok(/signature-state/.test(r.err) && /bogus/.test(r.err), r.err);
-  assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model']);
+  assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model', 'route']);
 });
 
 test('--signature-state with no value is the same warn-and-ignore, not a crash', () => {
   const r = runCli(['model', 'ci-fix', '--json', '--signature-state']);
   assert.strictEqual(r.status, 0, r.err);
   assert.ok(/signature-state/.test(r.err), r.err);
-  assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model']);
+  assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model', 'route']);
 });
 
 test('resolve reports the new key', () => {
@@ -1127,7 +1134,7 @@ test('R1 window: a measured input over the threshold earns it; under it does not
   assert.strictEqual(
     runCli(['model', 'arch-review', '--input-tokens', '300000'], CONSENTED).out, 'fable');
   assert.deepStrictEqual(
-    runCli(['model', 'arch-review', '--json', '--input-tokens', '200000'], CONSENTED).json(),
+    pair(runCli(['model', 'arch-review', '--json', '--input-tokens', '200000'], CONSENTED).json()),
     { model: 'opus', effort: 'xhigh' },
     'under the threshold nothing fired, so the role keeps its own row — xhigh, not max');
   // The threshold is configuration: five times the largest input measured here.
@@ -1146,10 +1153,10 @@ test('R1 is measured per dispatch, so every role can reach it — and none does 
 
 test('R2 exhausted depth: the third occurrence of one signature, from the journal', () => {
   const r = runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat_exhausted'], CONSENTED);
-  assert.deepStrictEqual(r.json(), { model: 'fable', effort: 'max', strategy: 'rethink' },
+  assert.deepStrictEqual(pair(r.json()), { model: 'fable', effort: 'max', strategy: 'rethink' },
     'the model rises and the depth STAYS at max — backing the thinking off here is neither ladder');
   assert.deepStrictEqual(
-    runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat'], CONSENTED).json(),
+    pair(runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat'], CONSENTED).json()),
     { model: 'opus', effort: 'max', strategy: 'rethink' }, 'a second occurrence is not exhausted');
   // It is a REPAIR route: an executor has no failure history to read.
   assert.strictEqual(
@@ -1187,13 +1194,13 @@ test('with pipeline.fable off or absent, a fired route degrades to opus at max a
   // axis that IS available.
   for (const raw of [{ runtime: 'claude' }, { runtime: 'claude', pipeline: { fable: 'off' } }]) {
     const r = runCli(['model', 'arch-review', '--json', '--input-tokens', '300000'], raw);
-    assert.deepStrictEqual(r.json(), { model: 'opus', effort: 'max' }, JSON.stringify(raw));
+    assert.deepStrictEqual(pair(r.json()), { model: 'opus', effort: 'max' }, JSON.stringify(raw));
     assert.ok(/pipeline\.fable/.test(r.err), `the reason must name the setting: ${r.err}`);
   }
   // Under the threshold nothing fired, so there is nothing to degrade and nothing
   // to report — a warning on every dispatch is how a warning gets ignored.
   const quiet = runCli(['model', 'arch-review', '--json', '--input-tokens', '200000'], { runtime: 'claude' });
-  assert.deepStrictEqual(quiet.json(), { model: 'opus', effort: 'xhigh' });
+  assert.deepStrictEqual(pair(quiet.json()), { model: 'opus', effort: 'xhigh' });
   assert.strictEqual(quiet.err, '', quiet.err);
 });
 
@@ -1203,15 +1210,15 @@ test('a fired route outranks the sonnet exemptions — and degrades the same way
   // exemption behind — to the ceiling with consent, and to the FLOOR at max
   // without it, never to `sonnet` at max.
   assert.deepStrictEqual(
-    runCli(['model', 'pr-sentinel', '--json', '--signature-state', 'repeat_exhausted'], CONSENTED).json(),
+    pair(runCli(['model', 'pr-sentinel', '--json', '--signature-state', 'repeat_exhausted'], CONSENTED).json()),
     { model: 'fable', effort: 'max', strategy: 'rethink' });
   const shut = runCli(['model', 'pr-sentinel', '--json', '--signature-state', 'repeat_exhausted'],
     { runtime: 'claude' });
-  assert.deepStrictEqual(shut.json(), { model: 'opus', effort: 'max', strategy: 'rethink' });
+  assert.deepStrictEqual(pair(shut.json()), { model: 'opus', effort: 'max', strategy: 'rethink' });
   assert.ok(/pipeline\.fable/.test(shut.err), shut.err);
   // With no route, the exemption holds at every depth.
   assert.deepStrictEqual(
-    runCli(['model', 'pr-sentinel', '--json', '--signature-state', 'repeat'], CONSENTED).json(),
+    pair(runCli(['model', 'pr-sentinel', '--json', '--signature-state', 'repeat'], CONSENTED).json()),
     { model: 'sonnet', effort: 'max', strategy: 'rethink' });
 });
 
@@ -1221,11 +1228,11 @@ test('a route on a runtime with no 1M tier degrades the same way, naming the run
   // resolves. On Codex the escalation is a `-deep` agent FILE (ADR-005 D8).
   const unset = runCli(['model', 'arch-review', '--json', '--input-tokens', '300000'],
     { pipeline: { fable: 'auto' } });
-  assert.deepStrictEqual(unset.json(), { model: 'opus', effort: 'max' });
+  assert.deepStrictEqual(pair(unset.json()), { model: 'opus', effort: 'max' });
   assert.ok(/runtime/.test(unset.err), unset.err);
   const codex = runCli(['model', 'arch-review', '--json', '--input-tokens', '300000'],
     { runtime: 'codex', pipeline: { fable: 'auto' } });
-  assert.deepStrictEqual(codex.json(), { model: 'sonnet', effort: 'high' },
+  assert.deepStrictEqual(pair(codex.json()), { model: 'sonnet', effort: 'high' },
     'the capped tier and the flat axis — this runtime\'s own ladder, untouched');
 });
 
@@ -1292,7 +1299,7 @@ test('both spellings of the code-change signal are parsed, so silence is disting
   // being the same value on the record: the next row keyed on it would inherit
   // the defect otherwise.
   for (const flags of [[], ['--code-change'], ['--no-code-change']]) {
-    assert.deepStrictEqual(runCli(['model', 'review-fix', '--json', ...flags]).json(),
+    assert.deepStrictEqual(pair(runCli(['model', 'review-fix', '--json', ...flags]).json()),
       { model: 'opus', effort: 'high' }, flags.join(' '));
   }
 });
@@ -1317,7 +1324,7 @@ test('a row a dispatch could not reach for want of a signal is named on stderr',
   // longer a cost surprise, it is a DEPTH the dispatch quietly declined. It still
   // has to be visible in a dispatch line rather than only in a shallow verdict.
   const noRisk = runCli(['model', 'executor', '--json']);
-  assert.deepStrictEqual(noRisk.json(), { model: 'opus', effort: 'high' });
+  assert.deepStrictEqual(pair(noRisk.json()), { model: 'opus', effort: 'high' });
   assert.ok(/--risk/.test(noRisk.err) && /xhigh/.test(noRisk.err), noRisk.err);
   const noType = runCli(['model', 'research', '--json']);
   assert.ok(/--type/.test(noType.err), noType.err);
@@ -1327,7 +1334,7 @@ test('a row a dispatch could not reach for want of a signal is named on stderr',
   // every time is how a warning teaches its reader to ignore warnings.
   const supplied = runCli(['model', 'executor', '--json', '--risk', 'medium']);
   assert.strictEqual(supplied.err, '', supplied.err);
-  assert.deepStrictEqual(supplied.json(), { model: 'opus', effort: 'high' });
+  assert.deepStrictEqual(pair(supplied.json()), { model: 'opus', effort: 'high' });
   assert.strictEqual(runCli(['model', 'ci-fix', '--json']).err, '', 'a role with no signal-keyed row says nothing');
 });
 
@@ -1352,6 +1359,128 @@ test('an effort override on a repair role is honoured, and warned about (ADR-005
   assert.ok(warnings.some((w) => /ci-fix/.test(w) && /max/.test(w)), warnings.join('; '));
   // A non-repair role gets no such warning: there is no escalation to shadow.
   assert.deepStrictEqual(withConfig({ effort: { 'arch-review': 'max' } }).warnings, []);
+});
+
+
+suite('the route — the resolver names the rule, so the journal need not guess');
+
+// The journal's `reason` used to be the CALLER's sentence about which branch of
+// the ladder fired, while the resolver named the route on stderr as prose. Two
+// callers therefore wrote two vocabularies into one field, and the field exists
+// precisely to make a later ladder review cheap. Every route below is asserted
+// against the DECISION it accompanies — a route that named a rule the resolver
+// did not take would be worse than no field at all.
+
+const { routeOf, parseRoute, ROUTE_RE, runtimeToken, DEFAULTS: D } = require(mod);
+const withCfg = (over) => ({ ...D, ...over });
+
+test('every route the resolver can emit parses under its own grammar', () => {
+  // The grammar is exported because `dispatch-record.cjs` validates against IT
+  // and not a copy — the drift `CODEX_DEEP_ROLES` already paid for. So the routes
+  // this resolver produces and the routes that recorder accepts are the same set
+  // by construction, and this is the test that says so.
+  const cases = [
+    ['executor', {}, D],
+    ['pr-sentinel', {}, D],
+    ['arch-review', {}, D],
+    ['ci-fix', { signatureState: 'repeat' }, D],
+    ['ci-fix', { signatureState: 'repeat_exhausted' }, D],
+    ['arch-review', { inputTokens: 900000 }, withCfg({ fable: 'auto', gsd: { runtime: 'claude' } })],
+    ['arch-review', { inputTokens: 900000 }, D],
+    ['executor', {}, withCfg({ gsd: { runtime: 'codex' } })],
+    ['executor', {}, withCfg({ models: { executor: 'haiku' } })],
+    ['executor', {}, withCfg({ effort: { executor: 'bogus' } })],
+    // A runtime name is an operator's free text; a space in it would emit a route
+    // the grammar rejects, and a legitimate dispatch would then be refused for a
+    // spelling in somebody's config file.
+    ['executor', {}, withCfg({ gsd: { runtime: 'Claude Code' } })],
+  ];
+  for (const [role, signals, cfg] of cases) {
+    const route = routeOf(role, signals, cfg);
+    const parsed = parseRoute(route);
+    assert.ok(parsed, `unparseable route for ${role} ${JSON.stringify(signals)}: ${route}`);
+    assert.strictEqual(parsed.tier.model, resolveModel(role, signals, cfg), `${route}: tier value`);
+    assert.strictEqual(parsed.effort.effort, resolveEffort(role, parsed.tier.model, cfg, signals),
+      `${route}: effort value`);
+  }
+});
+
+test('a whitespace-only runtime slugs to unset, not to a bare hyphen', () => {
+  // Copilot (round 3): the first version of this test asserted against
+  // `routeOf`, which never actually reaches `runtimeToken` for a whitespace
+  // runtime — both call sites gate on an EXACT `=== 'codex'` match against the
+  // raw (unslugged) value first, so a whitespace/mixed-case/padded runtime
+  // never produces a `cap:`/`flat:` token at all and the assertion passed
+  // vacuously. Test the function itself instead of a route shape that cannot
+  // exhibit the bug through the current call graph.
+  //
+  // A whitespace/punctuation-only value collapses under the slug regex to a
+  // single "-", which is non-empty and used to slip past the `|| 'unset'`
+  // fallback — this is what `runtimeToken` itself must not do, whatever calls
+  // it today or later.
+  assert.strictEqual(runtimeToken(withCfg({ gsd: { runtime: '   ' } })), 'unset');
+  assert.strictEqual(runtimeToken(withCfg({ gsd: { runtime: '!!!' } })), 'unset');
+  assert.strictEqual(runtimeToken(withCfg({ gsd: {} })), 'unset');
+  // And it must not over-trim a legitimately hyphenated or digit-leading name.
+  assert.strictEqual(runtimeToken(withCfg({ gsd: { runtime: 'codex' } })), 'codex');
+  assert.strictEqual(runtimeToken(withCfg({ gsd: { runtime: 'Claude Code' } })), 'claude-code');
+  assert.strictEqual(runtimeToken(withCfg({ gsd: { runtime: '--my-runtime--' } })), 'my-runtime');
+});
+
+test('the rule names the branch that actually fired, on both halves', () => {
+  const route = (role, signals, cfg) => routeOf(role, signals, cfg || D);
+  assert.strictEqual(route('executor', {}), 'tier=floor(opus) effort=row(high)');
+  assert.strictEqual(route('executor', { risk: 'high' }), 'tier=floor(opus) effort=row(xhigh)');
+  assert.strictEqual(route('pr-sentinel', {}), 'tier=floor:exempt(sonnet) effort=row(high)',
+    'the exemption is a different rule from the floor, and a review must be able to count them apart');
+  assert.strictEqual(route('ci-fix', { signatureState: 'repeat' }), 'tier=floor(opus) effort=repeat(max)');
+  assert.strictEqual(
+    route('arch-review', { inputTokens: 900000 }, withCfg({ fable: 'auto', gsd: { runtime: 'claude' } })),
+    'tier=ceiling:window(fable) effort=row(xhigh)'
+  );
+  assert.strictEqual(
+    route('arch-review', { inputTokens: 900000 }),
+    'tier=ceiling:window:degraded(opus) effort=degraded:window(max)',
+    'a route that fired and could not be honoured says BOTH: it fired, and it was shut'
+  );
+  assert.strictEqual(route('executor', {}, withCfg({ models: { executor: 'sonnet' } })),
+    'tier=override(sonnet) effort=row(high)');
+  assert.strictEqual(route('executor', {}, withCfg({ gsd: { runtime: 'codex' } })),
+    'tier=floor+cap:codex(sonnet) effort=flat:codex(high)',
+    'the cap is appended rather than replacing the rule — "the floor chose opus and the runtime capped it" is two facts');
+});
+
+test('a sentence is not a route, and a route naming an unresolvable value is not one either', () => {
+  // The refusal this buys: `--reason "role baseline"` was a caller's reading of
+  // the mechanism, and it is indistinguishable in the field from the mechanism's
+  // own answer. So the grammar is what the recorder checks, and prose fails it.
+  for (const bad of [
+    'role baseline', 'signature repeat', '', null, undefined, 'tier=floor(opus)',
+    'effort=row(high)', 'tier=floor(gpt-5.6-sol) effort=row(high)', 'tier=floor(opus) effort=row(ultra)',
+    'tier=floor(opus)  effort=row(high)', 'tier=(opus) effort=row(high)',
+  ]) {
+    assert.strictEqual(parseRoute(bad), null, `"${bad}" must not pass for a route`);
+  }
+  assert.ok(ROUTE_RE instanceof RegExp, 'and the grammar itself is exported, for the recorder to validate against');
+});
+
+test('the CLI emits the route on every --json call, beside the pair it explains', () => {
+  // On EVERY call and not on request: a field the caller has to ask for is one the
+  // caller composes when it forgets to, which is the defect this replaces.
+  const plain = runCli(['model', 'ci-fix', '--json']);
+  assert.strictEqual(plain.status, 0, plain.err);
+  assert.strictEqual(plain.json().route, 'tier=floor(opus) effort=row(high)');
+  const repeat = runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat']);
+  assert.strictEqual(repeat.json().route, 'tier=floor(opus) effort=repeat(max)',
+    'and it moves with the signals, which is the whole reason to record it');
+  // The route always describes the pair printed beside it, in the same JSON.
+  for (const r of [plain, repeat]) {
+    const j = r.json();
+    const parsed = parseRoute(j.route);
+    assert.ok(parsed, `unparseable: ${j.route}`);
+    assert.strictEqual(parsed.tier.model, j.model);
+    assert.strictEqual(parsed.effort.effort, j.effort);
+  }
 });
 
 done();

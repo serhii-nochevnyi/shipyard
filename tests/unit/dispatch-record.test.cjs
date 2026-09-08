@@ -509,6 +509,12 @@ const journal = (graph) => fs.readFileSync(path.join(graph, 'delivery-log.jsonl'
   .trim().split('\n').map(JSON.parse);
 const lastDispatch = (graph) => journal(graph).filter((e) => e.event === 'dispatch').pop();
 const DECIDED_KEYS = ['model', 'effort', 'effort_applied', 'reason', 'agent_file'];
+// What `pipeline-config.cjs model executor --json` returns for a signal-less
+// dispatch, in its own `route` field. Taken from the resolver rather than typed
+// here — a fixture that drifts from the grammar would make every test below
+// assert against a route the resolver cannot produce.
+const { routeOf, parseRoute } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
+const ROUTE = routeOf('executor', {});
 
 test('a mark with no flags writes NO such key at all — not null', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
@@ -551,10 +557,12 @@ test('the full round trip reaches the store AND the journal', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const r = run([
     'mark', 'T-01-01', 'executor',
-    '--model', 'opus', '--effort', 'high', '--effort-applied', 'high', '--reason', 'role baseline',
+    '--model', 'opus', '--effort', 'high', '--effort-applied', 'high', '--route', ROUTE,
   ], project);
   assert.equal(r.status, 0, `must succeed (${r.stderr})`);
-  const expect = { model: 'opus', effort: 'high', effort_applied: 'high', reason: 'role baseline' };
+  // The KEY is still `reason` — two journal rows carry it and deliver.md's ladder
+  // query greps for it — and the VALUE is now the resolver's own route.
+  const expect = { model: 'opus', effort: 'high', effort_applied: 'high', reason: ROUTE };
   const rec = store(graph)['T-01-01'];
   for (const [k, v] of Object.entries(expect)) assert.equal(rec[k], v, `record.${k}`);
   const ev = lastDispatch(graph);
@@ -602,8 +610,8 @@ test('an unknown flag, a duplicate and a missing value are all refused', () => {
     [['--modle', 'opus'], /flags:/],
     [['--model', 'opus', '--model', 'sonnet'], /more than once/],
     [['--model'], /needs a value/],
-    [['--effort', '--reason', 'x'], /needs a value/],
-    [['--reason', ''], /needs text/],
+    [['--effort', '--route', 'x'], /needs a value/],
+    [['--route', ''], /not a resolver route/],
     [['opus'], /unexpected argument/],
   ];
   for (const [flags, expected] of cases) {
@@ -673,13 +681,16 @@ test('the front does not gain a field — the overlay is byte-identical', () => 
   };
   const bare = scratch({ 'T-01-01': { ...READY } });
   seed(bare.project);
-  assert.equal(run(['mark', 'T-01-01', 'executor'], bare.project).status, 0);
+  assert.equal(run(['mark', 'T-01-01', 'ci-fix'], bare.project).status, 0);
 
   const rich = scratch({ 'T-01-01': { ...READY } });
   seed(rich.project);
+  // `ci-fix` on both sides, and not `executor`: the role has to be identical for
+  // the boards to compare, and it has to be one with an agent file for the
+  // --agent-file half of this test to mean anything.
   assert.equal(run([
-    'mark', 'T-01-01', 'executor', '--model', 'fable', '--effort', 'max',
-    '--effort-applied', 'max', '--reason', 'signature repeat', '--agent-file', 'shipyard-ci-fix-deep',
+    'mark', 'T-01-01', 'ci-fix', '--model', 'opus', '--effort', 'high',
+    '--effort-applied', 'high', '--route', ROUTE, '--agent-file', 'shipyard-ci-fix-deep',
   ], rich.project).status, 0);
 
   const richRaw = fs.readFileSync(path.join(rich.graph, 'delivery-front.json'), 'utf8');
@@ -691,7 +702,180 @@ test('the front does not gain a field — the overlay is byte-identical', () => 
   for (const k of DECIDED_KEYS) {
     assert.ok(!richRaw.includes(`"${k}"`), `the front must not carry "${k}"`);
   }
-  assert.ok(!richRaw.includes('signature repeat'), 'nor a reason string');
+  assert.ok(!richRaw.includes('tier=floor'), 'nor the resolver route the reason now holds');
+});
+
+suite('dispatch-record — the reason is the RESOLVER\'s route, not the caller\'s sentence');
+
+// The field shipped as `--reason <text>` and deliver.md said the text was "the
+// branch the resolver already returned". It was not: the resolver returned
+// `{model, effort}` and named the route on stderr, as prose — so the journal held
+// the caller's READING of the ladder, in whatever words that caller chose. The
+// field exists to make a later ladder review cheap by counting rows, and two
+// vocabularies in one field cannot be counted (ADR-006 D5).
+
+test('the route grammar the recorder validates against IS the resolver\'s own', () => {
+  // Not a copy: `parseRoute` is exported by the resolver and required here, so the
+  // routes it can emit and the routes this recorder accepts are the same set by
+  // construction. `CODEX_DEEP_ROLES` is the local copy this repo already pays a
+  // pin test for, and one is enough.
+  assert.ok(parseRoute(ROUTE), `the resolver's own output must parse: ${ROUTE}`);
+  assert.equal(parseRoute(ROUTE).tier.model, 'opus');
+  assert.equal(parseRoute(ROUTE).effort.effort, 'high');
+});
+
+test('a hand-composed reason is REFUSED, and the message names where the value comes from', () => {
+  // Its own branch, not the generic unexpected-argument path: that message names
+  // neither the replacement flag nor the command that produces its value, and a
+  // caller who cannot see the way forward composes a sentence somewhere else.
+  for (const text of ['role baseline', 'signature repeat', 'xhigh because risk high', '']) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const r = run(['mark', 'T-01-01', 'executor', '--reason', text], project);
+    assert.equal(r.status, 1, `"${text}" must refuse (${r.stdout}${r.stderr})`);
+    assert.ok(/no longer accepted/.test(r.stderr), `it says the flag is gone: ${r.stderr}`);
+    assert.ok(/pipeline-config\.cjs model/.test(r.stderr), `and names the resolver: ${r.stderr}`);
+    assert.ok(/--route/.test(r.stderr), `and the flag that replaces it: ${r.stderr}`);
+    assert.deepStrictEqual(store(graph), {}, 'and nothing is recorded');
+  }
+});
+
+test('--route records the resolver\'s route VERBATIM, in the store and the journal', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE], project);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  assert.equal(store(graph)['T-01-01'].reason, ROUTE, 'verbatim, under the key the query already reads');
+  assert.equal(lastDispatch(graph).reason, ROUTE);
+});
+
+test('--route alone fills model/effort from its own parse, rather than leaving them absent', () => {
+  // Copilot: a `--route`-only mark used to store a `reason` that NAMES a model
+  // and effort while leaving the structured `model`/`effort` fields empty — a
+  // record self-inconsistent in exactly the way the pair/route cross-check
+  // exists to catch, just from the other direction. `route` and `{model,
+  // effort}` are one claim in two encodings (unlike `effort`/`effort_applied`,
+  // which stay deliberately un-cross-filled because they measure different
+  // things), so the parse backfills what the flags did not supply.
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE], project);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  const rec = store(graph)['T-01-01'];
+  assert.equal(rec.model, parseRoute(ROUTE).tier.model, 'model is read out of the route, not left absent');
+  assert.equal(rec.effort, parseRoute(ROUTE).effort.effort, 'same for effort');
+  assert.equal(rec.reason, ROUTE);
+  // Disagreement is still refused — backfill only fires when a flag is ABSENT.
+  const bad = run(['mark', 'T-01-01', 'executor', '--model', 'sonnet', '--route', ROUTE], project);
+  assert.equal(bad.status, 1, 'an explicit --model that disagrees with the route must still refuse');
+});
+
+test('a sentence posted through the new flag is refused too — the grammar is the check', () => {
+  // The refusal has to be about the VALUE and not about the flag's name, or the
+  // change would be a rename and the journal would hold prose again by Friday.
+  for (const bad of ['role baseline', 'the ceiling fired', 'tier=floor(opus)', 'tier=floor(gpt-5.6-sol) effort=row(high)']) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const r = run(['mark', 'T-01-01', 'executor', '--route', bad], project);
+    assert.equal(r.status, 1, `"${bad}" must refuse (${r.stdout}${r.stderr})`);
+    assert.ok(/not a resolver route/.test(r.stderr), r.stderr);
+    assert.ok(/pipeline-config\.cjs model/.test(r.stderr), 'and names where a real one comes from');
+    assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
+  }
+});
+
+test('a route from ANOTHER dispatch is refused — the pair and the route must agree', () => {
+  // A well-formed route is not automatically THIS dispatch's route: the round
+  // before, or another role's resolve, produces one that parses perfectly and
+  // describes a decision nobody made here. The cross-check is the only thing that
+  // can tell those apart, since the route text carries no ticket.
+  const cases = [
+    [['--model', 'sonnet', '--route', 'tier=floor(opus) effort=row(high)'], /tier "opus".*--model says "sonnet"/s],
+    [['--effort', 'xhigh', '--route', 'tier=floor(opus) effort=row(high)'], /effort "high".*--effort says "xhigh"/s],
+  ];
+  for (const [flags, expected] of cases) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const r = run(['mark', 'T-01-01', 'executor', ...flags], project);
+    assert.equal(r.status, 1, `${flags.join(' ')} must refuse (${r.stdout}${r.stderr})`);
+    assert.ok(expected.test(r.stderr), `it names both sides: ${r.stderr}`);
+    assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
+  }
+});
+
+test('--effort-applied is NOT cross-checked, because it is the OTHER claim', () => {
+  // The two efforts are two facts (T-25-05): what the ladder decided, and what the
+  // spawn could carry. On the Agent path the second is legitimately different, so
+  // a check here would refuse exactly the honest dispatches those two fields exist
+  // to tell apart — and the journal would lose the only rows that prove the gap.
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run([
+    'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
+    '--effort-applied', 'low', '--route', ROUTE,
+  ], project);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  assert.equal(store(graph)['T-01-01'].effort_applied, 'low');
+  assert.equal(store(graph)['T-01-01'].reason, ROUTE);
+});
+
+test('a KNOWN agent file belonging to another role is refused, and names both', () => {
+  // Reproduced before it was a rule: `mark T-01-01 executor --agent-file
+  // shipyard-arch-review-deep` was accepted. On Codex the model lives IN the file,
+  // so a file from another role makes the model recorded beside it fiction —
+  // either the dispatch ran the wrong agent or the record names the wrong file,
+  // and the journal must not quietly hold it under either reading.
+  const cases = [
+    ['arch-review', 'shipyard-ci-fix'],
+    ['arch-review', 'shipyard-ci-fix-deep'],
+    ['ci-fix', 'shipyard-review-fix'],
+    // The role's own file at the WRONG depth is fine — the palette's two rungs are
+    // both this role's — so the refusal is about the role, never about `-deep`.
+    ['pr-sentinel', 'shipyard-arch-review'],
+  ];
+  for (const [role, file] of cases) {
+    const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
+    const r = run(['mark', 'T-01-02', role, '--agent-file', file], project);
+    assert.equal(r.status, 1, `${role} × ${file} must refuse (${r.stdout}${r.stderr})`);
+    assert.ok(r.stderr.includes(`"${file}"`), `it names the file: ${r.stderr}`);
+    assert.ok(r.stderr.includes(role), `and the role it was recorded against: ${r.stderr}`);
+    assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
+  }
+});
+
+test('every role accepts its OWN files, and a role with none says so instead', () => {
+  // The other half of the check, and the half that keeps the refusal above a
+  // discriminator rather than a blanket. It is also where the assumption behind
+  // the first draft died: the ladder's roles and the generator's files are NOT
+  // one-to-one. `research` ships as `inv-research.md`, and `executor` has no
+  // reference at all because it is dispatched by the main loop rather than by a
+  // `.toml` — so a check built on `shipyard-<role>` refused every legitimate
+  // research mark and offered executors a file name that does not exist.
+  const { agentFilesFor, codexAgentFiles } = require(DISPATCH);
+  const known = codexAgentFiles();
+  let withFiles = 0;
+  const claimed = new Set();
+  for (const role of ROLES) {
+    const files = agentFilesFor(role, known);
+    if (!files.size) {
+      // Any known file, to prove the refusal is about the ROLE having none rather
+      // than about the file being unknown.
+      const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
+      const r = run(['mark', 'T-01-02', role, '--agent-file', 'shipyard-ci-fix'], project);
+      assert.equal(r.status, 1, `${role} has no agent file, so it must refuse (${r.stdout}${r.stderr})`);
+      assert.ok(/no agent file/.test(r.stderr), `and say which fact refused it: ${r.stderr}`);
+      assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
+      continue;
+    }
+    withFiles += 1;
+    for (const file of files) {
+      claimed.add(file);
+      const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
+      const r = run(['mark', 'T-01-02', role, '--agent-file', file], project);
+      assert.equal(r.status, 0, `${role} × ${file} must be accepted (${r.stderr})`);
+      assert.equal(store(graph)['T-01-02'].agent_file, file);
+    }
+  }
+  assert.ok(withFiles >= 6, `most roles do have a file (${withFiles})`);
+  // No shipped file may be unclaimed: one that no role can record is a file the
+  // generator emits and this store can never name, which is the mirror of the
+  // refusal above and the thing a rename would break silently.
+  assert.deepStrictEqual([...claimed].sort(), [...known].sort(),
+    'every agent file the generator produces is claimed by exactly one role');
 });
 
 suite('dispatch-record — the docs pass what the record needs, and the query reads it back');
@@ -719,6 +903,18 @@ test('every documented mark invocation passes the resolved pair', () => {
     }
     assert.equal(lines.filter((l) => /--model /.test(l)).length, marks.length,
       `${rel}: --model must appear on the mark invocation lines and nowhere else`);
+    // `--reason` is refused by `mark` now (ADR-006 D5) — a MARK INVOCATION that
+    // still spells it is not a style nit, it is an instruction the recorder will
+    // reject at the moment a guard follows it. Scoped to the invocation lines,
+    // not the whole file: prose elsewhere legitimately NAMES the retired flag to
+    // explain the change. This is the exact hole a prior version of this same
+    // test had (it checked --model/--effort only) while
+    // `references/pr-sentinel.md` spelt `--reason "<branch>"` on its own copy of
+    // this invocation and went undetected.
+    for (const l of marks) {
+      assert.ok(!/--reason\b/.test(l),
+        `${rel}: a mark invocation still spells the refused --reason flag: ${l.trim()}`);
+    }
   }
 });
 
