@@ -352,3 +352,38 @@ Two fixes, and they are independent:
    place and PRINT which one they used, the way `base-merge`/`scope-gate` already
    print the base ref they measured. A silently-substituted declaration is a new
    invisible behaviour, and this phase now has one instance in each direction.
+
+## The checklist for the minutes AFTER epic #67 merges
+
+Recorded here because all three are wrong if done before the merge, and the
+reasons differ — so a list without them invites someone to "get ahead".
+
+1. **`delivery_pipeline.max_concurrent_agents` back to `4`** in
+   `.planning/config.json`. Raised to 8 on 2026-09-08 because the cap counted
+   dispatch RECORDS. The agent-shaped count is T-27-01's and rides in the epic;
+   the conveyor executes `front.cjs` from the PROJECT checkout, so before the
+   merge a cap of 4 is still a record count and re-creates the stall.
+
+2. **Strike ADR-003 D2's retired clause** —
+   `.planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md`,
+   the "generator stops writing `model =`" and "no model id is hardcoded anywhere
+   in shipyard" sentences, in the strikethrough format D3 three lines above
+   already uses, pointing at ADR-005 D6/D7/D8 and naming what survives (the
+   effort is still written per role; a user's GSD remap still outranks ours).
+   ADR-005's `Supersedes`, rewritten by T-27-08 in this very epic, already names
+   that clause retired, and the shipped `capability.json` palette contradicts it.
+   Not done before the merge because **the epic edits that same file** and the
+   conflict would land on whoever performs the integration.
+
+3. **Correct `CLAUDE.md`** where this phase falsified it: `ci-wait.cjs` no longer
+   refuses on an actionable board whose cap is spent; the stop-gate has two new
+   hatches (`capacity.max === 0`, and a full board with an agent out); name
+   `epic-branch.sh refresh` and `gate-trailer.cjs carry` where those mechanisms
+   are described. Not done before the merge for the reason this phase exists:
+   `CLAUDE.md` on the default branch describes the code ON the default branch,
+   and every one of those behaviours is still only in the epic. Writing them
+   early would be prose asserting a behaviour the deployed code does not have.
+
+Item 1 is mechanical. Items 2 and 3 are the phase's own subject applied to its
+own close, which is the reason to do them deliberately rather than fold them
+into the merge commit.
