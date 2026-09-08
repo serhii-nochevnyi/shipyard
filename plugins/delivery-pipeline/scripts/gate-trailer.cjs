@@ -6,7 +6,9 @@
 //
 //   gate-trailer.cjs write <pr> [--repo owner/name] --arch-review conform
 //        --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped>
-//        [--checks green]
+//        [--checks green] [--base-tree <40-hex>]
+//   gate-trailer.cjs carry <ticket> --pr <n> [--repo owner/name]
+//        --from <judged-head> --to <new-head> [--worktree <path>] [--json]
 //
 // WHY A SCRIPT. The trailer IS the merge gate: `sentinel.cjs merge` refuses
 // without it. It was assembled by hand in two prompts (`deliver.md`,
@@ -43,6 +45,28 @@
 // classification and its words live here and are imported, because a rule the
 // board and the guard must agree on cannot be held by two texts happening to
 // match — the board must never offer what the guard refuses.
+//
+// AND A VERDICT SURVIVES A HEAD MOVE IT PROVABLY COVERS (`carry`, ADR-006 D2).
+// The head binding above is correct and it made a `base-merge` cost a full
+// re-judgement even when the merge changed nothing: measured on T-25-05, the
+// same tree object and the same diff against the new base, re-judged at ~150k
+// tokens — 42% of that ticket's cost, once per cascade step per ticket.
+//
+// The exception is a PROOF and not a tolerance. It is two object identities: the
+// two heads resolve to the SAME tree, and the tree of the new merge base equals
+// the tree the verdict was rendered against. Together those entail that the
+// judged diff and the candidate diff are the same diff (for paths inside the
+// diff, base = head minus the identical diff; for paths outside it, base = head,
+// and the head trees are equal). Compared as OBJECTS rather than as diffs
+// deliberately: a diff is a rendering that depends on rename detection, context
+// size, whitespace and `diff.algorithm`, and two shas have no such surface.
+//
+// So the trailer records `base_tree=` beside `head=`. A TREE, never a branch
+// name: the old base branch gets reaped, and a rule that recomputes
+// `mergebase(<old base>, …)` dies with it, while a tree sha is immortal. Absent
+// proof is not proof — a trailer with no `base_tree` never carries, which is the
+// backwards-compatible direction and the one a later reader will be tempted to
+// relax.
 
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
@@ -50,7 +74,18 @@ const { execFileSync, spawnSync } = require('child_process');
 // The invocation the two command docs name. Exported so a test can pin the docs
 // against the script instead of against a copy of its usage.
 const USAGE = 'gate-trailer.cjs write <pr> [--repo owner/name] --arch-review conform '
-  + '--drift-check <fresh|skipped> --degenerate-green <clean|N|skipped> [--checks green]';
+  + '--drift-check <fresh|skipped> --degenerate-green <clean|N|skipped> [--checks green] '
+  + '[--base-tree <40-hex>]';
+// The carry has its own usage because it has its own caller: `base-merge.cjs`,
+// which is the only thing in the conveyor that moves a head WITHOUT adding
+// content and therefore the only place a carry can be proved.
+const CARRY_USAGE = 'gate-trailer.cjs carry <ticket> --pr <n> [--repo owner/name] '
+  + '--from <judged-head> --to <new-head> [--worktree <path>] [--json]';
+
+// A tree object, in full. Both directions of the proof compare object
+// identities, so an abbreviation is not a weaker proof — it is no proof at all,
+// and a reader cannot lengthen one. Refused on write and on read.
+const TREE_SHA = /^[0-9a-f]{40}$/i;
 
 // ── the reader, shared by state-sync, sentinel and front ────────────────────
 
@@ -133,7 +168,7 @@ function gateWhy(gate, headSha) {
   return `the conform trailer is for ${shortSha((gate || {}).head)}, the PR is at ${shortSha(headSha)}`;
 }
 
-module.exports = { USAGE, parseGate, gateKind, gateConform, gateWhy, shortSha };
+module.exports = { USAGE, CARRY_USAGE, TREE_SHA, parseGate, gateKind, gateConform, gateWhy, shortSha };
 
 // ── write: the only thing that composes a trailer ───────────────────────────
 // Behind require.main because front.cjs imports this file (and sentinel.cjs
@@ -186,11 +221,7 @@ if (require.main === module) {
     return null; // unreachable: die() exits.
   };
 
-  if (argv[0] !== 'write') die(`unknown command "${argv[0] || ''}"\nusage: ${USAGE}`, 2);
-  const pr = Number(argv[1]);
-  if (!Number.isInteger(pr) || pr <= 0) die(`write needs a PR number\nusage: ${USAGE}`, 2);
-
-  // ── argv, in ONE left-to-right pass ───────────────────────────────────────
+  // ── argv, in ONE left-to-right pass, for BOTH verbs ───────────────────────
   // Every flag the writer knows. An argument outside this list is REFUSED rather
   // than ignored, because the one that matters is invisible to every reader:
   // `--rep acme/other` does not fail, it leaves `--repo` unset, and the verdict is
@@ -223,26 +254,48 @@ if (require.main === module) {
   // reader of argv: a flag not followed by its value is reported against THAT
   // flag, and adding a valueless flag fails loudly at its own name here rather
   // than quietly at its neighbour's.
-  const FLAGS = ['repo', 'arch-review', 'drift-check', 'degenerate-green', 'checks'];
-  const given = new Map();
-  for (let i = 2; i < argv.length;) {
-    const arg = String(argv[i]);
-    const name = arg.startsWith('--') ? arg.slice(2) : null;
-    if (name === null || !FLAGS.includes(name)) {
-      die(`unexpected argument "${arg}"\nusage: ${USAGE}`, 2);
+  //
+  // Shared because there are two verbs now, and a second hand-rolled scan is how
+  // the two holes above came back: one parser, one set of refusals, one place
+  // arity is decided.
+  function parseFlags(start, FLAGS, usage, BOOLS = []) {
+    const given = new Map();
+    for (let i = start; i < argv.length;) {
+      const arg = String(argv[i]);
+      const name = arg.startsWith('--') ? arg.slice(2) : null;
+      if (name === null || !(FLAGS.includes(name) || BOOLS.includes(name))) {
+        die(`unexpected argument "${arg}"\nusage: ${usage}`, 2);
+      }
+      if (given.has(name)) {
+        die(`--${name} given more than once — the later value would be silently dropped, and for `
+          + '`--repo` that means recording the verdict onto another repository\'s PR; pass it once'
+          + `\nusage: ${usage}`, 2);
+      }
+      // Arity lives in the loop that consumes it: a flag named in BOOLS takes no
+      // value, every other flag takes exactly one, and a missing value is
+      // reported against the flag that is missing it rather than its neighbour's.
+      if (BOOLS.includes(name)) { given.set(name, true); i += 1; continue; }
+      const v = argv[i + 1];
+      if (v == null || String(v).startsWith('--')) die(`--${name} needs a value\nusage: ${usage}`, 2);
+      given.set(name, v);
+      i += 2;
     }
-    if (given.has(name)) {
-      die(`--${name} given more than once — the later value would be silently dropped, and for `
-        + '`--repo` that means recording the verdict onto another repository\'s PR; pass it once'
-        + `\nusage: ${USAGE}`, 2);
-    }
-    // Every flag in FLAGS takes exactly one value; that is stated HERE, where it
-    // is acted on, and a valueless flag would be a change to this branch.
-    const v = argv[i + 1];
-    if (v == null || String(v).startsWith('--')) die(`--${name} needs a value\nusage: ${USAGE}`, 2);
-    given.set(name, v);
-    i += 2;
+    return given;
   }
+
+  // ── which verb ────────────────────────────────────────────────────────────
+  // `carry` is implemented at the foot of this block (`runCarry`, a hoisted
+  // declaration) and always exits, so everything below runs only for `write`.
+  if (argv[0] === 'carry') runCarry();
+  if (argv[0] !== 'write') {
+    die(`unknown command "${argv[0] || ''}"\nusage: ${USAGE}\n   or: ${CARRY_USAGE}`, 2);
+  }
+  const pr = Number(argv[1]);
+  if (!Number.isInteger(pr) || pr <= 0) die(`write needs a PR number\nusage: ${USAGE}`, 2);
+
+  const given = parseFlags(
+    2, ['repo', 'arch-review', 'drift-check', 'degenerate-green', 'checks', 'base-tree'], USAGE
+  );
   const flag = (name) => (given.has(name) ? given.get(name) : null);
 
   // Values are validated HERE, ahead of every `gh` call: a usage error must cost
@@ -265,6 +318,20 @@ if (require.main === module) {
   // The trailer is only ever written on a green PR, so `green` is the default
   // rather than a thing every caller has to remember to say.
   const checks = closed('checks', flag('checks') || 'green');
+  // THE BASE THE VERDICT WAS RENDERED AGAINST, as the tree of the merge base.
+  // Optional, because the guard's pinned invocation does not pass it yet and a
+  // trailer without it must keep reading exactly as it did — but a value that
+  // is not a full tree object is refused rather than recorded: `carry` compares
+  // object identities, and an abbreviation is not a weaker proof, it is none.
+  // What must never happen is a base_tree nobody measured, so there is no
+  // default and no fallback that computes one here: the judge measured it, the
+  // judge reports it (references/arch-review.md).
+  const baseTree = flag('base-tree');
+  if (baseTree !== null && !TREE_SHA.test(String(baseTree).trim())) {
+    die(`--base-tree does not accept "${baseTree}" — expected the full forty hex characters of a `
+      + 'tree object (`git rev-parse "$(git merge-base <base> <head>)^{tree}"`); a reader cannot '
+      + `lengthen an abbreviation, and the carry compares object identities\nusage: ${USAGE}`, 2);
+  }
 
   // The live PR: the body to rewrite and the head the verdict is about. A head
   // the writer cannot read is fatal — writing a head-less trailer would have
@@ -300,7 +367,9 @@ if (require.main === module) {
   const kept = String(live.body || '').split('\n').filter((l) => !/^\s*gate_status:/i.test(l));
   while (kept.length && kept[kept.length - 1].trim() === '') kept.pop();
   const trailer = `gate_status: arch-review=${archReview}, drift-check=${driftCheck}, `
-    + `degenerate-green=${degenerateGreen}, checks=${checks}, head=${head}`;
+    + `degenerate-green=${degenerateGreen}, checks=${checks}`
+    + (baseTree ? `, base_tree=${normSha(baseTree)}` : '')
+    + `, head=${head}`;
   const body = `${kept.join('\n')}\n\n${trailer}\n`;
 
   try {
@@ -309,4 +378,174 @@ if (require.main === module) {
     die(`gh pr edit ${pr} failed: ${e.stderr ? String(e.stderr).trim() : e.message}`);
   }
   console.log(JSON.stringify({ pr, head, trailer, unresolved }, null, 2));
+
+  // ── carry: the only writer of a CARRIED verdict ────────────────────────────
+  //
+  // Re-stamps the verdict the PR already carries onto a new head, IF AND ONLY IF
+  // the two object identities at the top of this file both hold. Anything else —
+  // a missing `base_tree`, a sha this repository does not have, either tree
+  // moved — is a REFUSAL, and a refusal is not an error: the verdict is simply
+  // owed again, which is what the conveyor did before this verb existed. Hence
+  // exit 1 for a refusal and exit 2 for a usage error, so a caller can tell the
+  // two apart while treating both as "no carry".
+  //
+  // The script computes the proof; the CALLER does not supply it. It is handed
+  // two heads and reads everything else — the verdict, the judged base tree, the
+  // live head and the base branch — from the PR and from git. That is deliberate:
+  // prose rules get skipped and mechanical gates hold, so a caller told to
+  // "check the tree first" is not a gate, while a script that re-derives both
+  // conditions is one.
+  //
+  // What it does NOT cover, and by whom: the PR BODY and any thread opened since
+  // the judgement. An identical tree says nothing about either, so both keep
+  // their existing checks — `sentinel.cjs merge` re-verifies threads, checks and
+  // the review decision against live GitHub on every merge.
+  function runCarry() {
+    const ticket = argv[1];
+    if (!ticket || String(ticket).startsWith('--')) {
+      die(`carry needs a ticket id\nusage: ${CARRY_USAGE}`, 2);
+    }
+    const given = parseFlags(2, ['repo', 'pr', 'from', 'to', 'worktree'], CARRY_USAGE, ['json']);
+    const asJson = given.has('json');
+    const pr = Number(given.get('pr'));
+    if (!Number.isInteger(pr) || pr <= 0) die(`carry needs --pr <n>\nusage: ${CARRY_USAGE}`, 2);
+    const from = normSha(given.get('from'));
+    const to = normSha(given.get('to'));
+    if (!from) die(`carry needs --from <judged-head>\nusage: ${CARRY_USAGE}`, 2);
+    if (!to) die(`carry needs --to <new-head>\nusage: ${CARRY_USAGE}`, 2);
+    const repo = given.get('repo') || null;
+    const repoArg = repo ? ['--repo', repo] : [];
+    // The worktree, not the cwd: base-merge merges a worktree it was given, and
+    // an agent's cwd is not necessarily that one. Defaults to the cwd so the
+    // verb still works when run by hand from inside the branch.
+    const worktree = path.resolve(given.get('worktree') || process.cwd());
+
+    const git = (args) => {
+      const r = spawnSync('git', ['-C', worktree, ...args], { encoding: 'utf8' });
+      return { status: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
+    };
+    const refuse = (reason, extra = {}) => {
+      if (asJson) console.log(JSON.stringify({ ticket, pr, carried: false, reason, ...extra }, null, 2));
+      console.error(`gate-trailer: carry refused for ${ticket} — ${reason}`);
+      process.exit(1);
+    };
+
+    // ── condition 1: the head tree did not move ───────────────────────────────
+    // Local, and FIRST: the commonest refusal (the merge brought content) then
+    // costs no network round trip at all.
+    const treeOf = (sha) => {
+      const r = git(['rev-parse', '--verify', '-q', `${sha}^{tree}`]);
+      return r.status === 0 && TREE_SHA.test(r.out) ? r.out : null;
+    };
+    const fromTree = treeOf(from);
+    if (!fromTree) {
+      refuse(`--from ${from} does not resolve to a tree in ${worktree} — nothing can be proved `
+        + 'about a head this repository does not have');
+    }
+    const toTree = treeOf(to);
+    if (!toTree) {
+      refuse(`--to ${to} does not resolve to a tree in ${worktree} — nothing can be proved `
+        + 'about a head this repository does not have');
+    }
+    if (fromTree !== toTree) {
+      refuse(`the head tree MOVED — ${shortSha(from)} is tree ${fromTree}, ${shortSha(to)} is tree `
+        + `${toTree}: the merge brought content, and content nobody has judged is not covered by `
+        + 'the verdict', { from_tree: fromTree, to_tree: toTree });
+    }
+
+    // ── the verdict on the PR, and what it says it judged ─────────────────────
+    const view = spawnSync('gh', ['pr', 'view', String(pr), ...repoArg, '--json', 'body,headRefOid,baseRefName'], { encoding: 'utf8' });
+    if (view.status !== 0) {
+      die(`gh pr view ${pr} failed: ${(view.stderr || '').trim() || `exit ${view.status}`}`);
+    }
+    let live = {};
+    try { live = JSON.parse(view.stdout); } catch (e) { die(`gh pr view returned unparseable JSON (${e.message})`); }
+    const gate = parseGate(live.body);
+    if (!gate || String(gate['arch-review'] || '').toLowerCase() !== 'conform') {
+      refuse('the PR body carries no `gate_status: arch-review=conform` trailer — there is no '
+        + 'verdict to carry, so it is owed against this head like any other');
+    }
+    if (normSha(gate.head) !== from) {
+      refuse(`the trailer was written for ${shortSha(gate.head)}, not for ${shortSha(from)} — the `
+        + 'verdict on the PR is about a third head, and re-binding it here would carry it onto a '
+        + 'diff nobody judged');
+    }
+    // The LIVE head, not a snapshot: if something was pushed since the judgement
+    // the trailer is already stale, and stale is the correct state.
+    const liveHead = normSha(live.headRefOid);
+    if (liveHead !== from) {
+      refuse(`PR #${pr} is at ${shortSha(liveHead)}, not at the judged head ${shortSha(from)} — `
+        + 'something was pushed, so the verdict is owed against that instead');
+    }
+    const judgedBaseTree = normSha(gate.base_tree);
+    if (!judgedBaseTree) {
+      refuse('the trailer records no `base_tree=` — absent proof is not proof: nothing can say '
+        + 'which base the verdict was rendered against, so nothing can show it covers this one '
+        + '(have arch-review report it; see references/arch-review.md)');
+    }
+    if (!TREE_SHA.test(judgedBaseTree)) {
+      refuse(`the trailer records base_tree=${judgedBaseTree}, which is not the full forty `
+        + 'characters of a tree object — a reader cannot lengthen an abbreviation');
+    }
+
+    // ── condition 2: the base tree did not move ───────────────────────────────
+    // `origin/<base>` when it exists, for the same reason base-merge measures
+    // against it: after the sentinel squash-merges a parent through the API the
+    // local branch does not move (see resolveBaseRef). No fetch — the caller has
+    // just done one, and a gate must not grow a network dependency of its own.
+    const { resolveBaseRef } = require(path.join(__dirname, 'graph-dir.cjs'));
+    const baseName = String(live.baseRefName || '').trim();
+    if (!baseName) refuse(`PR #${pr} reports no base branch — the base tree cannot be measured`);
+    const baseRef = resolveBaseRef(worktree, baseName);
+    const mergeBase = git(['merge-base', baseRef, to]);
+    if (mergeBase.status !== 0 || !mergeBase.out) {
+      refuse(`no merge base between ${baseRef} and ${shortSha(to)} in ${worktree} `
+        + `(${mergeBase.err || `git merge-base exited ${mergeBase.status}`})`);
+    }
+    const newBaseTree = treeOf(mergeBase.out);
+    if (!newBaseTree) refuse(`the merge base ${shortSha(mergeBase.out)} does not resolve to a tree`);
+    if (newBaseTree !== judgedBaseTree) {
+      refuse(`the BASE tree MOVED — the verdict was rendered against tree ${judgedBaseTree}, the `
+        + `merge base with ${baseRef} (${shortSha(mergeBase.out)}) is tree ${newBaseTree}: the same `
+        + 'code against a different base is a different diff',
+      { judged_base_tree: judgedBaseTree, new_base_tree: newBaseTree, base_ref: baseRef });
+    }
+
+    // ── proved: re-bind head=, and claim nothing else ─────────────────────────
+    // Re-binding `head=` is what keeps every existing reader untouched: there is
+    // no new concept for `gateConform`, the board, the guard or state-sync to
+    // learn. Two rules about the keys, both mechanical rather than stated:
+    //
+    //   `checks=` is DROPPED. A green is measured by CI against a base, and this
+    //   proof says nothing about CI — the merge commit is a new merge base, which
+    //   is why CI correctly re-runs on it. Carrying the key would be a claim
+    //   about a build nobody ran.
+    //
+    //   `carried_from=` records the head a judge actually read, and the FIRST one
+    //   survives a chain of carries. Without it a carried verdict is
+    //   indistinguishable from one rendered against this head, and the audit
+    //   trail cannot answer which head a human or an agent actually looked at.
+    const parts = [];
+    for (const [k, v] of Object.entries(gate)) {
+      if (k === 'head' || k === 'checks' || k === 'carried_from') continue;
+      parts.push(`${k}=${v}`);
+    }
+    parts.push(`carried_from=${normSha(gate.carried_from) || from}`);
+    parts.push(`head=${to}`);
+    const trailer = `gate_status: ${parts.join(', ')}`;
+    const kept = String(live.body || '').split('\n').filter((l) => !/^\s*gate_status:/i.test(l));
+    while (kept.length && kept[kept.length - 1].trim() === '') kept.pop();
+    const body = `${kept.join('\n')}\n\n${trailer}\n`;
+
+    try {
+      execFileSync('gh', ['pr', 'edit', String(pr), ...repoArg, '--body', body], { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      die(`gh pr edit ${pr} failed: ${e.stderr ? String(e.stderr).trim() : e.message}`);
+    }
+    console.log(JSON.stringify({
+      ticket, pr, carried: true, from, to, head_tree: toTree, base_ref: baseRef,
+      base_tree: judgedBaseTree, trailer,
+    }, null, 2));
+    process.exit(0);
+  }
 }
