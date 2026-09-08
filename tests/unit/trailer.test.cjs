@@ -491,9 +491,21 @@ const REQUIRED_FLAGS = ['--arch-review', '--drift-check', '--degenerate-green'];
 // doc showing the invocation shows the qualifier. `deliver.md` and the script's
 // USAGE carried it and `pr-sentinel.md` did not — the three texts disagreeing
 // about the one flag that decides WHICH repository is written to.
-const OPTIONAL_FLAGS = ['--repo'];
+//
+// `--base-tree` is optional in exactly the same sense and for the same reason.
+// The writer accepts a trailer without it so an older body keeps reading as it
+// always did, but `gate-trailer.cjs carry` refuses to carry a verdict that
+// records no base tree — absent proof is not proof — so a documented invocation
+// that omits the flag makes the whole carry unreachable: every trailer the
+// conveyor writes is uncarryable, and the ~150k-token re-judgement D2 exists to
+// avoid is bought again on every base move. The writer's forty-hex refusal
+// catches a MALFORMED value; nothing can catch an omitted flag, so the only
+// defence is again that every doc showing the invocation shows it. `--base-tree`
+// went into the script's USAGE without a row here, and this list stopping one
+// short is why both docs shipped without it and the suite stayed green.
+const OPTIONAL_FLAGS = ['--repo', '--base-tree'];
 
-test('both docs name the optional --repo qualifier, which decides which repo is written to', () => {
+test('both docs name every optional flag the invocation is inert without', () => {
   for (const f of OPTIONAL_FLAGS) {
     assert.ok(USAGE.includes(f), `the script's USAGE no longer names ${f} — update OPTIONAL_FLAGS and the docs together`);
   }

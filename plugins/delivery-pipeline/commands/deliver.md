@@ -1401,8 +1401,17 @@ loop:
      conform      → check the green criteria:
        all checks passed ∧ unresolved=0 ∧ arch conform
        → record the verdicts in the PR body as a trailer (survives squash-merge):
-         node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs write <pr> [--repo owner/name] --arch-review conform --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped>
-         it reads the live body and the live head, and writes ONE `gate_status:`
+         node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs write <pr> [--repo owner/name] --arch-review conform --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped> --base-tree <base_tree>
+         `<base_tree>` is arch-review's own `base_tree:` output field, copied
+         verbatim: all forty hex characters of the merge-base TREE the judge
+         measured (references/arch-review.md). Never a branch name and never an
+         abbreviation — the writer refuses both, and there is no fallback that
+         computes one here, because a base_tree nobody measured is an assertion
+         rather than a proof. Omit it and the trailer still writes, but no later
+         `gate-trailer.cjs carry` can ever reuse this verdict across a base move:
+         it refuses on absent proof, and the ~150k-token re-judgement is bought
+         again.
+         The writer reads the live body and the live head, and writes ONE `gate_status:`
          line carrying every key plus `head=<full 40-char sha>` — the diff the verdict is
          about. NEVER hand-assemble that line: a second one hides the verdict
          above it (the reader takes the LAST), and a trailer with no `head=` is

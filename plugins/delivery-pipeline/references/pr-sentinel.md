@@ -193,10 +193,19 @@ The trailer, written by `arch-review` through one script — never by hand:
 
 ```bash
 node $SHIPYARD_ROOT/scripts/gate-trailer.cjs write <pr> --repo <owner/name> \
-     --arch-review conform \
+     --arch-review conform --base-tree <base_tree> \
      --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped>
 gh pr ready <pr> --repo <owner/name>
 ```
+
+`<base_tree>` is arch-review's own `base_tree:` output field, copied verbatim —
+all forty hex characters of the merge-base TREE that judge measured, reported
+beside its verdict (`references/arch-review.md`). Never a branch name and never
+an abbreviation: the writer refuses both, and nothing here computes a substitute,
+because a base_tree nobody measured is an assertion rather than a proof. It is
+optional to the script and mandatory in practice — a trailer written without it
+can never be carried, so every later base move that provably changes nothing buys
+the ~150k-token re-judgement again.
 
 Do not invent that trailer and do not assemble one yourself. It IS the merge gate
 — `sentinel.cjs merge` refuses without it — and the writer holds four rules that
