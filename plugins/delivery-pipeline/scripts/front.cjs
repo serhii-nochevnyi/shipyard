@@ -1386,7 +1386,8 @@ function formatFront(front) {
   if (front.config_invalid) {
     lines.push(
       'fixpoint: NO — and not a round to retry either. No policy is in effect, so every mutation refuses: '
-      + 'nothing above may be dispatched, merged or integrated, and recomputing changes nothing. '
+      + 'nothing above may be dispatched, auto-merged or integrated, and recomputing changes nothing — '
+      + 'a `waiting.merge_human` entry above is a human\'s option, not this refusal\'s. '
       + 'A person fixes the config file; the buckets above are the most restrictive reading until then.'
     );
   } else if (front.fixpoint) {
@@ -1536,7 +1537,8 @@ if (require.main === module) {
   const configRefusal = valid ? null
     : `front: no policy is in effect — ${error.relative} ${error.message}. `
       + 'Every board below is the most restrictive reading, not this project\'s decision: '
-      + 'nothing may be merged and nothing may be dispatched until the file parses.';
+      + 'nothing may be auto-merged and nothing may be dispatched until the file parses '
+      + '(a `waiting.merge_human` entry below is still a human\'s option).';
   const autoMerge = valid && config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
   // Passed explicitly here because this CLI has already paid for the config —
   // computeFront's own lazy fallback serves the callers that have not.
