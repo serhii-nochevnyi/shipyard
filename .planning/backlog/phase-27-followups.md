@@ -24,7 +24,21 @@ would still be a record count against a guard.
 
 The general shape is worth keeping beyond this knob: **a conveyor change is in
 force when it reaches the branch the conveyor RUNS from, not when its ticket
-merges.** Every ticket in this phase changes the conveyor itself, so the same gap
+merges.**
+
+**It bit, rather than being predicted, on 2026-09-09.** Cutting T-27-09's
+worktree, `ticket-worktree.sh create T-27-09 <branch> epic/27-…` resolved the
+bare epic name to the LOCAL ref at `8a0edc3` — the epic at two commits — while
+origin was at `868e9c7` with all eight. The executor would have worked against a
+tree missing six of its own phase's tickets, and `create` reported success.
+
+That is precisely the defect T-27-04 shipped a fix for ("`ticket-worktree.sh
+create` measures `origin/<base>` … and never resolves a bare `epic/…` to a stale
+local ref"), and the fix could not help: it lives in the epic, and the conveyor
+runs `ticket-worktree.sh` out of the project checkout, which is on `main`.
+Caught by reading the `HEAD is now at` line rather than by any gate — nothing in
+the delivery loop compares the cut point against origin, which is what T-27-04
+adds once it lands. Every ticket in this phase changes the conveyor itself, so the same gap
 applies to all of them — T-27-02's trailer carry, T-27-07's pin sweep and
 T-27-03's merge gate are all merged into the epic and none of them governs this
 session's own delivery.
