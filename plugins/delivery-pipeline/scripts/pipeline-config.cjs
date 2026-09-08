@@ -57,12 +57,112 @@ const TIERS = ['opus', 'sonnet', 'haiku', 'fable'];
 const TOP_TIERS = new Set(['opus', 'fable']);
 
 // Workflow's agent() accepts these; GSD's ladder also has `minimal`, which is
-// Codex-only and clamps to `low`, and `max`, which is Anthropic-only.
+// Codex-only and clamps to `low`. `ultra` is deliberately NOT here: it is
+// advertised by one Codex model that no built-in path selects (ADR-005 D6/D7).
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const EFFORT_TIER_DEFAULTS = { light: 'low', standard: 'high', heavy: 'xhigh' };
 // Roles whose work is mechanical reconciliation: they stay cheap on effort even
 // when the model tier is raised by an override.
 const MECHANICAL_ROLES = new Set(['drift-check']);
+
+// ── the Codex model palette (ADR-005 D6/D7) ──────────────────────────────────
+//
+// An ORDERED list of the models a Codex agent may be written with, each with the
+// effort to USE — not the deepest the model accepts. That distinction is the
+// whole reason the field is shaped this way: ranking the models by which effort
+// levels they SUPPORT is what produced three wrong ladders in a row (GSD's
+// `codexModelEffort` is a support matrix, and nothing in it claims to be a
+// quality ranking).
+//
+// FIRST entry is the workhorse floor every role gets; LAST is the ceiling, which
+// only the integrator takes statically and the `-deep` agents make reachable
+// (ADR-005 D8 — on that runtime an agent is a FILE, so an escalation needs its
+// own file). `min_cli` is the Codex CLI version that can first CONFIGURE the
+// model; the generator refuses an entry above the host's version rather than
+// writing an agent the runtime may ignore. There is no id registry to validate a
+// model against — GSD's catalog does not carry every model an operator may have
+// — so an unknown id cannot be distinguished from a new one, and a hardcoded
+// allowlist here would go stale faster than the models do.
+//
+// `gpt-5.6-sol` is deliberately absent: with `xhigh`/`max` retired on that
+// runtime its only distinguishing property (advertising `ultra`) buys nothing, so
+// no built-in path selects it. It stays a value a person may configure — see the
+// capability's declared default, which mirrors this list.
+const DEFAULT_CODEX_MODELS = [
+  { model: 'gpt-5.6-terra', effort: 'high' },
+  { model: 'gpt-6-astra', effort: 'high', min_cli: '0.153.1' },
+];
+const CODEX_MODEL_KEYS = new Set(['model', 'effort', 'min_cli']);
+
+// `model[:effort][@min_cli]` — the GSD-settable spelling of one palette entry.
+// The capability declares `codex_models` as a STRING because GSD's capability
+// config vocabulary is boolean|string|number|enum (its own
+// `validateConfigSliceEntry`), so an array-typed slice would not be a declared,
+// settable knob at all. A hand-edited config may still use the object form.
+function parseCodexModelEntry(text) {
+  const raw = String(text).trim();
+  if (!raw) return null;
+  const at = raw.indexOf('@');
+  const head = at === -1 ? raw : raw.slice(0, at);
+  const minCli = at === -1 ? undefined : raw.slice(at + 1).trim();
+  const colon = head.indexOf(':');
+  const model = (colon === -1 ? head : head.slice(0, colon)).trim();
+  const effort = colon === -1 ? undefined : head.slice(colon + 1).trim();
+  const entry = { model };
+  if (effort) entry.effort = effort;
+  if (minCli) entry.min_cli = minCli;
+  return entry;
+}
+
+// One list out of any of the three accepted spellings: an array of objects, an
+// array of `model:effort@min_cli` strings, or one comma-separated string.
+// Malformed entries are SKIPPED with a warning — never half-honoured — and an
+// empty palette means "write no model", which is the previous behaviour and a
+// safe floor.
+function normalizeCodexModels(value, warnings) {
+  const items = typeof value === 'string'
+    ? value.split(',')
+    : Array.isArray(value) ? value : null;
+  if (items === null) {
+    warnings.push(
+      'pipeline.codex_models must be a list of {model, effort} entries (or a "model:effort@min_cli, …" string) — ignored'
+    );
+    return null;
+  }
+  const out = [];
+  for (const item of items) {
+    const entry = typeof item === 'string' || typeof item === 'number'
+      ? parseCodexModelEntry(item)
+      : (item && typeof item === 'object' && !Array.isArray(item)) ? { ...item } : null;
+    if (!entry) {
+      warnings.push(`pipeline.codex_models entry ${JSON.stringify(item)} is not a model — skipped`);
+      continue;
+    }
+    for (const key of Object.keys(entry)) {
+      if (!CODEX_MODEL_KEYS.has(key)) {
+        warnings.push(`pipeline.codex_models."${key}" is not an entry field — ignored (fields: ${[...CODEX_MODEL_KEYS].join(', ')})`);
+        delete entry[key];
+      }
+    }
+    if (typeof entry.model !== 'string' || !entry.model.trim()) {
+      warnings.push(`pipeline.codex_models entry ${JSON.stringify(item)} has no model id — skipped`);
+      continue;
+    }
+    entry.model = entry.model.trim();
+    if (entry.effort !== undefined && !EFFORTS.includes(entry.effort)) {
+      warnings.push(
+        `pipeline.codex_models."${entry.model}" effort "${entry.effort}" is not an effort level — ignored (${EFFORTS.join('|')}); the role's own effort applies`
+      );
+      delete entry.effort;
+    }
+    if (entry.min_cli !== undefined && !/^\d+(\.\d+)*$/.test(String(entry.min_cli))) {
+      warnings.push(`pipeline.codex_models."${entry.model}" min_cli "${entry.min_cli}" is not a version — ignored`);
+      delete entry.min_cli;
+    }
+    out.push(entry);
+  }
+  return out;
+}
 
 // The roles that repair an existing PR rather than build a ticket. They are the
 // ones ADR-001 D1 took the attempt counter away from, and the only ones a
@@ -126,6 +226,9 @@ const DEFAULTS = {
   graph_gate: true,                   // mirrors the capability's declared key
   models: {},                         // per-role override → tier alias
   effort: {},                         // per-role override → effort level
+  // The Codex model palette, in preference order (see DEFAULT_CODEX_MODELS).
+  // Mirrors the capability's declared `delivery_pipeline.codex_models`.
+  codex_models: DEFAULT_CODEX_MODELS,
   // Sibling repositories the graph delivers into ("owner/name" → absolute local
   // checkout path). Tracking a foreign repo needs nothing but `delivery.repo` on
   // the ticket; EXECUTING there needs a local checkout, because worktrees,
@@ -176,7 +279,17 @@ function loadConfig(root) {
   const subReposRaw = raw.sub_repos ?? obj(raw.planning).sub_repos;
   const subRepos = Array.isArray(subReposRaw) ? subReposRaw : [];
 
-  const cfg = { ...DEFAULTS, jira: { ...DEFAULTS.jira }, models: {}, effort: {}, repos: {} };
+  // Every container value is copied, never shared with DEFAULTS: a caller that
+  // sorts or filters the palette in place would otherwise change what the next
+  // loadConfig() in the same process returns.
+  const cfg = {
+    ...DEFAULTS,
+    jira: { ...DEFAULTS.jira },
+    models: {},
+    effort: {},
+    repos: {},
+    codex_models: DEFAULT_CODEX_MODELS.map((e) => ({ ...e })),
+  };
   for (const [key, value] of Object.entries(merged)) {
     if (!KNOWN_KEYS.has(key)) {
       warnings.push(`unknown pipeline config key "${key}" — ignored (known: ${[...KNOWN_KEYS].sort().join(', ')})`);
@@ -239,6 +352,13 @@ function loadConfig(root) {
         }
         cfg.repos[slug] = local;
       }
+      continue;
+    }
+    if (key === 'codex_models') {
+      const palette = normalizeCodexModels(value, warnings);
+      // A wholly unusable value keeps the shipped palette; an explicitly EMPTY
+      // one is honoured, because "write no model" is a legitimate choice.
+      if (palette !== null) cfg.codex_models = palette;
       continue;
     }
     if (key === 'effort') {
@@ -399,12 +519,21 @@ function topTier(cfg) {
 // only agents it gives `sol` to are `gsd-planner` and `gsd-eval-planner`, and the
 // conveyor has no planner among its roles — decomposition is done by the main
 // loop, not by a role agent. Its reviewer, executor, fixer and debugger are all
-// on the workhorse. Nothing is lost by following that, because GSD expresses
-// depth through EFFORT at the same model: `gsd-debugger` and
-// `gsd-security-auditor` are `gsd-executor`'s model at xhigh. The effort rule
-// below reproduces that, so a capped runtime keeps the whole ladder rather than
-// flattening it to one setting.
+// on the workhorse. GSD expresses depth through EFFORT at the same model —
+// `gsd-debugger` and `gsd-security-auditor` are `gsd-executor`'s model at xhigh
+// — and that is what this cap used to lean on. It no longer holds THERE:
+// ADR-005 D6 measured that the deeper efforts buy nothing on that runtime, so
+// the effort axis is two values wide (see RUNTIMES_WITH_FLAT_EFFORT) and depth
+// comes back from the model, through a second agent FILE per escalating role
+// (D8). The cap still stands, because what it decides is which tier the
+// GENERATOR renders a palette entry for, and the palette's own ceiling is what
+// the escalation reaches.
 const RUNTIMES_WITH_PREMIUM_TOP_TIER = new Set(['codex']);
+
+// Where the effort axis is flat: one cheap value for the mechanical role, one
+// working value for everything else (ADR-005 D6). Not a limitation of the
+// runtime — a measurement of it.
+const RUNTIMES_WITH_FLAT_EFFORT = new Set(['codex']);
 function capForRuntime(tier, cfg) {
   const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
   if (!RUNTIMES_WITH_PREMIUM_TOP_TIER.has(runtime)) return tier;
@@ -480,17 +609,34 @@ function resolveModel(role, signals = {}, cfg = DEFAULTS) {
 // with it. GSD does exactly this — `gsd-debugger` is its executor's model at a
 // higher effort — so a capped repair runs the workhorse at heavy rather than the
 // premium model at heavy.
+//
+// Both of those are the ladder on a runtime that HAS depth on this axis. Where
+// the axis is flat (ADR-005 D6) neither applies and the answer is two-valued;
+// that branch is first below, right after the explicit override.
 function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
   const clamp = (level) => {
     // `minimal` is Codex-only in GSD and is not in Workflow's enum at all.
+    // There is deliberately no `max` → `xhigh` clamp for Codex any more: both
+    // halves of its justification were false (ADR-005 D7). GSD's
+    // `codexModelEffort._baseline` advertises `max` for every model, and
+    // `advertisedCodexEffort` returns that baseline for any model it does not
+    // name — which the palette's ceiling is. No built-in path asks for `max`
+    // there, so the clamp only ever rewrote an operator's explicit choice.
     if (level === 'minimal') return 'low';
-    // `max` is Anthropic-only; GSD clamps it to xhigh on Codex.
-    if (level === 'max' && runtime === 'codex') return 'xhigh';
     return EFFORTS.includes(level) ? level : 'high';
   };
   const override = cfg.effort && cfg.effort[role];
   if (override) return clamp(override);
+  // ADR-005 D6 — on THIS runtime the effort axis has two values, by measurement
+  // rather than by limitation: `xhigh` and `max` cost more there without a
+  // better result, and the ceiling model's best results are at `high`. So the
+  // ladder below does not apply; depth comes from the MODEL instead, which is
+  // what the `-deep` agents make reachable (D8). Placed after the override so an
+  // explicit configuration still wins, and before the repeat rule because there
+  // is no deeper rung here to escalate INTO — a repeat still changes strategy
+  // (`rethink`), which is the half that survives.
+  if (RUNTIMES_WITH_FLAT_EFFORT.has(runtime)) return MECHANICAL_ROLES.has(role) ? 'low' : 'high';
   // The same failure came back: hold the tier, deepen the thinking. Placed after
   // the override so an explicit configuration still wins, and before the tier
   // table because it outranks every signal below it. No mechanical-role guard is
@@ -518,7 +664,9 @@ function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
 
 module.exports = {
   loadConfig, resolveModel, resolveEffort, strategyFor,
+  parseCodexModelEntry, normalizeCodexModels,
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
+  DEFAULT_CODEX_MODELS,
 };
 
 // ── CLI ─────────────────────────────────────────────────────────────────────

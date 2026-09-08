@@ -65,63 +65,216 @@ function resolveGsdLib(explicit, codexHome) {
   );
 }
 
-// ── the model ladder, rendered for Codex ─────────────────────────────────────
+// ── the model palette, rendered for Codex ────────────────────────────────────
 //
 // On Claude the ladder reaches the agents at CALL time: the Workflow path passes
 // `model` and `effort` into every agent(). Codex has no such hook — an agent is a
-// static .toml — so a role's tier has to be baked in at generation time. Without
-// this the entire role × risk × attempt policy simply did not exist on Codex:
-// all seven agents ran at whatever the CLI default was, so arch-review and
-// drift-check were the same model. Every one of GSD's own 34 Codex agents carries
-// `model` + `model_reasoning_effort`; ours carried neither.
+// static .toml — so a role's model and effort are written at generation time.
 //
 // Two layers, and we own only the first. `pipeline-config.cjs` decides the TIER
-// (opus|sonnet|haiku) and the universal effort — that is shipyard's policy, and
-// it stays the single source. GSD owns the second: `runtimeTierDefaults.codex`
-// in its model catalog maps a tier to the concrete model. Reading the catalog
-// rather than hardcoding is what makes a user's `model_profile_overrides.codex.*`
-// remap take effect, and what keeps us from pinning a model id that GSD moves.
+// (opus|sonnet|haiku) and the effort — shipyard policy, and the single source.
+// The second layer is which concrete model a tier means, and on this runtime it
+// is the OPERATOR's, not the catalog's: `pipeline.codex_models` is an ordered
+// palette of `{model, effort, min_cli}` (ADR-005 D6/D7). The floor entry goes to
+// every role, the ceiling to the integrator — exactly as `integrator` takes the
+// 1M tier on the other runtime — and the four escalating roles get a SECOND file
+// at the ceiling, because a signal cannot reach an agent that does not exist
+// (D8). A GSD remap key still wins over the palette, resolved through GSD's own
+// resolver: reading `runtimeTierDefaults` straight out of the catalog, as this
+// did, meant `model_policy.runtime_tiers.codex.*` and
+// `model_profile_overrides.codex.*` changed nothing while the docs said they did.
 //
 // The signals are necessarily BASELINE (risk medium, attempt 1): risk is a
 // per-ticket fact and attempts are a per-run one, and neither exists when a
-// static file is written. So Codex gets the ladder's floor for each role, not its
-// escalation — an honest limit, not a silent one.
+// static file is written. The `-deep` files are how the escalation survives that.
+//
 // The Codex agent names are not all ladder role names: the investigation
 // researcher ships as `inv-research` (its reference file) while the ladder calls
 // the role `research`. Unmapped, it fell through to the ladder's `default` and
 // would have been billed as a judgment role.
 const LADDER_ROLE = { 'inv-research': 'research' };
 
-function codexModelFor(role, pluginDir, codexHome) {
+// The roles a signal escalates, and therefore the ones that get a second agent
+// FILE at the palette's ceiling (ADR-005 D8): a repair role when its failure
+// signature has repeated with the deeper strategy already spent
+// (`repeat_exhausted`), the judge when the journal already holds a `violation`
+// for this ticket. The integrator gets no variant — one call per phase, already
+// at the ceiling.
+const DEEP_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel', 'arch-review']);
+const DEEP_SUFFIX = '-deep';
+
+// Numeric, part by part: a string compare makes 0.153.4 > 0.153.1 true by luck
+// and 0.153.10 > 0.153.9 false.
+function compareVersions(a, b) {
+  const pa = String(a).split('.').map((n) => parseInt(n, 10));
+  const pb = String(b).split('.').map((n) => parseInt(n, 10));
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = Number.isFinite(pa[i]) ? pa[i] : 0;
+    const y = Number.isFinite(pb[i]) ? pb[i] : 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+// What the HOST's CLI is, because the palette's ceiling may be a model an older
+// CLI cannot be configured with. `SHIPYARD_CODEX_CLI_VERSION` is the override
+// tests and pinned hosts use; otherwise ask the CLI itself. Unknown counts as
+// BELOW any floor: the guard exists to avoid writing an agent the runtime may
+// ignore, and the fallback (the previous palette entry) always works.
+function detectCodexCliVersion(env) {
+  const pinned = String((env && env.SHIPYARD_CODEX_CLI_VERSION) || '').trim();
+  if (pinned) return pinned;
+  // Bounded: a CLI that stalls here would stall the installer with nothing on
+  // screen, and a timeout lands in the same branch as "no version" — unknown,
+  // therefore below any floor.
+  const r = require('child_process').spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 5000 });
+  if (r.error || r.status !== 0) return null;
+  const m = String(`${r.stdout || ''} ${r.stderr || ''}`).match(/\d+(?:\.\d+)+/);
+  return m ? m[0] : null;
+}
+
+// "Has the user REMAPPED this tier?" — asked through GSD's own resolver, so the
+// precedence its docs promise (model_policy.runtime_tiers, then
+// model_profile_overrides) is the precedence we honour. The builtin catalog value
+// is deliberately NOT a remap: it is what the palette replaces.
+//
+// GSD's loadConfig reads `<cwd>/.planning/config.json` and falls back to
+// `~/.gsd/defaults.json` only when the project has no config of its own — so a
+// global remap is invisible when the generator runs from a checkout that IS a GSD
+// project. Same cwd rule as the palette; not ours to change, but worth knowing
+// when a remap "does not take".
+function gsdCodexRemapper(codexHome, cwd, log) {
+  try {
+    const lib = path.join(codexHome, 'gsd-core', 'bin', 'lib');
+    const { resolveModelPolicy, resolveTierEntry } = require(path.join(lib, 'model-resolver.cjs'));
+    const { loadConfig } = require(path.join(lib, 'config-loader.cjs'));
+    if (typeof resolveTierEntry !== 'function' || typeof loadConfig !== 'function') {
+      throw new Error('gsd-core model-resolver/config-loader lack the expected exports');
+    }
+    // GSD's loader reports on stderr what it does not recognise — shipyard's own
+    // `pipeline` namespace among it — plus every global default a project config
+    // shadows. None of that is actionable for whoever ran the installer, and in
+    // installer output it reads as a failed install, so THIS read is muted. Our
+    // own lines are not.
+    const write = process.stderr.write;
+    let gsd;
+    try {
+      process.stderr.write = () => true;
+      gsd = loadConfig(cwd) || {};
+    } finally {
+      process.stderr.write = write;
+    }
+    return (tier) => {
+      if (!tier) return null;
+      const policy = gsd.model_policy && typeof gsd.model_policy === 'object'
+        ? { ...gsd.model_policy, runtime: 'codex' }
+        : null;
+      const fromPolicy = policy && typeof resolveModelPolicy === 'function'
+        ? resolveModelPolicy(policy, tier)
+        : null;
+      if (typeof fromPolicy === 'string' && fromPolicy) return fromPolicy;
+      const overrides = gsd.model_profile_overrides;
+      if (!overrides || typeof overrides !== 'object') return null;
+      const mapped = resolveTierEntry({ runtime: 'codex', tier, overrides });
+      const builtin = resolveTierEntry({ runtime: 'codex', tier, overrides: undefined });
+      if (mapped && mapped.model && (!builtin || mapped.model !== builtin.model)) return mapped.model;
+      return null;
+    };
+  } catch (e) {
+    log(`gen-codex-shipyard: could not read GSD's model remap (${e.message}) — the palette decides alone\n`);
+    return () => null;
+  }
+}
+
+// One policy per run: the palette is filtered against the CLI once, so the
+// version refusal is ONE line rather than one per role, and GSD's config is read
+// once rather than eleven times.
+function codexModelPolicy(pluginDir, codexHome, opts = {}) {
+  const log = opts.log || ((m) => process.stderr.write(m));
+  const cwd = opts.cwd || process.cwd();
+  const env = opts.env || process.env;
+  const inert = { forRole: () => ({ model: null, effort: null }), palette: [], cliVersion: null };
+
+  let pc;
+  let cfg;
   try {
     // require() treats a bare relative path as a PACKAGE name, so `--plugin
     // plugins/delivery-pipeline` resolved to nothing and every agent silently
     // shipped without a model — the failure this function exists to prevent,
     // wearing its own fallback as a disguise.
-    const { loadConfig, resolveModel, resolveEffort } =
-      require(path.resolve(pluginDir, 'scripts', 'pipeline-config.cjs'));
-    const { config } = loadConfig(process.cwd());
+    pc = require(path.resolve(pluginDir, 'scripts', 'pipeline-config.cjs'));
+    const loaded = pc.loadConfig(cwd);
     // Force the codex branch of the policy regardless of where we generate from:
-    // `fable` is Claude-only and must degrade to `opus` here.
-    const cfg = { ...config, gsd: { ...(config.gsd || {}), runtime: 'codex' } };
-    const tier = resolveModel(LADDER_ROLE[role] || role, {}, cfg);
-    const effort = resolveEffort(LADDER_ROLE[role] || role, tier, cfg, {});
-
-    const catalogPath = path.join(codexHome, 'gsd-core', 'bin', 'shared', 'model-catalog.json');
-    if (!fs.existsSync(catalogPath)) return { model: null, effort };
-    const catalog = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
-    const entry = ((catalog.runtimeTierDefaults || {}).codex || {})[tier];
-    // A tier the catalog does not carry is a fact worth saying out loud: the
-    // agent still ships, at the CLI default, rather than with a broken model id.
-    if (!entry || !entry.model) {
-      process.stderr.write(`gen-codex-shipyard: no codex model for tier "${tier}" (role ${role}) — leaving the agent on the CLI default\n`);
-      return { model: null, effort };
+    // the 1M tier is Claude-only and must degrade here, and the effort axis is
+    // flat here and nowhere else.
+    cfg = { ...loaded.config, gsd: { ...(loaded.config.gsd || {}), runtime: 'codex' } };
+    for (const w of loaded.warnings || []) {
+      if (/codex_models/.test(w)) log(`gen-codex-shipyard: ${w}\n`);
     }
-    return { model: entry.model, effort };
   } catch (e) {
-    process.stderr.write(`gen-codex-shipyard: could not resolve a model for ${role} (${e.message}) — leaving the agent on the CLI default\n`);
-    return { model: null, effort: null };
+    log(`gen-codex-shipyard: could not load the model policy (${e.message}) — every agent stays on the CLI default\n`);
+    return inert;
   }
+
+  const cliVersion = detectCodexCliVersion(env);
+  const palette = [];
+  for (const entry of Array.isArray(cfg.codex_models) ? cfg.codex_models : []) {
+    if (entry.min_cli && (!cliVersion || compareVersions(cliVersion, entry.min_cli) < 0)) {
+      log(
+        `gen-codex-shipyard: not writing "${entry.model}" — configuring it needs Codex CLI ${entry.min_cli}, ` +
+        `this host reports ${cliVersion || 'no version'}. Every role gets the previous palette entry instead.\n`
+      );
+      continue;
+    }
+    palette.push(entry);
+  }
+  if (!palette.length) {
+    log('gen-codex-shipyard: no usable model in the palette — every agent stays on the CLI default\n');
+  }
+  const floor = palette[0] || null;
+  const ceiling = palette.length ? palette[palette.length - 1] : null;
+  const remapFor = gsdCodexRemapper(codexHome, cwd, log);
+
+  // The palette entry's effort is the effort to USE for that model, so the role
+  // rule may ask for LESS but never more: the mechanical role keeps its `low`,
+  // and nothing pays above what the operator measured the model to be best at.
+  const EFFORTS = Array.isArray(pc.EFFORTS) ? pc.EFFORTS : [];
+  const lowerEffort = (a, b) => {
+    if (!a) return b || null;
+    if (!b) return a;
+    const ia = EFFORTS.indexOf(a);
+    const ib = EFFORTS.indexOf(b);
+    if (ia === -1 || ib === -1) return a;
+    return ia <= ib ? a : b;
+  };
+
+  const forRole = (role, { deep = false } = {}) => {
+    try {
+      const ladderRole = LADDER_ROLE[role] || role;
+      const tier = pc.resolveModel(ladderRole, {}, cfg);
+      const effort = pc.resolveEffort(ladderRole, tier, cfg, {});
+      const remapped = remapFor(tier);
+      // A remapped tier is one model for every role that resolves to it, so the
+      // palette's floor/ceiling distinction does not apply — and the entry's
+      // declared effort belongs to the entry's model, not to this one.
+      if (remapped) return { model: remapped, effort };
+      const entry = deep || role === 'integrator' ? ceiling : floor;
+      if (!entry) return { model: null, effort };
+      return { model: entry.model, effort: lowerEffort(effort, entry.effort) };
+    } catch (e) {
+      log(`gen-codex-shipyard: could not resolve a model for ${role} (${e.message}) — leaving the agent on the CLI default\n`);
+      return { model: null, effort: null };
+    }
+  };
+
+  return { forRole, palette, cliVersion };
+}
+
+// Kept as a function of its own because it is the unit under test: one role in,
+// one `{model, effort}` out. `opts.policy` reuses a policy main() already built.
+function codexModelFor(role, pluginDir, codexHome, opts = {}) {
+  const policy = opts.policy || codexModelPolicy(pluginDir, codexHome, opts);
+  return policy.forRole(role, opts);
 }
 
 function rmrf(p) {
@@ -247,6 +400,14 @@ function main() {
     'integrator': { sandbox: 'workspace-write', phase: 2 },
   };
   const emittedAgents = [];
+  const policy = codexModelPolicy(pluginDir, codexHome);
+  const agentToml = (agentName, description, sandbox, model, effort, body) =>
+    `name = ${tomlBasic(agentName)}\n` +
+    `description = ${tomlBasic(description)}\n` +
+    `sandbox_mode = ${tomlBasic(sandbox)}\n` +
+    (model ? `model = ${tomlBasic(model)}\n` : '') +
+    (effort ? `model_reasoning_effort = ${tomlBasic(effort)}\n` : '') +
+    `developer_instructions = ${tomlMultiline(body)}\n`;
   for (const [role, meta] of Object.entries(ROLES)) {
     if (meta.phase > phase) continue;
     const src = path.join(pluginDir, 'references', `${role}.md`);
@@ -255,16 +416,38 @@ function main() {
     const raw = fs.readFileSync(src, 'utf8');
     const body = shipyardRewrites(convert.convertClaudeToCodexMarkdown(raw), scriptsRoot);
     const description = deriveDescription(raw, role);
-    const { model, effort } = codexModelFor(role, pluginDir, codexHome);
-    const toml =
-      `name = ${tomlBasic(agentName)}\n` +
-      `description = ${tomlBasic(description)}\n` +
-      `sandbox_mode = ${tomlBasic(meta.sandbox)}\n` +
-      (model ? `model = ${tomlBasic(model)}\n` : '') +
-      (effort ? `model_reasoning_effort = ${tomlBasic(effort)}\n` : '') +
-      `developer_instructions = ${tomlMultiline(body)}\n`;
-    writeFile(path.join(outDir, 'agents', `${agentName}.toml`), toml);
+    const base = policy.forRole(role);
+    writeFile(
+      path.join(outDir, 'agents', `${agentName}.toml`),
+      agentToml(agentName, description, meta.sandbox, base.model, base.effort, body),
+    );
     emittedAgents.push({ agentName, description });
+
+    // The escalation variant. Written only when it would actually DIFFER from
+    // the ordinary agent — a single-entry palette, or a GSD remap that maps the
+    // whole tier to one model, leaves nothing for it to be, and a duplicate file
+    // that reads as an escalation is worse than no file at all.
+    if (!DEEP_ROLES.has(role)) continue;
+    const deep = policy.forRole(role, { deep: true });
+    if (!deep.model || (deep.model === base.model && deep.effort === base.effort)) continue;
+    const deepName = `${agentName}${DEEP_SUFFIX}`;
+    const deepBody =
+      '> **Escalation variant.** The ordinary `' + agentName + '` agent has already been\n' +
+      '> tried on this failure and it came back. Same contract as below, on a deeper\n' +
+      '> model: change the hypothesis, do not re-run the one that just failed.\n\n' +
+      body;
+    writeFile(
+      path.join(outDir, 'agents', `${deepName}.toml`),
+      agentToml(
+        deepName,
+        `${description} — escalation variant, for a failure the ordinary ${agentName} already tried`,
+        meta.sandbox,
+        deep.model,
+        deep.effort,
+        deepBody,
+      ),
+    );
+    emittedAgents.push({ agentName: deepName, description: `${description} (escalation variant)` });
   }
 
   // ── config fragment registering our agents (merged non-destructively) ──────
@@ -310,4 +493,10 @@ function main() {
   );
 }
 
-main();
+module.exports = {
+  codexModelPolicy, codexModelFor, compareVersions, detectCodexCliVersion,
+  DEEP_ROLES, DEEP_SUFFIX, LADDER_ROLE,
+};
+
+// The installer runs this as a script; the unit test requires it as a module.
+if (require.main === module) main();

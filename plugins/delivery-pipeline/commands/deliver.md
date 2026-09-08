@@ -264,7 +264,10 @@ default; raise judgment to it deliberately with
 Effort follows the RESOLVED tier (GSD's ladder: light→low, standard→high,
 heavy→xhigh), so escalating a repair to the top tier raises its effort with it.
 Mechanical roles stay cheap regardless. `minimal` is clamped to `low` (it is not
-in Workflow's enum) and `max` clamps to `xhigh` on the Codex runtime.
+in Workflow's enum). On the Codex runtime that ladder does NOT apply: the effort
+axis there is two values wide by measurement — `low` for the mechanical role,
+`high` for everything else — and depth comes from the model instead (ADR-005 D6,
+and the `-deep` agents below).
 
 The signals the resolver needs are already deterministic: `risk`/`type`/`files`
 from tickets.json (validated by Gate 2), and — for a repair — the verdict
@@ -356,11 +359,28 @@ substitutes that name in prose, which would inflect this sentence into saying
 the opposite where it matters most.)
 On Codex there is no Workflow tool and no model parameter to pass: each
 `$shipyard-<role>` agent runs under its own `~/.codex/agents/<name>.toml`, which
-deliberately carries NO `model` key, so the host's default applies — matching the
-`resolve_model_ids: "omit"` posture GSD installs there. Do not try to hand a
-Codex dispatch a tier alias; resolve the model only where you can pass it. The
-ladder still applies as JUDGMENT — escalate by re-reading the risk/attempt table,
-not by setting a field that does not exist on that runtime.
+carries the model and the effort ALREADY — written at install time from the
+operator's palette (`pipeline.codex_models`, first entry the workhorse floor,
+last the ceiling). Do not try to hand a Codex dispatch a tier alias: there is no
+field to put it in, and the file has already answered the question.
+
+**Escalating there means dispatching a DIFFERENT agent**, because a file cannot
+be re-parameterised: `$shipyard-ci-fix-deep`, `$shipyard-review-fix-deep`,
+`$shipyard-pr-sentinel-deep` and `$shipyard-arch-review-deep` are the same
+contracts at the palette's ceiling model. Two conditions select one, both read
+from the journal, never guessed:
+
+- `repeat_exhausted` — for a repair role: the same failure signature has come
+  back after the `rethink` strategy was already spent on it. One `-deep`
+  dispatch, then escalate to a human rather than a third model.
+- a recorded `arch_review … verdict=violation` for this ticket — for the judge:
+  the conform gate has already refused this PR once, so the re-judgement goes to
+  `$shipyard-arch-review-deep`.
+
+There is no `$shipyard-integrator-deep`: the integrator is at the ceiling on
+every call. Where the palette has no second entry (or the host's CLI is too old
+to configure it) the `-deep` files are not generated at all — check that the
+agent exists before naming it, and fall back to the ordinary one.
 
 Scripts (the deterministic layer — do NOT improvise git/gh by hand where a script
 exists):
