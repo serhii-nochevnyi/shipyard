@@ -44,22 +44,54 @@ child dirty.
 ## The question, stated so it can be answered
 
 **Should a conform verdict survive a head move that provably adds nothing the
-verdict did not already cover?** The honest answer is "sometimes", and the
-distinction is mechanical:
+verdict did not already cover?** Yes, and the distinction is mechanical — but
+the first draft of this note got the test wrong, and this same cascade step is
+the counter-example.
 
-- the verdict SURVIVES when `git diff <judged-head> <new-head>` is empty — the
-  tree is the same tree, so the verdict describes it exactly. That is the case
-  measured above, and it is the common case for a base-merge whose parent's work
-  the branch already contained;
-- the verdict is OWED when the diff is non-empty, which includes every
-  conflict resolution that actually chose something. A base-merge is mechanical
-  in intent and can still author content, so intent is not the test — the diff
-  is.
+**The wrong test (mine): `git diff <judged-head> <new-head>` is empty.** That
+proves the TREE did not move. It does not prove the DIFF did not move, and
+`arch-review` judges a diff against a base. A retarget moves the base under an
+identical tree: this very tree, measured against `epic/25` BEFORE the merge,
+showed **12 files instead of 7**. Tree-equality alone would have carried a
+verdict onto a diff nobody had judged — the exact failure the head binding
+exists to prevent. Found by the `arch-review` role itself when the rule was put
+to it, which is the right place for a rule about its own work to be tested.
 
-Note what this must NOT become: "a base-merge never invalidates a verdict".
+**The test, as the pair it has to be** — both mechanical, both cheap:
+
+1. `git diff <judged-sha> <candidate-sha>` is empty, **and**
+2. `git diff <old-base>...<judged>` equals `git diff <new-base>...<candidate>`.
+
+Verified together here: the two trees are the same object
+(`2d64461ecc2c006511e4d46e2957bacf59bea102`) and the two diffs are byte-for-byte
+identical at 7 files / +120/-46.
+
+**Ancestry is not a substitute.** `git merge-base --is-ancestor <old-base>
+<epic>` is FALSE in this very case, because the parent landed by squash — its
+content survived and its commit did not. An ancestry rule would have refused a
+legitimate carry; the diff comparison gets it right.
+
+Three conditions the same review attached, all of which hold up:
+
+- **Only `arch-review=conform` may carry. `checks=green` must not.** A green
+  measured against a base that has since moved is not a green, and the merge
+  commit is a new merge base — which is why CI correctly re-ran and passed on
+  `eb8030b`. Since the trailer records a single `head=`, a carry then needs
+  `arch_reviewed=<judged-sha>` recorded beside it, or a carried verdict becomes
+  indistinguishable from a stale one, which is the whole reason `gateConform`
+  binds to the head in the first place.
+- **The script computes the proof; the caller does not supply it.** Prose rules
+  get skipped and mechanical gates hold, so a `gateConform` that re-derives (1)
+  and (2) from a recorded sha is safe, while an instruction to "check the diff
+  first" is not.
+- **The PR BODY is not covered.** An empty tree diff says nothing about the
+  body — where the trailer itself lives — nor about threads opened since the
+  judgement. Those keep their existing checks.
+
+And what this must NOT become: "a base-merge never invalidates a verdict".
 `base-merge.cjs` legitimately resolves conflicts, and a resolution is authored
-content that nobody has judged. The empty-diff test is the whole of the
-exception, and it is exactly as strong as the evidence it reads.
+content nobody has judged. The pair above is the whole of the exception, and it
+is exactly as strong as the evidence it reads.
 
 ## Shape of the fix (unowned)
 
