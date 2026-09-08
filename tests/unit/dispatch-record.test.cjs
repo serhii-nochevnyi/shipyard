@@ -883,6 +883,18 @@ test('every documented mark invocation passes the resolved pair', () => {
     }
     assert.equal(lines.filter((l) => /--model /.test(l)).length, marks.length,
       `${rel}: --model must appear on the mark invocation lines and nowhere else`);
+    // `--reason` is refused by `mark` now (ADR-006 D5) — a MARK INVOCATION that
+    // still spells it is not a style nit, it is an instruction the recorder will
+    // reject at the moment a guard follows it. Scoped to the invocation lines,
+    // not the whole file: prose elsewhere legitimately NAMES the retired flag to
+    // explain the change. This is the exact hole a prior version of this same
+    // test had (it checked --model/--effort only) while
+    // `references/pr-sentinel.md` spelt `--reason "<branch>"` on its own copy of
+    // this invocation and went undetected.
+    for (const l of marks) {
+      assert.ok(!/--reason\b/.test(l),
+        `${rel}: a mark invocation still spells the refused --reason flag: ${l.trim()}`);
+    }
   }
 });
 

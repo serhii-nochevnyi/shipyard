@@ -1222,9 +1222,7 @@ Record that hand-over the same way the executors' was, and in the same order —
 the `Agent` call returns an agent id, and THEN
 `dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>"`
 for every ticket on the guarded list, taking all three fields from the
-`model pr-sentinel` call above — the route included, verbatim. (`references/pr-sentinel.md`
-still spells that flag `--reason` in its own copy of this line; the flag is refused
-now, and the recorder's message names the replacement.) No `--effort-applied` here: the guard is spawned with the `Agent` tool,
+`model pr-sentinel` call above — the route included, verbatim. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
 which carries no effort, so the applied depth is genuinely unmeasured and the
 record says so by leaving the key out;
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each

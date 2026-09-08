@@ -257,7 +257,7 @@ git -C <worktree> rev-parse HEAD                     # must equal the pushed hea
 node $SHIPYARD_ROOT/scripts/reviewers.cjs reinit <pr> [--repo owner/name]
 node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> \
      role=<ci-fix|review-fix> model=<tier> outcome=<pushed|no-op|escalate|flake> \
-     signature=<sig> head=<sha> hypothesis="<one sentence: what you believed was wrong>" \
+     signature=<sig> head=<full 40-char sha> hypothesis="<one sentence: what you believed was wrong>" \
      --graph <project>/.planning/graph
 ```
 `signature` and `head` are what the next `verdict` compares — without them every
@@ -315,7 +315,7 @@ reinit is not optional.
   (`dispatch-record.cjs`), which is what stops the run being told those tickets
   are un-taken while you work. Run `dispatch-record.cjs clear <T>` as soon as a PR
   is merged, parked, or handed to a person, and
-  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --reason "<branch>"`
+  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>"`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as
