@@ -54,14 +54,17 @@ Read `.planning/investigations/` (may not exist):
    lines: system state / alternatives / constraints / risks+unknowns.
    Models — ask the resolver, do not invent a value:
    `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs model research --type alternatives`
-   (→ `opus`, designing options is the heavy line) and
-   `… model research --type facts` (→ `sonnet`, for system state / constraints /
-   risks+unknowns). Override per role via `pipeline.models` in `.planning/config.json`.
-   **Only tier aliases are valid `model` values** — for research those are `opus` /
-   `sonnet` / `haiku` — and the Agent tool rejects full model IDs and suffixed
-   aliases like `opus[1m]`. Full model ids and `inherit` belong to a subagent
-   DEFINITION's own `model:` frontmatter, a different surface from the tool
-   parameter these spawns pass.
+   (→ `opus` at `xhigh` effort — designing options is the heavy line) and
+   `… model research --type facts` (→ `opus` at `high` effort, for system state /
+   constraints / risks+unknowns). The tier is the same on both lines because the
+   floor is `opus`; what `--type alternatives` buys is DEPTH, not a tier step, so
+   do not substitute a cheaper tier for the fact lines.
+   Override per role via `pipeline.models` in `.planning/config.json`.
+   **Only tier aliases are valid `model` values** — `opus`, `sonnet`, `haiku`,
+   `fable` — and the Agent tool rejects full model IDs and suffixed aliases like
+   `opus[1m]`. Full model ids and `inherit` belong to a subagent DEFINITION's own
+   `model:` frontmatter, a different surface from the tool parameter these spawns
+   pass.
    Pass each of them the problem statement and the path to the INV directory. Bring their results
    into RESEARCH.md, OPTIONS.md, RISKS.md, OPEN-QUESTIONS.md.
 6. Show the user a summary: how many options, key risks, the list of
