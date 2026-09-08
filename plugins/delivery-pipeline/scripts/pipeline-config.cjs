@@ -793,6 +793,14 @@ function capForRuntime(tier, cfg) {
   return TOP_TIERS.has(tier) ? 'sonnet' : tier;
 }
 
+// A runtime name reaches the route from the CONFIG, so it is slugged before it
+// becomes a rule token: an operator's `runtime: "Claude Code"` would otherwise
+// emit a route with a space in it, which `parseRoute` — the grammar
+// dispatch-record validates against — would reject, and a legitimate dispatch
+// would be refused for a spelling in someone's config.
+const runtimeToken = (cfg) =>
+  String((cfg.gsd && cfg.gsd.runtime) || 'unset').toLowerCase().replace(/[^a-z0-9-]+/g, '-') || 'unset';
+
 // ── the ceiling: three mechanical routes to `fable` (ADR-005 D4) ─────────────
 //
 // Each route is COMPUTABLE from something the caller measured or the journal
@@ -863,26 +871,50 @@ function fableRoute(role, signals = {}, cfg = DEFAULTS) {
 // ceiling sits ABOVE the floor deliberately: expressing the floor through
 // `pipeline.models.*` instead (which is how it was piloted) short-circuits this
 // function at the override and no escalation could ever fire.
-function ladderTier(role, signals = {}, cfg = DEFAULTS) {
+// Every step returns the RULE beside the value, and the value the callers below
+// take is `.value` — so the route is a BYPRODUCT of the decision rather than a
+// second function that describes it. A parallel `explainRoute()` mirroring these
+// branches is exactly the shape ADR-006's Consequences name: a claim about a
+// mechanism written from its documented intent, which is how three assertions in
+// one session came to be disproved by opening the file.
+function tierRoute(role, signals = {}, cfg = DEFAULTS) {
   const override = cfg.models && cfg.models[role];
-  if (override) return override;
+  if (override) return { value: override, rule: 'override' };
 
   // A fired route overrides the two sonnet exemptions as well: they say "the
   // model is not the gate here", and a route firing is the measured evidence
   // that on THIS dispatch it is.
   const ceiling = fableRoute(role, signals, cfg);
-  if (ceiling) return ceiling.model;
+  if (ceiling) {
+    return { value: ceiling.model, rule: `ceiling:${ceiling.route}${ceiling.degraded ? ':degraded' : ''}` };
+  }
 
   // The floor. `model_policy` deliberately does not appear: the floor is not a
   // preference (ADR-005 D1), so no profile moves it in either direction. The key
   // survives because `gsd-tune` mirrors it onto GSD's own `model_profile`, which
   // governs GSD's agents rather than the conveyor's roles.
-  return SONNET_ROLES.has(role) ? 'sonnet' : 'opus';
+  return SONNET_ROLES.has(role)
+    ? { value: 'sonnet', rule: 'floor:exempt' }
+    : { value: 'opus', rule: 'floor' };
+}
+
+function ladderTier(role, signals = {}, cfg = DEFAULTS) {
+  return tierRoute(role, signals, cfg).value;
+}
+
+// The tier the Agent tool is handed, and which rule produced it — the cap is
+// appended rather than replacing the rule, because "the floor chose opus and the
+// runtime capped it" is two facts and a reader of the journal needs both.
+function modelRoute(role, signals = {}, cfg = DEFAULTS) {
+  const tier = tierRoute(role, signals, cfg);
+  const capped = capForRuntime(tier.value, cfg);
+  if (capped === tier.value) return tier;
+  return { value: capped, rule: `${tier.rule}+cap:${runtimeToken(cfg)}` };
 }
 
 // role × signals routing. Returns a tier alias the Agent tool accepts.
 function resolveModel(role, signals = {}, cfg = DEFAULTS) {
-  return capForRuntime(ladderTier(role, signals, cfg), cfg);
+  return modelRoute(role, signals, cfg).value;
 }
 
 // Reasoning effort — the axis the policy now rests on, keyed on the ROLE and its
@@ -902,7 +934,7 @@ function resolveModel(role, signals = {}, cfg = DEFAULTS) {
 //   4. a ceiling route that fired but could not be honoured — `max` at the floor
 //      model, which is the escalation the closed ceiling still owes;
 //   5. the role's own row in EFFORT_ROWS.
-function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
+function effortRoute(role, model, cfg = DEFAULTS, signals = null) {
   const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
   const clamp = (level) => {
     // `minimal` is Codex-only in GSD and is not in Workflow's enum at all.
@@ -915,8 +947,14 @@ function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
     if (level === 'minimal') return 'low';
     return EFFORTS.includes(level) ? level : 'high';
   };
+  // `+clamp` is appended wherever the clamp actually MOVED the value, so a route
+  // never reports a depth the resolver declined to return.
+  const routed = (level, rule) => {
+    const value = clamp(level);
+    return { value, rule: value === level ? rule : `${rule}+clamp` };
+  };
   const override = cfg.effort && cfg.effort[role];
-  if (override) return clamp(override);
+  if (override) return routed(override, 'override');
   // ADR-005 D6 — on THIS runtime the effort axis has two values, by measurement
   // rather than by limitation: `xhigh` and `max` cost more there without a
   // better result, and the ceiling model's best results are at `high`. So the
@@ -925,7 +963,9 @@ function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   // explicit configuration still wins, and before the repeat rule because there
   // is no deeper rung here to escalate INTO — a repeat still changes strategy
   // (`rethink`), which is the half that survives.
-  if (RUNTIMES_WITH_FLAT_EFFORT.has(runtime)) return MECHANICAL_ROLES.has(role) ? 'low' : 'high';
+  if (RUNTIMES_WITH_FLAT_EFFORT.has(runtime)) {
+    return routed(MECHANICAL_ROLES.has(role) ? 'low' : 'high', `flat:${runtimeToken(cfg)}`);
+  }
   // The same failure came back: hold the tier, deepen the thinking (ADR-001 D1).
   // `max` and not `xhigh` — under the opus floor `xhigh` is where the judges
   // already sit, so it stopped being a raise at all, which is the regression this
@@ -936,7 +976,10 @@ function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   // drift-check is not a repair.
   if (signals && REPAIR_ROLES.has(role)
       && (signals.signatureState === 'repeat' || signals.signatureState === 'repeat_exhausted')) {
-    return clamp('max');
+    // `repeat` and `repeat:exhausted` rather than the state's own spelling: the
+    // grammar below has no underscore in it, and the rule token is the one thing
+    // in a route that a later reader groups by.
+    return routed('max', signals.signatureState === 'repeat' ? 'repeat' : 'repeat:exhausted');
   }
   // A ceiling route fired and the ceiling is shut (no consent, or a runtime with
   // no 1M tier). The escalation does not simply vanish: it lands on the axis that
@@ -945,10 +988,46 @@ function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   // the direction the config allows.
   if (signals) {
     const ceiling = fableRoute(role, signals, cfg);
-    if (ceiling && ceiling.degraded) return clamp('max');
+    if (ceiling && ceiling.degraded) return routed('max', `degraded:${ceiling.route}`);
   }
   const row = Object.prototype.hasOwnProperty.call(EFFORT_ROWS, role) ? EFFORT_ROWS[role] : null;
-  return clamp(row ? row(signals || {}) : DEFAULT_EFFORT_ROW);
+  return routed(row ? row(signals || {}) : DEFAULT_EFFORT_ROW, row ? 'row' : 'row:default');
+}
+
+function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
+  return effortRoute(role, model, cfg, signals).value;
+}
+
+// ── THE ROUTE: which rule chose the tier, and which chose the effort ─────────
+//
+// The journal used to record a `reason` the CALLER composed — its own reading of
+// which branch of the ladder had fired — while the resolver named the route only
+// on stderr, as prose. So a field that exists to make a later ladder review cheap
+// held the caller's opinion of the mechanism instead of the mechanism's answer,
+// and two rows written by two callers were not comparable (ADR-006 D5, and the
+// review that found it reproduced the gap rather than reading it).
+//
+// One line, one grammar, both halves: `tier=<rule>(<alias>) effort=<rule>(<level>)`.
+// It is a REGULAR grammar because it is meant to be counted later — `parseRoute`
+// is exported so the recorder validates against the resolver's own definition
+// rather than a copy of it, the lesson `CODEX_DEEP_ROLES` already paid for.
+const ROUTE_RE = /^tier=([a-z][a-z0-9:+-]*)\(([a-z]+)\) effort=([a-z][a-z0-9:+-]*)\(([a-z]+)\)$/;
+
+function routeOf(role, signals = {}, cfg = DEFAULTS) {
+  const m = modelRoute(role, signals, cfg);
+  const e = effortRoute(role, m.value, cfg, signals);
+  return `tier=${m.rule}(${m.value}) effort=${e.rule}(${e.value})`;
+}
+
+// Returns {tier: {rule, model}, effort: {rule, effort}} or null. The parenthesised
+// values are checked against TIERS/EFFORTS here, so a reader that parses a route
+// never has to re-validate them — and a hand-composed sentence cannot pass for
+// one, which is the whole point of the field.
+function parseRoute(text) {
+  const m = ROUTE_RE.exec(String(text == null ? '' : text));
+  if (!m) return null;
+  if (!TIERS.includes(m[2]) || !EFFORTS.includes(m[4])) return null;
+  return { tier: { rule: m[1], model: m[2] }, effort: { rule: m[3], effort: m[4] } };
 }
 
 // ── the signals a role's rows actually read, and what silence costs ──────────
@@ -1001,6 +1080,7 @@ function signalGaps(role, signals = {}) {
 
 module.exports = {
   loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
+  routeOf, parseRoute, ROUTE_RE,
   parseCodexModelEntry, normalizeCodexModels,
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
   DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS,
@@ -1103,9 +1183,14 @@ if (require.main === module) {
     }
     const model = resolveModel(role, signals, config);
     if (rest.includes('--json')) {
-      const out = { model, effort: resolveEffort(role, model, config, signals) };
-      // `strategy` appears ONLY when a valid state was passed, so every existing
-      // consumer keeps seeing exactly `{model, effort}`.
+      // `route` is the resolver's own answer to "which rule chose this", and it is
+      // what `dispatch-record.cjs mark --route` records: the journal's `reason`
+      // field holds the ladder's route rather than the caller's sentence about it
+      // (ADR-006 D5). Emitted on every `--json` call, because a field the caller
+      // has to ask for is one the caller composes when it forgets to.
+      const out = { model, effort: resolveEffort(role, model, config, signals), route: routeOf(role, signals, config) };
+      // `strategy` appears ONLY when a valid state was passed, so a consumer
+      // reading `{model, effort, route}` sees a stable shape either way.
       if (signatureState) out.strategy = strategyFor(signatureState);
       process.stdout.write(JSON.stringify(out) + '\n');
     } else {

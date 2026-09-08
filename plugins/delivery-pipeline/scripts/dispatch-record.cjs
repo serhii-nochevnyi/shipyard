@@ -5,7 +5,7 @@
 // now".
 //
 //   dispatch-record.cjs mark  <ticket> <role> [--model <alias>] [--effort <level>]
-//                             [--effort-applied <level>] [--reason <text>]
+//                             [--effort-applied <level>] [--route <resolver route>]
 //                             [--agent-file <name>] [--graph <dir>]
 //   dispatch-record.cjs clear <ticket>        [--graph <dir>]
 //   dispatch-record.cjs list  [--json]        [--graph <dir>]
@@ -66,7 +66,10 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 // TIERS and EFFORTS come from the SAME module for the same reason: the recorder
 // validates against the ladder's own vocabulary, never a copy of it, or a tier
 // added there would be refused here by a list nobody remembered to update.
-const { ROLES, TIERS, EFFORTS } = require(path.join(__dirname, 'pipeline-config.cjs'));
+// `parseRoute` for the same reason again: the route the journal records is the
+// RESOLVER's, so it is validated against the resolver's own grammar rather than a
+// regex copied over here — the drift `CODEX_DEEP_ROLES` already paid for.
+const { ROLES, TIERS, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -156,7 +159,27 @@ const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
 //     would compare rows that were never in force against rows that were.
 // So the Agent path omits `--effort-applied`, its absence means "nobody measured
 // this", and the recorder must not helpfully fill it in from the other flag.
-const MARK_FLAGS = ['model', 'effort', 'effort-applied', 'reason', 'agent-file'];
+const MARK_FLAGS = ['model', 'effort', 'effort-applied', 'route', 'agent-file'];
+
+// ── `reason` is the RESOLVER's route, never the caller's sentence ────────────
+//
+// The field shipped as `--reason <text>` and deliver.md claimed the text was
+// "the branch the resolver already returned". It was not: the resolver returned
+// `{model, effort}` and named the route only on stderr, as prose — so what landed
+// in the journal was the caller's READING of the ladder, in whatever words that
+// caller chose. One field then held two provenances, and the field exists for
+// exactly one purpose: to make a later review of the ladder cheap by counting
+// rows. Two vocabularies cannot be counted (ADR-006 D5).
+//
+// So the flag is refused rather than merged, with its own branch and its own
+// message — dropping it from MARK_FLAGS alone would report it as an "unexpected
+// argument", which names neither the replacement nor where the value comes from.
+const REFUSED_FLAGS = {
+  reason: 'a hand-composed reason is not the ladder\'s answer, it is the caller\'s reading of it, and one\n' +
+    '  field cannot hold both provenances and still be countable.\n' +
+    '  The route comes from the resolver: `pipeline-config.cjs model <role> --json [flags]` now returns\n' +
+    '  a `route` field beside the pair — pass THAT, verbatim, as `--route "<route>"`.',
+};
 // Flag name → the key written into the record and the journal line. The query in
 // deliver.md reads these names, so they are the field vocabulary, not an
 // implementation detail.
@@ -164,7 +187,10 @@ const MARK_FIELD = {
   model: 'model',
   effort: 'effort',
   'effort-applied': 'effort_applied',
-  reason: 'reason',
+  // The KEY stays `reason`: two journal rows already carry it and deliver.md's
+  // ladder query reads it by that name. What changed is where the value comes
+  // from, not what a reader greps for.
+  route: 'reason',
   'agent-file': 'agent_file',
 };
 
@@ -187,6 +213,31 @@ const MARK_FIELD = {
 const CODEX_DEEP_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel', 'arch-review']);
 const CODEX_DEEP_SUFFIX = '-deep';
 const CODEX_AGENT_PREFIX = 'shipyard-';
+
+// The ladder's roles and the generator's agent files are NOT one-to-one, and the
+// cross-check below is wrong in both directions if it assumes they are:
+//
+//   * `research`'s reference ships as `inv-research.md` — the investigation loop's
+//     own name — so the file a research dispatch runs is `shipyard-inv-research`;
+//   * `executor` has NO agent file at all. There is no `executor.md` for the
+//     generator to emit one from, because an executor is dispatched by the main
+//     loop rather than by a `.toml`. So `--agent-file` on an executor mark cannot
+//     name a file anybody can look at, whatever the value.
+//
+// Both facts are derived from `references/` rather than declared twice:
+// `agentFilesFor` intersects the role's candidate names with the files that
+// actually ship, so a reference added or renamed changes this with no edit here,
+// and tests/unit/dispatch-record.test.cjs pins that every shipped file is claimed
+// by exactly one role.
+const CODEX_AGENT_ROLE_NAME = { research: 'inv-research' };
+const agentRoleName = (role) => CODEX_AGENT_ROLE_NAME[role] || role;
+
+function agentFilesFor(role, known) {
+  const name = agentRoleName(role);
+  const candidates = [`${CODEX_AGENT_PREFIX}${name}`];
+  if (CODEX_DEEP_ROLES.has(name)) candidates.push(`${CODEX_AGENT_PREFIX}${name}${CODEX_DEEP_SUFFIX}`);
+  return new Set(candidates.filter((f) => known.has(f)));
+}
 
 function codexAgentFiles(dir = path.join(__dirname, '..', 'references')) {
   let refs;
@@ -218,11 +269,14 @@ function codexAgentFiles(dir = path.join(__dirname, '..', 'references')) {
  * recorded silently is worse than no field, because it would be counted later as
  * fact.
  */
-function parseMarkFlags(argv) {
+function parseMarkFlags(argv, role) {
   const given = new Map();
   for (let i = 0; i < argv.length;) {
     const arg = String(argv[i]);
     const name = arg.startsWith('--') ? arg.slice(2) : null;
+    if (name !== null && Object.prototype.hasOwnProperty.call(REFUSED_FLAGS, name)) {
+      fail(`--${name} is no longer accepted — ${REFUSED_FLAGS[name]}`);
+    }
     if (name === null || !MARK_FLAGS.includes(name)) {
       fail(
         `unexpected argument "${arg}" — the recorder would drop it in silence, and a dispatch ` +
@@ -262,10 +316,43 @@ function parseMarkFlags(argv) {
     }
     decided[MARK_FIELD[flag]] = level;
   }
-  const reason = given.get('reason');
-  if (reason !== undefined) {
-    if (!reason.trim()) fail('--reason needs text — the branch of the ladder that fired, e.g. "role baseline"');
-    decided.reason = reason;
+  // The RESOLVER's route, checked against the resolver's own grammar and then
+  // against the pair recorded beside it. The grammar check is what stops a
+  // sentence being posted through the new flag; the pair check is what stops a
+  // route from a DIFFERENT dispatch — a copy-paste from the round before, or from
+  // another role's resolve — describing this one. Both are cheap, and a journal
+  // whose provenance field describes the wrong decision is worse than one with no
+  // provenance field at all.
+  const route = given.get('route');
+  if (route !== undefined) {
+    const parsed = parseRoute(route);
+    if (!parsed) {
+      fail(
+        `--route "${route}" is not a resolver route — it is the \`route\` field of\n` +
+        '  `pipeline-config.cjs model <role> --json [flags]`, passed verbatim, e.g.\n' +
+        '  --route "tier=floor(opus) effort=row(high)". A sentence about the ladder is what this\n' +
+        '  field used to hold, and what it can no longer be counted with.'
+      );
+    }
+    // `--effort-applied` is deliberately NOT cross-checked: it is what the SPAWN
+    // could carry, and on the Agent path that is legitimately a different number
+    // from what the resolver decided. Checking it would refuse exactly the honest
+    // dispatches T-25-05 built the two fields to tell apart.
+    if (decided.model !== undefined && parsed.tier.model !== decided.model) {
+      fail(
+        `--route names tier "${parsed.tier.model}" and --model says "${decided.model}" — one of them is from\n` +
+        '  another dispatch. Re-run the resolver for THIS role and its signals, and pass the model and\n' +
+        '  the route it returned together.'
+      );
+    }
+    if (decided.effort !== undefined && parsed.effort.effort !== decided.effort) {
+      fail(
+        `--route names effort "${parsed.effort.effort}" and --effort says "${decided.effort}" — one of them is\n` +
+        '  from another dispatch. Re-run the resolver for THIS role and its signals, and pass the effort\n' +
+        '  and the route it returned together (--effort-applied is the other claim, and is not checked).'
+      );
+    }
+    decided.reason = route;
   }
   const agentFile = given.get('agent-file');
   if (agentFile !== undefined) {
@@ -281,6 +368,33 @@ function parseMarkFlags(argv) {
         `"${agentFile}" is not an agent file the Codex generator produces — recording it would name a ` +
         'file nobody can look at.\n' +
         `  agent files: ${[...known].sort().join(', ')}`
+      );
+    }
+    // A KNOWN file belonging to a DIFFERENT role is the case the flag was blind
+    // to, and it was found by reproduction: `mark T-01-01 executor --agent-file
+    // shipyard-arch-review-deep` was accepted. Either the dispatch went to the
+    // wrong agent or the record names the wrong file, and the journal must not
+    // quietly hold it under either reading — the whole point of the field is that
+    // the ordinary/`-deep` choice IS the dispatch's decision on Codex, so a file
+    // from another role makes the model recorded beside it fiction.
+    //
+    // Built from the ROLE rather than parsed out of the file name: five role names
+    // contain a hyphen, and `-deep` is a suffix, so splitting the name is where an
+    // off-by-one lives. Never compared against itself — the mutation test asserts
+    // that a known file for another role still refuses.
+    const mine = agentFilesFor(role, known);
+    if (!mine.size) {
+      fail(
+        `${role} has no agent file the Codex generator produces, so "${agentFile}" cannot be the file this\n` +
+        '  dispatch ran: the generator emits one agent per shipped `references/*.md`, and this role has\n' +
+        '  none — it is dispatched by the main loop rather than by a `.toml`. Omit --agent-file.'
+      );
+    }
+    if (!mine.has(agentFile)) {
+      fail(
+        `"${agentFile}" is not ${role}'s agent file — a dispatch recorded as ${role} ran either the wrong\n` +
+        '  agent or is recording the wrong file, and on Codex the FILE is what carries the model.\n' +
+        `  ${role} runs: ${[...mine].sort().join(' or ')}`
       );
     }
     decided.agent_file = agentFile;
@@ -527,7 +641,8 @@ function refreshFront(cwd) {
 
 module.exports = {
   activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
-  MARK_FLAGS, MARK_FIELD, codexAgentFiles, CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX,
+  MARK_FLAGS, MARK_FIELD, REFUSED_FLAGS, codexAgentFiles, agentFilesFor, agentRoleName,
+  CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_AGENT_PREFIX,
 };
 
 if (require.main === module) {
@@ -566,7 +681,7 @@ if (require.main === module) {
     // Parsed and validated BEFORE the state lookup and before anything is
     // written: a usage error must cost no lock and must never leave half a
     // record behind.
-    const decided = parseMarkFlags(rest.slice(2));
+    const decided = parseMarkFlags(rest.slice(2), role);
     const s = readState(cwd)[ticket];
     if (!s) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
     const at = new Date().toISOString();

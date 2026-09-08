@@ -38,6 +38,11 @@ const lines = (g) => {
   return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean) : [];
 };
 
+// One sha format, used by every fixture below: a head is the full forty
+// characters, because that is what `gate_status` records and a reader holding
+// only the journal cannot lengthen an abbreviation.
+const FULL = 'a'.repeat(39) + '1';
+
 suite('log-event — the journal lands beside its graph');
 
 test('logging from a checkout with no graph refuses, and creates nothing', () => {
@@ -130,12 +135,96 @@ test('the flake trio is refused — those events ARE the quarantine store', () =
   // head) bookkeeping the rules match on, and the loop would believe it.
   const { project, graph } = scratch();
   for (const ev of ['flake', 'flake_rerun', 'flake_lift']) {
-    const r = run(project, [ev, 'ticket=T-20-01', 'signature=9f2a', 'head=deadbee']);
+    const r = run(project, [ev, 'ticket=T-20-01', 'signature=9f2a', `head=${FULL}`]);
     assert.notStrictEqual(r.status, 0, `${ev} must be refused`);
     assert.ok(/failure-signature\.cjs/.test(r.stderr), `${ev}: the error must name the owning script`);
     assert.ok(!/duplicate/.test(r.stderr), `${ev}: there is no second record to duplicate`);
   }
   assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
+});
+
+test('the dispatch event is refused — marking and journalling are ONE act', () => {
+  // The claim this repository got WRONG once, which is why the test is the
+  // record: T-25-05's plan asserted that `log-event.cjs` already refused
+  // `dispatch`; a reviewer reproduced the opposite by running it. A hand-written
+  // line lands with no `by`, no durable record for the front to read, and none of
+  // `dispatch-record.cjs mark`'s validation — so the audit trail that store exists
+  // to make trustworthy can be written around, and the front hands the ticket
+  // straight back to a run that has already dispatched it.
+  const { project, graph } = scratch();
+  const r = run(project, ['dispatch', 'ticket=T-25-05', 'role=executor', 'model=opus']);
+  assert.notStrictEqual(r.status, 0, 'dispatch must be refused');
+  assert.ok(/half-recorded/.test(r.stderr), r.stderr);
+  assert.ok(!/duplicate/.test(r.stderr), 'an incomplete act, not a duplicate');
+  assert.ok(/dispatch-record\.cjs mark/.test(r.stderr), 'it must name the command that does both');
+  assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
+});
+
+suite('log-event — one sha format: the full forty characters');
+
+// `gate_status` records a head as the full forty and a reader that only has the
+// journal cannot lengthen an abbreviation, so the two formats can never be
+// compared. Measured in this project's own journal before the rule existed:
+// `head` appeared at 40, 7 AND 6 characters across `attempt`, `base_merge` and
+// `arch_review` — and ADR-002 D5 binds an architecture verdict to the head it
+// judged, so the first reader to compare one of those against a `headRefOid`
+// gets a false mismatch, which is the failure that gate exists to prevent.
+
+
+test('a full sha is accepted and stored as the forty characters it was given', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['attempt', 'ticket=T-27-05', 'pr=1', `head=${FULL}`]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(lines(graph)[0]).head, FULL);
+});
+
+test('an abbreviated sha is REFUSED — never padded, never accepted', () => {
+  const { project, graph } = scratch();
+  for (const short of ['deadbee', '9f2ab1c', 'deadbe', FULL.slice(0, 39)]) {
+    const r = run(project, ['attempt', 'ticket=T-27-05', `head=${short}`]);
+    assert.notStrictEqual(r.status, 0, `"${short}" must be refused`);
+    assert.ok(/head/.test(r.stderr), `the refusal names the key: ${r.stderr}`);
+    assert.ok(/40/.test(r.stderr), `and the format it wants: ${r.stderr}`);
+    assert.ok(/rev-parse/.test(r.stderr), `and the command that produces one: ${r.stderr}`);
+  }
+  assert.strictEqual(lines(graph).length, 0, 'and nothing reaches the journal');
+});
+
+test('a sha is normalised to lower case, because two spellings do not compare', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['attempt', 'ticket=T-27-05', `head=${FULL.toUpperCase()}`]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(lines(graph)[0]).head, FULL, 'stored lower-cased');
+});
+
+test('a 40-digit sha stays a STRING — the number coercion would destroy it', () => {
+  // `coerce` turns a decimal run into a Number, and a forty-digit one JSON-encodes
+  // as 1.1111111111111111e+39: the field survives as a value nothing can match a
+  // head against. Validating the raw text and writing it verbatim is what keeps
+  // the sha rule from creating the loss it exists to prevent.
+  const { project, graph } = scratch();
+  const digits = '1'.repeat(40);
+  const r = run(project, ['attempt', 'ticket=T-27-05', `head=${digits}`]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(lines(graph)[0]).head, digits);
+});
+
+test('a short hash that is NOT a sha is untouched — the rule is keyed, not guessed', () => {
+  // `signature` is failure-signature.cjs's four hex characters and appears on
+  // nineteen journal lines. A rule that matched hex-looking VALUES, or key names
+  // by pattern, would refuse every one of them.
+  const { project, graph } = scratch();
+  const r = run(project, ['attempt', 'ticket=T-27-05', 'signature=9f2a', 'base=epic/27-x', 'n=2']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(lines(graph)[0]).signature, '9f2a');
+});
+
+test('an empty head is absence, not a bad sha — the declared-field warning owns it', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['base_merge', 'ticket=T-27-05', 'pr=1', 'base=epic/27-x', 'head=']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(/WARNING/.test(r.stderr), r.stderr);
+  assert.strictEqual(lines(graph).length, 1);
 });
 
 suite('log-event — base_merge is a declared event, and never an attempt');
@@ -145,7 +234,7 @@ suite('log-event — base_merge is a declared event, and never an attempt');
 // so it went out under an ad-hoc slug instead. Declaring it costs nothing and
 // buys one name every reader already knows.
 
-const BASE_MERGE = ['base_merge', 'ticket=T-24-06', 'pr=42', 'base=epic/24-x', 'head=deadbee'];
+const BASE_MERGE = ['base_merge', 'ticket=T-24-06', 'pr=42', 'base=epic/24-x', `head=${FULL}`];
 
 test('base_merge is accepted and written with the four fields that make it readable', () => {
   const { project, graph } = scratch();
@@ -156,7 +245,7 @@ test('base_merge is accepted and written with the four fields that make it reada
   assert.strictEqual(rec.ticket, 'T-24-06');
   assert.strictEqual(rec.pr, 42);
   assert.strictEqual(rec.base, 'epic/24-x');
-  assert.strictEqual(rec.head, 'deadbee');
+  assert.strictEqual(rec.head, FULL);
 });
 
 test('a base_merge missing a declared field is logged, and warned about', () => {
@@ -164,7 +253,7 @@ test('a base_merge missing a declared field is logged, and warned about', () => 
   // not lose a real event over its label, but it stops being silent. A
   // base_merge with no `base` cannot be read back as "which base moved in".
   const { project, graph } = scratch();
-  const r = run(project, ['base_merge', 'ticket=T-24-06', 'pr=42', 'head=deadbee']);
+  const r = run(project, ['base_merge', 'ticket=T-24-06', 'pr=42', `head=${FULL}`]);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.ok(/WARNING/.test(r.stderr), r.stderr);
   assert.ok(/base/.test(r.stderr), 'the warning must name the missing field');
