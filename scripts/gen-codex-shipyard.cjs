@@ -204,6 +204,41 @@ function codexModelPolicy(pluginDir, codexHome, opts = {}) {
     // wearing its own fallback as a disguise.
     pc = require(path.resolve(pluginDir, 'scripts', 'pipeline-config.cjs'));
     const loaded = pc.loadConfig(cwd);
+    // A PROJECT CONFIG THAT DOES NOT PARSE IS NOT READ (ADR-004 D2).
+    //
+    // `loadConfig` returns DEFAULTS in `config` so a reader always has something
+    // to render, and `valid: false` beside it so a WRITER knows not to. This is
+    // a writer: it bakes the tier into eleven `.toml` files, once, at install
+    // time — and every dispatch for the life of that install then reads it back
+    // out of a file. Ignoring `valid` wrote THIS REPO's shipped palette (its
+    // ceiling included) into every agent and presented it as the operator's
+    // decision, with nothing on any face saying the file could not be read.
+    //
+    // The EFFORT is withheld with the model, not kept: it is resolved off the
+    // same `loaded.config`, so writing it would be one default presented as
+    // something the file said in place of two.
+    //
+    // Withheld, not failed. This is INSTALL time rather than a delivery
+    // mutation — the lowest of the three severities — so the refusal degrades to
+    // `inert`, which is the same answer the `catch` below gives and the previous
+    // behaviour of an empty palette: every skill, every agent and the fragment
+    // are still written, and every agent stays on the CLI default. A refusal
+    // that turns a working install into a broken one is a worse outcome than the
+    // defect it fixes.
+    //
+    // An ABSENT config is `valid: true, error: null, warnings: []` and must NOT
+    // refuse: a fresh project has no `.planning/config.json`, and an installer
+    // runs before any project exists.
+    if (!loaded.valid) {
+      const reason = `gen-codex-shipyard: no policy is in effect — ${loaded.error.file} `
+        + `${loaded.error.message}. No model and no effort is written into any agent, so every `
+        + 'agent stays on the CLI default rather than on this repository\'s shipped default '
+        + 'palette; the fix is the file, not a flag.';
+      log(`${reason}\n`);
+      // Returned BEFORE the GSD remapper is built: a remap read while the
+      // project's own policy is unknown would be one more value nobody chose.
+      return { ...inert, configInvalid: reason };
+    }
     // Force the codex branch of the policy regardless of where we generate from:
     // the 1M tier is Claude-only and must degrade here, and the effort axis is
     // flat here and nowhere else.
@@ -401,7 +436,13 @@ function main() {
   };
   const emittedAgents = [];
   const policy = codexModelPolicy(pluginDir, codexHome);
+  // The reason rides every RESULT, not stderr alone: an installer's log scrolls
+  // past, while the `.toml` is what the next reader opens when an agent turns
+  // out to carry no model. A `#` comment is valid TOML and adds no key, so the
+  // file says why it is silent instead of looking like an oversight.
+  const refusalComment = policy.configInvalid ? `# ${policy.configInvalid}\n` : '';
   const agentToml = (agentName, description, sandbox, model, effort, body) =>
+    refusalComment +
     `name = ${tomlBasic(agentName)}\n` +
     `description = ${tomlBasic(description)}\n` +
     `sandbox_mode = ${tomlBasic(sandbox)}\n` +
@@ -485,12 +526,17 @@ function main() {
     skills: emittedSkills,
     agents: emittedAgents.map((a) => a.agentName),
     gsdLib,
+    // Conditional, never a `null` key: a reader should see the field only when
+    // the refusal actually fired, and an always-present field reads as a state
+    // rather than an exception.
+    ...(policy.configInvalid ? { config_invalid: policy.configInvalid } : {}),
   };
   writeFile(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 
   process.stdout.write(
     `staged ${emittedSkills.length} skills, ${emittedAgents.length} agents → ${outDir} (phase ${phase})\n`,
   );
+  if (policy.configInvalid) process.stdout.write(`${policy.configInvalid}\n`);
 }
 
 module.exports = {
