@@ -67,7 +67,8 @@ and it is invisible unless someone reads the reinit output — worth a state-syn
 
 ## The board offers a fix at a child whose failure is its parent's
 
-Measured 2026-09-08, twice in one cascade. T-27-03's CI went red on one
+Measured 2026-09-08, **three times** in one cascade — the count matters, because
+one instance reads as bad luck and three reads as the cascade's normal shape. T-27-03's CI went red on one
 assertion; T-27-04 base-merged that branch and inherited the identical failure
 (`✗ a landed parent releases the child on both sides at once`, same single
 assertion, runs 34268518770 and 34269493892). `front.cjs` then listed
@@ -87,9 +88,23 @@ from its own diff. That is computable: the failing check's signature is
 identical on both PRs, and `failure-signature.cjs compute` already produces the
 hash that would say so.
 
-Parked with `state-sync --parked T-27-04` for the session, which is the honest
-channel (it holds only until the parent's fix lands, and it is nobody's
-escalation), but a fresh session would re-offer it and dispatch blindly.
+The third instance, added after the first draft of this note: T-27-05 (#69) was
+cut from T-27-04's branch and inherited the identical assertion again — run
+34272251452, `✗ a landed parent releases the child on both sides at once`,
+11 passed / 1 failed, byte-identical to runs 34268518770 and 34269493892. Its
+tree shows exactly why: `limbBaseOf` occurs 5 times in `sentinel.cjs` and
+`limbBase` 0 times in `front.cjs` — the divergent mid-fix state of the parent,
+frozen into the child at the moment its worktree was cut.
+
+So the shape is: **one divergence in a parent propagates to every descendant
+already cut, and each one arrives on the board as its own actionable `fix`.**
+Three PRs, three offers, one cause, and no child can fix it — the remedy is in
+files none of them declare.
+
+Parked with `state-sync --parked T-27-04,T-27-05` for the session, which is the
+honest channel (it holds only until the parent's fix lands, and it is nobody's
+escalation), but a fresh session would re-offer all of them and dispatch
+blindly at each.
 
 Worth its own ticket, and it belongs with T-27-06's family — the front saying
 what it knows about itself. Shape: when a child's failing signature equals its
