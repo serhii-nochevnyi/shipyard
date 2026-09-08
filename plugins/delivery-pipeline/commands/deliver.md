@@ -267,7 +267,7 @@ whole diff against every ADR at once. It is not an opt-in — where GSD's config
 ladder degrades to `opus` and the runtime cap takes it from there, which is one
 more reason to ASK the resolver rather than assume a value. It is a paid model: it
 may bill usage credits and asks for consent ONCE, and an unattended session waits
-that prompt out (`dialogExpiry`, 5 min) and then ends the turn without sending — so
+out that prompt (`dialogExpiry`, 5 min) and then ends the turn without sending — so
 a project where nobody has answered it opts OUT per role until someone has:
 `{"pipeline": {"models": {"integrator": "opus", "arch-review": "opus"}}}`.
 
