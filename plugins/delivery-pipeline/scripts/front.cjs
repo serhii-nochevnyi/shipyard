@@ -316,50 +316,105 @@ function computeFront(tickets, state, opts = {}) {
   // in; the front never guesses it, because the difference is whether an unmerged
   // green PR is the run's work or a human's.
   const autoMerge = opts.autoMerge === true;
-  // "This repo has no CI" is a claim only the PROJECT can make, so it is a
-  // config knob (`delivery_pipeline.merge_without_ci`) and never an inference.
-  // The caller may pass it and that always wins; otherwise it is resolved from
-  // the project's own config the first time a PR with no checks is actually
-  // seen — lazily, so an ordinary board still reads no file here.
+  // ── the project's own config, read AT MOST ONCE per call ───────────────────
   //
-  // The fallback exists because computeFront has THREE callers (state-sync.cjs,
-  // dispatch-record.cjs and the CLI below) and a board that answered
-  // `merge_human` while sentinel.cjs — which reads the config directly — landed
-  // the same PR is exactly the board/guard disagreement the shared predicates
-  // above exist to prevent.
+  // Two knobs are resolved from it (`merge_without_ci` below and
+  // `max_concurrent_agents` further down) and they share this one memo, so no
+  // board ever opens the file twice. It stays a function rather than a value
+  // because a caller who pins BOTH knobs must still read nothing at all: the
+  // passed option always wins, and there is then nothing to look up.
   //
-  // So the fallback must not resolve from `process.cwd()`. state-sync and this
-  // CLI run at the project root and would be served by it, but
+  // WHICH project: `graph-dir.cjs`, never `process.cwd()`. That is this repo's
+  // one answer to "which project does this invocation belong to" —
+  // `--graph`/`SHIPYARD_GRAPH_DIR` → cwd → the worktree's OWN repository, with
+  // the project root the graph's grandparent. computeFront has three callers
+  // (state-sync.cjs, dispatch-record.cjs and the CLI below); the first and last
+  // stand at the project root and a cwd read would serve them, but
   // `dispatch-record.cjs refreshFront` is DOCUMENTED to run from a ticket
   // worktree — which has no `.planning/` of its own when the project keeps it
-  // untracked — and it rewrites `delivery-front.json` from what it computes. A
-  // cwd read there would answer `false` on a project that had explicitly set
-  // `merge_without_ci: true`, so every dispatch mark would silently demote the
-  // very PRs the guard is entitled to land: the disagreement, reintroduced by
-  // the fallback meant to prevent it. Calling that "conservative" was the excuse
-  // (reviewer-found on PR #44) — the two answers are not more and less cautious,
-  // they are inconsistent, and the board must never contradict the guard.
+  // untracked — and it REWRITES `delivery-front.json` from what it computes. A
+  // cwd read there answers with a project that is not this one. Reviewer-found
+  // on PR #44, and calling it "conservative" was the excuse: two different
+  // answers are not more and less cautious, they are inconsistent.
   //
-  // `graph-dir.cjs` is this repo's one answer to "which project does this
-  // invocation belong to": `--graph`/`SHIPYARD_GRAPH_DIR` → cwd → the worktree's
-  // OWN repository. The project root is the graph's grandparent. Only when
-  // nothing resolves does it fall back to the cwd — and an unreadable config is
-  // still `false`, because absence is not consent.
-  let mergeWithoutCiCache;
-  const mergeWithoutCi = () => {
-    if (opts.mergeWithoutCi !== undefined) return opts.mergeWithoutCi === true;
-    if (mergeWithoutCiCache === undefined) {
+  // `valid` rides along because the two knobs need it: an unparseable config
+  // means no policy is in effect, and each knob says below what it does then.
+  let projectConfigCache;
+  const projectConfig = () => {
+    if (projectConfigCache === undefined) {
       try {
         const { resolveGraphDir } = require(path.join(__dirname, 'graph-dir.cjs'));
         const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
         const { dir, how } = resolveGraphDir(process.argv.slice(2), process.cwd());
         const root = how === 'none' ? process.cwd() : path.resolve(dir, '..', '..');
-        mergeWithoutCiCache = loadConfig(root).config.merge_without_ci === true;
+        const { config, valid } = loadConfig(root);
+        projectConfigCache = { config, valid };
       } catch (e) {
-        mergeWithoutCiCache = false; // unreadable config → the safe answer, never the permissive one
+        // Unreadable is treated exactly as unparseable: no policy is in effect.
+        projectConfigCache = { config: null, valid: false };
       }
     }
-    return mergeWithoutCiCache;
+    return projectConfigCache;
+  };
+  // "This repo has no CI" is a claim only the PROJECT can make, so it is a
+  // config knob (`delivery_pipeline.merge_without_ci`) and never an inference.
+  // The caller may pass it and that always wins; otherwise it comes from the
+  // shared read above, and only the first time a PR with no checks is actually
+  // seen — so a caller that pins this knob and the cap reads no file at all.
+  //
+  // The fallback exists because a board that answered `merge_human` while
+  // sentinel.cjs — which reads the config directly — landed the same PR is
+  // exactly the board/guard disagreement the shared predicates above exist to
+  // prevent. An unreadable or unparseable config is still `false`, because
+  // absence is not consent.
+  const mergeWithoutCi = () => {
+    if (opts.mergeWithoutCi !== undefined) return opts.mergeWithoutCi === true;
+    const { config, valid } = projectConfig();
+    return valid && !!config && config.merge_without_ci === true;
+  };
+  // ── the concurrency cap (ADR-005 D11) ──────────────────────────────────────
+  //
+  // How many agents this run may hold at once. It belongs on the board because
+  // the board is what the wave is BUILT from: deliver.md Step 3 fans out over
+  // every ready ticket in one call and Step 4 posts a guard beside it, and
+  // nothing counted. A rule in prose is the class of rule this repo has already
+  // watched get skipped, so the number lives here.
+  //
+  // Resolution has the same two steps as `merge_without_ci` above, and for the
+  // same reasons: a caller that has already paid for the config passes it in,
+  // and everyone else is served lazily through `graph-dir.cjs` — which answers
+  // "which PROJECT does this invocation belong to" even from a ticket worktree,
+  // where `dispatch-record.cjs refreshFront` is documented to run.
+  //
+  // The two failure directions are deliberately DIFFERENT, because a capacity
+  // cap is a gate on DISPATCH and a gate's failure must always be to dispatch
+  // LESS, never more:
+  //
+  //   the VALUE is malformed (0, negative, not a number) in a config that
+  //   parses → pipeline-config.cjs warns and uses the measured default. A typo
+  //   in a number is not a decision to stop working, and a run that stalls on a
+  //   typo is a run whose operator switches the cap off.
+  //
+  //   the FILE does not parse, or cannot be read at all → `max: 0`, so nothing
+  //   may be dispatched. T-26-02's rule applied to capacity: an invalid config
+  //   permits no mutation, and handing work to an agent is a mutation. The
+  //   permissive reading — "fall back to the default so the run keeps moving" —
+  //   would let a wave out under a policy nobody can read, which is precisely
+  //   the direction this gate must never fail in.
+  //
+  // So `max === 0` means exactly one thing — no policy could be read — and
+  // formatFront relies on that to word the line. A CALLER cannot express 0: a
+  // non-positive or non-numeric `opts.maxConcurrentAgents` is treated as absent
+  // and the project's own policy answers, so a caller's arithmetic slip can
+  // never freeze a run.
+  const capMax = () => {
+    const passed = Number(opts.maxConcurrentAgents);
+    if (Number.isFinite(passed) && passed > 0) return passed;
+    const { config, valid } = projectConfig();
+    // `|| 0` covers the impossible-but-cheap case of a config object without
+    // the key; pipeline-config.cjs has already coerced a malformed value to the
+    // measured default, so a positive number is what a VALID config yields.
+    return valid && config ? Number(config.max_concurrent_agents) || 0 : 0;
   };
   // The resolver is handed over UNCALLED. `noCiHold` settles `autoMerge` and
   // `none_reported` first and only then asks for it, so the promise the comment
@@ -671,6 +726,21 @@ function computeFront(tickets, state, opts = {}) {
   // back for it.
   const fixpoint = actionableCount === 0 && waiting.ci.length === 0
     && waiting.dispatched.length === 0 && waiting.parent.length === 0;
+  // What a wave may take NOW. The cap is a TRUNCATION of the order below, never
+  // a filter: nothing is moved out of `actionable`, and that is what keeps the
+  // fixpoint honest without touching its formula — `actionable_count` is
+  // unchanged, so a board with work and no free capacity still reports
+  // `fixpoint: NO`. Implemented as a filter it would have flipped exactly the
+  // way phase 24 exists to prevent: a capped front reporting YES ends a run
+  // mid-phase.
+  //
+  // `in_flight` counts the live dispatch RECORDS, not the actionable buckets:
+  // the cost is the agent, whatever bucket its ticket landed in, so a
+  // pr-sentinel and a ci-fix count exactly as an executor does. `activeDispatches`
+  // has already dropped everything expired or landed, so nothing here decides
+  // how long a dispatch lives.
+  const inFlight = Object.keys(dispatched).length;
+  const capacity = { max: capMax(), in_flight: inFlight, free: Math.max(0, capMax() - inFlight) };
   // SHALLOWEST FIRST within a stack — the THIRD sort key now; the full order is
   // stated at the comparator below. A ticket stacked on an open parent is
   // work that will have to be redone: when the parent lands, this branch's base
@@ -857,7 +927,7 @@ function computeFront(tickets, state, opts = {}) {
   const actionableIds = ORDER.flatMap((k) => actionable[k]);
   const leftBehindCount = actionableIds.filter((id) => leftBehind(id)).length;
 
-  return { actionable, waiting, parked, why, counts, parent_of: parentOf, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, sentinel, roles: BUCKET_ROLES };
+  return { actionable, waiting, parked, why, counts, parent_of: parentOf, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, capacity, sentinel, roles: BUCKET_ROLES };
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
@@ -1031,6 +1101,25 @@ function formatFront(front) {
       `${sHeld.length ? ` + ${sHeld.length} held behind a moving parent (${sHeld.join(', ')})` : ''}` +
       ' — post/keep the guard, do NOT wait on it');
 
+  // The cap, printed ONLY when it binds — when the board lists more actionable
+  // work than a wave may take now. On a healthy round it is noise; on a capped
+  // one it is the difference between a reader trusting the board and a reader
+  // wondering why a non-empty front produced no dispatches. An absent field is
+  // a front written before this existed (`delivery-front.json` outlives an
+  // upgrade), and it must not throw.
+  const cap = front.capacity;
+  const capBinds = cap && front.actionable_count > cap.free;
+  if (capBinds) {
+    lines.push(cap.max === 0
+      // `max: 0` means exactly one thing (see computeFront): no policy could be
+      // read. "0 agents, 0 in flight" would explain nothing, so name the cause
+      // and the remedy — which is the file, not a flag.
+      ? `capacity: 0 agents — no policy is in effect (the project config does not parse), so nothing may be `
+        + `dispatched; ${front.actionable_count} actionable item(s) wait. The fix is the file.`
+      : `capacity: ${cap.max} agents, ${cap.in_flight} in flight — `
+        + `${front.actionable_count - cap.free} actionable item(s) wait for the next round`);
+  }
+
   if (front.fixpoint) {
     lines.push(
       front.counts.blocked || front.counts.merge_human || front.counts.human
@@ -1078,9 +1167,37 @@ function formatFront(front) {
       'Nothing live remains. These are a decision, not motion: take them, or record why not ' +
       '(`drift-record.cjs mark` when the plan predates what shipped) — after which this reads `fixpoint: YES`.'
     );
+  } else if (cap && cap.free === 0) {
+    // There IS work and none of it may be handed out yet. The default wording
+    // below orders the run to dispatch now, which under a full cap is an order
+    // to do the thing that killed the 2026-09-07 wave — so the reason has to
+    // name capacity rather than work. Placed after the left-behind branch: if
+    // everything remaining is work its own phase shipped without, no wave would
+    // be built from it and capacity is not what the run is waiting for.
+    //
+    // Still `fixpoint: NO`, and that is the point: the round is not over. The
+    // stop gate reads the same file, so it keeps blocking — correctly, because
+    // the remainder is taken on the next round.
+    lines.push(cap.max === 0
+      // `max: 0` is the unreadable-policy answer, and it needs its OWN sentence:
+      // there are no agents out to collect and recomputing changes nothing, so
+      // the wording below would order the loop to spin. This is the one
+      // not-a-fixpoint whose remedy is a PERSON's — the same shape as a
+      // `human_checkpoint`, and it must read that way or the run retries it
+      // every round for as long as the file stays broken.
+      ? `fixpoint: NO — ${front.actionable_count} item(s) are actionable but NOTHING may be dispatched: `
+        + 'no policy is in effect, because the project\'s `.planning/config.json` does not parse. '
+        + 'This is not a round to retry — no agent is out to collect and recomputing changes nothing. '
+        + 'A person fixes the file; until then every mutation refuses.'
+      : `fixpoint: NO — ${front.actionable_count} item(s) are actionable but capacity is full `
+        + `(${cap.max} agent(s) allowed, ${cap.in_flight} in flight): this run is waiting on CAPACITY, not on work. `
+        + 'Do NOT dispatch past the cap and do NOT call this an ending — collect the agents that are out, '
+        + 'then recompute and take the remainder.');
   } else {
     lines.push(
-      `fixpoint: NO — ${front.actionable_count} item(s) are actionable RIGHT NOW. Ending the run here is a defect ` +
+      `fixpoint: NO — ${front.actionable_count} item(s) are actionable RIGHT NOW` +
+      `${capBinds ? `, but only ${cap.free} may be dispatched this round (see the capacity line)` : ''}. ` +
+      'Ending the run here is a defect ' +
       '(deliver.md Principle). Do not block on `gh pr checks --watch` while this list is non-empty.'
     );
   }
@@ -1121,11 +1238,16 @@ if (require.main === module) {
   // auto_merge decides whether an unmerged green PR is the sentinel's work or a
   // human's, so the standalone CLI has to read it too (state-sync passes it in).
   const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-  const { config } = loadConfig(root);
+  const { config, valid } = loadConfig(root);
   const autoMerge = config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
   // Passed explicitly here because this CLI has already paid for the config —
   // computeFront's own lazy fallback serves the callers that have not.
   const mergeWithoutCi = config.merge_without_ci === true;
+  // The concurrency cap, same reasoning — but only when the file PARSES. An
+  // invalid config authorizes no dispatch at all, and that answer is
+  // computeFront's to give (it resolves the same 0); passing the populated
+  // default from here would talk the cap out of it.
+  const maxConcurrentAgents = valid ? config.max_concurrent_agents : undefined;
   // The durable parks — drift verdicts and escalations — must be read here too.
   // deliver.md advertises this CLI as "re-runnable on its own", and it silently
   // was not equivalent: state-sync passed both in, so the same graph produced two
@@ -1137,7 +1259,8 @@ if (require.main === module) {
   // park's kind, and the flat map keeps the kind only as a text prefix.
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
   const front = computeFront(tickets, state, {
-    parked, autoMerge, mergeWithoutCi, drifted: activeDrift(root), escalated: activeParks(root, state),
+    parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
+    drifted: activeDrift(root), escalated: activeParks(root, state),
     // Same reason as the two stores above: this CLI is advertised as re-runnable
     // on its own, and a board that re-offers a ticket an agent is holding is not
     // the same board.

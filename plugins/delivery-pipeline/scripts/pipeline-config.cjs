@@ -277,6 +277,29 @@ const DEFAULTS = {
   // towards the human: see the coercion below.
   merge_without_ci: false,
   max_attempts: 5,                    // babysit rounds per PR (the backstop, not the ladder's input)
+  // How many agents a wave may hold at once (ADR-005 D11). The one axis no
+  // choice of TIER can address: the model policy is per dispatch and a spend
+  // limit is per SESSION, so what decides whether a run survives is how many
+  // dispatches are open together. On 2026-09-07 a run held nine opus/xhigh
+  // executors and a fable guard in flight, hit a per-session limit, and six
+  // agents died mid-ticket — five tickets lost their commits and the recovery
+  // cost a whole re-dispatch round. Priced on that session's volumes the entire
+  // ladder question is worth ~$26; this one is worth the run.
+  //
+  // 4 is a MEASUREMENT, not a round number: the largest wave this repository has
+  // completed without an interruption. Every role counts against it, the PR
+  // sentinel included — it is an agent, it holds tickets, and that session's
+  // failure included one.
+  //
+  // `front.cjs` reports it as `capacity: {max, in_flight, free}` and deliver.md
+  // builds the wave from `capacity.free`; the remainder is taken next round. A
+  // wave wider than the cap is CUT, never refused. Note the two failure
+  // directions are different on purpose: a malformed value here falls back to
+  // this default (below, with every other positive-number knob), because a typo
+  // in a number is not a decision to stop working — while a config file that
+  // does not PARSE resolves to a cap of 0 in front.cjs, because then no policy
+  // is in effect at all and a dispatch is a mutation.
+  max_concurrent_agents: 4,
   // K of the k-distinct rule: this many DIFFERENT failure signatures with no
   // green means the ticket is wrong, not the fix (ADR-001 D2). Same default as
   // `failure-signature.cjs verdict --k`, and the two must agree.
@@ -652,7 +675,7 @@ function loadConfig(root) {
     warnings.push(`pipeline.model_policy "${cfg.model_policy}" is unknown — falling back to balanced`);
     cfg.model_policy = 'balanced';
   }
-  for (const numeric of ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours', 'plan_defect_signatures', 'fable_window_tokens']) {
+  for (const numeric of ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours', 'plan_defect_signatures', 'fable_window_tokens', 'max_concurrent_agents']) {
     const n = Number(cfg[numeric]);
     if (!Number.isFinite(n) || n <= 0) {
       warnings.push(`pipeline.${numeric} must be a positive number — using ${DEFAULTS[numeric]}`);

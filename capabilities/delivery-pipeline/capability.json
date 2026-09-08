@@ -72,6 +72,11 @@
       "type": "boolean",
       "default": false,
       "description": "Set this only in a repository that genuinely has no CI. A pull request with NO reported checks is not a green pull request - nothing ran - so by default both the board and the sentinel withhold the two actions that walk it towards landing (the squash merge, and readying it out of draft) and report the merge as a human's. With this true, an empty check list counts as green again and the sentinel lands such a pull request itself."
+    },
+    "delivery_pipeline.max_concurrent_agents": {
+      "type": "number",
+      "default": 4,
+      "description": "How many agents a delivery wave may hold at once. The one axis no choice of model tier can address: the model policy is per dispatch while a spend limit is per session, so what decides whether a run survives is how many dispatches are open together. The default 4 is a measurement - the largest wave this project has completed without an interruption - not a round number. Every role counts against it, the PR sentinel included. The board reports it as capacity {max, in_flight, free} and the delivery loop builds each wave from capacity.free, so a wave wider than the cap is cut rather than refused and the remainder is taken on the next round. A malformed value falls back to the default with a warning; a project config that does not parse authorizes no dispatch at all, because then no policy is in effect and a dispatch is a mutation."
     }
   },
   "steps": [],
