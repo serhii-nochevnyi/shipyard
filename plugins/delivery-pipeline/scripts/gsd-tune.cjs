@@ -526,18 +526,16 @@ if (staleGlobalOverrides.length && !AS_JSON) {
   );
 }
 
-if (!drift.length && !staleGlobalOverrides.length && !blockers.length) process.exit(0);
-
-// A blocker survives --apply, because there is nothing to apply: the exit code
-// has to keep saying so, or the one finding a write cannot fix would be the one
-// finding a caller stops seeing.
-if (!drift.length && !staleGlobalOverrides.length) process.exit(1);
-
 // The mutation, withheld. A refusal is not a failed write and must not read as
 // one (ci-wait.cjs's rule): nothing was attempted, and the remedy is the project
-// file rather than a retry or a flag. Placed BEFORE the write loop, because
-// `blockers` does not stop it — that class is "no key fixes this", and this one
-// is "the keys are unknowable".
+// file rather than a retry or a flag. Checked BEFORE the empty-drift exit below:
+// a machine whose global defaults already match every non-derived row (drift
+// empty) and whose Codex toml has no version-floor issue (blockers empty, itself
+// gated on `!CONFIG_REFUSAL`) would otherwise fall through to that `exit(0)` and
+// report success on a run that printed a refusal — Copilot's finding on this
+// PR (the exit-0 the tests never exercised, because every fixture here starts
+// from a bare global file, so drift is never empty in them). A refusal is a
+// finding regardless of what else this run would have changed.
 if (CONFIG_REFUSAL) {
   if (!AS_JSON) {
     console.log(`\n  NOT ${APPLY ? 'applied' : 'reported in full'}: ${CONFIG}${APPLY ? ' is unchanged' : ''}.`);
@@ -546,6 +544,13 @@ if (CONFIG_REFUSAL) {
   }
   process.exit(1);
 }
+
+if (!drift.length && !staleGlobalOverrides.length && !blockers.length) process.exit(0);
+
+// A blocker survives --apply, because there is nothing to apply: the exit code
+// has to keep saying so, or the one finding a write cannot fix would be the one
+// finding a caller stops seeing.
+if (!drift.length && !staleGlobalOverrides.length) process.exit(1);
 
 if (!APPLY) {
   if (!AS_JSON) {

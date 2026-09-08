@@ -598,6 +598,33 @@ test('--apply leaves an EXISTING global file byte-for-byte alone', () => {
   assert.equal(fs.readFileSync(target, 'utf8'), before, 'withholding a mutation means writing no bytes at all');
 });
 
+test('the refusal still exits non-zero when every OTHER row already agrees (Copilot, PR #71)', () => {
+  // The bug the exit-0 ordering let through: `if (!drift.length &&
+  // !staleGlobalOverrides.length && !blockers.length) process.exit(0)` ran BEFORE
+  // the CONFIG_REFUSAL check, so a machine whose global defaults.json already
+  // matched every non-pipeline-derived row (drift empty) — plausible after an
+  // earlier successful `--apply` — would exit 0 on a run that printed the refusal,
+  // because `model_profile` is the only GLOBAL_SAFE row a refusal withholds and it
+  // was the one row already carrying drift in every other fixture here. Every
+  // fixture above starts from a bare global file for exactly that reason, which
+  // is why this defect had no test until now.
+  //
+  // Build that "already agrees" file for real: apply once against a VALID project
+  // config, so the written defaults.json is this script's own answer rather than
+  // a hand-typed guess, then corrupt the project config and rerun.
+  const dir = globalWorkspace(JSON.stringify({ pipeline: { model_policy: 'balanced' } }));
+  const applied = runGlobalIn(dir, ['--runtime', 'claude', '--apply']);
+  assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), CORRUPT_PROJECT);
+  const r = runGlobalIn(dir, ['--runtime', 'claude', '--json']);
+  const out = JSON.parse(r.stdout);
+  assert.ok(out.config_invalid, 'the refusal must still fire');
+  assert.deepStrictEqual(out.drift, [], 'every non-derived row already agrees — this is the case the ordering bug needed');
+  assert.notEqual(r.status, 0,
+    `a refusal is a finding even when nothing else would have changed: exit ${r.status}, ${r.stdout}`);
+});
+
 test('a project with NO config file at all behaves exactly as before', () => {
   // `loadConfig` reports an absent file as `valid: true, error: null`: a project
   // nobody has configured has decided nothing, and the shipped defaults are the
