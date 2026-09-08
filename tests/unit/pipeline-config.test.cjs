@@ -1371,7 +1371,7 @@ suite('the route — the resolver names the rule, so the journal need not guess'
 // against the DECISION it accompanies — a route that named a rule the resolver
 // did not take would be worse than no field at all.
 
-const { routeOf, parseRoute, ROUTE_RE, DEFAULTS: D } = require(mod);
+const { routeOf, parseRoute, ROUTE_RE, runtimeToken, DEFAULTS: D } = require(mod);
 const withCfg = (over) => ({ ...D, ...over });
 
 test('every route the resolver can emit parses under its own grammar', () => {
@@ -1406,16 +1406,25 @@ test('every route the resolver can emit parses under its own grammar', () => {
 });
 
 test('a whitespace-only runtime slugs to unset, not to a bare hyphen', () => {
-  // A whitespace/punctuation-only `gsd.runtime` collapses under the slug regex
-  // to a single "-", which is non-empty and used to slip past the `|| 'unset'`
-  // fallback — leaking into a route token as `cap:-`, indistinguishable from a
-  // real value on a review of the journal.
-  const route = routeOf('executor', {}, withCfg({ gsd: { runtime: '   ' } }));
-  assert.ok(!route.includes(':-('), `route must not carry a bare-hyphen token: ${route}`);
-  assert.strictEqual(
-    routeOf('executor', {}, withCfg({ gsd: { runtime: 'codex' } })).includes('cap:codex'),
-    true
-  );
+  // Copilot (round 3): the first version of this test asserted against
+  // `routeOf`, which never actually reaches `runtimeToken` for a whitespace
+  // runtime — both call sites gate on an EXACT `=== 'codex'` match against the
+  // raw (unslugged) value first, so a whitespace/mixed-case/padded runtime
+  // never produces a `cap:`/`flat:` token at all and the assertion passed
+  // vacuously. Test the function itself instead of a route shape that cannot
+  // exhibit the bug through the current call graph.
+  //
+  // A whitespace/punctuation-only value collapses under the slug regex to a
+  // single "-", which is non-empty and used to slip past the `|| 'unset'`
+  // fallback — this is what `runtimeToken` itself must not do, whatever calls
+  // it today or later.
+  assert.strictEqual(runtimeToken(withCfg({ gsd: { runtime: '   ' } })), 'unset');
+  assert.strictEqual(runtimeToken(withCfg({ gsd: { runtime: '!!!' } })), 'unset');
+  assert.strictEqual(runtimeToken(withCfg({ gsd: {} })), 'unset');
+  // And it must not over-trim a legitimately hyphenated or digit-leading name.
+  assert.strictEqual(runtimeToken(withCfg({ gsd: { runtime: 'codex' } })), 'codex');
+  assert.strictEqual(runtimeToken(withCfg({ gsd: { runtime: 'Claude Code' } })), 'claude-code');
+  assert.strictEqual(runtimeToken(withCfg({ gsd: { runtime: '--my-runtime--' } })), 'my-runtime');
 });
 
 test('the rule names the branch that actually fired, on both halves', () => {

@@ -1085,7 +1085,7 @@ function signalGaps(role, signals = {}) {
 
 module.exports = {
   loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
-  routeOf, parseRoute, ROUTE_RE,
+  routeOf, parseRoute, ROUTE_RE, runtimeToken,
   parseCodexModelEntry, normalizeCodexModels,
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
   DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS,
