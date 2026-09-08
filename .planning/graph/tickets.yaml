@@ -960,7 +960,7 @@ tickets:
     repo: null
     wave: 6
     depends_on: [T-27-06]
-    files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/scripts/gen-codex-shipyard.cjs, plugins/delivery-pipeline/commands/deliver.md, docs/gsd_multilevel_delivery_pipeline.md, '.planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md', '.planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md', tests/unit/front.test.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, scripts/gen-codex-shipyard.cjs, plugins/delivery-pipeline/commands/deliver.md, docs/gsd_multilevel_delivery_pipeline.md, '.planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md', '.planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md', tests/unit/front.test.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false

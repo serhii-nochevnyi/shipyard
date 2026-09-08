@@ -215,3 +215,43 @@ Fix shape: state in `references/pr-sentinel.md` that verification is the
 ticket's own scoped commands, run in the foreground, and that the whole suite
 belongs to CI — which has already run it on the pushed head anyway, so a local
 `make test-fast` re-proves what GitHub just proved.
+
+## Gate 2 validates a declaration no edit can satisfy
+
+Measured 2026-09-08 on T-27-08, and it is the same sentence ADR-006's Context
+ends on: a declaration correct about something adjacent to what it is used for.
+
+T-27-08's `files_modified` named
+`plugins/delivery-pipeline/scripts/gen-codex-shipyard.cjs`. That file does not
+exist; the script is at `scripts/gen-codex-shipyard.cjs` in the repository root
+(`find` shows exactly one copy). Gate 2 passed the plan anyway, twice — at
+decomposition and again after two amendments — and the executor then hit a
+contract no edit could fulfil: the real file was outside its declaration, so
+touching it would breach the parallel-safety guarantee, and the declared path
+had nothing to touch.
+
+The executor handled it correctly: refused, and NAMED the gap in its report
+rather than guessing that the adjacent real file was what the plan meant. That
+guess is the tempting one and it is a scope breach.
+
+**What `validate-graph.cjs` actually checks about a path**: that it parses as a
+declaration, that it does not escape the repository root (`unreachable_paths`, a
+warning plus a flag), and that two dependency-unordered tickets do not contest
+it. It never asks whether the file exists. Nothing else does either — the scope
+gate compares what a branch CHANGED against the declaration, so a declared path
+nobody edited is invisible to it by construction.
+
+So the failure mode is: a plan passes every mechanical check, an executor is
+dispatched against it, and the gap surfaces only if the agent is honest enough
+to report a refusal instead of improvising. This run got the honest report. The
+same typo in a ticket whose executor guessed would have shipped a scope breach
+with a green gate behind it.
+
+Fix shape, and it is cheap: `validate-graph.cjs` already resolves each
+`files_modified` entry against the repo root to compute `unreachable_paths`. In
+the same pass, for an entry with no wildcard, check existence — and report it as
+a WARNING plus a flag rather than a gate failure, exactly as `unreachable_paths`
+is handled, because a plan may legitimately declare a file it is about to
+CREATE. A warning naming "declared, does not exist, and contains no wildcard" is
+enough: it would have been read at decomposition time, before an executor spent
+a round discovering it.

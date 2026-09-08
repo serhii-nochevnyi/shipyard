@@ -1714,7 +1714,7 @@
         "plugins/delivery-pipeline/scripts/front.cjs",
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "plugins/delivery-pipeline/scripts/gsd-tune.cjs",
-        "plugins/delivery-pipeline/scripts/gen-codex-shipyard.cjs",
+        "scripts/gen-codex-shipyard.cjs",
         "plugins/delivery-pipeline/commands/deliver.md",
         "docs/gsd_multilevel_delivery_pipeline.md",
         ".planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md",
