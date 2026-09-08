@@ -1530,10 +1530,8 @@
       "plan": ".planning/phases/27-the-conveyor-measures-its-own-state/27-02-PLAN.md",
       "phase": "27",
       "repo": null,
-      "wave": 2,
-      "depends_on": [
-        "T-27-01"
-      ],
+      "wave": 1,
+      "depends_on": [],
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -1550,8 +1548,8 @@
       "preauthorized": true,
       "branch": "ticket/T-27-02-a-verdict-survives-a-head-move-it-provab",
       "epic": "epic/27-the-conveyor-measures-its-own-state",
-      "primary_parent": "T-27-01",
-      "pr_base": "ticket/T-27-01-the-cap-counts-agents-and-the-three-capa",
+      "primary_parent": null,
+      "pr_base": "epic/27-the-conveyor-measures-its-own-state",
       "jira": null
     },
     "T-27-03": {
@@ -1559,9 +1557,9 @@
       "plan": ".planning/phases/27-the-conveyor-measures-its-own-state/27-03-PLAN.md",
       "phase": "27",
       "repo": null,
-      "wave": 3,
+      "wave": 2,
       "depends_on": [
-        "T-27-02"
+        "T-27-01"
       ],
       "cross_phase_deps": [],
       "cross_repo_deps": [],
@@ -1579,8 +1577,8 @@
       "preauthorized": true,
       "branch": "ticket/T-27-03-a-base-is-chosen-for-where-the-merge-lan",
       "epic": "epic/27-the-conveyor-measures-its-own-state",
-      "primary_parent": "T-27-02",
-      "pr_base": "ticket/T-27-02-a-verdict-survives-a-head-move-it-provab",
+      "primary_parent": "T-27-01",
+      "pr_base": "ticket/T-27-01-the-cap-counts-agents-and-the-three-capa",
       "jira": null
     },
     "T-27-04": {
@@ -1588,7 +1586,7 @@
       "plan": ".planning/phases/27-the-conveyor-measures-its-own-state/27-04-PLAN.md",
       "phase": "27",
       "repo": null,
-      "wave": 4,
+      "wave": 3,
       "depends_on": [
         "T-27-03"
       ],
@@ -1616,7 +1614,7 @@
       "plan": ".planning/phases/27-the-conveyor-measures-its-own-state/27-05-PLAN.md",
       "phase": "27",
       "repo": null,
-      "wave": 5,
+      "wave": 4,
       "depends_on": [
         "T-27-04"
       ],
@@ -1647,7 +1645,7 @@
       "plan": ".planning/phases/27-the-conveyor-measures-its-own-state/27-06-PLAN.md",
       "phase": "27",
       "repo": null,
-      "wave": 6,
+      "wave": 5,
       "depends_on": [
         "T-27-05"
       ],
@@ -1701,7 +1699,7 @@
       "plan": ".planning/phases/27-the-conveyor-measures-its-own-state/27-08-PLAN.md",
       "phase": "27",
       "repo": null,
-      "wave": 7,
+      "wave": 6,
       "depends_on": [
         "T-27-06"
       ],

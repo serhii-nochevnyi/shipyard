@@ -296,8 +296,10 @@ instead of a set, a list of homes instead of a sweep. Eight tickets, and the
 order is load-bearing rather than a preference — T-27-01 first because this
 phase's own delivery runs under the cap it fixes, T-27-02 second because every
 later ticket pays the re-review cost it removes, T-27-08 last because it sweeps
-files the earlier tickets touch. Seven of the eight are one chain: `front.cjs`,
-`deliver.md` and `pipeline-config.cjs` are each touched by three of them, and a
-cascade gives a child only its primary parent's work, so a single-parent spine is
-what keeps the last ticket's base complete. T-27-07 contests nothing and runs
-beside T-27-01 from the start.
+files the earlier tickets touch. Six of the eight are one chain, and the reason
+is Gate 2's contested-path rule rather than a preference: `deliver.md` is touched
+by five of them, `front.cjs` by three and `pipeline-config.cjs` by two, while a
+cascade gives a child only its PRIMARY parent's work — the diamond-child gap
+ADR-006 parks — so a single-parent spine is what keeps the last ticket's base
+complete. T-27-02 and T-27-07 share no file with that chain and run as their own
+roots beside T-27-01, which puts the phase's largest saving in the first wave.
