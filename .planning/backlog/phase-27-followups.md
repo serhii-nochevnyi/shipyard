@@ -255,3 +255,42 @@ is handled, because a plan may legitimately declare a file it is about to
 CREATE. A warning naming "declared, does not exist, and contains no wildcard" is
 enough: it would have been read at decomposition time, before an executor spent
 a round discovering it.
+
+## I hand-typed a branch name for the third time, having adopted the rule not to
+
+2026-09-08/09. `state-sync` printed:
+
+```
+⚠ branch drift: T-27-08 matched by title marker
+   (PR head ticket/T-27-08-…-and-the-r ≠ canonical ticket/T-27-08-…-and-the-re)
+```
+
+One character. I typed the branch into `ticket-worktree.sh create` instead of
+reading it from `tickets.json`, which is the third time this exact defect has
+happened in this repository and the second time AFTER I recorded the lesson and
+adopted the rule ("now read only from `tickets.json`"). Four other branches this
+phase I typed correctly, which is worse rather than better: a rule that holds
+four times out of five is a habit, not a rule.
+
+Two things worth separating.
+
+**The safety net worked, and it is worth knowing why.** `state-sync` matches a
+ticket to its PR by TWO anchors — the canonical branch name and the
+`Ticket: <T>` marker plus the `<T>: ` title prefix — so the board stayed correct
+and the drift surfaced as a warning rather than as a ticket that reads `pending`
+forever while its PR is green. That second anchor exists precisely because this
+happened before. It is doing its job.
+
+**Relying on the net is not the same as following the rule.** The fix here was a
+declaration, not git surgery: the branch already carried a pushed PR (#71), so
+T-27-08's plan now sets `delivery.branch` to the name that actually exists —
+`validate-graph` VALIDATES an explicit branch rather than generating one, so the
+graph agrees with git instead of with a name nothing uses. Gate 2 exit 0, drift
+warning gone.
+
+The mechanical fix for the class, since three occurrences say prose will not
+hold it: `ticket-worktree.sh create` takes the branch as an argument and has the
+graph available. It could refuse a branch name that is neither the canonical one
+nor an existing branch, naming the canonical in the message. That turns a
+one-character typo into a refusal at the moment of the typo, instead of a
+warning several PRs later.

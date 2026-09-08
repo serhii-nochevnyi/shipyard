@@ -1728,7 +1728,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-27-08-the-remaining-adr-004-d2-gaps-and-the-re",
+      "branch": "ticket/T-27-08-the-remaining-adr-004-d2-gaps-and-the-r",
       "epic": "epic/27-the-conveyor-measures-its-own-state",
       "primary_parent": "T-27-06",
       "pr_base": "ticket/T-27-06-the-front-says-when-it-is-behind-and-one",
