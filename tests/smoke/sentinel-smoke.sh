@@ -755,6 +755,153 @@ else
   bad "the squash pins the verified head" "$(grep '^pr merge' "$W/nc-argv.log" || echo 'no pr merge call logged')"
 fi
 
+# ── a check state that could not be READ is neither empty nor green ─────────
+# The fourth state, end to end across the three readers, because the acceptance
+# criterion is about what STATE-SYNC WRITES and no unit test runs that script.
+# An unreadable `gh pr checks` (a 503, a rate limit, an old `gh` rejecting
+# `--json bucket`) reached the board first as an empty list — `none_reported`,
+# which routes to "confirm this repo has no CI", asking a person about a reading
+# that never happened — and then as a synthetic unknown-bucket row, which waits
+# for the right reason while reporting one running check on a PR nobody read.
+#
+# The stub answers every call state-sync makes and fails only `pr checks`, so the
+# rest of the board is ordinary and the assertions measure this one fact.
+URHEAD=5555555555555555555555555555555555555555
+urproj="$W/urproj"
+mkdir -p "$urproj/.planning/graph" "$W/bin8"
+cat > "$urproj/.planning/graph/tickets.json" <<'JSON'
+{ "epics": { "5": { "branch": "epic/05-demo", "repos": [null] } },
+  "tickets": { "T-05-01": { "phase": "5", "epic": "epic/05-demo", "branch": "ticket/T-05-01-unread",
+                            "title": "unreadable checks", "depends_on": [], "risk": "low" } } }
+JSON
+echo '{"pipeline":{}}' > "$urproj/.planning/config.json"
+cat > "$W/bin8/gh" <<STUB
+#!/usr/bin/env bash
+argv="\$*"
+case "\$argv" in
+  "repo view --json defaultBranchRef"*) echo "main" ;;
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  "pr list --state open"*)
+    echo '[{"number":501,"reviewDecision":"APPROVED","mergeStateStatus":"CLEAN","body":"Ticket: T-05-01\n\ngate_status: arch-review=conform, checks=green, head=$URHEAD"}]' ;;
+  "pr list --state all"*)
+    echo '[{"number":501,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-05-01-unread","headRefOid":"$URHEAD","baseRefName":"epic/05-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/501","title":"T-05-01: unreadable checks"}]' ;;
+  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/05-demo\nticket/T-05-01-unread\n' ;;
+  # The ONE call that does not answer. gh prints the cause to stderr, nothing to
+  # stdout, and exits non-zero — which is not the same fact as an empty list.
+  # SENTINEL_SMOKE_CHECKS_OK flips it to the exit-1-with-\`[]\` control below:
+  # \`gh pr checks\` exits 1 for a PR with no checks AT ALL as well as for a red
+  # one, so that exit code is DATA and the two must stay tellable apart.
+  "pr checks 501"*)
+    if [ -n "\${SENTINEL_SMOKE_CHECKS_OK:-}" ]; then echo '[]'; exit 1; fi
+    echo "gh: HTTP 503: Service Unavailable (api.github.com)" >&2; exit 1 ;;
+  "pr view 501 --json"*)
+    echo '{"number":501,"state":"OPEN","isDraft":false,"baseRefName":"epic/05-demo","headRefName":"ticket/T-05-01-unread","headRefOid":"$URHEAD","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","body":"Ticket: T-05-01\n\ngate_status: arch-review=conform, checks=green, head=$URHEAD"}' ;;
+  "api graphql"*)
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  "api repos/"*"/compare/"*) echo 0 ;;
+  "pr list --head "*) echo "[]" ;;
+  "pr merge "*) echo "squash-merged" ;;
+  *) echo "stub gh8: unhandled call: \$argv" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin8/gh"
+
+urboard="$W/ur-board.txt"
+urstate="$urproj/.planning/graph/delivery-state.json"
+( cd "$urproj" && PATH="$W/bin8:$PATH" node "$SCRIPTS/state-sync.cjs" > "$urboard" 2>"$W/ur-sync.err" ) \
+  || bad "state-sync survives a gh pr checks that does not answer" "$(cat "$W/ur-sync.err")"
+urq() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).reduce((o,k)=>o&&o[k],s);process.stdout.write(String(v))' "$urstate" "$@"; }
+
+# The acceptance criterion, on the file state-sync writes. All three facts, because
+# the bucket alone was already right under the synthetic row this replaces.
+[[ "$(urq T-05-01 checks unavailable)" == "true" ]] \
+  && ok "state records the reading that did not happen as its own state" \
+  || bad "state carries checks.unavailable" "got: $(urq T-05-01 checks unavailable)"
+[[ "$(urq T-05-01 checks none_reported)" == "false" ]] \
+  && ok "…and NOT as an empty list, which would ask a person to confirm it" \
+  || bad "an unreadable answer is not none_reported" "got: $(urq T-05-01 checks none_reported)"
+[[ "$(urq T-05-01 checks pending)" == "0" && "$(urq T-05-01 checks total)" == "0" ]] \
+  && ok "…and with no phantom check: zero were read, because none were" \
+  || bad "the tallies stay at zero" "got: pending=$(urq T-05-01 checks pending) total=$(urq T-05-01 checks total)"
+case "$(urq T-05-01 checks note)" in
+  *"HTTP 503"*) ok "the cause gh printed is recorded, so every reader can quote it" ;;
+  *) bad "the note names the cause" "got: $(urq T-05-01 checks note)" ;;
+esac
+# The PR is APPROVED in the stub deliberately, and that is what makes this
+# assertion discriminate: `mergeable_since` needs approved + not-draft + GREEN, so
+# the only remaining input is the green test. It used to be the arithmetic written
+# out at this call site, which HOLDS on an all-zero tally — the sync started the
+# "approved+green — awaiting merge" clock, and its stale warning, off a call that
+# never answered. The paired control below is the same PR with a readable answer.
+[[ "$(urq T-05-01 mergeable_since)" == "undefined" ]] \
+  && ok "the awaiting-merge clock does not start on checks nobody read" \
+  || bad "no mergeable_since on an unreadable read" "got: $(urq T-05-01 mergeable_since)"
+has "the sync warns in its own words, not the no-CI ones" "$urboard" "check state UNREADABLE"
+hasnt "…and never calls it green" "$urboard" "merge: T-05-01"
+has "the board holds it as a wait, which resolves by looking again" "$urboard" "ci: T-05-01"
+has "…and a run with a PR in CI is not a fixpoint" "$urboard" "fixpoint: NO"
+
+if node -e '
+const f = require(process.argv[1]);
+const actionable = Object.values(f.actionable || {}).flat();
+if (actionable.includes("T-05-01")) { console.error("still actionable: " + actionable.join(", ")); process.exit(1); }
+if (!((f.waiting || {}).ci || []).includes("T-05-01")) { console.error("waiting=" + JSON.stringify(f.waiting)); process.exit(1); }
+if (((f.waiting || {}).merge_human || []).includes("T-05-01")) { console.error("asked a human to confirm a reading that did not happen"); process.exit(1); }
+const why = f.why["T-05-01"] || "";
+if (!/checks unreadable/.test(why) || !/HTTP 503/.test(why)) { console.error("why=" + why); process.exit(1); }
+if (/still running/.test(why)) { console.error("phantom pending check: " + why); process.exit(1); }
+process.exit(0);
+' "$urproj/.planning/graph/delivery-front.json" 2>"$W/ur-front.err"; then
+  ok "the front says the checks are unreadable and names the cause"
+else
+  bad "the front holds the unreadable PR" "$(cat "$W/ur-front.err")"
+fi
+
+( cd "$urproj" && PATH="$W/bin8:$PATH" node "$SCRIPTS/sentinel.cjs" duty --json > "$W/ur-duty.json" 2>/dev/null ) || true
+if node -e '
+const i = require(process.argv[1]).items.find((x) => x.ticket === "T-05-01");
+process.exit(i && i.action === "wait-ci" && /unreadable/.test(i.why) && /HTTP 503/.test(i.why) ? 0 : 1);
+' "$W/ur-duty.json" 2>/dev/null; then
+  ok "duty agrees with the board rather than offering the merge the gate would refuse"
+else
+  bad "duty holds the unreadable PR" "$(head -30 "$W/ur-duty.json")"
+fi
+
+( cd "$urproj" && PATH="$W/bin8:$PATH" node "$SCRIPTS/sentinel.cjs" merge T-05-01 --json > "$W/ur-merge.json" 2>/dev/null ) || true
+if node -e '
+const r = require(process.argv[1]).results[0];
+const refused = r && r.merged === false && r.would_merge !== true;
+process.exit(refused && r.blockers.some((b) => /HTTP 503/.test(b) && /could not be read/.test(b)) ? 0 : 1);
+' "$W/ur-merge.json" 2>/dev/null; then
+  ok "the gate refuses to land a PR whose checks it could not read, quoting gh"
+else
+  bad "the gate refuses the unreadable merge" "$(head -30 "$W/ur-merge.json")"
+fi
+
+# THE CONTROL, and the rule it pins is `CLAUDE.md`'s: `gh pr checks` reports CI
+# state through its EXIT CODE while still printing the JSON, so exit 1 with a
+# valid `[]` is a PR that genuinely has no checks — the ordinary no-CI path, and
+# the answer a person decides once per repository.
+( cd "$urproj" && PATH="$W/bin8:$PATH" SENTINEL_SMOKE_CHECKS_OK=1 \
+    node "$SCRIPTS/state-sync.cjs" > "$W/ur-board2.txt" 2>"$W/ur-sync2.err" ) \
+  || bad "state-sync runs on the exit-1-with-[] control" "$(cat "$W/ur-sync2.err")"
+[[ "$(urq T-05-01 checks none_reported)" == "true" && "$(urq T-05-01 checks unavailable)" == "false" ]] \
+  && ok "exit 1 with a valid [] is an OBSERVED empty list — the exit code is data" \
+  || bad "exit code is data, not an error" \
+     "got: none_reported=$(urq T-05-01 checks none_reported) unavailable=$(urq T-05-01 checks unavailable)"
+[[ "$(urq T-05-01 checks note)" == "undefined" ]] \
+  && ok "…and it carries no error note, because nothing errored" \
+  || bad "no note on an observed empty list" "got: $(urq T-05-01 checks note)"
+# The other half of the `mergeable_since` pair, and the one that proves the
+# assertion above measures the flag rather than some unrelated gap in the
+# fixture: the same approved PR, an answer that WAS read, and the clock starts.
+# What "nothing ran" means is the front's decision (`merge_without_ci`), not the
+# sync's — this file only records that the checks were readable and empty.
+[[ "$(urq T-05-01 mergeable_since)" != "undefined" ]] \
+  && ok "…and a readable answer does start that clock (the paired control)" \
+  || bad "an observed empty list is green for the merge clock" "got: $(urq T-05-01 mergeable_since)"
+has "…and it routes to the no-CI hold instead, unchanged" "$W/ur-board2.txt" "merge (human): T-05-01"
+
 # ── a resync writes the front it means ───────────────────────────────────────
 # THREE writers produce delivery-front.json — front.cjs's CLI, dispatch-record's
 # `refreshFront` and state-sync — and only the last one was blind to the two

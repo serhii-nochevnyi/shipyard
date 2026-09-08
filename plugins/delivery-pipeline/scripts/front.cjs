@@ -24,7 +24,9 @@
 //     merge     — open PR green + conform, targeting the STACK (epic/parent):
 //                 the sentinel squashes it in (auto-merge only, see below)
 //   waiting (NOT actionable, and NOT a fixpoint either — motion resumes by itself):
-//     ci        — checks still running
+//     ci        — checks still running, or a check state that could not be READ
+//                 this round (check-state.cjs's `unavailable`): both resolve by
+//                 looking again, and neither owes anyone work
 //     dispatched— an agent already holds this ticket (dispatch-record.cjs): not
 //                 actionable, because taking it again is duplicate work; not
 //                 parked, because nobody has given up; and never a fixpoint,
@@ -81,6 +83,11 @@ const { movingParentOf, movingParentWhy } = require(path.join(__dirname, 'parent
 // The trailer's classification comes from its own module — the board and the
 // guard (sentinel.cjs) must never disagree about whether a verdict counts.
 const { gateConform: trailerConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
+// The check vocabulary, from the file that owns it. `isGreen` rather than the
+// inline `failing === 0 && pending === 0` this file used to spell out: an
+// UNAVAILABLE reading (a 503, a rate limit, an old `gh` rejecting `bucket`)
+// carries all-zero tallies, so the arithmetic alone calls a PR nobody read green.
+const { isGreen } = require(path.join(__dirname, 'check-state.cjs'));
 
 // ── the identity of one phase's epic, in ONE home ───────────────────────────
 //
@@ -458,7 +465,10 @@ function computeFront(tickets, state, opts = {}) {
       // `none_reported` means nothing ran, not that everything passed —
       // state-sync warns about it separately; for the front it counts as green
       // so the gate can still be driven (the human is told what "green" meant).
-      const green = !((c.failing || 0) > 0) && !((c.pending || 0) > 0);
+      // `unavailable` does NOT: check-state.cjs's `isGreen` asks that flag first,
+      // because a reading that never happened has all-zero tallies and the
+      // arithmetic this line used to spell out therefore said green about it.
+      const green = isGreen(c);
       if ((c.failing || 0) > 0) {
         actionable.fix.push(id);
         why[id] = `PR #${s.pr}: ${c.failing} failing check(s)`;
@@ -472,6 +482,28 @@ function computeFront(tickets, state, opts = {}) {
         // for. `dutyItems` orders the same two facts the same way.
         actionable.fix.push(id);
         why[id] = `PR #${s.pr}: ${baseMergeWhy(baseMoved(s), s.pr_base || s.base)}`;
+      } else if (c.unavailable) {
+        // THE READING THAT DID NOT HAPPEN. `gh pr checks` errored or answered
+        // something that is not a JSON array, so this PR's CI state is unknown —
+        // which is not "no checks" (`none_reported`, a decision a person makes
+        // once per repository) and not "one check pending" either, which is what
+        // the synthetic unreadable row used to say about a check nobody ever saw.
+        // Nobody owes work and nobody is asked to confirm anything: the next sync
+        // simply looks again, so the honest bucket is the one that means exactly
+        // that. `waiting.ci` is deliberately not a fixpoint — the stop gate's
+        // CI-only branch keeps the run alive and `ci-wait.cjs` terminates it
+        // (T-24-10 counts unreadable rounds as empty windows and escalates).
+        //
+        // PLACED LATE, after the failing and moved-base branches, and the
+        // position is load-bearing: the permanent case is an old `gh` that
+        // rejects `--json bucket`, where checks stay unreadable for every round
+        // of the run. Routing here first would freeze base-merge — real work,
+        // read from `merge_state`, which no `pr checks` failure says anything
+        // about — behind a reading that is never coming. Only the two actions
+        // that walk a PR towards LANDING are withheld, exactly as the no-CI hold
+        // withholds them; `sentinel.cjs`'s duty holds the same position.
+        waiting.ci.push(id);
+        why[id] = `PR #${s.pr}: checks unreadable: ${c.note || 'gh pr checks did not answer'} — retried next sync`;
       } else if ((c.pending || 0) > 0) {
         waiting.ci.push(id);
         why[id] = `PR #${s.pr}: ${c.pending} check(s) still running`;

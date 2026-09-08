@@ -9,7 +9,7 @@
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 
-const { classify, stateBucket, CHECK_FIELDS } = require(path.join(
+const { classify, stateBucket, isGreen, CHECK_FIELDS } = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'check-state.cjs'
 ));
 
@@ -21,7 +21,7 @@ test('the five buckets gh reports each land in exactly one tally', () => {
     { bucket: 'pass' }, { bucket: 'skipping' },
   ]);
   assert.deepStrictEqual(got, {
-    total: 5, failing: 2, pending: 1, passing: 1, skipped: 1, none_reported: false,
+    total: 5, failing: 2, pending: 1, passing: 1, skipped: 1, none_reported: false, unavailable: false,
   });
 });
 
@@ -108,8 +108,88 @@ test('no rows is none_reported, and every tally is zero', () => {
   // What "nothing ran" MEANS is not this module's call (T-24-05 owns that) — it
   // only reports the fact.
   assert.deepStrictEqual(classify([]), {
-    total: 0, failing: 0, pending: 0, passing: 0, skipped: 0, none_reported: true,
+    total: 0, failing: 0, pending: 0, passing: 0, skipped: 0, none_reported: true, unavailable: false,
   });
+});
+
+suite('check-state — the fourth state: a reading that did not happen');
+
+// An unreadable `gh pr checks` (a 503, a rate limit, an expired token, an old
+// `gh` rejecting `--json bucket`) is not an empty list. It arrived here AS one
+// until the merge gate started landing on the resulting all-zero tally; the
+// replacement was a synthetic unknown-bucket row, which waits for the right
+// reason and reports "1 check is still running" about a check nobody ever saw —
+// and then asks a person to confirm a reading that never happened. `unavailable`
+// is that fact as itself.
+
+test('a non-array is unavailable, NOT none_reported — the whole point of the state', () => {
+  assert.deepStrictEqual(classify(null), {
+    total: 0, failing: 0, pending: 0, passing: 0, skipped: 0, none_reported: false, unavailable: true,
+  });
+});
+
+test('every other unreadable answer lands there too, not in a tally', () => {
+  // A caller hands over whatever `gh` did NOT give it. None of these is a list
+  // of rows, and none of them may become a phantom pending check: the tallies
+  // stay at zero because zero checks were read.
+  for (const bad of [undefined, 'HTTP 503', 42, {}, { rows: [] }]) {
+    const c = classify(bad);
+    assert.strictEqual(c.unavailable, true, `${JSON.stringify(bad) || String(bad)} is not a row list`);
+    assert.strictEqual(c.none_reported, false, 'and it is not "this PR has no checks" either');
+    assert.strictEqual(c.total, 0);
+    assert.strictEqual(c.pending, 0, 'no phantom check: nothing was read, so nothing is running');
+  }
+});
+
+test('the two flags are mutually exclusive on every input', () => {
+  // `[]` is an observed empty list; a non-array is an answer that never arrived.
+  // Both true would mean the board could not tell them apart after all.
+  for (const input of [[], [{ bucket: 'pass' }], null, undefined, 'x']) {
+    const c = classify(input);
+    assert.ok(!(c.none_reported && c.unavailable), `both flags set for ${JSON.stringify(input) || String(input)}`);
+  }
+});
+
+suite('check-state — isGreen asks the flag before the arithmetic');
+
+test('an unavailable tally is NOT green, though every counter is zero', () => {
+  // This is why the green test had to become a function: `failing === 0 &&
+  // pending === 0` — written out at four consumers — HOLDS here.
+  const c = classify(null);
+  assert.strictEqual(c.failing, 0);
+  assert.strictEqual(c.pending, 0);
+  assert.strictEqual(isGreen(c), false, 'the arithmetic alone would have said green');
+});
+
+test('a passing pipeline is green, and a red or pending one is not', () => {
+  assert.strictEqual(isGreen(classify([{ bucket: 'pass' }])), true);
+  assert.strictEqual(isGreen(classify([{ bucket: 'fail' }])), false);
+  assert.strictEqual(isGreen(classify([{ bucket: 'pending' }])), false);
+  assert.strictEqual(isGreen(classify([{ bucket: 'weird' }])), false, 'fail closed, via pending');
+});
+
+test('an observed empty list still reads green here — what that MEANS is the caller\'s', () => {
+  // `none_reported` is a decision a person makes once per repository
+  // (`merge_without_ci`), and `noCiHold` in front.cjs/sentinel.cjs owns it. This
+  // module must not pre-empt it, or the setting would stop working.
+  assert.strictEqual(isGreen(classify([])), true);
+});
+
+test('a MISSING checks object reads the empty tally, exactly as the inline test did', () => {
+  assert.strictEqual(isGreen(undefined), true);
+  assert.strictEqual(isGreen(null), true);
+  assert.strictEqual(isGreen({}), true);
+});
+
+test('the flag is read for truth, and an ABSENT one is not a claim', () => {
+  // `classify` writes a real boolean, so any other truthy value came off a board
+  // some other process wrote — fail closed on it, by this module's own rule. But
+  // a board with NO such key is every board written before this release, and its
+  // unreadable answers were already held by the pending row they carried.
+  assert.strictEqual(isGreen({ failing: 0, pending: 0, unavailable: 'yes' }), false);
+  assert.strictEqual(isGreen({ failing: 0, pending: 0, unavailable: 1 }), false);
+  assert.strictEqual(isGreen({ failing: 0, pending: 0, unavailable: false }), true);
+  assert.strictEqual(isGreen({ failing: 0, pending: 0 }), true);
 });
 
 done();
