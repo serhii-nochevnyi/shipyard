@@ -102,11 +102,16 @@ test('duty holds a child whose base is an open human_checkpoint parent', () => {
 });
 
 test('and offers the merge again once that parent has landed', () => {
+  // The control is the world AFTER the parent landed, which is not the same
+  // state file with one status flipped: once P is merged its branch is a LIMB
+  // (ADR-006 D3 — see the suite below), so a fixture that keeps `pr_base:
+  // 'ticket/P'` here would be asserting the PR #52 shape as a pass. The real
+  // retarget moves C's base onto the epic; that is the world this asserts.
   const root = project({
     tickets: { P: { human_checkpoint: true, branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } },
     state: {
       P: { status: 'merged', pr: 1, branch: 'ticket/P' },
-      C: { ...green, pr: 2, pr_base: 'ticket/P', branch: 'ticket/C' },
+      C: { ...green, pr: 2, pr_base: 'epic/01-x', branch: 'ticket/C' },
     },
   });
   const byId = Object.fromEntries(JSON.parse(run(root, ['duty', '--json']).stdout).items.map((i) => [i.ticket, i]));
@@ -699,6 +704,29 @@ test('the parent has MERGED → the SAME PR is refused, and the refusal is a com
   assert.ok(/base-merge\.cjs T-LIMB-C/.test(why), why);
   // Refused BEFORE the merge call: this is the guard, not the post-mortem.
   assert.ok(!('reachability' in r), `nothing was merged, so nothing is asserted about the epic: ${JSON.stringify(r.reachability)}`);
+});
+
+test('duty does not hand out a merge the gate above would refuse', () => {
+  // Found by arch-review on this same ticket: the gate above refuses a limb
+  // base, but `dutyItems()` had no matching arm, so it kept answering `merge`
+  // for T-LIMB-C every round — the front offering exactly what the guard
+  // declines, forever. `duty` reads the BOARD (no live `gh` call), so no stub is
+  // needed here; only the merge gate re-verifies against live GitHub.
+  const root = project({ tickets: limbTickets, state: limbState('merged') });
+  const byId = Object.fromEntries(JSON.parse(run(root, ['duty', '--json']).stdout).items.map((i) => [i.ticket, i]));
+  assert.notStrictEqual(byId['T-LIMB-C'].action, 'merge', byId['T-LIMB-C'].why);
+  assert.ok(/T-LIMB-P/.test(byId['T-LIMB-C'].why), byId['T-LIMB-C'].why);
+  assert.ok(/MERGED/.test(byId['T-LIMB-C'].why), byId['T-LIMB-C'].why);
+});
+
+test('...and the open-parent cascade is still wait-parent through duty, not the limb path (the control)', () => {
+  // Same fixture, parent still open: `parentIsMoving` holds the child for the
+  // ordinary "drive the parent first" reason, never the new limb branch — the
+  // two must not be confused, since the limb rule is about a MERGED parent's
+  // branch specifically.
+  const root = project({ tickets: limbTickets, state: limbState('pr-open') });
+  const byId = Object.fromEntries(JSON.parse(run(root, ['duty', '--json']).stdout).items.map((i) => [i.ticket, i]));
+  assert.strictEqual(byId['T-LIMB-C'].action, 'wait-parent', byId['T-LIMB-C'].why);
 });
 
 suite('pre-authorization — the journal has to be able to tell the two apart');
