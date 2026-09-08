@@ -734,12 +734,14 @@ function computeFront(tickets, state, opts = {}) {
   // way phase 24 exists to prevent: a capped front reporting YES ends a run
   // mid-phase.
   //
-  // `in_flight` counts the live dispatch RECORDS, not the actionable buckets:
+  // `in_flight` counts AGENTS, not the actionable buckets and not the records:
   // the cost is the agent, whatever bucket its ticket landed in, so a
-  // pr-sentinel and a ci-fix count exactly as an executor does. `activeDispatches`
-  // has already dropped everything expired or landed, so nothing here decides
-  // how long a dispatch lives.
-  const inFlight = Object.keys(dispatched).length;
+  // pr-sentinel and a ci-fix count exactly as an executor does — but ONE guard
+  // holding four PRs is one agent, and the collapse that says so is
+  // `AGENT_CARDINALITY` beside `agentsInFlight` below (ADR-006 D1).
+  // `activeDispatches` has already dropped everything expired or landed, so
+  // nothing here decides how long a dispatch lives.
+  const inFlight = agentsInFlight(dispatched);
   const capacity = { max: capMax(), in_flight: inFlight, free: Math.max(0, capMax() - inFlight) };
   // SHALLOWEST FIRST within a stack — the THIRD sort key now; the full order is
   // stated at the comparator below. A ticket stacked on an open parent is
@@ -1060,6 +1062,66 @@ const BUCKET_ROLES = {
 const SENTINEL_ROLES = new Set(SENTINEL_BUCKETS.flatMap((k) => BUCKET_ROLES[k] || []));
 const roleOfDispatch = (rec) => (typeof rec === 'string' ? rec : ((rec && rec.role) || ''));
 
+// ── HOW MANY AGENTS A SET OF DISPATCH RECORDS *IS* (ADR-006 D1) ──────────────
+//
+// The capacity cap is a limit on AGENTS, and records are not agents. The one
+// place the two diverge is the guard: `deliver.md` marks a `pr-sentinel` record
+// for EVERY guarded ticket, while Step 4 spawns exactly ONE guard for the whole
+// round. Counting records therefore reported `in_flight: 4` for a single agent
+// holding four open PRs, which under the measured default of 4 left `free: 0`
+// and launched no executor until a PR merged — the ordinary mid-phase board, and
+// the number the default was measured on is an EXECUTOR wave.
+//
+// So each role declares its cardinality:
+//
+//   'round'   one agent for the whole round, however many tickets it holds
+//   'ticket'  one agent per record — the per-ticket roles, and the default
+//
+// The role vocabulary is `pipeline-config.cjs`'s `ROLES`, the same list
+// `dispatch-record.cjs mark` validates against and files its records under;
+// tests/unit/front.test.cjs iterates ROLES and fails if one has no entry here,
+// because a role that silently inherited the wrong cardinality would misreport
+// the budget rather than fail. `drift-check` is deliberately 'ticket':
+// `workflows/drift-gate.mjs` really does dispatch one judge per ticket, in
+// parallel.
+//
+// This is a COUNTING rule, not the per-role weighting T-26-12 put out of scope
+// (that needs a cost model the conveyor does not have): every agent still costs
+// exactly 1.
+const AGENT_CARDINALITY = {
+  executor: 'ticket',
+  'ci-fix': 'ticket',
+  'review-fix': 'ticket',
+  'arch-review': 'ticket',
+  'drift-check': 'ticket',
+  research: 'ticket',
+  integrator: 'ticket',
+  // The guard: one agent per round, posted beside the wave and holding every
+  // open PR on its duty list.
+  'pr-sentinel': 'round',
+};
+// A role the table does not know spends a WHOLE agent. Unknown must resolve
+// UPWARD here — the cap is a gate on dispatch, so its failure direction is to
+// dispatch less — and it is the opposite of the rule for a missing SIGNAL in the
+// model ladder, where every row is an upgrade and silence must resolve down.
+const DEFAULT_CARDINALITY = 'ticket';
+
+// The collapse. Every 'round' role contributes at most one agent no matter how
+// many tickets carry its record; everything else contributes one per record.
+function agentsInFlight(dispatched) {
+  const perRound = new Set();
+  let n = 0;
+  for (const id of Object.keys(dispatched || {})) {
+    const role = roleOfDispatch(dispatched[id]);
+    const how = Object.prototype.hasOwnProperty.call(AGENT_CARDINALITY, role)
+      ? AGENT_CARDINALITY[role]
+      : DEFAULT_CARDINALITY;
+    if (how === 'round') perRound.add(role);
+    else n += 1;
+  }
+  return n + perRound.size;
+}
+
 function formatFront(front) {
   const lines = [];
   const parts = ORDER.filter((k) => front.actionable[k].length)
@@ -1214,6 +1276,10 @@ module.exports = {
   // board must never offer what the guard refuses, and two texts for one rule is
   // how they came to disagree in the first place.
   reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy,
+  // The cap's counting unit, exported so the test can hold it against
+  // `pipeline-config.cjs`'s ROLES: a role with no cardinality would be counted
+  // by the fallback and nothing would say so.
+  AGENT_CARDINALITY, agentsInFlight,
 };
 
 // ── CLI: read the state files this project already has and print the verdict ──

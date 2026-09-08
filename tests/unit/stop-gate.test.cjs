@@ -822,4 +822,111 @@ test('a phase that really did land without a ticket still opens the hatch', () =
   assert.equal(run(board), null, 'a board of only left-behind work must not trap the session');
 });
 
+// ── A FULL BOARD IS A BOARD WITH AN AGENT OUT (T-27-01, ADR-006 D1) ──────────
+//
+// The gate did not read `capacity` at all, and its with-an-agent hatch sat behind
+// `count <= 0`. So on the ordinary full board — every agent the cap allows is
+// out, more tickets ready — it blocked the stop and ordered the run to "take the
+// actionable items RIGHT NOW", which is the one thing the cap exists to prevent.
+// `front.cjs` was meanwhile reporting `fixpoint: NO` for a reason that names
+// capacity, and `ci-wait.cjs` was refusing to wait. One board, three answers.
+suite('stop-gate — the cap is read, and a spent cap is not live work');
+
+// THE SHARED FULL-BOARD FIXTURE — four executors out under a cap of four, two
+// more tickets ready. Computed through the real front.cjs, and restated in
+// tests/unit/front.test.cjs and tests/unit/ci-wait.test.cjs: the point of the
+// ticket is that all three readers agree about ONE board, which three hand-built
+// fronts could not show. Change it here and change it there.
+const FULL_OUT = ['T-27-91', 'T-27-92', 'T-27-93', 'T-27-94'];
+const FULL_READY = ['T-27-95', 'T-27-96'];
+const fullBoard = () => {
+  const ids = [...FULL_OUT, ...FULL_READY];
+  return {
+    generated_at: fresh(),
+    ...computeFront(
+      Object.fromEntries(ids.map((id) => [id, {}])),
+      Object.fromEntries(ids.map((id) => [id, { status: 'pending', ready: true }])),
+      { maxConcurrentAgents: 4, dispatched: Object.fromEntries(FULL_OUT.map((id) => [id, 'executor'])) }
+    ),
+  };
+};
+
+test('the shared full board does not block: the agents out are the wake-up', () => {
+  const board = fullBoard();
+  assert.deepEqual(board.capacity, { max: 4, in_flight: 4, free: 0 }, 'the fixture really is full');
+  assert.equal(board.actionable_count, 2, 'and it really does have work on it');
+  assert.equal(run(board, { session_id: 'sess-cap-full' }), null,
+    'four agents are out; ordering a fifth is the thing the cap exists to prevent');
+});
+
+test('a guard holding four PRs is ONE agent, so a board of five ready tickets still blocks', () => {
+  // The other side of the same counting fix, end to end: with the collapse the
+  // board reports `free: 3`, so this work CAN be taken and walking away from it
+  // is the defect this hook exists for. Before the collapse the same board read
+  // as full and the gate would now stay silent on it.
+  const ids = ['T-27-81', 'T-27-82', 'T-27-83', 'T-27-84', 'T-27-85'];
+  const front = {
+    generated_at: fresh(),
+    ...computeFront(
+      Object.fromEntries(ids.map((id) => [id, {}])),
+      Object.fromEntries(ids.map((id) => [id, { status: 'pending', ready: true }])),
+      { maxConcurrentAgents: 4, dispatched: Object.fromEntries(ids.slice(0, 4).map((id) => [id, 'pr-sentinel'])) }
+    ),
+  };
+  assert.deepEqual(front.capacity, { max: 4, in_flight: 1, free: 3 });
+  const v = run(front, { session_id: 'sess-cap-guard' });
+  assert.ok(v && v.decision === 'block', 'one guard is one agent, so there is room and there is work');
+  assert.ok(/T-27-85/.test(v.reason), 'and the refusal names the ticket that can be taken');
+});
+
+test('a capacity-full board whose marks are all suspect still blocks, and says the cap is a phantom', () => {
+  // The direction that must NOT get more permissive. `in_flight` comes from
+  // dispatch marks, and a mark can be written before a launch that never
+  // happened: a board that looks full with nobody behind it is 90 minutes of
+  // silence with nothing coming, which is exactly what the suspect rule exists
+  // for. Same plausibility test as the CI hatch, so the two cannot diverge.
+  const dir = project(fullBoard());
+  putDispatches(dir, Object.fromEntries(FULL_OUT.map((id) => [id, { role: 'executor', at: minsAgo(60) }])));
+  const v = runIn(dir, { session_id: 'sess-cap-phantom' });
+  assert.ok(v && v.decision === 'block', 'a full board with no agent behind it is a stall, not a wait');
+  assert.ok(/FULL/.test(v.reason), `the refusal explains the cap it is blocking past: ${v.reason}`);
+  assert.ok(/dispatch-record\.cjs clear/.test(v.reason), 'and how to return the phantom tickets to the board');
+});
+
+test('one live mark beside three suspect ones keeps the board quiet', () => {
+  const dir = project(fullBoard());
+  putDispatches(dir, {
+    [FULL_OUT[0]]: { role: 'executor', at: minsAgo(60) },
+    [FULL_OUT[1]]: { role: 'executor', at: minsAgo(60) },
+    [FULL_OUT[2]]: { role: 'executor', at: minsAgo(60) },
+    [FULL_OUT[3]]: { role: 'executor', at: minsAgo(5) },
+  });
+  assert.equal(runIn(dir, { session_id: 'sess-cap-mixed' }), null,
+    'one agent still out is one wake-up still coming');
+});
+
+test('capacity.max === 0 exits 0 and stays silent', () => {
+  // front.cjs can only express 0 one way: the project config does not parse, so
+  // NO policy is in effect and nothing may be dispatched. A board that correctly
+  // cannot dispatch anything is not a defect to block on — no refusal of a stop
+  // can edit a file, and front.cjs's own line already says what to do.
+  assert.equal(run(live({ capacity: { max: 0, in_flight: 0, free: 0 } }), { session_id: 'sess-cap-zero' }),
+    null, 'a cap of 0 is a person\'s job, not a trap for the session');
+});
+
+test('a board written before capacity existed blocks exactly as it did', () => {
+  // `delivery-front.json` outlives an upgrade, and `live()` carries no capacity
+  // at all: an absent field must read as "no cap is in force", never as a full
+  // board — the second would silence the gate on every old board in existence.
+  const v = run(live(), { session_id: 'sess-cap-absent' });
+  assert.ok(v && v.decision === 'block', 'no capacity field is not a spent cap');
+  assert.ok(/2 item\(s\) are actionable/.test(v.reason), v.reason);
+});
+
+test('room in the cap blocks with the ordinary reason — no capacity noise', () => {
+  const v = run(live({ capacity: { max: 4, in_flight: 1, free: 3 } }), { session_id: 'sess-cap-room' });
+  assert.ok(v && v.decision === 'block');
+  assert.ok(!/FULL/.test(v.reason), `nothing is full, so nothing should say so: ${v.reason}`);
+});
+
 done();

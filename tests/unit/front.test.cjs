@@ -6,7 +6,7 @@
 
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
-const { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, epicKey } = require(path.join(
+const { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, epicKey, AGENT_CARDINALITY } = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
 ));
 
@@ -1962,8 +1962,9 @@ test('4 of the 7 with an agent → free 0, fixpoint NO, and the reason names cap
 
 test('every dispatch role counts against the cap — the guard is an agent too', () => {
   // "It is an agent, it holds tickets, and this session's failure included one."
-  // So `in_flight` counts the raw dispatch records, not the actionable buckets:
-  // a pr-sentinel and a ci-fix cost a session exactly what an executor costs.
+  // So `in_flight` counts AGENTS and not actionable buckets: a pr-sentinel and a
+  // ci-fix cost a session exactly what an executor costs. THREE roles, three
+  // agents — one record each, so the collapse below changes nothing here.
   const { ids, tickets, state } = readyBoard(5);
   const dispatched = { [ids[0]]: 'pr-sentinel', [ids[1]]: 'ci-fix', [ids[2]]: 'review-fix' };
   const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
@@ -2076,6 +2077,118 @@ test('formatFront survives a front written before capacity existed', () => {
   const out = formatFront(f);
   assert.ok(out.some((l) => /^fixpoint: NO/.test(l)), out.join('\n'));
   assert.strictEqual(out.find((l) => /^capacity:/.test(l)), undefined);
+});
+
+// ── THE COUNTING UNIT IS THE AGENT, NOT THE RECORD (ADR-006 D1) ─────────────
+//
+// The cap was shipped counting `Object.keys(dispatched)`, and `deliver.md` marks
+// a `pr-sentinel` record for EVERY guarded ticket while Step 4 spawns ONE guard.
+// So a single agent holding four open PRs reported `in_flight: 4` → `free: 0`
+// under the default of 4, and no executor launched until a PR merged. That is
+// the ORDINARY mid-phase board, and the number the default was measured on is an
+// executor wave. The remedy is a counting fix — collapse a role that runs once
+// per round to one agent — and not the per-role weighting T-26-12 put out of
+// scope for want of a cost model.
+suite('front — the cap counts AGENTS, not records');
+
+const { ROLES } = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
+));
+
+test('every ladder role has a cardinality, and only the guard runs as one agent per round', () => {
+  // Same shape as dispatch-record.cjs's own role-table test: a role added to the
+  // ladder must not silently inherit somebody else's cardinality, because the
+  // fallback decides how much of the cap it spends.
+  for (const role of ROLES) {
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(AGENT_CARDINALITY, role),
+      `${role} has no entry in AGENT_CARDINALITY — the counter would guess`
+    );
+    assert.ok(['round', 'ticket'].includes(AGENT_CARDINALITY[role]),
+      `${role}: ${AGENT_CARDINALITY[role]} is not a cardinality`);
+  }
+  const perRound = Object.keys(AGENT_CARDINALITY).filter((r) => AGENT_CARDINALITY[r] === 'round');
+  assert.deepStrictEqual(perRound, ['pr-sentinel'],
+    'the guard is the only role dispatched once per round; every other role is one agent per ticket');
+});
+
+test('one guard holding four guarded PRs is ONE agent — in_flight 1, free 3', () => {
+  // THE WHOLE TICKET. Four `pr-sentinel` records, one agent, and the two ready
+  // tickets beside them are dispatchable. On the record-counting code this is
+  // `in_flight: 4, free: 0` and the wave never leaves.
+  const { ids, tickets, state } = readyBoard(6);
+  const dispatched = Object.fromEntries(ids.slice(0, 4).map((id) => [id, 'pr-sentinel']));
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 1, free: 3 });
+  // The truncation still names everything: the collapse changes the BUDGET, not
+  // what the board reports as work.
+  assert.deepStrictEqual(f.actionable.execute, ids.slice(4));
+  assert.strictEqual(f.fixpoint, false, 'a guard is still out');
+});
+
+test('four executors are still four agents — the collapse is per role, never a blanket one', () => {
+  const { ids, tickets, state } = readyBoard(6);
+  const dispatched = Object.fromEntries(ids.slice(0, 4).map((id) => [id, 'executor']));
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 4, free: 0 });
+});
+
+test('a guard beside three per-ticket agents is 4, and the guard\'s extra tickets are free', () => {
+  // The mixed board, which is the one that decides whether the collapse is a
+  // role rule or a discount: one guard over three PRs (1) + an executor + a
+  // ci-fix + an arch-review (3).
+  const { ids, tickets, state } = readyBoard(8);
+  const dispatched = {
+    [ids[0]]: 'pr-sentinel', [ids[1]]: 'pr-sentinel', [ids[2]]: 'pr-sentinel',
+    [ids[3]]: 'executor', [ids[4]]: 'ci-fix', [ids[5]]: 'arch-review',
+  };
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 4, free: 0 });
+});
+
+test('a record shape the store never wrote is one agent, not a free one', () => {
+  // `activeDispatches` hands over {ticket: {role, at}} and a bare string is the
+  // flattened form; an EMPTY or unknown role must resolve to the per-ticket
+  // cardinality, because a dispatch nobody can name is still an agent that was
+  // paid for. Resolving upward is the failure direction a spend gate must take.
+  const { ids, tickets, state } = readyBoard(5);
+  const dispatched = {
+    [ids[0]]: { role: 'pr-sentinel', at: new Date().toISOString() },
+    [ids[1]]: { at: new Date().toISOString() },
+    [ids[2]]: 'a-role-nothing-dispatches',
+  };
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.strictEqual(f.capacity.in_flight, 3, 'one guard + two unnameable agents');
+});
+
+// ── THE SHARED FULL-BOARD FIXTURE ────────────────────────────────────────────
+//
+// Four executors out under a cap of four, two more tickets ready: `free: 0` with
+// work on the board. The SAME fixture is restated in tests/unit/ci-wait.test.cjs
+// and tests/unit/stop-gate.test.cjs, each computing it through THIS front.cjs —
+// the point of the ticket is that the three mechanisms which read capacity agree
+// about ONE board, and three suites reading three hand-built boards would not
+// show that. Change it here and change it there.
+const FULL_OUT = ['T-27-91', 'T-27-92', 'T-27-93', 'T-27-94'];
+const FULL_READY = ['T-27-95', 'T-27-96'];
+const fullBoard = () => {
+  const ids = [...FULL_OUT, ...FULL_READY];
+  return computeFront(
+    Object.fromEntries(ids.map((id) => [id, {}])),
+    Object.fromEntries(ids.map((id) => [id, { status: 'pending', ready: true }])),
+    { maxConcurrentAgents: 4, dispatched: Object.fromEntries(FULL_OUT.map((id) => [id, 'executor'])) }
+  );
+};
+
+test('the shared full board: free 0, fixpoint NO, and the reason is capacity rather than work', () => {
+  const f = fullBoard();
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 4, free: 0 });
+  assert.deepStrictEqual(f.actionable.execute, FULL_READY);
+  assert.deepStrictEqual(f.waiting.dispatched, FULL_OUT);
+  assert.strictEqual(f.fixpoint, false);
+  const line = fixpointLine(f);
+  assert.ok(/capacity/.test(line), line);
+  assert.ok(!/actionable RIGHT NOW/.test(line), `a full board must not be ordered to dispatch: ${line}`);
 });
 
 done();
