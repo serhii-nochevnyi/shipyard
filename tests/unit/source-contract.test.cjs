@@ -87,9 +87,26 @@ test('state-sync passes its epic records into computeFront', () => {
   // trailing comma) does not break this test.
   const call = extractCall(src, 'computeFront');
   assert.ok(call, 'expected to find the computeFront(tickets, state, { ... }) call in state-sync.cjs');
+  // The real call site carries a block comment ahead of the `epics:` line (this
+  // file explains every field it passes), so the KEY is not textually adjacent
+  // to the preceding `{`/`,` — comments must be stripped before the object-shape
+  // check below, or a harmless comment edit could flip this test independently
+  // of the actual code. Line and block comments only; this file's call sites
+  // contain no string literal with `//` or `/*` in it, so a full tokenizer is
+  // not needed here.
+  const stripped = call.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  // The key's PRESENCE is the contract, not the shape of its value: `epics:
+  // epicInfo`, `epics: epicInfo ?? []`, `epics: epicInfo.map(...)` and the
+  // shorthand `{ epics }` all satisfy it alike, so the match must not require a
+  // bare-identifier value the way `/epics:\s*\w+/` did — that failed a harmless
+  // refactor to any of the forms above even though the field still reached
+  // computeFront. Matched only where `epics` is an object-literal KEY
+  // (immediately preceded by `{` or `,` once comments are stripped), so a
+  // `foo: epics` local, or a comment mentioning "epics", cannot satisfy it by
+  // accident.
   assert.ok(
-    /epics:\s*\w+/.test(call),
-    'state-sync.cjs must pass an `epics:` field into computeFront — without it leftBehind() sees no epic records and every left_behind count reads 0'
+    /[{,]\s*epics\s*(?::|(?=[\s,}]))/.test(stripped),
+    'state-sync.cjs must pass an `epics` field into computeFront — without it leftBehind() sees no epic records and every left_behind count reads 0'
   );
 });
 
