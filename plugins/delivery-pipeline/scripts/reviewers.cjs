@@ -12,14 +12,19 @@
 //        the threads it was filed with, so "0 unresolved" is not "settled" —
 //        report both or the caller reads a clean board over a standing
 //        CHANGES_REQUESTED.
-//   reviewers.cjs feedback   <pr>
-//        EVERYTHING a reviewer said, in one call: unresolved threads + the bots'
-//        PR-level comments (CodeRabbit's summary/nitpick blocks, Copilot's
-//        remarks) + review verdicts + engagement. Threads alone miss the
-//        PR-level half, which is where CodeRabbit files most of its findings —
-//        a fixer working from `unresolved` only never saw them.
+//   reviewers.cjs feedback   <pr> [--no-since-head]
+//        EVERYTHING a reviewer said SINCE THE LAST PUSH, in one call: unresolved
+//        threads + the bots' PR-level comments (CodeRabbit's summary/nitpick
+//        blocks, Copilot's remarks) + review verdicts + engagement. Threads alone
+//        miss the PR-level half, which is where CodeRabbit files most of its
+//        findings — a fixer working from `unresolved` only never saw them.
+//        The window is the head commit's date, because a fixer on round 4 read
+//        rounds 1–3's already-addressed comments as live work. `--no-since-head`
+//        restores the whole history for a human who wants the record.
 //   reviewers.cjs status     <pr> [--json]
-//        which bot reviewers have ACTUALLY engaged on this PR
+//        which bot reviewers have ACTUALLY engaged on this PR, plus the review
+//        verdicts BOTH ways — the raw history and the current one-per-reviewer
+//        reduction — so the difference between "it said" and "it says" is visible
 //
 // Copilot does not re-review a push on its own — it must be re-requested.
 // A missing/disabled reviewer is a warning, not a failure, but the warning now
@@ -50,10 +55,24 @@ if (repoIdx !== -1 && !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(REPO)) {
   process.exit(2);
 }
 const REPO_ARG = REPO ? ['--repo', REPO] : [];
+// `{owner}/{repo}` is a placeholder `gh api` expands from the current repository
+// — and NOTHING expands it anywhere else. It belongs in an api PATH and never in
+// a `--repo` flag, where gh wants an OWNER/REPO slug and errors on anything else.
+// Measured 2026-09-07: `unresolved 27` reported `clean: false` with zero
+// unresolved threads (the decision query had errored and `null` is not clean)
+// while the same call with an explicit `--repo` reported `clean: true` — a false
+// "review not settled" that keeps a green PR out of `merge` indefinitely. Every
+// `gh pr …` call takes REPO_ARG; only api paths take this.
 const OWNER_REPO = REPO || '{owner}/{repo}';
+
+// Default ON: the feedback a fixer acts on is the feedback filed against the
+// code that is actually on the branch. `--no-since-head` is the escape hatch for
+// a human reading the record rather than a round servicing it.
+const sinceHead = !argv.includes('--no-since-head');
 
 if (!['reinit', 'unresolved', 'status', 'feedback', 'resolve'].includes(cmd) || !Number.isInteger(pr) || pr <= 0) {
   console.error('usage: reviewers.cjs <reinit|unresolved|feedback|status> <pr-number> [--json] [--force] [--repo owner/name]\n' +
+                '                        feedback [--no-since-head]   (default: only what was said since the head commit)\n' +
                 '       reviewers.cjs resolve <pr-number> <threadId> [<threadId> ...] [--repo owner/name]');
   process.exit(2);
 }
@@ -83,13 +102,49 @@ const REVIEW_MARKER = '@coderabbitai full review';
 const isCodeRabbit = (login) => String(login || '').toLowerCase().startsWith(CODERABBIT);
 const isCopilot = (login) => String(login || '').toLowerCase().startsWith('copilot');
 
+// Timestamps, in one place: `prActivity` reduces rows to their newest date and
+// the verdict reduction below reduces them to the newest ROW. Same comparison,
+// two shapes, and it used to exist only inside the first.
+const at = (v) => (v ? Date.parse(v) : 0);
+const latest = (rows, pick) => rows.reduce((max, r) => Math.max(max, at(pick(r))), 0);
+
+// A verdict is the reviewer's LAST word. `changes_requested` used to be
+// `some(state === 'CHANGES_REQUESTED')` over EVERY historical review, so a
+// reviewer who later approved still read as blocking and the PR could never be
+// called settled. GitHub's own `reviewDecision` reduces to one state per author;
+// the bot verdicts this script aggregates have to be reduced the same way or the
+// two disagree about the same PR.
+//
+// Only DECIDING states take part. A COMMENTED review is not an opinion about
+// whether the PR may land, and GitHub does not let one supersede a
+// CHANGES_REQUESTED — a reduction that took the plain last row would call a PR
+// settled because its reviewer left a remark afterwards.
+const DECIDING = new Set(['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED']);
+function currentVerdicts(rows) {
+  const byAuthor = new Map();
+  for (const r of rows) {
+    if (!DECIDING.has(r.state)) continue;
+    const author = r.author || 'unknown';
+    const prev = byAuthor.get(author);
+    if (!prev || at(r.submitted_at) >= at(prev.submitted_at)) byAuthor.set(author, r);
+  }
+  return [...byAuthor.values()].sort((a, b) => at(a.submitted_at) - at(b.submitted_at));
+}
+const verdictRow = (r) => ({
+  author: (r.user && r.user.login) || 'unknown',
+  bot: isCodeRabbit(r.user && r.user.login) || isCopilot(r.user && r.user.login),
+  state: r.state,
+  submitted_at: r.submitted_at,
+  url: r.html_url,
+});
+
 function prActivity() {
   const comments = ghJson(['api', `repos/${OWNER_REPO}/issues/${pr}/comments`, '--paginate'], []);
   const reviews = ghJson(['api', `repos/${OWNER_REPO}/pulls/${pr}/reviews`, '--paginate'], []);
-  const at = (v) => (v ? Date.parse(v) : 0);
-  const latest = (rows, pick) => rows.reduce((max, r) => Math.max(max, at(pick(r))), 0);
 
   return {
+    comments,
+    reviews,
     lastRequest: latest(
       comments.filter((c) => String(c.body || '').includes(REVIEW_MARKER)),
       (c) => c.created_at
@@ -116,13 +171,26 @@ function report(result) {
 
 if (cmd === 'status') {
   const a = prActivity();
+  // BOTH views of the verdicts, because the difference is the thing a human
+  // came here to see: "CodeRabbit requested changes" and "CodeRabbit currently
+  // approves" are both true of the same PR, and only one of them decides
+  // anything. The raw list is the evidence; the reduction is the answer.
+  const raw = a.reviews.filter((r) => r.state && r.state !== 'PENDING').map(verdictRow);
+  const current = currentVerdicts(raw);
+  const say = (rows) => (rows.length ? rows.map((v) => `${v.author} ${v.state}`).join(', ') : 'none');
   const result = {
     pr,
     coderabbit: { engaged: a.lastCodeRabbit > 0, last_activity: a.lastCodeRabbit ? new Date(a.lastCodeRabbit).toISOString() : null },
     copilot: { engaged: a.lastCopilot > 0, last_activity: a.lastCopilot ? new Date(a.lastCopilot).toISOString() : null },
     last_review_request: a.lastRequest ? new Date(a.lastRequest).toISOString() : null,
+    reviews_raw: raw,
+    current_reviews: current,
+    changes_requested: current.some((v) => v.state === 'CHANGES_REQUESTED'),
     lines: [
       `PR #${pr}: CodeRabbit ${a.lastCodeRabbit ? 'engaged' : 'NEVER responded'}, Copilot ${a.lastCopilot ? 'engaged' : 'NEVER responded'}`,
+      `  reviews (every one, oldest first): ${say(raw)}`,
+      `  reviews (current, one per reviewer): ${say(current)}`
+        + ` → changes_requested: ${current.some((v) => v.state === 'CHANGES_REQUESTED')}`,
     ],
   };
   report(result);
@@ -280,9 +348,29 @@ if (cmd === 'unresolved') {
   // `sentinel.cjs` both read this field and both refuse the merge; the command
   // the loop actually reads before deciding a PR is clean did not report it, so
   // the only thing that ever saw the verdict was the thing already refusing.
-  const view = ghJson(['pr', 'view', String(pr), '--repo', OWNER_REPO, '--json', 'reviewDecision'], null);
+  // REPO_ARG, not OWNER_REPO: `gh` does not expand `{owner}/{repo}` in a `--repo`
+  // flag, so passing the placeholder errored the query and the `null` fallback
+  // made `clean` false over zero unresolved threads. With no --repo given, gh
+  // resolves the repository from the current directory — which is what this
+  // command always meant.
+  //
+  // Three more fields ride on the same call, and that is the point of putting
+  // them here: `sentinel.cjs duty` has to know whether the base moved under the
+  // branch, it already spawns this command once per open PR per babysit round,
+  // and `mergeStateStatus` costs nothing extra on a single-PR view. A second
+  // query per PR per tick would be paid on every tick of the conveyor.
+  const view = ghJson(['pr', 'view', String(pr), ...REPO_ARG, '--json',
+    'reviewDecision,mergeStateStatus,baseRefName,headRefName'], null);
   console.log(JSON.stringify({
     ...threadReport,
+    // GitHub's own verdict on whether this branch can land as it stands: CLEAN,
+    // DIRTY (conflicts) or BEHIND (the base moved, reported only where branch
+    // protection requires up-to-date branches). `null` when the query failed —
+    // never a benign default, because the caller's rule is "an unknown is not a
+    // green" and it cannot apply that to a value we invented.
+    merge_state: (view && view.mergeStateStatus) || null,
+    base: (view && view.baseRefName) || null,
+    head: (view && view.headRefName) || null,
     // null is honest for "the query failed" AND for "nobody has reviewed yet";
     // neither is a clean bill of health, and `clean` below says which is which.
     review_decision: (view && view.reviewDecision) || null,
@@ -315,32 +403,66 @@ const issueComments = ghJson(['api', `repos/${OWNER_REPO}/issues/${pr}/comments`
 const reviews = ghJson(['api', `repos/${OWNER_REPO}/pulls/${pr}/reviews`, '--paginate'], []);
 const isBot = (login) => isCodeRabbit(login) || isCopilot(login);
 
-const botComments = issueComments
+// WHEN the code under review last changed. Everything a reviewer said before
+// that was said about a different diff: a fixer on round 4 was handed rounds
+// 1–3's comments, every one of them already addressed, and re-litigated them.
+// One `gh pr view` for the PR's commits; the newest committedDate is the push.
+// `headRefOid` + one commit lookup is the fallback for a view that answered
+// without the commit list.
+//
+// Unreadable → NO filtering, deliberately. Showing an addressed comment costs a
+// paragraph; hiding a live one costs an unaddressed finding, and this window is
+// not worth that trade.
+function headCommitAt() {
+  if (!sinceHead) return null;
+  const view = ghJson(['pr', 'view', String(pr), ...REPO_ARG, '--json', 'commits,headRefOid'], null);
+  if (!view) return null;
+  const dates = (Array.isArray(view.commits) ? view.commits : [])
+    .map((c) => at(c.committedDate || c.authoredDate))
+    .filter((n) => n > 0);
+  if (dates.length) return Math.max(...dates);
+  if (!view.headRefOid) return null;
+  const raw = gh(['api', `repos/${OWNER_REPO}/commits/${view.headRefOid}`,
+    '--jq', '.commit.committer.date'], { tolerate: true });
+  const t = typeof raw === 'string' ? at(raw.trim()) : 0;
+  return t > 0 ? t : null;
+}
+const headAt = headCommitAt();
+
+const allBotComments = issueComments
   .filter((c) => isBot(c.user && c.user.login))
   // our own re-review asks are echoed back by nobody, but keep the filter honest
-  .filter((c) => !String(c.body || '').includes(REVIEW_MARKER))
+  .filter((c) => !String(c.body || '').includes(REVIEW_MARKER));
+const liveBotComments = headAt === null
+  ? allBotComments
+  : allBotComments.filter((c) => at(c.created_at) >= headAt);
+
+const botComments = liveBotComments
   .slice(-MAX_ITEMS)
   .map((c) => ({ author: c.user.login, created_at: c.created_at, url: c.html_url, ...clip(c.body) }));
 
 const verdicts = reviews
   .filter((r) => r.state && r.state !== 'PENDING')
   .slice(-MAX_ITEMS)
-  .map((r) => ({
-    author: (r.user && r.user.login) || 'unknown',
-    bot: isBot(r.user && r.user.login),
-    state: r.state,
-    submitted_at: r.submitted_at,
-    url: r.html_url,
-    ...clip(r.body),
-  }));
+  .map((r) => ({ ...verdictRow(r), ...clip(r.body) }));
+// One state per reviewer, newest wins. See currentVerdicts: the raw list is the
+// evidence and this is the answer, and `some()` over the raw one called a PR
+// blocked because a reviewer had once said so.
+const current = currentVerdicts(verdicts);
 
 const activity = prActivity();
 console.log(JSON.stringify({
   ...threadReport,
+  // The window itself, so a reader is never guessing whether they are looking at
+  // the whole record or the live slice of it.
+  since_head: headAt === null ? null : new Date(headAt).toISOString(),
   bot_comments: botComments,
   bot_comment_count: botComments.length,
+  // Dropping evidence silently is its own defect: say how much was left out.
+  bot_comments_before_head: allBotComments.length - liveBotComments.length,
   reviews: verdicts,
-  changes_requested: verdicts.some((v) => v.state === 'CHANGES_REQUESTED'),
+  current_reviews: current,
+  changes_requested: current.some((v) => v.state === 'CHANGES_REQUESTED'),
   engagement: {
     coderabbit: { engaged: activity.lastCodeRabbit > 0, last_activity: activity.lastCodeRabbit ? new Date(activity.lastCodeRabbit).toISOString() : null },
     copilot: { engaged: activity.lastCopilot > 0, last_activity: activity.lastCopilot ? new Date(activity.lastCopilot).toISOString() : null },

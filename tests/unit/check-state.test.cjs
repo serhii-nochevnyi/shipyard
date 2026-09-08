@@ -1,0 +1,115 @@
+'use strict';
+
+// THE VOCABULARY TABLE. Three scripts each carried their own list of `state`
+// strings and the lists disagreed — and every state none of them named counted
+// as PASSED, because the green test everywhere is `failing === 0 && pending === 0`.
+// These cases ARE the table: gh classifies, we count, and one file decides how.
+// If a bucket ever has to move, exactly one file changes and this test says so.
+
+const path = require('path');
+const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+
+const { classify, stateBucket, CHECK_FIELDS } = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'check-state.cjs'
+));
+
+suite('check-state — gh\'s own buckets, counted once');
+
+test('the five buckets gh reports each land in exactly one tally', () => {
+  const got = classify([
+    { bucket: 'fail' }, { bucket: 'cancel' }, { bucket: 'pending' },
+    { bucket: 'pass' }, { bucket: 'skipping' },
+  ]);
+  assert.deepStrictEqual(got, {
+    total: 5, failing: 2, pending: 1, passing: 1, skipped: 1, none_reported: false,
+  });
+});
+
+test('the tallies partition the rows — nothing is counted twice or dropped', () => {
+  // The defect this module replaces was a row falling through BOTH filters. A
+  // partition cannot have that shape, so assert it as arithmetic rather than
+  // trusting the case list above to stay exhaustive.
+  const rows = ['pass', 'fail', 'pending', 'skipping', 'cancel', 'weird', undefined]
+    .map((bucket) => ({ bucket }));
+  const c = classify(rows);
+  assert.strictEqual(c.failing + c.pending + c.passing + c.skipped, c.total);
+});
+
+test('cancel is failing — a cancelled check is not a check that passed', () => {
+  const c = classify([{ bucket: 'cancel', state: 'CANCELLED' }]);
+  assert.strictEqual(c.failing, 1);
+  assert.strictEqual(c.passing, 0);
+});
+
+test('skipping counts towards total and towards nothing else', () => {
+  // A skipped check is neither owed work nor a reason to wait, so it must not
+  // land in `failing` or `pending` — but `total` is what tells a caller that
+  // checks exist at all, and a skip is a check that existed.
+  const c = classify([{ bucket: 'skipping' }, { bucket: 'pass' }]);
+  assert.strictEqual(c.total, 2);
+  assert.strictEqual(c.failing, 0);
+  assert.strictEqual(c.pending, 0);
+  assert.strictEqual(c.skipped, 1);
+});
+
+suite('check-state — fail closed: an unreadable check is never green');
+
+test('an unknown bucket is PENDING, not passing', () => {
+  const c = classify([{ bucket: 'weird' }]);
+  assert.strictEqual(c.pending, 1, 'a bucket name we do not know keeps the ticket waiting');
+  assert.strictEqual(c.failing, 0, 'and does not dispatch a fixer at a check nobody has read');
+  assert.strictEqual(c.passing, 0);
+  assert.ok(!(c.failing === 0 && c.pending === 0), 'the green test must not hold here');
+});
+
+test('a row with no bucket at all is PENDING — an older gh must not read as green', () => {
+  const c = classify([{ state: 'STARTUP_FAILURE' }]);
+  assert.strictEqual(c.pending, 1);
+  assert.strictEqual(c.failing, 0);
+  assert.ok(!(c.failing === 0 && c.pending === 0), 'the green test must not hold here either');
+});
+
+test('a row that is not an object does not crash the count', () => {
+  const c = classify([null, 'FAILURE', 7]);
+  assert.strictEqual(c.total, 3);
+  assert.strictEqual(c.pending, 3, 'unreadable, therefore pending');
+});
+
+test('an empty bucket string is unreadable, not a pass', () => {
+  assert.strictEqual(stateBucket({ bucket: '' }), 'pending');
+  assert.strictEqual(stateBucket({ bucket: '   ' }), 'pending');
+});
+
+suite('check-state — the row-level classifier and the field list');
+
+test('stateBucket answers for one row, with the same vocabulary', () => {
+  assert.strictEqual(stateBucket({ bucket: 'pass' }), 'pass');
+  assert.strictEqual(stateBucket({ bucket: 'fail' }), 'fail');
+  assert.strictEqual(stateBucket({ bucket: 'cancel' }), 'cancel');
+  assert.strictEqual(stateBucket({ bucket: 'pending' }), 'pending');
+  assert.strictEqual(stateBucket({ bucket: 'skipping' }), 'skipping');
+  assert.strictEqual(stateBucket({ bucket: 'nonsense' }), 'pending', 'fail closed');
+  assert.strictEqual(stateBucket(undefined), 'pending', 'fail closed');
+});
+
+test('gh spells its buckets lowercase, but a case difference must not read as unknown', () => {
+  assert.strictEqual(stateBucket({ bucket: 'PASS' }), 'pass');
+  assert.strictEqual(stateBucket({ bucket: 'Fail' }), 'fail');
+});
+
+test('CHECK_FIELDS asks gh for the bucket — that is the whole point', () => {
+  assert.ok(CHECK_FIELDS.split(',').includes('bucket'),
+    'without `bucket` every row is unreadable and the board would never go green');
+  assert.strictEqual(CHECK_FIELDS, 'name,state,bucket',
+    '`name` and `state` stay in the window: they are what the human-readable output prints');
+});
+
+test('no rows is none_reported, and every tally is zero', () => {
+  // What "nothing ran" MEANS is not this module's call (T-24-05 owns that) — it
+  // only reports the fact.
+  assert.deepStrictEqual(classify([]), {
+    total: 0, failing: 0, pending: 0, passing: 0, skipped: 0, none_reported: true,
+  });
+});
+
+done();

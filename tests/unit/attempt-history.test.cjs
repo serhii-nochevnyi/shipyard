@@ -18,6 +18,12 @@
 //     field rather than shredding the line it lives on;
 //   - and a missing graph refuses exactly as log-event does, because a history
 //     read out of the wrong journal is worse than no history at all.
+//
+// ADR-002 D8 adds the COUNT to the record: the attempt number lived only in the
+// session, so `attempts > max_attempts` restarted at 1 in every resumed run. The
+// journal already held every attempt, so the number is a count away — and the one
+// round it must not charge is a quarantined flake (ADR-001 D3, deliver.md:491:
+// "`outcome=flake` is logged at an UNCHANGED `n`").
 
 const fs = require('fs');
 const os = require('os');
@@ -65,6 +71,8 @@ function scratch({ journal = JOURNAL, malformed = true } = {}) {
 }
 
 const textLines = (out) => out.split('\n').filter(Boolean);
+// The first line is the counter (`attempts=… next_n=…`); the event lines follow.
+const eventLines = (out) => textLines(out).slice(1);
 
 suite('attempt-history — prior attempts are an input, not a memory');
 
@@ -72,7 +80,7 @@ test('renders only this ticket\'s repair events, oldest first', () => {
   const { project } = scratch();
   const r = run(project, ['T-01-01']);
   assert.strictEqual(r.status, 0, r.stderr);
-  const out = textLines(r.stdout);
+  const out = eventLines(r.stdout);
   assert.strictEqual(out.length, 4, `expected 4 event lines, got:\n${r.stdout}`);
   assert.ok(/^attempt /.test(out[0]), out[0]);
   assert.ok(/^fix_round /.test(out[1]), out[1]);
@@ -86,7 +94,7 @@ test('renders only this ticket\'s repair events, oldest first', () => {
 
 test('fields render when present and are simply absent when they are not', () => {
   const { project } = scratch();
-  const out = textLines(run(project, ['T-01-01']).stdout);
+  const out = eventLines(run(project, ['T-01-01']).stdout);
   const first = out[0];
   const second = out[2];
   assert.ok(/role=ci-fix/.test(first) && /model=sonnet/.test(first) && /outcome=pushed/.test(first), first);
@@ -98,7 +106,7 @@ test('fields render when present and are simply absent when they are not', () =>
 
 test('a hypothesis is a sentence, and survives as one field', () => {
   const { project } = scratch();
-  const line = textLines(run(project, ['T-01-01']).stdout).find((l) => /hypothesis=/.test(l));
+  const line = eventLines(run(project, ['T-01-01']).stdout).find((l) => /hypothesis=/.test(l));
   assert.ok(line, 'the hypothesis line vanished');
   assert.ok(
     /hypothesis="off-by-one in the pagination cursor"/.test(line),
@@ -111,7 +119,7 @@ test('--json hands back the raw events, filtered the same way', () => {
   const { project } = scratch();
   const r = run(project, ['T-01-01', '--json']);
   assert.strictEqual(r.status, 0, r.stderr);
-  const events = JSON.parse(r.stdout);
+  const events = JSON.parse(r.stdout).events;
   assert.strictEqual(events.length, 4);
   assert.deepStrictEqual(events.map((e) => e.event), ['attempt', 'fix_round', 'attempt', 'escalation']);
   assert.strictEqual(events[0].ts, '2026-08-01T10:00:00Z', 'raw means raw — ts included');
@@ -121,7 +129,7 @@ test('--json hands back the raw events, filtered the same way', () => {
 
 test('--limit keeps the most RECENT n, still oldest-first', () => {
   const { project } = scratch();
-  const out = textLines(run(project, ['T-01-01', '--limit', '2']).stdout);
+  const out = eventLines(run(project, ['T-01-01', '--limit', '2']).stdout);
   assert.strictEqual(out.length, 2, out.join('\n'));
   assert.ok(/^attempt .*n=2/.test(out[0]), `the newest attempt, not the oldest: ${out[0]}`);
   assert.ok(/^escalation /.test(out[1]), out[1]);
@@ -134,11 +142,90 @@ test('a fresh ticket is the normal case: a line, and exit 0', () => {
   assert.ok(/no prior attempts recorded for T-77-01/.test(r.stdout), r.stdout);
 });
 
-test('a fresh ticket in --json is an empty array, never prose', () => {
+test('a fresh ticket in --json is an empty events array, never prose', () => {
   const { project } = scratch();
   const r = run(project, ['T-77-01', '--json']);
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.deepStrictEqual(JSON.parse(r.stdout), [], 'a JSON consumer must not be handed a sentence');
+  const got = JSON.parse(r.stdout);
+  assert.deepStrictEqual(got.events, [], 'a JSON consumer must not be handed a sentence');
+  assert.strictEqual(got.attempts, 0);
+  assert.strictEqual(got.next_n, 1, 'a ticket nobody has attempted starts at 1');
+});
+
+// ── the attempt NUMBER, derived from the journal ────────────────────────────
+// The babysit loop used to keep `attempts` in the session, so a resumed run
+// restarted the ladder and the `attempts > max_attempts` backstop at 1 — the
+// ticket that had already burned four rounds got five more. `next_n` is the
+// exact key deliver.md names, so it is pinned by name here.
+
+test('--json reports how many attempts are on record, and the next number', () => {
+  const { project } = scratch();
+  const got = JSON.parse(run(project, ['T-01-01', '--json']).stdout);
+  assert.strictEqual(got.attempts, 2, 'two `attempt` events for this ticket');
+  assert.strictEqual(got.next_n, 3, 'so the next round is n=3, not n=1');
+  assert.strictEqual(got.ticket, 'T-01-01');
+});
+
+test('a resumed session continues at N+1 — that is the whole point', () => {
+  const { project, graph } = scratch({ journal: null });
+  const rounds = [1, 2, 3, 4].map((n) => ({
+    ts: `2026-08-01T1${n}:00:00Z`, event: 'attempt', ticket: 'T-01-01', pr: 11, n,
+    role: 'ci-fix', model: 'sonnet', signature: 'aaaa', outcome: 'pushed',
+  }));
+  fs.writeFileSync(path.join(graph, 'delivery-log.jsonl'),
+    rounds.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const got = JSON.parse(run(project, ['T-01-01', '--json']).stdout);
+  assert.strictEqual(got.attempts, 4);
+  assert.strictEqual(got.next_n, 5, 'a fresh session must not hand the ticket five more rounds');
+});
+
+test('a quarantined flake is NOT charged — the number does not move', () => {
+  // ADR-001 D3 and deliver.md:491: `outcome=flake` is logged at an UNCHANGED
+  // `n`, because a failure nobody caused is not an attempt. A raw count of
+  // `attempt` events would charge it and contradict the file that says so.
+  const { project } = scratch({
+    journal: [
+      { ts: '2026-08-01T10:00:00Z', event: 'attempt', ticket: 'T-01-01', n: 1, outcome: 'pushed', signature: 'aaaa' },
+      { ts: '2026-08-01T10:10:00Z', event: 'attempt', ticket: 'T-01-01', n: 2, outcome: 'flake', signature: 'aaaa' },
+      { ts: '2026-08-01T10:20:00Z', event: 'attempt', ticket: 'T-01-01', n: 2, outcome: 'pushed', signature: 'bbbb' },
+    ],
+    malformed: false,
+  });
+  const got = JSON.parse(run(project, ['T-01-01', '--json']).stdout);
+  assert.strictEqual(got.attempts, 2, 'two charged rounds, not three');
+  assert.strictEqual(got.next_n, 3);
+  assert.strictEqual(got.events.length, 3, 'the flake round is still RENDERED — it is evidence');
+});
+
+test('another ticket\'s attempts are not this ticket\'s number either', () => {
+  const { project } = scratch();
+  const got = JSON.parse(run(project, ['T-99-99', '--json']).stdout);
+  assert.strictEqual(got.attempts, 1);
+  assert.strictEqual(got.next_n, 2);
+});
+
+test('--limit trims what is SHOWN and never what is counted', () => {
+  // The count is the backstop's input; a display flag must not lower it, or
+  // `attempts > max_attempts` becomes a function of how much was printed.
+  const { project } = scratch();
+  const got = JSON.parse(run(project, ['T-01-01', '--json', '--limit', '1']).stdout);
+  assert.strictEqual(got.events.length, 1);
+  assert.strictEqual(got.attempts, 2, 'the record is the journal, not the window');
+  assert.strictEqual(got.next_n, 3);
+});
+
+test('the human rendering prints the number once, at the top', () => {
+  const { project } = scratch();
+  const out = textLines(run(project, ['T-01-01']).stdout);
+  assert.strictEqual(out[0], 'attempts=2 next_n=3', out.join('\n'));
+  assert.strictEqual(out.filter((l) => /next_n=/.test(l)).length, 1, 'once — not per event');
+});
+
+test('a fresh ticket still says so, under an honest next_n=1', () => {
+  const { project } = scratch();
+  const out = textLines(run(project, ['T-77-01']).stdout);
+  assert.strictEqual(out[0], 'attempts=0 next_n=1', out.join('\n'));
+  assert.ok(/no prior attempts recorded for T-77-01/.test(out[1]), out.join('\n'));
 });
 
 test('no journal at all reads as no history, not as a failure', () => {
@@ -184,7 +271,7 @@ test('--graph works from anywhere, in any position', () => {
   // would read "--graph" as the ticket id.
   const r = run(borrowed, ['--graph', graph, 'T-01-01']);
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.strictEqual(textLines(r.stdout).length, 4, r.stdout);
+  assert.strictEqual(eventLines(r.stdout).length, 4, r.stdout);
 });
 
 test('SHIPYARD_GRAPH_DIR does the same without touching the command line', () => {

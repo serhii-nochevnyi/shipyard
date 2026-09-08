@@ -36,6 +36,19 @@ const stateWith = (over = {}) => ({
   ...over,
 });
 
+// A board whose only content is a child HELD BEHIND A MOVING PARENT. The child's
+// own checks are green; the pipeline it is actually waiting for is the parent's,
+// and the board says which parent that is (`parent_of`, written by front.cjs).
+const heldOnly = (over = {}) => ciOnly({
+  waiting: { ci: [], dispatched: [], parent: ['T-01-02'], merge_human: [], human: [] },
+  parent_of: { 'T-01-02': 'T-01-01' },
+  ...over,
+});
+const heldState = (over = {}) => stateWith({
+  'T-01-02': { pr: 102, repo: 'acme/widgets', status: 'pr-open' },
+  ...over,
+});
+
 function project(front, state) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-ciwait-'));
   const g = path.join(dir, '.planning', 'graph');
@@ -60,6 +73,11 @@ const escalations = (dir) => {
 // A stub gh answering exactly the one call ci-wait makes. `rows` is the JSON it
 // returns for `pr checks`; `exit` mimics gh's habit of reporting CI state through
 // the EXIT CODE (8 = pending) while still printing JSON.
+//
+// Every row carries gh's own `bucket` next to its `state`, because that is what
+// gh returns and what check-state.cjs reads. A row WITHOUT one is PENDING by the
+// fail-closed rule, so a bucket-less fixture would sit in the wait forever — which
+// is the point of the two cases at the end of this suite.
 function stubGh(dir, rows, exit = 0) {
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin, { recursive: true });
@@ -104,7 +122,7 @@ test('a board of only LEFT-BEHIND work is not a reason to refuse', () => {
   // a guard starts lying, and the stop gate already honours the same rule.
   const dir = project(ciOnly({ actionable_count: 2, left_behind_count: 2,
     actionable: { ...EMPTY_ACTIONABLE, execute: ['T-00-01', 'T-00-02'] } }), stateWith());
-  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS' }]);
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
   const { code, json } = asJson(null, null, ['--interval', '1'], { dir, bin });
   assert.equal(code, 0, 'left-behind work must not block a legitimate wait');
   assert.equal(json.settled, 'T-01-01', 'the wait proceeded and returned normally');
@@ -138,11 +156,70 @@ test('no board at all is refused with the directory it looked in', () => {
   assert.ok(/\.planning\/graph/.test(json.refusal), 'and it names where it looked');
 });
 
+suite('ci-wait — a wait on the parent is a wait, and the parent is what it watches');
+
+// D4. `waiting.parent` is a child whose base is about to move: the only thing that
+// will ever release it is the PARENT's pipeline. A waiter that reads `waiting.ci`
+// alone called that board "nothing is waiting on CI" and refused — while the stop
+// gate's CI-only branch, reading the same empty bucket, allowed the stop. Between
+// the two, the one thing that would have moved the board was a pipeline nobody
+// watched.
+
+test('a held child is a legitimate wait, and it watches the PARENT\'s PR', () => {
+  const dir = project(heldOnly(), heldState());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }], 8);
+  const { code, json } = asJson(null, null, ['--timeout', '2', '--interval', '1'], { dir, bin });
+  assert.equal(code, 0, 'this is a wait, not a refusal');
+  assert.equal(json.waited, true);
+  assert.deepEqual(json.watched.map((w) => w.pr), [101], 'the PARENT\'s PR, not the child\'s');
+  assert.equal(json.watched[0].id, 'T-01-01', 'and the record belongs to the ticket whose pipeline it is');
+  assert.deepEqual(json.watched[0].via, ['T-01-02'], 'naming who is held behind it');
+});
+
+test('a parent already in waiting.ci is watched ONCE', () => {
+  // The common shape: the parent's checks are running, so the parent is in
+  // `waiting.ci` and is also what its child waits for. Two entries would poll the
+  // same PR twice per round and record the same empty window twice.
+  const dir = project(
+    heldOnly({ waiting: { ci: ['T-01-01'], dispatched: [], parent: ['T-01-02'], merge_human: [], human: [] } }),
+    heldState());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }], 8);
+  const { json } = asJson(null, null, ['--timeout', '2', '--interval', '1'], { dir, bin });
+  assert.deepEqual(json.watched.map((w) => w.pr), [101]);
+  assert.deepEqual(json.watched[0].via, ['T-01-02'], 'and it still says who else is waiting on it');
+  assert.equal(waits(dir).tickets['T-01-01'].empty_windows, 1, 'one window, not two');
+});
+
+test('a held child whose board names no parent is a board bug, not a wait', () => {
+  // An older front on disk carries `waiting.parent` with no `parent_of`. Guessing
+  // the parent here would mean re-deriving graph semantics in the waiter — the
+  // duplication this ticket exists to remove. Say so and name the re-sync.
+  const { code, json } = asJson(heldOnly({ parent_of: {} }), heldState());
+  assert.equal(code, 3);
+  assert.ok(/T-01-02/.test(json.refusal), 'the refusal names the held ticket');
+  assert.ok(/state-sync/.test(json.hint), 'and the remedy is a re-sync, not patience');
+});
+
+test('an orphan held child is refused even when another ticket gives the script a watch target', () => {
+  // The dangerous shape: T-01-01 is legitimately in `waiting.ci`, so `watch` is
+  // non-empty on its own — the old code let that mask a SEPARATE held ticket with
+  // no `parent_of` entry, silently dropping it instead of surfacing the stale
+  // front. Everything else on the board looking fine is exactly what must not
+  // hide this.
+  const { code, json } = asJson(heldOnly({
+    waiting: { ci: ['T-01-01'], dispatched: [], parent: ['T-01-02'], merge_human: [], human: [] },
+    parent_of: {},
+  }), heldState());
+  assert.equal(code, 3, 'one orphan held ticket refuses the whole wait, not just its own entry');
+  assert.ok(/T-01-02/.test(json.refusal), 'the refusal names the orphan ticket');
+  assert.ok(/state-sync/.test(json.hint), 'and the remedy is a re-sync, not patience');
+});
+
 suite('ci-wait — the wait itself');
 
 test('it returns the moment a PR settles, green', () => {
   const dir = project(ciOnly(), stateWith());
-  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS' }, { name: 'Lint', state: 'SUCCESS' }]);
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }, { name: 'Lint', state: 'SUCCESS', bucket: 'pass' }]);
   const { code, json } = asJson(null, null, ['--interval', '1'], { dir, bin });
   assert.equal(code, 0, 'a settled PR ends the wait');
   assert.equal(json.waited, true, 'and reports that it waited');
@@ -153,11 +230,36 @@ test('it returns the moment a PR settles, green', () => {
 
 test('RED counts as settled — a waiter must not hold a run hostage to a failure', () => {
   const dir = project(ciOnly(), stateWith());
-  const bin = stubGh(dir, [{ name: 'Tests', state: 'FAILURE' }, { name: 'Lint', state: 'SUCCESS' }]);
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'FAILURE', bucket: 'fail' }, { name: 'Lint', state: 'SUCCESS', bucket: 'pass' }]);
   const { code, json } = asJson(null, null, ['--interval', '1'], { dir, bin });
   assert.equal(code, 0, 'the answer exists; whether it is good news is the caller\'s business');
   assert.equal(json.settled, 'T-01-01', 'it settled');
   assert.equal(json.checks.failing, 1, 'and the failure is reported, not hidden');
+});
+
+test('a state no local list ever named is failing when gh says bucket fail', () => {
+  // ci-wait's own list had FAILURE/ERROR/CANCELLED/TIMED_OUT/ACTION_REQUIRED and
+  // nothing else, so STARTUP_FAILURE fell through both filters and this settle
+  // reported `failing: 0` — a green answer on a pipeline that never started. gh
+  // buckets it `fail`, and now so does the waiter.
+  const dir = project(ciOnly(), stateWith());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'STARTUP_FAILURE', bucket: 'fail' }], 1);
+  const { code, json } = asJson(null, null, ['--interval', '1'], { dir, bin });
+  assert.equal(code, 0, 'the answer exists, so the wait is over');
+  assert.equal(json.settled, 'T-01-01');
+  assert.equal(json.checks.failing, 1, 'and it is reported as the failure it is');
+});
+
+test('a row with no bucket keeps waiting — it must never be counted as settled', () => {
+  // Fail closed, on the waiter's side: an unreadable check cannot be green, and
+  // `total > 0 && pending === 0` is what ends the wait. An older gh with no
+  // `bucket` field used to end it AND hand the loop a green tally.
+  const dir = project(ciOnly(), stateWith());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS' }]);
+  const { code, json } = asJson(null, null, ['--timeout', '2', '--interval', '1'], { dir, bin });
+  assert.equal(code, 0, 'a timeout is still a legitimate return');
+  assert.equal(json.settled, null, 'nothing settled: the row could not be read');
+  assert.equal(json.timed_out, true);
 });
 
 test("gh's non-zero exit on a pending pipeline is DATA, not an error", () => {
@@ -166,7 +268,7 @@ test("gh's non-zero exit on a pending pipeline is DATA, not an error", () => {
   // pipeline indistinguishable from a missing gh — state-sync.cjs carries the
   // same note for the same reason.
   const dir = project(ciOnly(), stateWith());
-  const bin = stubGh(dir, [{ name: 'Tests', state: 'IN_PROGRESS' }], 8);
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }], 8);
   const { code, json } = asJson(null, null, ['--timeout', '2', '--interval', '1'], { dir, bin });
   assert.equal(code, 0, 'a timeout is still a legitimate return');
   assert.equal(json.timed_out, true, 'it waited rather than erroring out');
@@ -176,7 +278,7 @@ test("gh's non-zero exit on a pending pipeline is DATA, not an error", () => {
 
 test('a timeout returns 0 and tells the caller to re-sync anyway', () => {
   const dir = project(ciOnly(), stateWith());
-  const bin = stubGh(dir, [{ name: 'Tests', state: 'PENDING' }]);
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'PENDING', bucket: 'pending' }]);
   const r = run(null, null, ['--timeout', '2', '--interval', '1'], { dir, bin });
   assert.equal(r.code, 0, 'a waiter that dies noisily teaches the loop to stop calling it');
   assert.ok(/nothing settled/.test(r.out), 'the human form says what happened');
@@ -220,8 +322,40 @@ suite('ci-wait — it terminates, and a stuck pipeline ends with a person');
 // front, which makes the gate's CI branch stop firing through the rule it already
 // had. No second special case anywhere.
 
-const pending = (dir) => stubGh(dir, [{ name: 'Tests', state: 'IN_PROGRESS' }], 8);
+const pending = (dir) => stubGh(dir, [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }], 8);
 const shortWait = ['--timeout', '1', '--interval', '1'];
+
+// A `gh` that never answers at all — no valid JSON, ever. Distinct from `pending`
+// (which DOES answer, just with a pending check): this is what a rate limit, an
+// outage, or an expired token looks like from here.
+function stubGhDown(dir) {
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\necho "gh: rate limited" >&2\nexit 1\n', { mode: 0o755 });
+  return bin;
+}
+
+// A stub that answers differently PER PR NUMBER (the third positional arg to
+// `gh pr checks <pr> --json ...`), so two watched tickets on two different PRs
+// can be driven independently in the same round.
+function stubGhByPr(dir, map) {
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const cases = Object.entries(map)
+    .map(([pr, { rows, exit }]) => `  ${pr}) cat <<'J'\n${JSON.stringify(rows)}\nJ\n     exit ${exit || 0} ;;\n`)
+    .join('');
+  fs.writeFileSync(path.join(bin, 'gh'),
+    '#!/bin/sh\n' +
+    'if [ "$1 $2" = "pr checks" ]; then\n' +
+    '  case "$3" in\n' +
+    cases +
+    '  *) echo "stub gh: unhandled pr $3" >&2; exit 1 ;;\n' +
+    '  esac\n' +
+    'else\n' +
+    '  echo "stub gh: unhandled: $*" >&2; exit 1\n' +
+    'fi\n', { mode: 0o755 });
+  return bin;
+}
 
 test('an empty window is counted, bound to the delivery-state fingerprint', () => {
   const dir = project(ciOnly(), stateWith());
@@ -255,7 +389,7 @@ test('a settle forgets the whole run of empty windows', () => {
   const dir = project(ciOnly(), stateWith());
   asJson(null, null, shortWait, { dir, bin: pending(dir) });
   assert.equal(waits(dir).tickets['T-01-01'].empty_windows, 1, 'one window recorded');
-  const green = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS' }]);
+  const green = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
   const { json } = asJson(null, null, ['--interval', '1'], { dir, bin: green });
   assert.equal(json.settled, 'T-01-01', 'it settled');
   assert.equal(waits(dir).tickets['T-01-01'], undefined, 'and the record is gone');
@@ -271,6 +405,103 @@ test('the budget is tunable, and garbage in the env var does not disable it', ()
   const b2 = pending(d2);
   const { json: j2 } = asJson(null, null, shortWait, { dir: d2, bin: b2, env: { SHIPYARD_CI_WAIT_MAX_EMPTY: 'three' } });
   assert.equal(j2.escalated.length, 0, 'a garbage value falls back to the default, it does not park at once');
+});
+
+suite('ci-wait — an outage is not a stall');
+
+// A9 defect 1. When `gh` cannot be reached at all, every poll returns the same
+// "nothing readable" — not the same fact as a pipeline that genuinely has not
+// moved. Counting it as an empty window escalates every watched ticket after
+// one bad window each, and each park then needs a human to lift for no reason
+// but a rate limit.
+
+test('gh failing for the whole window is an outage, not a stall — nothing is recorded', () => {
+  const dir = project(ciOnly(), stateWith());
+  const bin = stubGhDown(dir);
+  const { code, json } = asJson(null, null, shortWait, { dir, bin });
+  assert.equal(code, 0, 'an outage still returns a code the loop can read');
+  assert.equal(json.outage, true, 'and says plainly that it is an outage, not a stall');
+  assert.equal(json.escalated.length, 0, 'nothing was parked from an outage');
+  assert.equal(waits(dir), null, 'ci-waits.json is untouched — no empty window was counted');
+});
+
+test("a settle on one ticket must not wipe another ticket's own window count", () => {
+  // A9 defect 2. `delete store.tickets[w.id]` used to run for EVERY watched
+  // ticket on any settle — a neighbour finishing wiped a ticket that had been
+  // stuck for two windows already.
+  const dir = project(
+    ciOnly({ waiting: { ci: ['T-01-01', 'T-01-05'], dispatched: [], merge_human: [], human: [] } }),
+    stateWith({ 'T-01-05': { pr: 105, repo: 'acme/widgets', status: 'pr-open' } }));
+  const bothPending = stubGhByPr(dir, {
+    101: { rows: [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }], exit: 8 },
+    105: { rows: [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }], exit: 8 },
+  });
+  // Two full windows where neither settles: B's count reaches 2.
+  asJson(null, null, shortWait, { dir, bin: bothPending });
+  asJson(null, null, shortWait, { dir, bin: bothPending });
+  assert.equal(waits(dir).tickets['T-01-05'].empty_windows, 2, 'B accumulated two empty windows');
+
+  // Third window: A settles at once; B is still pending.
+  const aSettles = stubGhByPr(dir, {
+    101: { rows: [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }], exit: 0 },
+    105: { rows: [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }], exit: 8 },
+  });
+  const { json } = asJson(null, null, shortWait, { dir, bin: aSettles });
+  assert.equal(json.settled, 'T-01-01', 'A settled');
+  assert.equal(waits(dir).tickets['T-01-01'], undefined, "A's own record is cleared");
+  assert.equal(waits(dir).tickets['T-01-05'].empty_windows, 2,
+    "B's record survives A's settle — today it is deleted along with it");
+});
+
+suite('ci-wait — the window is sized from the observed CI, not a flat 15 minutes');
+
+// A9 defect 3. `TIMEOUT_S` default (15m) × `MAX_EMPTY` (3) is 45 minutes to
+// escalation regardless of the repo. `front.ci_estimates[ticket]` carries a
+// per-repo median PR lifetime; when it is present the window should default to
+// a fraction of it rather than the flat constant.
+
+test('the window is sized from ci_estimates when the front carries one, floored at 15m', () => {
+  const dir = project(ciOnly({ ci_estimates: { 'T-01-01': 2400 } }), stateWith()); // 40m estimate
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
+  // No --timeout: it settles on the first poll regardless of window size, so the
+  // derived window is never actually waited out — only the reported value is
+  // checked.
+  const { json } = asJson(null, null, ['--interval', '1'], { dir, bin });
+  assert.equal(json.settled, 'T-01-01');
+  assert.equal(json.window_s, 900, '2400/3=800s is below the 15-minute floor, so it clamps to 900');
+  assert.ok(/ci_estimates/.test(json.window_source || ''), 'and says where the window came from');
+});
+
+test('the derived window is clamped to an hour for a very slow repo', () => {
+  const dir = project(ciOnly({ ci_estimates: { 'T-01-01': 999999 } }), stateWith());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
+  const { json } = asJson(null, null, ['--interval', '1'], { dir, bin });
+  assert.equal(json.window_s, 3600, 'clamped to the one-hour ceiling');
+});
+
+test('an explicit --timeout overrides the estimate-derived window', () => {
+  const dir = project(ciOnly({ ci_estimates: { 'T-01-01': 2400 } }), stateWith());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
+  const { json } = asJson(null, null, ['--timeout', '600', '--interval', '1'], { dir, bin });
+  assert.equal(json.window_s, 600, 'an explicit --timeout always wins over an estimate');
+});
+
+test('SHIPYARD_CI_WAIT_TIMEOUT_S overrides the estimate, but not an explicit --timeout', () => {
+  const dir = project(ciOnly({ ci_estimates: { 'T-01-01': 2400 } }), stateWith());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
+  const { json: j1 } = asJson(null, null, ['--interval', '1'],
+    { dir, bin, env: { SHIPYARD_CI_WAIT_TIMEOUT_S: '300' } });
+  assert.equal(j1.window_s, 300, 'the env override wins over the derived estimate');
+  const { json: j2 } = asJson(null, null, ['--timeout', '120', '--interval', '1'],
+    { dir, bin, env: { SHIPYARD_CI_WAIT_TIMEOUT_S: '300' } });
+  assert.equal(j2.window_s, 120, 'an explicit --timeout still wins over the env override');
+});
+
+test('with no ci_estimates entry, the window stays the flat default', () => {
+  const dir = project(ciOnly(), stateWith());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
+  const { json } = asJson(null, null, ['--interval', '1'], { dir, bin });
+  assert.equal(json.window_s, 15 * 60, 'no estimate for this ticket — the original 15-minute default holds');
 });
 
 test('a broken wait record never takes the wait down with it', () => {

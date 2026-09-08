@@ -13,8 +13,16 @@
 // `.planning/graph/delivery-log.jsonl` to one ticket's repair events and render
 // them compactly enough to paste into the next fixer's prompt.
 //
+//   attempts=2 next_n=3
 //   attempt n=2 role=ci-fix model=opus signature=ab12cd34 outcome=pushed \
 //     hypothesis="off-by-one in the pagination cursor"
+//
+// The first line is the COUNT, and it is why this reader gained a number at all
+// (ADR-002 D8). The attempt counter lived only in the babysit session, so
+// `attempts > max_attempts` restarted at 1 in every resumed run and a ticket
+// that had already burned four rounds was handed five more. The journal already
+// held every round: `--json` reports `attempts` and `next_n`, and the loop reads
+// the number instead of remembering it.
 //
 // Fields are rendered ONLY when the event carries them. Events written before
 // `signature`/`hypothesis` existed render without them, and a ticket nobody has
@@ -144,12 +152,30 @@ const ordered = events
 // order is what shows a fixer that a hypothesis was tried and did not hold.
 const shown = limit === null ? ordered : ordered.slice(-limit);
 
+// The attempt NUMBER, derived from the same ordered array rather than a second
+// pass over the journal. Two rules make it the number the loop can act on:
+//
+//   * a quarantined flake is NOT charged — ADR-001 D3, and deliver.md says the
+//     flake round is logged at an UNCHANGED `n`. A raw count of `attempt` events
+//     would charge it and contradict the file that instructs it;
+//   * counted over `ordered`, never over `shown` — `--limit` decides what a
+//     fixer READS, and a display flag must not lower the backstop's input.
+const attempts = ordered.filter((e) => e.event === 'attempt' && e.outcome !== 'flake').length;
+const nextN = attempts + 1;
+
 if (asJson) {
-  // Raw means raw, and an empty set is `[]`. A JSON consumer must never be
-  // handed the prose line below.
-  console.log(JSON.stringify(shown, null, 2));
+  // Raw still means raw — `events` is exactly the array this used to print — with
+  // the two derived numbers beside it. `next_n` is the key deliver.md names, so
+  // it is spelled in one place, here. A JSON consumer must never be handed the
+  // prose line below, and an empty history is `events: []` with `next_n: 1`.
+  console.log(JSON.stringify({ ticket, attempts, next_n: nextN, events: shown }, null, 2));
   process.exit(0);
 }
+
+// The number the next round logs as `n=`, once, above the record it belongs to —
+// including for a ticket nobody has attempted, where `next_n=1` is the answer and
+// the sentence below is the evidence for it.
+console.log(`attempts=${attempts} next_n=${nextN}`);
 
 if (!shown.length) {
   console.log(`no prior attempts recorded for ${ticket}`);

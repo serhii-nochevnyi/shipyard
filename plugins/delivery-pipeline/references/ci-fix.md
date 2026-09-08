@@ -13,6 +13,22 @@ ticket's worktree and ONLY within the ticket's scope.
   actually did, not a recollection of it.
 
 ## Procedure
+
+0. **If your dispatch says the base moved (`base-merge`) — do this before
+   anything else.** It is not a fallback for a rejected push; it is step 0,
+   because until it is done every other step measures the branch against a merge
+   base that no longer exists: the failure you reproduce may be the stale base
+   itself, and a fix verified against it is verified against code nobody will
+   land. Merge the base in and **never rebase** (see the section below for why):
+
+   ```
+   node <scripts>/base-merge.cjs <ticket> --worktree <your worktree> --base <base ref>
+   ```
+
+   Then re-run the failing command. If it is green, the stale base WAS the
+   failure: say so, commit the merge, push, and report `fixed` with that as the
+   hypothesis — do not go looking for a second cause.
+
 1. Read the failure log first. Identify the actual failing assertion/step —
    not the first red line.
 2. Reproduce locally in the worktree before changing anything, using the
@@ -59,8 +75,11 @@ ticket's worktree and ONLY within the ticket's scope.
 ## When the base has moved under you
 
 In a cascade your base moves every time a parent squashes into the epic, so a red
-check that is really "my branch has not seen the parent's change yet" is common —
-and the push in step 6 can be rejected as non-fast-forward.
+check that is really "my branch has not seen the parent's change yet" is common.
+The guard detects it and says so in the dispatch (`base-merge` — step 0 above);
+you can also meet it as a non-fast-forward rejection of the push in step 6, or as
+`git status` telling you the branch has diverged. Same fact, same remedy,
+whichever way you found out.
 
 **Merge the base in; never rebase onto it.**
 

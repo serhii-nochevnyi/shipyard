@@ -108,6 +108,12 @@ const DEFAULTS = {
   //               off — every merge is a human's, the pre-sentinel behaviour.
   sentinel: 'auto',                   // auto | off
   auto_merge: 'epic',                 // epic | off
+  // A PR with NO reported checks is not a green PR — nothing ran. Both the board
+  // (front.cjs) and the guard (sentinel.cjs) therefore withhold the two actions
+  // that walk such a PR towards landing, and this is the project's way to say
+  // "there is no CI here, that absence is expected". Opt-in only, and it fails
+  // towards the human: see the coercion below.
+  merge_without_ci: false,
   max_attempts: 5,                    // babysit rounds per PR (the backstop, not the ladder's input)
   // K of the k-distinct rule: this many DIFFERENT failure signatures with no
   // green means the ticket is wrong, not the fix (ADR-001 D2). Same default as
@@ -271,6 +277,20 @@ function loadConfig(root) {
   if (cfg.sentinel === 'off' && cfg.auto_merge === 'epic') {
     warnings.push('pipeline.sentinel is off, so nothing can auto-merge — treating pipeline.auto_merge as off (turn the sentinel back on to land ticket PRs automatically)');
     cfg.auto_merge = 'off';
+  }
+  // The polarity is deliberately asymmetric, the same way `preauthorized` is in
+  // front.cjs: this knob authorizes landing a PR that nothing verified, so only
+  // a real `true` (or the string a hand-edited JSON file acquires) opts in, and
+  // anything else is reported rather than silently honoured. A misspelling here
+  // must not read as consent.
+  if (cfg.merge_without_ci === 'true') cfg.merge_without_ci = true;
+  if (cfg.merge_without_ci === 'false') cfg.merge_without_ci = false;
+  if (typeof cfg.merge_without_ci !== 'boolean') {
+    warnings.push(
+      `pipeline.merge_without_ci "${cfg.merge_without_ci}" is not a boolean — using false, ` +
+      'so a PR with no reported checks stays a human\'s merge (values: true | false)'
+    );
+    cfg.merge_without_ci = false;
   }
   if (!['epic-stacked', 'direct-to-main'].includes(cfg.integration_mode)) {
     warnings.push(`pipeline.integration_mode "${cfg.integration_mode}" is unknown — falling back to epic-stacked`);
