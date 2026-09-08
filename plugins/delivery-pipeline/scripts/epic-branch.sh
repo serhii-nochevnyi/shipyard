@@ -94,33 +94,6 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# ONE exit handler for both things this script has to give back: the git lock and
-# the temporary worktree `refresh` merges in. Two `trap … EXIT` installations do
-# not compose — the second silently replaces the first — so a `refresh` that
-# installed its own would have leaked the lock on every conflict.
-lock_held=false
-refresh_tmp_parent=""
-# `set -e` is LIVE inside an EXIT trap (`bash -ec 'trap "false; echo reached" EXIT;
-# true'` prints nothing and exits 1), so a handler whose job is to GIVE RESOURCES
-# BACK must not be interruptible by it: one failing step would skip every step
-# after it — leaking the git lock — and would also turn a refresh that succeeded
-# into a non-zero exit. Hence `set +e` here, and `return $st` so the status that
-# triggered the trap is the status that survives it.
-cleanup() {
-  local st=$?
-  set +e
-  if [[ -n "$refresh_tmp_parent" ]]; then
-    if [[ -d "$refresh_tmp_parent/epic-refresh" ]]; then
-      git -C "$repo_root" worktree remove --force "$refresh_tmp_parent/epic-refresh" >/dev/null 2>&1
-    fi
-    rm -rf "$refresh_tmp_parent"
-    git -C "$repo_root" worktree prune >/dev/null 2>&1
-  fi
-  $lock_held && rm -rf "$git_lock"
-  return $st
-}
-trap cleanup EXIT INT TERM
-
 acquire_git_lock() {
   local ttl=120 waited=0 mtime
   while ! mkdir "$git_lock" 2>/dev/null; do
