@@ -1514,6 +1514,70 @@ has "an unreachable repository blocks its ticket in direct-to-main too" "$dmboar
 hasnt "neither is offered to an executor that would find nothing" "$dmboard" "ready: T-03-01"
 
 
+# ── a corrupt configuration permits no mutation (ADR-004 D2, audit F03) ──────
+# The audit's own fixture: a config TRUNCATED mid-object that CONTAINED
+# `auto_merge: "off"`. loadConfig turned it into the DEFAULTS — `auto_merge:
+# epic` — with only a warning, so the board published the policy the file forbade
+# and the guard offered T-01-01 as a merge. End to end here, across all three
+# readers, because the defect was that each of them read the same broken file and
+# none of them refused.
+cfgproj="$W/corrupt"
+cp -r "$proj" "$cfgproj"
+printf '%s' '{"pipeline": {"auto_merge": "off"' > "$cfgproj/.planning/config.json"
+cfgboard="$W/corrupt-board.txt"
+( cd "$cfgproj" && node "$SCRIPTS/state-sync.cjs" > "$cfgboard" 2>"$W/corrupt-sync.err" ) \
+  || bad "state-sync still runs on a corrupt config" "$(cat "$W/corrupt-sync.err")"
+
+has "the board says the config is INVALID" "$cfgboard" "INVALID"
+has "…and that no policy is in effect" "$cfgboard" "no policy is in effect"
+has "…and the auto-merge policy is off, not the default epic" "$cfgboard" "auto-merge: off"
+hasnt "…and never says the defaults are in use" "$cfgboard" "using defaults"
+hasnt "the green + conform PR is NOT offered as a merge" "$cfgboard" "merge: T-01-01"
+
+cfgfront="$cfgproj/.planning/graph/delivery-front.json"
+[[ "$(node -e 'process.stdout.write(String(require(process.argv[1]).auto_merge))' "$cfgfront")" == "off" ]] \
+  && ok "the board FILE the loop reads carries auto_merge: off" \
+  || bad "the front must not publish a policy read off an unparseable file"
+
+cfgduty="$W/corrupt-duty.json"
+( cd "$cfgproj" && node "$SCRIPTS/sentinel.cjs" duty --json > "$cfgduty" 2>/dev/null ) \
+  || bad "sentinel duty still runs on a corrupt config"
+if node -e '
+const d = require(process.argv[1]);
+if (d.config_valid !== false) { console.error("config_valid=" + d.config_valid); process.exit(1); }
+if ((d.items || []).length !== 0) { console.error("items=" + JSON.stringify(d.items)); process.exit(1); }
+if (d.auto_merge !== "off") { console.error("auto_merge=" + d.auto_merge); process.exit(1); }
+process.exit(0);
+' "$cfgduty" 2>"$W/corrupt-duty.err"; then
+  ok "duty hands out no actions at all while the config does not parse"
+else
+  bad "duty must stand down on a corrupt config" "$(cat "$W/corrupt-duty.err")"
+fi
+
+cfgtext="$W/corrupt-duty.txt"
+( cd "$cfgproj" && node "$SCRIPTS/sentinel.cjs" duty > "$cfgtext" 2>/dev/null ) || bad "duty prints on a corrupt config"
+has "duty says config-invalid" "$cfgtext" "config-invalid:"
+[[ "$(grep -c . "$cfgtext")" == "1" ]] \
+  && ok "…in exactly one line, not a board built from defaults" \
+  || bad "duty must print one line on a corrupt config" "$(cat "$cfgtext")"
+
+cfgmerge="$W/corrupt-merge.json"
+( cd "$cfgproj" && node "$SCRIPTS/sentinel.cjs" merge T-01-01 --dry-run --json > "$cfgmerge" 2>/dev/null ) \
+  || bad "sentinel merge exits 0 on a corrupt config — a refusal is data"
+if node -e '
+const j = require(process.argv[1]);
+const r = (j.results || [])[0] || {};
+if (r.would_merge) { console.error("would_merge on an unreadable config"); process.exit(1); }
+if (!(r.blockers || []).some((b) => /config unreadable/.test(b) && b.includes("config.json"))) {
+  console.error("blockers=" + JSON.stringify(r.blockers)); process.exit(1);
+}
+process.exit(0);
+' "$cfgmerge" 2>"$W/corrupt-merge.err"; then
+  ok "merge --dry-run refuses and names the file a person can open"
+else
+  bad "merge must refuse on a corrupt config" "$(cat "$W/corrupt-merge.err"; cat "$cfgmerge")"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" == 0 ]] || exit 1
