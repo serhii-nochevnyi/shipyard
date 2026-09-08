@@ -606,4 +606,52 @@ test('a lower-numbered phase still in flight is a move, and the wait is refused'
   assert.ok(/T-24-05/.test(json.refusal), 'and the refusal names the work that was nearly skipped');
 });
 
+// ── the last sleep of a wait, and why this is arithmetic and not a run ───────
+//
+// `sleep(s)` is called once per round with the time LEFT until the deadline, so
+// `s` is fractional whenever the remainder is smaller than `--interval`. Both
+// numbers handed to `spawnSync` must be integers: `timeout` is rejected with
+// ERR_OUT_OF_RANGE otherwise. It used to be `(s + 5) * 1000`, and in IEEE754
+// that is not always an integer — **12.1% of whole-millisecond remainders
+// between 1s and 30s produce one that is not** (3495 of 29000; e.g. s = 1.001
+// gives 6000.999999999999). So the throw landed on roughly one final sleep in
+// eight, immediately BEFORE the deadline branch — which means the empty-window
+// counting and the three-strikes escalation this script exists to reach never
+// ran on those invocations, and the waiter died noisily: the exact thing its own
+// header calls the reason a loop stops calling it.
+//
+// Two reasons this is tested as a rule rather than by running the script.
+// First, every other timeout test here passes `--interval 1`, so `Math.min(1, …)`
+// always picked the integer and the defect was invisible to all of them — and
+// widening the interval only makes the FINAL sleep fractional, which is a race
+// against how long a stubbed poll takes. Probed at `--timeout 3/5/8`: no crash,
+// because those remainders happened to land on the 88% that are integral. A test
+// that reproduces one run in eight is a flake, not a guard.
+// Second, `ci-wait.cjs` runs its CLI at require time, so the helper cannot be
+// imported and asserted directly.
+// So: pin the RULE over the range that broke, and pin that the code uses it.
+test('the sleep timeout is an integer for every remainder, not 88% of them', () => {
+  const msFor = (s) => Math.round(s * 1000) + 5000;   // the shipped derivation
+  const old = (s) => (s + 5) * 1000;                  // what it replaced
+  let brokeBefore = 0;
+  for (let ms = 1000; ms < 30000; ms += 1) {
+    const s = ms / 1000;
+    assert.ok(Number.isInteger(msFor(s)), `a remainder of ${s}s must yield an integer timeout`);
+    if (!Number.isInteger(old(s))) brokeBefore += 1;
+  }
+  assert.ok(brokeBefore > 3000,
+    'and the old derivation really did break on thousands of them — if this drops, ' +
+    'the arithmetic being guarded has changed and the guard needs rereading');
+});
+
+test('the script derives both sleep numbers from ONE rounding', () => {
+  // The regression was two separate derivations from the same fractional input:
+  // the `-e` body rounded, the `timeout` did not. Pin the shape, because the
+  // rule above cannot see which expression the file actually passes.
+  const src = fs.readFileSync(SCRIPT, 'utf8');
+  assert.ok(/const ms = Math\.round\(s \* 1000\)/.test(src), 'the milliseconds are rounded once');
+  assert.ok(/timeout: ms \+ 5000/.test(src), 'and the timeout is derived from that same integer');
+  assert.ok(!/timeout: \(s \+ 5\) \* 1000/.test(src), 'never again from the fractional seconds');
+});
+
 done();
