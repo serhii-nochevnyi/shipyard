@@ -63,6 +63,33 @@ const attempt = (sig, head, extra = {}) => ({
   ...extra,
 });
 
+// A green is what ENDS a run of failures. ADR-002 D8 says "a green or a merge"
+// and names no event, so the journal shapes that prove one belong to
+// failure-signature.cjs itself: an `attempt` that came back green, a `merge`, and
+// a `flake` — the record a re-run that PASSED leaves behind — for as long as no
+// `flake_lift` withdraws it. Any of them RESETS the distinct window: three
+// failures each of which was fixed are not "K distinct signatures with no green
+// between them", which is the sentence that file's own header has always claimed
+// and the code did not implement.
+const greenAttempt = (extra = {}) => ({
+  ts: '2026-08-21T10:00:00.000Z',
+  event: 'attempt',
+  ticket: 'T-20-01',
+  pr: 512,
+  role: 'ci-fix',
+  model: 'sonnet',
+  outcome: 'green',
+  ...extra,
+});
+
+const merged = (extra = {}) => ({
+  ts: '2026-08-21T10:00:00.000Z',
+  event: 'merge',
+  ticket: 'T-20-01',
+  pr: 512,
+  ...extra,
+});
+
 const seed = (graph, events) =>
   fs.writeFileSync(
     path.join(graph, 'delivery-log.jsonl'),
@@ -188,13 +215,27 @@ test('garbage input degrades to `unknown` and still exits 0', () => {
   const got = compute('  nothing useful here, just prose', ['--job', 'ci']);
   assert.equal(got.error_class, 'unknown');
   assert.equal(got.test_id, 'ci');
-  assert.ok(/^[0-9a-f]{16}$/.test(got.signature), 'still a usable signature');
+  assert.ok(/^unknown-[0-9a-f]{16}$/.test(got.signature), 'still a usable signature');
+});
+
+test('a degraded signature SAYS it is degraded, and stays job-specific', () => {
+  // The k-rule has to exclude these, and it reads nothing but the signature
+  // string out of the journal — no error_class is recorded there. So the shape
+  // carries the fact. The hash stays, because "unknown in the unit job" and
+  // "unknown in the build job" are still two different things to re-run.
+  const readable = compute(JEST_CLEAN);
+  assert.ok(/^[0-9a-f]{16}$/.test(readable.signature),
+    'a readable failure is unchanged — every signature already in a journal still matches');
+  const a = compute('just prose', ['--job', 'unit']);
+  const b = compute('just prose', ['--job', 'build']);
+  assert.ok(a.signature.startsWith('unknown-') && b.signature.startsWith('unknown-'));
+  assert.notEqual(a.signature, b.signature);
 });
 
 test('an empty log is not an error either', () => {
   const got = compute('');
   assert.equal(got.error_class, 'unknown');
-  assert.ok(/^[0-9a-f]{16}$/.test(got.signature));
+  assert.ok(/^unknown-[0-9a-f]{16}$/.test(got.signature));
 });
 
 test('an unreadable --log file is degraded data, never a stopped round', () => {
@@ -257,6 +298,115 @@ test('--k moves the threshold', () => {
   assert.equal(verdict(project, ['--signature', 'bbbb', '--head', 'h2', '--k', '4']).verdict, 'progress');
 });
 
+test('a green between the failures RESETS the distinct window', () => {
+  // The defect this closes: three sequential failures, each of them FIXED and
+  // each followed by a green, parked a healthy ticket as a plan defect on the
+  // third. `priorSignatures` was every signature the ticket had ever journalled,
+  // so "K distinct" counted work that had already succeeded.
+  const { project, graph } = scratch();
+  seed(graph, [
+    attempt('aaaa', 'h1'), greenAttempt(),
+    attempt('bbbb', 'h2'), greenAttempt(),
+  ]);
+  const got = verdict(project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']);
+  assert.notEqual(got.verdict, 'plan_defect',
+    'two fixed failures are not evidence that the plan is wrong');
+  assert.equal(got.verdict, 'first', 'the window since the last green is empty');
+  assert.equal(got.distinct, 1, 'only the current failure is in the window');
+});
+
+test('a `merge` resets it too, and so does a green re-run', () => {
+  const { project, graph } = scratch();
+  seed(graph, [attempt('aaaa', 'h1'), merged(), attempt('bbbb', 'h2')]);
+  assert.equal(verdict(project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']).distinct, 2,
+    'the window starts after the merge: bbbb + cccc');
+
+  // Seeded through the WRITER, not by hand: "the re-run passed" lands on disk as
+  // a `flake` event, and the first cut of this test asserted the reset against a
+  // synthetic `{event: 'flake_rerun', outcome: 'green'}` — a record no permitted
+  // path produces, so it proved a reader branch nothing could ever reach.
+  const other = scratch();
+  seed(other.graph, [attempt('aaaa', 'h1')]);
+  const r = run(
+    ['rerun', 'T-20-01', '--signature', 'zzzz', '--head', 'h1', '--outcome', 'green', '--job', 'unit'],
+    { cwd: other.project }
+  );
+  assert.equal(r.status, 0, `rerun must succeed (${r.stderr})`);
+  assert.equal(journalLines(other.graph)[1].event, 'flake',
+    'the shape under test is the one the writer appends');
+  fs.appendFileSync(
+    path.join(other.graph, 'delivery-log.jsonl'), JSON.stringify(attempt('bbbb', 'h2')) + '\n'
+  );
+  assert.equal(verdict(other.project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']).distinct, 2,
+    'a re-run that passed is a green as much as a merge is');
+});
+
+test('a green BEFORE the run of failures does not excuse them', () => {
+  // The window is "since the last green", not "the whole journal minus greens":
+  // three distinct failures after one still park the ticket.
+  const { project, graph } = scratch();
+  seed(graph, [greenAttempt(), attempt('aaaa', 'h1'), attempt('bbbb', 'h2')]);
+  const got = verdict(project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']);
+  assert.equal(got.verdict, 'plan_defect');
+  assert.equal(got.distinct, 3);
+});
+
+test('another ticket\'s green does not reset THIS ticket\'s window', () => {
+  const { project, graph } = scratch();
+  seed(graph, [
+    attempt('aaaa', 'h1'),
+    { ...merged(), ticket: 'T-20-02' },
+    attempt('bbbb', 'h2'),
+  ]);
+  assert.equal(verdict(project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']).verdict, 'plan_defect');
+});
+
+test('`unknown` never counts towards K — two unreadable logs are not two failures', () => {
+  // A degraded signature says "nobody could read this log", not "a second,
+  // different failure". Counted as distinct it spent a ticket's plan-defect
+  // budget on the CI's own illegibility.
+  const { project, graph } = scratch();
+  seed(graph, [attempt('unknown', 'h1'), attempt('unknown', 'h2')]);
+  const got = verdict(project, ['--signature', 'aaaa', '--head', 'h3', '--k', '3']);
+  assert.equal(got.distinct, 1, 'only the one readable failure is distinct');
+  assert.notEqual(got.verdict, 'plan_defect');
+});
+
+test('the real degraded form — `unknown-<hash>` — is excluded the same way', () => {
+  // compute() keeps the job discrimination inside an unknown signature, so the
+  // exclusion has to match the shape it actually emits, not just the bare word.
+  const { project, graph } = scratch();
+  const u1 = compute('nothing useful here at all', ['--job', 'unit']).signature;
+  const u2 = compute('nothing useful here at all', ['--job', 'build']).signature;
+  assert.notEqual(u1, u2, 'two unreadable logs from different checks stay distinguishable');
+  seed(graph, [attempt(u1, 'h1'), attempt(u2, 'h2')]);
+  const got = verdict(project, ['--signature', 'aaaa', '--head', 'h3', '--k', '3']);
+  assert.equal(got.distinct, 1);
+  assert.notEqual(got.verdict, 'plan_defect');
+});
+
+test('an unreadable failure still reads as `repeat` when it keeps happening', () => {
+  // Excluded from the k-rule, NOT from the rest: the current signature still
+  // participates in first/repeat/flake_candidate, or an illegible log would be
+  // invisible to the strategy switch as well.
+  const { project, graph } = scratch();
+  seed(graph, [attempt('unknown', 'h1'), attempt('unknown', 'h2')]);
+  const got = verdict(project, ['--signature', 'unknown', '--head', 'h3', '--k', '3']);
+  assert.equal(got.verdict, 'repeat');
+  assert.equal(got.seen, 2, 'seen still counts THIS signature');
+  assert.equal(got.distinct, 0, 'and nothing readable is on the board');
+});
+
+test('the same signature at the same HEAD across a green is still `flake_candidate`', () => {
+  // Deliberate asymmetry, and it is the whole point of the candidate rule: the
+  // tree did not move and CI went green in between, so this failure is
+  // instability by definition. The green resets the k-rule's window; it must not
+  // blind the head comparison, or a flake gets a fixer dispatched at it.
+  const { project, graph } = scratch();
+  seed(graph, [attempt('aaaa', 'h1'), greenAttempt()]);
+  assert.equal(verdict(project, ['--signature', 'aaaa', '--head', 'h1']).verdict, 'flake_candidate');
+});
+
 test('the same signature at the SAME head is `flake_candidate`', () => {
   // The tree did not change between the two failures, so the loop must re-run the
   // job once before dispatching a fixer at it.
@@ -308,8 +458,12 @@ test('the quarantine is scoped to (ticket, signature)', () => {
   const { project, graph } = scratch();
   seed(graph, [attempt('aaaa', 'h1')]);
   run(['rerun', 'T-20-01', '--signature', 'aaaa', '--head', 'h1', '--outcome', 'green'], { cwd: project, encoding: 'utf8' });
-  assert.equal(verdict(project, ['--signature', 'bbbb', '--head', 'h1']).verdict, 'progress',
+  const got = verdict(project, ['--signature', 'bbbb', '--head', 'h1']);
+  assert.notEqual(got.verdict, 'flake',
     'another signature on the same ticket is not quarantined');
+  // And the re-run that passed is a green, so it emptied the window behind it:
+  // `first`, not `progress`, is what "nothing on record since the green" reads as.
+  assert.equal(got.verdict, 'first');
 });
 
 test('`lift` ends the quarantine', () => {
@@ -318,8 +472,11 @@ test('`lift` ends the quarantine', () => {
   run(['rerun', 'T-20-01', '--signature', 'aaaa', '--head', 'h1', '--outcome', 'green'], { cwd: project, encoding: 'utf8' });
   const l = run(['lift', 'T-20-01', '--signature', 'aaaa'], { cwd: project, encoding: 'utf8' });
   assert.equal(l.status, 0, `lift must succeed (${l.stderr})`);
-  assert.equal(verdict(project, ['--signature', 'aaaa', '--head', 'h2']).verdict, 'repeat',
+  const got = verdict(project, ['--signature', 'aaaa', '--head', 'h2']);
+  assert.equal(got.verdict, 'repeat',
     'the signature is deterministic again, not quarantined');
+  assert.equal(got.seen, 1,
+    'the lift withdrew the green as well, so the failure it excused is back in the window');
 });
 
 test('a quarantine recorded AFTER a lift holds again', () => {
@@ -332,6 +489,33 @@ test('a quarantine recorded AFTER a lift holds again', () => {
     { ts: '2026-08-21T10:06:00.000Z', event: 'flake', ticket: 'T-20-01', signature: 'aaaa', head: 'h1' },
   ]);
   assert.equal(verdict(project, ['--signature', 'aaaa', '--head', 'h2']).verdict, 'flake');
+});
+
+test('a lifted `flake` stops being a green — the window it emptied comes back', () => {
+  // The green a `flake` records IS the re-run passing; `flake_lift` says the
+  // signature counts as a real failure again, which withdraws the excuse and with
+  // it the green. Ticket-wide, not just for the lifted signature: an unretracted
+  // lift would leave the window empty for every other failure too, and three real
+  // ones would read as `progress` while the board says the plan is wrong.
+  const events = [
+    attempt('aaaa', 'h1'),
+    { ts: '2026-08-21T10:05:00.000Z', event: 'flake', ticket: 'T-20-01', signature: 'aaaa', head: 'h1', job: 'unit', by: 'failure-signature' },
+    attempt('bbbb', 'h2'),
+  ];
+
+  const standing = scratch();
+  seed(standing.graph, events);
+  assert.equal(verdict(standing.project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']).distinct, 2,
+    'while the quarantine stands the flake is a green: bbbb + cccc');
+
+  const lifted = scratch();
+  seed(lifted.graph, [
+    ...events,
+    { ts: '2026-08-21T10:07:00.000Z', event: 'flake_lift', ticket: 'T-20-01', signature: 'aaaa' },
+  ]);
+  const got = verdict(lifted.project, ['--signature', 'cccc', '--head', 'h3', '--k', '3']);
+  assert.equal(got.distinct, 3, 'the lift put aaaa back on the board: aaaa + bbbb + cccc');
+  assert.equal(got.verdict, 'plan_defect');
 });
 
 test('pre-phase attempt events with no signature are ignored, not fatal', () => {

@@ -138,4 +138,51 @@ test('the flake trio is refused — those events ARE the quarantine store', () =
   assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
 });
 
+suite('log-event — base_merge is a declared event, and never an attempt');
+
+// The guard's base-merge push had no journal event of its own: logging it as
+// `attempt` would have charged a mechanical merge to the ticket's REPAIR record,
+// so it went out under an ad-hoc slug instead. Declaring it costs nothing and
+// buys one name every reader already knows.
+
+const BASE_MERGE = ['base_merge', 'ticket=T-24-06', 'pr=42', 'base=epic/24-x', 'head=deadbee'];
+
+test('base_merge is accepted and written with the four fields that make it readable', () => {
+  const { project, graph } = scratch();
+  const r = run(project, BASE_MERGE);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const rec = JSON.parse(lines(graph)[0]);
+  assert.strictEqual(rec.event, 'base_merge');
+  assert.strictEqual(rec.ticket, 'T-24-06');
+  assert.strictEqual(rec.pr, 42);
+  assert.strictEqual(rec.base, 'epic/24-x');
+  assert.strictEqual(rec.head, 'deadbee');
+});
+
+test('a base_merge missing a declared field is logged, and warned about', () => {
+  // Same rule as an unknown `role` right below it in the script: telemetry must
+  // not lose a real event over its label, but it stops being silent. A
+  // base_merge with no `base` cannot be read back as "which base moved in".
+  const { project, graph } = scratch();
+  const r = run(project, ['base_merge', 'ticket=T-24-06', 'pr=42', 'head=deadbee']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(/WARNING/.test(r.stderr), r.stderr);
+  assert.ok(/base/.test(r.stderr), 'the warning must name the missing field');
+  assert.strictEqual(lines(graph).length, 1, 'and the event is still recorded');
+});
+
+test('attempt-history does not charge a mechanical merge to the repair record', () => {
+  const { project } = scratch();
+  assert.strictEqual(run(project, BASE_MERGE).status, 0);
+  const AH = path.join(
+    __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'attempt-history.cjs'
+  );
+  const h = spawnSync('node', [AH, 'T-24-06', '--json'], { cwd: project, encoding: 'utf8' });
+  assert.strictEqual(h.status, 0, h.stderr);
+  const out = JSON.parse(h.stdout);
+  assert.strictEqual(out.attempts, 0, 'a base merge is not a repair attempt');
+  assert.strictEqual(out.next_n, 1);
+  assert.deepStrictEqual(out.events, [], 'and it is not rendered to the next fixer as one');
+});
+
 done();

@@ -36,16 +36,21 @@ argv="$*"
 case "$argv" in
   "repo view --json defaultBranchRef"*) echo "main" ;;
   "pr list --state open"*)
-    # the open-only pass: reviewDecision + body (the gate_status trailer)
+    # the open-only pass: reviewDecision + body (the gate_status trailer). PR
+    # 101's trailer names the SAME head the row below reports, which is the
+    # ordinary path — the mismatch has its own fixture at the end of this file.
     cat <<'JSON'
-[{"number":101,"reviewDecision":null,"body":"Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green"},
+[{"number":101,"reviewDecision":null,"body":"Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=1111111111111111111111111111111111111111"},
  {"number":102,"reviewDecision":"CHANGES_REQUESTED","body":"Ticket: T-01-02\n"}]
 JSON
     ;;
   "pr list --state all"*)
+    # `headRefOid` rides in the bulk window: it is the head the trailer's verdict
+    # is bound to, and state-sync records it as head_sha. Without it the board
+    # reads a conform verdict and cannot tell which diff it covered.
     cat <<'JSON'
-[{"number":101,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-01-root","baseRefName":"epic/01-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/101","title":"T-01-01: root"},
- {"number":102,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-02-child","baseRefName":"ticket/T-01-01-root","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/102","title":"T-01-02: child"}]
+[{"number":101,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-01-root","headRefOid":"1111111111111111111111111111111111111111","baseRefName":"epic/01-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/101","title":"T-01-01: root"},
+ {"number":102,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-02-child","headRefOid":"3333333333333333333333333333333333333333","baseRefName":"ticket/T-01-01-root","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/102","title":"T-01-02: child"}]
 JSON
     ;;
   "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/01-demo\nticket/T-01-01-root\nticket/T-01-02-child\n' ;;
@@ -63,16 +68,40 @@ JSON
   "api repos/{owner}/{repo}/compare/ticket/T-01-02-child...ticket/T-01-01-root"*)
     echo "${SENTINEL_SMOKE_BEHIND:-0}" ;;
   "api repos/{owner}/{repo}/compare"*) echo 0 ;;
-  "pr checks 101"*) echo '[{"name":"build","state":"SUCCESS"}]' ;;
+  # Every row carries gh's own `bucket` beside its `state`. check-state.cjs reads
+  # the bucket and a row WITHOUT one is PENDING by its fail-closed rule, so a
+  # bucket-less fixture would park this whole smoke on "checks still running".
+  "pr checks 101"*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
   # The checkpoint-parent case drives PR 102 to green; the earlier duty cases
   # rely on it being red. Both are served: SENTINEL_SMOKE_GREEN_102 flips it.
   "pr checks 102"*)
-    if [ -n "${SENTINEL_SMOKE_GREEN_102:-}" ]; then echo '[{"name":"build","state":"SUCCESS"}]';
-    else echo '[{"name":"build","state":"FAILURE"}]'; exit 1; fi ;;
+    if [ -n "${SENTINEL_SMOKE_GREEN_102:-}" ]; then echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]';
+    # ACTION_REQUIRED on purpose: gh buckets it `fail`, and it was in NO
+    # hand-written list on the state-sync/sentinel side — it fell through both
+    # filters and the board read the PR as GREEN. This fixture pins the third
+    # consumer on that exact row, end to end (tally → ci-fix duty → refusal).
+    else echo '[{"name":"build","state":"ACTION_REQUIRED","bucket":"fail"}]'; exit 1; fi ;;
   # The merge gate re-reads the PR from live GitHub by design, so the stub has to
-  # answer it for any merge-path assertion.
+  # answer it for any merge-path assertion. This one reports NO headRefOid and
+  # its trailer names no head — deliberately, because that pair is the
+  # backwards-compatibility case (a PR verdicted by the previous release on a
+  # board synced by it): with nothing to compare, the verdict still stands, and
+  # every merge-path assertion below therefore measures its own rule and not the
+  # head binding.
   "pr view 102 --json"*)
     echo '{"number":102,"state":"OPEN","isDraft":false,"baseRefName":"ticket/T-01-01-root","headRefName":"ticket/T-01-02-child","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-01-02\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green"}' ;;
+  # `reviewers.cjs unresolved` reads the review decision AND the merge state off
+  # one PR view — which is how `duty` learns the base moved without a second call
+  # per PR per round. SENTINEL_SMOKE_MERGE_STATE is the moved-base fixture.
+  "pr view 101 --json"*)
+    printf '{"number":101,"state":"OPEN","isDraft":false,"baseRefName":"epic/01-demo","headRefName":"ticket/T-01-01-root","mergeStateStatus":"%s","reviewDecision":null,"body":"Ticket: T-01-01"}\n' "${SENTINEL_SMOKE_MERGE_STATE:-CLEAN}" ;;
+  # The merge path's own three calls. The retarget asks GitHub which open PRs
+  # each graph child has RIGHT NOW instead of trusting the last sync — a child
+  # whose PR opened after it used to be left pointing at a branch that had just
+  # been squashed away. One call per child, on the merge path only.
+  "pr list --head "*) echo "${SENTINEL_SMOKE_CHILD_PRS:-[]}" ;;
+  "pr merge "*) echo "squash-merged" ;;
+  "pr edit "*) echo "retargeted" ;;
   *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;
 esac
 STUB
@@ -111,6 +140,10 @@ q() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).re
   && ok "the gate_status trailer is parsed out of the PR body" \
   || bad "the gate_status trailer is parsed out of the PR body" "got: $(q T-01-01 gate arch-review)"
 
+[[ "$(q T-01-01 head_sha)" == "1111111111111111111111111111111111111111" ]] \
+  && ok "the head the verdict is bound to is recorded from the bulk window" \
+  || bad "the head the verdict is bound to is recorded" "got: $(q T-01-01 head_sha)"
+
 [[ "$(q T-01-01 merge_scope)" == "stacked" ]] \
   && ok "a PR targeting the epic is inside the stack" \
   || bad "a PR targeting the epic is inside the stack" "got: $(q T-01-01 merge_scope)"
@@ -121,8 +154,18 @@ q() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).re
 
 has "the board names the auto-merge policy" "$board" "auto-merge: epic"
 has "the board names the sentinel's duty" "$board" "sentinel:"
+# The trailer names the head the PR is actually at, so the verdict counts. This
+# is the control for the mismatch fixture at the end of the file: without it, a
+# `finalize` there would prove nothing about the head and everything about some
+# unrelated gap in the fixture.
 has "the green + conform PR is a merge for the guard" "$board" "merge: T-01-01"
-has "the red PR is fix work" "$board" "fix: T-01-02"
+# The red child is stacked on T-01-01, whose PR is still open — so it is HELD,
+# not offered. The board used to print `fix: T-01-02` here while `duty` (below)
+# answered `wait-parent` for the same ticket: the loop dispatched nothing (the
+# bucket is the guard's), the guard declined the work the board offered, and the
+# run had no move it could take. This pair of assertions is that defect.
+has "a red child of an open parent is held behind it, and the parent is named" "$board" "parent: T-01-02→T-01-01"
+hasnt "and is never offered as fix while the base is about to move" "$board" "fix: T-01-02"
 has "an unmerged mergeable PR is not a fixpoint" "$board" "fixpoint: NO"
 
 # the guard's own view of the same state
@@ -139,6 +182,58 @@ d() { node -e 'const s=require(process.argv[1]);process.stdout.write(String(s.it
 [[ "$(d T-01-01 depth)" == "0" && "$(d T-01-02 depth)" == "1" ]] \
   && ok "duty carries the stack depth it sorts by" \
   || bad "duty carries the stack depth" "got: $(d T-01-01 depth) / $(d T-01-02 depth)"
+# The guard reads the base's freshness for every PR it is about to walk towards a
+# merge, off the same `reviewers.cjs unresolved` call plus one compare. `clean`
+# and `unknown` are different answers and only one of them may end in `merge`:
+# before this, `duty` said `merge` and the gate — which does ask — refused.
+[[ "$(d T-01-01 base_check)" == "clean" ]] \
+  && ok "duty records that the base WAS checked, not merely that nothing objected" \
+  || bad "duty records the base check" "got: $(d T-01-01 base_check)"
+
+# ── the duty names a remedy that exists ──────────────────────────────────────
+# Same fixture, one fact changed: GitHub reports the PR as BEHIND. `mergeOne`
+# refused this with a message and no action and `duty` had no action for it at
+# all, so the board offered the merge the gate was about to decline and the
+# documented fix was reachable by prose alone.
+bmduty="$W/bm-duty.json"
+( cd "$proj" && SENTINEL_SMOKE_MERGE_STATE=BEHIND \
+    node "$SCRIPTS/sentinel.cjs" duty --json > "$bmduty" 2>/dev/null ) || bad "duty runs against a BEHIND PR"
+if node -e '
+const d = require(process.argv[1]);
+const i = (d.items || []).find((x) => x.ticket === "T-01-01");
+if (!i) { console.error("no duty item"); process.exit(1); }
+if (i.action !== "base-merge") { console.error("action=" + i.action + " why=" + i.why); process.exit(1); }
+if (!/base-merge\.cjs/.test(i.why)) { console.error("the remedy must be a command: " + i.why); process.exit(1); }
+if (!d.items.some((x) => x.action === "base-merge") || d.actionable_count < 1) {
+  console.error("a base merge is work the guard can do NOW: " + JSON.stringify(d.actionable_count)); process.exit(1);
+}
+process.exit(0);
+' "$bmduty" 2>"$W/bm.err"; then
+  ok "duty answers base-merge for a PR whose base moved, and names the script"
+else
+  bad "duty answers base-merge" "$(cat "$W/bm.err"; head -20 "$bmduty")"
+fi
+
+# …and the board's own file must place that same ticket in the bucket the guard's
+# answer implies. One predicate (parent-moving.cjs), two readers, one state file:
+# asserted end to end rather than trusted, because this is the pair that drifted.
+front="$proj/.planning/graph/delivery-front.json"
+if node -e '
+const f = require(process.argv[1]);
+const held = (f.waiting && f.waiting.parent) || [];
+const actionable = Object.values(f.actionable || {}).flat();
+if (!held.includes("T-01-02")) { console.error("waiting.parent=" + JSON.stringify(held)); process.exit(1); }
+if (actionable.includes("T-01-02")) { console.error("still actionable: " + actionable.join(", ")); process.exit(1); }
+if ((f.parent_of || {})["T-01-02"] !== "T-01-01") { console.error("parent_of=" + JSON.stringify(f.parent_of)); process.exit(1); }
+if (!(f.sentinel || {}).waiting_parent || !f.sentinel.waiting_parent.includes("T-01-02")) {
+  console.error("sentinel=" + JSON.stringify(f.sentinel)); process.exit(1);
+}
+process.exit(0);
+' "$front" 2>"$W/front.err"; then
+  ok "the board file agrees with duty: the child is waiting.parent, and the guard owns it"
+else
+  bad "the board file agrees with duty" "$(cat "$W/front.err")"
+fi
 
 # auto_merge: off must hand the same PR back to a human, and restore the old
 # fixpoint semantics (nothing actionable → the run may end)
@@ -397,6 +492,297 @@ if blockers_match 'the base moved'; then
   bad "an up-to-date branch is not called stale" "$(head -20 "$mergeout")"
 else
   ok "an up-to-date branch is not called stale"
+fi
+# …and it actually LANDS, end to end through the stub. The negative assertion
+# above passed for years while the merge died one line later on a `gh pr merge`
+# the stub did not answer, which proved only that the refusal text differed.
+if node -e '
+const r = require(process.argv[1]).results[0];
+process.exit(r && r.merged === true ? 0 : 1);
+' "$mergeout" 2>/dev/null; then
+  ok "an up-to-date, green, conform PR inside the stack is squashed in"
+else
+  bad "the guard lands the PR it accepted" "$(head -20 "$mergeout")"
+fi
+
+# ── a conform verdict is bound to the head it judged ────────────────────────
+# Field-found on PR #31 and twice after it: verdict → undraft → a bot review lands
+# on the now-undrafted PR → review-fix pushes → CI goes green again, and the
+# untouched trailer still read `conform`. The guards were stripping it BY HAND to
+# force a re-review. End to end here, because the defect spanned all three
+# consumers: state-sync must RECORD the head, the board must not offer the merge,
+# the duty must name the work, and the gate must refuse against the LIVE head.
+JUDGED=1111111111111111111111111111111111111111
+LIVE=2222222222222222222222222222222222222222
+hbproj="$W/hbproj"
+mkdir -p "$hbproj/.planning/graph" "$W/bin3"
+cat > "$W/bin3/gh" <<STUB
+#!/usr/bin/env bash
+argv="\$*"
+case "\$argv" in
+  "repo view --json defaultBranchRef"*) echo "main" ;;
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  # The row reports the head the branch is at NOW; the body's trailer names the
+  # head the verdict was rendered against. That is the whole fixture.
+  "pr list --state all"*)
+    echo '[{"number":301,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","baseRefName":"epic/02-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/301","title":"T-02-01: moved"}]' ;;
+  "pr list --state open"*)
+    echo '[{"number":301,"reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=$JUDGED"}]' ;;
+  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/02-demo\nticket/T-02-01-moved\n' ;;
+  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
+  "api graphql"*)
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  "pr checks 301"*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
+  # The merge gate compares against the LIVE head, not the board's — the cached
+  # one is minutes old, which is the same reasoning the whole live
+  # re-verification exists to refuse.
+  "pr view 301 --json"*)
+    echo '{"number":301,"state":"OPEN","isDraft":false,"baseRefName":"epic/02-demo","headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=$JUDGED"}' ;;
+  *) echo "stub gh: unhandled call: \$argv" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin3/gh"
+cat > "$hbproj/.planning/graph/tickets.json" <<'JSON'
+{
+  "epics": { "2": { "branch": "epic/02-demo", "repos": [null] } },
+  "tickets": {
+    "T-02-01": { "phase": "2", "epic": "epic/02-demo", "branch": "ticket/T-02-01-moved",
+                 "title": "moved", "depends_on": [], "risk": "low" }
+  }
+}
+JSON
+echo '{"pipeline":{}}' > "$hbproj/.planning/config.json"
+
+hbboard="$W/hb-board.txt"
+( cd "$hbproj" && PATH="$W/bin3:$PATH" node "$SCRIPTS/state-sync.cjs" > "$hbboard" 2>"$W/hb-err.txt" ) \
+  || bad "state-sync runs against the moved-head stub" "$(cat "$W/hb-err.txt")"
+hbstate="$hbproj/.planning/graph/delivery-state.json"
+hq() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).reduce((o,k)=>o&&o[k],s);process.stdout.write(String(v))' "$hbstate" "$@"; }
+
+[[ "$(hq T-02-01 head_sha)" == "$LIVE" ]] \
+  && ok "state-sync records the PR's current head, not the trailer's" \
+  || bad "state-sync records the current head" "got: $(hq T-02-01 head_sha)"
+[[ "$(hq T-02-01 gate head)" == "$JUDGED" ]] \
+  && ok "and keeps the head the trailer claims, so the two can be compared" \
+  || bad "the trailer's head is parsed" "got: $(hq T-02-01 gate head)"
+
+hasnt "the board does not offer a merge for a verdict about another diff" "$hbboard" "merge: T-02-01"
+has "it offers the arch-review instead" "$hbboard" "finalize: T-02-01"
+
+hbduty="$W/hb-duty.json"
+( cd "$hbproj" && PATH="$W/bin3:$PATH" node "$SCRIPTS/sentinel.cjs" duty --json > "$hbduty" 2>/dev/null ) \
+  || bad "duty runs against the moved-head stub"
+if node -e '
+const i = require(process.argv[1]).items.find((x) => x.ticket === "T-02-01");
+// Both SHAs, or the remedy ("re-judge THIS head") is a guess — and "no conform
+// trailer" would be a lie about a body that visibly carries one.
+process.exit(i && i.action === "arch-review" && /1111111/.test(i.why) && /2222222/.test(i.why) ? 0 : 1);
+' "$hbduty" 2>/dev/null; then
+  ok "duty owes arch-review again and names both heads"
+else
+  bad "duty owes arch-review again" "$(head -20 "$hbduty")"
+fi
+
+hbmerge="$W/hb-merge.json"
+( cd "$hbproj" && PATH="$W/bin3:$PATH" node "$SCRIPTS/sentinel.cjs" merge T-02-01 --dry-run --json > "$hbmerge" 2>/dev/null ) || true
+if node -e '
+const r = require(process.argv[1]).results[0];
+const refused = r && r.merged === false && r.would_merge !== true;
+const named = refused && r.blockers.some((b) => /1111111/.test(b) && /2222222/.test(b) && /arch-review/.test(b));
+process.exit(named ? 0 : 1);
+' "$hbmerge" 2>/dev/null; then
+  ok "the gate refuses the merge against the live head, naming both"
+else
+  bad "the gate refuses a superseded verdict" "$(head -20 "$hbmerge")"
+fi
+
+# ── a PR where nothing ran is not a green PR ─────────────────────────────────
+# Б3, end to end across the three readers. `failing === 0 && pending === 0` is
+# the green test, and an EMPTY check list satisfies it without anything having
+# run: such a PR reached `actionable.merge` and was squashed into the epic with
+# no test having executed. state-sync warns about it in a line nobody reads at
+# 3am, so the board, the duty and the gate now all answer "a human's merge"
+# unless the project has declared the repo has no CI.
+NCHEAD=4444444444444444444444444444444444444444
+ncproj="$W/nociproj"
+mkdir -p "$ncproj/.planning/graph" "$W/bin4"
+cat > "$ncproj/.planning/graph/tickets.json" <<'JSON'
+{ "epics": { "3": { "branch": "epic/03-demo", "repos": [null] } },
+  "tickets": { "T-03-01": { "phase": "3", "epic": "epic/03-demo", "branch": "ticket/T-03-01-noci",
+                            "title": "no ci here", "depends_on": [], "risk": "low" } } }
+JSON
+cat > "$ncproj/.planning/graph/delivery-state.json" <<JSON
+{ "T-03-01": { "status": "pr-open", "pr": 401, "draft": false, "branch": "ticket/T-03-01-noci",
+               "epic": "epic/03-demo", "pr_base": "epic/03-demo", "merge_scope": "stacked",
+               "gate": { "arch-review": "conform", "head": "$NCHEAD" }, "head_sha": "$NCHEAD",
+               "checks": { "total": 0, "failing": 0, "pending": 0, "none_reported": true } } }
+JSON
+echo '{"pipeline":{}}' > "$ncproj/.planning/config.json"
+cat > "$W/bin4/gh" <<STUB
+#!/usr/bin/env bash
+argv="\$*"
+if [ -n "\${SENTINEL_SMOKE_LOG:-}" ]; then printf '%s\n' "\$argv" >> "\$SENTINEL_SMOKE_LOG"; fi
+case "\$argv" in
+  "repo view --json defaultBranchRef"*) echo "main" ;;
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  # The repo has no CI configured at all: gh exits 0 and reports nothing, which
+  # is the one case that genuinely means "no checks" (see sentinel.cjs ghChecks).
+  "pr checks 401"*) echo -n "" ;;
+  "pr view 401 --json"*)
+    echo '{"number":401,"state":"OPEN","isDraft":false,"baseRefName":"epic/03-demo","headRefName":"ticket/T-03-01-noci","headRefOid":"$NCHEAD","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-03-01\n\ngate_status: arch-review=conform, checks=green, head=$NCHEAD"}' ;;
+  "api graphql"*)
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  "api repos/"*"/compare/"*) echo 0 ;;
+  "pr list --head "*) echo "[]" ;;
+  "pr merge "*) echo "squash-merged" ;;
+  *) echo "stub gh4: unhandled call: \$argv" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin4/gh"
+
+# The board, from the state file alone — front.cjs needs no GitHub at all.
+( cd "$ncproj" && node "$SCRIPTS/front.cjs" --json > "$W/nc-front.json" 2>"$W/nc-front.err" ) \
+  || bad "front.cjs runs on the no-CI fixture" "$(cat "$W/nc-front.err")"
+if node -e '
+const f = require(process.argv[1]);
+const actionable = Object.values(f.actionable || {}).flat();
+if (actionable.includes("T-03-01")) { console.error("still actionable: " + actionable.join(", ")); process.exit(1); }
+if (!((f.waiting || {}).merge_human || []).includes("T-03-01")) { console.error("waiting=" + JSON.stringify(f.waiting)); process.exit(1); }
+if (!/merge_without_ci/.test(f.why["T-03-01"] || "")) { console.error("why=" + f.why["T-03-01"]); process.exit(1); }
+process.exit(0);
+' "$W/nc-front.json" 2>"$W/nc-front.err2"; then
+  ok "the board calls a PR with no reported checks a human's merge, and names the setting"
+else
+  bad "the board holds the no-CI PR" "$(cat "$W/nc-front.err2")"
+fi
+
+( cd "$ncproj" && PATH="$W/bin4:$PATH" node "$SCRIPTS/sentinel.cjs" duty --json > "$W/nc-duty.json" 2>/dev/null ) || true
+if node -e '
+const i = require(process.argv[1]).items.find((x) => x.ticket === "T-03-01");
+process.exit(i && i.action === "human-merge" && /merge_without_ci/.test(i.why) ? 0 : 1);
+' "$W/nc-duty.json" 2>/dev/null; then
+  ok "duty agrees with the board rather than offering the merge it would refuse"
+else
+  bad "duty holds the no-CI PR" "$(head -30 "$W/nc-duty.json")"
+fi
+
+( cd "$ncproj" && PATH="$W/bin4:$PATH" node "$SCRIPTS/sentinel.cjs" merge T-03-01 --json > "$W/nc-merge.json" 2>/dev/null ) || true
+if node -e '
+const r = require(process.argv[1]).results[0];
+process.exit(r && r.merged === false && r.blockers.some((b) => /merge_without_ci/.test(b)) ? 0 : 1);
+' "$W/nc-merge.json" 2>/dev/null; then
+  ok "the gate refuses to land a PR where nothing ran"
+else
+  bad "the gate refuses the no-CI merge" "$(head -30 "$W/nc-merge.json")"
+fi
+
+# …and the project that genuinely has no CI says so and gets its merge — with
+# the squash pinned to the head every gate above it was checked against.
+echo '{"pipeline":{"merge_without_ci":true}}' > "$ncproj/.planning/config.json"
+( cd "$ncproj" && PATH="$W/bin4:$PATH" SENTINEL_SMOKE_LOG="$W/nc-argv.log" \
+    node "$SCRIPTS/sentinel.cjs" merge T-03-01 --json > "$W/nc-merge2.json" 2>/dev/null ) || true
+if node -e '
+const r = require(process.argv[1]).results[0];
+process.exit(r && r.merged === true ? 0 : 1);
+' "$W/nc-merge2.json" 2>/dev/null; then
+  ok "merge_without_ci lets the same PR land (the control)"
+else
+  bad "merge_without_ci lets the PR land" "$(head -30 "$W/nc-merge2.json")"
+fi
+if grep -q -- "pr merge 401 --squash --match-head-commit $NCHEAD" "$W/nc-argv.log"; then
+  ok "the squash pins the head the gate was checked against"
+else
+  bad "the squash pins the verified head" "$(grep '^pr merge' "$W/nc-argv.log" || echo 'no pr merge call logged')"
+fi
+
+# ── a resync writes the front it means ───────────────────────────────────────
+# THREE writers produce delivery-front.json — front.cjs's CLI, dispatch-record's
+# `refreshFront` and state-sync — and only the last one was blind to the two
+# durable overlays. Measured 2026-09-07 while delivering this phase: a background
+# guard ran state-sync while six to ten tickets were with agents, the board came
+# back `execute: …/finalize: …` with `waiting.dispatched: []`, and the stop gate
+# blocked over work in flight THREE times in one session — each time repaired by
+# hand with `dispatch-record.cjs mark`. The guards sync on their own schedule, so
+# no sequencing of the main loop's calls closes that window; only state-sync
+# applying the overlay itself does.
+#
+# Its own fixture, deliberately: the assertions above share `$proj` and this case
+# has to run state-sync three times over a mutating store.
+dproj="$W/dispproj"
+mkdir -p "$dproj/.planning/graph"
+cp "$proj/.planning/graph/tickets.json" "$dproj/.planning/graph/tickets.json"
+echo '{"pipeline":{}}' > "$dproj/.planning/config.json"
+dfront="$dproj/.planning/graph/delivery-front.json"
+dstore="$dproj/.planning/graph/dispatches.json"
+dboard="$W/disp-board.txt"
+sync_d() { ( cd "$dproj" && node "$SCRIPTS/state-sync.cjs" > "$dboard" 2>"$W/disp-err.txt" ) \
+  || bad "state-sync runs on the dispatch fixture" "$(cat "$W/disp-err.txt")"; }
+
+# The control, and acceptance criterion "without a dispatch record the board is
+# unchanged": the same verdict the shared fixture produces at the top of the file.
+sync_d
+has "no dispatch record: the board offers the merge as before" "$dboard" "merge: T-01-01"
+has "no dispatch record: one item is actionable" "$dboard" "front: 1 actionable now"
+
+# A live record for the ticket the board would otherwise offer.
+node -e '
+const fs = require("fs");
+fs.writeFileSync(process.argv[1], JSON.stringify({
+  tickets: { "T-01-01": { role: "pr-sentinel", at: new Date().toISOString() } },
+}, null, 2) + "\n");
+' "$dstore"
+sync_d
+has "a resync keeps a dispatched ticket off the board" "$dboard" "dispatched: T-01-01"
+has "…and reports nothing actionable rather than re-offering it" "$dboard" "front: 0 actionable now"
+if node -e '
+const f = require(process.argv[1]);
+if (!f.dispatches_applied_at) { console.error("no dispatches_applied_at: " + Object.keys(f).join(", ")); process.exit(1); }
+if (!((f.waiting || {}).dispatched || []).includes("T-01-01")) { console.error("waiting=" + JSON.stringify(f.waiting)); process.exit(1); }
+const actionable = Object.values(f.actionable || {}).flat();
+if (actionable.includes("T-01-01")) { console.error("still actionable: " + actionable.join(", ")); process.exit(1); }
+process.exit(0);
+' "$dfront" 2>"$W/disp-front.err"; then
+  ok "the written front carries the overlay and stamps when it was applied"
+else
+  bad "the written front carries the overlay" "$(cat "$W/disp-front.err")"
+fi
+
+# Expiry stays the store's decision and nothing else's: an out-of-TTL record must
+# suppress nothing, or a killed session parks a ticket forever.
+node -e '
+const fs = require("fs");
+fs.writeFileSync(process.argv[1], JSON.stringify({
+  tickets: { "T-01-01": { role: "pr-sentinel", at: "2020-01-01T00:00:00Z" } },
+}, null, 2) + "\n");
+' "$dstore"
+sync_d
+has "an expired dispatch suppresses nothing" "$dboard" "merge: T-01-01"
+hasnt "…and never reaches the waiting line" "$dboard" "dispatched: T-01-01"
+
+# ── the same sync must not flatten a park's lifetime ─────────────────────────
+# state-sync read `activeEscalations` — the flat {ticket: reason} view, which has
+# already discarded the kind — where both other writers read `activeParks`. A
+# plan_defect park therefore reached the board wearing the ESCALATION sentence
+# ("it lifts once the PR moves"), which is false for a verdict bound to the plan
+# hash: pushing to the PR lifts nothing, and the person told otherwise waits.
+# `formatFront` never prints `why`, so the board being asserted here is the FILE.
+rm -f "$dstore"
+mkdir -p "$dproj/.planning/phases/01-demo"
+dplan="$dproj/.planning/phases/01-demo/01-01-PLAN.md"
+printf -- '---\nphase: 1\nplan: 1\n---\n\n## Goal\n\nroot\n' > "$dplan"
+( cd "$dproj" && node "$SCRIPTS/escalation-record.cjs" mark-plan-defect T-01-01 "$dplan" \
+    "the plan names an endpoint that does not exist" > /dev/null 2>"$W/disp-park.err" ) \
+  || bad "mark-plan-defect records the park" "$(cat "$W/disp-park.err")"
+sync_d
+if node -e '
+const why = (require(process.argv[1]).why || {})["T-01-01"] || "";
+if (!/the park lifts when the plan file changes/.test(why)) { console.error("why=" + why); process.exit(1); }
+if (/It lifts by itself once the PR moves/.test(why)) { console.error("the PR sentence: " + why); process.exit(1); }
+process.exit(0);
+' "$dfront" 2>"$W/disp-park2.err"; then
+  ok "a plan_defect park is described by the rule that actually expires it"
+else
+  bad "a plan_defect park keeps its own lifetime through a resync" "$(cat "$W/disp-park2.err")"
 fi
 
 echo

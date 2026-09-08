@@ -48,13 +48,14 @@
 //
 // A stop gate can only refuse once per turn, though, so the pair still has to
 // TERMINATE, and it must not do so by leaving a stuck pipeline unattended. That is
-// what the wait record below is for: three consecutive timeouts with nothing on
-// the board moving is 45 minutes of a pipeline that is not going to settle, and
-// the honest end of that is a person, not more patience. So this script ESCALATES
-// itself at that point — and because an escalation park drops the ticket from the
-// front (`front.cjs` reads `activeParks`), the CI bucket empties and the gate goes
-// quiet through the rule it already had. The loop terminates structurally rather
-// than by a special case.
+// what the wait record below is for: three consecutive timeouts in which one
+// ticket's own pipeline did not move (45m at the default window, longer where
+// the front's `ci_estimates` size it up) is a pipeline that is not going to
+// settle, and the honest end of that is a person, not more patience. So this
+// script ESCALATES itself at that point — and because an escalation park drops
+// the ticket from the front (`front.cjs` reads `activeParks`), the CI bucket
+// empties and the gate goes quiet through the rule it already had. The loop
+// terminates structurally rather than by a special case.
 //
 // It also refuses when tickets are `waiting.dispatched`: an agent completion is a
 // wake-up the runtime gives for free and gives sooner. Waiting on CI while an
@@ -75,6 +76,7 @@ const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock
 // reimplemented: two stores that expire against the same subject must not come to
 // disagree about what "the PR moved" means.
 const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
+const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 
 const argv = process.argv.slice(2);
 const JSON_OUT = argv.includes('--json');
@@ -94,7 +96,21 @@ function flag(name, dflt) {
 // minutes observed), short enough that one call is a bounded commitment the
 // caller can decide to repeat. The loop re-syncs and re-decides between calls,
 // so a stuck pipeline costs one window, not a night.
-const TIMEOUT_S = flag('--timeout', 15 * 60);
+//
+// This is the FLOOR/DEFAULT only. Once the watch list is known, an explicit
+// `--timeout` (tracked here as TIMEOUT_S_EXPLICIT) or `SHIPYARD_CI_WAIT_TIMEOUT_S`
+// still wins outright; short of that, the window is resized from the front's
+// own `ci_estimates` — see the "WINDOW SIZING" block below.
+const TIMEOUT_S_EXPLICIT = argv.includes('--timeout');
+let TIMEOUT_S = flag('--timeout', 15 * 60);
+const WINDOW_FLOOR_S = 15 * 60;
+const WINDOW_CEIL_S = 60 * 60;
+// Same "positive number or ignore it" rule as SHIPYARD_CI_WAIT_MAX_EMPTY below —
+// a garbage env value must fall back, not disable the sizing it was meant to tune.
+const ENV_TIMEOUT_S = (() => {
+  const v = Number(process.env.SHIPYARD_CI_WAIT_TIMEOUT_S);
+  return Number.isFinite(v) && v > 0 ? v : null;
+})();
 const INTERVAL_S = flag('--interval', 30);
 
 // Same resolution and the same flag spelling as log-event.cjs / drift-record.cjs
@@ -175,8 +191,23 @@ if (dispatched.length) {
     'An agent completion wakes the run for free and sooner; this would only add latency.');
 }
 
+// WHAT COUNTS AS A WAIT ON A PIPELINE — two buckets, not one:
+//
+//   waiting.ci     — the ticket's own checks are still running;
+//   waiting.parent — the ticket is stacked on a parent whose PR is still open, so
+//                    the pipeline it is actually waiting for is the PARENT's.
+//
+// Reading only the first is what let a board full of held children report
+// "nothing is waiting on CI": this script refused, the stop gate's CI-only branch
+// saw the same empty bucket and allowed the stop, and the one thing that would
+// ever have released those children was a pipeline nobody was watching.
 const ciTickets = (front.waiting && front.waiting.ci) || [];
-if (!ciTickets.length) {
+const heldTickets = (front.waiting && front.waiting.parent) || [];
+// WHO the parent is comes from the BOARD (`front.cjs` writes `parent_of`), never
+// from tickets.json: re-deriving the graph here is exactly the duplication that
+// let the guard and the board disagree about this bucket in the first place.
+const parentOf = (front.parent_of && typeof front.parent_of === 'object') ? front.parent_of : {};
+if (!ciTickets.length && !heldTickets.length) {
   refuse('nothing is waiting on CI',
     front.fixpoint === true
       ? 'The board reports a fixpoint — this run is done.'
@@ -186,14 +217,60 @@ if (!ciTickets.length) {
 // One watch target per ticket, scoped to the ticket's OWN repo — the same rule
 // state-sync obeys, and for the same reason: watching the wrong repository
 // reports a foreign PR as pending forever.
+//
+// DEDUPLICATED BY PR, because the usual shape has a parent in `waiting.ci` AND a
+// child held behind it: two entries would poll the same PR twice a round and
+// count the same empty window twice against the same budget. The entry keeps the
+// PARENT's ticket id — the record and any escalation belong to the ticket whose
+// pipeline is stuck, and parking it is what lifts the hold on its children
+// (`parentIsMoving` reads its caller's parked set) — with `via` naming who else
+// is waiting on it.
+//
+// A parent that is already GREEN settles on the first poll and this returns at
+// once. That is the normal return path and is deliberately not filtered: a check
+// that finished between the sync and the wait looks identical from here. It can
+// only happen when the parent is neither actionable (the board would have been
+// refused above) nor in `waiting.ci`, i.e. its merge is a human's — and today the
+// stop gate's CI-only branch reads `waiting.ci` alone, so such a board ends the
+// run rather than spinning on it. T-24-09 owns the gate's half.
+// A held child with NO entry in `parent_of` is a stale or partial front, not a
+// ticket with nothing to watch: `front.cjs` writes `parent_of` for every id it
+// puts in `waiting.parent`, so a miss here means the two disagree about the
+// SAME board. That must refuse even when some other ticket gives this script a
+// watch target — otherwise the missing mapping is silently dropped the moment
+// anything else is waiting on CI, which is exactly the shape that hid a stale
+// front the longest: everything else on the board looked fine.
+const orphanHeld = heldTickets.filter((id) => !parentOf[id]);
+if (orphanHeld.length) {
+  refuse(`held behind a parent the board names no parent_of for (${orphanHeld.join(', ')})`,
+    'That is a board bug, not a wait: re-run state-sync.cjs.');
+}
+
 const watch = [];
-for (const id of ciTickets) {
-  const s = state[id];
+const byPr = new Map();
+const wanted = [
+  ...ciTickets.map((id) => ({ ticket: id, via: null })),
+  ...heldTickets.map((id) => ({ ticket: parentOf[id], via: id })),
+];
+for (const w of wanted) {
+  const s = state[w.ticket];
   if (!s || !s.pr) continue;
-  watch.push({ id, pr: s.pr, repo: s.repo || null });
+  const key = `${s.repo || ''}#${s.pr}`;
+  const seen = byPr.get(key);
+  if (seen) {
+    if (w.via && !seen.via.includes(w.via)) seen.via.push(w.via);
+    continue;
+  }
+  const entry = { id: w.ticket, pr: s.pr, repo: s.repo || null, via: w.via ? [w.via] : [] };
+  byPr.set(key, entry);
+  watch.push(entry);
 }
 if (!watch.length) {
-  refuse(`the ${ciTickets.length} ticket(s) waiting on CI have no PR recorded (${ciTickets.join(', ')})`,
+  const named = [
+    ...(ciTickets.length ? [`waiting on CI: ${ciTickets.join(', ')}`] : []),
+    ...(heldTickets.length ? [`held behind a parent: ${heldTickets.join(', ')}`] : []),
+  ].join(' | ');
+  refuse(`no PR to watch for any ticket the board says is waiting (${named})`,
     'That is a board bug, not a wait: re-run state-sync.cjs.');
 }
 
@@ -202,22 +279,43 @@ if (!watch.length) {
 // DATA, not an error. state-sync.cjs carries the same note; getting it wrong
 // makes a pending pipeline look like a broken command.
 function checksOf({ pr, repo }) {
-  const args = ['pr', 'checks', String(pr), '--json', 'state,name'];
+  const args = ['pr', 'checks', String(pr), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
   const r = spawnSync('gh', args, { encoding: 'utf8', timeout: 60000 });
+  const stdout = (r.stdout || '').trim();
   let rows;
-  try { rows = JSON.parse(r.stdout || '[]'); } catch { rows = null; }
+  if (stdout) {
+    try { rows = JSON.parse(stdout); } catch { rows = null; }
+  } else if (r.status === 0) {
+    rows = []; // gh succeeded and printed nothing — genuinely no checks
+  } else {
+    // Empty stdout AND a non-zero exit: gh did not answer at all. A rate limit,
+    // an outage or an expired token prints to STDERR and leaves stdout blank,
+    // and a failed spawn hands back `null`. `JSON.parse(r.stdout || '[]')` used
+    // to read every one of those as `[]` — the SAME shape as a real "no checks
+    // configured" answer, which is exactly the null-vs-empty collapse the
+    // comment below warns against and the distinction the outage handling in
+    // the round loop depends on (an unreachable gh must never be counted as an
+    // empty window). Fixed by not reaching that fallback at all.
+    rows = null;
+  }
+  // `null` is UNREACHABLE THIS ROUND and is not the same fact as an empty list —
+  // check-state.cjs would happily count `[]` as "no checks reported", so the
+  // guard stays here, ahead of it.
   if (!Array.isArray(rows)) return null; // unreachable this round; try the next
-  const pending = rows.filter((c) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(c.state));
-  const failing = rows.filter((c) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(c.state));
-  return { total: rows.length, pending: pending.length, failing: failing.length };
+  // The vocabulary lives in check-state.cjs. This function used to carry its own
+  // list, and it was the only one of three that called ACTION_REQUIRED failing —
+  // three copies, three answers. The SHAPE stays {total, pending, failing}: it is
+  // what `--json` reports and what the settle test below reads.
+  const c = classify(rows);
+  return { total: c.total, pending: c.pending, failing: c.failing };
 }
 
 // HOW MANY EMPTY WINDOWS BEFORE A PERSON IS ASKED. Three at the default 15m is
-// 45 minutes in which nothing on the board moved — not a slow pipeline, a stuck
-// one. Bound to escalation-record's own fingerprint, so ANY real change (a check
-// finishing, a push, a draft lifting, a review landing) resets the count rather
-// than accumulating toward a park nobody has earned.
+// 45 minutes in which that ticket's OWN pipeline did not move — not a slow
+// pipeline, a stuck one. Bound to escalation-record's own fingerprint, so ANY
+// real change (a check finishing, a push, a draft lifting, a review landing)
+// resets the count rather than accumulating toward a park nobody has earned.
 const MAX_EMPTY_RAW = Number(process.env.SHIPYARD_CI_WAIT_MAX_EMPTY || 3);
 const MAX_EMPTY = Number.isFinite(MAX_EMPTY_RAW) && MAX_EMPTY_RAW > 0 ? Math.floor(MAX_EMPTY_RAW) : 3;
 
@@ -230,9 +328,16 @@ const LOCK_ROOT = path.resolve(GRAPH, '..', '..');
 // One locked read-modify-write, with the lock BESIDE THE STORE — a lock taken at
 // some other cwd serializes nothing, which is how six concurrent marks once
 // produced five records.
-function recordOutcome(settledId, watched) {
+//
+// `goodEver` is the set of watched ticket ids that got at least one READABLE gh
+// answer during this window (see the round loop below). A ticket absent from it
+// never taught us anything this window — not settled, not moved, not unchanged
+// — so its record must be left exactly as it was: not incremented (an outage
+// must never read as a stall) and not reset either (that would hide a real
+// unchanged run once gh comes back).
+function recordOutcome(settledId, watched, goodEver) {
   try {
-    return recordOutcomeInner(settledId, watched);
+    return recordOutcomeInner(settledId, watched, goodEver);
   } catch (e) {
     // A WAITER MUST NEVER DIE NOISILY — that is this script's own stated
     // invariant, and the bookkeeping is not worth breaking it for. A held lock,
@@ -246,7 +351,7 @@ function recordOutcome(settledId, watched) {
   }
 }
 
-function recordOutcomeInner(settledId, watched) {
+function recordOutcomeInner(settledId, watched, goodEver) {
   const escalations = [];
   withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
     let store = { tickets: {} };
@@ -255,13 +360,18 @@ function recordOutcomeInner(settledId, watched) {
     const now = new Date().toISOString();
 
     for (const w of watched) {
-      const fp = fingerprint(state[w.id] || {});
       if (settledId) {
-        // Progress: something answered, so nothing here is stuck. Forget the
-        // whole run of empty windows rather than carrying it forward.
-        delete store.tickets[w.id];
+        // Progress on ONE ticket says nothing about any OTHER watched ticket.
+        // Clear only the record of the ticket that actually settled — this used
+        // to run for every watched ticket, which wiped a neighbour's multi-
+        // window count the moment anything settled.
+        if (w.id === settledId) delete store.tickets[w.id];
         continue;
       }
+      // Never got a readable answer this window (gh unreachable throughout) —
+      // see the doc comment on `recordOutcome` above. Leave it untouched.
+      if (goodEver && !goodEver.has(w.id)) continue;
+      const fp = fingerprint(state[w.id] || {});
       const prev = store.tickets[w.id];
       const empties = prev && prev.fingerprint === fp ? Number(prev.empty_windows || 0) + 1 : 1;
       store.tickets[w.id] = {
@@ -296,13 +406,44 @@ function recordOutcomeInner(settledId, watched) {
   return parked;
 }
 
+// WINDOW SIZING. Precedence: an explicit --timeout always wins (the caller said
+// so on purpose); short of that, SHIPYARD_CI_WAIT_TIMEOUT_S; short of that, the
+// front's own `ci_estimates` (keyed by TICKET id — front.cjs already resolves
+// each ticket to its own repo's median, so there is no repo lookup to redo
+// here). A flat 15m/45m budget escalates a 40-minute-CI repo before its own
+// pipeline could ever settle; deriving from the observed median and clamping it
+// to [15m, 1h] keeps the SAME termination shape (three empty windows still ends
+// in a park) while sizing each window to the repo it is actually watching.
+let windowSource = 'default (no ci_estimates for the watched ticket(s))';
+if (TIMEOUT_S_EXPLICIT) {
+  windowSource = '--timeout (explicit)';
+} else if (ENV_TIMEOUT_S !== null) {
+  TIMEOUT_S = ENV_TIMEOUT_S;
+  windowSource = 'SHIPYARD_CI_WAIT_TIMEOUT_S';
+} else {
+  const estimates = watch
+    .map((w) => Number((front.ci_estimates || {})[w.id] || 0))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  if (estimates.length) {
+    // The MAX across watched tickets, not one arbitrarily picked: the window is
+    // shared by the whole round, so it must not undersize the slowest pipeline
+    // it is also watching.
+    const maxEst = Math.max(...estimates);
+    const derived = maxEst / 3;
+    TIMEOUT_S = Math.min(WINDOW_CEIL_S, Math.max(WINDOW_FLOOR_S, derived));
+    windowSource = `ci_estimates (max=${Math.round(maxEst)}s / 3 = ${Math.round(derived)}s, clamped to `
+      + `[${WINDOW_FLOOR_S}, ${WINDOW_CEIL_S}])`;
+  }
+}
+
 const startedAt = Date.now();
 const deadline = startedAt + TIMEOUT_S * 1000;
-const label = watch.map((w) => `${w.id}#${w.pr}`).join(', ');
+const label = watch.map((w) => `${w.id}#${w.pr}${w.via.length ? ` (holding ${w.via.join(', ')})` : ''}`).join(', ');
 if (!JSON_OUT) {
   process.stdout.write(
-    `ci-wait: the board offers nothing but CI — waiting on ${label}\n` +
-    `  up to ${Math.round(TIMEOUT_S / 60)}m, polling every ${INTERVAL_S}s; returns the moment one settles\n`);
+    `ci-wait: the board offers nothing but pipelines — waiting on ${label}\n` +
+    `  up to ${Math.round(TIMEOUT_S / 60)}m, polling every ${INTERVAL_S}s; returns the moment one settles\n` +
+    `  window: ${Math.round(TIMEOUT_S)}s — ${windowSource}\n`);
 }
 
 // Node has no synchronous sleep, and a busy loop would burn a core for fifteen
@@ -310,35 +451,56 @@ if (!JSON_OUT) {
 const sleep = (s) => spawnSync(process.execPath, ['-e', `setTimeout(()=>{}, ${Math.round(s * 1000)})`], { timeout: (s + 5) * 1000 });
 
 let rounds = 0;
+// A ticket earns an entry here the first time `checksOf` returns a READABLE
+// answer this window (settled, moved or unchanged — anything but `null`). A
+// ticket that never appears here taught this window nothing: `gh` was
+// unreachable for it on every poll, and that is an outage, not a stall (A9
+// defect 1). Checked at the deadline, not per-poll, because a ticket that
+// answers on round 2 after failing round 1 is not an outage at all.
+const goodEver = new Set();
 for (;;) {
   rounds += 1;
   const seen = [];
   for (const w of watch) {
     const c = checksOf(w);
+    if (c) goodEver.add(w.id);
     seen.push({ ...w, checks: c });
     // Settled means the answer exists: green or red, both change the board and
     // both are the caller's business, not this script's. A waiter that only
     // returned on GREEN would hold a run hostage to a red pipeline.
     if (c && c.total > 0 && c.pending === 0) {
-      // Progress forgets the whole run of empty windows: nothing here is stuck.
-      const parked = recordOutcome(w.id, watch);
+      // A settle clears THAT ticket's own record — its whole accumulated run of
+      // empty windows at once, not one decrement off it. Every OTHER watched
+      // ticket keeps its count: one pipeline finishing is no evidence about any
+      // other, and wiping the board here is the defect this call was fixed for.
+      const parked = recordOutcome(w.id, watch, goodEver);
       finish(
         { settled: w.id, pr: w.pr, checks: c, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
-          watched: seen, escalated: parked },
+          watched: seen, escalated: parked, window_s: Math.round(TIMEOUT_S), window_source: windowSource },
         `ci-wait: ${w.id} (PR #${w.pr}) settled after ${Math.round((Date.now() - startedAt) / 1000)}s — ` +
         `${c.total - c.failing}/${c.total} green${c.failing ? `, ${c.failing} failing` : ''}. ` +
         'Re-sync and take the round.');
     }
   }
   if (Date.now() >= deadline) {
-    const parked = recordOutcome(null, watch);
+    // gh answered NOBODY, not even once, for the whole window: every ticket's
+    // "unchanged" would really be "unknown". Counting that would escalate the
+    // entire watch list after one bad window each — an outage read as every
+    // pipeline stalling at once. Skip the store entirely: nothing was learned,
+    // so nothing is recorded.
+    const outage = watch.length > 0 && goodEver.size === 0;
+    const parked = outage ? [] : recordOutcome(null, watch, goodEver);
     const lines = parkLines(parked);
     finish(
       { settled: null, timed_out: true, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
-        watched: seen, escalated: parked },
-      `ci-wait: ${Math.round(TIMEOUT_S / 60)}m passed and nothing settled (${label}). ` +
-      'Re-sync anyway — the board may have moved for other reasons — then decide whether to wait again.' +
-      (lines ? `\n${lines}` : ''));
+        watched: seen, escalated: parked, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
+        outage },
+      (outage
+        ? `ci-wait: gh was unreachable for the whole ${Math.round(TIMEOUT_S / 60)}m window (${label}) — ` +
+          'that is an outage, not a stall; nothing was recorded. Re-sync and try again once gh answers.'
+        : `ci-wait: ${Math.round(TIMEOUT_S / 60)}m passed and nothing settled (${label}). ` +
+          'Re-sync anyway — the board may have moved for other reasons — then decide whether to wait again.')
+      + (lines ? `\n${lines}` : ''));
   }
   sleep(Math.min(INTERVAL_S, Math.max(1, (deadline - Date.now()) / 1000)));
 }

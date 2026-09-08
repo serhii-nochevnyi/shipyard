@@ -31,6 +31,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
+const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 // The checkpoint predicates live in front.cjs and are imported, not copied.
 // A `checkpointParentOf` used to exist here AND there, and the standing rule — the
 // board must never offer what the guard refuses — was held by nothing but the
@@ -38,7 +39,25 @@ const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 // importable; this file parses argv and can exit at load, so the dependency
 // only runs in one direction. (Its CLI is behind `require.main`, so requiring
 // it here executes nothing.)
-const { needsHuman, checkpointParentOf: checkpointParentIn } = require(path.join(__dirname, 'front.cjs'));
+// …and `noCiHold`/`NO_CI_WHY` for the same reason again: "a PR where nothing ran
+// is not a green PR" withholds `merge` HERE and its bucket THERE, so the two
+// must read one predicate and quote one sentence or the board offers what the
+// guard refuses.
+// …and `reviewStandsAlone`/`baseMoved` for the third and fourth time: a
+// CHANGES_REQUESTED with no thread left is a PERSON's here and `waiting.human`
+// there, and a base that has MOVED is `base-merge` here and a `fix` entry there.
+// Both were rules the two files could only have held by their texts happening to
+// match, which is the way they have already failed twice.
+const {
+  needsHuman, checkpointParentOf: checkpointParentIn, noCiHold, NO_CI_WHY,
+  reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy,
+} = require(path.join(__dirname, 'front.cjs'));
+// …and the second shared predicate, in its own module for the same reason: this
+// file used to own it outright, so `computeFront` had no `waiting.parent` bucket
+// and offered the tickets the guard was refusing. It lives next door rather than
+// in front.cjs because front.cjs imports it too, and one direction is the whole
+// property. The binding is below, where PARKED exists.
+const { parentIsMoving: parentIsMovingIn } = require(path.join(__dirname, 'parent-moving.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -105,6 +124,12 @@ function gh(args, { tolerate = false } = {}) {
   }
 }
 const repoArg = (repo) => (repo ? ['--repo', repo] : []);
+// The repo-qualified REST prefix, in state-sync.cjs's spelling rather than a
+// second one. `gh api` does NOT accept `--repo`, and its `{owner}/{repo}`
+// placeholders resolve from the CURRENT repository — so a foreign-repo call
+// built with `repoArg` measured the wrong repository or simply errored. Every
+// `gh api <path>` in this file goes through here.
+const apiBase = (repo) => (repo ? `repos/${repo}` : 'repos/{owner}/{repo}');
 
 // `gh pr checks` reports CI state through its EXIT CODE while still printing the
 // JSON (8 = pending, 1 = failing or no checks at all) — see state-sync.cjs.
@@ -117,25 +142,55 @@ const repoArg = (repo) => (repo ? ['--repo', repo] : []);
 // reads mergeStateStatus is silent exactly where the repo has not been hardened.
 // One extra call, on the merge path only — merges are rare next to the per-round
 // syncing, so this does not touch the conveyor's tick rate.
+//
+// TWO defects lived in one line here (external audit 2026-09-07, F06). The
+// endpoint named `{owner}/{repo}` and the repo was passed as `--repo`, which
+// `gh api` does not accept: the call errored for every foreign-repo ticket, and
+// the `null` it returned was read by the gate as "not behind". So the answer is
+// now a RESULT — `{behind}` or `{error}` — and the caller refuses on the error
+// rather than treating an unknown as a pass. `apiBase` is the same spelling
+// `epic-branch.sh`'s mirror-image `ahead_by` compare uses.
 function behindBy(base, head, repo) {
-  const out = gh(['api', `repos/{owner}/{repo}/compare/${head}...${base}`,
-    ...repoArg(repo), '--jq', '.ahead_by'], { tolerate: true });
-  if (typeof out !== 'string') return null; // unreachable/unknown — never guess a number
+  const out = gh(['api', `${apiBase(repo)}/compare/${head}...${base}`, '--jq', '.ahead_by'], { tolerate: true });
+  if (typeof out !== 'string') return { error: (out && out.error) || 'gh api compare failed' };
   const n = parseInt(out.trim(), 10);
-  return Number.isFinite(n) ? n : null;
+  if (!Number.isFinite(n)) return { error: `gh api compare answered "${out.trim().slice(0, 80)}", not a commit count` };
+  return { behind: n };
 }
 
+// The vocabulary is check-state.cjs's, not this file's: the local list named
+// FAILURE/ERROR/CANCELLED/TIMED_OUT and PENDING/QUEUED/IN_PROGRESS/EXPECTED, so
+// every other state gh reports — ACTION_REQUIRED and STARTUP_FAILURE among them —
+// fell through both filters and the gate below read `0 failing, 0 pending` and
+// MERGED. The returned shape is unchanged; only who decides is.
+//
+// A `gh` invocation that FAILED (non-zero exit with nothing parseable on
+// stdout — an old `gh` rejecting `bucket`, a network blip, a missing binary)
+// is not the same fact as "this PR genuinely has no checks configured", and
+// must not collapse into it: that collapse is what let a startup failure read
+// as green above. ANY stdout that parses to an array is authoritative and
+// used as-is, EMPTY OR NOT and regardless of exit status — a non-zero exit
+// with valid JSON is normal (the docstring above: exit code is data, not an
+// error). Only when there is nothing parseable to trust does exit status
+// decide: exit 0 with empty output means "no checks"; anything else
+// unreadable becomes a single synthetic row with an unknown bucket, which
+// `classify` already fails closed to `pending` — so the merge gate re-ticks
+// instead of merging on silence.
 function ghChecks(pr, repo) {
-  const r = spawnSync('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', 'name,state'], { encoding: 'utf8' });
-  let rows = [];
-  try { rows = JSON.parse((r.stdout || '').trim() || '[]'); } catch { rows = []; }
-  if (!Array.isArray(rows)) rows = [];
-  return {
-    failing: rows.filter((c) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT'].includes(c.state)).length,
-    pending: rows.filter((c) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(c.state)).length,
-    total: rows.length,
-    none_reported: rows.length === 0,
-  };
+  const r = spawnSync('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', CHECK_FIELDS], { encoding: 'utf8' });
+  const stdout = (r.stdout || '').trim();
+  let rows = null;
+  if (stdout) {
+    try {
+      const parsed = JSON.parse(stdout);
+      if (Array.isArray(parsed)) rows = parsed;
+    } catch { /* fall through to the unreadable branch below */ }
+  } else if (r.status === 0) {
+    rows = []; // gh succeeded and reported nothing — genuinely no checks
+  }
+  if (rows === null) rows = [{ bucket: 'unreadable' }];
+  const c = classify(rows);
+  return { failing: c.failing, pending: c.pending, total: c.total, none_reported: c.none_reported };
 }
 
 const defaultBranchCache = new Map();
@@ -153,20 +208,14 @@ function integrationBranchOf(repo) {
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
-// (it survives a squash merge). state-sync parses it into state[id].gate; parse
-// it again here from the LIVE body, because merge must not trust a cache.
-function parseGate(body) {
-  const line = String(body || '').split('\n').reverse().find((l) => /^gate_status:/i.test(l.trim()));
-  if (!line) return {};
-  const out = {};
-  for (const part of line.replace(/^\s*gate_status:/i, '').split(',')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    out[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
-  }
-  return out;
-}
-const gateConform = (gate) => String((gate || {})['arch-review'] || '').toLowerCase() === 'conform';
+// (it survives a squash merge). state-sync parses it into state[id].gate and the
+// head it was rendered against into state[id].head_sha; the merge path re-reads
+// BOTH from the LIVE PR below, because merge must not trust a cache.
+//
+// The parser, the four-state classification and its words are imported from the
+// trailer's own module rather than copied: this file and front.cjs must agree on
+// whether a verdict counts, or the board offers what the guard refuses.
+const { parseGate, gateKind, gateConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
 
 function journal(rec) {
   fs.mkdirSync(GRAPH_DIR, { recursive: true });
@@ -204,20 +253,68 @@ for (const [id, park] of Object.entries(ESCALATED)) PARKED_WHY[id] = escalationW
 for (const [id, r] of Object.entries(DRIFTED)) PARKED_WHY[id] = `drifted — ${r} (re-plan it; the park lifts when the plan changes)`;
 const SCOPE = listFlag('scope');
 
-// Unresolved review threads for one PR, or null when they cannot be read.
-// Cached: the duty pass and a later merge check ask about the same PRs, and the
-// GraphQL call is the expensive part of both.
-const threadCache = new Map();
-function unresolvedThreads(pr, repo) {
+// Everything `reviewers.cjs unresolved` knows about one PR, or nulls where it
+// could not be read. Cached: the duty pass and a later merge check ask about the
+// same PRs, and the GraphQL call is the expensive part of both.
+//
+// It carries THREE facts now, and that is why it is one call and not two: the
+// thread count, the review decision, and the PR's merge state (`mergeStateStatus`
+// plus the base/head names), which reviewers.cjs reads off the same `gh pr view`
+// it already makes for the decision. `duty` runs on every babysit round, so a
+// second per-PR query here would be paid on every tick of the conveyor.
+//
+// An unreadable answer stays ALL NULL rather than collapsing into a benign one:
+// "no threads", "no verdict" and "the base is fine" are three claims, and none of
+// them is what a failed call proves.
+const settlementCache = new Map();
+function settlement(pr, repo) {
   const key = `${repo || ''}#${pr}`;
-  if (threadCache.has(key)) return threadCache.get(key);
+  if (settlementCache.has(key)) return settlementCache.get(key);
   const out = spawnSync('node', [path.join(__dirname, 'reviewers.cjs'), 'unresolved', String(pr), ...repoArg(repo)], { encoding: 'utf8' });
-  let n = null;
+  let v = { unresolved: null, review_decision: null, merge_state: null, base: null, head: null };
   if (out.status === 0) {
-    try { const v = JSON.parse(out.stdout).unresolved_count; if (typeof v === 'number') n = v; } catch { n = null; }
+    try {
+      const j = JSON.parse(out.stdout);
+      v = {
+        unresolved: typeof j.unresolved_count === 'number' ? j.unresolved_count : null,
+        review_decision: j.review_decision || null,
+        merge_state: j.merge_state || null,
+        base: j.base || null,
+        head: j.head || null,
+      };
+    } catch { /* keep the all-null answer */ }
   }
-  threadCache.set(key, n);
-  return n;
+  settlementCache.set(key, v);
+  return v;
+}
+
+// "Has the base moved under this branch?" — the guard's reading of the same two
+// signals the merge gate reads, so `duty` stops offering a merge that gate is
+// about to refuse and names the remedy instead of describing it.
+//
+// The merge state rides on `settlement` above and costs nothing. The compare is
+// one extra `gh api` for each PR that gets this far, and it is required rather
+// than optional: GitHub reports BEHIND only where branch protection requires
+// up-to-date branches, so without the second opinion the duty is silent exactly
+// where the repo has not been hardened — and the merge path, which does ask,
+// then refuses what the duty offered. It is not paid for a parked PR, a child
+// behind a moving parent, or a red one: the chain below never reaches here for
+// those.
+//
+// An UNKNOWN answer is never "not behind" (the defect T-24-05 fixed one level
+// up): it reports `known: false`, the chain falls through unchanged, and the
+// merge gate still refuses rather than guessing.
+function baseCheck(s, repo) {
+  const st = settlement(s.pr, repo);
+  if (st.merge_state === 'DIRTY' || st.merge_state === 'BEHIND') {
+    return { moved: baseMoved({ merge_state: st.merge_state }), known: true };
+  }
+  const base = st.base || s.pr_base || s.base || null;
+  const head = st.head || s.branch || null;
+  if (!st.merge_state || !base || !head) return { moved: null, known: false };
+  const cmp = behindBy(base, head, repo);
+  if (typeof cmp.behind !== 'number') return { moved: null, known: false };
+  return { moved: baseMoved({ merge_state: st.merge_state, behind_by: cmp.behind }), known: true };
 }
 
 // How many unmerged tickets this one is stacked on. 0 = its PR targets the epic
@@ -232,29 +329,21 @@ function stackDepth(id, seen = new Set()) {
   return 1 + stackDepth(parent, seen);
 }
 
-// A child is deferred while its parent PR is still being driven — but never
-// behind a parent that is waiting on a PERSON, or the whole subtree freezes for
-// as long as the human takes.
-// The parent rule, bound to this process's graph. The rule itself is front.cjs's
-// — one predicate, two callers — so the duty chain, the merge gate and the board
-// cannot disagree about which children are landable.
+// The two parent rules, bound to this process's graph. Neither rule is this
+// file's any more — one predicate, two callers — so the duty chain, the merge
+// gate and the board cannot disagree about which children are landable or which
+// are still waiting. `checkpointParentOf` is front.cjs's; `parentIsMoving` is
+// parent-moving.cjs's, including its checkpoint exception (a child is deferred
+// while its parent PR is still being DRIVEN, but never behind a parent that is
+// waiting on a PERSON, or the whole subtree freezes for as long as the human
+// takes) and its PARKED clause, which is why the binding sits here rather than
+// beside the import.
 const checkpointParentOf = (id) => checkpointParentIn(id, tickets, state);
-
-function parentIsMoving(id) {
-  const parent = (tickets[id] || {}).primary_parent;
-  if (!parent) return false;
-  const ps = state[parent];
-  if (!ps || ps.status !== 'pr-open') return false;
-  if (PARKED.has(parent)) return false;
-  // Deliberately `human_checkpoint` and NOT `needsHuman`. This exception is
-  // about driving a child to GREEN, and narrowing it to un-authorized parents
-  // would make the guard answer `wait-parent` for a red child of a
-  // pre-authorized parent while the board still answers `fix` — inventing the
-  // very disagreement the shared predicate exists to remove. The merge-side
-  // hold is enforced below, where it belongs.
-  if ((tickets[parent] || {}).human_checkpoint) return false;
-  return true;
-}
+const parentIsMoving = (id) => parentIsMovingIn(id, { tickets, state, parked: PARKED });
+// The third shared predicate, bound to THIS process's config: a PR with no
+// reported checks is not one the guard may walk towards landing. Same function
+// as the board's, so `merge` and the `merge` bucket cannot disagree.
+const heldForNoCi = (checks) => noCiHold(checks, { autoMerge: AUTO_MERGE, mergeWithoutCi: cfg.merge_without_ci });
 
 function dutyItems() {
   const items = [];
@@ -310,21 +399,49 @@ function dutyItems() {
     // review servicing on an API hiccup and walk into the merge gate's refusal
     // later. They fall through to the normal ordering, and the merge gate still
     // refuses to merge blind.
-    const unresolved = unresolvedThreads(s.pr, s.repo || null);
-    if (typeof unresolved === 'number' && unresolved > 0) {
+    const unresolved = settlement(s.pr, s.repo || null).unresolved;
+    // …and the base, read from the same call plus one compare. Recorded on the
+    // item whatever the answer is, so a reader can tell "the base was checked and
+    // is fine" from "nobody could check it" — the two used to look identical, and
+    // one of them is the state the merge gate refuses.
+    const bc = baseCheck(s, s.repo || null);
+    item.base_check = bc.moved ? 'stale' : bc.known ? 'clean' : 'unknown';
+    if (bc.moved) {
+      // FIRST inside this block, ahead of threads and of pending CI. Everything
+      // else here measures the branch against a merge base that no longer exists:
+      // a thread serviced now is answered against the wrong diff, and a run we
+      // wait for is validating code that is about to change anyway. It sits AFTER
+      // `ci-fix` for the mirror-image reason — a failing check is the louder fact,
+      // and that fixer is told to merge the base in as its own step 0.
+      item.action = 'base-merge';
+      if (bc.moved.behind !== null) item.behind_by = bc.moved.behind;
+      item.why = baseMergeWhy(bc.moved, base);
+    } else if (typeof unresolved === 'number' && unresolved > 0) {
       item.action = 'review-fix';
       item.unresolved = unresolved;
       item.why = `${unresolved} unresolved review thread(s)${(c.pending || 0) > 0 ? ` (CI still running — service them NOW: a fix pushes anyway and restarts that run)` : ''} — fix or reply with reasoning, then RESOLVE each one`;
     } else if ((c.pending || 0) > 0) {
       item.action = 'wait-ci';
       item.why = `${c.pending} check(s) still running${unresolved === null ? ' — review threads unreadable this tick' : ''} — re-tick, do not block the main loop`;
-    } else if (s.draft && !gateConform(s.gate)) {
+    } else if (s.draft && !gateConform(s.gate, s.head_sha)) {
       // Certify BEFORE readying. Bundled together as one `finalize` these two
       // could not report separately, so a `violation` verdict and a clean one
       // ended the same way, and the action name itself was not a role the model
       // ladder knows — it got logged as one anyway.
       item.action = 'arch-review';
-      item.why = 'green draft, no `gate_status: arch-review=conform` trailer — judge the diff against the ADRs and record the verdict';
+      // A verdict recorded for another head is not a missing verdict, and saying
+      // "no trailer" about a body that visibly has one sends the agent looking
+      // for the wrong thing. The remedies differ, so the sentences do.
+      item.why = gateKind(s.gate, s.head_sha) === 'unrecorded'
+        ? 'green draft, no `gate_status: arch-review=conform` trailer — judge the diff against the ADRs and record the verdict'
+        : `green draft, ${gateWhy(s.gate, s.head_sha)} — judge THIS head against the ADRs and record the verdict again`;
+    } else if (s.draft && heldForNoCi(c)) {
+      // Certified, and the only thing left is the readying — which is the step
+      // that hands the PR to this guard's own merge. Nothing ran on this branch,
+      // so that step is withheld and the PR stays a draft, which is what a draft
+      // says. The board answers `waiting.merge_human` for the same state.
+      item.action = 'human-merge';
+      item.why = `${NO_CI_WHY} Left as a draft — readying it is the step that hands it to the guard's own merge.`;
     } else if (s.draft) {
       item.action = 'undraft';
       item.why = 'green + conform, still a draft — ready it (`gh pr ready`); nothing else is owed';
@@ -336,12 +453,27 @@ function dutyItems() {
       // review threads and the stacked base are all still ahead.
       item.action = 'human';
       item.why = 'human_checkpoint — the approval and the merge are the human\'s';
+    } else if (reviewStandsAlone(s.review_decision, unresolved)) {
+      // A verdict with nothing left to service. review-fix was dispatched at it
+      // regardless of the thread count, came back having done nothing, and the
+      // repeated signature escalated the ticket after the attempt budget — paid
+      // work re-deciding a state only a reviewer can move. NOT in ACTIONABLE:
+      // the board answers `waiting.human` for the same PR.
+      item.action = 'wait-human';
+      item.why = REVIEW_STANDS_WHY;
     } else if (s.review_decision === 'CHANGES_REQUESTED') {
+      // Reached only with an UNKNOWN thread count (a real 0 is the branch above,
+      // and >0 was handled at the top of this block). Fail towards the work: the
+      // fixer reads the threads itself, and an API hiccup must not park a PR on a
+      // person.
       item.action = 'review-fix';
-      item.why = 'CHANGES_REQUESTED — service the threads (a bot can be wrong: a reasoned reply is a valid resolution)';
-    } else if (!gateConform(s.gate)) {
+      item.why = 'CHANGES_REQUESTED, and the thread count could not be read this tick — '
+        + 'read them yourself and service them (a bot can be wrong: a reasoned reply is a valid resolution)';
+    } else if (!gateConform(s.gate, s.head_sha)) {
       item.action = 'arch-review';
-      item.why = 'green and out of draft, but no `gate_status: arch-review=conform` trailer — the architecture verdict was never recorded';
+      item.why = gateKind(s.gate, s.head_sha) === 'unrecorded'
+        ? 'green and out of draft, but no `gate_status: arch-review=conform` trailer — the architecture verdict was never recorded'
+        : `green and out of draft, but ${gateWhy(s.gate, s.head_sha)} — the recorded verdict does not cover what is on the branch; judge THIS head and record it again`;
     } else if (AUTO_MERGE && s.merge_scope === 'stacked' && checkpointParentOf(id)) {
       // Ready in every respect, and still not ours to land: the base is an open
       // human_checkpoint parent. `merge` would be refused by the gate anyway —
@@ -357,6 +489,12 @@ function dutyItems() {
           + 'Landing now would rewrite the diff that person is reading; it merges once they land theirs.'
         : `green + conform, but its base is ${cpParent} — a pre-authorized human_checkpoint PR still open. `
           + 'Nobody is reading it, but it lands first; this one follows once it does.';
+    } else if (AUTO_MERGE && s.merge_scope === 'stacked' && heldForNoCi(c)) {
+      // Ready in every other respect, and nothing verified it. `mergeOne` refuses
+      // this against LIVE GitHub; the duty says so first, so the guard is not
+      // handed an action its own gate will decline.
+      item.action = 'human-merge';
+      item.why = NO_CI_WHY;
     } else if (AUTO_MERGE && s.merge_scope === 'stacked') {
       item.action = 'merge';
       item.why = `green + conform → squash into ${base}`;
@@ -398,13 +536,24 @@ function dutyItems() {
 // itself (`undraft` — one `gh pr ready`, no agent, no model). The old catch-all
 // `finalize` was neither, which is how it ended up in the journal as a role
 // `model <role>` declines to route.
-const ACTIONABLE = new Set(['ci-fix', 'review-fix', 'arch-review', 'undraft', 'merge']);
+//
+// `base-merge` is the mechanical kind: `base-merge.cjs` does the work and the
+// only judgement left is a conflict inside the ticket's own declared files, so a
+// fixer dispatched for it runs at the `ci-fix` tier (that IS the role to pass to
+// `model <role>` and to record on an attempt — `base-merge` is an action, never a
+// role). It journals itself as `base_merge`, which is deliberately not an
+// `attempt`: charging a mechanical merge to a ticket's repair record would spend
+// its attempt budget on work no hypothesis was ever wrong about.
+const ACTIONABLE = new Set(['ci-fix', 'review-fix', 'arch-review', 'undraft', 'merge', 'base-merge']);
 
 function dutySummary() {
   const items = dutyItems();
   const actionable = items.filter((i) => ACTIONABLE.has(i.action));
   const waiting = items.filter((i) => i.action === 'wait-ci');
-  const human = items.filter((i) => i.action === 'human' || i.action === 'human-merge');
+  // `wait-human` joins them: a standing CHANGES_REQUESTED nobody can service is
+  // a PR waiting on a person exactly as a checkpoint is, and counting it as
+  // anything else would report it as either work or a fixpoint.
+  const human = items.filter((i) => i.action === 'human' || i.action === 'human-merge' || i.action === 'wait-human');
   const parked = items.filter((i) => i.action === 'parked');
   return {
     auto_merge: AUTO_MERGE ? 'epic' : 'off',
@@ -465,7 +614,7 @@ function mergeOne(id) {
 
   const repo = s.repo || null;
   const view = gh(['pr', 'view', String(s.pr), ...repoArg(repo), '--json',
-    'number,state,isDraft,baseRefName,headRefName,mergeStateStatus,reviewDecision,body'], { tolerate: true });
+    'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,body'], { tolerate: true });
   if (typeof view !== 'string') return block(`gh pr view failed: ${view.error}`);
   let pr;
   try { pr = JSON.parse(view); } catch (e) { return block(`gh pr view returned unparseable JSON (${e.message})`); }
@@ -475,20 +624,32 @@ function mergeOne(id) {
   if (pr.isDraft) return block('PR is still a draft — the conform gate has not been passed');
 
   // The stack boundary. A ticket PR may only land on the phase epic or on a
-  // parent ticket's branch, both inside its own repo. Anything else — above all
-  // the integration branch — is out of the sentinel's mandate.
+  // parent ticket's branch, both inside its own repo AND inside its own PHASE.
+  // Anything else — above all the integration branch — is out of the sentinel's
+  // mandate.
+  //
+  // The set used to be every ticket branch in the repository, from every phase.
+  // A `pr_base` naming another phase's branch — hand-edited, or read off a stale
+  // graph by a resumed run — passed this check and would have been squashed
+  // there, into an epic quarantining different work. A phase is the unit the
+  // epic quarantines, so it is the unit the boundary measures. A graph whose
+  // tickets carry no `phase` at all is unaffected: they then all share the same
+  // (absent) phase, which is the pre-existing behaviour.
   const integration = integrationBranchOf(repo);
-  const sameRepoTicketBranches = new Set(
-    Object.entries(tickets)
-      .filter(([, o]) => (o.repo || null) === repo)
-      .map(([, o]) => o.branch)
-  );
-  const allowed = new Set([s.epic, t.epic, ...sameRepoTicketBranches].filter(Boolean));
+  const phaseOf = (o) => (o && o.phase !== undefined && o.phase !== null ? String(o.phase) : null);
+  const myPhase = phaseOf(t);
+  const samePhaseTicketBranches = Object.entries(tickets)
+    .filter(([, o]) => (o.repo || null) === repo && phaseOf(o) === myPhase)
+    .map(([, o]) => o.branch);
+  const allowed = new Set([s.epic, t.epic, ...samePhaseTicketBranches].filter(Boolean));
   if (pr.baseRefName === integration) {
     return block(`PR targets the integration branch ${integration} — landing a phase there is a human's decision, never the sentinel's`);
   }
   if (!allowed.has(pr.baseRefName)) {
-    return block(`PR base "${pr.baseRefName}" is neither the phase epic nor a parent ticket branch in this repo — refusing to merge outside the stack`);
+    return block(
+      `PR base "${pr.baseRefName}" is neither the phase epic nor a ticket branch of this ticket's own phase` +
+      `${myPhase ? ` (${myPhase})` : ''} in this repo — refusing to merge outside the stack`
+    );
   }
 
   // The base may be inside the stack and STILL be a branch nobody may land on
@@ -526,9 +687,15 @@ function mergeOne(id) {
 
   if (pr.reviewDecision === 'CHANGES_REQUESTED') return block('review decision is CHANGES_REQUESTED');
 
+  // The trailer AND the head it names, both from the live view: a verdict is
+  // only a verdict about the diff it was rendered against. `head_sha` on the
+  // board is minutes old, and "it was that diff last tick" is the same reasoning
+  // this whole live re-verification exists to refuse.
   const gate = parseGate(pr.body);
-  if (!gateConform(gate)) {
-    return block('the PR body carries no `gate_status: arch-review=conform` trailer — the architecture verdict is not recorded');
+  if (!gateConform(gate, pr.headRefOid)) {
+    return block(gateKind(gate, pr.headRefOid) === 'unrecorded'
+      ? 'the PR body carries no `gate_status: arch-review=conform` trailer — the architecture verdict is not recorded'
+      : `${gateWhy(gate, pr.headRefOid)} — arch-review is owed again on this head before it can land`);
   }
   res.gate = gate;
 
@@ -536,7 +703,16 @@ function mergeOne(id) {
   res.checks = checks;
   if (checks.failing > 0) return block(`${checks.failing} failing check(s)`);
   if (checks.pending > 0) return block(`${checks.pending} check(s) still running`);
-  if (checks.none_reported) res.checks_note = 'no CI checks reported — merged on a PR where nothing ran';
+  // Б3. `failing === 0 && pending === 0` is the green test, and an EMPTY check
+  // list satisfies it without anything having run. This used to merge and leave
+  // a note about it; the note was the only witness, and nobody reads a note at
+  // 3am. The refusal names the setting, because the remedy is a decision a
+  // person makes once per repository rather than work anyone can do.
+  if (heldForNoCi(checks)) return block(NO_CI_WHY);
+  if (checks.none_reported) {
+    res.checks_note = 'no CI checks reported — merged on a PR where nothing ran '
+      + '(allowed by delivery_pipeline.merge_without_ci)';
+  }
 
   const threads = spawnSync('node', [path.join(__dirname, 'reviewers.cjs'), 'unresolved', String(s.pr), ...repoArg(repo)], { encoding: 'utf8' });
   if (threads.status !== 0) {
@@ -575,15 +751,27 @@ function mergeOne(id) {
   // enough: mergeStateStatus is authoritative but only speaks when branch
   // protection requires up-to-date branches, and our own comparison works
   // everywhere but is a second opinion, not GitHub's verdict.
-  const staleBy = pr.mergeStateStatus === 'BEHIND'
-    ? (behindBy(pr.baseRefName, pr.headRefName, repo) ?? 'some')
-    : behindBy(pr.baseRefName, pr.headRefName, repo);
-  if (pr.mergeStateStatus === 'BEHIND' || (typeof staleBy === 'number' && staleBy > 0)) {
+  const cmp = behindBy(pr.baseRefName, pr.headRefName, repo);
+  if (pr.mergeStateStatus === 'BEHIND' || (cmp.behind || 0) > 0) {
+    // GitHub's own verdict is reported first and needs no second opinion; our
+    // count only sharpens the remedy when it is available.
+    const staleBy = typeof cmp.behind === 'number' ? cmp.behind : 'some';
     res.behind_by = staleBy;
     return block(
       `the base moved: ${pr.baseRefName} is ${staleBy} commit(s) ahead of this branch, so the green checks were ` +
       'measured against a merge base that no longer exists. In the ticket worktree: ' +
       '`git fetch origin && git merge origin/<base>` (NEVER rebase — the PR is pushed), push, let CI re-run.'
+    );
+  }
+  // An UNKNOWN answer is not "not behind". The old code returned null on an
+  // errored compare and the comparison `null > 0` read as a pass — which is how
+  // this whole gate came to be silently absent for every foreign-repo ticket
+  // (the endpoint was unqualified, so the call always errored). Fail closed and
+  // quote the gh error, or the refusal is unactionable.
+  if (cmp.error) {
+    return block(
+      `base freshness unproven — gh compare failed: ${cmp.error}. A green measured against a base that has ` +
+      'since moved cannot be told from a real green without it, so the merge is refused rather than guessed.'
     );
   }
 
@@ -595,8 +783,18 @@ function mergeOne(id) {
   // --squash: one ticket, one commit on the epic. The branch is deliberately NOT
   // deleted — the reaper owns that and only for `reapable` tickets, because a
   // cascade child may still be based on this branch.
-  const merged = gh(['pr', 'merge', String(s.pr), ...repoArg(repo), '--squash'], { tolerate: true });
+  //
+  // --match-head-commit: every gate above was checked against `pr.headRefOid`,
+  // and a concurrent push can replace the head between the last check and this
+  // call — the fixer that is servicing this very PR is one such push. `gh` has
+  // the flag for exactly that race, so the merge either lands the diff the gate
+  // judged or fails loudly. Omitted when the live view reports no head at all
+  // (a pre-head-binding PR): the flag needs a value to pin, and an empty one is
+  // a malformed call, not a weaker check.
+  const merged = gh(['pr', 'merge', String(s.pr), ...repoArg(repo), '--squash',
+    ...(pr.headRefOid ? ['--match-head-commit', pr.headRefOid] : [])], { tolerate: true });
   if (typeof merged !== 'string') return block(`gh pr merge failed: ${merged.error}`);
+  if (pr.headRefOid) res.merged_head = pr.headRefOid;
   res.merged = true;
   // `preauthorized` is present only when it is WHY the merge was allowed, so a
   // reader can count design-time approvals without re-deriving them from the
@@ -607,14 +805,63 @@ function mergeOne(id) {
   // Cascade children based on THIS branch now have to move onto the epic —
   // GitHub does it by itself when the head branch is deleted, and we do not
   // delete it here, so finish the job idempotently.
+  //
+  // The children come from the GRAPH and their PRs are read LIVE. This loop used
+  // to walk cached `state` alone, so a child whose PR opened after the last sync
+  // was invisible to it: that PR kept pointing at a branch whose content had
+  // just been squashed away, went DIRTY on the next sync, and waited for a
+  // person. ONE `gh pr list --head` per child — a new call, and it is on the
+  // MERGE path, not the tick: the conveyor's tick rate is state-sync's, and a
+  // merge is rare next to a round of syncing.
   const epic = s.epic || t.epic;
   if (epic) {
+    // Candidates from both directions, so neither a graph without state nor
+    // state without a graph edge is missed. The graph half is the fix; the state
+    // half preserves what the old loop could already see (a child whose
+    // `primary_parent` the graph does not record, but whose PR points here).
+    const candidates = new Map();
+    for (const [childId, o] of Object.entries(tickets)) {
+      if ((o.repo || null) !== repo) continue;
+      if (o.primary_parent !== id) continue;
+      if (o.branch) candidates.set(childId, o.branch);
+    }
     for (const [childId, childState] of Object.entries(state)) {
-      if (childState.status !== 'pr-open' || !childState.pr) continue;
       if ((childState.repo || null) !== repo) continue;
       if (childState.pr_base !== pr.headRefName) continue;
-      const out = gh(['pr', 'edit', String(childState.pr), ...repoArg(repo), '--base', epic], { tolerate: true });
-      res.retargeted.push({ ticket: childId, pr: childState.pr, base: epic, ok: typeof out === 'string', error: typeof out === 'string' ? null : out.error });
+      if (childState.branch) candidates.set(childId, childState.branch);
+    }
+    for (const [childId, branch] of candidates) {
+      const live = gh(['pr', 'list', '--head', branch, ...repoArg(repo), '--state', 'open',
+        '--json', 'number,baseRefName'], { tolerate: true });
+      let rows = null;
+      if (typeof live === 'string') {
+        try {
+          const parsed = JSON.parse(live);
+          if (Array.isArray(parsed)) rows = parsed.map((r) => ({ ...r, from: 'live' }));
+        } catch { /* fall through to the cached answer below */ }
+      }
+      if (rows === null) {
+        // gh could not answer. Fall back to the cached board — it is what we had
+        // before this query existed — and SAY SO on the result: a silent
+        // fallback is how a child left on a squashed base becomes a person's
+        // problem hours later.
+        const cs = state[childId] || {};
+        rows = cs.status === 'pr-open' && cs.pr && cs.pr_base === pr.headRefName
+          ? [{ number: cs.pr, baseRefName: cs.pr_base, from: 'cache' }]
+          : [];
+        (res.retarget_warnings = res.retarget_warnings || []).push(
+          `${childId}: could not list its open PRs (${typeof live === 'string' ? 'unreadable output' : live.error}) — ` +
+          `used the cached board instead${rows.length ? '' : ', which knows of no PR on this base'}`
+        );
+      }
+      for (const row of rows) {
+        if (row.baseRefName !== pr.headRefName) continue; // already retargeted, or never based here
+        const out = gh(['pr', 'edit', String(row.number), ...repoArg(repo), '--base', epic], { tolerate: true });
+        res.retargeted.push({
+          ticket: childId, pr: row.number, base: epic, from: row.from,
+          ok: typeof out === 'string', error: typeof out === 'string' ? null : out.error,
+        });
+      }
     }
   }
   return res;
