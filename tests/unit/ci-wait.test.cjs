@@ -654,4 +654,155 @@ test('the script derives both sleep numbers from ONE rounding', () => {
   assert.ok(!/timeout: \(s \+ 5\) \* 1000/.test(src), 'never again from the fractional seconds');
 });
 
+// ── THE CAP AND THE WAIT AGREE ABOUT ONE BOARD (T-27-01, ADR-006 D1) ─────────
+//
+// This script's refusal is about OPPORTUNITY COST: waiting while the board has
+// moves stops the run driving every other ticket. A move that CANNOT BE TAKEN
+// costs nothing to leave, so on a board the cap has spent (`capacity.free === 0`)
+// the actionable items are not "work to take first" — naming them as such told
+// the run to breach the gate that computed them, while `front.cjs` said
+// `fixpoint: NO — capacity` and `stop-gate.cjs` blocked the stop. Three
+// mechanisms, one board, three answers.
+suite('ci-wait — a board the cap has spent is not work to take first');
+
+// THE SHARED FULL-BOARD FIXTURE — four executors out under a cap of four, two
+// more tickets ready. Computed through the real front.cjs, and restated in
+// tests/unit/front.test.cjs and tests/unit/stop-gate.test.cjs: the point of the
+// ticket is that all three readers agree about ONE board, which three hand-built
+// fronts could not show. Change it here and change it there.
+const { computeFront } = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
+));
+const FULL_OUT = ['T-27-91', 'T-27-92', 'T-27-93', 'T-27-94'];
+const FULL_READY = ['T-27-95', 'T-27-96'];
+const fullBoard = () => {
+  const ids = [...FULL_OUT, ...FULL_READY];
+  return {
+    generated_at: new Date().toISOString(),
+    ...computeFront(
+      Object.fromEntries(ids.map((id) => [id, {}])),
+      Object.fromEntries(ids.map((id) => [id, { status: 'pending', ready: true }])),
+      { maxConcurrentAgents: 4, dispatched: Object.fromEntries(FULL_OUT.map((id) => [id, 'executor'])) }
+    ),
+  };
+};
+const fullBoardState = () => Object.fromEntries(
+  [...FULL_OUT, ...FULL_READY].map((id) => [id, { status: 'pending', ready: true }])
+);
+
+test('the shared full board is never refused with the capped items as the reason', () => {
+  const board = fullBoard();
+  assert.deepEqual(board.capacity, { max: 4, in_flight: 4, free: 0 }, 'the fixture really is full');
+  const { code, json } = asJson(board, fullBoardState());
+  // It still refuses — four agents are out, and an agent completion is a wake-up
+  // the runtime gives for free and sooner — but on THAT ground, which is the one
+  // the board supports. What must never come back is "take that work first".
+  assert.equal(code, 3);
+  assert.ok(/with an agent/.test(json.refusal), `the refusal names the agents: ${json.refusal}`);
+  assert.ok(!/actionable item/.test(json.refusal),
+    `a capped board must not be named as work to take first: ${json.refusal}`);
+  for (const id of FULL_READY) {
+    assert.ok(!json.refusal.includes(id), `${id} cannot be taken this round: ${json.refusal}`);
+  }
+});
+
+test('a capped board with nobody out WAITS — the guard is skipped, not merely reordered', () => {
+  // Reachable and not contrived: `in_flight` counts live dispatch records, and a
+  // record for a ticket that has since merged or been parked leaves the bucket
+  // while still spending its agent until it expires. The cap says nothing may be
+  // dispatched, nothing is with an agent, and a pipeline is running — so the only
+  // move in the system is the wait, and this script is the one that can take it.
+  const dir = project(ciOnly({
+    actionable_count: 2,
+    actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05', 'T-01-06'] },
+    capacity: { max: 4, in_flight: 4, free: 0 },
+  }), stateWith());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
+  const { code, json } = asJson(null, null, ['--interval', '1'], { dir, bin });
+  assert.equal(code, 0, 'a capped board must not be refused as work to take first');
+  assert.equal(json.settled, 'T-01-01', 'the wait proceeded and returned normally');
+});
+
+test('a cap of 0 waits too — no policy is in effect, so no dispatch is possible', () => {
+  // front.cjs can only express `max: 0` one way: the project config does not
+  // parse, so nothing may be dispatched at all. Waiting mutates nothing; the
+  // escalation a wait may earn is withheld by the config rule this file already
+  // tests, and that split is exactly ci-wait's own template.
+  const dir = project(ciOnly({
+    actionable_count: 1,
+    actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05'] },
+    capacity: { max: 0, in_flight: 0, free: 0 },
+  }), stateWith(), '{ "pipeline": ');
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
+  const { code, json } = asJson(null, null, ['--interval', '1'], { dir, bin });
+  assert.equal(code, 0);
+  assert.equal(json.settled, 'T-01-01');
+});
+
+test('room in the cap still refuses — the guard is not gone', () => {
+  // The control, and the direction that matters: this script's whole value is
+  // WHEN IT REFUSES, so the capacity read must narrow that refusal by exactly
+  // one case and not switch it off.
+  const { code, json } = asJson(ciOnly({
+    actionable_count: 2,
+    actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05'], merge: ['T-01-06'] },
+    capacity: { max: 4, in_flight: 2, free: 2 },
+  }), stateWith());
+  assert.equal(code, 3, 'two agents may still be dispatched, so the run owes work');
+  assert.ok(/execute: T-01-05/.test(json.refusal) && /merge: T-01-06/.test(json.refusal), json.refusal);
+});
+
+test('a board written before capacity existed refuses exactly as it did', () => {
+  // `delivery-front.json` outlives an upgrade. An absent field must read as "no
+  // cap is in force", never as a full board — the second would turn every old
+  // board into a legitimate wait.
+  const { code, json } = asJson(ciOnly({
+    actionable_count: 1, actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05'] },
+  }), stateWith());
+  assert.equal(code, 3);
+  assert.ok(/execute: T-01-05/.test(json.refusal), json.refusal);
+});
+
+test('capacity.free: null is unreadable, not a spent cap — Number(null) is 0, not "absent"', () => {
+  // A malformed/partially-written front can carry `free: null` (or `max: null`).
+  // `Number(null) === 0` and `Number.isFinite(0)` is true, so the naive read used
+  // to coerce that into a binding cap of 0 — the exact opposite of the comment's
+  // own invariant that unreadable capacity behaves like no cap at all.
+  const { code, json } = asJson(ciOnly({
+    actionable_count: 1, actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05'] },
+    capacity: { max: 4, in_flight: 4, free: null },
+  }), stateWith());
+  assert.equal(code, 3, 'a null free must not read as capFree <= 0 and suppress the refusal');
+  assert.ok(/execute: T-01-05/.test(json.refusal), json.refusal);
+});
+
+test('capacity.free: -1 is unreadable, not a spent cap — front.cjs never emits a negative', () => {
+  // `front.cjs` clamps `free` at zero (`Math.max(0, …)`) and `max`/`in_flight`
+  // are a config value and a collapsed count, so a negative here is not a
+  // smaller cap — it is a corrupted or hand-edited front, and must read exactly
+  // like `null` does: unreadable, never a binding zero.
+  const { code, json } = asJson(ciOnly({
+    actionable_count: 1, actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05'] },
+    capacity: { max: 4, in_flight: 5, free: -1 },
+  }), stateWith());
+  assert.equal(code, 3, 'a negative free must not read as capFree <= 0 and suppress the refusal');
+  assert.ok(/execute: T-01-05/.test(json.refusal), json.refusal);
+});
+
+test('capacity.max unreadable with free: 0 does not bind — the readers must agree, not just this one', () => {
+  // `capBinds` used to be derived from `free` alone. A partially-written front
+  // (`free: 0`, `max` missing or garbled) then read as a spent cap here while
+  // stop-gate.cjs's `capacityFull` — which requires `max` to be a readable
+  // number greater than zero — would call the SAME board not full. Two readers
+  // disagreeing about one board is the exact defect this ticket exists to
+  // remove, so an unreadable `max` must fall back to "no cap in force" (the
+  // pre-cap refusal) here too, matching stop-gate's own requirement.
+  const { code, json } = asJson(ciOnly({
+    actionable_count: 1, actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05'] },
+    capacity: { max: 'corrupt', in_flight: 4, free: 0 },
+  }), stateWith());
+  assert.equal(code, 3, 'an unreadable max must not let a readable free: 0 alone bind the cap');
+  assert.ok(/execute: T-01-05/.test(json.refusal), json.refusal);
+});
+
 done();
