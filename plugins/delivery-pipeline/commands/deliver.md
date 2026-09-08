@@ -499,7 +499,7 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs <duty|merge <T|--all>|report> [-
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve | model <role> [flags]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved|feedback|status> <pr> [--json] [--repo owner/name]
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|root|list [--json]> ...
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|pr|status|retarget> ...
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|refresh|pr|status|retarget> ...
 node ${CLAUDE_PLUGIN_ROOT}/scripts/scope-gate.cjs <T> --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--graph <dir>]
@@ -782,6 +782,54 @@ itself a STOP signal, not a reason to improvise.
    NEVER construct tickets.json by hand, bypassing validate-graph.
 2. `state-sync.cjs` — rebuild delivery-state from the actual GitHub
    (the local file is just a cache).
+2a. **`epic-branch.sh refresh <epic>` — let each LIVE epic learn what landed
+   under it.** Nothing in delivery used to merge the base INTO an epic at all:
+   two epics were measured 27 then 31 commits behind, each containing zero
+   occurrences of the predicates their next tickets were written against, while
+   `ticket-worktree.sh create` reported success four separate times.
+
+   **WHICH epics, and it is read off the board state-sync just printed — not off
+   `tickets.json.epics`.** One line per phase per repo:
+   `epic phase 26: epic/26-… — 0 ahead of main, PR #41 merged`. Refresh the ones
+   whose integration PR is **not `merged` and not `closed`** — i.e. `no epic PR
+   yet`, `not started`, or `PR #N open`. Run it once per repo the phase spans
+   (`tickets.json.epics[<phase>].repos`), inside that checkout.
+   - **A phase that SHIPPED must never be refreshed.** The graph keeps every
+     phase forever and a merged phase's epic branch often still exists on origin
+     — three of them did on 2026-09-08 (`epic/24`, `epic/25`, `epic/26`). Its
+     base has moved on past the integration merge, so `refresh` would happily
+     merge and push onto a dead branch, once per cold start, and the next board
+     would then report that finished phase as commits ahead of the base. `PR …
+     merged` is the only thing that tells a shipped epic from a freshly `ensure`d
+     one: BOTH read `0 ahead`, so an ahead-count or an ancestry test cannot make
+     this distinction — and skipping the fresh one is precisely the defect this
+     verb exists to fix.
+   - Do NOT pre-filter the survivors by "whose base has moved" — that is a
+     measurement and the script owns it: it fetches, compares `origin/<epic>`
+     against `origin/<base>`, and when the epic already contains the base it
+     merges nothing and pushes nothing, says `already up to date`, and only
+     fast-forwards the LOCAL refs.
+   - `nothing to refresh: origin/<epic> does not exist` is EXPECTED OUTPUT, not a
+     fault, and it exits 0 — a phase that has not started yet (Step 3.0 creates
+     that branch, with `ensure`), or one that shipped and had its epic reaped. Do
+     NOT `ensure` an epic because a refresh mentioned it: that would recreate a
+     dead branch and push it for a phase that shipped weeks ago.
+   - The verb also moves the LOCAL base and epic refs (it says which ones and
+     from where). That half is what makes the next `create` cut from the right
+     tip: a refresh pushes from a detached worktree, and nothing about that moves
+     a local ref.
+   - A CONFLICT is a refusal, never a resolution: non-zero, the conflicting paths
+     named, the epic untouched. Show it to the user — it is a decision about
+     somebody's work and neither the script nor you may take it. Delivery
+     continues for every other epic.
+   - **If ANY refresh printed `"pushed":true`, run `state-sync.cjs` once more
+     before showing the board.** The condition is that JSON field, not a
+     judgement: a push moved the base under every open ticket PR stacked on that
+     epic, so their `mergeStateStatus` and check results are now about a merge
+     base that no longer exists, and the board you are about to show was measured
+     before it. Those PRs going `BEHIND` is the sentinel's existing path (its
+     merge gate reads `mergeStateStatus`/`behindBy`; the fixer merges the base in
+     with `base-merge.cjs`), not new work for you here.
 2b. **Reaper (`reapable`-only, self-healing).** Cleanup is reconciliation-based,
    not happy-path-only: using the fresh delivery-state, sweep the tails of previous
    (even interrupted) runs. The decision is NOT yours to infer — `state-sync`
@@ -987,8 +1035,15 @@ the branch exists and only the publish half is missing (skip straight to 5).
    The branch name is taken ONLY from tickets.json (canonical format
    `ticket/<ID>-<slug-from-ticket-title>`, already sanitized by validate-graph) —
    don't construct it by hand. `create` is idempotent: an existing worktree already
-   on that branch is reused (a resumed run is normal), and a base that exists only
-   on the remote is resolved via `origin/<base>`.
+   on that branch is reused (a resumed run is normal). The base it cuts from is
+   **`origin/<base>` whenever that exists** — the edition the board named — and it
+   prints the ref it measured; a LOCAL branch of the same name is reported and not
+   obeyed, because a bare name resolves `refs/heads` first and a stale local epic
+   is how four worktrees in one session were cut from a pre-merge tip while
+   `create` reported success. Anything it REUSES (a worktree, or a branch whose
+   worktree is gone) comes with its distance from that base — a branch that is
+   commits behind is not re-cut, it may hold work that exists nowhere else, so the
+   base is merged in later by the fixer (`base-merge.cjs`).
 
 **Phase B — implement (fan-out).** Agents code → verify → COMMIT. They do not push
 and do not open PRs.

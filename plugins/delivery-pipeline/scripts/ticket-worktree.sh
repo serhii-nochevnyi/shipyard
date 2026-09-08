@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Deterministic worktree lifecycle for ticket executors.
 #
-#   ticket-worktree.sh create <ticket-id> <branch> <base-ref>
+#   ticket-worktree.sh create <ticket-id> <branch> <base-ref>   # cuts from origin/<base-ref>
 #   ticket-worktree.sh remove <ticket-id>
 #   ticket-worktree.sh path   <ticket-id>
 #   ticket-worktree.sh list            # human: `git worktree list`
@@ -93,19 +93,66 @@ acquire_git_lock() {
   trap 'rm -rf "$git_lock"' EXIT INT TERM
 }
 
-# Resolve a base ref that may exist only on the remote. A bare branch name does
-# NOT resolve through `git rev-parse` unless a local ref exists, so a second
-# delivery run (or a fresh clone, or a machine that never created the epic
-# locally) used to die with "base ref not found" on every root ticket.
-resolve_ref() {
-  local ref="$1" out
-  for candidate in "$ref" "refs/heads/$ref" "origin/$ref" "refs/remotes/origin/$ref"; do
+# WHICH EDITION of <base> a worktree is cut from: ORIGIN's, whenever it exists.
+#
+# A base ref may exist only on the remote — a bare branch name does not resolve
+# through `git rev-parse` unless a local ref exists, so a second delivery run (or
+# a fresh clone, or a machine that never created the epic locally) used to die
+# with "base ref not found" on every root ticket. That is the case this function
+# was written for, and it is the LOUD one.
+#
+# The quiet one is worse, and it is why origin now comes FIRST: a bare name
+# resolves refs/heads before refs/remotes, so a stale local `epic/<phase>` — the
+# state every session checkout is in after the sentinel squash-merges through the
+# GitHub API, since nothing moves the local ref — silently won the lookup, and
+# `create` cut the worktree from the pre-merge tip while reporting success. Four
+# separate times in one session, against epics 27 and 31 commits behind the base,
+# each containing none of the predicates the plans were written against.
+#
+# So the board's edition wins, and a divergent local ref is REPORTED rather than
+# obeyed: the PR's base and scope-gate both measure `origin/<base>` (see
+# graph-dir.cjs's resolveBaseRef), so a worktree cut from a local ref that is
+# AHEAD of origin carries commits the base does not have and scope-gate flags
+# them as violations — a false failure of the kind that gets a gate switched off.
+# The full refs/remotes/ probe makes SHAs and already-prefixed refs fall through.
+#
+# Prints "<ref-name>\t<sha>"; the NAME is what callers print, because a silently
+# substituted base would be a new invisible behaviour.
+resolve_base() {
+  local ref="$1" out origin_sha local_sha candidate
+  origin_sha="$(git -C "$repo_root" rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" 2>/dev/null || true)"
+  if [[ -n "$origin_sha" ]]; then
+    local_sha="$(git -C "$repo_root" rev-parse --verify --quiet "refs/heads/$ref^{commit}" 2>/dev/null || true)"
+    if [[ -n "$local_sha" && "$local_sha" != "$origin_sha" ]]; then
+      echo "base $ref: measuring origin/$ref (${origin_sha:0:7}); the LOCAL ref of that name is at ${local_sha:0:7} and is not what this worktree is cut from" >&2
+    fi
+    printf '%s\t%s' "origin/$ref" "$origin_sha"
+    return 0
+  fi
+  # No origin edition at all: a local branch, a sha, a tag, an already-prefixed
+  # ref. Nothing here can be stale relative to something that does not exist.
+  for candidate in "$ref" "refs/heads/$ref"; do
     if out="$(git -C "$repo_root" rev-parse --verify --quiet "${candidate}^{commit}" 2>/dev/null)"; then
-      printf '%s' "$out"
+      printf '%s\t%s' "$candidate" "$out"
       return 0
     fi
   done
   return 1
+}
+
+# How far a branch this script is about to REUSE stands from the base it was
+# supposed to be cut from. Reuse is the normal resumed-run path and it used to be
+# silent, so a branch cut before three ticket merges landed looked identical to
+# one cut a second ago. Reported, never acted on: merging the base in is the
+# fixer's job (base-merge.cjs) and re-cutting the branch would discard work.
+reuse_distance() { # <branch> <base-ref-name>
+  local branch="$1" base_name="$2" counts behind ahead
+  [[ -n "$base_name" ]] || { printf '%s' "the base does not resolve here, so its distance is unknown"; return 0; }
+  counts="$(git -C "$repo_root" rev-list --left-right --count "$base_name...$branch" 2>/dev/null || true)"
+  [[ -n "$counts" ]] || { printf '%s' "distance from $base_name unknown (the branch and the base share no history)"; return 0; }
+  behind="$(printf '%s' "$counts" | cut -f1)"
+  ahead="$(printf '%s' "$counts" | cut -f2)"
+  printf '%s commit(s) behind %s, %s ahead' "$behind" "$base_name" "$ahead"
 }
 
 # The pipeline's own worktrees, keyed by ticket id, as JSON. Shared by `list --json`
@@ -160,12 +207,22 @@ case "$cmd" in
     git -C "$repo_root" fetch origin --prune 1>&2 2>/dev/null || \
       echo "warning: git fetch origin failed — working from the local refs" >&2
 
+    # Measured BEFORE the reuse branches, because both of them report a distance
+    # against it — but not fatally here: a resumed run whose base branch has
+    # since been reaped must still be able to reuse its own worktree. The create
+    # path below is where a base that resolves to nothing is a hard error.
+    base_name=""; base_sha=""
+    if resolved="$(resolve_base "$base")"; then
+      base_name="${resolved%%$'\t'*}"; base_sha="${resolved##*$'\t'}"
+      echo "base $base measured as $base_name (${base_sha:0:7})" >&2
+    fi
+
     # Already there? Reuse it when it holds the right branch; refuse only on a
     # genuine mismatch, which is a state a human has to look at.
     if [[ -e "$wt_dir" ]]; then
       current="$(git -C "$wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
       if [[ "$current" == "$branch" ]]; then
-        echo "reusing existing worktree for $ticket ($wt_dir, branch $branch)" >&2
+        echo "reusing existing worktree for $ticket ($wt_dir, branch $branch) — $(reuse_distance "$branch" "$base_name")" >&2
         echo "$wt_dir"
         exit 0
       fi
@@ -173,8 +230,8 @@ case "$cmd" in
       exit 1
     fi
 
-    base_sha="$(resolve_ref "$base")" || {
-      echo "base ref not found: $base (looked for $base, refs/heads/$base, origin/$base)" >&2
+    [[ -n "$base_sha" ]] || {
+      echo "base ref not found: $base (looked for origin/$base, $base, refs/heads/$base)" >&2
       exit 1; }
 
     if ! mkdir -p "$wt_base" 2>/dev/null; then
@@ -188,6 +245,10 @@ case "$cmd" in
     # git worktree add chats on stdout; keep stdout clean — it is the API
     # (the orchestrator consumes the printed path).
     if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"; then
+      # An existing local branch is reused AS IT STANDS — it may hold committed
+      # work that exists nowhere else, so it is never re-cut onto the base. Say
+      # how far from the base it is instead of reusing it silently.
+      echo "reusing existing branch $branch — $(reuse_distance "$branch" "$base_name")" >&2
       git -C "$repo_root" worktree add "$wt_dir" "$branch" 1>&2
     else
       git -C "$repo_root" worktree add -b "$branch" "$wt_dir" "$base_sha" 1>&2
