@@ -182,3 +182,36 @@ worktree, and any prompt that asks an agent to self-verify scope has to pass
 `--graph <project>/.planning/graph` explicitly.
 
 Related: [[a-childs-pr-base-is-its-merge-target-not-just-its-review-diff]].
+
+## A guard that backgrounds `make test-fast` never sees its own verification
+
+Measured three times in a row on one PR, 2026-09-08 — same guard, same cause,
+zero commits made across all three stops.
+
+`make test-fast` takes over two minutes on this machine (145 assertions across
+the whole deterministic layer; timed at cold start when it exceeded a 120s tool
+timeout). A background agent that launches it and then waits ends its TURN
+before the completion notification arrives. The harness then wakes the PARENT,
+not the agent, so:
+
+- the guard never sees the result it was waiting for;
+- its finished work sits uncommitted in the worktree;
+- the orchestrator gets a notification whose entire content is "standing by".
+
+Each wake needed a `SendMessage` to make progress, and the guard did progress
+each time — so this is not a confused agent, it is a structural mismatch between
+a >2-minute foreground wait and a turn that ends when the agent stops acting.
+
+**The rule that prevents it already exists and applies here too.** `deliver.md`
+tells an EXECUTOR to run the plan's Verification commands and never to widen
+them to `make test` or the full suite, because "the executor runs these on every
+attempt and the fix roles on every round, so an unscoped command sets the tick
+rate of the entire conveyor." That reasoning was about wall-clock cost; this run
+shows a second consequence — an unscoped command is also too slow to survive one
+agent turn. `references/pr-sentinel.md` does not carry the same instruction, and
+it should: the guard runs verification on every round, exactly like a fixer.
+
+Fix shape: state in `references/pr-sentinel.md` that verification is the
+ticket's own scoped commands, run in the foreground, and that the whole suite
+belongs to CI — which has already run it on the pushed head anyway, so a local
+`make test-fast` re-proves what GitHub just proved.
