@@ -41,33 +41,48 @@ branch, the diff is exactly the child's slice, and the post-merge retarget plus
 one `base-merge` round moves it afterwards — which is the documented cascade
 cost this repo already accepts and already has a remedy for.
 
-## Fix (unowned)
+## Fix (unowned) — and it is NOT deferring the parent's merge
 
-Give the front and the guard the one fact they lack: a parent whose child is
-not merged and has no PR yet, while that child is `waiting.dispatched`, should
-have its `merge` DEFERRED rather than offered. Concretely, as a shared
-predicate of the shape `checkpointParent` already has, and for the same reason
-(the board must never offer what the guard would regret):
+The first draft of this note argued for deferring the parent's `merge` until the
+child had a PR, and the stop gate refused the run for leaving two actionable
+items listed. Checking the premise under that pressure showed it was false, so
+the correction belongs here rather than in a summary.
 
-    childWithNoPrYet(parentTicket, tickets, state)
-      -> any ticket whose primary_parent is this one, whose status is not
-         merged, and which has no PR — with `waiting.dispatched` making it
-         imminent rather than hypothetical.
+**The child's PR base is a choice, not a consequence.** `deleteBranchOnMerge` is
+`false` on this repository, so a squashed parent's branch SURVIVES at exactly
+the commit the child was cut from — verified after merging #50 and #51:
 
-Then `merge` routes to a `waiting.parent`-style deferral with a `why` that
-names the child, and the guard's duty says the same, so the two cannot
-disagree. It must be a DEFERRAL and never a park: nobody owes work, and it
-lifts by itself the moment the child's PR appears.
+    e1ffc11  refs/heads/ticket/T-26-15-…
+    d2cfb7c  refs/heads/ticket/T-25-02-…
 
-One caution for whoever takes it: the deferral must not outlive the child's
-dispatch. A dispatch record expires after 90m, and an executor that dies would
-otherwise hold a parent behind a PR that will never open — so the condition has
-to read the LIVE dispatch overlay, not the ticket's static graph position.
+`tickets.json`'s `pr_base` still names the parent branch; only
+`delivery-state[id].base` is recomputed by `state-sync` after the merge. The
+publish step passes a base to `gh pr create` explicitly, so the child's opening
+diff can be measured against the parent branch whatever the board now says. The
+parent's merge and the child's clean first review are therefore INDEPENDENT —
+there was nothing to defer.
 
-## What was done in the meantime
+So the fix is a rule at the publish step, not a new deferral in the front:
 
-The merge of #50 was held until T-26-03's PR existed, by hand and with the
-reason stated. That is a sequencing choice inside the window the gate already
-permits, not an override of it — but it is exactly the class of rule this
-repository has learned prose cannot hold, which is why it is written down here
-as a ticket rather than remembered.
+- when a child's `pr_base` names a parent ticket branch that still exists on
+  origin, open the PR against THAT branch even if the parent has since merged
+  and `delivery-state[id].base` has moved to the epic;
+- `state-sync` then reports the base as moved and the documented `base-merge`
+  round retargets it — after `arch-review` has already judged the child's own
+  slice;
+- and if the parent branch is GONE (a repo with `deleteBranchOnMerge: true`, or
+  the reaper ran), fall back to the epic and say so in the dispatch line, because
+  there the inflated diff is unavoidable and the reviewer should know why it is
+  reading work that was already merged.
+
+That last branch is the one worth a test: the two repositories the conveyor
+targets may differ in the setting, and the behaviour must not depend on which
+one a reader happened to check.
+
+## The residual risk, stated plainly
+
+A child whose PR is opened against a merged parent branch carries commits that
+reach the epic twice — once squashed, once original. Git resolves identical
+content, but this is the same shape as the cascade conflicts that cost 3.9% of
+one session's tokens. Measure it on the next such child before generalising the
+rule above; it is written as a preference, not as a proven saving.
