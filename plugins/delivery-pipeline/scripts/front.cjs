@@ -697,27 +697,32 @@ function computeFront(tickets, state, opts = {}) {
   // branch is cut), and an epic freshly cut from the base with no ticket merged
   // into it. Either would flag a whole phase at the instant its delivery began.
   //
-  // The integration event is therefore observed two ways. The epic's own PR
-  // being MERGED is the direct signal. A ticket of that phase having reached
-  // `merged` while the epic is level with its base is the same fact from the
-  // other side — that ticket's work is in the base — and it is what survives a
-  // truncated PR window or an epic a human merged and reaped by hand.
-  const phasesWithMerged = new Set(
-    Object.keys(tickets || {}).filter((tid) => (state[tid] || {}).status === 'merged').map(keyOf)
-  );
+  // The integration event is therefore ONE observable thing: the epic's own
+  // integration PR is MERGED. That is the act — a person performs it, the
+  // conveyor never auto-merges an epic — and the record already carries it.
+  //
+  // A MERGED TICKET of the phase is deliberately NOT accepted as the same fact,
+  // and the reason is a fact about `delivery-state` rather than a preference.
+  // `status: 'merged'` says a ticket's PR was merged into ITS OWN BASE, and in a
+  // stack that base is legitimately a parent TICKET branch — `pr_base` (the only
+  // field that would tell the two apart) is recorded for OPEN PRs alone, so a
+  // merged entry cannot answer "into the epic, or into a parent?". Accepting it
+  // would re-create this ticket's own defect on any freshly cut epic: epic level
+  // with its base, one child squash-merged into an open parent by hand, and the
+  // green ready parent reads as left behind while the hatch exits 0 over it. So
+  // the untruncated-window case is given up in the conservative direction — no
+  // evidence, no hatch, the run keeps driving.
   const leftBehind = (id) => {
-    // A merged ticket is IN the phase that landed; it is the evidence, not a
-    // casualty. (It is never actionable either, so this is the definition
-    // holding rather than a bucket being filtered.)
+    // A merged ticket is IN the phase that landed; it is not a casualty of it.
+    // (It is never actionable either, so this is the definition holding rather
+    // than a bucket being filtered.)
     if ((state[id] || {}).status === 'merged') return 0;
-    const key = keyOf(id);
-    const info = epics[key];
+    const info = epics[keyOf(id)];
     // No record (direct-to-main, or a phase this graph knows no epic for) and
     // `landed: null` (the compare did not answer) are both 0 — one has no epic
     // that could land, the other has an answer nobody received.
     if (!info || info.landed !== true) return 0;
-    const prMerged = !!(info.pr && String(info.pr.state || '').toUpperCase() === 'MERGED');
-    return prMerged || phasesWithMerged.has(key) ? 1 : 0;
+    return info.pr && String(info.pr.state || '').toUpperCase() === 'MERGED' ? 1 : 0;
   };
 
   // UNBLOCKING POWER — how much other work this ticket is holding up. Depth

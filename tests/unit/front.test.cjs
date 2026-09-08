@@ -908,18 +908,26 @@ test('an epic reaped after its integration PR merged still proves the landing', 
   assert.strictEqual(f.left_behind_count, 1, 'the phase landed and this ticket was not in it');
 });
 
-test('a merged ticket in an epic level with its base is the landing, PR window or not', () => {
-  // The second way the integration event is observable, and the one that
-  // survives a truncated `gh pr list` window or an epic a human merged by hand:
-  // the epic is level with its base AND a ticket of the phase is merged, so that
-  // ticket's work is in the base.
-  const tickets = { 'T-20-01': { phase: '20' }, 'T-20-02': { phase: '20' } };
-  const state = {
-    'T-20-01': { status: 'merged' },
-    'T-20-02': { status: 'pr-open', pr: 4, draft: true, checks: checks() },
+test('a merged TICKET is not the phase landing — it may have merged into a parent', () => {
+  // The tempting second signal, and it re-creates this ticket's defect. A
+  // `merged` status means the PR went into ITS OWN base, and in a stack that
+  // base is legitimately a parent TICKET branch; `pr_base` — the only field
+  // that tells the two apart — is recorded for OPEN PRs alone, so a merged
+  // entry cannot say which it was. Here the epic is freshly cut (level with its
+  // base, no integration PR), the parent is green and ready, and a child was
+  // squash-merged into the parent by hand: counting that child would call the
+  // parent left behind and let the stop gate exit over it.
+  const tickets = {
+    'T-27-01': { phase: '27' },
+    'T-27-02': { phase: '27', depends_on: ['T-27-01'], primary_parent: 'T-27-01' },
   };
-  const f = computeFront(tickets, state, { epics: epicsOf(epicRecord(20, { pr: null })) });
-  assert.strictEqual(f.left_behind_count, 1, 'the diff is in the base and this ticket is not in it');
+  const state = {
+    'T-27-01': { status: 'pr-open', pr: 4, draft: true, checks: checks() },
+    'T-27-02': { status: 'merged' },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(epicRecord(27, { pr: null })) });
+  assert.deepStrictEqual(f.actionable.finalize, ['T-27-01'], 'the parent is live work');
+  assert.strictEqual(f.left_behind_count, 0, 'nothing has been observed to integrate');
 });
 
 test('an unanswered comparison is not evidence, even beside a merged epic PR', () => {
