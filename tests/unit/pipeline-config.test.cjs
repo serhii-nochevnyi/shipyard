@@ -87,13 +87,127 @@ test('non-positive numeric knobs fall back with a warning', () => {
   assert.strictEqual(warnings.filter((w) => /must be a positive number/.test(w)).length, 2);
 });
 
-test('malformed JSON degrades to defaults with a warning, never throws', () => {
+// ── the concurrency cap (ADR-005 D11) ───────────────────────────────────────
+//
+// No choice of TIER addresses a per-session spend limit: the policy is per
+// dispatch and the limit is per session, so the missing axis is how many
+// dispatches are open at once. This is that axis, and it rides the SAME numeric
+// rule as every other positive-number knob — deliberately, because a bespoke
+// coercion here is one more place for the fallback direction to be got wrong.
+test('max_concurrent_agents defaults to the largest wave measured on this repo', () => {
+  assert.strictEqual(DEFAULTS.max_concurrent_agents, 4);
+  assert.strictEqual(withConfig(undefined).config.max_concurrent_agents, 4);
+  const set = withConfig({ max_concurrent_agents: 2 });
+  assert.strictEqual(set.config.max_concurrent_agents, 2);
+  assert.deepStrictEqual(set.warnings, []);
+});
+
+test('a cap of 0 or a malformed cap warns and falls back — a broken knob must not stall the run', () => {
+  // The knob's OWN failure direction is the default, not zero: a typo in the
+  // number is not a decision to dispatch nothing, and a run that stalls on a
+  // typo is a run whose operator switches the cap off. (The other direction —
+  // a config file that does not PARSE — is front.cjs's, and there the answer is
+  // zero, because then no policy is in effect at all.)
+  for (const bad of [0, -1, 'lots', null, {}]) {
+    const { config, warnings } = withConfig({ max_concurrent_agents: bad });
+    assert.strictEqual(config.max_concurrent_agents, DEFAULTS.max_concurrent_agents, JSON.stringify(bad));
+    assert.ok(
+      warnings.some((w) => /max_concurrent_agents must be a positive number/.test(w)),
+      `${JSON.stringify(bad)}: ${warnings.join('; ')}`
+    );
+  }
+});
+
+test('the cap is DECLARED in capability.json, so GSD tooling can set it', () => {
+  // `pipeline.*` is not a valid GSD config key, so a knob that exists only there
+  // cannot be set with `/gsd-config --set`. Declaring it under the capability's
+  // own namespace is what makes it settable — and `delivery_pipeline.*` wins
+  // over `pipeline.*`, so the declared spelling is also the authoritative one.
+  const cap = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'capabilities', 'delivery-pipeline', 'capability.json'), 'utf8'
+  ));
+  const declared = (cap.config || {})['delivery_pipeline.max_concurrent_agents'];
+  assert.ok(declared, 'capability.json must declare delivery_pipeline.max_concurrent_agents');
+  assert.strictEqual(declared.type, 'number');
+  assert.strictEqual(declared.default, DEFAULTS.max_concurrent_agents);
+});
+
+test('the declared namespace wins for the cap, as it does for every other knob', () => {
+  const { config } = withRaw({ pipeline: { max_concurrent_agents: 9 }, delivery_pipeline: { max_concurrent_agents: 3 } });
+  assert.strictEqual(config.max_concurrent_agents, 3);
+});
+
+// ── absent is not the same fact as unparseable (ADR-004 D2, audit F03) ──────
+// A truncated config that CONTAINED `auto_merge: off` used to resolve to the
+// default `epic` with nothing but a warning, and the sentinel merged under it.
+// `config` still carries the defaults (a board has to render) but `valid` is the
+// field every writer checks, and it is the ONLY thing that separates "nobody has
+// configured this yet" from "what this project decided is unknown".
+function withRawText(text) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cfg-'));
   fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
-  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{broken');
-  const { config, warnings } = loadConfig(dir);
+  if (text !== undefined) fs.writeFileSync(path.join(dir, '.planning', 'config.json'), text);
+  return { dir, ...loadConfig(dir) };
+}
+
+test('malformed JSON degrades to defaults with a warning, never throws', () => {
+  const { config, warnings } = withRawText('{broken');
   assert.strictEqual(config.model_policy, 'balanced');
   assert.ok(warnings.some((w) => /not valid JSON/.test(w)));
+});
+
+test('an ABSENT config is valid — the defaults are the right answer there', () => {
+  const { valid, error, warnings } = withRawText(undefined);
+  assert.strictEqual(valid, true);
+  assert.strictEqual(error, null);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('a config that parses to an object is valid', () => {
+  const { valid, error } = withRawText('{"pipeline":{"auto_merge":"off"}}');
+  assert.strictEqual(valid, true);
+  assert.strictEqual(error, null);
+});
+
+test('the truncated config that started this: valid:false, and it names the file', () => {
+  // The audit's own fixture. It SAID auto_merge: off; the reader cannot know
+  // that, which is exactly why nothing may act on the defaults it returns.
+  const { config, valid, error, warnings } = withRawText('{"pipeline": {"auto_merge": "off"');
+  assert.strictEqual(valid, false, 'a file that exists and does not parse is not valid');
+  assert.ok(error, 'and the reason travels with the verdict');
+  assert.strictEqual(error.relative, path.join('.planning', 'config.json'));
+  assert.ok(path.isAbsolute(error.file), 'the absolute path is the datum — callers run from worktrees');
+  assert.ok(/not valid JSON/.test(error.message), error.message);
+  assert.strictEqual(config.auto_merge, 'epic', 'readers still get the defaults');
+  assert.ok(warnings.some((w) => /INVALID/.test(w) && /no policy is in effect/.test(w)),
+    `the warning must not also say "using defaults": ${warnings.join('; ')}`);
+});
+
+test('the resolve CLI carries the same verdict — it is loadConfig\'s shell face', () => {
+  const { dir } = withRawText('{"pipeline": {"auto_merge": "off"');
+  const out = spawnSync(process.execPath, [mod, 'resolve'], { cwd: dir, encoding: 'utf8' });
+  assert.strictEqual(out.status, 0, out.stderr);
+  const j = JSON.parse(out.stdout);
+  assert.strictEqual(j.valid, false, 'a shell reader must be able to see it, not only a require()');
+  assert.ok(/not valid JSON/.test(j.error.message), out.stdout);
+  assert.strictEqual(j.config.auto_merge, 'epic', 'the defaults are still shown — and now labelled');
+
+  const good = spawnSync(process.execPath, [mod, 'resolve'], { cwd: withRawText(undefined).dir, encoding: 'utf8' });
+  const gj = JSON.parse(good.stdout);
+  assert.strictEqual(gj.valid, true);
+  assert.strictEqual(gj.error, null);
+});
+
+test('a config that parses but is not an OBJECT is invalid, never a crash', () => {
+  // `JSON.parse('null')` returns null and the next line read `raw.pipeline` off
+  // it — a TypeError that took state-sync and the sentinel down with a stack
+  // trace instead of a refusal.
+  for (const [text, what] of [['null', 'null'], ['[]', 'an array'], ['"x"', 'string'], ['', null]]) {
+    const { valid, error, config } = withRawText(text);
+    assert.strictEqual(valid, false, `${JSON.stringify(text)} must be invalid`);
+    assert.strictEqual(config.model_policy, 'balanced', 'and still readable');
+    if (what) assert.ok(error.message.includes(what), `${JSON.stringify(text)} → ${error.message}`);
+  }
 });
 
 test('jira defaults are present and unknown jira keys warn', () => {

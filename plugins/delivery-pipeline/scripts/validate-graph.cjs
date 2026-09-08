@@ -28,6 +28,10 @@
 const fs = require('fs');
 const path = require('path');
 const { parseFrontmatter } = require(path.join(__dirname, 'frontmatter.cjs'));
+// The ONE ownership matcher. Gate 2's overlap check, the scope gate and
+// base-merge all ask it, so a declaration that passes here is one all three can
+// answer exactly — see path-owner.cjs for what the old prefix stump got wrong.
+const { parse: parseDecl, mayIntersect, literalPrefix, GRAMMAR } = require(path.join(__dirname, 'path-owner.cjs'));
 
 const ROOT = process.cwd();
 const PHASES_DIR = path.join(ROOT, '.planning', 'phases');
@@ -205,8 +209,32 @@ for (const file of planFiles.sort()) {
     errors.push(`${id}: files_modified is empty — Gate 2's file-overlap guarantee and the executor scope both depend on it (delivery-rules §4); list every path the plan touches`);
   } else {
     for (const f of tickets[id].files) {
-      if (globPrefix(f) === '') {
-        warnings.push(`${id}: files_modified entry "${f}" is a bare glob matching everything — narrow it (delivery-rules §4: resolve overlap by a dependency or a re-slice, never by widening globs)`);
+      // A declaration the matcher cannot answer EXACTLY is an error, not a
+      // warning. The same entry decides overlap here, what the scope gate lets
+      // through, and which side base-merge keeps on a conflict — and that last
+      // one is a mutation. An inexact answer there discarded a ticket's own
+      // implementation and exited 0 (audit F01; ADR-004 D1), so the uncertainty
+      // is refused at the only place it can still be a decision.
+      const parsed = parseDecl(f);
+      if (parsed.error) {
+        errors.push(
+          `${id}: files_modified entry "${f}" is not a declaration the ownership matcher can answer exactly — ` +
+          `${parsed.error}. ${GRAMMAR}. The same entry decides Gate 2 overlap, the scope gate and which side ` +
+          'base-merge keeps on a conflict, so an inexact declaration is refused here rather than guessed at there.'
+        );
+      } else if (literalPrefix(f) === '') {
+        // The condition is "no leading literal segment", and the message has to
+        // say exactly that. It used to say "a bare glob matching everything",
+        // which was true only of `**` — and `**` is now a parse ERROR above, so
+        // the only entries that reach here are leading-wildcard ones (`*.ts`,
+        // `*/x.ts`) that a suffix or a depth still constrains. A warning that
+        // overstates what it found is a warning its reader learns to skip.
+        warnings.push(
+          `${id}: files_modified entry "${f}" begins with a wildcard segment, so it has no literal prefix — ` +
+          'its suffix and its depth may still narrow WHAT it matches, but nothing anchors WHERE it applies: ' +
+          'every path of that depth whose segments match is claimed, in any directory. Give it a literal leading ' +
+          'segment (delivery-rules §4: resolve overlap by a dependency or a re-slice, never by widening globs)'
+        );
       }
       if (/#/.test(f)) {
         errors.push(`${id}: files_modified entry "${f}" contains "#" — a YAML trailing comment leaked into the value; move the comment onto its own line`);
@@ -227,10 +255,10 @@ for (const file of planFiles.sort()) {
     // shape that reads as `pending` forever while its PR is green elsewhere.
     if (!tickets[id].repo && !tickets[id].unreachable_paths) {
       const missing = [...new Set(tickets[id].files
-        .map((f) => globPrefix(f).split('/')[0])
+        .map((f) => literalPrefix(f).split('/')[0])
         .filter((seg) => seg && !seg.includes('*')))]
         .filter((seg) => !fs.existsSync(path.join(ROOT, seg)));
-      if (missing.length && missing.length === new Set(tickets[id].files.map((f) => globPrefix(f).split('/')[0])).size) {
+      if (missing.length && missing.length === new Set(tickets[id].files.map((f) => literalPrefix(f).split('/')[0])).size) {
         warnings.push(
           `${id}: every files_modified path is under "${missing.join('", "')}", which does not exist in this repo — ` +
           'if the ticket targets another repository declare `delivery.repo: <owner>/<name>`, otherwise ignore this ' +
@@ -310,16 +338,16 @@ if (acyclic) {
 }
 
 // --- files overlap between dependency-unordered tickets ---
-function globPrefix(g) {
-  const i = g.search(/[*?[]/);
-  return (i === -1 ? g : g.slice(0, i)).replace(/\/+$/, '');
-}
-function overlaps(a, b) {
-  const pa = globPrefix(a);
-  const pb = globPrefix(b);
-  if (!pa || !pb) return true; // bare glob like "**" overlaps everything
-  return pa === pb || pa.startsWith(pb + '/') || pb.startsWith(pa + '/');
-}
+// `mayIntersect` asks the real question — could ANY single path satisfy both
+// declarations — where the old `overlaps` compared two pre-wildcard stumps as
+// directory prefixes. That was wrong in both directions: `src/foo*.ts` (stump
+// `src/foo`) did not contest `src/fooBar.ts`, so a genuine collision passed;
+// `src/*.ts` (stump `src`) contested `src/a/b.ts`, so a pair that cannot collide
+// was rejected. An entry the matcher cannot parse is excluded here and reported
+// as its own error above — `mayIntersect` fails closed, so leaving one in would
+// restate that single cause as a contested-path error against every file of every
+// unordered ticket.
+const ownable = (f) => !parseDecl(f).error;
 // A MERGED ticket cannot contest a path: its work has already landed, so there
 // is nothing left for it to write and nothing for a future ticket to collide
 // with. Without this, a delivered phase owns its files forever — the second
@@ -357,9 +385,9 @@ if (acyclic) {
       // repos is not a conflict, and treating it as one would force a bogus
       // dependency between a backend and a frontend ticket.
       if ((a.repo || null) !== (b.repo || null)) continue;
-      for (const fa of a.files) {
-        for (const fb of b.files) {
-          if (overlaps(fa, fb)) {
+      for (const fa of a.files.filter(ownable)) {
+        for (const fb of b.files.filter(ownable)) {
+          if (mayIntersect(fa, fb)) {
             // Group by the CONTESTED PATH, not by the ticket pair. Reporting
             // every (pair × file) restates one fact once per combination: a
             // single hot file touched by four tickets produced six lines, and a

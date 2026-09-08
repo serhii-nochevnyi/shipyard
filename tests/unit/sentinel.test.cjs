@@ -15,14 +15,20 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 const SENTINEL = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'sentinel.cjs');
 const roots = [];
 
-function project({ tickets, state, config }) {
+// `configRaw` writes the config file BYTE FOR BYTE, which is the only way to
+// build the one fixture that matters here: a config that cannot be parsed at all.
+// JSON.stringify cannot produce one.
+function project({ tickets, state, config, configRaw }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sentinel-'));
   roots.push(root);
   const graph = path.join(root, '.planning', 'graph');
   fs.mkdirSync(graph, { recursive: true });
   fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets, epics: {} }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
-  fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify(config || { pipeline: {} }));
+  fs.writeFileSync(
+    path.join(root, '.planning', 'config.json'),
+    configRaw !== undefined ? configRaw : JSON.stringify(config || { pipeline: {} })
+  );
   return root;
 }
 
@@ -360,9 +366,17 @@ function stubGh() {
     // bucket-less stub would leave every merge case waiting on CI forever.
     // STUB_CHECKS lets one case hand over a different pipeline; `${VAR:-json}`
     // cannot carry the default (the first `}` would close the expansion).
+    // STUB_CHECKS_FAIL is the call that DOES NOT ANSWER: `gh` prints the cause to
+    // stderr, nothing to stdout, and exits non-zero — a 503, a rate limit, an old
+    // `gh` rejecting `--json bucket`. STUB_CHECKS_EXIT is separate on purpose,
+    // because `gh pr checks` reports CI state through its exit code while still
+    // printing the JSON (1 = a check failed OR the PR has no checks, 8 = pending),
+    // so a non-zero exit WITH output is data and must stay tellable from this.
     '  "pr checks "*)',
+    '    if [ -n "${STUB_CHECKS_FAIL:-}" ]; then echo "$STUB_CHECKS_FAIL" >&2; exit "${STUB_CHECKS_EXIT:-1}"; fi',
     '    if [ -n "${STUB_CHECKS:-}" ]; then echo "$STUB_CHECKS";',
-    '    else echo \'[{"name":"test-fast","state":"SUCCESS","bucket":"pass"}]\'; fi ;;',
+    '    else echo \'[{"name":"test-fast","state":"SUCCESS","bucket":"pass"}]\'; fi',
+    '    exit "${STUB_CHECKS_EXIT:-0}" ;;',
     '  "repo view --json owner,name"*) echo \'{"owner":{"login":"acme"},"name":"demo"}\' ;;',
     // Matches both the local form (`repo view --json …`) and the foreign one
     // (`repo view acme/other --json …`) — a ticket in a sibling repository asks
@@ -914,6 +928,131 @@ test('...and lands it when the project has declared it has no CI (the control)',
   assert.ok(/nothing ran/.test(r.checks_note || ''), r.checks_note);
 });
 
+suite('a check state that could not be READ is neither empty nor green');
+
+// The fourth state, on both of the guard's paths. `duty` reads it off the board
+// state-sync wrote; `merge` reads it LIVE, and that read is the one that lands
+// PRs. An unreadable `gh pr checks` used to arrive as an empty list (all-zero
+// tallies — the exact shape the merge gate treats as unblocked) and then as a
+// synthetic unknown-bucket row, which waits for the right reason while telling
+// the operator that one check is still running on a PR nobody read.
+//
+// Every assertion below therefore pins the TALLY and the WORDS, not only the
+// action: `wait-ci` was already the answer under the synthetic row, so a test
+// that checked the action alone would pass on the code this replaces.
+
+const unread = (note = 'gh: HTTP 503: Service Unavailable') =>
+  ({ total: 0, failing: 0, pending: 0, none_reported: false, unavailable: true, note });
+
+test('duty: an unreadable check state is wait-ci, and the reason names the cause', () => {
+  const root = project({ tickets: { A: {} }, state: { A: { ...green, checks: unread() } } });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  const i = d.items[0];
+  assert.strictEqual(i.action, 'wait-ci', i.why);
+  assert.ok(/unreadable/.test(i.why), i.why);
+  assert.ok(/HTTP 503/.test(i.why), 'the cause gh printed is what makes it actionable');
+  assert.ok(!/still running/.test(i.why), 'the synthetic row said exactly that about a check nobody saw');
+  assert.strictEqual(d.actionable_count, 0, 'the guard has nothing it may do — and nothing to ask a person');
+  assert.strictEqual(d.clear, false, 'nor is the guard done: the next sync reads again');
+});
+
+test('duty: it is not the no-CI hold — nobody is asked to confirm a reading that did not happen', () => {
+  const root = project({ tickets: { A: {} }, state: { A: { ...green, checks: unread() } } });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.notStrictEqual(d.items[0].action, 'human-merge', d.items[0].why);
+  assert.ok(!/merge_without_ci/.test(d.items[0].why), d.items[0].why);
+});
+
+test('duty: merge_without_ci does not lift it either', () => {
+  // The setting is a person saying "this repository has no CI". It says nothing
+  // about a call that failed.
+  const root = project({
+    tickets: { A: {} },
+    state: { A: { ...green, checks: unread() } },
+    config: { pipeline: { merge_without_ci: true } },
+  });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'wait-ci', d.items[0].why);
+});
+
+test('duty: a certified draft is not readied on an unreadable answer', () => {
+  // `undraft` is the step that hands the PR to this guard's own merge, so it is
+  // withheld for the same reason the merge is.
+  const root = project({ tickets: { A: {} }, state: { A: { ...green, checks: unread(), draft: true } } });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.items[0].action, 'wait-ci', d.items[0].why);
+});
+
+test('duty: a MOVED BASE still outranks it — the same order the board holds', () => {
+  // The permanent case is an old `gh` that cannot answer `--json bucket` at all;
+  // routing to `wait-ci` ahead of this would freeze base-merge for the whole run.
+  // `merge_state` rides on the review read, which no `pr checks` failure touches.
+  const root = project({
+    tickets: { 'T-BM': { branch: 'ticket/T-BM', epic: 'epic/21-x' } },
+    state: { 'T-BM': { ...openGreen(9, 'ticket/T-BM', 'epic/21-x'), checks: unread() } },
+    config: epicConfig,
+  });
+  const d = JSON.parse(run(root, ['duty', '--json'], {
+    env: onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-BM', STUB_PR: '9', STUB_MERGE_STATE: 'BEHIND' }),
+  }).stdout);
+  assert.strictEqual(d.items[0].action, 'base-merge', d.items[0].why);
+});
+
+// The live read, and the path that actually lands PRs.
+const unreadMerge = (env, config) => JSON.parse(run(
+  project({
+    tickets: { 'T-UR': { branch: 'ticket/T-UR', epic: 'epic/21-x' } },
+    state: { 'T-UR': openGreen(9, 'ticket/T-UR', 'epic/21-x') },
+    config: config || epicConfig,
+  }),
+  ['merge', 'T-UR', '--json', '--dry-run'],
+  { env: onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-UR', STUB_PR: '9', ...env }) }
+).stdout).results[0];
+
+test('merge refuses when the live check read fails, and quotes what gh said', () => {
+  const r = unreadMerge({ STUB_CHECKS_FAIL: 'gh: HTTP 503: Service Unavailable (api.github.com)' });
+  assert.strictEqual(r.merged, false);
+  assert.strictEqual(r.would_merge, undefined, 'not even a dry run may say it would land');
+  assert.ok(r.blockers.some((b) => /HTTP 503/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /could not be read/.test(b)), r.blockers.join('; '));
+  assert.strictEqual((r.checks || {}).unavailable, true, 'the fact is recorded, not just refused');
+  assert.strictEqual((r.checks || {}).pending, 0, 'no phantom check: nothing was read');
+  assert.strictEqual((r.checks || {}).none_reported, false, 'and it is not "this PR has no checks"');
+});
+
+test('...and it is refused even where the project declared it has no CI', () => {
+  const r = unreadMerge(
+    { STUB_CHECKS_FAIL: 'gh: HTTP 503: Service Unavailable' },
+    { ...epicConfig, pipeline: { merge_without_ci: true } }
+  );
+  assert.strictEqual(r.merged, false);
+  assert.ok(r.blockers.some((b) => /HTTP 503/.test(b)), r.blockers.join('; '));
+});
+
+test('an old gh that rejects --json bucket is the same refusal, not a green', () => {
+  // This is the case that made the state permanent rather than transient: the
+  // binary cannot answer at all, so every round reads the same nothing.
+  const r = unreadMerge({ STUB_CHECKS_FAIL: 'unknown JSON field: "bucket"', STUB_CHECKS_EXIT: '1' });
+  assert.strictEqual(r.merged, false);
+  assert.ok(r.blockers.some((b) => /bucket/.test(b)), r.blockers.join('; '));
+});
+
+test('EXIT CODE IS DATA: exit 1 with a valid [] is an observed empty list, not a failure', () => {
+  // `gh pr checks` exits 1 both for a failing check and for a PR with no checks
+  // at all, so this is the ordinary no-CI path. It must reach the no-CI hold —
+  // the refusal that names the setting — and not the unreadable one.
+  const r = unreadMerge({ STUB_CHECKS: '[]', STUB_CHECKS_EXIT: '1' });
+  assert.strictEqual(r.merged, false);
+  assert.ok(r.blockers.some((b) => /merge_without_ci/.test(b)), r.blockers.join('; '));
+  assert.strictEqual((r.checks || {}).none_reported, true);
+  assert.strictEqual((r.checks || {}).unavailable, false);
+});
+
+test('...and exit 1 with a PASSING row still lands (the exit-code-is-data control)', () => {
+  const r = unreadMerge({ STUB_CHECKS: '[{"name":"build","state":"SUCCESS","bucket":"pass"}]', STUB_CHECKS_EXIT: '1' });
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
 suite('the squash pins the head the gate was checked against');
 
 // Б5. Every gate above the merge was measured against a head a concurrent push
@@ -1306,6 +1445,98 @@ test('without it the prompt is byte-identical to the one the fixer got before', 
   while (to < lines.length && /base-merge/.test(lines[to])) to++;
   if (lines[to] === '') to++;
   assert.strictEqual(lines.slice(0, from).concat(lines.slice(to)).join('\n'), plain.prompts[0]);
+});
+
+suite('a corrupt configuration permits no mutation (ADR-004 D2)');
+
+// The audit's own fixture, byte for byte: a config TRUNCATED mid-object that
+// contained `auto_merge: "off"`. Before this ticket loadConfig turned it into the
+// DEFAULTS — `auto_merge: epic` — dropped the warning, and the guard reported
+// `would_merge: true` for a PR the file forbade merging. The ticket that could
+// not be told apart from an absent file is the whole defect.
+const TRUNCATED = '{"pipeline": {"auto_merge": "off"';
+const cfgTickets = { 'T-OK': { branch: 'ticket/T-OK', epic: 'epic/21-x' } };
+const cfgState = { 'T-OK': openGreen(9, 'ticket/T-OK', 'epic/21-x') };
+const cfgEnv = () => onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-OK', STUB_PR: '9' });
+
+test('the control: with a VALID config this very PR is a dry-run merge', () => {
+  // Without this the refusal below proves nothing — a gate that refused
+  // everything would satisfy it just as well.
+  const root = project({ tickets: cfgTickets, state: cfgState, config: { pipeline: {}, git: { base_branch: 'main' } } });
+  const r = JSON.parse(run(root, ['merge', 'T-OK', '--json', '--dry-run'], { env: cfgEnv() }).stdout).results[0];
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+test('merge --dry-run refuses on a truncated config and NAMES the file', () => {
+  const root = project({ tickets: cfgTickets, state: cfgState, configRaw: TRUNCATED });
+  const out = JSON.parse(run(root, ['merge', 'T-OK', '--json', '--dry-run'], { env: cfgEnv() }).stdout);
+  const r = out.results[0];
+  assert.strictEqual(r.would_merge, undefined, 'not even a dry run may say it would land');
+  assert.strictEqual(r.merged, false);
+  assert.ok(/config unreadable/.test(r.blockers[0]), r.blockers.join('; '));
+  assert.ok(r.blockers[0].includes(path.join('.planning', 'config.json')),
+    `the refusal must name the file a person can open: ${r.blockers[0]}`);
+  assert.ok(/not valid JSON/.test(r.blockers[0]), r.blockers[0]);
+  assert.strictEqual(out.auto_merge, 'off', 'the default epic policy must not be reported as in effect');
+  assert.strictEqual(out.config_valid, false);
+});
+
+test('the config refusal comes FIRST — before the ticket lookup', () => {
+  // `unknown ticket` would send a reader to the graph looking for a defect that
+  // is in one file it can open.
+  const root = project({ tickets: cfgTickets, state: cfgState, configRaw: TRUNCATED });
+  const r = JSON.parse(run(root, ['merge', 'NOPE', '--json'], { env: onPath(denyGh()) }).stdout).results[0];
+  assert.ok(/config unreadable/.test(r.blockers[0]), r.blockers.join('; '));
+});
+
+test('merge --all does not report an empty board — it reports the refusal', () => {
+  // `results: []` alone reads as "nothing is mergeable right now", which is the
+  // silent success this rule exists to forbid.
+  const root = project({ tickets: cfgTickets, state: cfgState, configRaw: TRUNCATED });
+  const out = run(root, ['merge', '--all', '--json'], { env: onPath(denyGh()) });
+  assert.strictEqual(out.status, 0, 'a refusal is data, not a crash');
+  const j = JSON.parse(out.stdout);
+  assert.deepStrictEqual(j.results, []);
+  assert.ok(/config unreadable/.test(j.refusal), j.refusal);
+  const text = run(root, ['merge', '--all'], { env: onPath(denyGh()) }).stdout;
+  assert.ok(/refused/.test(text) && /config unreadable/.test(text), text);
+  assert.ok(!/nothing is mergeable/.test(text), text);
+});
+
+test('duty emits ONE config-invalid line and no actions at all', () => {
+  const root = project({ tickets: cfgTickets, state: cfgState, configRaw: TRUNCATED });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.config_valid, false);
+  assert.deepStrictEqual(d.items, [], 'every action is a dispatch decision taken from the policy');
+  assert.strictEqual(d.actionable_count, 0);
+  assert.strictEqual(d.auto_merge, 'off');
+  assert.strictEqual(d.clear, false, 'nothing is finished — a person owes a one-line fix');
+  const lines = run(root, ['duty'], { env: onPath(denyGh()) }).stdout.trim().split('\n');
+  assert.strictEqual(lines.length, 1, `one line, not a board: ${lines.join(' | ')}`);
+  assert.ok(/^config-invalid: /.test(lines[0]), lines[0]);
+  assert.ok(lines[0].includes(path.join('.planning', 'config.json')), lines[0]);
+});
+
+test('a config that parses to null is a refusal, not a stack trace', () => {
+  // `JSON.parse('null')` returns null and `raw.pipeline` threw a TypeError on it,
+  // so this fixture used to take the whole guard down with a Node stack.
+  const root = project({ tickets: cfgTickets, state: cfgState, configRaw: 'null' });
+  const out = run(root, ['merge', 'T-OK', '--json'], { env: onPath(denyGh()) });
+  assert.strictEqual(out.status, 0, out.stderr);
+  const r = JSON.parse(out.stdout).results[0];
+  assert.ok(/not a JSON object/.test(r.blockers[0]), r.blockers.join('; '));
+});
+
+test('an ABSENT config is untouched by all of this — the defaults still apply', () => {
+  // The other half of the distinction. Nobody has configured this project yet,
+  // and `epic` is the right answer.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sentinel-'));
+  roots.push(root);
+  fs.mkdirSync(path.join(root, '.planning', 'graph'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: cfgTickets, epics: {} }));
+  fs.writeFileSync(path.join(root, '.planning', 'graph', 'delivery-state.json'), JSON.stringify(cfgState));
+  const r = JSON.parse(run(root, ['merge', 'T-OK', '--json', '--dry-run'], { env: cfgEnv() }).stdout).results[0];
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
 });
 
 for (const r of roots) {

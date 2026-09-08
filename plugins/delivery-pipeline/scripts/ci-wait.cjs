@@ -77,6 +77,7 @@ const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock
 // disagree about what "the PR moved" means.
 const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 const argv = process.argv.slice(2);
 const JSON_OUT = argv.includes('--json');
@@ -159,6 +160,12 @@ function parkLines(parked) {
         + ' and the park lifts by itself once the PR moves.';
     }
     if (!p.id) return `  WARNING: ${p.error} — the empty-window count did not advance, so no park will be earned.`;
+    // A DELIBERATE refusal is not a failed write, and the two must not read the
+    // same: "record it by hand" is the opposite of the rule when the reason the
+    // park was withheld is that nothing may be mutated at all.
+    if (p.refused) {
+      return `  NOT ESCALATED ${p.id} (PR #${p.pr}) after ${p.empty_windows} empty windows — ${p.error}`;
+    }
     return `  WARNING: could not escalate ${p.id} (${p.error}) — record it by hand, or the front keeps offering`
       + ' a wait that has already failed its window budget.';
   }).join('\n');
@@ -325,6 +332,34 @@ const WAITS = path.join(GRAPH, 'ci-waits.json');
 // once produced five records.
 const LOCK_ROOT = path.resolve(GRAPH, '..', '..');
 
+// A CORRUPT CONFIGURATION PERMITS NO MUTATION (ADR-004 D2), and the park this
+// script files is one: it hands a ticket to a person and drops it off the front.
+// So the wait itself still happens — waiting mutates nothing — and the ESCALATION
+// is withheld while the file does not parse. Read from the project the graph
+// belongs to, not from the cwd: this script is called from worktrees.
+//
+// Wrapped, and treated as invalid on a throw, because of this script's own
+// invariant: a waiter must never die noisily. A config read that took the wait
+// down with a stack trace would teach the loop to stop calling it, and then the
+// hole this whole script exists to close is back.
+const CONFIG = (() => {
+  try {
+    const { valid, error } = loadConfig(LOCK_ROOT);
+    return { valid, error };
+  } catch (e) {
+    return { valid: false, error: { file: path.join(LOCK_ROOT, '.planning', 'config.json'), relative: '.planning/config.json', message: `could not be read (${e.message})` } };
+  }
+})();
+const CONFIG_REASON = CONFIG.valid ? null
+  : `the configuration does not parse (${CONFIG.error.relative} — ${CONFIG.error.message}), and an `
+    + 'unparseable config permits no mutation — no escalation is filed until the file parses. '
+    + 'The empty-window count keeps running, so the park is earned the moment it does.';
+// Carried on EVERY result, not only on the window where a park came due: the
+// caller is a loop, and it should learn on window 1 that the termination path is
+// withheld rather than discover it on window 3.
+const CONFIG_FIELDS = CONFIG.valid ? {}
+  : { config_valid: false, config_error: CONFIG.error, config_note: CONFIG_REASON };
+
 // One locked read-modify-write, with the lock BESIDE THE STORE — a lock taken at
 // some other cwd serializes nothing, which is how six concurrent marks once
 // produced five records.
@@ -389,6 +424,13 @@ function recordOutcomeInner(settledId, watched, goodEver) {
   // Park OUTSIDE the lock: escalation-record takes its own, beside its own store.
   const parked = [];
   for (const e of escalations) {
+    // Counting an empty window is recording a FACT and is always safe; filing the
+    // park is a mutation, and an unparseable config authorizes none.
+    if (!CONFIG.valid) {
+      parked.push({ id: e.id, pr: e.pr, empty_windows: e.empties, ok: false, refused: true,
+        error: CONFIG_REASON });
+      continue;
+    }
     const reason =
       `CI has not moved for ${e.empties} consecutive ci-wait windows (~${Math.round(e.empties * TIMEOUT_S / 60)}m) ` +
       `on PR #${e.pr}, with no change to any delivery-state fact a check would touch. ` +
@@ -443,7 +485,8 @@ if (!JSON_OUT) {
   process.stdout.write(
     `ci-wait: the board offers nothing but pipelines — waiting on ${label}\n` +
     `  up to ${Math.round(TIMEOUT_S / 60)}m, polling every ${INTERVAL_S}s; returns the moment one settles\n` +
-    `  window: ${Math.round(TIMEOUT_S)}s — ${windowSource}\n`);
+    `  window: ${Math.round(TIMEOUT_S)}s — ${windowSource}\n`
+    + (CONFIG_REASON ? `  ⚠ ${CONFIG_REASON}\n` : ''));
 }
 
 // Node has no synchronous sleep, and a busy loop would burn a core for fifteen
@@ -476,7 +519,8 @@ for (;;) {
       const parked = recordOutcome(w.id, watch, goodEver);
       finish(
         { settled: w.id, pr: w.pr, checks: c, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
-          watched: seen, escalated: parked, window_s: Math.round(TIMEOUT_S), window_source: windowSource },
+          watched: seen, escalated: parked, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
+          ...CONFIG_FIELDS },
         `ci-wait: ${w.id} (PR #${w.pr}) settled after ${Math.round((Date.now() - startedAt) / 1000)}s — ` +
         `${c.total - c.failing}/${c.total} green${c.failing ? `, ${c.failing} failing` : ''}. ` +
         'Re-sync and take the round.');
@@ -494,7 +538,7 @@ for (;;) {
     finish(
       { settled: null, timed_out: true, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
         watched: seen, escalated: parked, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
-        outage },
+        outage, ...CONFIG_FIELDS },
       (outage
         ? `ci-wait: gh was unreachable for the whole ${Math.round(TIMEOUT_S / 60)}m window (${label}) — ` +
           'that is an outage, not a stall; nothing was recorded. Re-sync and try again once gh answers.'

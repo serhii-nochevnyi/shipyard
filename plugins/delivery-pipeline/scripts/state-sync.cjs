@@ -43,7 +43,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-const { computeFront, formatFront, ciEstimates } = require(path.join(__dirname, 'front.cjs'));
+const { computeFront, formatFront, ciEstimates, epicKey } = require(path.join(__dirname, 'front.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
 // The park RECORDS, never the flat `activeEscalations` view: the board's lifting
 // sentence is chosen from the park's KIND, and the flat map keeps the kind only
@@ -54,7 +54,7 @@ const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
 // the one this writer used to drop. See the comment at DISPATCHED below.
 const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
-const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
 const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
@@ -65,6 +65,18 @@ const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const STATE = path.join(GRAPH_DIR, 'delivery-state.json');
 const FRONT = path.join(GRAPH_DIR, 'delivery-front.json');
 const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
+// The snapshot's own identity — WHEN its facts were observed, and which
+// generation of the board they produced. Its own file, and that is not a
+// preference: `delivery-state.json` is a bare `{ticket-id: entry}` map with no
+// top level that is not a ticket, and `front.cjs` iterates those keys without
+// filtering against tickets.json — so metadata parked in there becomes a phantom
+// ticket in the buckets the stop gate reads. `delivery-front.json` cannot hold it
+// either: `dispatch-record.cjs refreshFront` rewrites that file from a fixed list
+// of keys, so anything else on it is dropped by the next `mark`. This file has
+// exactly one writer (this script, inside the `state` lock), which is what a
+// compare-and-swap subject has to have. The front gets an advisory copy for
+// readers; THIS is the authority.
+const META = path.join(GRAPH_DIR, 'delivery-state-meta.json');
 
 // Tickets the RUN parked (an agent returned `escalate`, attempts > max). GitHub
 // cannot know this, and a front that keeps re-offering an escalated PR is an
@@ -88,7 +100,24 @@ const PR_FIELDS = 'number,state,isDraft,headRefName,headRefOid,baseRefName,merge
 // `body` rides along in the open-only pass for the same reason as reviewDecision:
 // it is only read for OPEN PRs (the `gate_status:` trailer the conform gate
 // writes), and pulling bodies across the whole 1000-row window is expensive.
-const REVIEW_FIELDS = 'number,reviewDecision,body';
+// `mergeStateStatus` rides the SAME open-only pass, and it is the fact
+// `front.cjs`'s `baseMoved` reads: a green measured against a base that has since
+// MOVED is not a green, so the board was offering exactly the merges
+// `sentinel.cjs merge` refuses. The integrator found that predicate DEAD on the
+// board (2026-09-07) for one reason — nothing wrote the field it reads. It is one
+// scalar on a call that is already open-only and already asking for the two
+// expensive fields, so it is paid where the answer is read and nowhere else;
+// never add it to the bulk window above.
+//
+// `behind_by` — the mirror signal, and the reason neither alone suffices
+// (GitHub reports BEHIND only where branch protection requires up-to-date
+// branches) — is deliberately NOT here: no `gh pr list` field carries it, so it
+// would cost one `gh api compare` PER PR PER ROUND, and state-sync's wall time is
+// the conveyor's tick rate. The guard pays that compare on the duty/merge path
+// only (`sentinel.cjs baseCheck`), where the answer is about to be acted on. A
+// board with no `behind_by` therefore says "GitHub did not report BEHIND", which
+// is exactly what `baseMoved` treats it as.
+const REVIEW_FIELDS = 'number,reviewDecision,body,mergeStateStatus';
 
 function fail(msg) {
   console.error(`state-sync: ${msg}`);
@@ -115,41 +144,94 @@ function gh(args, { tolerate = false } = {}) {
   }
 }
 
+// The tolerant helper above answers `null` and DROPS gh's own message, which is
+// enough for every call whose failure means "park this and move on". It is not
+// enough for a call whose failure has to reach the board wearing a reason a
+// person can act on — the epic comparison below is the one such call, and
+// "integration state unknown" with no cause named is a dead end. So it goes
+// through spawnSync like `ghChecks` and keeps stdout, the exit status and the
+// first line of stderr apart. One call per epic per sync (not per PR), so the
+// conveyor's tick rate is untouched.
+function ghTry(args) {
+  const t0 = TIME ? process.hrtime.bigint() : null;
+  const r = spawnSync('gh', args, { encoding: 'utf8' });
+  if (TIME) process.stderr.write(`  ${Number(process.hrtime.bigint() - t0) / 1e9}s  gh ${args.slice(0, 4).join(' ')}\n`);
+  const why = (r.stderr || '').trim().split('\n').filter(Boolean)[0]
+    || (r.error ? r.error.message : '');
+  return { status: r.error ? null : r.status, stdout: (r.stdout || '').trim(), stderr: why };
+}
+
 // `gh pr checks` reports CI state through its EXIT CODE (8 = some checks still
 // pending, 1 = a check failed or the PR has no checks at all) while still
 // printing the requested JSON on stdout. A non-zero exit is therefore DATA, not
 // an error: reading it through the strict helper above made state-sync abort on
 // exactly the red/pending PRs the babysit loop exists to service.
 //
-// But a non-zero exit with NOTHING parseable on stdout is a different fact
-// again: gh itself failed to answer (an old `gh` rejecting `bucket`, a network
-// blip), and that is not "this PR has no checks" either. Collapsing the two
-// into the same `{ rows: [], none: true }` shape made `classify([])` read
-// `none_reported: true, failing: 0, pending: 0` — the exact tally the merge
-// gate treats as unblocked — off a call that never actually answered. ANY
-// stdout that parses to an array is trusted as-is, EMPTY OR NOT and whatever
-// the exit code — a non-zero exit with valid JSON is the normal case above,
-// not an error. Only when nothing parses does exit status decide: exit 0 with
-// empty output means "no checks"; anything else unreadable returns a
-// synthetic unknown-bucket row, which `classify` already fails closed to
-// `pending`, so the caller waits and re-ticks instead of merging on silence.
+// But an answer that never arrived is a different fact again: gh itself failed
+// (an old `gh` rejecting `bucket`, a 503, a rate limit, an expired token), and
+// that is not "this PR has no checks" either. Collapsing the two into the same
+// `{ rows: [] }` shape made `classify([])` read `none_reported: true, failing: 0,
+// pending: 0` — the exact tally the merge gate treats as unblocked — off a call
+// that never actually answered.
+//
+// THE SHAPE OF STDOUT DECIDES; the exit code is consulted only when stdout is
+// silent. Three cases, and the middle one is the whole point:
+//
+//   parses to an array   trusted as-is, EMPTY OR NOT and whatever the exit code.
+//                        A non-zero exit with valid JSON is the normal case
+//                        above, not an error.
+//   non-empty, not an    UNREADABLE, whatever the exit code. `gh` answered
+//   array                something else — malformed JSON, an API error object, a
+//                        notice contaminating stdout — and it exits 0 while
+//                        doing so, so a `status === 0` test here reads a
+//                        successful COMMAND as a readable ANSWER. This branch
+//                        used to be a bare `if` after the parse attempt rather
+//                        than an `else if`, so exit 0 manufactured `[]` locally;
+//                        `sentinel.cjs` and `ci-wait.cjs` both had the `else if`
+//                        and called the same `gh` answer unreadable, which left
+//                        the board and the guard disagreeing (ADR-004 F02 names
+//                        this cell "malformed JSON").
+//   empty                only here does the status decide: 0 means gh succeeded
+//                        and reported nothing — genuinely no checks — and
+//                        anything else is unreadable.
+//
+// Unreadable hands `rows: null` to `check-state.cjs`, which reports it as the
+// fourth state, `unavailable`. It used to hand over a synthetic
+// `[{ bucket: 'unreadable' }]` row instead, to borrow `classify`'s fail-closed
+// `pending`. That waited for the right reason and said the wrong thing — one
+// pending check, on a PR where nothing was read — and it put the fact in two
+// places at once: the row here and the flag there. The flag is the fact;
+// `rows: null` is how it is spelled on the way in, and this function returns
+// NOTHING else about it — `none`/`unavailable` were computed here too until the
+// only caller stopped reading them, which is one more second home for a fact
+// `classify` owns.
 function ghChecks(prNumber, repo) {
   const args = ['pr', 'checks', String(prNumber), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
   const r = spawnSync('gh', args, { encoding: 'utf8' });
   const stdout = (r.stdout || '').trim();
+  let rows = null;
   if (stdout) {
     try {
-      const rows = JSON.parse(stdout);
-      if (Array.isArray(rows)) return { rows, none: rows.length === 0 };
-    } catch { /* fall through to the no-data branch */ }
+      const parsed = JSON.parse(stdout);
+      if (Array.isArray(parsed)) rows = parsed;
+    } catch { /* not JSON at all — `null` travels on to `classify` */ }
+  } else if (r.status === 0) {
+    rows = []; // gh succeeded and printed nothing — genuinely no checks
   }
-  if (r.status === 0) return { rows: [], none: true };
-  const why = (r.stderr || '').trim().split('\n')[0] || `gh pr checks exited ${r.status}`;
-  return { rows: [{ bucket: 'unreadable' }], none: false, note: why };
+  if (Array.isArray(rows)) return { rows };
+  // The note is what reaches the board, the front's why-message and the merge
+  // refusal, so it has to name the CAUSE — and it is derived by the module that
+  // owns the provenance order, so the board and the guard cannot describe the
+  // same `gh` answer differently.
+  return { rows: null, note: unavailableNote(r) };
 }
 
-const { config: cfg, warnings: cfgWarnings } = loadConfig(ROOT);
+// `valid` is the field a WRITER checks (ADR-004 D2): this script writes the board
+// the loop acts on and prints the auto-merge policy the guard enforces, so an
+// unparseable config must not reach either as the DEFAULTS. Absent is a different
+// fact and keeps its old behaviour — the defaults are the right answer there.
+const { config: cfg, warnings: cfgWarnings, valid: CFG_VALID } = loadConfig(ROOT);
 
 if (!fs.existsSync(TICKETS)) fail('missing .planning/graph/tickets.json — run validate-graph first');
 let graph;
@@ -179,7 +261,44 @@ if (fs.existsSync(STATE)) {
   try { prev = JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { prev = {}; }
 }
 const nowIso = new Date().toISOString();
+// When THIS run started READING GitHub — which is the only timestamp that can
+// decide who gets to publish. Two syncs run concurrently by design (the main loop
+// and the guard), each spending minutes in `gh` calls OUTSIDE the write lock, and
+// the one that started earlier can easily finish later: it then holds valid,
+// coherent, OLDER facts. Ordering by who reached the lock first is exactly how a
+// board rolls backwards (audit F13), so the comparison is about the age of the
+// FACTS. Kept separate from `nowIso` on purpose: `nowIso` stamps `since`, the
+// journal transitions and the front's `generated_at`, and the smoke case that
+// ages an observation window must move one of the two and not the other.
+const OBSERVED_AT = process.env.SHIPYARD_STATE_OBSERVED_AT || nowIso;
+
 const notices = [];
+
+// The snapshot on disk, as it stands right now. Read INSIDE the lock and nowhere
+// else — a read taken before queueing for the lock is precisely the stale input
+// this guard exists to reject.
+//
+// A file that will not parse FAILS OPEN: no snapshot is known, so this run
+// publishes as generation 1 and the comparison cannot refuse anything. Failing
+// closed would be worse by a wide margin — one bad byte would wedge every sync on
+// the project forever — but the reader has to be told, or a generation counter
+// silently restarting at 1 reads as "the board was never published".
+function readMeta() {
+  if (!fs.existsSync(META)) return null;   // the ordinary first run: nothing to say
+  try {
+    const m = JSON.parse(fs.readFileSync(META, 'utf8'));
+    if (m && typeof m === 'object') return m;
+    notices.push(`${path.basename(META)} does not hold an object — publishing as generation 1; nothing older can be recognised this run`);
+    return null;
+  } catch (e) {
+    notices.push(
+      `${path.basename(META)} is unreadable (${e.message}) — publishing as generation 1. ` +
+      'A concurrent sync that started before this one can no longer be recognised as newer; ' +
+      'delete the file if a run was killed mid-write.'
+    );
+    return null;
+  }
+}
 
 // GSD's `git.base_branch` is the project's integration branch — it is what
 // /gsd-ship targets. Honour it over the repo's default branch: in a repo that
@@ -230,6 +349,7 @@ function loadRepo(repo) {
         const r = byNumber.get(p.number);
         p.reviewDecision = r.reviewDecision || null;
         p.body = r.body || '';
+        p.mergeStateStatus = r.mergeStateStatus || null;
       }
     }
   }
@@ -247,9 +367,12 @@ const repoData = new Map();
 for (const r of REPO_IDS) repoData.set(r, loadRepo(r));
 
 function prsForBranch(repo, branch) {
-  // branch-scoped, so a handful of rows: asking for reviewDecision here is cheap
-  // and keeps a fallback-matched open PR from looking like it has no review.
-  const out = gh(['pr', 'list', ...repoArg(repo), '--state', 'all', '--head', branch, '--limit', '50', '--json', `${PR_FIELDS},reviewDecision,body`], { tolerate: true });
+  // branch-scoped, so a handful of rows: asking for the open-only fields here is
+  // cheap and keeps a fallback-matched open PR from looking like it has no review,
+  // no trailer and no merge state — left out, a PR reached only through this
+  // fallback would arrive with `merge_state: null`, which every reader treats as
+  // "GitHub did not report BEHIND".
+  const out = gh(['pr', 'list', ...repoArg(repo), '--state', 'all', '--head', branch, '--limit', '50', '--json', `${PR_FIELDS},reviewDecision,body,mergeStateStatus`], { tolerate: true });
   if (!out) return [];
   try { return JSON.parse(out); } catch { return []; }
 }
@@ -289,9 +412,16 @@ for (const [id, t] of Object.entries(tickets)) {
       // `gateConform(gate, head_sha)` is absent when they disagree, so a push
       // after arch-review re-owes the verdict instead of inheriting it.
       entry.head_sha = pr.headRefOid || null;
+      // GitHub's own verdict on whether this branch can still land where it
+      // points, recorded under the name both readers use (`sentinel.cjs`'s
+      // `settlement` reads the identical field off its own PR view). BEHIND and
+      // DIRTY are what `front.cjs baseMoved` acts on; UNKNOWN — which GitHub
+      // returns while it computes mergeability — is neither, and falls through to
+      // the work, because "we could not tell" must never park a PR.
+      entry.merge_state = pr.mergeStateStatus || null;
       const gate = parseGate(pr.body);
       if (gate) entry.gate = gate;
-      const { rows, none, note } = ghChecks(pr.number, repo);
+      const { rows, note } = ghChecks(pr.number, repo);
       // check-state.cjs classifies; this file only records. The KEYS are the
       // board's contract — front.cjs's green test, escalation-record's
       // fingerprint and the stop gate all read exactly these — so the tallies
@@ -301,12 +431,18 @@ for (const [id, t] of Object.entries(tickets)) {
         total: c.total,
         failing: c.failing,
         pending: c.pending,
-        // `none` comes from ghChecks, and is true ONLY for a genuine exit-0
-        // empty answer — an unreachable/unparseable `gh` call now reports a
-        // synthetic unreadable row instead, so it lands in `c.pending`, not
-        // here.
-        none_reported: none,
+        // Both flags come from `classify`, not from `ghChecks`: the shape of the
+        // answer (`[]` versus nothing at all) is what decides, and one place
+        // decides it. `none_reported` is a genuine observed empty list — this PR
+        // has no checks configured. `unavailable` is the reading that did not
+        // happen, and it is recorded UNCONDITIONALLY beside it, because a board
+        // where the key is simply missing cannot say whether the last sync found
+        // the checks readable or predates the question.
+        none_reported: c.none_reported,
+        unavailable: c.unavailable,
       };
+      // Only ever set with `unavailable` — it is the cause `gh` printed, and it
+      // is what the front's why-message and the merge refusal quote.
       if (note) entry.checks.note = note;
     } else {
       entry.status = remoteBranches.has(t.branch) ? 'branched' : 'pending';
@@ -321,8 +457,10 @@ for (const [id, t] of Object.entries(tickets)) {
 // ── epic state (needed BEFORE readiness: a cross-phase dependency is only
 //    satisfied once its own phase's epic has landed on the default branch) ────
 // Keyed per phase AND repo: one epic NAME per phase, but a separate branch (and
-// integration PR) in every repository the phase touches.
-const epicKey = (phase, repo) => `${phase} ${repo || ''}`;
+// integration PR) in every repository the phase touches. `epicKey` comes from
+// front.cjs and is not spelled again here: `computeFront` LOOKS UP these very
+// records to decide whether a ticket was left behind by its own phase, and a
+// key written twice is a lookup that can miss while both spellings look right.
 const epicInfo = {};
 if (mode === 'epic-stacked') {
   for (const [phase, e] of Object.entries(epics)) {
@@ -333,22 +471,58 @@ if (mode === 'epic-stacked') {
       const rd = repoData.get(repo) || { available: false, prs: [], branches: new Set(), defaultBranch: null };
       const base = rd.defaultBranch || DEFAULT_BRANCH;
       const exists = rd.branches.has(e.branch);
+      // Integration state is `landed | not-landed | unknown` (ADR-004 D3), and
+      // the third value is the whole point. This was `let ahead = 0; … ahead =
+      // cmp ? parseInt(cmp) || 0 : 0` with `landed: !exists || ahead === 0`, so
+      // a failed compare (`null`), an empty answer and a REAL zero were the same
+      // number and `landed` came out TRUE off a call that never answered. The
+      // audit reproduced it with a rate-limited compare (F07): a parent merged
+      // into its still-unlanded epic, and every phase-N+1 child of it became
+      // `ready` on a base that does not contain it. `null` means "not observed":
+      // it parks the dependents with the reason and is retried on the next sync,
+      // never mapped onto zero.
       let ahead = 0;
+      let landed = true;
+      let landedReason = `epic ${e.branch} does not exist — nothing from this phase is outside ${base}`;
       if (exists) {
-        const cmp = gh(['api', `${apiBase(repo)}/compare/${base}...${e.branch}`, '--jq', '.ahead_by'], { tolerate: true });
-        ahead = cmp ? parseInt(cmp.trim(), 10) || 0 : 0;
+        const cmpPath = `${apiBase(repo)}/compare/${base}...${e.branch}`;
+        const cmp = ghTry(['api', cmpPath, '--jq', '.ahead_by']);
+        // Strict on purpose: `parseInt` is what collapsed the states. A rate-limit
+        // message, an HTML error page, jq's `null` and an empty answer all yield
+        // NaN, and `NaN || 0` is a zero nobody measured.
+        const n = cmp.status === 0 && /^\d+$/.test(cmp.stdout) ? parseInt(cmp.stdout, 10) : null;
+        if (n === null) {
+          ahead = null;
+          landed = null;
+          landedReason = cmp.status === 0
+            ? `gh compare failed: ${cmpPath} answered ${JSON.stringify(cmp.stdout.slice(0, 80))}, not a commit count`
+            : `gh compare failed: ${cmp.stderr || `gh api ${cmpPath} exited ${cmp.status}`}`;
+        } else {
+          ahead = n;
+          landed = n === 0;
+          landedReason = n === 0
+            ? `epic ${e.branch} is 0 commits ahead of ${base} — its whole diff is in`
+            : `epic ${e.branch} is ${n} commit(s) ahead of ${base}`;
+        }
       }
       const pr = rd.prs.find((p) => p.headRefName === e.branch && p.state !== 'CLOSED') || null;
       // "landed" = nothing from this phase is still waiting outside the default
-      // branch (either the epic never started, or its whole diff is already in).
-      epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed: !exists || ahead === 0 };
+      // branch (either the epic never started, or its whole diff is already in);
+      // `null` = the comparison did not answer, so nothing is proven either way.
+      epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed, landed_reason: landedReason };
     }
   }
 }
+// `landed | not-landed | unknown` for one phase in one repository, WITH the
+// observation behind it: a blocker whose reason is "unknown" has to name what
+// could not be seen, or the board hands its reader a dead end. No epic record —
+// direct-to-main, or a phase whose epic metadata predates epic-stacked — is
+// `true`, because there is no epic that could still be ahead.
 const phaseLanded = (phase, repo) => {
-  if (mode !== 'epic-stacked') return true;
+  if (mode !== 'epic-stacked') return { landed: true, reason: null };
   const info = epicInfo[epicKey(phase, repo)];
-  return info ? info.landed : true;
+  if (!info) return { landed: true, reason: null };
+  return { landed: info.landed, reason: info.landed_reason };
 };
 
 // ── readiness + the effective PR base each ticket should target ─────────────
@@ -361,6 +535,27 @@ for (const [id, t] of Object.entries(tickets)) {
   const deps = t.depends_on || [];
   const blockers = [];
   const reasons = {};
+
+  // Two facts about whether this ticket can be executed AT ALL, and they hold in
+  // BOTH integration modes — so they are checked BEFORE the mode split, where
+  // mode-specific dependency and base logic cannot skip them. They used to live
+  // inside the epic-stacked branch alone (audit F27), so in direct-to-main —
+  // including the legacy fallback a pre-epic tickets.json triggers — a
+  // dependency-free ticket whose declared paths escape the repo, or whose
+  // repository cannot be reached at all, still came out `ready` and was
+  // dispatched to an executor that would find nothing.
+  //
+  // A path outside the repo root is unreachable from a worktree, so the ticket
+  // cannot be executed as written — park it with the reason instead of offering
+  // it as `ready`.
+  if (t.unreachable_paths) {
+    blockers.push('plan');
+    reasons.plan = 'files_modified points outside the repo — declare delivery.repo and use repo-relative paths (validate-graph warns with the exact entry)';
+  }
+  if (!repoData.get(repoOf(t)).available) {
+    blockers.push('repo');
+    reasons.repo = `repo ${repoOf(t)} is not reachable through gh — status unknown, nothing can be driven there`;
+  }
 
   if (mode === 'epic-stacked') {
     for (const d of deps) {
@@ -382,21 +577,28 @@ for (const [id, t] of Object.entries(tickets)) {
           blockers.push(d);
           reasons[d] = 'parent has no branch yet (nothing to cascade from)';
         }
-      } else if (!(state[d].status === 'merged' && phaseLanded(tickets[d].phase, repoOf(tickets[d])))) {
-        blockers.push(d);
-        reasons[d] = `cross-phase parent must land on ${repoData.get(repoOf(t)).defaultBranch || DEFAULT_BRANCH} first (phase ${tickets[d].phase} epic still ahead)`;
+      } else {
+        // A cross-phase parent cannot be cascaded from: its contract only counts
+        // once its own phase's epic is on the integration branch. THREE distinct
+        // facts, so three distinct sentences — the single condition said "epic
+        // still ahead" even when the parent PR was not merged at all, and said
+        // the same when the comparison had simply failed. "Positive evidence"
+        // means the board reports what was observed, and `unknown` is not
+        // `not-landed`: it is retried, and a person reading the board is told
+        // which observation is missing rather than being sent to look at an epic.
+        const integ = repoData.get(repoOf(t)).defaultBranch || DEFAULT_BRANCH;
+        const ph = phaseLanded(tickets[d].phase, repoOf(tickets[d]));
+        if (state[d].status !== 'merged') {
+          blockers.push(d);
+          reasons[d] = `cross-phase parent must be MERGED and its phase ${tickets[d].phase} epic landed on ${integ} first (parent is ${state[d].status})`;
+        } else if (ph.landed === null) {
+          blockers.push(d);
+          reasons[d] = `integration state unknown (${ph.reason}) — retried next sync`;
+        } else if (ph.landed === false) {
+          blockers.push(d);
+          reasons[d] = `cross-phase parent must land on ${integ} first (phase ${tickets[d].phase} epic still ahead)`;
+        }
       }
-    }
-    // A path outside the repo root is unreachable from a worktree, so the ticket
-    // cannot be executed as written — park it with the reason instead of
-    // offering it as `ready` to an executor that will find nothing.
-    if (t.unreachable_paths) {
-      blockers.push('plan');
-      reasons.plan = 'files_modified points outside the repo — declare delivery.repo and use repo-relative paths (validate-graph warns with the exact entry)';
-    }
-    if (!repoData.get(repoOf(t)).available) {
-      blockers.push('repo');
-      reasons.repo = `repo ${repoOf(t)} is not reachable through gh — status unknown, nothing can be driven there`;
     }
     // A stale tickets.json (generated before repos were part of the graph) can
     // still carry a foreign primary parent; never emit a base that does not
@@ -477,7 +679,13 @@ for (const [id, entry] of Object.entries(state)) {
   // time it has been mergeable. Carry a dedicated stamp, and when there is no
   // local history fall back to the PR's creation time (a conservative floor)
   // rather than inventing "0h" and suppressing the warning entirely.
-  const green = entry.checks && entry.checks.failing === 0 && entry.checks.pending === 0;
+  // `isGreen`, not the arithmetic that used to be written out here: an
+  // `unavailable` reading has all-zero tallies, so `failing === 0 && pending === 0`
+  // started this clock off a call that never answered — and the warning it feeds
+  // says "approved+green — awaiting merge", which is a claim about checks nobody
+  // read. The `entry.checks &&` guard stays: a ticket with no checks object at
+  // all has no clock, which is not the same as one whose checks are empty.
+  const green = entry.checks && isGreen(entry.checks);
   const mergeable = entry.status === 'pr-open' && !entry.draft && entry.review_decision === 'APPROVED' && green;
   if (mergeable) {
     entry.mergeable_since = (before && before.mergeable_since) || entry.pr_created_at || nowIso;
@@ -503,7 +711,10 @@ for (const [id, s] of Object.entries(state)) {
 // so they are computed here; ciEstimates DOES (see below), so computeFront
 // itself moves inside the locked section, after the append. The dispatch overlay
 // is read inside that section too, for a different reason — see it below.
-const AUTO_MERGE = cfg.auto_merge === 'epic' && mode === 'epic-stacked';
+// An unparseable config authorizes nothing, so the policy this board publishes —
+// `auto_merge` in delivery-front.json, `autoMerge` into computeFront, and the
+// line printed below — is `off` whatever the defaults say.
+const AUTO_MERGE = CFG_VALID && cfg.auto_merge === 'epic' && mode === 'epic-stacked';
 // Drift verdicts recorded by earlier runs, minus any whose plan has since been
 // re-planned (drift-record binds each verdict to the plan's content hash, so the
 // park lifts by itself). Without this the front hands a stale plan back to an
@@ -522,7 +733,28 @@ const DRIFTED = activeDrift(ROOT);
 // rendered; this was the one caller that still did.
 const ESCALATED = activeParks(ROOT, state);
 
-const front = withLock(lockDirFor(ROOT), 'state', () => {
+const published = withLock(lockDirFor(ROOT), 'state', () => {
+  // FIRST inside the lock, ahead of the journal append and every write. Nothing
+  // this run holds was read under the lock — `prev`, the timestamps and every
+  // `gh` observation were gathered minutes ago, because they have to be — so a
+  // newer sync can have published in the meantime. Its JSON is valid, coherent
+  // and NEWER, and replacing it rolls the board back: apparent status reversals,
+  // duplicated transitions, ownership and reap decisions taken off facts that
+  // have already been superseded (audit F13). The transitions go with it: they
+  // were computed against a `prev` that is now the snapshot before last, so
+  // appending them would journal changes that either already landed or never
+  // happened.
+  const onDisk = readMeta();
+  const diskObserved = onDisk && onDisk.observed_at ? Date.parse(onDisk.observed_at) : NaN;
+  const ourObserved = Date.parse(OBSERVED_AT);
+  if (Number.isFinite(diskObserved) && Number.isFinite(ourObserved) && diskObserved > ourObserved) {
+    return { stale: onDisk };
+  }
+  // One counter for the whole trio, bumped once per PUBLISHED snapshot — so
+  // "state, yaml and front were written together" is a fact a reader can check
+  // rather than a property of this file it has to trust.
+  const generation = (onDisk && Number.isInteger(onDisk.generation) ? onDisk.generation : 0) + 1;
+
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
   }
@@ -565,9 +797,26 @@ const front = withLock(lockDirFor(ROOT), 'state', () => {
     // NOT feed it: no per-PR `gh` field. Adding one to the bulk window is the
     // 41s-vs-7s regression this file already carries a warning about.
     ci_estimates: ciEstimates(GRAPH_DIR, tickets),
+    // The epic observations THIS sync just made — `landed | not-landed | unknown`
+    // per phase per repo, keyed by front.cjs's own `epicKey`. It is what makes
+    // `left_behind` evidence instead of arithmetic: the board used to call a
+    // ticket left behind whenever some HIGHER-NUMBERED phase had a merged ticket,
+    // which said nothing about the ticket's own phase and mislabelled phase 24's
+    // live chain the moment phase 26 landed three tickets (2026-09-07). This file
+    // is the only one that has asked GitHub, so it is the only one that can
+    // answer; a caller with no such observation gets no left-behind at all.
+    epics: epicInfo,
   });
   writeAtomic(STATE, JSON.stringify(state, null, 2) + '\n');
-  writeAtomic(path.join(GRAPH_DIR, 'delivery-state.yaml'), yaml.join('\n') + '\n');
+  // The generation rides the human mirror as a comment: the yaml is keyed by
+  // ticket id exactly like the JSON, so it has no more room for a metadata key
+  // than the JSON does — but a person reading it can still see which snapshot
+  // they are looking at.
+  writeAtomic(path.join(GRAPH_DIR, 'delivery-state.yaml'), [
+    yaml[0],
+    `# snapshot generation ${generation} — observed ${OBSERVED_AT}`,
+    ...yaml.slice(1),
+  ].join('\n') + '\n');
   // `dispatches_applied_at` is stamped the way `refreshFront` stamps it, and
   // UNCONDITIONALLY — including when no dispatch is live. Its absence is the
   // signature of a writer blind to the overlay, which is exactly the defect this
@@ -575,9 +824,44 @@ const front = withLock(lockDirFor(ROOT), 'state', () => {
   // ambiguity for every quiet board. Here it equals `generated_at` by
   // construction (one sync, one moment); after a `mark` it runs ahead, which is
   // why the stop gate reads `generated_at` alone for freshness and never this.
-  writeAtomic(FRONT, JSON.stringify({ generated_at: nowIso, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', dispatches_applied_at: nowIso, ...front }, null, 2) + '\n');
-  return front;
+  //
+  // `generation`/`observed_at` here are the ADVISORY copy — `refreshFront`
+  // rebuilds this file from a fixed key list, so a `dispatch-record mark` drops
+  // them and the board carries no generation until the next sync. That is fine
+  // for a reader and would be fatal for the compare-and-swap above, which is why
+  // that reads META and never this.
+  writeAtomic(FRONT, JSON.stringify({ generated_at: nowIso, observed_at: OBSERVED_AT, generation, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', dispatches_applied_at: nowIso, ...front }, null, 2) + '\n');
+  // Written LAST, and that ordering is the publish itself: the generation on disk
+  // only advances once the trio it describes is fully in place, so a sync that
+  // dies mid-write leaves the previous generation standing and the next run
+  // rewrites everything rather than trusting a half-published board.
+  writeAtomic(META, JSON.stringify({
+    generation,
+    observed_at: OBSERVED_AT,
+    generated_at: nowIso,
+    by: 'state-sync',
+    pid: process.pid,
+  }, null, 2) + '\n');
+  return { front, generation };
 }, { label: 'state-sync' });
+
+// A refusal is an OUTCOME, not a failure: the board on disk is the better of the
+// two snapshots and the run that has it is the one driving. Exit 0 before any
+// board line — printing a summary built from facts we just declined to publish is
+// how a run acts on a rollback it decided against.
+if (published.stale) {
+  const m = published.stale;
+  console.log(
+    `state-sync: a newer snapshot (generation ${Number.isInteger(m.generation) ? m.generation : '?'}, ` +
+    `observed ${m.observed_at}) landed while this one was reading — kept the newer one`
+  );
+  console.log(
+    `  this run observed ${OBSERVED_AT} and wrote nothing. Nothing is lost: the newer board already ` +
+    'reflects GitHub more recently than this read does. Re-run state-sync for the current front.'
+  );
+  process.exit(0);
+}
+const front = published.front;
 
 // ── board summary on stdout for the /shipyard:deliver skill ──
 function ageH(sinceIso) { return (Date.parse(nowIso) - Date.parse(sinceIso)) / 3_600_000; }
@@ -588,9 +872,19 @@ if (epicNotice) console.log(`note: ${epicNotice}`);
 for (const n of notices) console.log(`⚠ ${n}`);
 console.log(`integration mode: ${mode}${mode === 'epic-stacked' ? ` (→ ${DEFAULT_BRANCH} via epic)` : ` (→ ${DEFAULT_BRANCH})`} [base from ${DEFAULT_BRANCH_SOURCE}]`);
 console.log(`model policy: ${cfg.model_policy} | workflow: ${cfg.use_workflow === false ? 'forced-off' : 'auto'} | max attempts: ${cfg.max_attempts}`);
+// The `⚠ config: … INVALID …` line comes from the warnings loop above (loadConfig
+// composes it, so the board and every other reader quote one sentence). This line
+// carries the CONSEQUENCE, and the epic-stacked note below it must not fire on an
+// invalid config: `auto_merge` is then the default rather than something the file
+// set, and blaming the integration mode for it would name the wrong cause.
+const autoMergeNote = !CFG_VALID
+  ? ' — the configuration does not parse, so no policy is in effect (fix .planning/config.json and re-sync)'
+  : (cfg.auto_merge === 'epic' && !AUTO_MERGE
+    ? ` — auto_merge is set but ${mode} targets the integration branch directly, so it does not apply`
+    : '');
 console.log(
-  `sentinel: ${cfg.sentinel} | auto-merge: ${AUTO_MERGE ? `epic (ticket PRs → their base; ${DEFAULT_BRANCH} stays a human merge)` : 'off (every merge is a human action)'}` +
-  (cfg.auto_merge === 'epic' && !AUTO_MERGE ? ` — auto_merge is set but ${mode} targets the integration branch directly, so it does not apply` : '')
+  `sentinel: ${CFG_VALID ? cfg.sentinel : 'off'} | auto-merge: ${AUTO_MERGE ? `epic (ticket PRs → their base; ${DEFAULT_BRANCH} stays a human merge)` : 'off (every merge is a human action)'}` +
+  autoMergeNote
 );
 if (cfg.gsd.base_branch) {
   console.log(`note: integrating into "${cfg.gsd.base_branch}" per git.base_branch — pass it to epic-branch.sh as the base ref`);
@@ -621,9 +915,18 @@ if (mode === 'epic-stacked') {
     const where = info.repo ? ` [${info.repo}]` : '';
     const prPart = info.pr
       ? `PR #${info.pr.number} ${info.pr.state.toLowerCase()}${info.pr.isDraft ? ' (draft)' : ''}`
-      : (info.exists && info.ahead > 0 ? 'no epic PR yet' : 'not started');
-    console.log(`epic phase ${info.phase}${where}: ${info.branch} — ${info.exists ? `${info.ahead} ahead of ${info.base}` : 'not created'}, ${prPart}`);
-    if (info.exists && info.ahead > 0 && !info.pr) {
+      : (info.exists && info.ahead !== 0 ? 'no epic PR yet' : 'not started');
+    // Never print a count that was not measured: `${info.ahead} ahead of main`
+    // rendered an unobserved state as "null ahead of", which reads to a person
+    // exactly like "nothing left to land" — the same collapse the tri-state above
+    // exists to undo, one layer up.
+    const aheadPart = !info.exists
+      ? 'not created'
+      : (info.ahead === null
+        ? `integration state unknown (${info.landed_reason}) — cross-phase dependents parked, retried next sync`
+        : `${info.ahead} ahead of ${info.base}`);
+    console.log(`epic phase ${info.phase}${where}: ${info.branch} — ${aheadPart}, ${prPart}`);
+    if (info.exists && info.ahead !== null && info.ahead > 0 && !info.pr) {
       console.log(`⚠ epic ${info.branch}${where} has ${info.ahead} commit(s) but no PR into ${info.base} — open it: epic-branch.sh pr ${info.branch}${info.repo ? ` (run it inside the ${info.repo} checkout)` : ''}`);
     }
   }
@@ -655,7 +958,15 @@ for (const [id, s] of Object.entries(state)) {
     console.log(`⚠ stale: ${id} PR #${s.pr} still a draft for ${ageLabel(s.since)}`);
   }
   if (s.checks && s.checks.none_reported) {
-    console.log(`⚠ ${id} PR #${s.pr}: no CI checks reported${s.checks.note ? ` (${s.checks.note})` : ''} — "green" here means "nothing to run", confirm that is expected`);
+    console.log(`⚠ ${id} PR #${s.pr}: no CI checks reported — "green" here means "nothing to run", confirm that is expected`);
+  }
+  // The fourth state gets its OWN line, and the two must not share one: this
+  // warning used to be the no-CI one with `(${note})` appended, which told a
+  // reader that a 503 meant "nothing to run" and asked them to confirm it.
+  // Nobody confirms a reading that did not happen — the note names the cause and
+  // the next sync looks again, so the line says that instead.
+  if (s.checks && s.checks.unavailable) {
+    console.log(`⚠ ${id} PR #${s.pr}: check state UNREADABLE this sync (${s.checks.note || 'gh pr checks did not answer'}) — not "no checks" and not green; the next sync reads again`);
   }
 }
 for (const [id, s] of Object.entries(state)) {
@@ -675,4 +986,7 @@ for (const [id, s] of Object.entries(state)) {
 // it a fixpoint while a dozen tickets were executable.
 if (RUN_PARKED.length) console.log(`parked by this run: ${RUN_PARKED.join(', ')}`);
 for (const line of formatFront(front)) console.log(line);
-console.log('wrote .planning/graph/delivery-state.json, delivery-state.yaml and delivery-front.json');
+console.log(
+  `wrote .planning/graph/delivery-state.json, delivery-state.yaml, delivery-front.json ` +
+  `and delivery-state-meta.json (snapshot generation ${published.generation})`
+);

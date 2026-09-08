@@ -6,11 +6,49 @@
 
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
-const { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf } = require(path.join(
+const { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, epicKey } = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
 ));
 
 const checks = (failing = 0, pending = 0, total = 3) => ({ total, failing, pending, none_reported: total === 0 });
+
+// ── the epic records state-sync.cjs publishes ───────────────────────────────
+//
+// Built in ITS shape (`epicInfo[epicKey(phase, repo)]`) and filed under ITS key,
+// which is imported rather than spelled again: a fixture that invents a key of
+// its own proves only that the test agrees with itself.
+//
+// The DEFAULT is the trap this ticket exists for — an epic that exists and is 0
+// commits ahead of its base, which state-sync calls `landed: true` because
+// nothing of the phase is outside the base. That is equally true of an epic
+// whose whole diff went in and of one freshly cut with nothing in it yet, so it
+// is a readiness fact and never, on its own, evidence that a phase shipped.
+const epicRecord = (phase, over = {}) => ({
+  phase: String(phase),
+  repo: null,
+  branch: `epic/${phase}-x`,
+  base: 'main',
+  exists: true,
+  ahead: 0,
+  pr: null,
+  landed: true,
+  landed_reason: `epic epic/${phase}-x is 0 commits ahead of main — its whole diff is in`,
+  ...over,
+});
+// A phase that DID land: its integration PR is merged. This is the positive
+// evidence, and the only difference from the record above.
+const landedEpic = (phase, over = {}) =>
+  epicRecord(phase, { pr: { number: 900 + Number(phase), state: 'MERGED' }, ...over });
+// A phase still being delivered: its epic is ahead of the base with an open
+// integration PR.
+const openEpic = (phase, over = {}) => epicRecord(phase, {
+  ahead: 7,
+  landed: false,
+  pr: { number: 800 + Number(phase), state: 'OPEN' },
+  landed_reason: `epic epic/${phase}-x is 7 commit(s) ahead of main`,
+  ...over,
+});
+const epicsOf = (...records) => Object.fromEntries(records.map((r) => [epicKey(r.phase, r.repo), r]));
 
 suite('front — actionable buckets');
 
@@ -244,6 +282,32 @@ test('blocked tickets are parked with their reason and do not prevent a fixpoint
   assert.ok(f.why.T.includes('parent has no branch yet'));
 });
 
+// An UNKNOWN integration state is a blocker like any other here, and that is the
+// point: `state-sync.cjs` used to map a failed `gh api compare` onto zero commits
+// ahead, so the child of a merged cross-phase parent arrived with `ready: true`
+// and this function correctly filed it under `execute` — a base missing its own
+// declared dependency, handed to an executor. The board's job is to carry the
+// verdict, so the fix is upstream; this pins that the front does carry it, with
+// the reason a person needs, rather than needing a bucket of its own.
+test('a cross-phase child whose integration state was never observed is parked, not executable', () => {
+  const f = computeFront(
+    { C: { depends_on: ['P'] } },
+    {
+      P: { status: 'merged' },
+      C: {
+        status: 'pending',
+        ready: false,
+        blocked_by: ['P'],
+        blocked_reasons: { P: 'integration state unknown (gh compare failed: API rate limit exceeded) — retried next sync' },
+      },
+    }
+  );
+  assert.deepStrictEqual(f.actionable.execute, [], 'nothing may start on a base nobody has seen');
+  assert.deepStrictEqual(f.parked.blocked, ['C']);
+  assert.ok(/integration state unknown/.test(f.why.C), f.why.C);
+  assert.ok(/retried next sync/.test(f.why.C), 'the park is provisional, and says so');
+});
+
 test('a run-parked PR leaves the front (otherwise babysit loops forever)', () => {
   const state = { T: { status: 'pr-open', pr: 7, checks: checks(1, 0) } };
   assert.strictEqual(computeFront({ T: {} }, state).actionable_count, 1);
@@ -275,7 +339,7 @@ test('counts cover every ticket exactly once', () => {
 
 test('parents come before children, but a left-behind phase never comes first', () => {
   const tickets = {
-    'T-02-01': { phase: '2' },                              // left behind: 14 has landed
+    'T-02-01': { phase: '2' },                              // left behind: phase 2's own epic went in
     'T-14-02': { phase: '14' },                              // live root
     'T-14-07': { phase: '14', primary_parent: 'T-14-02' },   // live child
     'T-14-09': { phase: '14', primary_parent: 'T-14-07' },   // live grandchild
@@ -288,7 +352,7 @@ test('parents come before children, but a left-behind phase never comes first', 
     'T-14-09': { status: 'pending', ready: true },
     'T-14-01': { status: 'merged' },
   };
-  const f = computeFront(tickets, state, {});
+  const f = computeFront(tickets, state, { epics: epicsOf(landedEpic(2), openEpic(14)) });
   // Depth orders a stack; it says nothing across phases. Sorting by depth alone
   // put a phase-2 root (depth 0) ahead of every live phase-14 child — observed on
   // a real board right after the sort shipped, with two tickets judged stale six
@@ -308,7 +372,8 @@ test('when only left-behind work remains, the verdict stops demanding motion', (
     'T-02-01': { status: 'pending', ready: true },
     'T-14-01': { status: 'merged' },
   };
-  const out = formatFront(computeFront(tickets, state, {})).join('\n');
+  const epics = epicsOf(landedEpic(2), openEpic(14));
+  const out = formatFront(computeFront(tickets, state, { epics })).join('\n');
   // "Ending the run is a defect" is false when the only thing left has been
   // offered and declined every round for days: continuing means taking abandoned
   // work. Observed on a real board, where two such tickets held `fixpoint: NO`
@@ -687,10 +752,14 @@ test('left-behind still sorts last, however much it would unblock', () => {
     'T-14-02': { status: 'pending', ready: true },
     'T-14-01': { status: 'merged' },
   };
-  const f = computeFront(tickets, state, {});
+  // Phase 2 shipped without these four — its own epic went in. That is now the
+  // fixture's job to SAY: the merged phase-14 ticket beside them used to be the
+  // whole reason they read as left behind, and a higher number landing is not a
+  // fact about phase 2.
+  const f = computeFront(tickets, state, { epics: epicsOf(landedEpic(2), openEpic(14)) });
   assert.deepStrictEqual(
     f.actionable.execute, ['T-14-02', 'T-02-01'],
-    'unblocking power must never promote a phase the run has already moved past'
+    'unblocking power must never promote a phase that shipped without the ticket'
   );
   assert.strictEqual(f.left_behind_count, 1, 'and the count is unchanged');
 });
@@ -746,6 +815,194 @@ test('computeFront stays a pure function over its inputs — no filesystem acces
     !/\b(readFileSync|existsSync|readdirSync|writeFileSync|appendFileSync)\b/.test(src),
     'computeFront must not touch the filesystem'
   );
+});
+
+suite('front — left behind is evidence, not arithmetic');
+
+// The flag used to be `phase(id) < max(phase of any merged ticket)`, which is a
+// claim about NUMBERS. Measured on 2026-09-07: three phase-26 tickets merged into
+// their epic, so the board called phase 24's live, high-risk, pre-authorized head
+// `ALL 1 actionable item(s) are in phases already moved past` and the stop gate's
+// all-left-behind hatch exited 0 over it. Every test here is one reading of "its
+// own phase landed without it" that the arithmetic got wrong in one direction or
+// the other.
+
+test('a phase delivered out of order is not left behind by a newer one', () => {
+  // ROADMAP §22: this repository shipped phase 22 before 21 on purpose. Phase 21
+  // is the live work, and the only thing 22's landing proves is that 22 landed.
+  const tickets = {
+    'T-21-01': { phase: '21' },
+    'T-21-02': { phase: '21', depends_on: ['T-21-01'] },
+    'T-22-01': { phase: '22' },
+  };
+  const state = {
+    'T-21-01': { status: 'pending', ready: true },
+    'T-21-02': held('T-21-01'),
+    'T-22-01': { status: 'merged' },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(openEpic(21), landedEpic(22)) });
+  assert.deepStrictEqual(f.actionable.execute, ['T-21-01'], 'the live phase is work');
+  assert.strictEqual(
+    f.left_behind_count, 0,
+    'phase 21 is being delivered — 21 < 22 is arithmetic, not an abandonment'
+  );
+  // …and the verdict a run reads must not offer the all-left-behind exit either.
+  assert.ok(
+    formatFront(f).some((l) => /1 item\(s\) are actionable RIGHT NOW/.test(l)),
+    'the fixpoint line must demand motion, not a decision'
+  );
+});
+
+test("a ticket its own phase's epic landed without IS left behind", () => {
+  const tickets = { 'T-20-01': { phase: '20' }, 'T-20-02': { phase: '20' } };
+  const state = {
+    'T-20-01': { status: 'merged' },
+    'T-20-02': { status: 'pr-open', pr: 4, draft: true, checks: checks() },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(landedEpic(20)) });
+  assert.deepStrictEqual(f.actionable.finalize, ['T-20-02'], 'still listed — the fixpoint must not lie');
+  assert.strictEqual(f.left_behind_count, 1, 'the phase integrated without it');
+  assert.ok(f.parked.done.includes('T-20-01'), 'and the merged one is the evidence, not a casualty');
+});
+
+test('an epic freshly cut from its base has landed nothing at all', () => {
+  // `exists` + 0 ahead is `landed: true`, and it is exactly as true of an empty
+  // new epic as of one whose whole diff is in. Reading that alone as evidence
+  // would flag an entire phase at the instant its delivery began — a worse
+  // defect than the arithmetic it replaces, and reachable on every phase.
+  const tickets = { 'T-27-01': { phase: '27' }, 'T-27-02': { phase: '27' } };
+  const state = {
+    'T-27-01': { status: 'pending', ready: true },
+    'T-27-02': { status: 'pending', ready: true },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(epicRecord(27)) });
+  assert.strictEqual(f.left_behind_count, 0, 'no integration event has happened yet');
+});
+
+test('a phase whose epic branch does not exist yet has not shipped', () => {
+  // Every decomposed phase has an `epics` entry from the moment it is planned,
+  // long before its branch is cut — and a missing branch is `landed: true` for
+  // the honest reason that nothing of the phase is outside the base.
+  const tickets = { 'T-28-01': { phase: '28' } };
+  const state = { 'T-28-01': { status: 'pending', ready: true } };
+  const f = computeFront(tickets, state, {
+    epics: epicsOf(epicRecord(28, {
+      exists: false,
+      landed_reason: 'epic epic/28-x does not exist — nothing from this phase is outside main',
+    })),
+  });
+  assert.strictEqual(f.left_behind_count, 0, 'an unstarted phase is not one that moved on');
+});
+
+test('an epic reaped after its integration PR merged still proves the landing', () => {
+  // The mirror of the case above: the branch is gone, but the merged epic PR is
+  // the integration event and it is what the record still carries.
+  const tickets = { 'T-19-01': { phase: '19' } };
+  const state = { 'T-19-01': { status: 'pr-open', pr: 3, draft: true, checks: checks() } };
+  const f = computeFront(tickets, state, {
+    epics: epicsOf(landedEpic(19, {
+      exists: false,
+      landed_reason: 'epic epic/19-x does not exist — nothing from this phase is outside main',
+    })),
+  });
+  assert.strictEqual(f.left_behind_count, 1, 'the phase landed and this ticket was not in it');
+});
+
+test('a merged TICKET is not the phase landing — it may have merged into a parent', () => {
+  // The tempting second signal, and it re-creates this ticket's defect. A
+  // `merged` status means the PR went into ITS OWN base, and in a stack that
+  // base is legitimately a parent TICKET branch; `pr_base` — the only field
+  // that tells the two apart — is recorded for OPEN PRs alone, so a merged
+  // entry cannot say which it was. Here the epic is freshly cut (level with its
+  // base, no integration PR), the parent is green and ready, and a child was
+  // squash-merged into the parent by hand: counting that child would call the
+  // parent left behind and let the stop gate exit over it.
+  const tickets = {
+    'T-27-01': { phase: '27' },
+    'T-27-02': { phase: '27', depends_on: ['T-27-01'], primary_parent: 'T-27-01' },
+  };
+  const state = {
+    'T-27-01': { status: 'pr-open', pr: 4, draft: true, checks: checks() },
+    'T-27-02': { status: 'merged' },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(epicRecord(27, { pr: null })) });
+  assert.deepStrictEqual(f.actionable.finalize, ['T-27-01'], 'the parent is live work');
+  assert.strictEqual(f.left_behind_count, 0, 'nothing has been observed to integrate');
+});
+
+test('an unanswered comparison is not evidence, even beside a merged epic PR', () => {
+  // T-26-03 made `landed` tri-state precisely so a failed compare stops reading
+  // as a zero nobody measured. A merged epic PR does not overrule it: commits
+  // pushed to the epic after that merge are exactly what the compare would have
+  // seen, and this file must not guess on a fact whose measurement failed.
+  const tickets = { 'T-23-01': { phase: '23' } };
+  const state = { 'T-23-01': { status: 'pr-open', pr: 5, draft: true, checks: checks() } };
+  const f = computeFront(tickets, state, {
+    epics: epicsOf(landedEpic(23, {
+      ahead: null,
+      landed: null,
+      landed_reason: 'gh compare failed: rate limited',
+    })),
+  });
+  assert.strictEqual(f.left_behind_count, 0, 'unknown is not landed — it is retried');
+});
+
+test('a phase whose epic is still ahead of its base is nobody\'s casualty', () => {
+  const tickets = { 'T-24-05': { phase: '24' } };
+  const state = { 'T-24-05': { status: 'pending', ready: true } };
+  const f = computeFront(tickets, state, { epics: epicsOf(openEpic(24)) });
+  assert.strictEqual(f.left_behind_count, 0, '7 commits outside the base is a phase in flight');
+});
+
+test('with no epic observation at all, nothing is left behind', () => {
+  // front.cjs's own CLI and `dispatch-record.cjs refreshFront` cannot ask GitHub,
+  // so they pass none. The hatch this count feeds (stop-gate.cjs) must never fire
+  // on a fact nobody measured: with no evidence the run keeps driving.
+  const tickets = { 'T-20-01': { phase: '20' }, 'T-20-02': { phase: '20' } };
+  const state = {
+    'T-20-01': { status: 'merged' },
+    'T-20-02': { status: 'pr-open', pr: 4, draft: true, checks: checks() },
+  };
+  assert.strictEqual(computeFront(tickets, state, {}).left_behind_count, 0, 'absence of evidence is not evidence');
+  assert.strictEqual(
+    computeFront(tickets, state, { epics: {} }).left_behind_count, 0,
+    'an empty observation reads the same as none — direct-to-main has no epics at all'
+  );
+});
+
+test("another repository's epic does not speak for this one", () => {
+  // One epic NAME per phase, but a separate branch and integration PR per repo —
+  // which is why the record is keyed by both. A phase that landed in the API repo
+  // says nothing about its own web-repo half.
+  const tickets = {
+    'T-30-01': { phase: '30', repo: 'acme/api' },
+    'T-30-02': { phase: '30', repo: 'acme/web' },
+  };
+  const state = {
+    'T-30-01': { status: 'pr-open', pr: 1, draft: true, checks: checks() },
+    'T-30-02': { status: 'pr-open', pr: 2, draft: true, checks: checks() },
+  };
+  const f = computeFront(tickets, state, {
+    epics: epicsOf(landedEpic(30, { repo: 'acme/api' }), openEpic(30, { repo: 'acme/web' })),
+  });
+  assert.strictEqual(f.left_behind_count, 1, 'one repo integrated, the other is still ahead');
+  assert.deepStrictEqual(
+    f.actionable.finalize, ['T-30-02', 'T-30-01'],
+    'and the left-behind half sorts last within the bucket'
+  );
+});
+
+test('a board of nothing but left-behind work still says so, in the new words', () => {
+  const tickets = { 'T-20-01': { phase: '20' }, 'T-20-02': { phase: '20' } };
+  const state = {
+    'T-20-01': { status: 'merged' },
+    'T-20-02': { status: 'pr-open', pr: 4, draft: true, checks: checks() },
+  };
+  const f = computeFront(tickets, state, { epics: epicsOf(landedEpic(20)) });
+  const line = formatFront(f).find((l) => /^fixpoint:/.test(l));
+  assert.ok(/ALL 1 actionable item\(s\)/.test(line), line);
+  assert.ok(/own epic\s+already landed without them/.test(line.replace(/\s+/g, ' ')), line);
+  assert.ok(/decision, not motion/.test(line), 'the two exits are still named');
 });
 
 suite('front — ciEstimates: a per-repo PR-lifetime proxy from the journal');
@@ -1256,16 +1513,130 @@ test('a checkpoint outranks the no-CI hold — a person holds that one for anoth
   assert.deepStrictEqual(f.waiting.merge_human, []);
 });
 
-suite('front — the project config is consulted only when a no-CI PR is on the board');
+suite('front — a check state that could not be READ is neither empty nor green');
+
+// The fourth state. An unreadable `gh pr checks` (a 503, a rate limit, an old
+// `gh` rejecting `--json bucket`) used to reach the board as `none_reported`,
+// which routes to `waiting.merge_human` and asks a person to confirm that this
+// repo has no CI — about a reading that never happened. Then it reached the board
+// as a synthetic pending row, which waits for the right reason while claiming one
+// check is running on a PR nobody read. `unavailable` is the fact as itself: no
+// work is owed, nobody is asked anything, and the next sync looks again.
+//
+// The assertions below deliberately discriminate from BOTH predecessors: the
+// bucket alone was already `waiting.ci` under the synthetic row, so the tally and
+// the why-message are what pin this behaviour rather than the routing.
+const unread = (note = 'gh: HTTP 503: Service Unavailable') =>
+  ({ total: 0, failing: 0, pending: 0, none_reported: false, unavailable: true, note });
+const unreadLanded = { ...landed, checks: unread() };
+
+test('green + conform + stacked, but the checks were never read → waiting.ci', () => {
+  const f = computeFront({ T: {} }, { T: { ...unreadLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, [], 'nothing read this branch');
+  assert.deepStrictEqual(f.waiting.ci, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, [], 'nobody is asked to confirm a reading that did not happen');
+  assert.ok(/checks unreadable/.test(f.why.T), f.why.T);
+  assert.ok(/HTTP 503/.test(f.why.T), 'the cause gh printed is what makes the message actionable');
+  assert.ok(/retried next sync/.test(f.why.T), f.why.T);
+  assert.ok(!/still running/.test(f.why.T), 'no phantom check: the synthetic row said exactly that');
+  assert.strictEqual(f.fixpoint, false, 'waiting on CI is never a fixpoint');
+});
+
+test('the same PR is not actionable in ANY bucket', () => {
+  // `finalize` is the one that would otherwise fire (a green, out-of-draft PR
+  // with an unrecorded gate is finalize work), so assert the whole board.
+  const f = computeFront(
+    { T: {}, D: {} },
+    { T: { ...unreadLanded, gate: undefined }, D: { ...unreadLanded, pr: 10, draft: true } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(Object.values(f.actionable).flat(), []);
+  assert.deepStrictEqual(f.waiting.ci.slice().sort(), ['D', 'T']);
+});
+
+test('a note the board never carried still names the state', () => {
+  // `note` is only ever written beside the flag, but a board can be hand-edited
+  // or written by an older release — the why-message must not read "undefined".
+  const f = computeFront({ T: {} }, { T: { ...landed, checks: { ...unread(), note: undefined } } }, { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.ci, ['T']);
+  assert.ok(/checks unreadable: gh pr checks did not answer/.test(f.why.T), f.why.T);
+});
+
+test('an OBSERVED empty list is untouched — it is still the human\'s merge (the control)', () => {
+  // `gh` exits 1 both for a failing check and for a PR with no checks at all, so
+  // an exit-1 answer of `[]` is the ordinary no-CI path, not an error. The two
+  // states must not converge again: this one names the setting, that one does not.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.merge_human, ['T']);
+  assert.deepStrictEqual(f.waiting.ci, []);
+  assert.ok(/merge_without_ci/.test(f.why.T), f.why.T);
+});
+
+test('merge_without_ci does NOT lift an unreadable answer', () => {
+  // The setting is a person saying "this repository has no CI". It says nothing
+  // about a call that failed, and reading it as consent for one would put the
+  // merge gate right back where Б3 found it.
+  const f = computeFront({ T: {} }, { T: { ...unreadLanded } }, { autoMerge: true, mergeWithoutCi: true });
+  assert.deepStrictEqual(f.actionable.merge, []);
+  assert.deepStrictEqual(f.waiting.ci, ['T']);
+});
+
+test('a failing check outranks it — a tally that WAS read is the louder fact', () => {
+  // Unreachable from state-sync (an unavailable answer has zero tallies), but the
+  // branch order is the contract with sentinel.cjs's duty, and a hand-written or
+  // half-migrated board must not lose a red.
+  const f = computeFront({ T: {} }, { T: { ...landed, checks: { ...unread(), failing: 2 } } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+});
+
+test('a MOVED BASE outranks it too, and the position is deliberate', () => {
+  // The permanent case is an old `gh` that cannot answer `--json bucket` at all,
+  // so routing to `waiting.ci` first would freeze base-merge for every round of
+  // the run — and `merge_state` comes from a different call, which no `pr checks`
+  // failure says anything about. `sentinel.cjs`'s duty holds the same order.
+  const f = computeFront(
+    { T: {} },
+    { T: { ...unreadLanded, merge_state: 'BEHIND', behind_by: 3 } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.ok(/base moved/.test(f.why.T), f.why.T);
+});
+
+test('a human_checkpoint ticket waits on the READING, and is never offered as a merge', () => {
+  // The opposite order from the no-CI hold, and for a mechanical reason: the
+  // checkpoint branch is `needsHuman(t) && green`, and `green` is now false here.
+  // Reached after this branch, that guard would fall through to the merge branch
+  // below it and the board would offer to squash a checkpoint PR nobody approved.
+  // So the checkpoint is not LOST, it is deferred: `waiting.ci` resolves by
+  // looking again, and the moment the reading succeeds the checkpoint answers.
+  const f = computeFront({ T: { human_checkpoint: true } }, { T: { ...unreadLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, [], 'the one answer that would be unrecoverable');
+  assert.deepStrictEqual(f.waiting.ci, ['T']);
+  assert.deepStrictEqual(f.waiting.human, []);
+});
+
+suite('front — the project config is read AT MOST ONCE per board');
 
 // Reviewer-found on PR #44. `heldForNoCi` resolved `merge_without_ci` EAGERLY to
 // build noCiHold's options object, so every `computeFront` opened the project's
-// config file — including the ordinary board where no PR reports `none_reported`
-// and the setting cannot change a single answer. What makes it worth a test
+// config file — twice on a board with two no-CI PRs. What made it worth a test
 // rather than a shrug is that the comment beside the resolver already promised
-// the opposite ("lazily, so an ordinary board still reads no file here"): the
-// file asserted a behaviour the code did not have. These pin the promise so it
-// cannot rot back, and they measure the READ, not the clock.
+// the opposite: the file asserted a behaviour the code did not have. These pin
+// the promise so it cannot rot back, and they measure the READ, not the clock.
+//
+// The promise CHANGED SHAPE with the concurrency cap (ADR-005 D11), and the
+// change is stated here rather than quietly absorbed. `merge_without_ci` is
+// conditional — it can only alter a board that actually holds a PR with no
+// reported checks — so it could be resolved on first need or never. A CAPACITY
+// number is not conditional: every board reports `capacity`, because the run
+// builds its wave from `capacity.free`, so on an ordinary board there is now
+// one read where there were none.
+//
+// What is pinned instead is the invariant that actually protects the file:
+// ONE read per computeFront, shared by both knobs, however many PRs or tickets
+// the board holds — and still ZERO for a caller that pins both, which is the
+// path state-sync.cjs and the CLI take.
 const cfgMod = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
 ));
@@ -1280,7 +1651,7 @@ function configReadsDuring(fn) {
   return reads;
 }
 
-test('an ordinary board reads no config at all', () => {
+test('an ordinary board reads it exactly once — for the cap, not for merge_without_ci', () => {
   const reads = configReadsDuring(() => {
     const f = computeFront(
       { A: {}, B: {}, C: {} },
@@ -1291,8 +1662,20 @@ test('an ordinary board reads no config at all', () => {
       { autoMerge: true }
     );
     assert.deepStrictEqual(f.actionable.merge.slice().sort(), ['A', 'B']);
+    // Nothing here reports `none_reported`, so merge_without_ci still cannot
+    // change an answer and still resolves nothing. The one read is the cap's.
+    assert.strictEqual(f.capacity.max > 0, true, 'a readable config yields a positive cap');
   });
-  assert.strictEqual(reads, 0, 'nothing reports none_reported, so merge_without_ci cannot change an answer');
+  assert.strictEqual(reads, 1, 'the cap is unconditional; merge_without_ci is not, and shares the read');
+});
+
+test('pinning only the cap leaves merge_without_ci resolving nothing on an ordinary board', () => {
+  // The two knobs are independent: pinning the cap must not drag the other one
+  // into a read it does not need.
+  const reads = configReadsDuring(() => {
+    computeFront({ A: {} }, { A: { ...landed } }, { autoMerge: true, maxConcurrentAgents: 3 });
+  });
+  assert.strictEqual(reads, 0);
 });
 
 test('a board with no-CI PRs reads it ONCE, however many of them there are', () => {
@@ -1307,21 +1690,40 @@ test('a board with no-CI PRs reads it ONCE, however many of them there are', () 
   assert.strictEqual(reads, 1, 'resolved on first need, memoized for the rest of the call');
 });
 
-test('a caller that pins the setting reads nothing, even with a no-CI PR', () => {
+test('a caller that pins BOTH knobs reads nothing, even with a no-CI PR', () => {
+  // The path state-sync.cjs and the front CLI take: they have already paid for
+  // the config, so they hand both answers in and computeFront opens no file.
   const reads = configReadsDuring(() => {
-    const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true, mergeWithoutCi: true });
+    const f = computeFront({ T: {} }, { T: { ...noCiLanded } },
+      { autoMerge: true, mergeWithoutCi: true, maxConcurrentAgents: 4 });
     assert.deepStrictEqual(f.actionable.merge, ['T']);
+    assert.strictEqual(f.capacity.max, 4);
   });
-  assert.strictEqual(reads, 0, 'the passed option always wins, so there is nothing to look up');
+  assert.strictEqual(reads, 0, 'a passed option always wins, so there is nothing to look up');
 });
 
-test('with auto-merge off the config is not consulted either', () => {
+test('pinning only merge_without_ci still costs the cap\'s single read, never two', () => {
+  const reads = configReadsDuring(() => {
+    const f = computeFront({ A: {}, B: {} }, { A: { ...noCiLanded }, B: { ...noCiLanded } },
+      { autoMerge: true, mergeWithoutCi: true });
+    assert.deepStrictEqual(f.actionable.merge.slice().sort(), ['A', 'B']);
+  });
+  assert.strictEqual(reads, 1);
+});
+
+test('with auto-merge off merge_without_ci is not consulted either', () => {
   // The hold is gated on autoMerge, and that is the cheapest fact of the three,
-  // so it is settled before anything goes looking for a file.
+  // so it is settled before anything goes looking for a file. The cap's read
+  // still happens — it is unconditional — and it is the ONLY one.
   const reads = configReadsDuring(() => {
     computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } });
   });
-  assert.strictEqual(reads, 0);
+  assert.strictEqual(reads, 1);
+
+  const pinned = configReadsDuring(() => {
+    computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } }, { maxConcurrentAgents: 2 });
+  });
+  assert.strictEqual(pinned, 0, 'and nothing at all once the cap is pinned');
 });
 
 // The predicate is shared with sentinel.cjs, which passes the resolved VALUE
@@ -1475,5 +1877,205 @@ test('CLEAN and zero behind is untouched (the control)', () => {
   assert.deepStrictEqual(f.actionable.fix, []);
 });
 
+
+
+// ── the concurrency cap: a wave is cut to what the session can afford ────────
+//
+// ADR-005 D11. No choice of TIER addresses this: the model policy is per
+// dispatch and a spend limit is per session, so the missing axis is how many
+// dispatches are open at once. On 2026-09-07 a run held nine opus/xhigh
+// executors and a fable guard in flight, hit the limit, and six agents died
+// mid-ticket — five tickets lost their commits.
+//
+// The cap is a gate on DISPATCH, so its failure direction is to dispatch LESS.
+// It is also a TRUNCATION of an order, never a filter: nothing leaves
+// `actionable`, which is exactly what keeps the fixpoint honest — a capped board
+// still reports its work, and `fixpoint` stays NO because `actionable_count`
+// never moved. deliver.md builds the wave from `capacity.free`; the remainder is
+// taken next round.
+suite('front — capacity');
+
+const fs = require('fs');
+const os = require('os');
+
+// N root tickets, all ready, no parents: every sort key ties except the id, so
+// the order is `T-26-01 … T-26-0N` and a truncation of it is deterministic.
+const boardIds = (n) => Array.from({ length: n }, (_, i) => `T-26-${String(i + 1).padStart(2, '0')}`);
+const readyBoard = (n) => {
+  const ids = boardIds(n);
+  return {
+    ids,
+    tickets: Object.fromEntries(ids.map((id) => [id, {}])),
+    state: Object.fromEntries(ids.map((id) => [id, { status: 'pending', ready: true }])),
+  };
+};
+const fixpointLine = (f) => formatFront(f).find((l) => /^fixpoint:/.test(l));
+const capacityLine = (f) => formatFront(f).find((l) => /^capacity:/.test(l));
+
+// A project computeFront can resolve the cap FROM, for the cases that exercise
+// the fallback rather than the caller's own number. `SHIPYARD_GRAPH_DIR` is
+// graph-dir.cjs's first-priority answer, so it pins the resolution regardless of
+// where the test process happens to be standing — and it is restored after, or
+// every later test in this file would inherit the fixture.
+function projectWith(configText) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-front-cap-'));
+  fs.mkdirSync(path.join(dir, '.planning', 'graph'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: {} }));
+  if (configText !== undefined) fs.writeFileSync(path.join(dir, '.planning', 'config.json'), configText);
+  return dir;
+}
+function inProject(dir, fn) {
+  const prev = process.env.SHIPYARD_GRAPH_DIR;
+  process.env.SHIPYARD_GRAPH_DIR = path.join(dir, '.planning', 'graph');
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+    else process.env.SHIPYARD_GRAPH_DIR = prev;
+  }
+}
+
+test('7 actionable, cap 4, nothing in flight → free 4, and all 7 stay actionable in the same order', () => {
+  const { ids, tickets, state } = readyBoard(7);
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4 });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 0, free: 4 });
+  // The cap does not reorder and does not hide: the first 4 of a good order is
+  // still a good order, and the run — not the board — takes them.
+  assert.deepStrictEqual(f.actionable.execute, ids);
+  assert.strictEqual(f.actionable_count, 7);
+  assert.strictEqual(f.fixpoint, false);
+});
+
+test('4 of the 7 with an agent → free 0, fixpoint NO, and the reason names capacity, not work', () => {
+  const { ids, tickets, state } = readyBoard(7);
+  const dispatched = Object.fromEntries(ids.slice(0, 4).map((id) => [id, 'executor']));
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 4, free: 0 });
+  assert.deepStrictEqual(f.actionable.execute, ids.slice(4));
+  assert.strictEqual(f.fixpoint, false, 'a capped front is never a finished one');
+  const line = fixpointLine(f);
+  assert.ok(/capacity/.test(line), line);
+  // The old wording ordered the run to dispatch NOW, which under a full cap is
+  // an order to do the thing that killed the 2026-09-07 wave.
+  assert.ok(!/actionable RIGHT NOW/.test(line), line);
+});
+
+test('every dispatch role counts against the cap — the guard is an agent too', () => {
+  // "It is an agent, it holds tickets, and this session's failure included one."
+  // So `in_flight` counts the raw dispatch records, not the actionable buckets:
+  // a pr-sentinel and a ci-fix cost a session exactly what an executor costs.
+  const { ids, tickets, state } = readyBoard(5);
+  const dispatched = { [ids[0]]: 'pr-sentinel', [ids[1]]: 'ci-fix', [ids[2]]: 'review-fix' };
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.strictEqual(f.capacity.in_flight, 3);
+  assert.strictEqual(f.capacity.free, 1);
+});
+
+test('more agents out than the cap allows is free 0, never a negative budget', () => {
+  const { ids, tickets, state } = readyBoard(7);
+  const dispatched = Object.fromEntries(ids.slice(0, 6).map((id) => [id, 'executor']));
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 6, free: 0 });
+});
+
+test('formatFront prints the capacity line only when the cap binds', () => {
+  const wide = readyBoard(7);
+  const bound = computeFront(wide.tickets, wide.state, { maxConcurrentAgents: 4 });
+  const line = capacityLine(bound);
+  assert.ok(line, formatFront(bound).join('\n'));
+  assert.ok(/4 agents/.test(line), line);
+  assert.ok(/0 in flight/.test(line), line);
+  assert.ok(/3 actionable item\(s\) wait for the next round/.test(line), line);
+
+  // Room for everything on the board: nothing waits, so there is nothing to
+  // explain and the line would only add noise to a healthy round.
+  const small = readyBoard(2);
+  const roomy = computeFront(small.tickets, small.state, { maxConcurrentAgents: 4 });
+  assert.strictEqual(capacityLine(roomy), undefined, formatFront(roomy).join('\n'));
+  assert.ok(/actionable RIGHT NOW/.test(fixpointLine(roomy)), fixpointLine(roomy));
+});
+
+test('a caller cannot express a cap of 0 — only an unreadable policy can', () => {
+  // 0 is the one value that means "dispatch nothing", and it is reserved for the
+  // case below. A caller passing 0 (or a NaN it computed) is treated as having
+  // passed nothing, so the project's own policy answers instead of a value that
+  // would silently freeze the run.
+  const { tickets, state } = readyBoard(3);
+  const dir = projectWith(JSON.stringify({ pipeline: { max_concurrent_agents: 2 } }));
+  for (const bad of [0, -3, NaN, 'four', null]) {
+    const f = inProject(dir, () => computeFront(tickets, state, { maxConcurrentAgents: bad }));
+    assert.strictEqual(f.capacity.max, 2, `${String(bad)} → ${f.capacity.max}`);
+  }
+});
+
+test('with no caller value the cap comes from the project config', () => {
+  const { tickets, state } = readyBoard(3);
+  const configured = inProject(projectWith(JSON.stringify({ pipeline: { max_concurrent_agents: 1 } })),
+    () => computeFront(tickets, state, {}));
+  assert.strictEqual(configured.capacity.max, 1);
+  assert.strictEqual(configured.capacity.free, 1);
+
+  // An ABSENT config is not an unreadable one: nobody has configured this yet,
+  // which is the ordinary state of a new project, and the measured default is
+  // the right answer there.
+  const bare = inProject(projectWith(undefined), () => computeFront(tickets, state, {}));
+  assert.strictEqual(bare.capacity.max, 4);
+});
+
+test('an unparseable config authorizes NO dispatch — the cap fails towards dispatching less', () => {
+  // T-26-02's rule, applied to capacity: an invalid config permits no mutation,
+  // and a dispatch is a mutation. The permissive reading — "fall back to the
+  // default so the run keeps moving" — would let a wave out under a policy
+  // nobody can read, which is exactly the direction a spend gate must never
+  // fail in.
+  const { ids, tickets, state } = readyBoard(3);
+  const f = inProject(projectWith('{ "pipeline": '), () => computeFront(tickets, state, {}));
+  assert.deepStrictEqual(f.capacity, { max: 0, in_flight: 0, free: 0 });
+  // Still named, though: the cap truncates a wave, it never hides a ticket.
+  assert.deepStrictEqual(f.actionable.execute, ids);
+  assert.strictEqual(f.fixpoint, false);
+  const line = capacityLine(f);
+  assert.ok(/no policy is in effect/.test(line), line);
+  assert.ok(!/0 in flight/.test(line), `"0 agents, 0 in flight" explains nothing: ${line}`);
+
+  // …and the OPERATIVE line must say the same thing. deliver.md acts on the
+  // fixpoint sentence, so the ordinary capacity wording here would order the
+  // loop to collect agents that do not exist and recompute a board that cannot
+  // change — a spin, on a board whose remedy is a person's.
+  const fx = fixpointLine(f);
+  assert.ok(/no policy is in effect/.test(fx), fx);
+  assert.ok(/A person fixes the file/.test(fx), fx);
+  assert.ok(!/collect the agents/.test(fx), `nothing is out to collect: ${fx}`);
+});
+
+test('the cap never turns an actionable board into a fixpoint, and never blocks an empty one', () => {
+  // The invariant, and the reason the fixpoint FORMULA is untouched: the cap
+  // moves nothing out of `actionable`, so `actionable_count > 0` still forces
+  // NO on its own. A cap implemented as a filter would have flipped this.
+  const { ids, tickets, state } = readyBoard(4);
+  const all = Object.fromEntries(ids.map((id) => [id, 'executor']));
+  const full = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched: all });
+  assert.strictEqual(full.capacity.free, 0);
+  assert.strictEqual(full.fixpoint, false, 'four agents are still out');
+
+  // …and with nothing to dispatch, capacity is not a reason to keep a run alive.
+  // Even a zero cap (an unreadable policy) leaves an empty board a fixpoint:
+  // there is no wave to cut.
+  const empty = inProject(projectWith('{ oops'), () => computeFront({}, {}, {}));
+  assert.strictEqual(empty.capacity.max, 0);
+  assert.strictEqual(empty.fixpoint, true);
+  assert.strictEqual(capacityLine(empty), undefined);
+});
+
+test('formatFront survives a front written before capacity existed', () => {
+  // `delivery-front.json` on disk outlives an upgrade, and formatFront is handed
+  // whatever state-sync last wrote. An absent field must not throw.
+  const { tickets, state } = readyBoard(2);
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4 });
+  delete f.capacity;
+  const out = formatFront(f);
+  assert.ok(out.some((l) => /^fixpoint: NO/.test(l)), out.join('\n'));
+  assert.strictEqual(out.find((l) => /^capacity:/.test(l)), undefined);
+});
 
 done();

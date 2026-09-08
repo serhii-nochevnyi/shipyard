@@ -116,6 +116,22 @@ const { runtime, how } = detectRuntime();
 const DELIVERY_RULES = runtime === 'claude'
   ? 'global:shipyard:delivery-rules'
   : 'global:shipyard-delivery-rules';
+const OTHER_DELIVERY_RULES = runtime === 'claude'
+  ? 'global:shipyard-delivery-rules'
+  : 'global:shipyard:delivery-rules';
+
+// The desired value for an agent_skills.* entry is a MERGE, not a replacement:
+// present entries ∪ {delivery-rules-for-this-runtime} − {delivery-rules-for-the-
+// OTHER-runtime}, order preserved and ours appended last. A static one-element
+// array here (the earlier shape) is what produced ADR-004 D7 / audit F22: a
+// project's own [custom-test-contract, custom-quality] became
+// [global:shipyard-delivery-rules] after a successful --apply, because the
+// generic `set()` below replaces the whole key with whatever "want" is.
+function mergedSkills(have) {
+  const existing = Array.isArray(have) ? have : [];
+  const kept = existing.filter((s) => s !== OTHER_DELIVERY_RULES);
+  return kept.includes(DELIVERY_RULES) ? kept : [...kept, DELIVERY_RULES];
+}
 
 // `pipeline.model_policy` and GSD's `model_profile` are the same decision stated
 // twice; leaving them to drift means the conveyor's agents and GSD's own agents
@@ -287,10 +303,10 @@ const TUNING_ALL = [
   // without delivery-rules produces tickets Gate 2 then rejects. Only the
   // executor was set here until decomposing this repo through the conveyor
   // surfaced the omission — the skill's own template lists both.
-  [`agent_skills.gsd-planner`, [DELIVERY_RULES],
-    `the frontmatter contract, in the form the "${runtime}" runtime resolves`],
-  [`agent_skills.gsd-executor`, [DELIVERY_RULES],
-    `the delivery-rules skill in the form the "${runtime}" runtime resolves`],
+  [`agent_skills.gsd-planner`, mergedSkills,
+    `the frontmatter contract, in the form the "${runtime}" runtime resolves — merged in, not replacing what's already there`],
+  [`agent_skills.gsd-executor`, mergedSkills,
+    `the delivery-rules skill in the form the "${runtime}" runtime resolves — merged in, not replacing what's already there`],
 ];
 
 const TUNING = TUNING_ALL.filter(([key]) => !GLOBAL || GLOBAL_SAFE.has(key));
@@ -319,12 +335,24 @@ const staleGlobalOverrides = GLOBAL && raw.model_overrides && typeof raw.model_o
   ? OUR_OLD_GLOBAL_OVERRIDES.filter((a) => raw.model_overrides[a] === 'fable')
   : [];
 
+// Most desired values are static. agent_skills.* is a MERGE, computed from
+// whatever is already there, so its "want" is a function of `have` rather than
+// a constant — the only way to add our entry without clobbering the rest.
+const isMergeKey = (key) => key.startsWith('agent_skills.');
+
 const drift = [];
 for (const [group, list] of [['required', REQUIRED], ['tuning', TUNING]]) {
-  for (const [key, want, why] of list) {
+  for (const [key, wantSpec, why] of list) {
     const have = get(raw, key);
+    const want = typeof wantSpec === 'function' ? wantSpec(have) : wantSpec;
     if (same(have, want)) continue;
-    drift.push({ group, key, have: have === undefined ? null : have, want, why, set: have !== undefined });
+    const entry = { group, key, have: have === undefined ? null : have, want, why, set: have !== undefined };
+    if (isMergeKey(key)) {
+      const haveArr = Array.isArray(have) ? have : [];
+      entry.added = want.filter((s) => !haveArr.includes(s));
+      entry.removed = haveArr.filter((s) => !want.includes(s));
+    }
+    drift.push(entry);
   }
 }
 
@@ -426,8 +454,17 @@ if (AS_JSON) {
     for (const d of rows) {
       // A value the user deliberately set is named as theirs, not flattened as
       // "drift": the difference decides whether --apply is a fix or an override.
-      const state = d.set ? `currently ${JSON.stringify(d.have)} (yours)` : 'unset';
-      console.log(`    ${d.key} → ${JSON.stringify(d.want)}   [${state}]`);
+      if (isMergeKey(d.key)) {
+        // A merge is never "set to X" — that reads as a replacement of whatever
+        // the project already put there. Say only what changes.
+        const bits = [];
+        if (d.added.length) bits.push(`+ ${d.added.join(', ')}`);
+        if (d.removed.length) bits.push(`- ${d.removed.join(', ')}`);
+        console.log(`    ${d.key}:  ${bits.join('   ')}`);
+      } else {
+        const state = d.set ? `currently ${JSON.stringify(d.have)} (yours)` : 'unset';
+        console.log(`    ${d.key} → ${JSON.stringify(d.want)}   [${state}]`);
+      }
       console.log(`        ${d.why}`);
     }
   }
@@ -463,6 +500,9 @@ for (const agent of staleGlobalOverrides) delete raw.model_overrides[agent];
 if (raw.model_overrides && !Object.keys(raw.model_overrides).length) delete raw.model_overrides;
 
 const tmp = `${CONFIG}.gsd-tune.tmp`;
+// `--global` on a machine that never ran GSD has no ~/.gsd at all, not just a
+// missing defaults.json — the directory itself is ours to create.
+fs.mkdirSync(path.dirname(CONFIG), { recursive: true });
 fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
 fs.renameSync(tmp, CONFIG); // atomic: a reader sees the old file or the new one
 if (!AS_JSON) {

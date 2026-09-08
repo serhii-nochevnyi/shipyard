@@ -49,10 +49,14 @@ const heldState = (over = {}) => stateWith({
   ...over,
 });
 
-function project(front, state) {
+// `configRaw` writes .planning/config.json byte for byte — the only way to build
+// an UNPARSEABLE one. Absent by default, which is the case every other test in
+// this file means: nobody has configured the project, so the defaults apply.
+function project(front, state, configRaw) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-ciwait-'));
   const g = path.join(dir, '.planning', 'graph');
   fs.mkdirSync(g, { recursive: true });
+  if (configRaw !== undefined) fs.writeFileSync(path.join(dir, '.planning', 'config.json'), configRaw);
   if (front !== null) fs.writeFileSync(path.join(g, 'delivery-front.json'), JSON.stringify(front));
   if (state !== null) fs.writeFileSync(path.join(g, 'delivery-state.json'), JSON.stringify(state));
   // escalation-record refuses to write beside a graph with no tickets.json — the
@@ -407,6 +411,50 @@ test('the budget is tunable, and garbage in the env var does not disable it', ()
   assert.equal(j2.escalated.length, 0, 'a garbage value falls back to the default, it does not park at once');
 });
 
+suite('ci-wait — a corrupt configuration permits no park (ADR-004 D2)');
+
+// The park is a MUTATION: it hands the ticket to a person and drops it off the
+// front. An unparseable config means the project's policy is unknown, and an
+// unknown policy authorizes nothing — so the wait still happens (waiting mutates
+// nothing) and the escalation is withheld, with the reason, until the file parses.
+const TRUNCATED = '{"pipeline": {"auto_merge": "off"';
+
+test('three empty windows on an invalid config file earn NO escalation', () => {
+  const dir = project(ciOnly(), stateWith(), TRUNCATED);
+  const bin = pending(dir);
+  let json;
+  for (let i = 0; i < 3; i += 1) ({ json } = asJson(null, null, shortWait, { dir, bin }));
+  assert.equal(waits(dir).tickets['T-01-01'].empty_windows, 3,
+    'the empty window is a FACT and is still counted');
+  assert.equal(escalations(dir), null, 'but nothing was parked');
+  assert.equal(json.escalated.length, 1, 'the withheld park is still reported to the caller');
+  assert.equal(json.escalated[0].ok, false);
+  assert.equal(json.escalated[0].refused, true, 'a deliberate refusal, not a failed write');
+  assert.ok(/does not parse/.test(json.escalated[0].error), json.escalated[0].error);
+});
+
+test('and it says so on window ONE, not only when the park came due', () => {
+  // The caller is a loop; learning on window 3 that the termination path is
+  // withheld is learning 45 minutes late.
+  const dir = project(ciOnly(), stateWith(), TRUNCATED);
+  const { code, json } = asJson(null, null, shortWait, { dir, bin: pending(dir) });
+  assert.equal(code, 0, 'a waiter never dies noisily — least of all over a config file');
+  assert.equal(json.config_valid, false);
+  assert.ok(/config\.json/.test(json.config_error.relative), JSON.stringify(json.config_error));
+  assert.ok(/no escalation is filed/.test(json.config_note), json.config_note);
+  assert.equal(json.escalated.length, 0, 'no park was due yet, and none was invented');
+});
+
+test('a VALID config parks exactly as before — the control', () => {
+  const dir = project(ciOnly(), stateWith(), '{"pipeline":{"auto_merge":"off"}}');
+  const bin = pending(dir);
+  let json;
+  for (let i = 0; i < 3; i += 1) ({ json } = asJson(null, null, shortWait, { dir, bin }));
+  assert.equal(json.escalated[0].ok, true, 'a readable config authorizes the park');
+  assert.ok(escalations(dir).tickets['T-01-01'], 'and the record is on disk');
+  assert.equal(json.config_valid, undefined, 'and nothing is said about a file that is fine');
+});
+
 suite('ci-wait — an outage is not a stall');
 
 // A9 defect 1. When `gh` cannot be reached at all, every poll returns the same
@@ -517,6 +565,45 @@ test('a broken wait record never takes the wait down with it', () => {
   assert.equal(json.timed_out, true, 'and its own result stands');
   assert.equal(json.escalated[0].ok, false, 'while saying the bookkeeping failed');
   assert.ok(/wait record not updated/.test(json.escalated[0].error), 'and naming what broke');
+});
+
+suite('ci-wait — the left-behind adjustment reads a front built from evidence');
+
+// The guard subtracts `left_behind_count` from the actionable count, and that is
+// the right arithmetic over the wrong input for as long as the count is derived
+// from phase NUMBERS. Measured on 2026-09-07: three phase-26 tickets merged into
+// their epic, so phase 24's live, high-risk, pre-authorized head counted as
+// left behind — a board with one real move would then have waited on somebody
+// else's CI instead of taking it. So this fixture is the real computed front.
+
+test('a lower-numbered phase still in flight is a move, and the wait is refused', () => {
+  const { computeFront, epicKey } = require(path.join(
+    __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
+  ));
+  const epic = (phase, over) => ({
+    phase: String(phase), repo: null, branch: `epic/${phase}-x`, base: 'main',
+    exists: true, ahead: 0, pr: null, landed: true, landed_reason: 'whole diff is in', ...over,
+  });
+  const tickets = { 'T-24-05': { phase: '24' }, 'T-26-01': { phase: '26' }, 'T-26-02': { phase: '26' } };
+  const state = {
+    'T-24-05': { status: 'pending', ready: true },
+    'T-26-01': { status: 'merged' },
+    'T-26-02': { status: 'pr-open', pr: 102, repo: 'acme/widgets', checks: { total: 3, failing: 0, pending: 3, none_reported: false } },
+  };
+  const records = [
+    epic(24, { ahead: 7, landed: false, pr: { number: 824, state: 'OPEN' } }),
+    epic(26, { pr: { number: 926, state: 'MERGED' } }),
+  ];
+  const front = {
+    generated_at: new Date().toISOString(),
+    ...computeFront(tickets, state, { epics: Object.fromEntries(records.map((r) => [epicKey(r.phase, r.repo), r])) }),
+  };
+  assert.equal(front.left_behind_count, 0, 'the fixture must be the defect, not a hand-written count');
+  assert.deepEqual(front.waiting.ci, ['T-26-02'], 'and there is a genuine wait to be tempted by');
+
+  const { code, json } = asJson(front, state);
+  assert.equal(code, 3, 'a board with a move must not be waited on');
+  assert.ok(/T-24-05/.test(json.refusal), 'and the refusal names the work that was nearly skipped');
 });
 
 done();

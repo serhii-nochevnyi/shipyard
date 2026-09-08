@@ -24,7 +24,9 @@
 //     merge     — open PR green + conform, targeting the STACK (epic/parent):
 //                 the sentinel squashes it in (auto-merge only, see below)
 //   waiting (NOT actionable, and NOT a fixpoint either — motion resumes by itself):
-//     ci        — checks still running
+//     ci        — checks still running, or a check state that could not be READ
+//                 this round (check-state.cjs's `unavailable`): both resolve by
+//                 looking again, and neither owes anyone work
 //     dispatched— an agent already holds this ticket (dispatch-record.cjs): not
 //                 actionable, because taking it again is duplicate work; not
 //                 parked, because nobody has given up; and never a fixpoint,
@@ -81,6 +83,28 @@ const { movingParentOf, movingParentWhy } = require(path.join(__dirname, 'parent
 // The trailer's classification comes from its own module — the board and the
 // guard (sentinel.cjs) must never disagree about whether a verdict counts.
 const { gateConform: trailerConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
+// The check vocabulary, from the file that owns it. `isGreen` rather than the
+// inline `failing === 0 && pending === 0` this file used to spell out: an
+// UNAVAILABLE reading (a 503, a rate limit, an old `gh` rejecting `bucket`)
+// carries all-zero tallies, so the arithmetic alone calls a PR nobody read green.
+const { isGreen } = require(path.join(__dirname, 'check-state.cjs'));
+
+// ── the identity of one phase's epic, in ONE home ───────────────────────────
+//
+// The key `state-sync.cjs`'s `epicInfo` is keyed by, and it lives here for the
+// same reason the predicates below do: two files have to agree about it, so only
+// one of them may own it. `state-sync` imports it (this module is pure and
+// importable; that one parses argv and can exit at load time, so it cannot be
+// imported back). One epic NAME per phase, but a separate branch — and a
+// separate integration PR — in every repository the phase touches, so the repo
+// is part of the identity and not a detail of it.
+//
+// The separator is written as the ESCAPE `\0` and never as the byte itself. It
+// is the one character neither a phase number nor an `owner/name` slug can
+// contain, so no two pairs collide on a key; a literal NUL in the source, on the
+// other hand, makes the whole file binary to `grep`, which is how state-sync.cjs
+// came to answer nothing at all to `grep -n require`.
+const epicKey = (phase, repo) => `${String(phase ?? '')}\0${repo || ''}`;
 
 // ── the checkpoint predicates, in ONE home ──────────────────────────────────
 //
@@ -292,50 +316,105 @@ function computeFront(tickets, state, opts = {}) {
   // in; the front never guesses it, because the difference is whether an unmerged
   // green PR is the run's work or a human's.
   const autoMerge = opts.autoMerge === true;
-  // "This repo has no CI" is a claim only the PROJECT can make, so it is a
-  // config knob (`delivery_pipeline.merge_without_ci`) and never an inference.
-  // The caller may pass it and that always wins; otherwise it is resolved from
-  // the project's own config the first time a PR with no checks is actually
-  // seen — lazily, so an ordinary board still reads no file here.
+  // ── the project's own config, read AT MOST ONCE per call ───────────────────
   //
-  // The fallback exists because computeFront has THREE callers (state-sync.cjs,
-  // dispatch-record.cjs and the CLI below) and a board that answered
-  // `merge_human` while sentinel.cjs — which reads the config directly — landed
-  // the same PR is exactly the board/guard disagreement the shared predicates
-  // above exist to prevent.
+  // Two knobs are resolved from it (`merge_without_ci` below and
+  // `max_concurrent_agents` further down) and they share this one memo, so no
+  // board ever opens the file twice. It stays a function rather than a value
+  // because a caller who pins BOTH knobs must still read nothing at all: the
+  // passed option always wins, and there is then nothing to look up.
   //
-  // So the fallback must not resolve from `process.cwd()`. state-sync and this
-  // CLI run at the project root and would be served by it, but
+  // WHICH project: `graph-dir.cjs`, never `process.cwd()`. That is this repo's
+  // one answer to "which project does this invocation belong to" —
+  // `--graph`/`SHIPYARD_GRAPH_DIR` → cwd → the worktree's OWN repository, with
+  // the project root the graph's grandparent. computeFront has three callers
+  // (state-sync.cjs, dispatch-record.cjs and the CLI below); the first and last
+  // stand at the project root and a cwd read would serve them, but
   // `dispatch-record.cjs refreshFront` is DOCUMENTED to run from a ticket
   // worktree — which has no `.planning/` of its own when the project keeps it
-  // untracked — and it rewrites `delivery-front.json` from what it computes. A
-  // cwd read there would answer `false` on a project that had explicitly set
-  // `merge_without_ci: true`, so every dispatch mark would silently demote the
-  // very PRs the guard is entitled to land: the disagreement, reintroduced by
-  // the fallback meant to prevent it. Calling that "conservative" was the excuse
-  // (reviewer-found on PR #44) — the two answers are not more and less cautious,
-  // they are inconsistent, and the board must never contradict the guard.
+  // untracked — and it REWRITES `delivery-front.json` from what it computes. A
+  // cwd read there answers with a project that is not this one. Reviewer-found
+  // on PR #44, and calling it "conservative" was the excuse: two different
+  // answers are not more and less cautious, they are inconsistent.
   //
-  // `graph-dir.cjs` is this repo's one answer to "which project does this
-  // invocation belong to": `--graph`/`SHIPYARD_GRAPH_DIR` → cwd → the worktree's
-  // OWN repository. The project root is the graph's grandparent. Only when
-  // nothing resolves does it fall back to the cwd — and an unreadable config is
-  // still `false`, because absence is not consent.
-  let mergeWithoutCiCache;
-  const mergeWithoutCi = () => {
-    if (opts.mergeWithoutCi !== undefined) return opts.mergeWithoutCi === true;
-    if (mergeWithoutCiCache === undefined) {
+  // `valid` rides along because the two knobs need it: an unparseable config
+  // means no policy is in effect, and each knob says below what it does then.
+  let projectConfigCache;
+  const projectConfig = () => {
+    if (projectConfigCache === undefined) {
       try {
         const { resolveGraphDir } = require(path.join(__dirname, 'graph-dir.cjs'));
         const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
         const { dir, how } = resolveGraphDir(process.argv.slice(2), process.cwd());
         const root = how === 'none' ? process.cwd() : path.resolve(dir, '..', '..');
-        mergeWithoutCiCache = loadConfig(root).config.merge_without_ci === true;
+        const { config, valid } = loadConfig(root);
+        projectConfigCache = { config, valid };
       } catch (e) {
-        mergeWithoutCiCache = false; // unreadable config → the safe answer, never the permissive one
+        // Unreadable is treated exactly as unparseable: no policy is in effect.
+        projectConfigCache = { config: null, valid: false };
       }
     }
-    return mergeWithoutCiCache;
+    return projectConfigCache;
+  };
+  // "This repo has no CI" is a claim only the PROJECT can make, so it is a
+  // config knob (`delivery_pipeline.merge_without_ci`) and never an inference.
+  // The caller may pass it and that always wins; otherwise it comes from the
+  // shared read above, and only the first time a PR with no checks is actually
+  // seen — so a caller that pins this knob and the cap reads no file at all.
+  //
+  // The fallback exists because a board that answered `merge_human` while
+  // sentinel.cjs — which reads the config directly — landed the same PR is
+  // exactly the board/guard disagreement the shared predicates above exist to
+  // prevent. An unreadable or unparseable config is still `false`, because
+  // absence is not consent.
+  const mergeWithoutCi = () => {
+    if (opts.mergeWithoutCi !== undefined) return opts.mergeWithoutCi === true;
+    const { config, valid } = projectConfig();
+    return valid && !!config && config.merge_without_ci === true;
+  };
+  // ── the concurrency cap (ADR-005 D11) ──────────────────────────────────────
+  //
+  // How many agents this run may hold at once. It belongs on the board because
+  // the board is what the wave is BUILT from: deliver.md Step 3 fans out over
+  // every ready ticket in one call and Step 4 posts a guard beside it, and
+  // nothing counted. A rule in prose is the class of rule this repo has already
+  // watched get skipped, so the number lives here.
+  //
+  // Resolution has the same two steps as `merge_without_ci` above, and for the
+  // same reasons: a caller that has already paid for the config passes it in,
+  // and everyone else is served lazily through `graph-dir.cjs` — which answers
+  // "which PROJECT does this invocation belong to" even from a ticket worktree,
+  // where `dispatch-record.cjs refreshFront` is documented to run.
+  //
+  // The two failure directions are deliberately DIFFERENT, because a capacity
+  // cap is a gate on DISPATCH and a gate's failure must always be to dispatch
+  // LESS, never more:
+  //
+  //   the VALUE is malformed (0, negative, not a number) in a config that
+  //   parses → pipeline-config.cjs warns and uses the measured default. A typo
+  //   in a number is not a decision to stop working, and a run that stalls on a
+  //   typo is a run whose operator switches the cap off.
+  //
+  //   the FILE does not parse, or cannot be read at all → `max: 0`, so nothing
+  //   may be dispatched. T-26-02's rule applied to capacity: an invalid config
+  //   permits no mutation, and handing work to an agent is a mutation. The
+  //   permissive reading — "fall back to the default so the run keeps moving" —
+  //   would let a wave out under a policy nobody can read, which is precisely
+  //   the direction this gate must never fail in.
+  //
+  // So `max === 0` means exactly one thing — no policy could be read — and
+  // formatFront relies on that to word the line. A CALLER cannot express 0: a
+  // non-positive or non-numeric `opts.maxConcurrentAgents` is treated as absent
+  // and the project's own policy answers, so a caller's arithmetic slip can
+  // never freeze a run.
+  const capMax = () => {
+    const passed = Number(opts.maxConcurrentAgents);
+    if (Number.isFinite(passed) && passed > 0) return passed;
+    const { config, valid } = projectConfig();
+    // `|| 0` covers the impossible-but-cheap case of a config object without
+    // the key; pipeline-config.cjs has already coerced a malformed value to the
+    // measured default, so a positive number is what a VALID config yields.
+    return valid && config ? Number(config.max_concurrent_agents) || 0 : 0;
   };
   // The resolver is handed over UNCALLED. `noCiHold` settles `autoMerge` and
   // `none_reported` first and only then asks for it, so the promise the comment
@@ -441,7 +520,10 @@ function computeFront(tickets, state, opts = {}) {
       // `none_reported` means nothing ran, not that everything passed —
       // state-sync warns about it separately; for the front it counts as green
       // so the gate can still be driven (the human is told what "green" meant).
-      const green = !((c.failing || 0) > 0) && !((c.pending || 0) > 0);
+      // `unavailable` does NOT: check-state.cjs's `isGreen` asks that flag first,
+      // because a reading that never happened has all-zero tallies and the
+      // arithmetic this line used to spell out therefore said green about it.
+      const green = isGreen(c);
       if ((c.failing || 0) > 0) {
         actionable.fix.push(id);
         why[id] = `PR #${s.pr}: ${c.failing} failing check(s)`;
@@ -455,6 +537,28 @@ function computeFront(tickets, state, opts = {}) {
         // for. `dutyItems` orders the same two facts the same way.
         actionable.fix.push(id);
         why[id] = `PR #${s.pr}: ${baseMergeWhy(baseMoved(s), s.pr_base || s.base)}`;
+      } else if (c.unavailable) {
+        // THE READING THAT DID NOT HAPPEN. `gh pr checks` errored or answered
+        // something that is not a JSON array, so this PR's CI state is unknown —
+        // which is not "no checks" (`none_reported`, a decision a person makes
+        // once per repository) and not "one check pending" either, which is what
+        // the synthetic unreadable row used to say about a check nobody ever saw.
+        // Nobody owes work and nobody is asked to confirm anything: the next sync
+        // simply looks again, so the honest bucket is the one that means exactly
+        // that. `waiting.ci` is deliberately not a fixpoint — the stop gate's
+        // CI-only branch keeps the run alive and `ci-wait.cjs` terminates it
+        // (T-24-10 counts unreadable rounds as empty windows and escalates).
+        //
+        // PLACED LATE, after the failing and moved-base branches, and the
+        // position is load-bearing: the permanent case is an old `gh` that
+        // rejects `--json bucket`, where checks stay unreadable for every round
+        // of the run. Routing here first would freeze base-merge — real work,
+        // read from `merge_state`, which no `pr checks` failure says anything
+        // about — behind a reading that is never coming. Only the two actions
+        // that walk a PR towards LANDING are withheld, exactly as the no-CI hold
+        // withholds them; `sentinel.cjs`'s duty holds the same position.
+        waiting.ci.push(id);
+        why[id] = `PR #${s.pr}: checks unreadable: ${c.note || 'gh pr checks did not answer'} — retried next sync`;
       } else if ((c.pending || 0) > 0) {
         waiting.ci.push(id);
         why[id] = `PR #${s.pr}: ${c.pending} check(s) still running`;
@@ -489,9 +593,30 @@ function computeFront(tickets, state, opts = {}) {
         // after the draft branches because a draft still owes arch-review and the
         // conform gate, which are real work whatever the reviewer said.
         //
-        // The thread count is state's (`unresolved_count`); the guard reads it
-        // live off the same `reviewers.cjs unresolved` call it already makes. The
-        // predicate is shared so the two cannot disagree about the same PR.
+        // WHERE THE COUNT COMES FROM — and it is not the sync. An unresolved
+        // thread count is a per-PR GraphQL query, the class of field that made a
+        // monorepo sync cost 41s instead of 7s, so it never enters the sync
+        // window: `unresolved_count` is NOT a field state-sync writes, and this
+        // comment used to say it was. (`merge_state`, the other half of the pair
+        // this branch was shipped with, DOES ride the open-only pass — one scalar
+        // on a call already being made — which is why that predicate is fed and
+        // this one is not.) So the branch fires for a caller that already HOLDS
+        // the count, and for nobody else: on a board rebuilt from GitHub it is
+        // unreachable BY DESIGN, and the integrator reading it as dead was right.
+        //
+        // A synced board learns a real zero the way it learns every other fact a
+        // live query owns — as a PARK. The guard reads the count off the
+        // `reviewers.cjs unresolved` call it already makes, answers `wait-human`
+        // for this exact state, and the durable form of that answer is
+        // `escalation-record.cjs mark <T> <reason>`; `activeParks` then routes the
+        // ticket above this whole chain, and the park lifts by itself when the
+        // review verdict moves (`parkFingerprint` hashes `review_decision`), so
+        // nothing has to remember to unpark it.
+        //
+        // An UNKNOWN count is not a disagreement either, which is why no fallback
+        // is owed here: the guard's own answer for it is `review-fix`, whose
+        // bucket on this board is `finalize` — where the final branch below
+        // already puts exactly that PR.
         waiting.human.push(id);
         why[id] = `PR #${s.pr}: ${REVIEW_STANDS_WHY}`;
       } else if (autoMerge && gateConform(s) && s.merge_scope === 'stacked' && checkpointParent(id)) {
@@ -601,6 +726,21 @@ function computeFront(tickets, state, opts = {}) {
   // back for it.
   const fixpoint = actionableCount === 0 && waiting.ci.length === 0
     && waiting.dispatched.length === 0 && waiting.parent.length === 0;
+  // What a wave may take NOW. The cap is a TRUNCATION of the order below, never
+  // a filter: nothing is moved out of `actionable`, and that is what keeps the
+  // fixpoint honest without touching its formula — `actionable_count` is
+  // unchanged, so a board with work and no free capacity still reports
+  // `fixpoint: NO`. Implemented as a filter it would have flipped exactly the
+  // way phase 24 exists to prevent: a capped front reporting YES ends a run
+  // mid-phase.
+  //
+  // `in_flight` counts the live dispatch RECORDS, not the actionable buckets:
+  // the cost is the agent, whatever bucket its ticket landed in, so a
+  // pr-sentinel and a ci-fix count exactly as an executor does. `activeDispatches`
+  // has already dropped everything expired or landed, so nothing here decides
+  // how long a dispatch lives.
+  const inFlight = Object.keys(dispatched).length;
+  const capacity = { max: capMax(), in_flight: inFlight, free: Math.max(0, capMax() - inFlight) };
   // SHALLOWEST FIRST within a stack — the THIRD sort key now; the full order is
   // stated at the comparator below. A ticket stacked on an open parent is
   // work that will have to be redone: when the parent lands, this branch's base
@@ -620,20 +760,80 @@ function computeFront(tickets, state, opts = {}) {
   // tickets judged stale six days earlier sat first under `execute`, and a run
   // that takes the head of the list would have taken one.
   //
-  // "Left behind" is a phase the run has already moved past: something newer has
-  // landed. Those go LAST — still listed, because the fixpoint must not lie about
-  // them, but never ahead of work that is actually in flight.
-  const phaseNum = (id) => Number.parseInt(String(((tickets && tickets[id]) || {}).phase ?? ''), 10) || 0;
-  const newestLandedPhase = Object.keys(state)
-    .filter((id) => (state[id] || {}).status === 'merged')
-    .reduce((max, id) => Math.max(max, phaseNum(id)), 0);
-  const leftBehind = (id) => (phaseNum(id) < newestLandedPhase ? 1 : 0);
+  // "Left behind" is a ticket its OWN phase shipped WITHOUT: the phase's epic has
+  // landed on the integration branch and this ticket is not in it. Those go LAST
+  // — still listed, because the fixpoint must not lie about them, but never ahead
+  // of work that is actually in flight.
+  //
+  // It used to be ARITHMETIC over phase numbers — `phase(id) < max(phase of any
+  // merged ticket)` — which is a different claim entirely: it says a HIGHER
+  // NUMBER landed, not that THIS phase did. This repository delivered phase 22
+  // before 21 on purpose (ROADMAP §22), so every phase-21 ticket read as left
+  // behind while it was the live work. Measured on 2026-09-07: three phase-26
+  // tickets merged into their epic, `max` became 26, and the board reported
+  // phase 24's T-24-05 — high risk, pre-authorized, the live head of that
+  // phase's chain — as `ALL 1 actionable item(s) are in phases already moved
+  // past`; the stop gate's all-left-behind hatch then exited 0 over it. Nothing
+  // about phase 24 had been abandoned. The only fact behind the verdict was that
+  // 26 is greater than 24.
+  //
+  // So the flag needs POSITIVE EVIDENCE of an integration event, and the caller
+  // supplies it rather than this file inferring it: `opts.epics` is
+  // state-sync.cjs's own `epicInfo` — `landed | not-landed | unknown` per phase
+  // per repo, keyed by `epicKey`, and the only place in the conveyor that has
+  // actually asked GitHub. A caller that cannot supply the observation
+  // (front.cjs's own CLI, `dispatch-record.cjs refreshFront`) gets NO left-behind
+  // at all, deliberately: the hatch this feeds must never fire on a fact nobody
+  // measured, and "no evidence" has to mean "keep driving".
+  const epics = opts.epics || {};
+  const keyOf = (id) => {
+    const t = (tickets && tickets[id]) || {};
+    return epicKey(t.phase, t.repo);
+  };
+  // `landed === true` ALONE is not that evidence, and reading it as such would be
+  // a worse defect than the arithmetic it replaces. It means "nothing from this
+  // phase is outside the base" — a READINESS fact (state-sync blocks cross-phase
+  // dependents on it) — and it is deliberately true in two states where nothing
+  // has landed: a phase whose epic BRANCH does not exist yet (every decomposed
+  // phase has an `epics` entry from the moment it is planned, long before its
+  // branch is cut), and an epic freshly cut from the base with nothing merged
+  // into it yet. Either would flag a whole phase at the instant its delivery
+  // began.
+  //
+  // The integration event is therefore ONE observable thing: the epic's own
+  // integration PR is MERGED. That is the act — a person performs it, the
+  // conveyor never auto-merges an epic — and the record already carries it.
+  //
+  // A MERGED TICKET of the phase is deliberately NOT accepted as the same fact,
+  // and the reason is a fact about `delivery-state` rather than a preference.
+  // `status: 'merged'` says a ticket's PR was merged into ITS OWN BASE, and in a
+  // stack that base is legitimately a parent TICKET branch — `pr_base` (the only
+  // field that would tell the two apart) is recorded for OPEN PRs alone, so a
+  // merged entry cannot answer "into the epic, or into a parent?". Accepting it
+  // would re-create this ticket's own defect on any freshly cut epic: epic level
+  // with its base, one child squash-merged into an open parent by hand, and the
+  // green ready parent reads as left behind while the hatch exits 0 over it. So
+  // an epic PR outside the bulk window — or one a human merged and reaped
+  // without a PR at all — is given up in the conservative direction: no
+  // evidence, no hatch, the run keeps driving.
+  const leftBehind = (id) => {
+    // A merged ticket is IN the phase that landed; it is not a casualty of it.
+    // (It is never actionable either, so this is the definition holding rather
+    // than a bucket being filtered.)
+    if ((state[id] || {}).status === 'merged') return 0;
+    const info = epics[keyOf(id)];
+    // No record (direct-to-main, or a phase this graph knows no epic for) and
+    // `landed: null` (the compare did not answer) are both 0 — one has no epic
+    // that could land, the other has an answer nobody received.
+    if (!info || info.landed !== true) return 0;
+    return info.pr && String(info.pr.state || '').toUpperCase() === 'MERGED' ? 1 : 0;
+  };
 
   // UNBLOCKING POWER — how much other work this ticket is holding up. Depth
-  // orders a stack and left-behind demotes an abandoned phase, but neither says
-  // which of two live roots to take, and unattended that is the decision that
-  // matters: the head of the list is what the 04:00 round picks up, so it should
-  // be the ticket that leaves the most work available behind it.
+  // orders a stack and left-behind demotes a phase that shipped without it, but
+  // neither says which of two live roots to take, and unattended that is the
+  // decision that matters: the head of the list is what the 04:00 round picks up,
+  // so it should be the ticket that leaves the most work available behind it.
   //
   // Counted over `depends_on` (the whole DAG) rather than `primary_parent` (the
   // branch stack): a ticket can gate work it was never going to be the base of.
@@ -675,7 +875,7 @@ function computeFront(tickets, state, opts = {}) {
   const ciLen = (id) => Number(ciEst[id]) || 0;
 
   // The order inside every actionable bucket:
-  //   leftBehind  ASC   an abandoned phase never leads (unchanged, still first)
+  //   leftBehind  ASC   a phase that shipped without it never leads (still first)
   //   descendants DESC  the widest unblocker first
   //   depth       ASC   then top-down within a stack
   //   ciLen       DESC  then the longest pipeline, started earliest
@@ -716,15 +916,18 @@ function computeFront(tickets, state, opts = {}) {
   sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0
     && sentinel.dispatched.length === 0 && sentinel.waiting_parent.length === 0;
 
-  // How much of the actionable list is work the run has already moved past. The
-  // stop condition has to distinguish "there is live work" from "there is only
-  // abandoned work": on a real board `fixpoint: NO — 4 actionable` was held
-  // ENTIRELY by two tickets judged stale six days earlier, so the run was being
-  // told that stopping is a defect on account of work it would never take.
+  // How much of the actionable list is work its own phase already shipped
+  // without. The stop condition has to distinguish "there is live work" from
+  // "there is only work left behind": on a real board `fixpoint: NO — 4
+  // actionable` was held ENTIRELY by two tickets judged stale six days earlier,
+  // so the run was being told that stopping is a defect on account of work it
+  // would never take. Both readers of the count (`stop-gate.cjs`'s
+  // all-left-behind hatch, `ci-wait.cjs`'s refusal) act on it unchanged — what
+  // changed underneath them is that it is now evidence rather than arithmetic.
   const actionableIds = ORDER.flatMap((k) => actionable[k]);
   const leftBehindCount = actionableIds.filter((id) => leftBehind(id)).length;
 
-  return { actionable, waiting, parked, why, counts, parent_of: parentOf, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, sentinel, roles: BUCKET_ROLES };
+  return { actionable, waiting, parked, why, counts, parent_of: parentOf, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, capacity, sentinel, roles: BUCKET_ROLES };
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
@@ -898,6 +1101,25 @@ function formatFront(front) {
       `${sHeld.length ? ` + ${sHeld.length} held behind a moving parent (${sHeld.join(', ')})` : ''}` +
       ' — post/keep the guard, do NOT wait on it');
 
+  // The cap, printed ONLY when it binds — when the board lists more actionable
+  // work than a wave may take now. On a healthy round it is noise; on a capped
+  // one it is the difference between a reader trusting the board and a reader
+  // wondering why a non-empty front produced no dispatches. An absent field is
+  // a front written before this existed (`delivery-front.json` outlives an
+  // upgrade), and it must not throw.
+  const cap = front.capacity;
+  const capBinds = cap && front.actionable_count > cap.free;
+  if (capBinds) {
+    lines.push(cap.max === 0
+      // `max: 0` means exactly one thing (see computeFront): no policy could be
+      // read. "0 agents, 0 in flight" would explain nothing, so name the cause
+      // and the remedy — which is the file, not a flag.
+      ? `capacity: 0 agents — no policy is in effect (the project config does not parse), so nothing may be `
+        + `dispatched; ${front.actionable_count} actionable item(s) wait. The fix is the file.`
+      : `capacity: ${cap.max} agents, ${cap.in_flight} in flight — `
+        + `${front.actionable_count - cap.free} actionable item(s) wait for the next round`);
+  }
+
   if (front.fixpoint) {
     lines.push(
       front.counts.blocked || front.counts.merge_human || front.counts.human
@@ -932,19 +1154,50 @@ function formatFront(front) {
       '(run ci-wait.cjs — it waits in the foreground and returns on the first PR to settle).'
     );
   } else if (front.left_behind_count && front.left_behind_count === front.actionable_count) {
-    // Every actionable item is in a phase the run has already moved past. Saying
-    // "ending the run is a defect" here is false: continuing would mean taking
-    // work that has been offered and declined every round for days. The honest
-    // verdict names the two exits instead of demanding motion.
+    // Every actionable item is in a phase that has already landed without it.
+    // Saying "ending the run is a defect" here is false: continuing would mean
+    // taking work that has been offered and declined every round for days. The
+    // honest verdict names the two exits instead of demanding motion — and it
+    // names the EVIDENCE, because "moved past" was the old arithmetic's wording
+    // and it read as a verdict about phase numbers rather than about an epic.
     lines.push(
-      `fixpoint: NO — but ALL ${front.actionable_count} actionable item(s) are in phases already moved past ` +
+      `fixpoint: NO — but ALL ${front.actionable_count} actionable item(s) are in phases whose own epic ` +
+      'already landed without them ' +
       `(${front.actionable.execute.concat(front.actionable.fix, front.actionable.finalize).slice(0, 6).join(', ')}). ` +
       'Nothing live remains. These are a decision, not motion: take them, or record why not ' +
       '(`drift-record.cjs mark` when the plan predates what shipped) — after which this reads `fixpoint: YES`.'
     );
+  } else if (cap && cap.free === 0) {
+    // There IS work and none of it may be handed out yet. The default wording
+    // below orders the run to dispatch now, which under a full cap is an order
+    // to do the thing that killed the 2026-09-07 wave — so the reason has to
+    // name capacity rather than work. Placed after the left-behind branch: if
+    // everything remaining is work its own phase shipped without, no wave would
+    // be built from it and capacity is not what the run is waiting for.
+    //
+    // Still `fixpoint: NO`, and that is the point: the round is not over. The
+    // stop gate reads the same file, so it keeps blocking — correctly, because
+    // the remainder is taken on the next round.
+    lines.push(cap.max === 0
+      // `max: 0` is the unreadable-policy answer, and it needs its OWN sentence:
+      // there are no agents out to collect and recomputing changes nothing, so
+      // the wording below would order the loop to spin. This is the one
+      // not-a-fixpoint whose remedy is a PERSON's — the same shape as a
+      // `human_checkpoint`, and it must read that way or the run retries it
+      // every round for as long as the file stays broken.
+      ? `fixpoint: NO — ${front.actionable_count} item(s) are actionable but NOTHING may be dispatched: `
+        + 'no policy is in effect, because the project\'s `.planning/config.json` does not parse. '
+        + 'This is not a round to retry — no agent is out to collect and recomputing changes nothing. '
+        + 'A person fixes the file; until then every mutation refuses.'
+      : `fixpoint: NO — ${front.actionable_count} item(s) are actionable but capacity is full `
+        + `(${cap.max} agent(s) allowed, ${cap.in_flight} in flight): this run is waiting on CAPACITY, not on work. `
+        + 'Do NOT dispatch past the cap and do NOT call this an ending — collect the agents that are out, '
+        + 'then recompute and take the remainder.');
   } else {
     lines.push(
-      `fixpoint: NO — ${front.actionable_count} item(s) are actionable RIGHT NOW. Ending the run here is a defect ` +
+      `fixpoint: NO — ${front.actionable_count} item(s) are actionable RIGHT NOW` +
+      `${capBinds ? `, but only ${cap.free} may be dispatched this round (see the capacity line)` : ''}. ` +
+      'Ending the run here is a defect ' +
       '(deliver.md Principle). Do not block on `gh pr checks --watch` while this list is non-empty.'
     );
   }
@@ -953,6 +1206,10 @@ function formatFront(front) {
 
 module.exports = {
   computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, noCiHold, NO_CI_WHY,
+  // Shared with state-sync.cjs, which BUILDS the `epics` records computeFront
+  // reads: one key function, so a phase's epic cannot be filed under one name
+  // and looked up under another.
+  epicKey,
   // Shared with sentinel.cjs for the same reason as everything above it: the
   // board must never offer what the guard refuses, and two texts for one rule is
   // how they came to disagree in the first place.
@@ -981,11 +1238,16 @@ if (require.main === module) {
   // auto_merge decides whether an unmerged green PR is the sentinel's work or a
   // human's, so the standalone CLI has to read it too (state-sync passes it in).
   const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-  const { config } = loadConfig(root);
+  const { config, valid } = loadConfig(root);
   const autoMerge = config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
   // Passed explicitly here because this CLI has already paid for the config —
   // computeFront's own lazy fallback serves the callers that have not.
   const mergeWithoutCi = config.merge_without_ci === true;
+  // The concurrency cap, same reasoning — but only when the file PARSES. An
+  // invalid config authorizes no dispatch at all, and that answer is
+  // computeFront's to give (it resolves the same 0); passing the populated
+  // default from here would talk the cap out of it.
+  const maxConcurrentAgents = valid ? config.max_concurrent_agents : undefined;
   // The durable parks — drift verdicts and escalations — must be read here too.
   // deliver.md advertises this CLI as "re-runnable on its own", and it silently
   // was not equivalent: state-sync passed both in, so the same graph produced two
@@ -997,7 +1259,8 @@ if (require.main === module) {
   // park's kind, and the flat map keeps the kind only as a text prefix.
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
   const front = computeFront(tickets, state, {
-    parked, autoMerge, mergeWithoutCi, drifted: activeDrift(root), escalated: activeParks(root, state),
+    parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
+    drifted: activeDrift(root), escalated: activeParks(root, state),
     // Same reason as the two stores above: this CLI is advertised as re-runnable
     // on its own, and a board that re-offers a ticket an agent is holding is not
     // the same board.

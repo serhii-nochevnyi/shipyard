@@ -31,7 +31,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
-const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { classify, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 // The checkpoint predicates live in front.cjs and are imported, not copied.
 // A `checkpointParentOf` used to exist here AND there, and the standing rule — the
 // board must never offer what the guard refuses — was held by nothing but the
@@ -102,16 +102,32 @@ function readJson(file, what) {
 const graph = readJson(TICKETS, 'the ticket graph');
 const tickets = graph.tickets || {};
 const state = readJson(STATE, 'the delivery state');
-const { config: cfg } = loadConfig(ROOT);
+const { config: cfg, valid: CFG_VALID, error: CFG_ERROR } = loadConfig(ROOT);
+
+// A CONFIGURATION THAT DOES NOT PARSE PERMITS NO MUTATION (ADR-004 D2, audit
+// F03). The guard is the loudest case of that rule: `loadConfig` reports the
+// defaults for readers, and this file's whole mandate — merge, and the dispatch
+// decisions `duty` hands out — used to be taken FROM those defaults. A truncated
+// config that said `auto_merge: off` therefore resolved to `epic` and the guard
+// squashed PRs under a policy the file forbade, with the warning dropped on the
+// floor one line above.
+//
+// Defaults are for an ABSENT file. Unparseable means the project's policy is
+// unknown, and an unknown policy authorizes nothing. There is deliberately no
+// `--allow-defaults`: the fix is the file.
+const CONFIG_REFUSAL = CFG_VALID ? null
+  : `config unreadable: ${CFG_ERROR.relative} — ${CFG_ERROR.message} — fix it before any merge`;
 
 // auto_merge is only meaningful in epic-stacked: in direct-to-main a ticket PR
 // targets the integration branch itself, and that merge is a human's.
-const AUTO_MERGE = cfg.auto_merge === 'epic' && cfg.integration_mode === 'epic-stacked';
-const AUTO_MERGE_WHY = cfg.auto_merge !== 'epic'
-  ? 'pipeline.auto_merge is off'
-  : cfg.integration_mode !== 'epic-stacked'
-    ? `integration_mode is ${cfg.integration_mode} — ticket PRs target the integration branch, which only a human merges`
-    : null;
+const AUTO_MERGE = CFG_VALID && cfg.auto_merge === 'epic' && cfg.integration_mode === 'epic-stacked';
+const AUTO_MERGE_WHY = !CFG_VALID
+  ? CONFIG_REFUSAL
+  : cfg.auto_merge !== 'epic'
+    ? 'pipeline.auto_merge is off'
+    : cfg.integration_mode !== 'epic-stacked'
+      ? `integration_mode is ${cfg.integration_mode} — ticket PRs target the integration branch, which only a human merges`
+      : null;
 
 // ── gh plumbing ─────────────────────────────────────────────────────────────
 function gh(args, { tolerate = false } = {}) {
@@ -165,17 +181,27 @@ function behindBy(base, head, repo) {
 // MERGED. The returned shape is unchanged; only who decides is.
 //
 // A `gh` invocation that FAILED (non-zero exit with nothing parseable on
-// stdout — an old `gh` rejecting `bucket`, a network blip, a missing binary)
-// is not the same fact as "this PR genuinely has no checks configured", and
-// must not collapse into it: that collapse is what let a startup failure read
-// as green above. ANY stdout that parses to an array is authoritative and
+// stdout — an old `gh` rejecting `bucket`, a 503, a rate limit, a missing
+// binary) is not the same fact as "this PR genuinely has no checks configured",
+// and must not collapse into it: that collapse is what let a startup failure
+// read as green above. ANY stdout that parses to an array is authoritative and
 // used as-is, EMPTY OR NOT and regardless of exit status — a non-zero exit
 // with valid JSON is normal (the docstring above: exit code is data, not an
 // error). Only when there is nothing parseable to trust does exit status
-// decide: exit 0 with empty output means "no checks"; anything else
-// unreadable becomes a single synthetic row with an unknown bucket, which
-// `classify` already fails closed to `pending` — so the merge gate re-ticks
-// instead of merging on silence.
+// decide: exit 0 with empty output means "no checks"; anything else unreadable
+// hands `rows: null` to `classify`, which reports it as the FOURTH state,
+// `unavailable`.
+//
+// It used to hand over a synthetic `[{ bucket: 'unreadable' }]` row to borrow
+// `classify`'s fail-closed `pending`. That waited for the right reason and said
+// the wrong thing — "1 check(s) still running" about a check nobody ever saw,
+// on the guard's own live read — and it kept the fact in two places at once:
+// the row here and the flag there. The flag is the fact.
+//
+// The returned shape stays a TALLY, because that is what every caller in this
+// file reads (`checks.failing`, `heldForNoCi(checks)`, `c.pending`); it simply
+// carries `unavailable` and the `note` now. state-sync's `ghChecks` returns rows
+// instead — same distinction, different side of `classify`.
 function ghChecks(pr, repo) {
   const r = spawnSync('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', CHECK_FIELDS], { encoding: 'utf8' });
   const stdout = (r.stdout || '').trim();
@@ -188,9 +214,17 @@ function ghChecks(pr, repo) {
   } else if (r.status === 0) {
     rows = []; // gh succeeded and reported nothing — genuinely no checks
   }
-  if (rows === null) rows = [{ bucket: 'unreadable' }];
+  // `null` travels straight through: `classify` is the one place that decides
+  // what the shape of the answer means, and it answers `unavailable: true`.
   const c = classify(rows);
-  return { failing: c.failing, pending: c.pending, total: c.total, none_reported: c.none_reported };
+  const out = { failing: c.failing, pending: c.pending, total: c.total, none_reported: c.none_reported, unavailable: c.unavailable };
+  // The cause, for the duty's why and the merge refusal — derived by the module
+  // that owns the provenance order rather than written out here. It was a copy of
+  // state-sync's chain, and a rule kept in two places is one the two can differ
+  // on: on the exit-0-with-a-non-array-answer cell both said "exited 0", which
+  // names nothing at all for whoever reads the refusal.
+  if (c.unavailable) out.note = unavailableNote(r);
+  return out;
 }
 
 const defaultBranchCache = new Map();
@@ -420,6 +454,17 @@ function dutyItems() {
       item.action = 'review-fix';
       item.unresolved = unresolved;
       item.why = `${unresolved} unresolved review thread(s)${(c.pending || 0) > 0 ? ` (CI still running — service them NOW: a fix pushes anyway and restarts that run)` : ''} — fix or reply with reasoning, then RESOLVE each one`;
+    } else if (c.unavailable) {
+      // The board could not READ this PR's check state (a 503, a rate limit, an
+      // old `gh` rejecting `bucket`). Not "no checks", not "one check pending" —
+      // `wait-ci` because looking again is the whole remedy, and the note says
+      // what stopped the reading. Withholding only the landing actions, in the
+      // same position `front.cjs` puts this bucket: base-merge and review-fix
+      // above are real work that no `pr checks` failure says anything about, and
+      // the permanent case (an old `gh`) would freeze them for the whole run.
+      item.action = 'wait-ci';
+      item.why = `check state unreadable: ${c.note || 'gh pr checks did not answer'} — not "no checks" and not green; `
+        + 'the next state-sync reads again. Nothing to fix and nobody to ask.';
     } else if ((c.pending || 0) > 0) {
       item.action = 'wait-ci';
       item.why = `${c.pending} check(s) still running${unresolved === null ? ' — review threads unreadable this tick' : ''} — re-tick, do not block the main loop`;
@@ -546,7 +591,33 @@ function dutyItems() {
 // its attempt budget on work no hypothesis was ever wrong about.
 const ACTIONABLE = new Set(['ci-fix', 'review-fix', 'arch-review', 'undraft', 'merge', 'base-merge']);
 
+// The one line an invalid configuration is allowed to produce, and the reason it
+// is a line and not a board: every action `duty` hands out is a dispatch decision
+// taken from the policy, so composing a board here would be improvising one.
+const CONFIG_INVALID_LINE = CFG_VALID ? null
+  : `config-invalid: ${CFG_ERROR.relative} — ${CFG_ERROR.message}. The guard is standing down: `
+    + 'no PR is driven and nothing is merged until the file parses. Fix the file (there is no flag).';
+
 function dutySummary() {
+  // No items, and none of the buckets a caller might act on. `clear` is FALSE
+  // because nothing is finished — a person owes a one-line fix, and reporting
+  // `clear: true` here would tell the run the tail was handled.
+  if (!CFG_VALID) {
+    return {
+      config_valid: false,
+      config_error: CFG_ERROR,
+      config_invalid: CONFIG_INVALID_LINE,
+      auto_merge: 'off',
+      auto_merge_note: CONFIG_REFUSAL,
+      guarded: 0,
+      items: [],
+      actionable_count: 0,
+      waiting_count: 0,
+      human_count: 0,
+      parked_count: 0,
+      clear: false,
+    };
+  }
   const items = dutyItems();
   const actionable = items.filter((i) => ACTIONABLE.has(i.action));
   const waiting = items.filter((i) => i.action === 'wait-ci');
@@ -571,6 +642,9 @@ function dutySummary() {
 }
 
 function formatDuty(d) {
+  // Exactly one line: the header plus "NOT clear — 0 actionable now, 0 waiting on
+  // CI" reads as a bug in the guard rather than as a fact about the file.
+  if (d.config_valid === false) return [d.config_invalid];
   const lines = [`sentinel duty: ${d.guarded} PR(s) under guard | auto-merge: ${d.auto_merge}${d.auto_merge_note ? ` (${d.auto_merge_note})` : ''}`];
   for (const i of d.items) {
     const where = i.repo ? `@${i.repo}` : '';
@@ -600,6 +674,10 @@ function mergeOne(id) {
   const res = { ticket: id, pr: s ? s.pr : null, merged: false, dry_run: dryRun, blockers: [], retargeted: [] };
   const block = (why) => { res.blockers.push(why); return res; };
 
+  // Before anything else, including the ticket lookup: a corrupt config is the
+  // loudest fact about this invocation, and `unknown ticket` would send a reader
+  // looking at the graph for a defect that is in one file it can open.
+  if (!CFG_VALID) return block(CONFIG_REFUSAL);
   if (!s) return block('unknown ticket (not in delivery-state.json)');
   if (!AUTO_MERGE) return block(`auto-merge refused: ${AUTO_MERGE_WHY}`);
   if (s.status !== 'pr-open') return block(`status is ${s.status}, not pr-open`);
@@ -701,6 +779,19 @@ function mergeOne(id) {
 
   const checks = ghChecks(s.pr, repo);
   res.checks = checks;
+  // ASKED FIRST, ahead of the tallies, because an `unavailable` answer has all of
+  // them at zero: `failing === 0 && pending === 0` is the green test, so the
+  // arithmetic below would pass a PR whose checks nobody read. This is the same
+  // shape of refusal as the errored `gh compare` at the end of this gate — an
+  // unknown is not a pass — and the note is quoted so the refusal is actionable
+  // rather than a dead end. No park and no human is asked: the next tick reads
+  // again, and `state-sync` records the same fact for the board.
+  if (checks.unavailable) {
+    return block(
+      `the check state could not be read: ${checks.note || 'gh pr checks did not answer'} — a green cannot be told ` +
+      'from a red without it, so the merge is refused rather than guessed. Nothing to fix; the next tick reads again.'
+    );
+  }
   if (checks.failing > 0) return block(`${checks.failing} failing check(s)`);
   if (checks.pending > 0) return block(`${checks.pending} check(s) still running`);
   // Б3. `failing === 0 && pending === 0` is the green test, and an EMPTY check
@@ -871,7 +962,12 @@ if (cmd === 'merge') {
   const target = argv[1];
   let ids;
   if (target === '--all' || argv.includes('--all')) {
-    ids = dutyItems().filter((i) => i.action === 'merge').map((i) => i.ticket);
+    // Nothing to select from when the policy is unknown — and asking `duty` for
+    // the merge bucket would be composing that selection out of defaults the
+    // file may well have forbidden. The refusal is reported below instead of
+    // being reported as an empty board, because `results: []` reads as "nothing
+    // is mergeable right now", which is the silent success D2 exists to forbid.
+    ids = CFG_VALID ? dutyItems().filter((i) => i.action === 'merge').map((i) => i.ticket) : [];
   } else if (target && !target.startsWith('--')) {
     ids = [target];
   } else {
@@ -880,7 +976,13 @@ if (cmd === 'merge') {
 
   const results = ids.map(mergeOne);
   if (asJson) {
-    process.stdout.write(JSON.stringify({ auto_merge: AUTO_MERGE ? 'epic' : 'off', results }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({
+      auto_merge: AUTO_MERGE ? 'epic' : 'off',
+      ...(CFG_VALID ? {} : { config_valid: false, config_error: CFG_ERROR, refusal: CONFIG_REFUSAL }),
+      results,
+    }, null, 2) + '\n');
+  } else if (!CFG_VALID && !results.length) {
+    console.log(`sentinel merge: refused — ${CONFIG_REFUSAL}`);
   } else if (!results.length) {
     console.log('sentinel merge: nothing is mergeable right now');
   } else {

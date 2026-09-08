@@ -223,5 +223,105 @@ out="$(cd "$WT3" && node "$SCRIPTS/scope-gate.cjs" --graph "$P3/.planning/graph"
   || fail "flag-first scope-gate failed: $out"
 ok "--graph before the positionals leaves the ticket intact in both gates"
 
+# ── F01: a segment glob owns the paths it matches, in BOTH gates ─────────────
+# The old matcher cut `src/foo*.ts` at its first wildcard and compared the stump
+# `src/foo` as a directory prefix, so `src/fooBar.ts` read as "not this ticket's
+# file". The scope gate rejected the ticket's own legitimate edit, and base-merge
+# — the only mechanical conflict resolver the conveyor has — classified the same
+# file as undeclared, took the BASE's edition over the ticket's implementation,
+# committed it and exited 0 reporting `resolved mechanically`.
+P4="$WORK/proj4"
+mkdir -p "$P4/src" "$P4/.planning/graph"
+git init -q -b main "$P4"
+printf '.planning/\n' > "$P4/.gitignore"
+printf 'fooBar v1\n' > "$P4/src/fooBar.ts"
+# T-01 is the sibling whose WILDCARD declaration also matches the contested path.
+cat > "$P4/.planning/graph/tickets.json" <<'JSON'
+{"tickets":{
+  "T-01":{"files":["src/*.ts"]},
+  "T-02":{"files":["src/foo*.ts"]}}}
+JSON
+git -C "$P4" add -A && git -C "$P4" commit -qm init
+git -C "$P4" branch epic/01
+
+git -C "$P4" checkout -q -b ticket/T-01 epic/01
+printf 'fooBar PARENT\n' > "$P4/src/fooBar.ts"
+git -C "$P4" commit -qam T-01
+
+git -C "$P4" checkout -q -b ticket/T-02 epic/01
+printf 'fooBar CHILD OWN WORK\n' > "$P4/src/fooBar.ts"
+git -C "$P4" commit -qam T-02
+
+git -C "$P4" checkout -q epic/01
+git -C "$P4" merge --squash ticket/T-01 -q >/dev/null
+git -C "$P4" commit -qm "squash T-01"
+git -C "$P4" checkout -q main
+
+WT4="$WORK/wt4"
+git -C "$P4" worktree add -q "$WT4" ticket/T-02
+
+# The scope gate first, while the tree is clean: the edit IS inside the ticket's
+# declaration, and the gate that blocks publishing must say so.
+out="$(cd "$WT4" && node "$SCRIPTS/scope-gate.cjs" T-02 --worktree "$WT4" --base epic/01 2>&1)" \
+  || fail "scope-gate rejected the ticket's own file under its glob declaration: $out"
+grep -q 'all inside files_modified' <<<"$out" \
+  || fail "src/fooBar.ts must be inside src/foo*.ts: $out"
+ok "scope-gate accepts a src/fooBar.ts edit declared as src/foo*.ts"
+
+set +e
+out="$(cd "$WT4" && node "$SCRIPTS/base-merge.cjs" T-02 --worktree "$WT4" --base epic/01 --no-fetch 2>&1)"
+code=$?
+set -e
+[[ "$code" == 1 ]] || fail "a conflict in a glob-declared file must exit 1, got $code: $out"
+grep -q 'REAL conflict' <<<"$out" || fail "the report must name it a real conflict: $out"
+# CONTENT, not the message: the whole defect was a green exit over a discarded
+# implementation. A conflicted file still carries the ticket's side.
+grep -q 'CHILD OWN WORK' "$WT4/src/fooBar.ts" \
+  || fail "the ticket's own implementation was discarded, got: $(cat "$WT4/src/fooBar.ts")"
+ok "base-merge keeps the ticket's edition of a glob-declared file"
+
+git -C "$WT4" status --porcelain | grep -q '^UU' \
+  || fail "the merge must be left IN PROGRESS for an agent to resolve"
+ok "the merge is left in progress, nothing committed"
+
+# Ownership is contested: a sibling ticket's wildcard declaration matches the same
+# path, so the agent resolving it needs to know whose work the other side is.
+grep -q 'T-01' <<<"$out" || fail "the reason must name the sibling that also claims the path: $out"
+grep -q 'src/\*\.ts' <<<"$out" || fail "the reason must name the sibling's declaration: $out"
+ok "a path a sibling's wildcard also claims is reported as contested, naming it"
+
+git -C "$WT4" merge --abort
+
+# ── a declaration the matcher cannot answer exactly stops both gates ─────────
+# Gate 2 rejects such an entry, so reaching either gate with one means the graph
+# was never validated. Neither gate may guess: no certainty, no mutation.
+P5="$WORK/proj5"
+mkdir -p "$P5/src" "$P5/.planning/graph"
+git init -q -b main "$P5"
+printf '.planning/\n' > "$P5/.gitignore"
+printf 'x\n' > "$P5/src/a.ts"
+cat > "$P5/.planning/graph/tickets.json" <<'JSON'
+{"tickets":{"T-09":{"files":["src/**/a.ts"]}}}
+JSON
+git -C "$P5" add -A && git -C "$P5" commit -qm init
+git -C "$P5" branch epic/09
+git -C "$P5" checkout -q -b ticket/T-09 epic/09
+printf 'y\n' > "$P5/src/a.ts"
+git -C "$P5" commit -qam T-09
+git -C "$P5" checkout -q main
+WT5="$WORK/wt5"
+git -C "$P5" worktree add -q "$WT5" ticket/T-09
+
+for gate in scope-gate base-merge; do
+  set +e
+  out="$(cd "$WT5" && node "$SCRIPTS/$gate.cjs" T-09 --worktree "$WT5" --base epic/09 --no-fetch 2>&1)"
+  code=$?
+  set -e
+  [[ "$code" == 2 ]] || fail "$gate must refuse an unanswerable declaration with exit 2, got $code: $out"
+  grep -q 'src/\*\*/a\.ts' <<<"$out" || fail "$gate must name the entry it cannot answer: $out"
+  grep -q 'Gate 2' <<<"$out" || fail "$gate must name Gate 2 as the place that should have caught it: $out"
+done
+ok "both gates refuse a declaration the ownership matcher cannot answer"
+
 echo "$PASS passed, 0 failed"
 echo "worktree gates smoke passed"
