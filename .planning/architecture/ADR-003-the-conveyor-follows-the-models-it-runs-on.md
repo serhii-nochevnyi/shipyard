@@ -90,3 +90,42 @@ landing on `main` (cross-phase parents wait for a MERGE, by design).
 Operational, not tickets: after the release, the installers refresh both
 gsd-core installs to 1.13.0 and regenerate the Codex agents; Codex CLI 0.147.0
 on this host predates first-class Astra config (0.153.1) — the user's call.
+
+## D1's verification, settled 2026-09-08 — and what the release must therefore say
+
+D1 says an image pin "is verified by a human — the CI never builds it — so the
+ticket carries a checkpoint". That checkpoint came due, and here is how it was
+answered.
+
+**Verified, on the epic head `d6890db`:** `make test-codex-shipyard` exits 0
+(`codex-shipyard smoke: OK`), exercising the 233 lines T-25-02 changed in
+`scripts/gen-codex-shipyard.cjs`. It was run against the EPIC and not `main`,
+because `main` does not contain the generator's changes and a green there would
+have proved nothing. The smoke is fully isolated — `mktemp -d`,
+`export HOME="$WORK"`, `CODEX_HOME` inside it, `trap 'rm -rf' EXIT` — so it
+touches no real Codex install; that was checked before running it, not after.
+
+**NOT verified, by the operator's decision:** `make test-base`,
+`test-overlay`, `test-runtime`, `test-mcp-runtime`. The operator declined the
+build on 2026-09-08 ("не збирай"), and the reason it cannot be shortcut is that
+`tests/smoke/base-image-smoke.sh:12` **runs `make build-base` itself** — it is a
+build, not an assertion. The images on this host are four weeks old, which
+predates T-25-01's pins entirely, so running the smoke against them would have
+produced a green that describes the previous pin. That is the exact shape of
+false assurance this phase spent its reviews finding, and taking it would have
+been worse than the honest gap.
+
+**So the pins ship verified by READING.** `Dockerfile.base` carries
+`ARG CLAUDE_CODE_VERSION=2.1.263` (above the 2.1.255 floor Fable 5.1 needs and
+the 2.1.219 floor Opus 5 needs), and all five build homes of
+`GSD_CORE_VERSION` agree at 1.13.0 with a `docs-smoke.sh` assertion now holding
+them together (T-25-06). What no one has observed is the image those numbers
+produce.
+
+**The release notes must say this in their own words**, not leave it to be
+inferred: the container's toolchain pins are updated and unbuilt. A reader who
+assumes a tagged release was built is the person this sentence exists for. And
+whoever next builds the image should treat the first `make build-base` +
+`build-dev-image` as the deferred half of T-25-01's checkpoint — if it fails,
+the failure belongs to this phase and not to whatever change happens to be in
+flight then.
