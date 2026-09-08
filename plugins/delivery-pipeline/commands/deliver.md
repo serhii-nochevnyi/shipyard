@@ -252,10 +252,10 @@ supports them (Workflow's `agent()` takes `effort`; the args contracts carry
 Valid model values are the aliases `opus`, `sonnet`, `haiku`, `fable` — nothing
 else. **The Agent tool accepts tier aliases only; a full model ID (`claude-opus-…`,
 or an alias with a context suffix like `opus[1m]`) is rejected on input validation.**
-That enum belongs to the TOOL PARAMETER. A subagent's own `model:` frontmatter
-(`.claude/agents/*.md`) is a different surface and does take full model ids and
-`inherit` — so a model-config page listing them says nothing about what a dispatch
-may pass. Full IDs also belong to GSD's own `model_overrides`, which GSD resolves
+That enum belongs to the TOOL PARAMETER. A subagent DEFINITION's own `model:`
+frontmatter is a different surface and does take full model ids and `inherit` —
+so a model-config page listing them says nothing about what a dispatch may
+pass. Full IDs also belong to GSD's own `model_overrides`, which GSD resolves
 itself.
 
 `fable` is Fable 5.1: Opus-tier, **1M-token context**, adaptive thinking at

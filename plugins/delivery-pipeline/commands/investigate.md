@@ -59,8 +59,8 @@ Read `.planning/investigations/` (may not exist):
    risks+unknowns). Override per role via `pipeline.models` in `.planning/config.json`.
    **Only tier aliases are valid `model` values** — for research those are `opus` /
    `sonnet` / `haiku` — and the Agent tool rejects full model IDs and suffixed
-   aliases like `opus[1m]`. Full model ids and `inherit` belong to a subagent's own
-   `model:` frontmatter (`.claude/agents/*.md`), a different surface from the tool
+   aliases like `opus[1m]`. Full model ids and `inherit` belong to a subagent
+   DEFINITION's own `model:` frontmatter, a different surface from the tool
    parameter these spawns pass.
    Pass each of them the problem statement and the path to the INV directory. Bring their results
    into RESEARCH.md, OPTIONS.md, RISKS.md, OPEN-QUESTIONS.md.
