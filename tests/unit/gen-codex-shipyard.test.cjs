@@ -157,6 +157,33 @@ function generate(opts = {}) {
   return { ...f, out, run: r, agents, stderr: r.stderr || '' };
 }
 
+// A minimal line-level TOML shape check — no full parser, but enough to catch
+// the class of bug a regex-only assertion cannot: every non-blank line must
+// either be a `#` comment or a `key = value` pair. A raw line of prose (a
+// verbatim JSON.parse error can embed one) is neither, and a regex like
+// `/^model = "(.*)"$/m` finds its target line regardless of what garbage sits
+// beside it — which is exactly why `agents[name].text` matching that regex was
+// never evidence the FILE parses.
+function assertLooksLikeToml(text, label) {
+  // `developer_instructions = '''…'''` legitimately spans many raw lines (the
+  // agent's own prose body) — those are content, not structure, and the check
+  // below is about STRUCTURE lines only, so everything between a `'''` that
+  // opens one and the `'''` that closes it is skipped.
+  let inMultiline = false;
+  for (const line of text.split('\n')) {
+    if (inMultiline) {
+      if (line.trim() === "'''") inMultiline = false;
+      continue;
+    }
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) continue;
+    if (/=\s*'''$/.test(trimmed)) { inMultiline = true; continue; }
+    assert.ok(/^[A-Za-z0-9_-]+\s*=\s*.+$/.test(trimmed),
+      `${label}: line is neither a comment nor a key = value pair: ${JSON.stringify(line)}`);
+  }
+  assert.ok(!inMultiline, `${label}: an opened ''' block never closed`);
+}
+
 // ── the palette, and what each role gets from it ─────────────────────────────
 
 suite('the shipped palette');
@@ -453,6 +480,30 @@ test('the manifest carries the reason, so a caller need not scrape stderr', () =
   const manifest = JSON.parse(fs.readFileSync(path.join(g.out, 'manifest.json'), 'utf8'));
   assert.ok(manifest.config_invalid, 'manifest.json must carry the refusal');
   assert.ok(/no policy is in effect/.test(manifest.config_invalid), manifest.config_invalid);
+});
+
+// `CORRUPT` above is truncated JSON: V8 answers a short, POSITIONAL message
+// ("Unexpected end of JSON input") with no snippet of the file's own bytes, so
+// it never reaches the multi-line form the reason-comment embeds verbatim. A
+// short file that is not JSON AT ALL (never even starts parsing a structure)
+// gets the other shape: V8 quotes the offending bytes back, newlines included —
+// this is the shape a human hand-typing a placeholder into the file produces,
+// and it is a `# ` comment away from splitting into a bare, unparseable line
+// (Copilot round; arch-review, PR #71, ADR-004 D6 / audit F21).
+const CORRUPT_MULTILINE = 'TODO\nfix this later\n';
+
+test('a config whose parse error embeds a multi-line snippet still yields parseable TOML', () => {
+  const g = generate({ projectRaw: CORRUPT_MULTILINE });
+  assert.strictEqual(g.run.status, 0, g.stderr);
+  assert.ok(Object.keys(g.agents).length >= 7, Object.keys(g.agents).join(', '));
+  for (const [name, a] of Object.entries(g.agents)) {
+    assert.strictEqual(a.model, null, `${name} must carry no model key`);
+    assert.ok(/no policy is in effect/.test(a.text), `${name} does not say why it has no model`);
+    // The refusal reason is multi-line at the source (loadConfig's JSON.parse
+    // message quotes the file's own "TODO\nfix this later\n" back), so a file
+    // that still line-parses is the whole of what this test is proving.
+    assertLooksLikeToml(a.text, name);
+  }
 });
 
 test('NO config file at all is not a refusal — the regression the guard could introduce', () => {

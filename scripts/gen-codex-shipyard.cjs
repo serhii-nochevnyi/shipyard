@@ -364,6 +364,24 @@ function tomlBasic(value) {
   return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+// A `#` comment runs to end of LINE and TOML forbids control characters other
+// than tab inside one — and `policy.configInvalid` is not our own prose, it
+// carries `loadConfig`'s verbatim `JSON.parse` message, which for a SHORT
+// unparseable file embeds a snippet of the file's own bytes (V8-version-
+// dependent: older Node has no snippet form at all). A hand-typed corrupt
+// config is exactly the shape that reaches this — multi-line, and free to
+// carry any control byte the human's editor wrote. Collapsing to one printable
+// line before it becomes a comment is what keeps every downstream line a
+// `name = value` pair or a comment and nothing else, which is the whole of
+// what these files need to still parse (ADR-004 D6, audit F21).
+function tomlComment(text) {
+  const oneLine = String(text)
+    .replace(/[\x00-\x08\x0A-\x1F\x7F]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `# ${oneLine}\n`;
+}
+
 // First markdown heading or first sentence → a one-line agent description.
 function deriveDescription(body, roleName) {
   const heading = body.match(/^#\s+(.+)$/m);
@@ -440,7 +458,7 @@ function main() {
   // past, while the `.toml` is what the next reader opens when an agent turns
   // out to carry no model. A `#` comment is valid TOML and adds no key, so the
   // file says why it is silent instead of looking like an oversight.
-  const refusalComment = policy.configInvalid ? `# ${policy.configInvalid}\n` : '';
+  const refusalComment = policy.configInvalid ? tomlComment(policy.configInvalid) : '';
   const agentToml = (agentName, description, sandbox, model, effort, body) =>
     refusalComment +
     `name = ${tomlBasic(agentName)}\n` +
