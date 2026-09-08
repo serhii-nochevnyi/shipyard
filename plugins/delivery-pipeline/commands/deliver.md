@@ -1097,8 +1097,29 @@ may be dispatched at all: fix the file.
    then `gh pr create --base <state[T].base> --head <branch> --draft
    --title "<T>: <title>" --body <the agent's prBody>` (add
    `--repo <state[T].repo>` for a foreign-repo ticket).
-   `--base` is the RESOLVED base of the ticket (the epic branch for a root; the
-   primary parent's branch for a dependent), NOT main directly in epic-stacked.
+   `--base` is the RESOLVED base of the ticket, NOT main directly in
+   epic-stacked. **The base is one field with two jobs: it decides what the
+   review diff shows AND where the squash LANDS.** A primary parent's ticket
+   branch is a legal base only while that parent's PR is still OPEN — the
+   post-merge retarget then gives both properties. Once the parent has MERGED
+   its branch is a limb (it survives the squash, but its content is already in
+   the epic), so the base is the EPIC. `state-sync.cjs` resolves this and says
+   which rule it applied in `state[T].base_reason` — take the base from
+   `state[T].base` and never re-derive it from the graph's decompose-time
+   `pr_base`, which was computed before any PR existed.
+   When the resolved base is the epic and the ticket HAS a primary parent, keep
+   the diff a single slice by merging the base in first, then open the PR:
+
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <state[T].base>
+   ```
+
+   With the parent's work already in the epic that makes the child's diff
+   against the epic exactly its own slice again — both properties, one order of
+   operations, and the merge target is right. Optimising the diff alone is what
+   produced PR #52: three files, a perfect review slice, squashed onto a branch
+   already merged into `epic/26`, which therefore never received the work while
+   the ticket read `merged` and the front read empty.
    PR body: the FIRST line — a machine-readable marker `Ticket: <T>` (a safety net for
    state-sync matching if a re-decomposition renames the canonical branch);
    then Problem / Scope / Dependency slice / Test evidence /

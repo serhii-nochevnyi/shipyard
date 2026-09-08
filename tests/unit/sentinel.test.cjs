@@ -644,16 +644,61 @@ test('the guard refuses a child whose base is an OPEN pre-authorized checkpoint 
 });
 
 test('...and takes it once that parent has ACTUALLY merged (the control)', () => {
+  // The control is the world AFTER the parent landed, which is not the same
+  // state file with one status flipped: the parent's merge retargets this PR
+  // onto the epic (ADR-006 D3 — once the parent is merged its branch is a limb,
+  // and the suite below refuses landing there). So the child's base is the epic
+  // here, and what this asserts is the CHECKPOINT wait ending, which is what it
+  // was written for. It used to keep `pr_base: ticket/T-PRE`, i.e. assert the
+  // PR #52 shape as a pass, on a fixture whose own retarget had not happened.
   const root = project({
     tickets: childTickets,
     state: {
       'T-PRE': { ...openGreen(11, 'ticket/T-PRE', 'epic/21-x'), status: 'merged' },
-      'C-PRE': openGreen(14, 'ticket/C-PRE', 'ticket/T-PRE'),
+      'C-PRE': openGreen(14, 'ticket/C-PRE', 'epic/21-x'),
     },
     config: epicConfig,
   });
-  const r = JSON.parse(run(root, ['merge', 'C-PRE', '--json', '--dry-run'], { env: childEnv() }).stdout).results[0];
+  const env = onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/C-PRE', STUB_PR: '14' });
+  const r = JSON.parse(run(root, ['merge', 'C-PRE', '--json', '--dry-run'], { env }).stdout).results[0];
   assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+suite('a base whose ticket has MERGED is a limb, not the stack (ADR-006 D3)');
+
+// PR #52, as the two states that differ by ONE fact the guard must act on. The
+// base is inside the stack in both — a same-phase ticket branch in the same repo
+// — so the mandate boundary two rules up admits it either way; what decides is
+// whether that branch is still where work lands.
+const limbTickets = {
+  'T-LIMB-P': { branch: 'ticket/T-LIMB-P', epic: 'epic/21-x' },
+  'T-LIMB-C': { primary_parent: 'T-LIMB-P', branch: 'ticket/T-LIMB-C', epic: 'epic/21-x' },
+};
+const limbState = (parentStatus) => ({
+  'T-LIMB-P': { ...openGreen(21, 'ticket/T-LIMB-P', 'epic/21-x'), status: parentStatus },
+  'T-LIMB-C': openGreen(22, 'ticket/T-LIMB-C', 'ticket/T-LIMB-P'),
+});
+const limbEnv = () => onPath(stubGh(), { STUB_BASE: 'ticket/T-LIMB-P', STUB_HEAD: 'ticket/T-LIMB-C', STUB_PR: '22' });
+
+test('the parent PR is still OPEN → the child lands on its branch (the cascade as designed)', () => {
+  const root = project({ tickets: limbTickets, state: limbState('pr-open'), config: epicConfig });
+  const r = JSON.parse(run(root, ['merge', 'T-LIMB-C', '--json', '--dry-run'], { env: limbEnv() }).stdout).results[0];
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+test('the parent has MERGED → the SAME PR is refused, and the refusal is a command', () => {
+  const root = project({ tickets: limbTickets, state: limbState('merged'), config: epicConfig });
+  const r = JSON.parse(run(root, ['merge', 'T-LIMB-C', '--json'], { env: limbEnv() }).stdout).results[0];
+  assert.strictEqual(r.merged, false, 'a squash onto a merged parent branch strands the work');
+  const why = r.blockers.join('; ');
+  assert.ok(/T-LIMB-P/.test(why), why);
+  assert.ok(/MERGED/.test(why), why);
+  // The remedy, not a description of one: the retarget is a paste, and the base
+  // merge after it is the script that keeps the diff a single slice.
+  assert.ok(/gh pr edit 22 --base epic\/21-x/.test(why), why);
+  assert.ok(/base-merge\.cjs T-LIMB-C/.test(why), why);
+  // Refused BEFORE the merge call: this is the guard, not the post-mortem.
+  assert.ok(!('reachability' in r), `nothing was merged, so nothing is asserted about the epic: ${JSON.stringify(r.reachability)}`);
 });
 
 suite('pre-authorization — the journal has to be able to tell the two apart');
