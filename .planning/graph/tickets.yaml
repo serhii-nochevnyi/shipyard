@@ -880,7 +880,7 @@ tickets:
     repo: null
     wave: 2
     depends_on: [T-27-01]
-    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/parent-moving.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/sentinel.test.cjs, tests/unit/parent-moving.test.cjs, tests/smoke/sentinel-smoke.sh]
+    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/parent-moving.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/sentinel.test.cjs, tests/unit/parent-moving.test.cjs, tests/unit/front.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: high
     human_checkpoint: true
     preauthorized: true

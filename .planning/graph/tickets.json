@@ -1572,6 +1572,7 @@
         "plugins/delivery-pipeline/commands/deliver.md",
         "tests/unit/sentinel.test.cjs",
         "tests/unit/parent-moving.test.cjs",
+        "tests/unit/front.test.cjs",
         "tests/smoke/sentinel-smoke.sh"
       ],
       "risk": "high",

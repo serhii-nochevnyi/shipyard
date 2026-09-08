@@ -126,3 +126,44 @@ Cheap fix, and it is the same shape as this phase's other findings: have
 one line — `parked: T-27-04 (this render only — `state-sync --parked` writes the
 board the stop gate reads)`. No behaviour change, and the trap stops being
 invisible.
+
+## scope-gate run from inside the worktree answers from the BRANCH's frozen graph
+
+Found by T-27-03's fix round, 2026-09-08, and it is the stale-graph-in-a-worktree
+class `CLAUDE.md` already documents for `graph-dir.cjs` — arriving through the
+one door that entry does not close.
+
+`scope-gate.cjs` resolves its graph dir through `graph-dir.cjs`, whose order is
+flag/env → **cwd** → the worktree's own repository. This repo TRACKS
+`.planning/`, so a ticket worktree contains a full `.planning/graph/tickets.json`
+— the branch's copy, frozen at whatever the declaration said when the branch was
+cut. The cwd step finds it and stops looking.
+
+Measured: with T-27-03's plan amended (files_modified widened from 5 paths to 8),
+`scope-gate.cjs T-27-03` run from inside `/Volumes/KINGSTON/.wt-claude-shipyard/T-27-03`
+reported `front.cjs`, `parent-moving.cjs` and `parent-moving.test.cjs` as
+`outside` and exited 1. Run from the project it reported `outside: []` and
+exited 0. Same command, same branch, same commit — two answers, and the wrong
+one is the one an agent standing in its worktree gets.
+
+Why it bites harder than the `base-merge` case: a false `outside` tells an agent
+its correct work breaches the scope contract. The plausible reactions are all
+damaging — revert the edit, widen nothing and escalate, or conclude the plan is
+wrong. And it is silent: exit 1 with a specific file list reads exactly like a
+real violation.
+
+The proving ground keeps `.planning/` untracked, which is why the documented
+`graph-dir.cjs` story is about the OPPOSITE failure (no `.planning/` at all in
+the worktree). Both directions are the same root: **cwd is not evidence about
+which graph an invocation belongs to.** For an amendable declaration the project's
+copy is the only one that can be current, so the ordering should prefer the
+worktree's own REPOSITORY over its cwd when the two disagree and the cwd copy is
+a tracked checkout of that same repo — or, cheaper and honest: have scope-gate
+print the graph dir it resolved and how, the way `base-merge`/`scope-gate`
+already print the base ref they measured.
+
+Until then: the main loop must run scope-gate from the PROJECT, never from the
+worktree, and any prompt that asks an agent to self-verify scope has to pass
+`--graph <project>/.planning/graph` explicitly.
+
+Related: [[a-childs-pr-base-is-its-merge-target-not-just-its-review-diff]].
