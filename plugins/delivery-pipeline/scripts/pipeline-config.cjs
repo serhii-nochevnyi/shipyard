@@ -11,7 +11,7 @@
 //
 //   node pipeline-config.cjs resolve                      # effective config, JSON
 //   node pipeline-config.cjs model <role> [flags]         # one tier alias
-//   node pipeline-config.cjs model <role> --json [flags]  # {model, effort}
+//   node pipeline-config.cjs model <role> --json [flags]  # {model, effort, route}
 //                                                        # + strategy, with --signature-state
 //
 //   flags: --risk low|medium|high  --type <plan type>  --checkpoint
@@ -833,11 +833,24 @@ function capForRuntime(tier, cfg) {
 
 // A runtime name reaches the route from the CONFIG, so it is slugged before it
 // becomes a rule token: an operator's `runtime: "Claude Code"` would otherwise
-// emit a route with a space in it, which `parseRoute` — the grammar
-// dispatch-record validates against — would reject, and a legitimate dispatch
-// would be refused for a spelling in someone's config.
-const runtimeToken = (cfg) =>
-  String((cfg.gsd && cfg.gsd.runtime) || 'unset').toLowerCase().replace(/[^a-z0-9-]+/g, '-') || 'unset';
+// risk a route with a space in it, which `parseRoute` — the grammar
+// dispatch-record validates against — would reject. Today both call sites below
+// gate on an EXACT `=== 'codex'` match against the raw value before either ever
+// reaches this function, so `runtimeToken` only ever sees `'codex'` in practice —
+// this guards a FUTURE caller (a broadened match, a third call site) rather than
+// a live failure, and the function's own contract (never a bare punctuation
+// remnant, see below) should hold regardless of who calls it or how.
+const runtimeToken = (cfg) => {
+  // A whitespace-only (or otherwise all-punctuation) runtime slugs to a bare
+  // "-", which is non-empty and so slips past the `|| 'unset'` fallback below —
+  // it would leak into a route token as e.g. `cap:-`. Trim the leading/trailing
+  // hyphens the replace can produce before testing for emptiness.
+  const slug = String((cfg.gsd && cfg.gsd.runtime) || 'unset')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'unset';
+};
 
 // ── the ceiling: three mechanical routes to `fable` (ADR-005 D4) ─────────────
 //
@@ -934,10 +947,6 @@ function tierRoute(role, signals = {}, cfg = DEFAULTS) {
   return SONNET_ROLES.has(role)
     ? { value: 'sonnet', rule: 'floor:exempt' }
     : { value: 'opus', rule: 'floor' };
-}
-
-function ladderTier(role, signals = {}, cfg = DEFAULTS) {
-  return tierRoute(role, signals, cfg).value;
 }
 
 // The tier the Agent tool is handed, and which rule produced it — the cap is
@@ -1118,7 +1127,7 @@ function signalGaps(role, signals = {}) {
 
 module.exports = {
   loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
-  routeOf, parseRoute, ROUTE_RE,
+  routeOf, parseRoute, ROUTE_RE, runtimeToken,
   parseCodexModelEntry, normalizeCodexModels,
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
   DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS,
