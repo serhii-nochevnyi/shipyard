@@ -63,3 +63,41 @@ One caution for whoever takes it: a refresh moves the base under every open
 ticket PR in that phase, so each becomes BEHIND and needs its own base-merge
 round. That is the documented cascade cost, not a new one, but it means a
 refresh is worth doing at a phase boundary rather than continuously.
+
+## Two further measurements, 2026-09-08 — the refresh alone is not enough
+
+The refresh was then done BY HAND (`main` merged into both epics in a disposable
+worktree, both pushed, both 0 behind origin) and the very next `ticket-worktree.sh
+create` still produced trees without the code. Two separate causes, both the same
+asymmetry `graph-dir.cjs`'s `resolveBaseRef` was written for — measure
+`origin/<base>` when it exists:
+
+- **`ticket-worktree.sh create` resolves a bare `epic/…` to the LOCAL ref.** The
+  refresh happened in a detached worktree and was pushed; the local `epic/25` and
+  `epic/26` refs never moved, so both cuts came off the pre-refresh tip
+  (`b902659`) and reported success. `epic-branch.sh ensure` cuts from
+  `origin/<base>` deliberately (see `epic-cut-silently-behind-origin.md`);
+  `ticket-worktree.sh create` does not, so the same run can hold an epic that is
+  current on origin and ticket trees that are 49 commits behind it.
+- **`create` is idempotent on BRANCH EXISTENCE, not on base freshness.** Both
+  ticket branches already existed from a pre-refresh cut, carried zero commits of
+  their own, and were silently reused. Idempotence is the right property; what is
+  missing is the same sentence as above — say how far the reused branch is from
+  the base it was asked for.
+
+Compounding both: the project checkout's own `main` was 12 commits behind
+`origin/main` after the epic PR was merged through the API, so nothing in the
+working tree — not the scripts the guard reads, not the base a worktree is cut
+from — contained phase 24 at all. The merge moved origin; no step of delivery
+moves the local default branch afterwards.
+
+So the fix's shape widens by one line: whatever performs the refresh must also
+fast-forward the local base and the local epic refs, and `ticket-worktree.sh
+create` must measure `origin/<base>` and report the distance of any branch it
+reuses. Until then the manual recovery is: `git merge --ff-only origin/main`,
+`git update-ref refs/heads/epic/<N>-… refs/remotes/origin/epic/<N>-…`, then
+remove and recut the ticket worktree.
+
+Cheap detection for whoever takes it: after `create`, the caller can `git -C
+<worktree> rev-list --count HEAD..origin/<base>` — it was 49 and 42 here, and
+zero is the only acceptable answer.
