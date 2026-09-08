@@ -694,8 +694,9 @@ function computeFront(tickets, state, opts = {}) {
   // dependents on it) — and it is deliberately true in two states where nothing
   // has landed: a phase whose epic BRANCH does not exist yet (every decomposed
   // phase has an `epics` entry from the moment it is planned, long before its
-  // branch is cut), and an epic freshly cut from the base with no ticket merged
-  // into it. Either would flag a whole phase at the instant its delivery began.
+  // branch is cut), and an epic freshly cut from the base with nothing merged
+  // into it yet. Either would flag a whole phase at the instant its delivery
+  // began.
   //
   // The integration event is therefore ONE observable thing: the epic's own
   // integration PR is MERGED. That is the act — a person performs it, the
@@ -710,7 +711,8 @@ function computeFront(tickets, state, opts = {}) {
   // would re-create this ticket's own defect on any freshly cut epic: epic level
   // with its base, one child squash-merged into an open parent by hand, and the
   // green ready parent reads as left behind while the hatch exits 0 over it. So
-  // the untruncated-window case is given up in the conservative direction — no
+  // an epic PR outside the bulk window — or one a human merged and reaped
+  // without a PR at all — is given up in the conservative direction: no
   // evidence, no hatch, the run keeps driving.
   const leftBehind = (id) => {
     // A merged ticket is IN the phase that landed; it is not a casualty of it.
