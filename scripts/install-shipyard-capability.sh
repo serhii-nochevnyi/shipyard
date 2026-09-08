@@ -25,8 +25,8 @@ PLUGIN_DIR="$REPO_ROOT/plugins/delivery-pipeline"
 CAP_SRC="$REPO_ROOT/capabilities/delivery-pipeline"
 
 case "$RUNTIME" in
-  claude) GSD_TOOLS="${CLAUDE_HOME:-$HOME/.claude}/gsd-core/bin/gsd-tools.cjs"; HINT='npx --yes @opengsd/gsd-core@1.7.0 --claude --global --profile=full' ;;
-  codex)  GSD_TOOLS="${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/gsd-tools.cjs";  HINT='npx --yes @opengsd/gsd-core@1.7.0 --codex --global' ;;
+  claude) GSD_TOOLS="${CLAUDE_HOME:-$HOME/.claude}/gsd-core/bin/gsd-tools.cjs"; HINT='npx --yes @opengsd/gsd-core@latest --claude --global --profile=full' ;;
+  codex)  GSD_TOOLS="${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/gsd-tools.cjs";  HINT='npx --yes @opengsd/gsd-core@latest --codex --global' ;;
   *) echo "usage: install-shipyard-capability.sh [claude|codex]" >&2; exit 2 ;;
 esac
 
