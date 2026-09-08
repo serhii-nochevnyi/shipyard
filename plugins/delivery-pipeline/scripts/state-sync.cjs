@@ -132,6 +132,23 @@ function gh(args, { tolerate = false } = {}) {
   }
 }
 
+// The tolerant helper above answers `null` and DROPS gh's own message, which is
+// enough for every call whose failure means "park this and move on". It is not
+// enough for a call whose failure has to reach the board wearing a reason a
+// person can act on — the epic comparison below is the one such call, and
+// "integration state unknown" with no cause named is a dead end. So it goes
+// through spawnSync like `ghChecks` and keeps stdout, the exit status and the
+// first line of stderr apart. One call per epic per sync (not per PR), so the
+// conveyor's tick rate is untouched.
+function ghTry(args) {
+  const t0 = TIME ? process.hrtime.bigint() : null;
+  const r = spawnSync('gh', args, { encoding: 'utf8' });
+  if (TIME) process.stderr.write(`  ${Number(process.hrtime.bigint() - t0) / 1e9}s  gh ${args.slice(0, 4).join(' ')}\n`);
+  const why = (r.stderr || '').trim().split('\n').filter(Boolean)[0]
+    || (r.error ? r.error.message : '');
+  return { status: r.error ? null : r.status, stdout: (r.stdout || '').trim(), stderr: why };
+}
+
 // `gh pr checks` reports CI state through its EXIT CODE (8 = some checks still
 // pending, 1 = a check failed or the PR has no checks at all) while still
 // printing the requested JSON on stdout. A non-zero exit is therefore DATA, not
@@ -361,22 +378,58 @@ if (mode === 'epic-stacked') {
       const rd = repoData.get(repo) || { available: false, prs: [], branches: new Set(), defaultBranch: null };
       const base = rd.defaultBranch || DEFAULT_BRANCH;
       const exists = rd.branches.has(e.branch);
+      // Integration state is `landed | not-landed | unknown` (ADR-004 D3), and
+      // the third value is the whole point. This was `let ahead = 0; … ahead =
+      // cmp ? parseInt(cmp) || 0 : 0` with `landed: !exists || ahead === 0`, so
+      // a failed compare (`null`), an empty answer and a REAL zero were the same
+      // number and `landed` came out TRUE off a call that never answered. The
+      // audit reproduced it with a rate-limited compare (F07): a parent merged
+      // into its still-unlanded epic, and every phase-N+1 child of it became
+      // `ready` on a base that does not contain it. `null` means "not observed":
+      // it parks the dependents with the reason and is retried on the next sync,
+      // never mapped onto zero.
       let ahead = 0;
+      let landed = true;
+      let landedReason = `epic ${e.branch} does not exist — nothing from this phase is outside ${base}`;
       if (exists) {
-        const cmp = gh(['api', `${apiBase(repo)}/compare/${base}...${e.branch}`, '--jq', '.ahead_by'], { tolerate: true });
-        ahead = cmp ? parseInt(cmp.trim(), 10) || 0 : 0;
+        const cmpPath = `${apiBase(repo)}/compare/${base}...${e.branch}`;
+        const cmp = ghTry(['api', cmpPath, '--jq', '.ahead_by']);
+        // Strict on purpose: `parseInt` is what collapsed the states. A rate-limit
+        // message, an HTML error page, jq's `null` and an empty answer all yield
+        // NaN, and `NaN || 0` is a zero nobody measured.
+        const n = cmp.status === 0 && /^\d+$/.test(cmp.stdout) ? parseInt(cmp.stdout, 10) : null;
+        if (n === null) {
+          ahead = null;
+          landed = null;
+          landedReason = cmp.status === 0
+            ? `gh compare failed: ${cmpPath} answered ${JSON.stringify(cmp.stdout.slice(0, 80))}, not a commit count`
+            : `gh compare failed: ${cmp.stderr || `gh api ${cmpPath} exited ${cmp.status}`}`;
+        } else {
+          ahead = n;
+          landed = n === 0;
+          landedReason = n === 0
+            ? `epic ${e.branch} is 0 commits ahead of ${base} — its whole diff is in`
+            : `epic ${e.branch} is ${n} commit(s) ahead of ${base}`;
+        }
       }
       const pr = rd.prs.find((p) => p.headRefName === e.branch && p.state !== 'CLOSED') || null;
       // "landed" = nothing from this phase is still waiting outside the default
-      // branch (either the epic never started, or its whole diff is already in).
-      epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed: !exists || ahead === 0 };
+      // branch (either the epic never started, or its whole diff is already in);
+      // `null` = the comparison did not answer, so nothing is proven either way.
+      epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed, landed_reason: landedReason };
     }
   }
 }
+// `landed | not-landed | unknown` for one phase in one repository, WITH the
+// observation behind it: a blocker whose reason is "unknown" has to name what
+// could not be seen, or the board hands its reader a dead end. No epic record —
+// direct-to-main, or a phase whose epic metadata predates epic-stacked — is
+// `true`, because there is no epic that could still be ahead.
 const phaseLanded = (phase, repo) => {
-  if (mode !== 'epic-stacked') return true;
+  if (mode !== 'epic-stacked') return { landed: true, reason: null };
   const info = epicInfo[epicKey(phase, repo)];
-  return info ? info.landed : true;
+  if (!info) return { landed: true, reason: null };
+  return { landed: info.landed, reason: info.landed_reason };
 };
 
 // ── readiness + the effective PR base each ticket should target ─────────────
@@ -389,6 +442,27 @@ for (const [id, t] of Object.entries(tickets)) {
   const deps = t.depends_on || [];
   const blockers = [];
   const reasons = {};
+
+  // Two facts about whether this ticket can be executed AT ALL, and they hold in
+  // BOTH integration modes — so they are checked BEFORE the mode split, where
+  // mode-specific dependency and base logic cannot skip them. They used to live
+  // inside the epic-stacked branch alone (audit F27), so in direct-to-main —
+  // including the legacy fallback a pre-epic tickets.json triggers — a
+  // dependency-free ticket whose declared paths escape the repo, or whose
+  // repository cannot be reached at all, still came out `ready` and was
+  // dispatched to an executor that would find nothing.
+  //
+  // A path outside the repo root is unreachable from a worktree, so the ticket
+  // cannot be executed as written — park it with the reason instead of offering
+  // it as `ready`.
+  if (t.unreachable_paths) {
+    blockers.push('plan');
+    reasons.plan = 'files_modified points outside the repo — declare delivery.repo and use repo-relative paths (validate-graph warns with the exact entry)';
+  }
+  if (!repoData.get(repoOf(t)).available) {
+    blockers.push('repo');
+    reasons.repo = `repo ${repoOf(t)} is not reachable through gh — status unknown, nothing can be driven there`;
+  }
 
   if (mode === 'epic-stacked') {
     for (const d of deps) {
@@ -410,21 +484,28 @@ for (const [id, t] of Object.entries(tickets)) {
           blockers.push(d);
           reasons[d] = 'parent has no branch yet (nothing to cascade from)';
         }
-      } else if (!(state[d].status === 'merged' && phaseLanded(tickets[d].phase, repoOf(tickets[d])))) {
-        blockers.push(d);
-        reasons[d] = `cross-phase parent must land on ${repoData.get(repoOf(t)).defaultBranch || DEFAULT_BRANCH} first (phase ${tickets[d].phase} epic still ahead)`;
+      } else {
+        // A cross-phase parent cannot be cascaded from: its contract only counts
+        // once its own phase's epic is on the integration branch. THREE distinct
+        // facts, so three distinct sentences — the single condition said "epic
+        // still ahead" even when the parent PR was not merged at all, and said
+        // the same when the comparison had simply failed. "Positive evidence"
+        // means the board reports what was observed, and `unknown` is not
+        // `not-landed`: it is retried, and a person reading the board is told
+        // which observation is missing rather than being sent to look at an epic.
+        const integ = repoData.get(repoOf(t)).defaultBranch || DEFAULT_BRANCH;
+        const ph = phaseLanded(tickets[d].phase, repoOf(tickets[d]));
+        if (state[d].status !== 'merged') {
+          blockers.push(d);
+          reasons[d] = `cross-phase parent must be MERGED and its phase ${tickets[d].phase} epic landed on ${integ} first (parent is ${state[d].status})`;
+        } else if (ph.landed === null) {
+          blockers.push(d);
+          reasons[d] = `integration state unknown (${ph.reason}) — retried next sync`;
+        } else if (ph.landed === false) {
+          blockers.push(d);
+          reasons[d] = `cross-phase parent must land on ${integ} first (phase ${tickets[d].phase} epic still ahead)`;
+        }
       }
-    }
-    // A path outside the repo root is unreachable from a worktree, so the ticket
-    // cannot be executed as written — park it with the reason instead of
-    // offering it as `ready` to an executor that will find nothing.
-    if (t.unreachable_paths) {
-      blockers.push('plan');
-      reasons.plan = 'files_modified points outside the repo — declare delivery.repo and use repo-relative paths (validate-graph warns with the exact entry)';
-    }
-    if (!repoData.get(repoOf(t)).available) {
-      blockers.push('repo');
-      reasons.repo = `repo ${repoOf(t)} is not reachable through gh — status unknown, nothing can be driven there`;
     }
     // A stale tickets.json (generated before repos were part of the graph) can
     // still carry a foreign primary parent; never emit a base that does not
@@ -649,9 +730,18 @@ if (mode === 'epic-stacked') {
     const where = info.repo ? ` [${info.repo}]` : '';
     const prPart = info.pr
       ? `PR #${info.pr.number} ${info.pr.state.toLowerCase()}${info.pr.isDraft ? ' (draft)' : ''}`
-      : (info.exists && info.ahead > 0 ? 'no epic PR yet' : 'not started');
-    console.log(`epic phase ${info.phase}${where}: ${info.branch} — ${info.exists ? `${info.ahead} ahead of ${info.base}` : 'not created'}, ${prPart}`);
-    if (info.exists && info.ahead > 0 && !info.pr) {
+      : (info.exists && info.ahead !== 0 ? 'no epic PR yet' : 'not started');
+    // Never print a count that was not measured: `${info.ahead} ahead of main`
+    // rendered an unobserved state as "null ahead of", which reads to a person
+    // exactly like "nothing left to land" — the same collapse the tri-state above
+    // exists to undo, one layer up.
+    const aheadPart = !info.exists
+      ? 'not created'
+      : (info.ahead === null
+        ? `integration state unknown (${info.landed_reason}) — cross-phase dependents parked, retried next sync`
+        : `${info.ahead} ahead of ${info.base}`);
+    console.log(`epic phase ${info.phase}${where}: ${info.branch} — ${aheadPart}, ${prPart}`);
+    if (info.exists && info.ahead !== null && info.ahead > 0 && !info.pr) {
       console.log(`⚠ epic ${info.branch}${where} has ${info.ahead} commit(s) but no PR into ${info.base} — open it: epic-branch.sh pr ${info.branch}${info.repo ? ` (run it inside the ${info.repo} checkout)` : ''}`);
     }
   }
