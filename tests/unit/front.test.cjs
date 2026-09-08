@@ -2191,4 +2191,169 @@ test('the shared full board: free 0, fixpoint NO, and the reason is capacity rat
   assert.ok(!/actionable RIGHT NOW/.test(line), `a full board must not be ordered to dispatch: ${line}`);
 });
 
+// ── IS THIS BOARD BEHIND REALITY? (T-27-06) ──────────────────────────────────
+//
+// The main loop's cheap board read is `front.cjs`, which recomputes the buckets
+// from the CACHED `delivery-state.json`. Only `state-sync.cjs` re-derives that
+// state from GitHub — so after a write that moved the world (a push, a merge)
+// the front prints buckets computed BEFORE it. Found 2026-09-08: the push was
+// journalled, the front was read, "0 actionable" was concluded, and the
+// conclusion was right only by accident.
+//
+// The rule is `stop-gate.cjs`'s, duplicated (never shared — the installer copies
+// that hook as a single file): read the journal's TAIL, count `merge` and a
+// pushed `attempt`/`fix_round`, and exclude everything a resync would not teach
+// the board.
+//
+// Deliberately at the END of this file: T-27-03 owns the import line and the
+// checkpoint fixtures above, so this suite carries its own requires.
+
+const bfs = require('fs');
+const bos = require('os');
+const {
+  behindWarning, movedSince, stateDerivedAt,
+} = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'));
+
+const AT = Date.parse('2026-09-08T10:00:00.000Z');   // the state was derived here
+const AFTER = '2026-09-08T10:07:00.000Z';            // …and this happened after
+const BEFORE = '2026-09-08T09:00:00.000Z';
+
+// A graph dir holding exactly the journal these cases are about.
+function journalDir(events) {
+  const dir = bfs.mkdtempSync(path.join(bos.tmpdir(), 'shipyard-front-behind-'));
+  bfs.writeFileSync(
+    path.join(dir, 'delivery-log.jsonl'),
+    events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : '')
+  );
+  return dir;
+}
+const MERGE = { ts: AFTER, event: 'merge', ticket: 'T-27-02', pr: 47, by: 'sentinel' };
+const PUSH = { ts: AFTER, event: 'attempt', ticket: 'T-27-02', pr: 47, n: 2, outcome: 'pushed' };
+
+suite('front — the board says when it is behind reality');
+
+test('a journalled merge newer than the state prints one behind-line naming state-sync', () => {
+  const w = behindWarning(journalDir([{ ts: BEFORE, event: 'status_change', ticket: 'T-27-01' }, MERGE]), AT);
+  assert.ok(w, 'a merge after the state was derived is proof the board is behind');
+  assert.strictEqual(w.event, 'merge');
+  assert.strictEqual(w.ticket, 'T-27-02');
+  assert.strictEqual(w.ts, AFTER);
+  assert.ok(/state-sync/.test(w.why), `the remedy must be named: ${w.why}`);
+  assert.ok(/behind/i.test(w.why), w.why);
+  // It must not repeat the stale board's contents as fact — those contents are
+  // what is wrong. No bucket name, no count, no verdict.
+  assert.ok(!/fixpoint|actionable/i.test(w.why), `the line must not restate the board: ${w.why}`);
+});
+
+test('a pushed attempt is the same proof — the push is what re-runs the checks', () => {
+  const w = behindWarning(journalDir([PUSH]), AT);
+  assert.ok(w, 'a push moved the world');
+  assert.strictEqual(w.event, 'attempt');
+  assert.ok(/state-sync/.test(w.why), w.why);
+});
+
+test('a pushed fix_round counts too, at whatever spelling of true it was written with', () => {
+  for (const pushed of [true, 'true']) {
+    const w = behindWarning(journalDir([{ ts: AFTER, event: 'fix_round', ticket: 'T-27-02', pushed }]), AT);
+    assert.ok(w, `fix_round pushed=${JSON.stringify(pushed)} must count`);
+  }
+  assert.strictEqual(
+    behindWarning(journalDir([{ ts: AFTER, event: 'fix_round', ticket: 'T-27-02', pushed: false }]), AT), null,
+    'a fix_round that pushed nothing moved nothing'
+  );
+});
+
+// THE ASSERTION THAT MATTERS MOST. `status_change` is written BY state-sync, so
+// it is contemporaneous with the state by construction, and `dispatch` is
+// already overlaid onto the board by dispatch-record's own refresh. Counting
+// either is the false block that fired five times across phases 20 and 22 — and
+// a warning that fires on a contemporaneous event teaches its reader to skip it,
+// which is how this repository lost a gate before.
+test('a tail of ONLY status_change and dispatch newer than the state prints NOTHING', () => {
+  const dir = journalDir([
+    { ts: AFTER, event: 'status_change', ticket: 'T-27-01', from: 'pr-open', to: 'merged', pr: 44 },
+    { ts: AFTER, event: 'dispatch', ticket: 'T-27-02', role: 'executor' },
+    { ts: AFTER, event: 'reuse_scan', ticket: 'T-27-02', hits: 0 },
+    { ts: AFTER, event: 'attempt', ticket: 'T-27-02', outcome: 'no-op' },
+  ]);
+  assert.strictEqual(behindWarning(dir, AT), null);
+});
+
+// A DELIBERATE divergence from the twin in stop-gate.cjs, pinned here so nobody
+// "fixes" the two back into agreement: the stop gate cannot see a park, while
+// this CLI reads the escalation store LIVE on every run (`activeParks`). An
+// escalation is therefore already in the board it is about to print.
+test('an escalation newer than the state prints nothing — this CLI reads the park store live', () => {
+  const dir = journalDir([{ ts: AFTER, event: 'escalation', ticket: 'T-27-02', reason: 'held by hand' }]);
+  assert.strictEqual(behindWarning(dir, AT), null);
+});
+
+test('an event OLDER than the state proves nothing — that is what a resync looks like', () => {
+  assert.strictEqual(behindWarning(journalDir([{ ...MERGE, ts: BEFORE }]), AT), null);
+});
+
+// The seek rule. A read that starts mid-file lands mid-line, so the first line
+// is a fragment and is dropped — ONLY then. Dropping it unconditionally ate the
+// only event in a short journal, which is every project not running for weeks.
+test('a one-event journal keeps its first line', () => {
+  const dir = journalDir([MERGE]);
+  const w = behindWarning(dir, AT);
+  assert.ok(w, 'the only line in the journal is not a fragment');
+  assert.strictEqual(w.ticket, 'T-27-02');
+});
+
+test('a journal past the read window still reads its tail, and its first line IS a fragment', () => {
+  // Padded past 64KB so the read actually seeks: the merge is at the very end,
+  // and the fragment at the front must not throw or count.
+  const pad = [];
+  for (let i = 0; i < 900; i += 1) {
+    pad.push({ ts: BEFORE, event: 'status_change', ticket: `T-19-${String(i).padStart(3, '0')}`, from: 'pending', to: 'pr-open', note: 'x'.repeat(60) });
+  }
+  const dir = journalDir([...pad, MERGE]);
+  assert.ok(bfs.statSync(path.join(dir, 'delivery-log.jsonl')).size > 64 * 1024, 'fixture must exceed the tail window');
+  const w = behindWarning(dir, AT);
+  assert.ok(w, 'the newest events are at the end, which is the end we read');
+  assert.strictEqual(w.ticket, 'T-27-02');
+});
+
+test('no journal, and an unreadable one, are no evidence — never a warning', () => {
+  const dir = bfs.mkdtempSync(path.join(bos.tmpdir(), 'shipyard-front-nojournal-'));
+  assert.strictEqual(behindWarning(dir, AT), null);
+  // and a line that is not JSON at all is skipped rather than fatal
+  bfs.writeFileSync(path.join(dir, 'delivery-log.jsonl'), '{not json\n' + JSON.stringify(MERGE) + '\n');
+  assert.ok(behindWarning(dir, AT), 'one broken line must not hide the event beside it');
+});
+
+test('the newest qualifying event wins, so the line names the most recent write', () => {
+  const dir = journalDir([
+    { ...PUSH, ts: '2026-09-08T10:01:00.000Z' },
+    { ...MERGE, ts: '2026-09-08T10:09:00.000Z', ticket: 'T-27-05' },
+  ]);
+  const m = movedSince(dir, AT);
+  assert.strictEqual(m.event.ticket, 'T-27-05');
+  assert.strictEqual(m.event.event, 'merge');
+});
+
+test('with NO derivation timestamp there is no warning — a line off a guessed time is a guess', () => {
+  // `stateDerivedAt` reads the stamp state-sync wrote and nothing else: this
+  // repo TRACKS .planning/, so a checkout rewrites every mtime and an
+  // mtime-based answer would either disarm the guard or invent a time.
+  const dir = journalDir([MERGE]);
+  assert.strictEqual(stateDerivedAt(dir), null, 'no board on disk, no stamp');
+  assert.strictEqual(behindWarning(dir, null), null);
+  bfs.writeFileSync(path.join(dir, 'delivery-front.json'), JSON.stringify({ generated_at: new Date(AT).toISOString() }));
+  assert.strictEqual(stateDerivedAt(dir), AT, 'the front carries the sync stamp (dispatch-record preserves it)');
+  assert.ok(behindWarning(dir), 'and behindWarning resolves it by itself');
+});
+
+test('formatFront prints the behind-line FIRST, before any bucket a reader might believe', () => {
+  const f = computeFront({ T: {} }, { T: { status: 'pending', ready: true } });
+  f.behind = { event: 'merge', ticket: 'T-27-02', ts: AFTER, why: 'the board is behind — run state-sync' };
+  const lines = formatFront(f);
+  assert.strictEqual(lines[0], f.behind.why, `the warning must lead: ${JSON.stringify(lines.slice(0, 2))}`);
+  // and a front with no such field renders exactly as it did before
+  const clean = computeFront({ T: {} }, { T: { status: 'pending', ready: true } });
+  assert.ok(/^front: /.test(formatFront(clean)[0]), formatFront(clean)[0]);
+});
+
 done();

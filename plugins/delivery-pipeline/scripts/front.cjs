@@ -65,6 +65,9 @@
 // simply "waiting on a human" and the run declared a fixpoint on top of it.
 
 const path = require('path');
+// Read at module level for the journal-tail reader below. (The CLI block at the
+// bottom re-requires it in its own scope; harmless, and left alone.)
+const fs = require('fs');
 // The lifting rule for a park comes from the store that OWNS the park, never
 // from here. Composing it at this render site is what let the board tell a
 // human that moving the PR lifts a plan defect, while escalation-record.cjs —
@@ -1122,8 +1125,146 @@ function agentsInFlight(dispatched) {
   return n + perRound.size;
 }
 
+// ── IS THE BOARD ABOUT TO BE PRINTED BEHIND REALITY? (ADR-006 D6) ────────────
+//
+// This module recomputes the buckets from the CACHED `delivery-state.json`.
+// Only `state-sync.cjs` re-derives that state from GitHub — so any writer that
+// moved GitHub (a push, a merge, a thread resolve) obliges a resync before the
+// board is read again, and nothing said so. Found 2026-09-08: the push was
+// journalled with `log-event.cjs`, the front was read, "0 actionable" was
+// concluded — a verdict computed before the write, right only by accident.
+// `dispatch-record.cjs` is the exception, because it refreshes the overlay
+// itself; the journal writers are not.
+//
+// So the board says it on its own face. One line, and it never repeats the
+// stale board's contents as fact — those contents are precisely what is wrong.
+//
+// THE TAIL READER IS A TWIN OF `stop-gate.cjs`'s, DUPLICATED ON PURPOSE.
+// `install-shipyard-claude-hook.sh` installs that hook by COPYING the single
+// file into `~/.claude/hooks/`, where it has no siblings: a `require` of a
+// shared module would break the installed hook while every in-repo test stayed
+// green. So each file carries its own copy of ONE rule:
+//
+//   * read the TAIL only (64KB) — the newest events are at the end, which is
+//     the only end either caller needs, and a hook has a ~75ms budget;
+//   * COUNT what a resync would teach the board: `merge` (a PR is gone and its
+//     children were retargeted) and a pushed `attempt`/`fix_round` (a branch
+//     moved, so checks re-ran);
+//   * EXCLUDE `status_change` — `state-sync.cjs` writes it, so it is
+//     contemporaneous with the state by construction — and `dispatch`, which
+//     `dispatch-record.cjs` has already overlaid onto the board. Counting
+//     either re-creates the false block that fired five times across phases 20
+//     and 22, and a warning that fires on a contemporaneous event teaches its
+//     reader to skip it;
+//   * shift the first line ONLY when the read actually SEEKED. A seek lands
+//     mid-line, so line one is a fragment; dropping it unconditionally ate the
+//     only event in a short journal, which is every project that has not been
+//     running for weeks.
+//
+// TWO DELIBERATE DIVERGENCES from the twin, both because the callers differ:
+//   * `escalation` is NOT counted here. The hook cannot see a park; this
+//     module's CLI reads the escalation store LIVE on every run
+//     (`activeParks`), so an escalation is already in the board it is about to
+//     print. Pinned by a test, so the two are not "fixed" into agreement.
+//   * NO age bound. The hook bounds candidates by `RESYNC_MS` because it
+//     BLOCKS the end of a turn globally, and a merge stays in the journal
+//     forever. Here nothing is blocked — one line is printed on demand — and a
+//     state derived before a journalled merge is behind whatever its age.
+const JOURNAL_TAIL_BYTES = 64 * 1024;
+
+// The newest event proving the world moved after `generatedAt`, or null.
+function movedSince(graphDir, generatedAt) {
+  if (!Number.isFinite(generatedAt)) return null;
+  const file = path.join(graphDir, 'delivery-log.jsonl');
+  let text;
+  let seeked = false;
+  try {
+    const { size } = fs.statSync(file);
+    const start = Math.max(0, size - JOURNAL_TAIL_BYTES);
+    seeked = start > 0;
+    const fd = fs.openSync(file, 'r');
+    try {
+      const buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      text = buf.toString('utf8');
+    } finally { fs.closeSync(fd); }
+  } catch {
+    return null; // no journal is no evidence, and never a warning
+  }
+  const lines = text.split('\n');
+  if (seeked) lines.shift();
+
+  let newest = null;
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    let e;
+    try { e = JSON.parse(t); } catch { continue; }
+    if (!e || typeof e !== 'object') continue;
+    const at = Date.parse(e.ts || '');
+    if (Number.isNaN(at) || at <= generatedAt) continue;
+    const moved =
+      e.event === 'merge' ||
+      (e.event === 'attempt' && e.outcome === 'pushed') ||
+      (e.event === 'fix_round' && (e.pushed === true || e.pushed === 'true'));
+    if (!moved) continue;
+    if (!newest || at > newest.at) newest = { at, event: e };
+  }
+  return newest;
+}
+
+// WHEN the state this module is about to render was derived. Read from the stamp
+// `state-sync.cjs` wrote and from nothing else: `.planning/` is TRACKED in this
+// project, so a checkout rewrites every mtime — an mtime-based answer would
+// silently disarm the guard on one repo and invent a derivation time on another,
+// and a line printed off a guessed timestamp is a guess. No stamp, no warning.
+// `delivery-front.json` first because it is the field the twin reads and
+// `refreshFront` preserves it verbatim; `delivery-state-meta.json` is the same
+// moment, written last by the sync that published the trio.
+function stateDerivedAt(graphDir) {
+  for (const name of ['delivery-front.json', 'delivery-state-meta.json']) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(graphDir, name), 'utf8'));
+      const at = Date.parse((raw && raw.generated_at) || '');
+      if (Number.isFinite(at)) return at;
+    } catch { /* absent, corrupt, or a directory some accident left behind */ }
+  }
+  return null;
+}
+
+const MOVED_WHAT = {
+  merge: 'a merge',
+  attempt: 'a push (fix attempt)',
+  fix_round: 'a push (fix round)',
+};
+
+// The board's own warning about itself: what moved, when, and the ONE remedy.
+// It names no bucket and no count — repeating the stale board would be asserting
+// exactly what this line exists to deny.
+function behindWarning(graphDir, generatedAt = stateDerivedAt(graphDir)) {
+  const moved = movedSince(graphDir, generatedAt);
+  if (!moved) return null;
+  const e = moved.event;
+  const what = MOVED_WHAT[e.event] || e.event;
+  const who = e.ticket ? ` of ${e.ticket}` : '';
+  return {
+    event: e.event,
+    ticket: e.ticket || null,
+    ts: e.ts,
+    why:
+      `⚠ this board is BEHIND reality: ${what}${who} is journalled at ${e.ts}, after the state it renders ` +
+      `was derived (${new Date(generatedAt).toISOString()}). A merge retargets children and a push re-runs ` +
+      'checks, and this state knows neither — every line below was computed before that write. ' +
+      'Run `state-sync.cjs` and read the board IT prints, not this one.',
+  };
+}
+
 function formatFront(front) {
   const lines = [];
+  // FIRST, before any bucket a reader might believe: this board is behind
+  // reality and the remedy is a resync (see behindWarning). Absent on a front
+  // computed by a caller that did not look — this file's CLI does.
+  if (front.behind && front.behind.why) lines.push(front.behind.why);
   const parts = ORDER.filter((k) => front.actionable[k].length)
     .map((k) => `${k}: ${front.actionable[k].join(', ')}`);
   lines.push(`front: ${front.actionable_count} actionable now${parts.length ? ` — ${parts.join(' | ')}` : ''}`);
@@ -1280,6 +1421,10 @@ module.exports = {
   // `pipeline-config.cjs`'s ROLES: a role with no cardinality would be counted
   // by the fallback and nothing would say so.
   AGENT_CARDINALITY, agentsInFlight,
+  // The twin of stop-gate.cjs's journal-tail rule (see the section above for why
+  // it is a copy and not an import), exported so its exclusions are pinned by a
+  // test rather than by prose.
+  movedSince, stateDerivedAt, behindWarning, JOURNAL_TAIL_BYTES,
 };
 
 // ── CLI: read the state files this project already has and print the verdict ──
@@ -1336,6 +1481,12 @@ if (require.main === module) {
     // same graph differently.
     ci_estimates: ciEstimates(dir, tickets),
   });
+  // Does the journal prove this cached state is already behind reality? Computed
+  // HERE rather than in computeFront, which is a pure function of what it is
+  // handed and must stay one. `--json` carries the same finding as a field, so a
+  // machine reader cannot miss what a human is shown.
+  const behind = behindWarning(dir);
+  if (behind) front.behind = behind;
   if (argv.includes('--json')) {
     process.stdout.write(JSON.stringify(front, null, 2) + '\n');
   } else {
