@@ -21,6 +21,9 @@ epics:
   '26':
     branch: epic/26-positive-evidence-before-a-mutation
     repos: [null]
+  '27':
+    branch: epic/27-the-conveyor-measures-its-own-state
+    repos: [null]
 tickets:
   T-20-01:
     title: 'Failure signature: normalize, history verdict, flake quarantine'
@@ -837,4 +840,132 @@ tickets:
     epic: epic/26-positive-evidence-before-a-mutation
     primary_parent: T-26-02
     pr_base: ticket/T-26-02-a-corrupt-configuration-permits-no-mutat
+    jira: null
+  T-27-01:
+    title: 'The cap counts agents, and the three capacity readers give one answer'
+    plan: '.planning/phases/27-the-conveyor-measures-its-own-state/27-01-PLAN.md'
+    phase: '27'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, capabilities/delivery-pipeline/capability.json, tests/unit/front.test.cjs, tests/unit/ci-wait.test.cjs, tests/unit/stop-gate.test.cjs, tests/unit/workflows-args.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-27-01-the-cap-counts-agents-and-the-three-capa
+    epic: epic/27-the-conveyor-measures-its-own-state
+    primary_parent: null
+    pr_base: epic/27-the-conveyor-measures-its-own-state
+    jira: null
+  T-27-02:
+    title: A verdict survives a head move it provably covers
+    plan: '.planning/phases/27-the-conveyor-measures-its-own-state/27-02-PLAN.md'
+    phase: '27'
+    repo: null
+    wave: 2
+    depends_on: [T-27-01]
+    files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, plugins/delivery-pipeline/scripts/base-merge.cjs, plugins/delivery-pipeline/references/arch-review.md, tests/unit/trailer.test.cjs, tests/unit/files-contract.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-27-02-a-verdict-survives-a-head-move-it-provab
+    epic: epic/27-the-conveyor-measures-its-own-state
+    primary_parent: T-27-01
+    pr_base: ticket/T-27-01-the-cap-counts-agents-and-the-three-capa
+    jira: null
+  T-27-03:
+    title: 'A base is chosen for where the merge lands, and the epic is asserted to have received it'
+    plan: '.planning/phases/27-the-conveyor-measures-its-own-state/27-03-PLAN.md'
+    phase: '27'
+    repo: null
+    wave: 3
+    depends_on: [T-27-02]
+    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/sentinel.test.cjs, tests/smoke/sentinel-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-27-03-a-base-is-chosen-for-where-the-merge-lan
+    epic: epic/27-the-conveyor-measures-its-own-state
+    primary_parent: T-27-02
+    pr_base: ticket/T-27-02-a-verdict-survives-a-head-move-it-provab
+    jira: null
+  T-27-04:
+    title: 'An epic learns what landed under it, and a worktree is cut from what the board named'
+    plan: '.planning/phases/27-the-conveyor-measures-its-own-state/27-04-PLAN.md'
+    phase: '27'
+    repo: null
+    wave: 4
+    depends_on: [T-27-03]
+    files: [plugins/delivery-pipeline/scripts/epic-branch.sh, plugins/delivery-pipeline/scripts/ticket-worktree.sh, plugins/delivery-pipeline/commands/deliver.md, tests/smoke/worktree-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-27-04-an-epic-learns-what-landed-under-it-and
+    epic: epic/27-the-conveyor-measures-its-own-state
+    primary_parent: T-27-03
+    pr_base: ticket/T-27-03-a-base-is-chosen-for-where-the-merge-lan
+    jira: null
+  T-27-05:
+    title: 'A journal records what was applied, and refuses to be written around'
+    plan: '.planning/phases/27-the-conveyor-measures-its-own-state/27-05-PLAN.md'
+    phase: '27'
+    repo: null
+    wave: 5
+    depends_on: [T-27-04]
+    files: [plugins/delivery-pipeline/scripts/log-event.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/log-event.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/pipeline-config.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-27-05-a-journal-records-what-was-applied-and-r
+    epic: epic/27-the-conveyor-measures-its-own-state
+    primary_parent: T-27-04
+    pr_base: ticket/T-27-04-an-epic-learns-what-landed-under-it-and
+    jira: null
+  T-27-06:
+    title: 'The front says when it is behind, and one dispatch carries one base'
+    plan: '.planning/phases/27-the-conveyor-measures-its-own-state/27-06-PLAN.md'
+    phase: '27'
+    repo: null
+    wave: 6
+    depends_on: [T-27-05]
+    files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/workflows/drift-gate.mjs, tests/unit/front.test.cjs, tests/unit/workflows-args.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-27-06-the-front-says-when-it-is-behind-and-one
+    epic: epic/27-the-conveyor-measures-its-own-state
+    primary_parent: T-27-05
+    pr_base: ticket/T-27-05-a-journal-records-what-was-applied-and-r
+    jira: null
+  T-27-07:
+    title: 'A guard asserts a sweep, not a list of known homes'
+    plan: '.planning/phases/27-the-conveyor-measures-its-own-state/27-07-PLAN.md'
+    phase: '27'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [tests/smoke/docs-smoke.sh, scripts/install-shipyard-capability.sh, tests/unit/source-contract.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-27-07-a-guard-asserts-a-sweep-not-a-list-of-kn
+    epic: epic/27-the-conveyor-measures-its-own-state
+    primary_parent: null
+    pr_base: epic/27-the-conveyor-measures-its-own-state
+    jira: null
+  T-27-08:
+    title: 'The remaining ADR-004 D2 gaps, and the records that contradict themselves'
+    plan: '.planning/phases/27-the-conveyor-measures-its-own-state/27-08-PLAN.md'
+    phase: '27'
+    repo: null
+    wave: 7
+    depends_on: [T-27-06]
+    files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/scripts/gen-codex-shipyard.cjs, plugins/delivery-pipeline/commands/deliver.md, docs/gsd_multilevel_delivery_pipeline.md, '.planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md', '.planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md', tests/unit/front.test.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-27-08-the-remaining-adr-004-d2-gaps-and-the-re
+    epic: epic/27-the-conveyor-measures-its-own-state
+    primary_parent: T-27-06
+    pr_base: ticket/T-27-06-the-front-says-when-it-is-behind-and-one
     jira: null

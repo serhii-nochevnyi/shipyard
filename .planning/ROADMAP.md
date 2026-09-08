@@ -141,6 +141,30 @@ script — not in a prompt.** Every requirement below is an instance of it.
   the ticket is cut from, not judged against the integration branch.
 - **REQ-44** — A workflow returns a reference to a document, not the document:
   what the orchestrator forwards but never reads must not enter its context.
+- **REQ-46** — The concurrency cap counts AGENTS, and the three mechanisms that
+  read capacity give one answer: a capacity-full board must not have the front,
+  `ci-wait` and the stop gate ordering three incompatible things at once.
+- **REQ-47** — An architecture verdict survives a head move it provably covers —
+  equal head trees AND equal base trees — and the trailer records the base it
+  judged, as a tree sha rather than a branch name.
+- **REQ-48** — A child's PR base is chosen for where the merge LANDS, and after
+  any ticket merge the ticket's own declared files are asserted reachable from
+  its epic.
+- **REQ-49** — An epic learns what landed under it, and a worktree is cut from
+  the base the board named: `origin/<base>` is measured, a reused branch reports
+  its distance, and a bare epic name never resolves to a stale local ref.
+- **REQ-50** — The journal records what was APPLIED, not what was intended: the
+  `dispatch` event has one writer, `--reason` comes from the resolver, and one
+  sha format throughout.
+- **REQ-51** — The front says when it is behind the world, and one dispatch
+  carries one base: a mixed-base cascade round is never judged against a single
+  `baseRef`.
+- **REQ-52** — A guard asserts a SWEEP rather than a list of known homes, fails
+  on more than one match per file, and every wiring line the board depends on is
+  asserted by something.
+- **REQ-53** — No reader takes defaults from a config that does not parse, the
+  shared numeric rule rejects a non-integer, and no ADR asserts what a later
+  amendment retired.
 
 ## Phases
 
@@ -259,3 +283,21 @@ deleting a project's skills, Jira labels colliding across repositories,
 workflow input errors returning an empty success, and "left behind" decided by
 phase arithmetic. Six tickets touch nothing phases 24/25 own and run at once;
 five wait for phase 24's epic as one chain.
+
+### Phase 27: The conveyor measures its own state
+**Requirements**: REQ-46, REQ-47, REQ-48, REQ-49, REQ-50, REQ-51, REQ-52, REQ-53
+
+Decomposed from ADR-006, which extends ADR-004's principle from the work the
+conveyor JUDGES to the records it keeps ABOUT ITSELF. Every item was found by
+running the conveyor, most of them more than once and several by its own
+reviewers correcting the orchestrator: a branch name read instead of a ticket
+status, a sha instead of a tree, an intent instead of an application, a count
+instead of a set, a list of homes instead of a sweep. Eight tickets, and the
+order is load-bearing rather than a preference — T-27-01 first because this
+phase's own delivery runs under the cap it fixes, T-27-02 second because every
+later ticket pays the re-review cost it removes, T-27-08 last because it sweeps
+files the earlier tickets touch. Seven of the eight are one chain: `front.cjs`,
+`deliver.md` and `pipeline-config.cjs` are each touched by three of them, and a
+cascade gives a child only its primary parent's work, so a single-parent spine is
+what keeps the last ticket's base complete. T-27-07 contests nothing and runs
+beside T-27-01 from the start.
