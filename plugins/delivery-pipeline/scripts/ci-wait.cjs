@@ -198,7 +198,7 @@ const leftBehind = Number(front.left_behind_count || 0);
 // capacity existed outlives an upgrade, and an absent field must read as "no cap
 // is in force" (refuse as before), never as a full board.
 const capacity = (front.capacity && typeof front.capacity === 'object') ? front.capacity : null;
-const capNum = (k) => (capacity !== null && Number.isFinite(Number(capacity[k])) ? Number(capacity[k]) : null);
+const capNum = (k) => (capacity !== null && typeof capacity[k] === 'number' && Number.isFinite(capacity[k]) ? capacity[k] : null);
 const capFree = capNum('free');
 // `max`/`in_flight` are read the same defensive way for the human message below —
 // they gate nothing here, but an old or partially-written front must not print

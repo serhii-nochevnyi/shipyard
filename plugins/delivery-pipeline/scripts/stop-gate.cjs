@@ -518,7 +518,7 @@ const dispatched = (front.waiting && front.waiting.dispatched) || [];
 // existed outlives an upgrade, so an absent or unreadable field is `null` — "no
 // cap is in force" — and must never open the hatches below.
 const capacity = (front.capacity && typeof front.capacity === 'object') ? front.capacity : null;
-const capNum = (k) => (capacity !== null && Number.isFinite(Number(capacity[k])) ? Number(capacity[k]) : null);
+const capNum = (k) => (capacity !== null && typeof capacity[k] === 'number' && Number.isFinite(capacity[k]) ? capacity[k] : null);
 const capMax = capNum('max');
 const capFree = capNum('free');
 // Read for the phantom-capacity message below the same defensive way as

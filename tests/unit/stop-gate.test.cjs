@@ -929,4 +929,15 @@ test('room in the cap blocks with the ordinary reason — no capacity noise', ()
   assert.ok(!/FULL/.test(v.reason), `nothing is full, so nothing should say so: ${v.reason}`);
 });
 
+test('capacity.max: null is unreadable, not a binding zero — Number(null) is 0, not "absent"', () => {
+  // A malformed/partially-written front can carry `max: null`. `Number(null)`
+  // is 0 and `Number.isFinite(0)` is true, so the naive read used to coerce
+  // that into `capMax === 0` and take the early allow() — silencing the gate
+  // on a board that plainly has live work, on the strength of a value that was
+  // never a real zero.
+  const v = run(live({ capacity: { max: null, in_flight: 0, free: null } }), { session_id: 'sess-cap-null' });
+  assert.ok(v && v.decision === 'block', 'a null cap must not take the capMax === 0 allow() path');
+  assert.ok(/2 item\(s\) are actionable/.test(v.reason), v.reason);
+});
+
 done();

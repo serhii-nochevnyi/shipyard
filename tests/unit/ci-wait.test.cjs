@@ -763,4 +763,17 @@ test('a board written before capacity existed refuses exactly as it did', () => 
   assert.ok(/execute: T-01-05/.test(json.refusal), json.refusal);
 });
 
+test('capacity.free: null is unreadable, not a spent cap — Number(null) is 0, not "absent"', () => {
+  // A malformed/partially-written front can carry `free: null` (or `max: null`).
+  // `Number(null) === 0` and `Number.isFinite(0)` is true, so the naive read used
+  // to coerce that into a binding cap of 0 — the exact opposite of the comment's
+  // own invariant that unreadable capacity behaves like no cap at all.
+  const { code, json } = asJson(ciOnly({
+    actionable_count: 1, actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05'] },
+    capacity: { max: 4, in_flight: 4, free: null },
+  }), stateWith());
+  assert.equal(code, 3, 'a null free must not read as capFree <= 0 and suppress the refusal');
+  assert.ok(/execute: T-01-05/.test(json.refusal), json.refusal);
+});
+
 done();
