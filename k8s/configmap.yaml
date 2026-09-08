@@ -12,3 +12,9 @@ data:
   # to <repo>/../.wt-<repo-name>, which is unwritable when a repo is checked out
   # at the volume root — so pin an explicit, writable location on the PVC.
   SHIPYARD_WORKTREE_ROOT: "/workspace/.worktrees"
+  # What the `fable` alias resolves to. The conveyor can only emit an ALIAS (the
+  # Agent tool validates `model` against opus|sonnet|haiku|fable), and below CLI
+  # 2.1.255 that alias is Fable 5 rather than Fable 5.1 — silently. This bypasses
+  # the built-in mapping and passes the id to the API, so it holds whatever
+  # version the deployed image happens to ship.
+  ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1"

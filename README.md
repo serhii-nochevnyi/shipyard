@@ -186,13 +186,49 @@ Full specification: `docs/gsd_multilevel_delivery_pipeline.md`.
 
 ### Agent model policy
 
-The conveyor routes agents by **role × risk × attempt**, and that policy is code:
+The conveyor routes agents by a **floor**, a **depth** and an earned **ceiling**,
+and that policy is code:
 
 ```bash
 node plugins/delivery-pipeline/scripts/pipeline-config.cjs model executor --risk high
-node plugins/delivery-pipeline/scripts/pipeline-config.cjs model ci-fix --json --attempt 3
+node plugins/delivery-pipeline/scripts/pipeline-config.cjs model ci-fix --json --signature-state repeat
 node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve      # effective config
 ```
+
+| | tier | effort |
+|---|---|---|
+| executor | `opus` | `high`, `xhigh` at `--risk high` or `--checkpoint` |
+| research | `opus` | `high`, `xhigh` with `--type alternatives` |
+| ci-fix, review-fix | `opus` | `high` |
+| arch-review, integrator | `opus` | `xhigh` |
+| pr-sentinel | `sonnet` | `high` |
+| drift-check | `sonnet` | `high` |
+| any repair role on a repeated failure signature | same | `max` |
+
+The floor is `opus` for every role that writes code or renders a judgement: the
+conveyor's failure mode is a wrong green reaching an epic, and every mechanical
+gate above the executor costs more to run than the difference between two tiers.
+`haiku` is returned by no built-in path (it stays a value you may configure). The
+two exemptions are about what actually DECIDES rather than what is at stake —
+`pr-sentinel`'s merge gate is re-verified inside `sentinel.cjs` against live
+GitHub, and `drift-check` returns a file list — and together they are 57% of all
+dispatches.
+
+Depth is EFFORT, keyed on the role and its signals. **It is a quality knob, not a
+price one:** output is 12–19% of a model line and cache read+write 82–87%, so
+`xhigh` → `high` moves about 3.4% of a run against ≈2.5× for a tier step. Note
+`max` appears once, earned by a failure that has repeated on one ticket — the
+judges sit at `xhigh` because that is the best setting for most coding and agentic
+work, and `max` is for where measurement shows headroom below it. **Effort is only
+enforced on the Workflow path**: the Agent tool has no `effort` parameter, so for a
+background guard it is a sentence in the prompt.
+
+**Pass the signals the table reads.** Every signal-keyed row above is an upgrade,
+so an absent signal resolves to the cheaper row — and the resolver warns on stderr
+when a row could not be reached for want of one. That direction is deliberate: the
+defect it replaces read `Number(signals.files) <= 2` against a dispatch that never
+passed `--files`, so the cheap row was unreachable in all 173 recorded dispatches
+and every one of them silently bought the dearer answer.
 
 It only ever emits the tier aliases `opus`, `sonnet`, `haiku`, `fable` — the values
 the Agent tool validates `model` against, and the only ones it accepts: a full model
@@ -200,32 +236,55 @@ ID or a suffixed alias like `opus[1m]` is rejected on input. (Full model ids and
 `inherit` live on a different surface — a subagent's own `model:` frontmatter in
 `.claude/agents/*.md` — not on the tool parameter the conveyor dispatches through,
 so a model-config page listing them is not permission to emit one.) With `--json` it
-also returns the reasoning `effort`, which follows the resolved tier (GSD's ladder:
-light→low, standard→high, heavy→xhigh). So escalating a repair to the top tier makes
-it think harder too.
+also returns the reasoning `effort` from the table above — keyed on the ROLE and its
+signals, not on the resolved model. That dependency had to invert: while effort was
+derived from the tier, the floor made the tier constant and everything collapsed to
+one value, which is how `--signature-state repeat` came to deepen nothing at all.
 
 `fable` is Claude Fable 5.1 (Claude Code 2.1.255 on; `opus` is Opus 5 from 2.1.219
-on): Opus-tier with a **1M-token context window** and adaptive thinking. It is the
-only alias that expresses "top tier with 1M context", which is exactly why it is the
-**default for the two judgment roles** — `arch-review` reads a whole diff against
-every ADR at once, and the integrator reconciles across repositories — wherever
-GSD's `runtime` says `claude`. Everywhere else that tier does not exist, so the
-ladder degrades to `opus` and the runtime cap takes it from there. It is a paid
-model: it may bill usage credits and asks for consent ONCE, and in a background or
-Remote Control session that prompt waits out `dialogExpiry` (5 min) and then ends
-the turn without sending — so an org that has never answered it opts **out** per
-role until someone has, interactively:
+on): Opus-tier with a **1M-token context window** and adaptive thinking — the only
+alias that expresses "top tier with 1M context". It is a **ceiling the conveyor
+reaches by itself, and nobody's default**, the integrator included. The window
+argument was retired on a measurement: on this repository the ADR corpus a judge
+re-reads is ~8k tokens, the largest ticket diff of a phase ~16k, and the phase epic
+diff — the integrator's own input, the largest in the whole system — ~52k, all of
+which Opus 5's ordinary window swallows, while `fable` costs exactly 2× `opus`.
+
+Three mechanical routes reach it, and each is computed rather than argued:
+
+1. **window** — a caller-MEASURED `--input-tokens` over `fable_window_tokens`
+   (250000 by default, five times the largest input measured here);
+2. **exhausted depth** — a repair role at `--signature-state repeat_exhausted`:
+   the same failure signature a third time, after `rethink` at `max` already failed;
+3. **contested judgment** — `--contested`, when the journal already holds an
+   `arch_review … verdict=violation` for the ticket.
+
+All three are gated on consent, because it is a paid model that may bill usage
+credits and asks for permission ONCE — and in a background or Remote Control
+session that prompt waits out `dialogExpiry` (5 min) and then ends the turn without
+sending, so silence must not read as agreement:
 
 ```json
-{ "pipeline": { "models": { "integrator": "opus", "arch-review": "opus" } } }
+{ "delivery_pipeline": { "fable": "auto" } }
 ```
+
+With it `off` (the default) a fired route degrades to `opus` at `max` effort and
+says why. Two more guards: on a runtime whose tier vocabulary has no such alias the
+route degrades the same way (on Codex the escalation is a `-deep` agent file
+instead), and below CLI 2.1.255 the alias resolves to Fable **5** — so
+`gsd-tune.cjs` reports that floor at Step 0 of every delivery, and
+`ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1` is pinned in `.env.example`,
+`docker-compose.yml` and `k8s/configmap.yaml`, which bypasses the built-in mapping
+and therefore holds whatever version the host runs.
 
 Configuration lives in `.planning/config.json` under two namespaces:
 `delivery_pipeline.*` (the capability's own declared config — GSD-native, settable
 and validated through GSD's tooling, and it wins) and `pipeline.*` (shipyard's
 runtime knobs; note `pipeline` is not a valid GSD config key, so edit the file
 directly). Keys: `model_policy` (GSD's own `budget`/`quality` names work as
-aliases), `models`, `effort`, `max_attempts`, `pr_fetch_limit`,
+aliases — it mirrors GSD's own `model_profile` and routes none of our roles, since
+the floor is not a preference), `models`, `effort`, `fable` (`off` | `auto`),
+`fable_window_tokens`, `max_attempts`, `pr_fetch_limit`,
 `integration_mode`, `use_workflow`, `graph_gate`, `jira`, `repos`.
 
 The conveyor also **obeys GSD's own settings** rather than second-guessing them:
@@ -288,8 +347,10 @@ install time from a palette you declare — `delivery_pipeline.codex_models` (or
   and never more. `min_cli` is the Codex CLI version that can first configure the
   model: below it the generator writes the previous entry for every role and says
   so, rather than an agent your CLI may ignore.
-- The **integrator** takes the ceiling on every call — one dispatch per phase, the
-  largest input in the system. Everything else reaches it through an escalation
+- The **integrator** takes the ceiling on every call here — one dispatch per phase,
+  and a static file cannot be re-parameterised, so this is where the two runtimes
+  legitimately differ: on Claude the same role reaches the ceiling only through a
+  route. Everything else reaches it through an escalation
   agent: `$shipyard-ci-fix-deep`, `$shipyard-review-fix-deep`,
   `$shipyard-pr-sentinel-deep` and `$shipyard-arch-review-deep` are the same
   contracts at the ceiling, dispatched when a failure signature comes back after
@@ -492,6 +553,9 @@ The base image bakes in:
 - Claude Code CLI (`@anthropic-ai/claude-code`, pinned version) installed via npm.
   The pin is what the tier aliases MEAN inside the image: from Claude Code 2.1.263
   on, `opus` is Opus 5 (2.1.219 on) and `fable` is Claude Fable 5.1 (2.1.255 on).
+  `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1` (compose and the k8s configmap)
+  is the belt to that brace: it bypasses the alias mapping altogether, so a host
+  or an older image cannot resolve `fable` to Fable 5 behind your back.
 - Git identity: whatever you passed as `GIT_USER_NAME` / `GIT_USER_EMAIL` (required build args, no default)
 - Git defaults: `init.defaultBranch=main`, `push.autoSetupRemote=true`, `color.ui=auto`,
   `fetch.prune=true`, `pull.rebase=false`, `pull.ff=only`

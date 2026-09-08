@@ -21,6 +21,12 @@ services:
       GH_TOKEN: ${GH_TOKEN:-}
       # Fixed in-container path; the host agent is proxied via the bind below.
       SSH_AUTH_SOCK: /run/host-services/ssh-auth.sock
+      # What the `fable` alias resolves to. The conveyor can only emit an ALIAS
+      # (the Agent tool validates `model` against opus|sonnet|haiku|fable), and
+      # below CLI 2.1.255 that alias is Fable 5 rather than Fable 5.1 — silently.
+      # This bypasses the built-in mapping and passes the id to the API, so it
+      # holds whatever version the image happens to ship.
+      ANTHROPIC_DEFAULT_FABLE_MODEL: ${ANTHROPIC_DEFAULT_FABLE_MODEL:-claude-fable-5-1}
     volumes:
       - ${WORKSPACE_DIR:-./workspace}:/workspace
       - ${HOME_CACHE_DIR:-./.cache-home}:/home/dev/.cache
