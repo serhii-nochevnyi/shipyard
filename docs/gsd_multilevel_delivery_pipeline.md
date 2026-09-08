@@ -642,20 +642,47 @@ from a host install (`make install-shipyard-codex`) against the same state files
 
 ## 7.5. Model policy
 
-**Judgment → the top tier, and the 1M-window one wherever the runtime has it;
-heavy work → Opus; light mechanics → Sonnet.** The pipeline agent layout:
+**The floor is `opus`, the depth is EFFORT, and `fable` is earned.** No built-in
+path resolves a role below `opus` except the two exemptions named in the table,
+each carrying the reason it is exempt — an exemption without one is a row the
+next reader deletes in good faith. With the tier nearly constant, what varies
+with the work is the reasoning effort. These are the DEFAULTS the resolver
+returns for a bare `model <role>`, and `tests/smoke/docs-smoke.sh` compares this
+table against `pipeline-config.cjs model <role> --json` for every role, so it
+cannot go stale silently again:
 
 ```text
-fable     integrator, arch-review         — judgment with the most expensive mistakes,
-                                            reading a whole diff against every ADR in
-                                            one window; degrades to `opus` where the
-                                            configured runtime has no 1M tier, and the
-                                            runtime cap takes it from there
-opus      executor, review-fix, ci-fix,   — code work, diagnostics,
-          research:alternatives             option design
-sonnet    drift-check, research:system-    — mechanical cross-checking and fact gathering
-          state/constraints/risks
+role          tier     effort   why this row
+integrator    opus     xhigh    the last mechanical judgment before a person merges,
+                                so its effort never drops; its measured run is 291k
+                                tokens against a 1M window, which is why it holds no
+                                standing exception to the floor either
+arch-review   opus     xhigh    reads a whole diff against every ADR — one model at
+                                one effort, because caches are model-scoped and this
+                                guard re-reads the same corpus every round
+executor      opus     high     it implements a contract; falsifying that contract
+                                belongs upstream of it
+ci-fix        opus     high     diagnosing a failing pipeline
+review-fix    opus     high     diagnosing review threads
+research      opus     high     gathering facts
+drift-check   sonnet   high     EXEMPT: its product is a file list and reuse pointers,
+                                not a judgment, and the plan-defect burden it now
+                                carries is bought with effort rather than with a tier
+pr-sentinel   sonnet   high     EXEMPT: the merge decision is not the model's —
+                                `sentinel.cjs merge` re-verifies
+                                open/undrafted/green/threads-zero/conform against live
+                                GitHub and refuses on anything unproven. The model
+                                drives a PR towards green; the script decides what
+                                lands. It is also the highest-volume role in the system
 ```
+
+**The escalations are per DISPATCH, not per role**, which is why none of them is
+a row above: `executor` takes `xhigh` at `risk: high` or a `human_checkpoint`;
+`research` takes `xhigh` with `--type alternatives`; a repair role whose failure
+signature repeats after a `rethink` takes `max`. `fable` is assigned to no role
+at all — it is a ceiling reached mechanically, by caller-measured window
+pressure, by exhausted repair depth, or by a judgment already contested through
+a journalled `violation`, and only while `pipeline.fable` is `auto`.
 
 **The policy is code, not prose.** `scripts/pipeline-config.cjs model <role>
 [--risk|--type|--files|--attempt|…]` returns the tier for a spawn, applying the
@@ -664,8 +691,8 @@ role × risk × attempt matrix, the `model_policy` profile, and any
 which is also what keeps the emitted values valid.
 
 **Only tier aliases are valid `model` values on a spawn**: `opus`, `sonnet`,
-`haiku` — and `fable`, the judgment tier. The Agent tool validates `model` against
-exactly that set, so a full model ID (`claude-opus-…`) or a context-suffixed alias
+`haiku` — and `fable`, the earned ceiling of §7.5. The Agent tool validates
+`model` against exactly that set, so a full model ID (`claude-opus-…`) or a context-suffixed alias
 (`opus[1m]`) is rejected on input — an earlier revision of this document specified
 suffixed aliases, and every spawn following it would have failed validation. Full
 model ids and `inherit` DO exist, on a different surface: `model:` in a subagent's
