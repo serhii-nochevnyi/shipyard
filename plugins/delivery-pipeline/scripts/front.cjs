@@ -79,7 +79,14 @@ const { dispatchWhy, activeDispatches } = require(path.join(__dirname, 'dispatch
 // ticket's parent still being driven?". It lived in sentinel.cjs alone, which is
 // why the board offered tickets the guard was refusing. One home, one direction:
 // this module imports nothing back.
-const { movingParentOf, movingParentWhy } = require(path.join(__dirname, 'parent-moving.cjs'));
+// `limbBaseOf`/`limbRemedy` come from the same home for the same reason, and
+// they are the reason stated in the past tense: the merge gate learned to
+// refuse a limb base and this file did not, so the board answered
+// `actionable.merge` for exactly the PR `sentinel.cjs merge` declined, every
+// round, on a real phase.
+const {
+  movingParentOf, movingParentWhy, limbBaseOf, limbRemedy,
+} = require(path.join(__dirname, 'parent-moving.cjs'));
 // The trailer's classification comes from its own module — the board and the
 // guard (sentinel.cjs) must never disagree about whether a verdict counts.
 const { gateConform: trailerConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
@@ -436,6 +443,12 @@ function computeFront(tickets, state, opts = {}) {
   // either side means the two disagree the moment a human parks a parent.
   const parkedForParent = new Set([...parkedIds, ...Object.keys(drifted), ...Object.keys(escalated)]);
   const movingParent = (id) => movingParentOf(id, { tickets, state, parked: parkedForParent });
+  // The board's base is the one it holds; `sentinel.cjs mergeOne` asks the same
+  // predicate about `pr.baseRefName` from the live view. Same rule, two bases,
+  // deliberately — `dutyItems` resolves it exactly this way.
+  const limbBase = (id) => limbBaseOf(
+    id, ((state[id] || {}).pr_base || (state[id] || {}).base || null), { tickets, state }
+  );
 
   const actionable = { execute: [], publish: [], fix: [], finalize: [], merge: [] };
   const waiting = { ci: [], dispatched: [], parent: [], merge_human: [], human: [] };
@@ -650,6 +663,34 @@ function computeFront(tickets, state, opts = {}) {
         // it — the front must never offer what the guard declines.
         waiting.merge_human.push(id);
         why[id] = `PR #${s.pr}: ${NO_CI_WHY}`;
+      } else if (autoMerge && s.review_decision !== 'CHANGES_REQUESTED'
+                 && gateConform(s) && s.merge_scope === 'stacked' && limbBase(id)) {
+        // Ready in every other respect, and the base is a LIMB: a ticket branch
+        // whose own ticket has already merged, so its content is in the epic and
+        // the branch is only still there because nothing deleted it. A squash
+        // landing here strands the work — PR #52, measured, with the epic missing
+        // the very files the board reported merged.
+        //
+        // `sentinel.cjs merge` refuses this against LIVE GitHub and `dutyItems`
+        // answers `human-merge` for it; the board must not offer what the guard
+        // declines, or every round re-proposes the same impossible action. That
+        // is not a hypothetical here: this branch is the second half of a fix
+        // whose first half taught the gate a refusal the board never learned.
+        //
+        // `waiting.merge_human`, matching the NO-CI hold above and duty's own
+        // `human-merge` — the remedy is a retarget plus a base-merge, and until
+        // someone does it this run has no move. The remedy text is the guard's,
+        // character for character, because two paraphrases of one remedy make an
+        // operator guess which is current.
+        //
+        // CHANGES_REQUESTED is excluded, and that guard is not decoration: duty
+        // reaches `review-fix` BEFORE its own limb branch, so a limb PR carrying
+        // a verdict is still work — servicing the threads. Without this clause
+        // the board would answer `waiting.merge_human` where the guard answers
+        // `review-fix`, which is the disagreement this branch exists to remove,
+        // merely relocated.
+        waiting.merge_human.push(id);
+        why[id] = `PR #${s.pr}: green + conform, but its ${limbRemedy(id, s.pr_base || s.base || null, limbBase(id), { tickets, state })}`;
       } else if (autoMerge && s.review_decision !== 'CHANGES_REQUESTED' && gateConform(s) && s.merge_scope === 'stacked') {
         // The sentinel's merge: into the epic or a parent ticket branch only.
         // `merge_scope` is set by state-sync; an integration-branch target never

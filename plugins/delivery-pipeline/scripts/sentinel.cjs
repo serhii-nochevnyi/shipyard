@@ -57,7 +57,11 @@ const {
 // and offered the tickets the guard was refusing. It lives next door rather than
 // in front.cjs because front.cjs imports it too, and one direction is the whole
 // property. The binding is below, where PARKED exists.
-const { parentIsMoving: parentIsMovingIn } = require(path.join(__dirname, 'parent-moving.cjs'));
+const {
+  parentIsMoving: parentIsMovingIn,
+  limbBaseOf: limbBaseOfIn,
+  limbRemedy: limbRemedyIn,
+} = require(path.join(__dirname, 'parent-moving.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -172,6 +176,102 @@ function behindBy(base, head, repo) {
   const n = parseInt(out.trim(), 10);
   if (!Number.isFinite(n)) return { error: `gh api compare answered "${out.trim().slice(0, 80)}", not a commit count` };
   return { behind: n };
+}
+
+// ── did the epic actually RECEIVE it? (ADR-006 D3) ──────────────────────────
+// The invariant PR #52 violated in silence: a ticket reads `merged`, its PR
+// reads merged, every board is telling the truth about its own subject, and the
+// epic does not contain the work. Nothing in the conveyor asserted it, so
+// nothing was ever going to notice — the detection for the whole class is one
+// question asked after every squash.
+//
+// TREES, not a diff, and for the same reason ADR-006 D2 gives: a diff is a
+// rendering that depends on rename detection, context size, whitespace and
+// `diff.algorithm`, while two blob identities have no such surface. `owns` is
+// the ownership matcher Gate 2 and the scope gate already share (path-owner.cjs),
+// evaluated here against the epic's tree listing rather than against a diff.
+//
+// One `git/trees/<ref>?recursive=1` per ref, on the MERGE path only — never on
+// the tick. A truncated listing or an unreadable ref is an UNKNOWN that says so:
+// an unknown is not a pass, but it is not an alarm either, because this runs
+// AFTER an irreversible squash and a cried-wolf alarm on the merge line is how
+// an alarm stops being read.
+const { owns } = require(path.join(__dirname, 'path-owner.cjs'));
+function treeBlobs(ref, repo) {
+  const out = gh(['api', `${apiBase(repo)}/git/trees/${ref}?recursive=1`], { tolerate: true });
+  if (typeof out !== 'string') return { error: (out && out.error) || 'gh api git/trees failed' };
+  let j;
+  try { j = JSON.parse(out); } catch (e) { return { error: `git/trees answered unparseable JSON (${e.message})` }; }
+  if (!j || !Array.isArray(j.tree)) return { error: 'git/trees answered no `tree` array' };
+  // A partial tree can only produce a false alarm: every path it happens not to
+  // list would read as "absent from the epic".
+  if (j.truncated) return { error: `GitHub truncated the recursive listing of ${ref} — a partial tree cannot answer this` };
+  const blobs = new Map();
+  for (const e of j.tree) {
+    if (e && e.type === 'blob' && typeof e.path === 'string') blobs.set(e.path, e.sha);
+  }
+  return { blobs };
+}
+
+// `{ ok: true|false|null }` — reachable, an alarm, or an honest unknown — plus
+// the paths and the reason. Never a refusal: the squash cannot be undone, so the
+// value here is that the operator hears about it in the same breath.
+function epicReceived({ t, pr, repo, epic }) {
+  const declared = (t.files || []).filter((f) => typeof f === 'string' && f.trim());
+  if (!epic) return { ok: null, why: 'the ticket carries no epic (direct-to-main) — there is no epic that could have received it' };
+  if (!declared.length) return { ok: null, epic, why: 'the ticket declares no files_modified — there is nothing to assert' };
+  if (!pr.headRefOid) return { ok: null, epic, why: 'the live PR view reported no head sha, so the merged tree cannot be identified' };
+  const head = treeBlobs(pr.headRefOid, repo);
+  if (head.error) return { ok: null, epic, why: `the merged head tree could not be read: ${head.error}` };
+  const ep = treeBlobs(epic, repo);
+  if (ep.error) return { ok: null, epic, why: `the ${epic} tree could not be read: ${ep.error}` };
+
+  // Every path in the MERGED head that a declaration owns must be in the epic
+  // with the same blob. A path the ticket DELETED owns nothing in the head and is
+  // therefore not asserted — the assertion fails safe rather than reading a
+  // deletion as an absence.
+  const unreachable = [];
+  let checked = 0;
+  for (const decl of declared) {
+    for (const [p, sha] of head.blobs) {
+      if (!owns(decl, p)) continue;
+      checked += 1;
+      const epicSha = ep.blobs.get(p);
+      if (!epicSha) unreachable.push({ path: p, declared_by: decl, why: 'absent from the epic' });
+      else if (epicSha !== sha) unreachable.push({ path: p, declared_by: decl, why: `a different blob in the epic (${epicSha.slice(0, 7)} ≠ ${String(sha).slice(0, 7)})` });
+    }
+  }
+  if (!checked) return { ok: null, epic, why: `no path in the merged tree is owned by any of the ${declared.length} declared entr${declared.length === 1 ? 'y' : 'ies'} — nothing was asserted` };
+  if (!unreachable.length) return { ok: true, epic, checked, why: `all ${checked} declared path(s) are in ${epic} with the blob this merge landed` };
+
+  // Unreachable, and there are two very different ways to get here. Landing on a
+  // parent branch whose own PR is STILL OPEN is the cascade working as designed:
+  // that PR carries this work onward, so the epic legitimately does not have it
+  // yet. Asked LIVE, never off the board — the board is exactly what is stale in
+  // the window this assertion exists for — and asked only when the base is not
+  // the epic itself, because `pr list --head <epic>` would return the epic's own
+  // integration PR and turn every real alarm into a reassuring note.
+  if (pr.baseRefName && pr.baseRefName !== epic) {
+    const live = gh(['pr', 'list', '--head', pr.baseRefName, ...repoArg(repo), '--state', 'open', '--json', 'number'], { tolerate: true });
+    if (typeof live === 'string') {
+      let rows = null;
+      try { const parsed = JSON.parse(live); if (Array.isArray(parsed)) rows = parsed; } catch { /* not an answer */ }
+      if (rows && rows.length) {
+        return {
+          ok: null, epic, in_transit: rows.map((r) => r.number),
+          why: `the squash landed on ${pr.baseRefName}, whose own PR ${rows.map((r) => `#${r.number}`).join(', ')} is still open — ` +
+            `${epic} receives this work when that PR lands`,
+        };
+      }
+    }
+  }
+  return {
+    ok: false, epic, checked, unreachable,
+    why: `${unreachable.length} declared path(s) are NOT in ${epic} after this merge` +
+      (pr.baseRefName && pr.baseRefName !== epic
+        ? ` — the squash landed on ${pr.baseRefName}, which has no open PR carrying it onward`
+        : ''),
+  };
 }
 
 // The vocabulary is check-state.cjs's, not this file's: the local list named
@@ -378,6 +478,18 @@ const parentIsMoving = (id) => parentIsMovingIn(id, { tickets, state, parked: PA
 // reported checks is not one the guard may walk towards landing. Same function
 // as the board's, so `merge` and the `merge` bucket cannot disagree.
 const heldForNoCi = (checks) => noCiHold(checks, { autoMerge: AUTO_MERGE, mergeWithoutCi: cfg.merge_without_ci });
+// The fourth and fifth shared predicates, bound the same way: a base inside the
+// stack whose own ticket has already MERGED is a LIMB, not the stack (PR #52's
+// shape), and the sentence that says so with its remedy. Both are
+// parent-moving.cjs's — that module owns "what is this ticket's parent doing to
+// its base", and it owns the reason too: `mergeOne` refuses a limb, and while
+// the predicate lived HERE the BOARD never learned the refusal, so `computeFront`
+// answered `actionable.merge` for exactly the PR the gate declined every round.
+// `base` stays an argument because the two readers do not measure the same one:
+// duty and the board ask about the base the board holds, `mergeOne` about
+// `pr.baseRefName` from the live view.
+const limbBaseOf = (id, base) => limbBaseOfIn(id, base, { tickets, state });
+const limbRemedy = (id, base, limbId) => limbRemedyIn(id, base, limbId, { tickets, state });
 
 function dutyItems() {
   const items = [];
@@ -541,8 +653,20 @@ function dutyItems() {
       item.action = 'human-merge';
       item.why = NO_CI_WHY;
     } else if (AUTO_MERGE && s.merge_scope === 'stacked') {
-      item.action = 'merge';
-      item.why = `green + conform → squash into ${base}`;
+      // One arm, one `limbBaseOf` call — folded together per Copilot review on
+      // #66: the limb check and the plain merge used to be two branches each
+      // re-scanning `tickets` via `limbBaseOf`'s `Object.entries().find()`.
+      // Ready in every other respect; `mergeOne` refuses a limb base (PR #52's
+      // shape) against LIVE GitHub regardless, so say so first here rather than
+      // hand the guard an action its own gate will decline every round.
+      const limbId = limbBaseOf(id, base);
+      if (limbId) {
+        item.action = 'human-merge';
+        item.why = `green + conform, but its ${limbRemedy(id, base, limbId)}`;
+      } else {
+        item.action = 'merge';
+        item.why = `green + conform → squash into ${base}`;
+      }
     } else {
       item.action = 'human-merge';
       item.why = AUTO_MERGE
@@ -761,6 +885,14 @@ function mergeOne(id) {
         : `base "${pr.baseRefName}" is ${baseId}, a pre-authorized human_checkpoint ticket whose PR is still ` +
           'open — nothing lands inside the diff that authorization named. It lands first; this one follows.');
     }
+
+    // A base inside the stack whose own ticket has already MERGED is a LIMB, not
+    // the stack — `parent-moving.cjs`'s `limbBaseOf` carries the shape (PR #52)
+    // and the reason a cached BOARD read is sound here (`merged` is TERMINAL).
+    // Shared with `dutyItems()` AND with `computeFront`, so neither the duty
+    // chain nor the board can offer what this refuses.
+    const limbId = limbBaseOf(id, pr.baseRefName);
+    if (limbId) return block(limbRemedy(id, pr.baseRefName, limbId));
   }
 
   if (pr.reviewDecision === 'CHANGES_REQUESTED') return block('review decision is CHANGES_REQUESTED');
@@ -955,6 +1087,20 @@ function mergeOne(id) {
       }
     }
   }
+
+  // THE ASSERTION, last and unconditional. Never a retro-active refusal — the
+  // squash has happened and cannot be undone — and never a silent success: the
+  // result carries the verdict, the merge line prints it, and an ALARM is
+  // journalled by the same writer that owns the `merge` event above, so a run
+  // that ends before anyone reads stdout has still recorded it.
+  res.reachability = epicReceived({ t, pr, repo, epic });
+  if (res.reachability.ok === false) {
+    res.epic_unreachable = res.reachability.unreachable.map((u) => u.path);
+    journal({
+      event: 'epic_unreachable', ticket: id, pr: s.pr, base: pr.baseRefName, epic,
+      repo, paths: res.epic_unreachable, why: res.reachability.why, by: 'sentinel',
+    });
+  }
   return res;
 }
 
@@ -991,6 +1137,20 @@ if (cmd === 'merge') {
         console.log(`merged ${r.ticket} PR #${r.pr} → ${r.base} (squash)${r.checks_note ? ` [${r.checks_note}]` : ''}`);
         for (const rt of r.retargeted) {
           console.log(`  retargeted ${rt.ticket} PR #${rt.pr} onto ${rt.base}${rt.ok ? '' : ` — FAILED: ${rt.error}`}`);
+        }
+        // In the same breath as the merge, and NAMED: a merged ticket whose work
+        // is not in its epic is the invariant PR #52 broke while every board
+        // read healthy. The unknown is printed too — silence about an assertion
+        // that did not run is what made the class invisible in the first place.
+        const rc = r.reachability || {};
+        if (rc.ok === false) {
+          console.log(`  ⚠ ALARM: ${r.ticket}'s work is NOT in ${rc.epic} — ${rc.why}`);
+          for (const u of rc.unreachable || []) console.log(`      ${u.path} — ${u.why} (declared as ${u.declared_by})`);
+          console.log(`      merge ${r.base} into ${rc.epic} (a merge, never a rebase) and re-check; recorded as epic_unreachable in the journal`);
+        } else if (rc.ok === true) {
+          console.log(`  epic reachability: ${rc.why}`);
+        } else if (rc.why) {
+          console.log(`  epic reachability UNKNOWN: ${rc.why}`);
         }
       } else if (r.would_merge) {
         console.log(`would merge ${r.ticket} PR #${r.pr} → ${r.base} (dry run)`);
