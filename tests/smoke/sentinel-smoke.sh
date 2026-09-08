@@ -19,7 +19,12 @@ trap 'rm -rf "$W"' EXIT
 
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); echo "  ✓ $1"; }
-bad() { fail=$((fail + 1)); echo "  ✗ $1"; [[ -n "${2:-}" ]] && echo "$2" | sed 's/^/      /'; }
+# `return 0` is load-bearing under `set -e`: called with no detail argument the
+# trailing `[[ -n "" ]] && …` made this function exit 1, which killed the whole
+# run at the FIRST such failure — the summary never printed and every assertion
+# after it silently stopped being a test. A recorded failure is what the counter
+# and the final `exit 1` are for.
+bad() { fail=$((fail + 1)); echo "  ✗ $1"; [[ -n "${2:-}" ]] && echo "$2" | sed 's/^/      /'; return 0; }
 has() { # has <label> <haystack-file> <needle>
   if grep -qF -- "$3" "$2"; then ok "$1"; else bad "$1" "expected to find: $3"; fi
 }
@@ -839,6 +844,111 @@ process.exit(0);
 else
   bad "a plan_defect park keeps its own lifetime through a resync" "$(cat "$W/disp-park2.err")"
 fi
+
+# ── a slower sync never rolls a newer board back ─────────────────────────────
+# Everything a sync knows — the previous state, its timestamps and every GitHub
+# observation — is gathered OUTSIDE the write lock, because those are minutes of
+# network calls. Two syncs run concurrently BY DESIGN (the main loop and the
+# guard), so the one that started earlier can finish later and then publish
+# valid, coherent, OLDER JSON over the newer board: apparent status reversals,
+# duplicated transitions, reap and ownership decisions taken off superseded facts
+# (audit F13). Atomic writes do not help — each write is whole, and the WRONG one
+# wins. So the snapshot carries `observed_at` plus a `generation`, and the
+# publish is a compare-and-swap performed INSIDE the lock.
+#
+# `SHIPYARD_STATE_OBSERVED_AT` is what makes the losing run reproducible: a real
+# race is scheduling-dependent, and the fact under test is not "who reached the
+# lock first" but "whose facts are older".
+genproj="$W/genproj"
+mkdir -p "$genproj/.planning/graph"
+cp "$proj/.planning/graph/tickets.json" "$genproj/.planning/graph/tickets.json"
+echo '{"pipeline":{}}' > "$genproj/.planning/config.json"
+genmeta="$genproj/.planning/graph/delivery-state-meta.json"
+genstate="$genproj/.planning/graph/delivery-state.json"
+genfront="$genproj/.planning/graph/delivery-front.json"
+sync_g() { ( cd "$genproj" && env "$@" node "$SCRIPTS/state-sync.cjs" > "$W/gen-board.txt" 2>"$W/gen-err.txt" ); }
+# Reads a key path out of a JSON file WITHOUT dying when the file is absent —
+# unlike the `require`-based readers above, the very existence of what this one
+# reads is under test, and a helper that throws there would abort the suite and
+# hide every assertion after it.
+jget() { node -e '
+  const fs = require("fs");
+  let s = null;
+  try { s = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { process.stdout.write("<unreadable>"); process.exit(0); }
+  const v = process.argv.slice(2).reduce((o, k) => (o == null ? o : o[k]), s);
+  process.stdout.write(String(v));
+' "$@"; }
+
+sync_g || bad "the first sync runs" "$(cat "$W/gen-err.txt")"
+[[ -f "$genmeta" ]] \
+  && ok "a sync publishes the snapshot's own identity beside the board" \
+  || bad "the snapshot carries a generation"
+[[ "$(jget "$genmeta" generation)" == "1" ]] \
+  && ok "the first published snapshot is generation 1" \
+  || bad "the first snapshot is generation 1" "got: $(jget "$genmeta" generation)"
+# The metadata must NOT be a key in delivery-state.json: every top-level key
+# there is a ticket id, and front.cjs iterates them without checking tickets.json
+# — so an `observed_at` sibling would become a phantom ticket in the buckets the
+# stop gate reads.
+if node -e '
+const s = require(process.argv[1]);
+const strays = Object.entries(s).filter(([, v]) => !v || typeof v !== "object");
+if (strays.length) { console.error("non-ticket keys: " + strays.map(([k]) => k).join(", ")); process.exit(1); }
+process.exit(0);
+' "$genstate" 2>"$W/gen-stray.err"; then
+  ok "…and never as a phantom ticket inside the state map"
+else
+  bad "the state map holds ticket entries only" "$(cat "$W/gen-stray.err")"
+fi
+[[ "$(jget "$genfront" generation)" == "1" ]] \
+  && ok "the front the stop gate reads names the same generation" \
+  || bad "the front carries the generation" "got: $(jget "$genfront" generation)"
+
+# A value a real write would overwrite: the strongest possible proof that the
+# losing run wrote NOTHING, rather than writing something that happens to match.
+node -e '
+const fs = require("fs"); const f = process.argv[1];
+const s = JSON.parse(fs.readFileSync(f, "utf8"));
+s["T-01-01"].status = "TAMPERED";
+fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
+' "$genstate"
+
+# The slower sync: its facts are from 2020, the board on disk was observed today.
+if sync_g SHIPYARD_STATE_OBSERVED_AT=2020-01-01T00:00:00Z; then
+  ok "a sync that lost the race exits 0 — a refusal is an outcome, not a failure"
+else
+  bad "the losing sync exits 0" "$(cat "$W/gen-board.txt" "$W/gen-err.txt")"
+fi
+has "…and says a newer snapshot landed while it was reading" "$W/gen-board.txt" "a newer snapshot"
+has "…that the newer one was kept" "$W/gen-board.txt" "kept the newer one"
+has "…naming the generation it deferred to" "$W/gen-board.txt" "generation 1"
+[[ "$(jget "$genstate" T-01-01 status)" == "TAMPERED" ]] \
+  && ok "…and wrote nothing at all: the newer board is untouched" \
+  || bad "the losing sync must not write" "got: $(jget "$genstate" T-01-01 status)"
+[[ "$(jget "$genmeta" generation)" == "1" ]] \
+  && ok "…so the generation on disk never moved" \
+  || bad "a refused publish must not bump the generation" "got: $(jget "$genmeta" generation)"
+hasnt "…and it prints no board summary off facts it declined to publish" "$W/gen-board.txt" "integration mode:"
+
+# The control, and it is what proves the refusal is the COMPARISON and not a
+# freeze: the same fixture, observations of its own, publishes generation 2 and
+# repairs the tampered row.
+sync_g || bad "the next sync runs" "$(cat "$W/gen-err.txt")"
+[[ "$(jget "$genmeta" generation)" == "2" ]] \
+  && ok "a sync with fresher facts publishes the next generation" \
+  || bad "the counter advances for a fresher sync" "got: $(jget "$genmeta" generation)"
+[[ "$(jget "$genstate" T-01-01 status)" == "pr-open" ]] \
+  && ok "…and rewrites the board it is entitled to rewrite" \
+  || bad "the winning sync writes the board" "got: $(jget "$genstate" T-01-01 status)"
+has "…and reports which snapshot it published" "$W/gen-board.txt" "snapshot generation 2"
+
+# An equal observation window is not a newer one: a re-run of the same read must
+# still publish, or an idempotent resync would refuse itself.
+same="$(jget "$genmeta" observed_at)"
+sync_g SHIPYARD_STATE_OBSERVED_AT="$same" || bad "a re-run of the same observation runs" "$(cat "$W/gen-err.txt")"
+[[ "$(jget "$genmeta" generation)" == "3" ]] \
+  && ok "an equally-fresh sync still publishes — only a STRICTLY newer board wins" \
+  || bad "an equal observation window must not be refused" "got: $(jget "$genmeta" generation)"
 
 # ── a review verdict with nothing behind it, through a real sync ─────────────
 # The other half of the pair T-24-06 shared between the board and the guard, and

@@ -65,6 +65,18 @@ const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const STATE = path.join(GRAPH_DIR, 'delivery-state.json');
 const FRONT = path.join(GRAPH_DIR, 'delivery-front.json');
 const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
+// The snapshot's own identity — WHEN its facts were observed, and which
+// generation of the board they produced. Its own file, and that is not a
+// preference: `delivery-state.json` is a bare `{ticket-id: entry}` map with no
+// top level that is not a ticket, and `front.cjs` iterates those keys without
+// filtering against tickets.json — so metadata parked in there becomes a phantom
+// ticket in the buckets the stop gate reads. `delivery-front.json` cannot hold it
+// either: `dispatch-record.cjs refreshFront` rewrites that file from a fixed list
+// of keys, so anything else on it is dropped by the next `mark`. This file has
+// exactly one writer (this script, inside the `state` lock), which is what a
+// compare-and-swap subject has to have. The front gets an advisory copy for
+// readers; THIS is the authority.
+const META = path.join(GRAPH_DIR, 'delivery-state-meta.json');
 
 // Tickets the RUN parked (an agent returned `escalate`, attempts > max). GitHub
 // cannot know this, and a front that keeps re-offering an escalated PR is an
@@ -213,6 +225,27 @@ if (fs.existsSync(STATE)) {
   try { prev = JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { prev = {}; }
 }
 const nowIso = new Date().toISOString();
+// When THIS run started READING GitHub — which is the only timestamp that can
+// decide who gets to publish. Two syncs run concurrently by design (the main loop
+// and the guard), each spending minutes in `gh` calls OUTSIDE the write lock, and
+// the one that started earlier can easily finish later: it then holds valid,
+// coherent, OLDER facts. Ordering by who reached the lock first is exactly how a
+// board rolls backwards (audit F13), so the comparison is about the age of the
+// FACTS. Kept separate from `nowIso` on purpose: `nowIso` stamps `since`, the
+// journal transitions and the front's `generated_at`, and the smoke case that
+// ages an observation window must move one of the two and not the other.
+const OBSERVED_AT = process.env.SHIPYARD_STATE_OBSERVED_AT || nowIso;
+
+// The snapshot on disk, as it stands right now. Read INSIDE the lock and nowhere
+// else — a read taken before queueing for the lock is precisely the stale input
+// this guard exists to reject.
+function readMeta() {
+  try {
+    const m = JSON.parse(fs.readFileSync(META, 'utf8'));
+    return m && typeof m === 'object' ? m : null;
+  } catch { return null; }
+}
+
 const notices = [];
 
 // GSD's `git.base_branch` is the project's integration branch — it is what
@@ -631,7 +664,28 @@ const DRIFTED = activeDrift(ROOT);
 // rendered; this was the one caller that still did.
 const ESCALATED = activeParks(ROOT, state);
 
-const front = withLock(lockDirFor(ROOT), 'state', () => {
+const published = withLock(lockDirFor(ROOT), 'state', () => {
+  // FIRST inside the lock, ahead of the journal append and every write. Nothing
+  // this run holds was read under the lock — `prev`, the timestamps and every
+  // `gh` observation were gathered minutes ago, because they have to be — so a
+  // newer sync can have published in the meantime. Its JSON is valid, coherent
+  // and NEWER, and replacing it rolls the board back: apparent status reversals,
+  // duplicated transitions, ownership and reap decisions taken off facts that
+  // have already been superseded (audit F13). The transitions go with it: they
+  // were computed against a `prev` that is now the snapshot before last, so
+  // appending them would journal changes that either already landed or never
+  // happened.
+  const onDisk = readMeta();
+  const diskObserved = onDisk && onDisk.observed_at ? Date.parse(onDisk.observed_at) : NaN;
+  const ourObserved = Date.parse(OBSERVED_AT);
+  if (Number.isFinite(diskObserved) && Number.isFinite(ourObserved) && diskObserved > ourObserved) {
+    return { stale: onDisk };
+  }
+  // One counter for the whole trio, bumped once per PUBLISHED snapshot — so
+  // "state, yaml and front were written together" is a fact a reader can check
+  // rather than a property of this file it has to trust.
+  const generation = (onDisk && Number.isInteger(onDisk.generation) ? onDisk.generation : 0) + 1;
+
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
   }
@@ -676,7 +730,15 @@ const front = withLock(lockDirFor(ROOT), 'state', () => {
     ci_estimates: ciEstimates(GRAPH_DIR, tickets),
   });
   writeAtomic(STATE, JSON.stringify(state, null, 2) + '\n');
-  writeAtomic(path.join(GRAPH_DIR, 'delivery-state.yaml'), yaml.join('\n') + '\n');
+  // The generation rides the human mirror as a comment: the yaml is keyed by
+  // ticket id exactly like the JSON, so it has no more room for a metadata key
+  // than the JSON does — but a person reading it can still see which snapshot
+  // they are looking at.
+  writeAtomic(path.join(GRAPH_DIR, 'delivery-state.yaml'), [
+    yaml[0],
+    `# snapshot generation ${generation} — observed ${OBSERVED_AT}`,
+    ...yaml.slice(1),
+  ].join('\n') + '\n');
   // `dispatches_applied_at` is stamped the way `refreshFront` stamps it, and
   // UNCONDITIONALLY — including when no dispatch is live. Its absence is the
   // signature of a writer blind to the overlay, which is exactly the defect this
@@ -684,9 +746,44 @@ const front = withLock(lockDirFor(ROOT), 'state', () => {
   // ambiguity for every quiet board. Here it equals `generated_at` by
   // construction (one sync, one moment); after a `mark` it runs ahead, which is
   // why the stop gate reads `generated_at` alone for freshness and never this.
-  writeAtomic(FRONT, JSON.stringify({ generated_at: nowIso, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', dispatches_applied_at: nowIso, ...front }, null, 2) + '\n');
-  return front;
+  //
+  // `generation`/`observed_at` here are the ADVISORY copy — `refreshFront`
+  // rebuilds this file from a fixed key list, so a `dispatch-record mark` drops
+  // them and the board carries no generation until the next sync. That is fine
+  // for a reader and would be fatal for the compare-and-swap above, which is why
+  // that reads META and never this.
+  writeAtomic(FRONT, JSON.stringify({ generated_at: nowIso, observed_at: OBSERVED_AT, generation, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', dispatches_applied_at: nowIso, ...front }, null, 2) + '\n');
+  // Written LAST, and that ordering is the publish itself: the generation on disk
+  // only advances once the trio it describes is fully in place, so a sync that
+  // dies mid-write leaves the previous generation standing and the next run
+  // rewrites everything rather than trusting a half-published board.
+  writeAtomic(META, JSON.stringify({
+    generation,
+    observed_at: OBSERVED_AT,
+    generated_at: nowIso,
+    by: 'state-sync',
+    pid: process.pid,
+  }, null, 2) + '\n');
+  return { front, generation };
 }, { label: 'state-sync' });
+
+// A refusal is an OUTCOME, not a failure: the board on disk is the better of the
+// two snapshots and the run that has it is the one driving. Exit 0 before any
+// board line — printing a summary built from facts we just declined to publish is
+// how a run acts on a rollback it decided against.
+if (published.stale) {
+  const m = published.stale;
+  console.log(
+    `state-sync: a newer snapshot (generation ${Number.isInteger(m.generation) ? m.generation : '?'}, ` +
+    `observed ${m.observed_at}) landed while this one was reading — kept the newer one`
+  );
+  console.log(
+    `  this run observed ${OBSERVED_AT} and wrote nothing. Nothing is lost: the newer board already ` +
+    'reflects GitHub more recently than this read does. Re-run state-sync for the current front.'
+  );
+  process.exit(0);
+}
+const front = published.front;
 
 // ── board summary on stdout for the /shipyard:deliver skill ──
 function ageH(sinceIso) { return (Date.parse(nowIso) - Date.parse(sinceIso)) / 3_600_000; }
@@ -793,4 +890,7 @@ for (const [id, s] of Object.entries(state)) {
 // it a fixpoint while a dozen tickets were executable.
 if (RUN_PARKED.length) console.log(`parked by this run: ${RUN_PARKED.join(', ')}`);
 for (const line of formatFront(front)) console.log(line);
-console.log('wrote .planning/graph/delivery-state.json, delivery-state.yaml and delivery-front.json');
+console.log(
+  `wrote .planning/graph/delivery-state.json, delivery-state.yaml, delivery-front.json ` +
+  `and delivery-state-meta.json (snapshot generation ${published.generation})`
+);
