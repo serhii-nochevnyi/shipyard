@@ -65,12 +65,25 @@ distinguishes their work; the prose is what changes.
   through GSD's resolver, not by reading `runtimeTierDefaults` directly. No
   model id is hardcoded anywhere in shipyard: Astra reaches the agents through
   the user's own `config.toml` the moment nothing overrides it.
-- **D3 — `fable` stays the default for judgment on Claude; the prose says so and
-  names the consent hazard.** Aliases remain the ONLY thing shipyard emits,
-  and for the Agent tool that is enforced by the tool itself (enum-validated),
-  not only by our policy. `opus[1m]` is therefore unreachable from a dispatch:
-  an agent can have a 1M window only as `fable` (native) or `sonnet` (Sonnet 5,
-  native) — the fact that re-opens the judgment tier.
+- **D3 — ~~`fable` stays the default for judgment on Claude~~ — SUPERSEDED by
+  ADR-005 D1/D4 (amended 2026-09-08). `fable` is the default for NOTHING; it is
+  a ceiling earned through three mechanical routes, and the prose names the
+  consent hazard.** What survives of this decision is the part about aliases,
+  and it survives intact: aliases remain the ONLY thing shipyard emits, and for
+  the Agent tool that is enforced by the tool itself (enum-validated), not only
+  by our policy. `opus[1m]` is therefore unreachable from a dispatch: an agent
+  can have a 1M window only as `fable` (native) or `sonnet` (Sonnet 5, native)
+  — the fact that re-opened the judgment tier, and that ADR-005 then closed
+  again on a measurement (the largest input in the system is the phase epic
+  diff at ~52k tokens, and the integrator's own measured run was 291k against
+  a 1M window at twice the price).
+
+  *Struck through rather than rewritten, because the sentence is why this
+  decision existed and a reader who remembers it needs to see that it moved.
+  Flagged by the integrator of phase 25's epic as its follow-up E, after
+  `b85d510` amended this ADR's Consequences without closing D3 — which is the
+  same defect one document over: an amendment that lands beside a stale
+  assertion and leaves it standing.*
 - **D4 — Prose names the tools as they are.** Every sentence claiming the Agent
   tool rejects full ids is KEPT and gains the frontmatter distinction plus the
   version floors; "Fable 5" → "Fable 5.1"; one line
