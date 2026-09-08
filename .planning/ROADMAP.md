@@ -115,13 +115,25 @@ script — not in a prompt.** Every requirement below is an instance of it.
   without it, never by phase-number arithmetic.
 - **REQ-39** — An unavailable check reading (gh error, malformed JSON) is a
   state of its own, distinct from an observed empty list, and never green.
-- **REQ-40** — No role is dispatched below `opus`; depth is expressed by EFFORT
-  keyed on the role and its signals, not on the tier, and a configured effort
-  override must not silently disable the signature escalation it outranks.
+- **REQ-40** — No role that writes code or renders a judgement is dispatched
+  below `opus`; `pr-sentinel` and `drift-check` stay on `sonnet` because
+  neither's answer is the gate, and no built-in path reaches `haiku`. Depth is
+  expressed by EFFORT keyed on the role and its signals, not on the tier; a
+  configured effort override must not silently disable the signature escalation
+  it outranks; and **every signal a row is keyed on is passed by the dispatch,
+  with an absent signal never resolving upward.** *(Amended 2026-09-08: the
+  universal floor is retired for those two roles, and effort is chosen for the
+  work rather than for the price — output is 12–19% of a model line, so an
+  effort step moves ~3% of a run against ~2.5× for a tier step. ADR-005 D2.)*
 - **REQ-41** — `fable` is a ceiling the conveyor reaches mechanically (window
-  pressure, exhausted repair depth, contested judgment) and never by default
-  except for the integrator; it is never emitted where the runtime would
-  resolve it to Fable 5.
+  pressure, exhausted repair depth, contested judgment) and never by default,
+  the integrator included; it is never emitted where the runtime would
+  resolve it to Fable 5. *(Amended 2026-09-08: the integrator's standing
+  exception is withdrawn — its measured run was 291k tokens against a 1M window
+  at 2× the price, so it earns `fable` through the window route like every other
+  role.)*
+- **REQ-45** — Every dispatch records the model and the effort it ran at, so
+  the ladder can be revised on evidence instead of judgement.
 - **REQ-42** — A wave is cut to a concurrency the session can afford: the front
   reports capacity, the loop dispatches no more than that, and a front held back
   by the cap is never a fixpoint.
@@ -214,7 +226,7 @@ the board back into `execute: …, finalize: …` until the next `mark` rewrites
 — measured on the first wave of this very phase, with four tickets out.
 
 ### Phase 25: The conveyor follows the models it runs on
-**Requirements**: REQ-26, REQ-27, REQ-28, REQ-40, REQ-41, REQ-42
+**Requirements**: REQ-26, REQ-27, REQ-28, REQ-40, REQ-41, REQ-42, REQ-45
 
 Decomposed from ADR-003. Three things moved under the conveyor within a
 fortnight — Claude Code's aliases (Opus 5 at 2.1.219, Fable 5.1 at 2.1.255, the

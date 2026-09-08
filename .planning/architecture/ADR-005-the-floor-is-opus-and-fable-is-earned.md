@@ -47,12 +47,28 @@ plans written the same day), executors about 45%, guards about 22%.
 
 ## Decision
 
-- **D1 — The floor is `opus`.** No built-in path resolves a role below it.
-  `sonnet` and `haiku` remain valid values a user may configure; nothing in the
-  ladder chooses them. The reason is not that the cheaper tiers are bad, it is
-  that the conveyor's failure mode is a wrong green reaching an epic, and every
-  mechanical gate above the executor costs more to run than the difference
-  between tiers.
+- **D1 — The floor is `opus`, with exactly two named exemptions.** No built-in
+  path resolves a role below `opus` EXCEPT `pr-sentinel` and `drift-check`,
+  which stay on `sonnet`. `haiku` is chosen by nothing at all; all four tiers
+  remain values a user may configure. The reason for the floor is not that the
+  cheaper tiers are bad, it is that the conveyor's failure mode is a wrong green
+  reaching an epic, and every mechanical gate above the executor costs more to
+  run than the difference between tiers.
+
+  **The two exemptions, amended 2026-09-08** — the operator's decision, with the
+  measurement, and recorded HERE because an exemption whose only home is a
+  requirement line is an exemption the next reader deletes in good faith:
+  - **`pr-sentinel`.** Its merge decision is not the model's: `sentinel.cjs
+    mergeOne` re-verifies open/undrafted/green/threads-zero/conform/not-CHANGES_REQUESTED/not-checkpoint
+    against LIVE GitHub and refuses on anything unproven. The model drives a PR
+    towards green; the gate decides whether it lands. It is also **44% of all
+    dispatches** in the journal, the highest-volume role in the system.
+  - **`drift-check`.** Its product is a file list and a set of reuse pointers,
+    not a judgement — and D2's amendment moves the plan-defect burden onto it,
+    which is work it does at `high` effort on `sonnet` for ~1–2% of the bill.
+  Together they are **57% of dispatches and 25% of subagent tokens**, and a tier
+  step there is ≈2.5× on the 82–87% of a model line that effort cannot reach
+  (see D2's amendment). Everything else keeps the floor.
 - **D2 — On Claude, depth is EFFORT, keyed on the role and its signals.** The
   dependency inverts: today the effort tier is derived from the model, which
   collapses to a single value the moment the model is constant. Proven, not
@@ -69,6 +85,57 @@ plans written the same day), executors about 45%, guards about 22%.
   draft of this decision made the two-value Codex rule universal. It is not —
   the operator's measurement that `max` and `xhigh` buy nothing for their cost
   is a CODEX fact, recorded in D6. On Claude the ladder stands.)*
+
+  **Amended 2026-09-08 — the executor drops to `high`, and effort is not a cost
+  lever.** Two operator decisions, both with the measurement that settles them.
+
+  *Effort is a QUALITY knob, not a price one.* Reconstructed from this project's
+  own usage ledger (the `sonnet` and `fable-5` lines reproduce to the cent, the
+  `opus` line within 3%): output is **12–19%** of a model line, and cache-read
+  plus cache-write are **82–87%**. Effort moves only output, and thinking was
+  36% of the `opus` line's output — so `xhigh` → `high` changes about **3.4% of
+  a run**. The tier multiplies all of it (≈2.5× between `opus` and `sonnet`), so
+  a tier step is roughly thirteen times the lever an effort step is. Every
+  argument in this ADR that treats an effort choice as a spend decision is
+  therefore wrong, this one included until now. Effort is chosen for the work,
+  and the bill is decided by the tier and by how much each agent reads.
+
+  *So the executor's effort is chosen on its JOB, and its job is not to catch
+  plan defects.* The operator's position, adopted: an executor implements a
+  contract; falsifying that contract belongs upstream. The table becomes `high`
+  for the executor, with `xhigh` kept where a defect is expensive rather than
+  merely possible — `risk: high` or `human_checkpoint`, which is 6 of this
+  project's 49 tickets. The mechanical escalation survives; the flat default
+  drops.
+
+  **What this decision costs, stated so nobody is surprised by it.** On
+  2026-09-08 four of five executors corrected their own plan: one refused the
+  plan's literal predicate (`landed === true` is true in two states where
+  nothing landed), one overruled a reuse candidate this repository's own drift
+  judge had suggested, one mutation-checked its own assertion, and one **built a
+  forty-round six-way race probe and disproved the plan's prescribed atomic step
+  twice** — that step produced two simultaneous lock holders about one run in
+  four. Of those four, two were statically readable and belong upstream. The
+  race probe is not: it required running an experiment against the code with the
+  code in hand, which neither the planner nor the drift judge does. **That case
+  has no upstream home, and lowering the executor's effort accepts it.**
+
+  *Where the burden goes.* `drift-check` is the role whose stated job already is
+  "does this plan still match the codebase", and it runs BEFORE an executor is
+  paid. It is the natural home, and it cannot carry this at `low`. Since effort
+  is nearly free (12% of a `sonnet` line) while its tier is not, the answer is
+  `sonnet` at **`high`** — the cheapest possible place to put plan-defect
+  detection, at roughly one to two percent of the whole bill. Upstream of that,
+  plan quality is a DECOMPOSE-time matter (`/gsd-plan-review-convergence`, and
+  the planner's own tier), not a ladder one.
+
+  **A precondition this ADR cannot supply.** The conveyor cannot answer its own
+  ladder questions: `dispatch` events carry `ts, event, ticket, role, pr, by`
+  and record **neither the model nor the effort** the dispatch ran at — 196
+  events, none of them. So `high` versus `xhigh` on the executor is adopted on
+  the operator's judgement of the ROLE, not on evidence, and no future revision
+  can do better until the journal records what it dispatched. That field is the
+  first thing to add.
 - **D3 — A configured effort override must not silently disable the escalation
   it outranks.** `cfg.effort[role]` is read before the signature rule, so
   shipping the effort table as configuration would have disabled the repair
@@ -79,9 +146,27 @@ plans written the same day), executors about 45%, guards about 22%.
   repair depth, read from the journal as a third occurrence of one signature
   after a `rethink` at `max`; and contested judgment, meaning the journal
   already holds a `violation` for this ticket. Each is computable; none is a
-  prompt rule. The integrator is the single standing exception and takes `fable`
-  unconditionally: largest input in the system, one call per phase, last
-  mechanical judgment before a person merges.
+  prompt rule.
+
+  **Amended 2026-09-08 — there is no standing exception; the integrator goes
+  through the window route like every other role.** An earlier form of this
+  decision gave it `fable` unconditionally on the grounds that it reads the
+  largest input in the system, runs once per phase, and is the last mechanical
+  judgment before a person merges. All three are true and none is a
+  measurement. The measurement: its single run on 2026-09-08 consumed 291k
+  tokens end to end, against a 1M window, at exactly 2× `opus` on every
+  component. So it is `opus`/`xhigh` by default and earns `fable` when R1's
+  threshold says its input has actually grown — which at 291k measured is a
+  route that will sometimes fire, on evidence, which is the point. The
+  "last judgment before a human merge" argument survives as the reason its
+  EFFORT is `xhigh` and never drops.
+
+  *This paragraph was inconsistent with D2's amendment for several hours after
+  that amendment landed, and it is worth saying why that matters rather than
+  just fixing it: a stale sentence in the governing record is how the old
+  behaviour comes back. A generator, a reviewer or a later ticket reads the ADR,
+  finds the exception still stated, and restores it in good faith. Caught by an
+  external audit, not by us.*
 - **D5 — Fable 5.1 or nothing.** `pipeline.fable` defaults to `off`; `auto` is a
   person's signature that consent was given, because an unconsented Fable
   request in a background session waits out `dialogExpiry` and then ends the
@@ -110,17 +195,35 @@ plans written the same day), executors about 45%, guards about 22%.
   ONLY escalation available on Codex is the model, which is what D8's variants
   make reachable.
 
-  | | Claude (D2's ladder) | Codex (two values) |
+  *Table amended 2026-09-08 to match D1's exemptions, D2's effort decision and
+  D4's withdrawal of the integrator's exception. Four rows were stale and are
+  marked; the earlier values are kept struck through in the text below the
+  table, because a reader who remembers the old grid needs to see that it moved
+  rather than wonder whether they misread it.*
+
+  | | Claude (D1/D2's ladder) | Codex (two values) |
   |---|---|---|
-  | mechanical: drift-check | opus / low | terra / low |
+  | drift-check | **sonnet / high** | terra / low |
+  | pr-sentinel | **sonnet / high** | terra / high |
   | research, repair roles | opus / high | terra / high |
-  | ordinary executor | opus / xhigh | terra / high |
-  | judges, and a repeated repair | opus / max | terra / high |
-  | integrator, unconditionally | fable / max | astra / high |
+  | ordinary executor | **opus / high** | terra / high |
+  | executor at `risk: high` or a checkpoint | opus / xhigh | terra / high |
+  | judges | **opus / xhigh** | terra / high |
+  | a repeated repair | opus / max | terra / high |
+  | integrator | **opus / xhigh** | astra / high |
   | the earned ceiling (D4's routes) | fable | astra / high |
 
-  The MODELS mirror each other exactly — one workhorse floor, one senior
-  ceiling that is earned, one unconditional exception for the integrator. Only
+  What moved: drift-check from `opus`/`low`; pr-sentinel out of the floor
+  altogether; the ordinary executor from `xhigh` (its job is to implement a
+  contract, not to falsify it); the judges from `max` to `xhigh` (nothing has
+  measured headroom at `xhigh`, which is what `max` is reserved for); and the
+  integrator from `fable`/`max` unconditionally to `opus`/`xhigh` earning
+  `fable` through D4's window route.
+
+  The MODELS still mirror each other on the Codex side — one workhorse floor and
+  one senior ceiling, taken statically by the integrator there because a static
+  `.toml` cannot resolve a route. On Claude there is no unconditional exception
+  any more. Only
   the effort column differs, and it differs for a measured reason rather than a
   structural one.
 
@@ -170,9 +273,14 @@ plans written the same day), executors about 45%, guards about 22%.
   Caches are model-scoped, so an escalation that changes model forfeits the
   prefix a guard has been reusing across rounds — and a guard re-reads the same
   diff and the same ADR corpus every round. That is why `arch-review` stays on
-  ONE model at `xhigh` and reaches `fable` only through D4's routes, while the
-  integrator takes `fable` unconditionally: one call per phase has no cache to
-  lose. Measured prices make the same point from the other side. Anthropic and
+  ONE model at `xhigh` and reaches `fable` only through D4's routes. *(Amended
+  2026-09-08: this clause used to continue "while the integrator takes `fable`
+  unconditionally: one call per phase has no cache to lose". The cache argument
+  is sound and survives — a single call per phase forfeits nothing — but it only
+  ever showed that the escalation is CHEAP there, never that it is NEEDED. D4's
+  amendment withdraws the exception on the measurement the cache argument never
+  supplied: 291k tokens against a 1M window, at 2× the price.)* Measured prices
+  make the same point from the other side. Anthropic and
   OpenAI are within a few percent tier for tier per 1M tokens — Sonnet 5 $2/$10
   against Terra $2/$12, Opus 5 $5/$25 against Sol $5/$30, Fable 5.1 $10/$50
   against Astra $10/$50 — so the symmetry in D6 costs the same on both sides and
@@ -196,7 +304,26 @@ One ticket, T-25-04, last in phase 25's chain, and high risk with a checkpoint
 because it changes the model of every dispatch in the conveyor. The floor and
 the two judgment efforts are in `.planning/config.json` from today so the
 policy is in force before the code enforces it; T-25-04 moves them into the
-resolver and the project config then drops them. `drift-check` at `opus`/`low`
-is the one role whose cost rises without a quality argument behind it, and the
-honest fix for it is not a tier but Step 2's own condition, which did not ask
-for fifteen of this session's judges.
+resolver and the project config then drops them.
+
+**Amended 2026-09-08, and this is the operator's first action after T-25-04
+lands, not a tidy-up.** The paragraph above said `drift-check` at `opus`/`low`
+was the one role whose cost rose without a quality argument; D1's exemption
+settles that by keeping it on `sonnet`, at `high`. What replaces it is sharper
+and it points the other way: **the two keys this ADR put in
+`.planning/config.json` now SHADOW the ceiling they were meant to stand in
+for.** `ladderTier` reads `cfg.models[role]` above the route logic, so with
+`pipeline.models.arch-review` and `.integrator` set to `opus`, R1 and R3 cannot
+fire at all — demonstrated by the review of PR #57:
+`model arch-review --input-tokens 300000` answers `opus`/`max` and prints
+*"the window ceiling route fired … but pipeline.models.\"arch-review\" = \"opus\"
+outranks it"*. **Drop both keys when T-25-04 lands**, or the ceiling it builds
+is inert here while its tests say it works. `pipeline.effort.*` is already
+absent, so that half needs nothing.
+
+And one consequence that is a spend decision rather than a cleanup:
+`model_overrides.gsd-planner` / `.gsd-code-reviewer` set to `fable` become Step
+0 drift the moment `gsd-tune` starts wanting `opus` for them. The two ways out
+are NOT equivalent — flipping the overrides to `opus` is a config edit, while
+setting `pipeline.fable: auto` also opens every ceiling route AND activates the
+≥ 2.1.255 version blocker. Decide it deliberately.

@@ -2,11 +2,11 @@ SHELL := /bin/bash
 
 BASE_IMAGE ?= claude-shipyard-base:test
 DEV_IMAGE ?= claude-shipyard:test
-GSD_CORE_VERSION ?= 1.7.0
+GSD_CORE_VERSION ?= 1.13.0
 KARPATHY_SKILLS_REPO ?= https://github.com/multica-ai/andrej-karpathy-skills
 KARPATHY_SKILLS_REF ?= 2c606141936f1eeef17fa3043a72095b4765b9c2
 KARPATHY_SKILLS_STAGING ?= .build/karpathy-skills
-CLAUDE_CODE_VERSION ?= 2.1.200
+CLAUDE_CODE_VERSION ?= 2.1.263
 CONTEXT7_MCP_VERSION ?= 2.2.5
 TYPESCRIPT_LANGUAGE_SERVER_VERSION ?= 5.2.0
 TYPESCRIPT_VERSION ?= 6.0.3

@@ -282,6 +282,42 @@ test('the same signature after a push is `repeat`', () => {
   assert.equal(verdict(project, ['--signature', 'aaaa', '--head', 'h2']).verdict, 'repeat');
 });
 
+test('the same signature a THIRD time is `repeat_exhausted` — the second is still `repeat`', () => {
+  // The rung ADR-005 D4 R2 rests on. `seen` counts PRIOR attempts and the verdict
+  // is computed before the round it is about is journalled, so the third
+  // occurrence of one signature arrives with seen = 2:
+  //   1st → first (fix) · 2nd → repeat (rethink, at `max`) · 3rd → the deepest
+  //   thinking has already failed on this exact failure, so the next rung is the
+  //   ceiling MODEL and after that a human — never a third model at one depth.
+  // Every head differs on purpose: the same signature at the SAME head is the
+  // flake rule, which outranks this one (asserted below).
+  const { project, graph } = scratch();
+  seed(graph, [attempt('aaaa', 'h1')]);
+  assert.equal(verdict(project, ['--signature', 'aaaa', '--head', 'h2']).verdict, 'repeat',
+    'the second occurrence is a rethink, not an exhaustion');
+  seed(graph, [attempt('aaaa', 'h1'), attempt('aaaa', 'h2')]);
+  const third = verdict(project, ['--signature', 'aaaa', '--head', 'h3']);
+  assert.equal(third.verdict, 'repeat_exhausted');
+  assert.equal(third.seen, 2, 'two priors + the failure in hand = the same failure a third time');
+});
+
+test('a green resets it: the count is the WINDOW, not the whole journal', () => {
+  // Same rule as the k-distinct window, over a different subject. A failure that
+  // was fixed, went green, and came back twice is on its second occurrence, not
+  // its fourth — otherwise the ceiling route fires on a healthy ticket.
+  const { project, graph } = scratch();
+  seed(graph, [attempt('aaaa', 'h1'), attempt('aaaa', 'h2'), greenAttempt(), attempt('aaaa', 'h3')]);
+  assert.equal(verdict(project, ['--signature', 'aaaa', '--head', 'h4']).verdict, 'repeat');
+});
+
+test('the flake rules still outrank it — an unchanged tree is not an exhausted repair', () => {
+  const { project, graph } = scratch();
+  // Same signature three times, and the last one at the head being asked about:
+  // the tree did not move, so this is the candidate rule's business.
+  seed(graph, [attempt('aaaa', 'h1'), attempt('aaaa', 'h2')]);
+  assert.equal(verdict(project, ['--signature', 'aaaa', '--head', 'h2']).verdict, 'flake_candidate');
+});
+
 test('k distinct signatures with no progress is `plan_defect`', () => {
   const { project, graph } = scratch();
   seed(graph, [attempt('aaaa', 'h1'), attempt('bbbb', 'h2')]);
@@ -385,14 +421,16 @@ test('the real degraded form — `unknown-<hash>` — is excluded the same way',
   assert.notEqual(got.verdict, 'plan_defect');
 });
 
-test('an unreadable failure still reads as `repeat` when it keeps happening', () => {
+test('an unreadable failure still walks the repeat ladder when it keeps happening', () => {
   // Excluded from the k-rule, NOT from the rest: the current signature still
-  // participates in first/repeat/flake_candidate, or an illegible log would be
-  // invisible to the strategy switch as well.
+  // participates in first/repeat/repeat_exhausted/flake_candidate, or an
+  // illegible log would be invisible to the strategy switch as well.
   const { project, graph } = scratch();
+  seed(graph, [attempt('unknown', 'h1')]);
+  assert.equal(verdict(project, ['--signature', 'unknown', '--head', 'h2', '--k', '3']).verdict, 'repeat');
   seed(graph, [attempt('unknown', 'h1'), attempt('unknown', 'h2')]);
   const got = verdict(project, ['--signature', 'unknown', '--head', 'h3', '--k', '3']);
-  assert.equal(got.verdict, 'repeat');
+  assert.equal(got.verdict, 'repeat_exhausted', 'the third one is exhausted, illegible or not');
   assert.equal(got.seen, 2, 'seen still counts THIS signature');
   assert.equal(got.distinct, 0, 'and nothing readable is on the board');
 });
@@ -558,14 +596,17 @@ test('the bare form prints the verdict word alone', () => {
   assert.equal(r.stdout.trim(), 'repeat');
 });
 
-test('the enum is exactly the six pinned words', () => {
-  // T-20-02 and T-20-06 switch on these literals; a seventh word, or a synonym,
-  // is a silent no-op in the policy that reads them.
+test('the enum is exactly the seven pinned words', () => {
+  // T-20-02 and T-20-06 switch on these literals; an eighth word, or a synonym,
+  // is a silent no-op in the policy that reads them. `repeat_exhausted` sits
+  // beside `repeat` because pipeline-config.cjs's STRATEGIES keys must be this
+  // list VERBATIM, order included (its own test asserts the two are identical).
   const src = fs.readFileSync(SCRIPT, 'utf8');
   const m = /const VERDICTS = \[([^\]]*)\]/.exec(src);
   assert.ok(m, 'the enum is declared once, as VERDICTS');
   const words = m[1].split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter(Boolean);
-  assert.deepEqual(words, ['first', 'progress', 'repeat', 'flake_candidate', 'flake', 'plan_defect']);
+  assert.deepEqual(words,
+    ['first', 'progress', 'repeat', 'repeat_exhausted', 'flake_candidate', 'flake', 'plan_defect']);
 });
 
 suite('failure signature — the journal is the record, and it lands in the project');

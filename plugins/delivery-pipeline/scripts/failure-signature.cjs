@@ -23,6 +23,9 @@
 //
 //   changed              → progress; hold the tier, continue
 //   same twice           → repeat; change STRATEGY, not tier (T-20-02)
+//   same a THIRD time    → repeat_exhausted; the deeper effort has been spent on
+//                          this failure already, so the next rung is the ceiling
+//                          MODEL (ADR-005 D4's second route) or a human
 //   same at the same HEAD→ flake_candidate; re-run the job once before dispatching
 //   K distinct, no green → plan_defect; a person in the morning, not now (T-20-03)
 //
@@ -69,10 +72,23 @@ const crypto = require('crypto');
 const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 
 // The pinned enum. T-20-02's ladder and T-20-06's loop switch on these literals,
-// so a synonym or a seventh word is a silent no-op in whatever reads it.
-const VERDICTS = ['first', 'progress', 'repeat', 'flake_candidate', 'flake', 'plan_defect'];
+// so a synonym or an eighth word is a silent no-op in whatever reads it.
+const VERDICTS = ['first', 'progress', 'repeat', 'repeat_exhausted', 'flake_candidate', 'flake', 'plan_defect'];
 
 const DEFAULT_K = 3; // the same default T-20-02 declares as pipeline.plan_defect_signatures
+
+// How many PRIOR attempts carrying this signature make the current failure
+// "exhausted". `seen` counts priors only — the verdict is computed BEFORE the
+// round it is about is journalled (deliver.md a2 runs before step d) — so two
+// priors plus the failure in hand is the same failure a THIRD time:
+//
+//   1st  → first            strategy `fix`
+//   2nd  → repeat           strategy `rethink`, and the effort deepens to `max`
+//   3rd  → repeat_exhausted the deepest thinking has already failed on this
+//                           signature, so the next rung is the ceiling model
+//                           (ADR-005 D4 R2) and after that a human, never a
+//                           third model at the same depth.
+const EXHAUSTED_PRIOR_REPEATS = 2;
 
 // A failure nobody could read SAYS SO IN ITS SIGNATURE. The k-rule reads nothing
 // but signature strings back out of the journal — no `error_class` is recorded
@@ -306,7 +322,9 @@ function isGreen(e, i, lastLiftAt) {
  *      → flake_candidate (the tree did not move; re-run before dispatching)
  *   3. k distinct signatures, current one included → plan_defect
  *   4. nothing on record → first
- *   5. the same as the most recent one → repeat (change strategy, hold the tier)
+ *   5. the same as the most recent one → repeat (change strategy, hold the tier),
+ *      or repeat_exhausted once `seen` has reached EXHAUSTED_PRIOR_REPEATS — the
+ *      same failure a third time, after the deeper effort was already spent on it
  *   6. otherwise → progress
  *
  * Events are read in JOURNAL order, not by `ts`: the journal is append-only and
@@ -372,7 +390,12 @@ function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
 
   if (distinct >= k) return { verdict: 'plan_defect', ...base };
   if (!priorSignatures.length) return { verdict: 'first', ...base };
-  if (priorSignatures[priorSignatures.length - 1] === signature) return { verdict: 'repeat', ...base };
+  if (priorSignatures[priorSignatures.length - 1] === signature) {
+    // `seen` is already the number the caller needs; the split is here rather
+    // than at the call site so the journal stays the single source and every
+    // consumer reads one word instead of re-deriving a threshold.
+    return { verdict: seen >= EXHAUSTED_PRIOR_REPEATS ? 'repeat_exhausted' : 'repeat', ...base };
+  }
   return { verdict: 'progress', ...base };
 }
 
@@ -497,7 +520,7 @@ if (require.main === module) {
         ts, event: 'flake_rerun', ticket, signature: flags.signature, head: flags.head,
         outcome: 'red', by: 'failure-signature',
       });
-      console.log(`${ticket}: ${flags.signature} failed again at the same head — deterministic, the next verdict reads it as \`repeat\``);
+      console.log(`${ticket}: ${flags.signature} failed again at the same head — deterministic, the next verdict reads it as \`repeat\` (or \`repeat_exhausted\` if it is the third time)`);
     }
     process.exit(0);
   }

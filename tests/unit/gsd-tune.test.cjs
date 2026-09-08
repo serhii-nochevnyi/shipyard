@@ -20,6 +20,9 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 const SCRIPT = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'gsd-tune.cjs'
 );
+const pc = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
+));
 
 function project(config = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsdtune-'));
@@ -27,7 +30,35 @@ function project(config = {}) {
   fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(config, null, 2));
   return dir;
 }
-const run = (dir, args = []) => spawnSync('node', [SCRIPT, ...args], { cwd: dir, encoding: 'utf8' });
+
+// The version-floor checks read the machine: `claude --version`, `codex --version`
+// and `$CODEX_HOME/config.toml`. A test that inherited those would pass or fail by
+// what happens to be installed on the developer's laptop — and it did, on the
+// first run: this host's own ~/.codex/config.toml names gpt-6-astra against Codex
+// 0.147.0, so an unrelated assertion started failing on a real blocker. So every
+// invocation gets an EMPTY CODEX_HOME and a PATH with no CLIs on it, and the
+// tests that want a version stub one in deliberately.
+const EMPTY_CODEX = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-nocodex-'));
+const hermetic = (extra = {}) => ({
+  ...process.env, CODEX_HOME: EMPTY_CODEX, PATH: path.join(EMPTY_CODEX, 'bin'), ...extra,
+});
+// `process.execPath` and not 'node': the hermetic PATH has no interpreter on it
+// either, so a spawn by name would fail to start at all.
+const run = (dir, args = [], env = {}) =>
+  spawnSync(process.execPath, [SCRIPT, ...args], { cwd: dir, encoding: 'utf8', env: hermetic(env) });
+
+// One CLI on PATH, printing the version we want to test against — the same shape
+// the real ones print, because the reader extracts the number rather than taking
+// the whole line.
+function stubCli(bins) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-stubbin-'));
+  for (const [name, line] of Object.entries(bins)) {
+    const p = path.join(dir, name);
+    fs.writeFileSync(p, `#!/bin/sh\necho "${line}"\n`);
+    fs.chmodSync(p, 0o755);
+  }
+  return dir;
+}
 const readCfg = (dir) => JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8'));
 const driftOf = (dir, args = []) => JSON.parse(run(dir, ['--json', ...args]).stdout).drift;
 const keyed = (drift) => Object.fromEntries(drift.map((d) => [d.key, d]));
@@ -84,17 +115,23 @@ test('an already-correct skill entry is left alone', () => {
   assert.equal(d['agent_skills.gsd-executor'], undefined, 'no drift on a correct value');
 });
 
-test('the 1M tier for GSD\'s agents is set on Claude, and only there', () => {
+test('GSD\'s two context-bound agents take the paid tier on the SAME terms as ours', () => {
+  // They had `fable` unconditionally, on the identical 1M-window argument that
+  // ADR-005 retired for `arch-review` on a measurement. So: `opus` by default,
+  // and `fable` only where a person has consented through pipeline.fable.
+  const shut = keyed(driftOf(project({}), ['--runtime', 'claude']));
+  assert.equal(shut['model_overrides.gsd-planner'].want, 'opus');
+  assert.equal(shut['model_overrides.gsd-code-reviewer'].want, 'opus');
+  const consented = keyed(driftOf(project({ pipeline: { fable: 'auto' } }), ['--runtime', 'claude']));
+  assert.equal(consented['model_overrides.gsd-planner'].want, 'fable');
+  assert.equal(consented['model_overrides.gsd-code-reviewer'].want, 'fable');
   // And via model_overrides, NOT the tier keys: the resolver's runtime-tier step
   // is guarded by `configRuntime !== 'claude'`, so model_profile_overrides.claude.*
   // is inert — it looks like the lever and does nothing.
-  const claude = keyed(driftOf(project({}), ['--runtime', 'claude']));
-  assert.equal(claude['model_overrides.gsd-planner'].want, 'fable');
-  assert.equal(claude['model_overrides.gsd-code-reviewer'].want, 'fable');
-  assert.equal(claude['model_profile_overrides.claude.opus'], undefined,
+  assert.equal(shut['model_profile_overrides.claude.opus'], undefined,
     'the inert key must not be written — it would read as a working setting');
 
-  const codex = keyed(driftOf(project({}), ['--runtime', 'codex']));
+  const codex = keyed(driftOf(project({ pipeline: { fable: 'auto' } }), ['--runtime', 'codex']));
   for (const k of Object.keys(codex)) {
     assert.ok(!k.startsWith('model_overrides.'), `${k}: fable does not exist off Claude`);
   }
@@ -280,6 +317,130 @@ test('model_profile mirrors the conveyor\'s own policy, in GSD\'s vocabulary', (
   }
 });
 
+suite('gsd-tune — the version floors, which no key can fix');
+
+// A third class beside REQUIRED and tuning, and the distinction is that --apply
+// has nothing to write: a runtime too old to resolve the model a project has
+// consented to is an install to upgrade, not a value to flatten. So they are
+// report-only and they keep the exit code non-zero even after a successful write.
+const blockersOf = (dir, args = [], env = {}) =>
+  JSON.parse(run(dir, ['--json', ...args], env).stdout).blockers;
+
+test('pipeline.fable: auto below Claude Code 2.1.255 is a blocker, and it names the floor', () => {
+  // Below that version the `fable` alias resolves to Fable 5 — the model the
+  // operator ruled out — and it does so silently, which is the whole reason this
+  // check exists rather than a comment.
+  const dir = project({ runtime: 'claude', pipeline: { fable: 'auto' } });
+  const old = { PATH: stubCli({ claude: '2.1.240 (Claude Code)' }) };
+  const r = run(dir, [], old);
+  assert.equal(r.status, 1, r.stdout);
+  assert.ok(/2\.1\.255/.test(r.stdout), `the floor must be named: ${r.stdout}`);
+  assert.ok(/ANTHROPIC_DEFAULT_FABLE_MODEL/.test(r.stdout),
+    'and the second way to miss it, which is the stronger guarantee');
+  const b = blockersOf(dir, [], old);
+  assert.equal(b.length, 1);
+  assert.equal(b[0].what, 'fable-floor');
+  assert.equal(b[0].have, '2.1.240');
+  assert.equal(b[0].need, '2.1.255');
+});
+
+test('at or above the floor it is silent, and a project that never consented is silent at any version', () => {
+  const consented = project({ runtime: 'claude', pipeline: { fable: 'auto' } });
+  assert.deepEqual(blockersOf(consented, [], { PATH: stubCli({ claude: '2.1.263 (Claude Code)' }) }), []);
+  assert.deepEqual(blockersOf(consented, [], { PATH: stubCli({ claude: '2.1.255 (Claude Code)' }) }), [],
+    'the floor is inclusive — 2.1.255 IS the version that resolves 5.1');
+  const noConsent = project({ runtime: 'claude' });
+  assert.deepEqual(blockersOf(noConsent, [], { PATH: stubCli({ claude: '2.1.100 (Claude Code)' }) }), [],
+    'nothing asks for the paid tier, so its floor is not this project\'s problem');
+});
+
+test('a CLI that cannot be read at all is silence, not a finding', () => {
+  // An unmeasurable floor asserted as a blocker would fire on every run of a host
+  // we know nothing about — a container without the CLI on PATH, say.
+  const dir = project({ runtime: 'claude', pipeline: { fable: 'auto' } });
+  assert.deepEqual(blockersOf(dir, []), [], 'no claude on PATH');
+  assert.deepEqual(blockersOf(dir, [], { PATH: stubCli({ claude: 'not a version at all' }) }), []);
+});
+
+// The ceiling model and its floor come from the PALETTE, never from a constant in
+// gsd-tune: a second copy of a model id goes stale the next time the operator
+// changes the palette, and tests/unit/gen-codex-shipyard.test.cjs enforces that
+// the shipped default is the only place an id appears as a value.
+const CEILING = pc.DEFAULT_CODEX_MODELS.filter((e) => e.min_cli).slice(-1)[0];
+const codexHomeWith = (contents) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexhome-'));
+  fs.writeFileSync(path.join(dir, 'config.toml'), contents);
+  return dir;
+};
+
+test('a palette model below its declared min_cli is the mirror blocker, read from config.toml', () => {
+  // The floor is the palette's own `min_cli` (the ceiling entry ships with one,
+  // because first-class configuration for that model arrived in a specific Codex
+  // release). Below it the agent files naming the model may simply be ignored,
+  // which looks like a working install running a model nobody chose.
+  const codexHome = codexHomeWith(
+    `[agents.shipyard-integrator]\nmodel = "${CEILING.model}"\nmodel_reasoning_effort = "high"\n`);
+  const dir = project({ runtime: 'codex' });
+  const env = { CODEX_HOME: codexHome, PATH: stubCli({ codex: 'codex-cli 0.147.0' }) };
+  const r = run(dir, [], env);
+  assert.equal(r.status, 1, r.stdout);
+  assert.ok(r.stdout.includes(CEILING.min_cli), `the version must be named: ${r.stdout}`);
+  const b = blockersOf(dir, [], env);
+  assert.equal(b.length, 1);
+  assert.equal(b[0].what, 'codex-model-floor');
+  assert.equal(b[0].model, CEILING.model);
+  assert.equal(b[0].have, '0.147.0');
+  assert.equal(b[0].need, CEILING.min_cli);
+  // At a release above the floor it is silent…
+  assert.deepEqual(blockersOf(dir, [], { ...env, PATH: stubCli({ codex: 'codex-cli 0.153.4' }) }), []);
+  // …and so is a config that names only the workhorse, at any version.
+  fs.writeFileSync(path.join(codexHome, 'config.toml'),
+    `[agents.shipyard-executor]\nmodel = "${pc.DEFAULT_CODEX_MODELS[0].model}"\n`);
+  assert.deepEqual(blockersOf(dir, [], env), []);
+});
+
+test('a palette entry that declares no floor cannot produce one', () => {
+  // The operator declared no version requirement, so there is nothing to measure
+  // against — and inventing one would be this file holding an opinion about a
+  // model it has never heard of.
+  const codexHome = codexHomeWith('model = "some-new-model"\n');
+  const dir = project({ runtime: 'codex', pipeline: { codex_models: 'some-new-model:high' } });
+  assert.deepEqual(
+    blockersOf(dir, [], { CODEX_HOME: codexHome, PATH: stubCli({ codex: 'codex-cli 0.1.0' }) }), []);
+});
+
+test('a Codex install elsewhere on the machine is not a Claude project\'s finding', () => {
+  // gsd-tune runs at Step 0 of every delivery. A dual-runtime host has a
+  // ~/.codex/config.toml whatever this project delivers on, and a Codex version
+  // report in front of a Claude run is a report nobody in that session can act
+  // on — which is how a report teaches its reader to skip it.
+  const codexHome = codexHomeWith(`model = "${CEILING.model}"\n`);
+  const dir = project({ runtime: 'claude' });
+  assert.deepEqual(
+    blockersOf(dir, [], { CODEX_HOME: codexHome, PATH: stubCli({ codex: 'codex-cli 0.147.0' }) }), []);
+});
+
+test('a blocker survives --apply: the write happens, the exit code still reports it', () => {
+  const dir = project({ runtime: 'claude', pipeline: { fable: 'auto' } });
+  const env = { PATH: stubCli({ claude: '2.1.240 (Claude Code)' }) };
+  const r = run(dir, ['--apply'], env);
+  assert.equal(r.status, 1, 'nothing here can write a CLI version');
+  assert.equal(readCfg(dir).git.branching_strategy, 'none', 'and the writable half still landed');
+  const again = run(dir, ['--apply'], env);
+  assert.equal(again.status, 1, 'with no drift left, the floor alone keeps it non-zero');
+  assert.ok(/2\.1\.255/.test(again.stdout), again.stdout);
+});
+
+test('version comparison is numeric, not lexical', () => {
+  // 2.1.9 vs 2.1.10 is exactly the pair a string compare gets wrong, and exactly
+  // the pair a floor check meets.
+  const dir = project({ runtime: 'claude', pipeline: { fable: 'auto' } });
+  assert.equal(blockersOf(dir, [], { PATH: stubCli({ claude: '2.1.9 (Claude Code)' }) }).length, 1,
+    '2.1.9 is BELOW 2.1.255');
+  assert.equal(blockersOf(dir, [], { PATH: stubCli({ claude: '2.2.0 (Claude Code)' }) }).length, 0,
+    '2.2.0 is above it');
+});
+
 suite('gsd-tune --global — the install-time surface');
 
 // ~/.gsd/defaults.json is what a directory with NO .planning/ inherits. Verified
@@ -295,7 +456,7 @@ function home(defaults) {
   return dir;
 }
 const runGlobal = (h, args = []) =>
-  spawnSync('node', [SCRIPT, '--global', ...args], { cwd: h, encoding: 'utf8', env: { ...process.env, HOME: h } });
+  spawnSync(process.execPath, [SCRIPT, '--global', ...args], { cwd: h, encoding: 'utf8', env: hermetic({ HOME: h }) });
 const globalCfg = (h) => JSON.parse(fs.readFileSync(path.join(h, '.gsd', 'defaults.json'), 'utf8'));
 
 test('nothing conveyor-shaped is ever written machine-wide', () => {

@@ -566,6 +566,38 @@ tickets:
     primary_parent: T-25-03
     pr_base: ticket/T-25-03-the-prose-names-the-models-the-runtimes
     jira: null
+  T-25-05:
+    title: A dispatch records what it dispatched
+    plan: '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-05-PLAN.md'
+    phase: '25'
+    repo: null
+    wave: 11
+    depends_on: [T-25-04]
+    files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/dispatch-record.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-25-05-a-dispatch-records-what-it-dispatched
+    epic: epic/25-the-conveyor-follows-the-models-it-runs-on
+    primary_parent: T-25-04
+    pr_base: ticket/T-25-04-the-floor-is-opus-the-depth-is-effort-an
+    jira: null
+  T-25-06:
+    title: Every home of a pinned fact agrees with the others
+    plan: '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-06-PLAN.md'
+    phase: '25'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [docs/gsd_multilevel_delivery_pipeline.md, plugins/delivery-pipeline/commands/investigate.md, docker-compose.yml, '.env.example', tests/smoke/docs-smoke.sh]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-25-06-every-home-of-a-pinned-fact-agrees-with
+    epic: epic/25-the-conveyor-follows-the-models-it-runs-on
+    primary_parent: null
+    pr_base: epic/25-the-conveyor-follows-the-models-it-runs-on
+    jira: null
   T-26-01:
     title: 'One ownership matcher, exact by construction'
     plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-01-PLAN.md'
@@ -780,7 +812,7 @@ tickets:
     phase: '26'
     repo: null
     wave: 14
-    depends_on: [T-26-11, T-25-04]
+    depends_on: [T-26-11, T-25-05]
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/ci-wait.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false

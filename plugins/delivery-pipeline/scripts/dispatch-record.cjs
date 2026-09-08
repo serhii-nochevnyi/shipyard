@@ -4,7 +4,9 @@
 // dispatch-record.cjs — the durable home for "this ticket is with an agent right
 // now".
 //
-//   dispatch-record.cjs mark  <ticket> <role> [--graph <dir>]
+//   dispatch-record.cjs mark  <ticket> <role> [--model <alias>] [--effort <level>]
+//                             [--effort-applied <level>] [--reason <text>]
+//                             [--agent-file <name>] [--graph <dir>]
 //   dispatch-record.cjs clear <ticket>        [--graph <dir>]
 //   dispatch-record.cjs list  [--json]        [--graph <dir>]
 //
@@ -60,7 +62,11 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 // One role vocabulary for the whole conveyor: the same names `pipeline-config.cjs
 // model <role>` resolves a model for. A dispatch filed under a name the ladder
 // does not know is a record whose owner nobody can identify.
-const { ROLES } = require(path.join(__dirname, 'pipeline-config.cjs'));
+//
+// TIERS and EFFORTS come from the SAME module for the same reason: the recorder
+// validates against the ladder's own vocabulary, never a copy of it, or a tier
+// added there would be refused here by a list nobody remembered to update.
+const { ROLES, TIERS, EFFORTS } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -124,6 +130,163 @@ const DISPATCH_SUBJECT = {
 const DEFAULT_SUBJECT = DISPATCH_SUBJECT.executor;
 
 const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
+
+// ── WHAT THE DISPATCH DECIDED, recorded beside WHO holds the ticket ──────────
+//
+// The record used to carry `role` and nothing about the model, so the journal
+// could say a judge was dispatched 196 times and not once what it ran at. Every
+// row of the ladder was therefore adopted on reasoning, and no revision of it
+// could be better than the reasoning until these fields existed.
+//
+// Every one is OPTIONAL and every one is written ONLY when the caller passes it.
+// There is no default, no inference and no fallback to a session setting: an
+// omitted flag writes NO KEY AT ALL, because absence here means UNMEASURED and a
+// `null` would read as a measured unknown. The same discipline the conveyor
+// applies to `landed`, `checks` and `unresolved` — positive evidence before a
+// mutation, and writing a fact IS the mutation.
+//
+// `effort` and `effort_applied` are TWO CLAIMS and must never be collapsed into
+// one:
+//   * `--effort` is what the RESOLVER decided (`pipeline-config.cjs model … --json`);
+//   * `--effort-applied` is what the SPAWN could actually carry, and only the
+//     Workflow path can: `agent()` takes an effort, the Agent tool has no such
+//     parameter, so an Agent-dispatched judge runs at the SESSION's own effort
+//     whatever the ladder chose. Recording the resolved value as applied would
+//     poison the very evidence these fields exist to collect — a later review
+//     would compare rows that were never in force against rows that were.
+// So the Agent path omits `--effort-applied`, its absence means "nobody measured
+// this", and the recorder must not helpfully fill it in from the other flag.
+const MARK_FLAGS = ['model', 'effort', 'effort-applied', 'reason', 'agent-file'];
+// Flag name → the key written into the record and the journal line. The query in
+// deliver.md reads these names, so they are the field vocabulary, not an
+// implementation detail.
+const MARK_FIELD = {
+  model: 'model',
+  effort: 'effort',
+  'effort-applied': 'effort_applied',
+  reason: 'reason',
+  'agent-file': 'agent_file',
+};
+
+// ── the Codex half: which FILE was invoked ───────────────────────────────────
+//
+// An agent on Codex is a static `.toml`, so the dispatch's real decision is the
+// file: `shipyard-<reference>` at the palette's floor, or its `-deep` twin at the
+// ceiling. Recording the role alone loses exactly the distinction the palette
+// exists to express.
+//
+// The accepted names are derived from the plugin's OWN `references/` directory,
+// which is the generator's source of truth for "which agents exist" and which
+// ships inside the bundle — `scripts/gen-codex-shipyard.cjs` does not, so it
+// cannot be required here.
+//
+// `-deep` is written for four roles only; the set is a local copy of that
+// generator's `DEEP_ROLES` (there is nothing exported inside the plugin to read
+// it from), and tests/unit/dispatch-record.test.cjs asserts the two are equal so
+// the copy cannot drift.
+const CODEX_DEEP_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel', 'arch-review']);
+const CODEX_DEEP_SUFFIX = '-deep';
+const CODEX_AGENT_PREFIX = 'shipyard-';
+
+function codexAgentFiles(dir = path.join(__dirname, '..', 'references')) {
+  let refs;
+  try { refs = fs.readdirSync(dir); } catch { return null; }
+  const out = new Set();
+  for (const f of refs) {
+    if (!f.endsWith('.md')) continue;
+    const role = f.slice(0, -3);
+    out.add(`${CODEX_AGENT_PREFIX}${role}`);
+    if (CODEX_DEEP_ROLES.has(role)) out.add(`${CODEX_AGENT_PREFIX}${role}${CODEX_DEEP_SUFFIX}`);
+  }
+  return out;
+}
+
+/**
+ * The `mark` flags, in ONE left-to-right pass — gate-trailer.cjs's shape, for the
+ * holes it already paid for:
+ *
+ *   * an argument outside the list is REFUSED rather than ignored, because a
+ *     mis-typed `--modle opus` does not fail, it records a dispatch with no model
+ *     at all — the silent omission this whole ticket exists to end;
+ *   * a DUPLICATE is refused: `indexOf` takes the first, so the later value would
+ *     be dropped in silence and the record would name a model the spawn did not
+ *     get;
+ *   * the arity lives in the loop that consumes it, so a flag with no value is
+ *     reported against THAT flag instead of mis-blaming its neighbour's value.
+ *
+ * Values are validated here, before anything is written: a mis-spelled alias
+ * recorded silently is worse than no field, because it would be counted later as
+ * fact.
+ */
+function parseMarkFlags(argv) {
+  const given = new Map();
+  for (let i = 0; i < argv.length;) {
+    const arg = String(argv[i]);
+    const name = arg.startsWith('--') ? arg.slice(2) : null;
+    if (name === null || !MARK_FLAGS.includes(name)) {
+      fail(
+        `unexpected argument "${arg}" — the recorder would drop it in silence, and a dispatch ` +
+        'recorded without its model is the gap this store exists to close.\n' +
+        `  flags: ${MARK_FLAGS.map((f) => `--${f}`).join(', ')}`
+      );
+    }
+    if (given.has(name)) {
+      fail(`--${name} given more than once — the later value would be silently dropped; pass it once`);
+    }
+    const v = argv[i + 1];
+    if (v === undefined || String(v).startsWith('--')) fail(`--${name} needs a value`);
+    given.set(name, String(v));
+    i += 2;
+  }
+
+  const decided = {};
+  const model = given.get('model');
+  if (model !== undefined) {
+    if (!TIERS.includes(model)) {
+      fail(
+        `"${model}" is not a tier alias — a model recorded by a name nothing resolves would be read ` +
+        'later as fact.\n' +
+        `  tiers: ${TIERS.join(', ')}`
+      );
+    }
+    decided.model = model;
+  }
+  for (const flag of ['effort', 'effort-applied']) {
+    const level = given.get(flag);
+    if (level === undefined) continue; // absent stays absent — never filled in from its twin
+    if (!EFFORTS.includes(level)) {
+      fail(
+        `"${level}" is not an effort level — --${flag} would record a depth nothing ran at.\n` +
+        `  efforts: ${EFFORTS.join(', ')}`
+      );
+    }
+    decided[MARK_FIELD[flag]] = level;
+  }
+  const reason = given.get('reason');
+  if (reason !== undefined) {
+    if (!reason.trim()) fail('--reason needs text — the branch of the ladder that fired, e.g. "role baseline"');
+    decided.reason = reason;
+  }
+  const agentFile = given.get('agent-file');
+  if (agentFile !== undefined) {
+    const known = codexAgentFiles();
+    if (!known) {
+      fail(
+        `--agent-file cannot be verified: no references/ directory beside ${__dirname}.\n` +
+        '  The point of the field is to record which agent file RAN, so an unverifiable name is worse than none.'
+      );
+    }
+    if (!known.has(agentFile)) {
+      fail(
+        `"${agentFile}" is not an agent file the Codex generator produces — recording it would name a ` +
+        'file nobody can look at.\n' +
+        `  agent files: ${[...known].sort().join(', ')}`
+      );
+    }
+    decided.agent_file = agentFile;
+  }
+  return decided;
+}
 
 // `draft` is normalized so `undefined` and `false` are one state; everything else
 // is compared as it stands, with an absent field as null.
@@ -362,7 +525,10 @@ function refreshFront(cwd) {
   }
 }
 
-module.exports = { activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DISPATCH_TTL_MS };
+module.exports = {
+  activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
+  MARK_FLAGS, MARK_FIELD, codexAgentFiles, CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX,
+};
 
 if (require.main === module) {
   const [cmd, ...rest] = ARGV;
@@ -384,13 +550,23 @@ if (require.main === module) {
 
   if (cmd === 'mark') {
     const [ticket, role] = rest;
-    if (!ticket || !role) fail(`usage: dispatch-record.cjs mark <ticket> <role> [--graph <dir>]   (roles: ${ROLES.join(', ')})`);
+    if (!ticket || !role) {
+      fail(
+        'usage: dispatch-record.cjs mark <ticket> <role> ' +
+        `[${MARK_FLAGS.map((f) => `--${f} <v>`).join('] [')}] [--graph <dir>]\n` +
+        `  roles: ${ROLES.join(', ')}`
+      );
+    }
     // The role is what tells the morning reader WHO holds the ticket, and it is
     // the ladder's own vocabulary so that the name on the board is the name the
     // model resolver answers to.
     if (!ROLES.includes(role)) {
       fail(`"${role}" is not a pipeline role — the board would name a holder nothing can identify.\n  roles: ${ROLES.join(', ')}`);
     }
+    // Parsed and validated BEFORE the state lookup and before anything is
+    // written: a usage error must cost no lock and must never leave half a
+    // record behind.
+    const decided = parseMarkFlags(rest.slice(2));
     const s = readState(cwd)[ticket];
     if (!s) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
     const at = new Date().toISOString();
@@ -400,17 +576,22 @@ if (require.main === module) {
       store.tickets[ticket] = {
         role,
         at,
+        // Spread, never enumerated: a flag the caller did not pass contributes no
+        // key, so the record distinguishes "ran at high" from "nobody measured".
+        ...decided,
         fingerprint: dispatchFingerprint(role, s),
         // Which hash the line above is, so a reader upgrading over an existing
         // store compares each record with the rule it was written under.
         fingerprint_kind: 'role',
         pr: s.pr || null,
       };
-      // Journalled because nothing else records WHEN work was handed over. The
-      // TTL above had to be inferred from PR timestamps for want of this line;
-      // the next one can be measured. The ticket's next `status_change` closes
-      // the interval, so a `clear` needs no event of its own.
-      return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, by: 'dispatch-record' };
+      // Journalled because nothing else records WHEN work was handed over, nor
+      // WHAT it was handed to. The TTL above had to be inferred from PR
+      // timestamps for want of this line and the ladder from judgement for want
+      // of the fields; the next one of each can be measured. The ticket's next
+      // `status_change` closes the interval, so a `clear` needs no event of its
+      // own.
+      return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...decided, by: 'dispatch-record' };
     });
     // The record is durable the instant `mutate` above returns — that alone is
     // what `activeDispatches` reads. `refreshFront` only decides whether the
