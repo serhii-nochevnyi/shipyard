@@ -650,6 +650,11 @@ UNCHANGED `n`: a quarantined failure is not charged.
 `merge` and `status_change` are written by `sentinel.cjs merge` and
 `state-sync.cjs` themselves — do NOT log them by hand; log-event refuses.
 
+Logging is not syncing: an `attempt … outcome=pushed` or a `fix_round …
+pushed=true` records a write that moved GitHub, and the cached state the board is
+computed from knows nothing about it. Re-run `state-sync.cjs` before the next
+board read (see Step 4's cycle).
+
 Four more events are refused there, and for a sharper reason than duplication —
 they are not a metric ABOUT a state, they ARE the state, so a hand-written one is
 a verdict the loop reads back and believes. Each has exactly one writer:
@@ -957,9 +962,9 @@ attempts and landing nothing. When in doubt, RUN the check: it is a cheap
 read-only judge, and the failure it prevents is the most expensive one there is.
 
 - **Workflow path** (available and `use_workflow ≠ false`): `Workflow({scriptPath:
-  <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, model, effort}],
+  <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, baseRef, model, effort}],
   driftRefPath: <references/drift-check.md>,
-  baseRef: "origin/<the configured base>",
+  baseRef: "origin/<the configured base>",   // the round-level FALLBACK only
   recordCmd: "node <plugin-root>/scripts/drift-record.cjs",
   graphDir: "<project>/.planning/graph"}})`.
   `model` and `effort` come from `pipeline-config.cjs model drift-check --json`
@@ -978,6 +983,17 @@ the working tree, and the working tree is whatever branch the session is on —
 possibly one cut before the work existed, where every path is missing and the
 judge concludes "untouched" about code that is sitting on the base under those
 exact names. Tell it the ref and it checks the right tree.
+
+**And pass it PER TICKET** — `tickets[].baseRef` = `origin/<state[T].base>` from
+`delivery-state.json`, read exactly as `worktreePath`/`prBase` are read for the
+executors. In epic-stacked delivery the base IS a per-ticket fact: a root ticket
+is cut from the phase epic, a dependent one from its primary parent's branch, and
+two tickets picked in the same round routinely differ. One value for the whole
+round forces a mixed-base round into one invocation per base, and handing every
+judge the configured base instead is worse than useless — each then reads a diff
+dominated by the work its own ticket is deliberately stacked on top of, and calls
+that "movement since the plan was written". The round-level `baseRef` stays as the
+fallback for a ticket that carries none.
 
 `drifted` → **record it**, then exclude the ticket from scope and give the user a
 drift summary plus a route to /shipyard:decompose:
@@ -1439,6 +1455,20 @@ loop:
        else would ever stop it. This is not dead code — do not remove it.
      → step a
 ```
+
+**A journal write is not a board refresh — after a push, the next board read is
+`state-sync.cjs`, never `front.cjs`.** `log-event.cjs` is a dumb append-only
+writer: it records the attempt and touches nothing else, while the push it
+records re-ran the checks and, after a merge, retargeted children. `front.cjs`
+recomputes its buckets from the CACHED `delivery-state.json`, so read straight
+after a journal write it reports a board computed BEFORE that write — which is
+how "0 actionable" got concluded from a state that had never seen the push
+(2026-09-08). `dispatch-record.cjs mark|clear` is the ONE exception: it refreshes
+the overlay itself, so reading the front right after a mark is correct. The same
+obligation covers every write that moves GitHub — a push, a merge, a thread
+resolve, an undraft, a PR opened. The front now warns when it can prove it is
+behind (`⚠ this board is BEHIND reality …`); treat that line as the resync order
+it is, and do not act on any bucket printed under it.
 
 Every `park blocked` here does NOT end the run — it's an exit from the cycle of ONE PR.
 After it, return to the actionable front (Step 3/4 for the rest); the run

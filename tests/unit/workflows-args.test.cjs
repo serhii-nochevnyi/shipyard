@@ -434,4 +434,60 @@ for (const spec of DISPATCH) {
   }
 }
 
+// ── ONE DISPATCH, ONE BASE (T-27-06) ────────────────────────────────────────
+//
+// `baseRef` was ONE value for a whole round. In epic-stacked delivery that is
+// wrong by construction: a root ticket's base is the phase epic, a dependent
+// ticket's base is its primary parent's BRANCH, and two tickets picked in the
+// same round routinely differ. Measured 2026-09-08 dispatching T-26-03
+// (base `ticket/T-26-15-…`) beside T-25-03 (base `ticket/T-25-02-…`, another
+// phase): the round had to be split into two invocations, one per base, or the
+// judges would be handed a diff dominated by the work each ticket is
+// deliberately stacked on. `drift-needed.cjs:257` already resolves the
+// per-ticket base — the value is on the board at the call site, so the args
+// contract is the only thing that was missing.
+
+suite('drift-gate.mjs — one dispatch carries one base (T-27-06)');
+
+const driftArgs = (tickets, over = {}) => ({
+  tickets, driftRefPath: '/x/drift-check.md', ...over,
+});
+const promptFor = (calls, id) => {
+  const c = calls.find((x) => x.opts && x.opts.label === `drift:${id}`);
+  assert.ok(c, `no dispatch for ${id}`);
+  return c.prompt;
+};
+
+test('a mixed-base cascade dispatches each judge with ITS OWN baseRef', async () => {
+  const { calls } = await run('drift-gate', driftArgs([
+    { ...TICKETS[0], baseRef: 'origin/ticket/T-26-15-a' },
+    { ...TICKETS[1], baseRef: 'origin/ticket/T-25-02-b' },
+  ]));
+  assert.strictEqual(calls.length, 2);
+  const a = promptFor(calls, 'T-99-01');
+  const b = promptFor(calls, 'T-99-02');
+  assert.ok(a.includes('origin/ticket/T-26-15-a'), `T-99-01 must be judged against its own base: ${a}`);
+  assert.ok(!a.includes('origin/ticket/T-25-02-b'), 'and never against the other ticket\'s base');
+  assert.ok(b.includes('origin/ticket/T-25-02-b'), `T-99-02 must be judged against its own base: ${b}`);
+  assert.ok(!b.includes('origin/ticket/T-26-15-a'), 'and never against the other ticket\'s base');
+});
+
+test('the round-level baseRef stays the FALLBACK, so no existing caller breaks', async () => {
+  const { calls } = await run('drift-gate', driftArgs(
+    [TICKETS[0], { ...TICKETS[1], baseRef: 'origin/epic/25-x' }],
+    { baseRef: 'origin/main' }
+  ));
+  assert.ok(promptFor(calls, 'T-99-01').includes('origin/main'), 'a ticket with no base of its own takes the round\'s');
+  const b = promptFor(calls, 'T-99-02');
+  assert.ok(b.includes('origin/epic/25-x'), 'and a ticket that carries one wins over it');
+  assert.ok(!b.includes('origin/main'), `the fallback must not ride along beside it: ${b}`);
+});
+
+test('no base anywhere is still legal, and says nothing about a ref it does not have', async () => {
+  const { calls } = await run('drift-gate', driftArgs([TICKETS[0]]));
+  const p = promptFor(calls, 'T-99-01');
+  assert.ok(/Has landed/.test(p), p);
+  assert.ok(!/\(\)/.test(p), `an absent base must not print an empty parenthesis: ${p}`);
+});
+
 done();

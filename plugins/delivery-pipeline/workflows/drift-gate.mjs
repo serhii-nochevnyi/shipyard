@@ -6,15 +6,33 @@ export const meta = {
 
 // ── args contract (built by /shipyard:deliver before invocation) ────────────
 //   args = {
-//     tickets: [ { id, planPath, model, effort } ],  // both optional; the
-//                                                   // defaults below are the
-//                                                   // ladder's drift-check row
-//                                                    // (default sonnet / high)
+//     tickets: [ { id, planPath, baseRef, model, effort } ],  // all three
+//                        // optional; the model/effort defaults below are the
+//                        // ladder's drift-check row (sonnet / high), and
+//                        // `baseRef` falls back to the round-level one.
+//                        //
+//                        // PER TICKET, because the base is a per-ticket fact: in
+//                        // epic-stacked delivery a root ticket is cut from the
+//                        // phase epic and a dependent one from its primary
+//                        // parent's BRANCH, so two tickets picked in the same
+//                        // round routinely differ (measured 2026-09-08:
+//                        // T-26-03 off `ticket/T-26-15-…` beside T-25-03 off
+//                        // `ticket/T-25-02-…`, in another phase). One value for
+//                        // the round forced that into two invocations — and
+//                        // passing the default base to both would have been
+//                        // worse than useless, handing each judge a diff
+//                        // dominated by the work its ticket is deliberately
+//                        // stacked on top of. The caller reads it from
+//                        // `delivery-state[id].base`, exactly as it reads
+//                        // `worktreePath`/`prBase` for the executors, and
+//                        // `drift-needed.cjs` already resolves the same value.
 //     driftRefPath: "<abs path to references/drift-check.md>",
-//     baseRef: "origin/<git.base_branch>",   // optional but strongly advised —
-//                        // the ref that defines "has landed". Omit it and the
-//                        // judge falls back to reasoning about the working tree,
-//                        // which may predate the work entirely.
+//     baseRef: "origin/<git.base_branch>",   // the round-level FALLBACK, for a
+//                        // ticket that carries none — kept so no existing caller
+//                        // breaks. Strongly advised: the ref that defines "has
+//                        // landed". With neither, the judge falls back to
+//                        // reasoning about the working tree, which may predate
+//                        // the work entirely.
 //     recordCmd: "node <plugin-root>/scripts/drift-record.cjs",  // optional;
 //                        // when given, a `drifted` judge persists its own verdict
 //                        // instead of leaving it in a reply that dies with the run
@@ -94,13 +112,17 @@ phase('Drift')
 const driftFallback = (id, why) => ({ id, verdict: 'drifted', moved: [why], reuse_candidates: [] })
 
 const results = await parallel(
-  tickets.map((t) => () =>
-    agent(
+  tickets.map((t) => () => {
+    // The ticket's own base wins over the round's; the round's is the fallback.
+    // A judge handed one base for a mixed-base cascade measures "has landed"
+    // against a tree its ticket is not cut from.
+    const baseRef = (t && t.baseRef) || argv.baseRef
+    return agent(
       [
         `You are a drift-check judge. First read your full instructions and output contract from this file: ${refPath}.`,
         `Then read the ticket contract (plan file): ${t.planPath} — including every path it lists under Context reads and files_modified.`,
         `Judge ONLY ticket ${t.id}. Do NOT modify anything.`,
-        `"Has landed" means present on the integration base${argv.baseRef ? ` (${argv.baseRef})` : ''}, NOT present in the working tree. The checkout may sit on a branch cut before this work existed, where every path the ticket names is absent and that absence proves nothing — verify with \`git cat-file -e <base>:<path>\` / \`git ls-tree -r --name-only <base> -- <dir>\`.`,
+        `"Has landed" means present on the integration base${baseRef ? ` (${baseRef})` : ''}, NOT present in the working tree. The checkout may sit on a branch cut before this work existed, where every path the ticket names is absent and that absence proves nothing — verify with \`git cat-file -e <base>:<path>\` / \`git ls-tree -r --name-only <base> -- <dir>\`.`,
         `Run the reuse scan (step 4) even when nothing has drifted — search by BEHAVIOR, not by the names the plan proposes. Existing code to build on is reported in reuse_candidates and leaves the verdict "fresh"; only work that is already done, or an implementation that invalidates the ticket's approach, is "drifted".`,
         ...(argv.recordCmd
           ? [`If and only if your verdict is "drifted", persist it BEFORE answering: \`${argv.recordCmd} mark ${t.id} ${t.planPath} "<what moved>"${argv.graphDir ? ` --graph ${argv.graphDir}` : ''}\`. A verdict left only in this reply dies with the run and the next state-sync offers the same stale plan again; the record is bound to the plan's hash, so it lifts by itself once the ticket is re-planned. Report whether it landed.`]
@@ -130,7 +152,7 @@ const results = await parallel(
     )
       .then((v) => (v ? { ...v, id: t.id } : driftFallback(t.id, 'judge returned no verdict — treat as drifted')))
       .catch((e) => driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`))
-  )
+  })
 )
 
 // Every dispatch above resolves to exactly one object — a dead or throwing
