@@ -1,6 +1,6 @@
 # Multilevel delivery pipeline built on GSD
 
-> Version 3. Current pin: `@opengsd/gsd-core@1.7.0` (commands and flags
+> Version 3. Current pin: `@opengsd/gsd-core@1.13.0` (commands and flags
 > verified against the package and the next documentation; adaptation status — section 10.5).
 > Target scenario:
 > **deep investigation → decomposition into tickets with dependencies → implementation
@@ -642,12 +642,16 @@ from a host install (`make install-shipyard-codex`) against the same state files
 
 ## 7.5. Model policy
 
-Two tiers: **heavy judgment + heavy work → the Opus tier, light mechanics →
-Sonnet.** The pipeline agent layout:
+**Judgment → the top tier, and the 1M-window one wherever the runtime has it;
+heavy work → Opus; light mechanics → Sonnet.** The pipeline agent layout:
 
 ```text
-opus      integrator, arch-review,        — judgment with the most expensive mistakes,
-          executor, review-fix, ci-fix,     code work, diagnostics,
+fable     integrator, arch-review         — judgment with the most expensive mistakes,
+                                            reading a whole diff against every ADR in
+                                            one window; degrades to `opus` where the
+                                            configured runtime has no 1M tier, and the
+                                            runtime cap takes it from there
+opus      executor, review-fix, ci-fix,   — code work, diagnostics,
           research:alternatives             option design
 sonnet    drift-check, research:system-    — mechanical cross-checking and fact gathering
           state/constraints/risks
@@ -660,13 +664,18 @@ role × risk × attempt matrix, the `model_policy` profile, and any
 which is also what keeps the emitted values valid.
 
 **Only tier aliases are valid `model` values on a spawn**: `opus`, `sonnet`,
-`haiku`. The Agent tool validates `model` against exactly that set, so a full
-model ID (`claude-opus-…`) or a context-suffixed alias (`opus[1m]`) is rejected on
-input — an earlier revision of this document specified suffixed aliases, and every
-spawn following it would have failed validation. Deliberately no generation is
-pinned here: model ids move, and a document that names one goes stale silently.
-Context-window selection is a session/runtime concern and cannot be expressed in a
-spawn's `model` at all.
+`haiku` — and `fable`, the judgment tier. The Agent tool validates `model` against
+exactly that set, so a full model ID (`claude-opus-…`) or a context-suffixed alias
+(`opus[1m]`) is rejected on input — an earlier revision of this document specified
+suffixed aliases, and every spawn following it would have failed validation. Full
+model ids and `inherit` DO exist, on a different surface: `model:` in a subagent's
+own frontmatter (`.claude/agents/*.md`), which is not the tool parameter a spawn
+passes — a model-config page listing them is not permission to emit one here.
+Deliberately no generation is pinned beyond what an alias itself means (`opus` is
+Opus 5 from Claude Code 2.1.219, `fable` is Claude Fable 5.1 from 2.1.255): model
+ids move, and a document that names one goes stale silently. A context window is
+selectable only as far as a TIER expresses one — `fable` is the alias that carries
+the 1M window, and nothing finer than that can be said in a spawn's `model`.
 
 The GSD decomposition agents are governed by GSD's own mechanism
 (`model_profile` / `models` / `model_overrides` in the same config.json) —
@@ -855,7 +864,7 @@ so the two runtimes do not diverge (zero drift).
   `$CODEX_HOME/shipyard/scripts/`, agentic work — via `spawn_agent`.
 
 Installation: `make install-shipyard-codex` (requires gsd-core for Codex:
-`npx --yes @opengsd/gsd-core@1.7.0 --codex --global`). `SHIPYARD_CODEX_PHASE=1` —
+`npx --yes @opengsd/gsd-core@1.13.0 --codex --global`). `SHIPYARD_CODEX_PHASE=1` —
 investigate+decompose only. Smoke: `make test-codex-shipyard`.
 
 ## 11. Brief conclusion

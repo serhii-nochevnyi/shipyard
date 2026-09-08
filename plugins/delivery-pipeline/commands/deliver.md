@@ -250,16 +250,26 @@ supports them (Workflow's `agent()` takes `effort`; the args contracts carry
 `effort` per item), and hand the `strategy` to the fixer as part of its input.
 
 Valid model values are the aliases `opus`, `sonnet`, `haiku`, `fable` — nothing
-else. **The Agent tool accepts tier aliases only; a full model ID
-(`claude-opus-…`, or an alias with a context suffix like `opus[1m]`) is rejected
-on input validation.** Full IDs belong to GSD's own `model_overrides`, which GSD
-resolves itself.
+else. **The Agent tool accepts tier aliases only; a full model ID (`claude-opus-…`,
+or an alias with a context suffix like `opus[1m]`) is rejected on input validation.**
+That enum belongs to the TOOL PARAMETER. A subagent DEFINITION's own `model:`
+frontmatter is a different surface and does take full model ids and `inherit` —
+so a model-config page listing them says nothing about what a dispatch may
+pass. Full IDs also belong to GSD's own `model_overrides`, which GSD resolves
+itself.
 
-`fable` is Claude Fable 5: Opus-tier, **1M-token context**, adaptive thinking at
+`fable` is Fable 5.1: Opus-tier, **1M-token context**, adaptive thinking at
 xhigh effort — the only alias that expresses "top tier with a 1M window", which is
-what the old `opus[1m]` was reaching for. It is a paid model, so it is never a
-default; raise judgment to it deliberately with
-`{"pipeline": {"models": {"integrator": "fable", "arch-review": "fable"}}}`.
+what the old `opus[1m]` was reaching for. That window is why the resolver makes it
+the DEFAULT for the two judgment roles, `arch-review` and `integrator`: both read a
+whole diff against every ADR at once. It is not an opt-in — where GSD's configured
+`runtime` has no such tier (`RUNTIMES_WITH_1M_TIER` in `pipeline-config.cjs`) the
+ladder degrades to `opus` and the runtime cap takes it from there, which is one
+more reason to ASK the resolver rather than assume a value. It is a paid model: it
+may bill usage credits and asks for consent ONCE, and an unattended session waits
+out that prompt (`dialogExpiry`, 5 min) and then ends the turn without sending — so
+a project where nobody has answered it opts OUT per role until someone has:
+`{"pipeline": {"models": {"integrator": "opus", "arch-review": "opus"}}}`.
 
 Effort follows the RESOLVED tier (GSD's ladder: light→low, standard→high,
 heavy→xhigh), so escalating a repair to the top tier raises its effort with it.
@@ -1142,6 +1152,9 @@ loop:
          ABSENT to every reader once the board knows the head. The writer also
          refuses while any review thread is unresolved, because recording a
          verdict over unanswered feedback falsifies the gate.
+         NOT to be confused with GSD 1.13's `gate-status:` COMMIT trailer, which
+         its TDD audit reads: one hyphen apart, different mechanism, different
+         place (PR body vs commit message), and neither reads the other.
          Consequence to expect: a push AFTER the verdict re-owes arch-review
          instead of inheriting it — the trailer names the old head, so the front
          says `finalize` and the guard refuses the merge, naming both SHAs.
