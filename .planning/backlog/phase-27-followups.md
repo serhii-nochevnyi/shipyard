@@ -64,3 +64,34 @@ still unanswered — is it installed?" every time. Every review round in this ph
 therefore rested on Copilot alone. That is a real narrowing of review coverage
 and it is invisible unless someone reads the reinit output — worth a state-sync
 `⚠` line of its own, so a phase does not silently ship with half its reviewers.
+
+## The board offers a fix at a child whose failure is its parent's
+
+Measured 2026-09-08, twice in one cascade. T-27-03's CI went red on one
+assertion; T-27-04 base-merged that branch and inherited the identical failure
+(`✗ a landed parent releases the child on both sides at once`, same single
+assertion, runs 34268518770 and 34269493892). `front.cjs` then listed
+`fix: T-27-04` as actionable, because failing checks outrank the
+parent-still-open bucket.
+
+Taking it would have been wrong twice over: it is the same failure a fixer is
+already out on, and the remedy needs `front.cjs` and
+`tests/unit/parent-moving.test.cjs`, which are in NEITHER child's
+`files_modified` — so the second fixer would hit the exact wall the guard hit on
+the first and burn an attempt to reach the same plan-defect verdict.
+
+`parentIsMoving` does not cover this: the parent's base had not moved, so the
+child was not deferred. What the board is missing is not a moving base but an
+INHERITED failure — the child's red arrived through the merge base rather than
+from its own diff. That is computable: the failing check's signature is
+identical on both PRs, and `failure-signature.cjs compute` already produces the
+hash that would say so.
+
+Parked with `state-sync --parked T-27-04` for the session, which is the honest
+channel (it holds only until the parent's fix lands, and it is nobody's
+escalation), but a fresh session would re-offer it and dispatch blindly.
+
+Worth its own ticket, and it belongs with T-27-06's family — the front saying
+what it knows about itself. Shape: when a child's failing signature equals its
+primary parent's, the child is `waiting: parent`, not `fix`, with a why that
+names the parent's PR.
