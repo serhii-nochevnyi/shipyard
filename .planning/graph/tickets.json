@@ -1630,6 +1630,7 @@
         "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/references/pr-sentinel.md",
         "tests/unit/log-event.test.cjs",
         "tests/unit/dispatch-record.test.cjs",
         "tests/unit/pipeline-config.test.cjs"

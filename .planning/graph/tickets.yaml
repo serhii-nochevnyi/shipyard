@@ -912,7 +912,7 @@ tickets:
     repo: null
     wave: 4
     depends_on: [T-27-04]
-    files: [plugins/delivery-pipeline/scripts/log-event.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/log-event.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/pipeline-config.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/log-event.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/log-event.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/pipeline-config.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false

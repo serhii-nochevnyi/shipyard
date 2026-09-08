@@ -294,3 +294,47 @@ graph available. It could refuse a branch name that is neither the canonical one
 nor an existing branch, naming the canonical in the message. That turns a
 one-character typo into a refusal at the moment of the typo, instead of a
 warning several PRs later.
+
+## A plan amended on the ticket branch is inert for every gate
+
+Measured 2026-09-08 on T-27-05, and it is the mirror image of the scope-gate
+finding above — same root, opposite direction.
+
+The guard hit a real arch-review violation at T-27-05's fourth head: the ticket
+makes `dispatch-record mark` refuse `--reason`, and `references/pr-sentinel.md`
+— the file the guard itself reads — still told the guard to pass it, plus a bare
+`head=<sha>` the ticket's forty-character rule rejects. Correct fix, correctly
+scoped: change the reference file and declare it. The guard amended
+`files_modified` and pushed.
+
+But it amended the plan **on the ticket branch**, and that is inert:
+
+```
+$ git show main:….../27-05-PLAN.md | sed -n '/files_modified/,/requirements/p'   # 7 paths
+$ git show origin/epic/27-…:….../27-05-PLAN.md | …                               # 8 paths
+```
+
+`validate-graph.cjs` and `scope-gate.cjs` read the PROJECT checkout's
+`tickets.json`. So at the moment of the push the eighth path was declared
+nowhere any gate could see, and a project-side `scope-gate` run would have
+called that file `outside`. Nothing refused only because nobody ran it from
+there on that head.
+
+**Same root as the earlier finding, read from the other end.** This repo tracks
+`.planning/`, so a live phase has TWO copies of every declaration — the
+project's and each branch's — and which one answers a gate depends purely on
+cwd. From a worktree the gate reads a FROZEN declaration and reports correct
+work as out of scope; from the project it reads the CURRENT one and cannot see
+an amendment a branch made. Neither direction is a bug in either script; both
+are the consequence of a mutable contract living inside the tree it governs.
+
+Two fixes, and they are independent:
+
+1. **Cheap and immediate**: whoever amends a declaration mid-delivery must mirror
+   it on the planning branch, not only on the ticket branch, and the guard should
+   say so when it does one — T-27-03's precedent (`4ec4868`) is the shape. Done
+   here for T-27-05.
+2. **The real one**: gates should resolve the declaration from a single named
+   place and PRINT which one they used, the way `base-merge`/`scope-gate` already
+   print the base ref they measured. A silently-substituted declaration is a new
+   invisible behaviour, and this phase now has one instance in each direction.
