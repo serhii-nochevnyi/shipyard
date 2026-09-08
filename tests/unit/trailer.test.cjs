@@ -66,7 +66,13 @@ fs.writeFileSync(GH, [
   // `--repo`: with `--repo acme/demo` its argv starts `pr view 9 --repo` too, the
   // same prefix as the reviewers.cjs call below, and the first matching case wins.
   // No other stubbed call asks for `body,headRefOid`.
-  '  *"--json body,headRefOid"*) cat "$SHIPYARD_TRAILER_PRVIEW" ;;',
+  // `carry` runs both `gh` calls with `cwd: <worktree>` — recorded here (only
+  // when a carry test asks for it via SHIPYARD_TRAILER_CARRY_CWD) so a test can
+  // assert the process actually ran there rather than in whatever directory the
+  // test runner itself started from.
+  '  *"--json body,headRefOid"*)',
+  '    if [ -n "${SHIPYARD_TRAILER_CARRY_CWD:-}" ]; then pwd > "$SHIPYARD_TRAILER_CARRY_CWD"; fi',
+  '    cat "$SHIPYARD_TRAILER_PRVIEW" ;;',
   // reviewers.cjs asks for the review DECISION with an explicit --repo, which is
   // a different argv shape from the body read below. Unanswered it merely warns
   // (the call is tolerated), but then every writer case would run with a stub
@@ -80,6 +86,7 @@ fs.writeFileSync(GH, [
   // stub's stdout would depend on shell quoting, which is the thing that made
   // hand-assembling this trailer unreliable in the first place.
   '  "pr edit 9"*)',
+  '    if [ -n "${SHIPYARD_TRAILER_CARRY_CWD:-}" ]; then pwd > "$SHIPYARD_TRAILER_CARRY_CWD"; fi',
   '    prev=""',
   '    for a in "$@"; do',
   '      if [ "$prev" = "--body" ]; then printf \'%s\' "$a" > "$SHIPYARD_TRAILER_EDIT"; fi',
@@ -760,6 +767,404 @@ test('a duplicate is refused BEFORE the PR is read, like every other usage error
   assert.strictEqual(r.status, 2, `${r.stdout}\n${r.stderr}`);
   assert.ok(/--checks/.test(r.stderr), r.stderr);
   assert.ok(!/gh pr view/.test(r.stderr), `the PR was read before the argv was checked: ${r.stderr}`);
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// A VERDICT SURVIVES A HEAD MOVE IT PROVABLY COVERS
+//
+// Binding the verdict to a head (the suites above) made a `base-merge` cost a
+// full re-judgement even when it changed nothing at all. Measured on T-25-05:
+// the same tree object, the same diff against the new base, and arch-review re-run
+// anyway at ~150k tokens — 42% of that ticket's cost.
+//
+// The exception is a PROOF, not a tolerance, and it is two object identities:
+//
+//   1. the two heads resolve to the SAME tree, and
+//   2. the tree of the NEW merge base equals the `base_tree=` the trailer
+//      recorded when the verdict was rendered.
+//
+// Together they entail that the judged diff and the candidate diff are the same
+// diff. Compared as OBJECTS rather than as diffs on purpose: a diff is a
+// rendering that depends on rename detection, context size, whitespace and
+// `diff.algorithm`, while two shas have no such surface (ADR-006 D2). The
+// `base_tree` is recorded as a TREE and never as a branch name, because the old
+// base branch gets reaped and a rule that recomputes `mergebase(<old base>, …)`
+// dies with it.
+//
+// The refusals are written first and there are more of them than happy paths: a
+// gate that fails OPEN is the failure this verb could introduce, and it would be
+// invisible in the happy path.
+// ════════════════════════════════════════════════════════════════════════════
+
+const TREE_ZERO = '0000000000000000000000000000000000000000';
+
+const g = (repo, args) => {
+  const r = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+  return (r.stdout || '').trim();
+};
+
+// A REAL repository, because a carry is a claim about tree objects and there is
+// no way to hand-build one. Three knobs, one per condition under test:
+//
+//   move: 'empty-commit'  a new sha over the same tree — the shape a base-merge
+//                         that changed nothing produces, and the case a head-SHA
+//                         comparison cannot tell from a real push.
+//         'content'       the merge brought content: a different tree.
+//   base: 'same'          the recorded base tree IS the new merge base's tree.
+//         'whitespace'    the recorded tree differs from the new merge base's
+//                         tree in trailing whitespace ONLY. Two distinct objects
+//                         that `git diff -w` reports as identical — the case an
+//                         object comparison and a diff comparison disagree on.
+function carryRepo({ move = 'empty-commit', base = 'same' } = {}) {
+  const repo = fs.mkdtempSync(path.join(W, 'carry-'));
+  g(repo, ['init', '-q']);
+  g(repo, ['config', 'user.email', 't@e']);
+  g(repo, ['config', 'user.name', 'T']);
+  const w = (rel, body) => fs.writeFileSync(path.join(repo, rel), body);
+
+  w('a.txt', 'x\ny\n');
+  g(repo, ['add', '.']);
+  g(repo, ['commit', '-qm', 'c0']);
+  const treeBefore = g(repo, ['rev-parse', 'HEAD^{tree}']);
+  if (base === 'whitespace') {
+    w('a.txt', 'x \ny\n');
+    g(repo, ['commit', '-qam', 'a trailing space and nothing else']);
+  }
+  g(repo, ['branch', 'base']);
+
+  g(repo, ['checkout', '-qb', 'child']);
+  w('child.txt', 'child\n');
+  g(repo, ['add', '.']);
+  g(repo, ['commit', '-qm', 'child']);
+  const from = g(repo, ['rev-parse', 'HEAD']);
+  if (move === 'content') {
+    w('child.txt', 'child+more\n');
+    g(repo, ['commit', '-qam', 'more work, a different tree']);
+  } else {
+    g(repo, ['commit', '-q', '--allow-empty', '-m', 'a new sha over the same tree']);
+  }
+  const to = g(repo, ['rev-parse', 'HEAD']);
+
+  return {
+    repo,
+    from,
+    to,
+    fromTree: g(repo, ['rev-parse', `${from}^{tree}`]),
+    toTree: g(repo, ['rev-parse', `${to}^{tree}`]),
+    // What the trailer recorded, and what the merge base is NOW. Equal unless
+    // the fixture was asked for a base that moved.
+    judgedBaseTree: base === 'whitespace' ? treeBefore : g(repo, ['rev-parse', 'base^{tree}']),
+    newBaseTree: g(repo, ['rev-parse', 'base^{tree}']),
+  };
+}
+
+const conformTrailerFor = (head, baseTree) => `${PREAMBLE}gate_status: arch-review=conform, `
+  + `drift-check=fresh, degenerate-green=clean, checks=green`
+  + `${baseTree ? `, base_tree=${baseTree}` : ''}, head=${head}`;
+
+// The carry runner. `--worktree` is passed explicitly rather than relying on the
+// cwd, because that is how base-merge.cjs calls it (an agent's cwd is its own
+// worktree, which may not be the one being merged).
+function carry(fixture, { body, headRefOid, baseRefName = 'base', args, from, to, cwdLog } = {}) {
+  fs.writeFileSync(PRVIEW, JSON.stringify({
+    number: 9,
+    baseRefName,
+    body: body === undefined ? conformTrailerFor(fixture.from, fixture.judgedBaseTree) : body,
+    ...(headRefOid === null ? {} : { headRefOid: headRefOid || fixture.from }),
+  }));
+  try { fs.unlinkSync(EDIT); } catch { /* not written yet */ }
+  const env = {
+    ...process.env,
+    PATH: `${BIN}${path.delimiter}${process.env.PATH}`,
+    SHIPYARD_TRAILER_PRVIEW: PRVIEW,
+    SHIPYARD_TRAILER_EDIT: EDIT,
+    ...(cwdLog ? { SHIPYARD_TRAILER_CARRY_CWD: cwdLog } : {}),
+  };
+  const r = spawnSync(process.execPath, [TRAILER, ...(args || [
+    'carry', 'T-01-01', '--pr', '9',
+    '--from', from || fixture.from, '--to', to || fixture.to,
+    '--worktree', fixture.repo, '--json',
+  ])], { encoding: 'utf8', env });
+  return { ...r, edited: fs.existsSync(EDIT) ? fs.readFileSync(EDIT, 'utf8') : null };
+}
+
+suite('gate-trailer write: base_tree records the base the verdict was rendered against');
+
+test('parseGate reads base_tree, and a trailer without it parses as before', () => {
+  const withIt = parseGate(`gate_status: arch-review=conform, base_tree=${SHA_B}, head=${SHA_A}`);
+  assert.strictEqual(withIt.base_tree, SHA_B);
+  assert.strictEqual(withIt.head, SHA_A);
+  const without = parseGate(`gate_status: arch-review=conform, head=${SHA_A}`);
+  assert.deepStrictEqual(without, { 'arch-review': 'conform', head: SHA_A });
+  assert.ok(!('base_tree' in without), 'no key is invented for a trailer that records none');
+  // And the reader is untouched by the new key in both directions.
+  assert.strictEqual(gateConform(withIt, SHA_A), true);
+  assert.strictEqual(gateKind(withIt, SHA_B), 'stale');
+});
+
+test('the writer records base_tree beside head when it is given one', () => {
+  const r = writeTrailer({
+    args: ['write', '9', '--arch-review', 'conform', '--drift-check', 'fresh',
+      '--degenerate-green', 'clean', '--base-tree', SHA_B],
+  });
+  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  const lines = r.edited.split('\n').filter((l) => /^\s*gate_status:/i.test(l));
+  assert.strictEqual(lines.length, 1, `expected one trailer, got:\n${r.edited}`);
+  assert.ok(lines[0].includes(`base_tree=${SHA_B}`), lines[0]);
+  assert.ok(lines[0].includes(`head=${SHA_A}`), lines[0]);
+  assert.strictEqual(parseGate(r.edited).base_tree, SHA_B, 'the writer and the reader must agree');
+});
+
+test('--base-tree is optional, and its absence writes the trailer it wrote before', () => {
+  // The one direction backwards compatibility runs in: the guard's pinned
+  // invocation does not pass it yet, and must keep writing a trailer the readers
+  // accept. What it must NOT do is invent a base_tree nobody measured.
+  const r = writeTrailer();
+  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.ok(!/base_tree/.test(r.edited), `a base_tree was invented:\n${r.edited}`);
+  assert.strictEqual(gateConform(parseGate(r.edited), SHA_A), true);
+});
+
+test('an ABBREVIATED base_tree is rejected on write, not silently accepted', () => {
+  // A reader cannot lengthen an abbreviation, and the carry compares object
+  // identities — a seven-character value would make every comparison false while
+  // looking like a recorded proof.
+  for (const bad of [SHA_B.slice(0, 7), SHA_B.slice(0, 39), `${SHA_B}0`, 'not-a-tree', '']) {
+    const r = writeTrailer({
+      args: ['write', '9', '--arch-review', 'conform', '--drift-check', 'fresh',
+        '--degenerate-green', 'clean', '--base-tree', bad],
+    });
+    assert.strictEqual(r.status, 2, `expected a usage refusal for "${bad}", got ${r.status}\n${r.stderr}`);
+    assert.strictEqual(r.edited, null, `the PR body was edited anyway:\n${r.edited}`);
+    assert.ok(/--base-tree/.test(r.stderr), r.stderr);
+    assert.ok(/usage: /.test(r.stderr), r.stderr);
+    // Refused for its VALUE, not because the flag is unknown. Without this the
+    // whole case passes against a writer that has never heard of --base-tree,
+    // which is what it looked like before the flag existed.
+    assert.ok(!/unexpected argument/.test(r.stderr), `--base-tree is not accepted at all: ${r.stderr}`);
+  }
+});
+
+test('--base-tree given twice is a duplicate like every other flag', () => {
+  const r = writeTrailer({
+    args: ['write', '9', '--arch-review', 'conform', '--drift-check', 'fresh',
+      '--degenerate-green', 'clean', '--base-tree', SHA_A, '--base-tree', SHA_B],
+  });
+  assert.strictEqual(r.status, 2, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null);
+  assert.ok(/more than once|twice|duplicat/i.test(r.stderr), r.stderr);
+});
+
+suite('gate-trailer carry: the refusals, which are the whole of the safety');
+
+test('a trailer with NO base_tree never carries — absent proof is not proof', () => {
+  // The backwards-compatible direction, and the one a future reader will be
+  // tempted to relax: everything else about this carry is provable, and the
+  // answer is still no, because nothing can say which base was judged.
+  const fx = carryRepo();
+  const r = carry(fx, { body: conformTrailerFor(fx.from, null) });
+  assert.strictEqual(r.status, 1, `expected a refusal, got ${r.status}\n${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null, `the trailer was rewritten anyway:\n${r.edited}`);
+  // Refused FOR THE ABSENCE, in those words. Asserting merely that the message
+  // mentions `base_tree` passed against a mutant that had deleted this check
+  // entirely: the abbreviation check below caught the empty string and refused
+  // with its own message, so the test was green while the rule was gone. The
+  // two refusals must be distinguishable, or neither is pinned.
+  assert.ok(/records no `base_tree=`/.test(r.stderr), r.stderr);
+  assert.ok(/absent proof is not proof/.test(r.stderr), r.stderr);
+  assert.strictEqual(JSON.parse(r.stdout).carried, false, r.stdout);
+});
+
+test('an abbreviated base_tree in the trailer does not carry either', () => {
+  const fx = carryRepo();
+  const r = carry(fx, { body: conformTrailerFor(fx.from, fx.judgedBaseTree.slice(0, 7)) });
+  assert.strictEqual(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null);
+  // Its OWN message, not the absent-proof one: an abbreviation is a recorded
+  // value that cannot be compared, and a reader sent looking for a missing key
+  // would go hunting in the wrong place.
+  assert.ok(/full forty/.test(r.stderr), r.stderr);
+  assert.ok(!/absent proof/.test(r.stderr), r.stderr);
+});
+
+test('the merge brought CONTENT: refused, with both tree shas in the message', () => {
+  const fx = carryRepo({ move: 'content' });
+  const r = carry(fx);
+  assert.strictEqual(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null, `the trailer was rewritten anyway:\n${r.edited}`);
+  assert.ok(r.stderr.includes(fx.fromTree), `the judged tree is not named: ${r.stderr}`);
+  assert.ok(r.stderr.includes(fx.toTree), `the candidate tree is not named: ${r.stderr}`);
+  assert.notStrictEqual(fx.fromTree, fx.toTree, 'the fixture must actually move the tree');
+});
+
+test('the BASE tree moved under an identical head tree: refused', () => {
+  // The condition that makes this a proof rather than a heuristic. A retarget
+  // moves the base under an unchanged tree, and the same code against a
+  // different base is a different diff — measured on T-25-03, where one tree
+  // showed 7 files against its own base and 12 against the epic.
+  //
+  // MUTATION NOTE. This fixture's two base trees differ in trailing whitespace
+  // only, so `git diff -w` calls them identical while the objects differ. That is
+  // deliberate: replace the object comparison with a whitespace-tolerant diff
+  // comparison and this test is the one that fails. It is the disagreement the
+  // acceptance criterion asks for — a rename does not produce one, because both
+  // renderings of a rename are non-empty, while a whitespace-only difference
+  // renders as no difference at all.
+  const fx = carryRepo({ base: 'whitespace' });
+  assert.notStrictEqual(fx.judgedBaseTree, fx.newBaseTree, 'the fixture must move the base tree');
+  assert.strictEqual(fx.fromTree, fx.toTree, 'and it must NOT move the head tree');
+  assert.strictEqual(
+    spawnSync('git', ['-C', fx.repo, 'diff', '-w', '--quiet', fx.judgedBaseTree, fx.newBaseTree]).status, 0,
+    'the fixture must be a case an object comparison and a diff comparison disagree on'
+  );
+  const r = carry(fx);
+  assert.strictEqual(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null);
+  assert.ok(r.stderr.includes(fx.judgedBaseTree), `the judged base tree is not named: ${r.stderr}`);
+  assert.ok(r.stderr.includes(fx.newBaseTree), `the new base tree is not named: ${r.stderr}`);
+});
+
+test('a trailer written for a THIRD head is not carried onto a fourth', () => {
+  const fx = carryRepo();
+  const r = carry(fx, { body: conformTrailerFor(SHA_B, fx.judgedBaseTree) });
+  assert.strictEqual(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null);
+  assert.ok(/def456d/.test(r.stderr), r.stderr);
+});
+
+test('a non-conform trailer has no verdict to carry', () => {
+  const fx = carryRepo();
+  const r = carry(fx, {
+    body: `${PREAMBLE}gate_status: arch-review=violation, base_tree=${fx.judgedBaseTree}, head=${fx.from}`,
+  });
+  assert.strictEqual(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null);
+  assert.ok(/arch-review=conform/.test(r.stderr), r.stderr);
+});
+
+test('a PR that has moved past the judged head is refused, not carried forward', () => {
+  // The carry re-binds head=, so it must not re-bind onto a branch someone has
+  // pushed to in the meantime: that push is unjudged content, and the trailer
+  // being stale is the correct state.
+  const fx = carryRepo();
+  const r = carry(fx, { headRefOid: SHA_B });
+  assert.strictEqual(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null);
+  assert.ok(/def456d/.test(r.stderr), r.stderr);
+});
+
+test('a sha the repository does not have refuses rather than assuming', () => {
+  const fx = carryRepo();
+  const r = carry(fx, { to: TREE_ZERO });
+  assert.strictEqual(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null);
+  assert.ok(/--to/.test(r.stderr), r.stderr);
+});
+
+test('a usage error is a usage error, and costs no PR read', () => {
+  const fx = carryRepo();
+  for (const [what, args, expected] of [
+    ['no ticket', ['carry', '--pr', '9'], /ticket/],
+    ['no --pr', ['carry', 'T-01-01', '--from', fx.from, '--to', fx.to], /--pr/],
+    ['no --from', ['carry', 'T-01-01', '--pr', '9', '--to', fx.to], /--from/],
+    ['an unknown flag', ['carry', 'T-01-01', '--pr', '9', '--from', fx.from, '--to', fx.to, '--basetree', 'x'], /--basetree/],
+    ['a duplicate flag', ['carry', 'T-01-01', '--pr', '9', '--pr', '10', '--from', fx.from, '--to', fx.to], /more than once/],
+    ['a flag with no value', ['carry', 'T-01-01', '--pr', '--from', fx.from, '--to', fx.to], /--pr needs a value/],
+  ]) {
+    const r = carry(fx, { args });
+    assert.strictEqual(r.status, 2, `${what}: expected exit 2, got ${r.status}\n${r.stderr}`);
+    assert.strictEqual(r.edited, null, `${what}: the PR body was edited anyway`);
+    assert.ok(expected.test(r.stderr), `${what}: ${r.stderr}`);
+    assert.ok(/usage: /.test(r.stderr), `${what}: a usage error must print the usage: ${r.stderr}`);
+  }
+});
+
+suite('gate-trailer carry: what a proved carry writes, and what it refuses to claim');
+
+test('the same tree under a new sha carries the verdict onto the new head', () => {
+  // THE case. `from` and `to` are different commits with the same tree — which is
+  // what a base-merge that resolved to the branch's own content produces, and
+  // what a head-SHA comparison cannot tell from a real push.
+  const fx = carryRepo();
+  assert.notStrictEqual(fx.from, fx.to, 'the fixture must move the head sha');
+  assert.strictEqual(fx.fromTree, fx.toTree, 'and must not move the tree');
+
+  const r = carry(fx);
+  assert.strictEqual(r.status, 0, `expected the carry to be proved\n${r.stdout}\n${r.stderr}`);
+  const lines = r.edited.split('\n').filter((l) => /^\s*gate_status:/i.test(l));
+  assert.strictEqual(lines.length, 1, `expected one trailer, got:\n${r.edited}`);
+  assert.ok(r.edited.startsWith('Ticket: T-01-01'), `the body was not preserved:\n${r.edited}`);
+
+  // The whole point, stated through the readers rather than through the text:
+  // the verdict now counts for the NEW head and no longer for the old one.
+  const gate = parseGate(r.edited);
+  assert.strictEqual(gateConform(gate, fx.to), true, `the new head is not conform:\n${lines[0]}`);
+  assert.strictEqual(gateKind(gate, fx.from), 'stale', 'the old head must no longer read conform');
+  assert.strictEqual(gate.base_tree, fx.judgedBaseTree, 'the proof it was measured against is kept');
+  assert.strictEqual(gate['drift-check'], 'fresh', 'every other recorded key survives');
+  assert.strictEqual(gate.carried_from, fx.from, 'the head a judge actually read is recorded');
+  assert.strictEqual(JSON.parse(r.stdout).carried, true, r.stdout);
+});
+
+test('carry runs both gh calls with cwd: <worktree>, not the caller\'s own cwd', () => {
+  // base-merge.cjs invokes `carry` from ITS OWN cwd (a conveyor project
+  // directory, not necessarily the ticket worktree). Without `--repo`, `gh`
+  // resolves the repo from the process cwd — so if the two `gh` calls here ran
+  // in the test process's cwd instead of the fixture's git repo, `gh` would
+  // resolve the wrong repository (or none at all) the moment `--repo` is
+  // omitted. The fixture repo is a fresh tempdir distinct from wherever this
+  // test process itself runs, so this only passes if `cwd: worktree` is
+  // actually threaded through.
+  const fx = carryRepo();
+  const cwdLog = path.join(W, 'carry-cwd.txt');
+  try { fs.unlinkSync(cwdLog); } catch { /* not written yet */ }
+  const r = carry(fx, { cwdLog });
+  assert.strictEqual(r.status, 0, `expected the carry to be proved\n${r.stdout}\n${r.stderr}`);
+  assert.ok(fs.existsSync(cwdLog), 'neither gh call recorded a cwd — the stub case did not match');
+  // Realpath both sides: bash's `pwd` reports the OS's canonical cwd, which on
+  // macOS resolves /var's symlink to /private/var — a difference in spelling,
+  // not in which directory `gh` actually ran in.
+  const recorded = fs.realpathSync(fs.readFileSync(cwdLog, 'utf8').trim());
+  const expected = fs.realpathSync(fx.repo);
+  assert.strictEqual(recorded, expected, `gh ran in "${recorded}", expected the worktree "${expected}"`);
+  assert.notStrictEqual(recorded, fs.realpathSync(process.cwd()), 'gh must not run in the test process\'s own cwd');
+});
+
+test('checks=green NEVER carries — a green is measured by CI against a base', () => {
+  // The merge commit is a new merge base, so CI has not built this commit and a
+  // carried `checks=green` would be a claim about a build nobody ran. Dropping
+  // the key is the mechanical form of that rule; nothing reads it, and the merge
+  // gate asks live GitHub for the check state either way.
+  const fx = carryRepo();
+  const r = carry(fx);
+  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.ok(
+    conformTrailerFor(fx.from, fx.judgedBaseTree).includes('checks=green'),
+    'the fixture body must carry a green to lose'
+  );
+  assert.ok(!/checks=/.test(r.edited), `a green was carried onto an unbuilt commit:\n${r.edited}`);
+  assert.ok(!('checks' in parseGate(r.edited)), 'the reader must see no check claim at all');
+});
+
+test('a chain of carries keeps the head a judge actually read', () => {
+  // Carry twice. `carried_from` must stay the FIRST head — the one whose diff a
+  // judge looked at — or the audit trail says a verdict was rendered against a
+  // commit nobody ever judged.
+  const fx = carryRepo();
+  const first = carry(fx);
+  assert.strictEqual(first.status, 0, `${first.stdout}\n${first.stderr}`);
+
+  const third = g(fx.repo, ['rev-parse', 'HEAD']);
+  g(fx.repo, ['commit', '-q', '--allow-empty', '-m', 'another sha over the same tree']);
+  const fourth = g(fx.repo, ['rev-parse', 'HEAD']);
+  const second = carry(fx, {
+    body: first.edited, headRefOid: third, from: third, to: fourth,
+  });
+  assert.strictEqual(second.status, 0, `${second.stdout}\n${second.stderr}`);
+  const gate = parseGate(second.edited);
+  assert.strictEqual(gateConform(gate, fourth), true);
+  assert.strictEqual(gate.carried_from, fx.from, 'the originally judged head must survive the chain');
 });
 
 done();
