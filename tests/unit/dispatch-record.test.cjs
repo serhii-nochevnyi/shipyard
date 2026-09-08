@@ -747,6 +747,26 @@ test('--route records the resolver\'s route VERBATIM, in the store and the journ
   assert.equal(lastDispatch(graph).reason, ROUTE);
 });
 
+test('--route alone fills model/effort from its own parse, rather than leaving them absent', () => {
+  // Copilot: a `--route`-only mark used to store a `reason` that NAMES a model
+  // and effort while leaving the structured `model`/`effort` fields empty — a
+  // record self-inconsistent in exactly the way the pair/route cross-check
+  // exists to catch, just from the other direction. `route` and `{model,
+  // effort}` are one claim in two encodings (unlike `effort`/`effort_applied`,
+  // which stay deliberately un-cross-filled because they measure different
+  // things), so the parse backfills what the flags did not supply.
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE], project);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  const rec = store(graph)['T-01-01'];
+  assert.equal(rec.model, parseRoute(ROUTE).tier.model, 'model is read out of the route, not left absent');
+  assert.equal(rec.effort, parseRoute(ROUTE).effort.effort, 'same for effort');
+  assert.equal(rec.reason, ROUTE);
+  // Disagreement is still refused — backfill only fires when a flag is ABSENT.
+  const bad = run(['mark', 'T-01-01', 'executor', '--model', 'sonnet', '--route', ROUTE], project);
+  assert.equal(bad.status, 1, 'an explicit --model that disagrees with the route must still refuse');
+});
+
 test('a sentence posted through the new flag is refused too — the grammar is the check', () => {
   // The refusal has to be about the VALUE and not about the flag's name, or the
   // change would be a rename and the journal would hold prose again by Friday.
@@ -883,6 +903,18 @@ test('every documented mark invocation passes the resolved pair', () => {
     }
     assert.equal(lines.filter((l) => /--model /.test(l)).length, marks.length,
       `${rel}: --model must appear on the mark invocation lines and nowhere else`);
+    // `--reason` is refused by `mark` now (ADR-006 D5) — a MARK INVOCATION that
+    // still spells it is not a style nit, it is an instruction the recorder will
+    // reject at the moment a guard follows it. Scoped to the invocation lines,
+    // not the whole file: prose elsewhere legitimately NAMES the retired flag to
+    // explain the change. This is the exact hole a prior version of this same
+    // test had (it checked --model/--effort only) while
+    // `references/pr-sentinel.md` spelt `--reason "<branch>"` on its own copy of
+    // this invocation and went undetected.
+    for (const l of marks) {
+      assert.ok(!/--reason\b/.test(l),
+        `${rel}: a mark invocation still spells the refused --reason flag: ${l.trim()}`);
+    }
   }
 });
 

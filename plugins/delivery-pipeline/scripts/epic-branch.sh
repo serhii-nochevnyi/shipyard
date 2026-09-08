@@ -47,7 +47,52 @@ git_dir="$(git -C "$repo_root" rev-parse --git-common-dir)"
 [[ "$git_dir" = /* ]] || git_dir="$repo_root/$git_dir"
 git_lock="$git_dir/shipyard-git.lock"
 
-lock_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# `stat` disagrees about `-f` across platforms, and the disagreement is NOT a
+# clean failure: BSD/macOS reads it as the FORMAT flag, GNU reads it as
+# --file-system, so on Linux `stat -f %m <dir>` fails on the operand `%m` and
+# STILL prints the filesystem report for <dir> — to STDOUT. Chaining the two
+# spellings with `||` therefore concatenates that report onto the real answer,
+# and the caller's arithmetic then evaluates the word `File` from `File: "<dir>"`
+# as a variable. So each spelling is tried in isolation (GNU first, same order as
+# ticket-worktree.sh) and only an all-digits answer is accepted; an unreadable
+# mtime is reported as such (non-zero) rather than smuggled through as 0.
+lock_mtime() {
+  local out
+  if out="$(stat -c %Y "$1" 2>/dev/null)" && [[ "$out" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$out"; return 0
+  fi
+  if out="$(stat -f %m "$1" 2>/dev/null)" && [[ "$out" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$out"; return 0
+  fi
+  return 1
+}
+
+# ONE exit handler for both things this script has to give back: the git lock and
+# the temporary worktree `refresh` merges in. Two `trap … EXIT` installations do
+# not compose — the second silently replaces the first — so a `refresh` that
+# installed its own would have leaked the lock on every conflict.
+lock_held=false
+refresh_tmp_parent=""
+# `set -e` is LIVE inside an EXIT trap (`bash -ec 'trap "false; echo reached" EXIT;
+# true'` prints nothing and exits 1), so a handler whose job is to GIVE RESOURCES
+# BACK must not be interruptible by it: one failing step would skip every step
+# after it — leaking the git lock — and would also turn a refresh that succeeded
+# into a non-zero exit. Hence `set +e` here, and `return $st` so the status that
+# triggered the trap is the status that survives it.
+cleanup() {
+  local st=$?
+  set +e
+  if [[ -n "$refresh_tmp_parent" ]]; then
+    if [[ -d "$refresh_tmp_parent/epic-refresh" ]]; then
+      git -C "$repo_root" worktree remove --force "$refresh_tmp_parent/epic-refresh" >/dev/null 2>&1
+    fi
+    rm -rf "$refresh_tmp_parent"
+    git -C "$repo_root" worktree prune >/dev/null 2>&1
+  fi
+  $lock_held && rm -rf "$git_lock"
+  return $st
+}
+trap cleanup EXIT INT TERM
 
 # ONE exit handler for both things this script has to give back: the git lock and
 # the temporary worktree `refresh` merges in. Two `trap … EXIT` installations do
@@ -77,9 +122,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 acquire_git_lock() {
-  local ttl=120 waited=0
+  local ttl=120 waited=0 mtime
   while ! mkdir "$git_lock" 2>/dev/null; do
-    if [[ -d "$git_lock" ]] && (( $(date +%s) - $(lock_mtime "$git_lock") > ttl )); then
+    # Stealing the lock is a mutation (`rm -rf`) on another process's state, so it
+    # needs positive evidence the holder is gone: an mtime we could actually READ,
+    # older than the TTL. Unknown means keep waiting; the 60s ceiling below is the
+    # bounded way out.
+    if [[ -d "$git_lock" ]] && mtime="$(lock_mtime "$git_lock")" \
+       && (( $(date +%s) - mtime > ttl )); then
       rm -rf "$git_lock"
       continue
     fi

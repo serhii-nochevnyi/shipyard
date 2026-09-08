@@ -468,11 +468,19 @@ suite('front — a child never lands into an open human_checkpoint parent');
 // is reading, and the post-merge retarget then sends that child's own children to
 // the epic — content actually sitting in a checkpoint branch.
 const cpTickets = { P: { human_checkpoint: true, branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } };
-const cpState = (parentStatus) => ({
+// `base` is the child's own `pr_base`. Every existing caller leaves it at the
+// default — the parent's own ticket branch, the shape while that parent's PR
+// is still open. Once the parent MERGES, its ticket branch is a LIMB (its
+// content is already in the epic; the branch only still exists because
+// nothing deleted it) — `limbBaseOf` refuses a merge onto it (PR #52), so a
+// "parent landed" fixture must pass the RETARGETED base (the epic) to assert
+// the ordinary post-retarget shape rather than the limb `sentinel.cjs merge`
+// would refuse.
+const cpState = (parentStatus, base = 'ticket/P') => ({
   P: { status: parentStatus, pr: 1, draft: false, checks: checks(), branch: 'ticket/P' },
   C: {
     status: 'pr-open', pr: 2, draft: false, checks: checks(), gate: conform,
-    merge_scope: 'stacked', pr_base: 'ticket/P', branch: 'ticket/C',
+    merge_scope: 'stacked', pr_base: base, branch: 'ticket/C',
   },
 });
 
@@ -486,7 +494,10 @@ test('while the parent PR is open the child waits on the human, not on the run',
 });
 
 test('once the parent lands, the same child is a merge again', () => {
-  const f = computeFront(cpTickets, cpState('merged'), { autoMerge: true });
+  // Post-merge the child has already been retargeted onto the epic — this is
+  // NOT the limb shape (pr_base naming the merged parent's own ticket branch),
+  // which `limbBaseOf` refuses regardless of who the parent is (PR #52).
+  const f = computeFront(cpTickets, cpState('merged', 'epic/27-x'), { autoMerge: true });
   assert.deepStrictEqual(f.actionable.merge, ['C'], 'the hold is scoped to an OPEN parent');
 });
 
@@ -1329,7 +1340,10 @@ test('while a PRE-AUTHORIZED parent PR is open, its child is not offered for mer
 });
 
 test('once that pre-authorized parent lands, the same child is a merge (the control)', () => {
-  const f = computeFront(paTickets, cpState('merged'), { autoMerge: true });
+  // Same reasoning as the non-authorized control above: post-merge the child
+  // is retargeted onto the epic, not left naming the merged parent's own
+  // ticket branch, which would be the limb `limbBaseOf` refuses (PR #52).
+  const f = computeFront(paTickets, cpState('merged', 'epic/27-x'), { autoMerge: true });
   assert.deepStrictEqual(f.actionable.merge, ['C'], 'the hold is scoped to an OPEN parent');
 });
 

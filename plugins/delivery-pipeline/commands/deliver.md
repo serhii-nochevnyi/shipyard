@@ -126,7 +126,13 @@ instead, and the front reads it back by itself:
   honest record of that: absence means UNMEASURED, and the recorder will not fill
   it in. Never pass the resolved value as the applied one.
   On the Codex bundle add `--agent-file shipyard-<role>[-deep]` — the file you
-  actually dispatched, which is where that runtime's model choice lives.
+  actually dispatched, which is where that runtime's model choice lives. That
+  pattern is not 1:1 for every role, so check `dispatch-record.cjs`'s own mapping
+  rather than assuming it: `research` dispatches ship as `shipyard-inv-research`
+  (the investigation loop's own name for it, not `shipyard-research`), and
+  `executor` has no agent file at all — an executor is dispatched by the main
+  loop, not a `.toml`, so its `mark` omits `--agent-file` rather than naming a
+  file nothing ships. Naming a file the role does not claim is refused.
 Reserve `--parked` for what genuinely holds only for this session.
 
 **The ladder review, as one query.** Run it from the project (not a worktree) when
@@ -1232,9 +1238,7 @@ Record that hand-over the same way the executors' was, and in the same order —
 the `Agent` call returns an agent id, and THEN
 `dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>"`
 for every ticket on the guarded list, taking all three fields from the
-`model pr-sentinel` call above — the route included, verbatim. (`references/pr-sentinel.md`
-still spells that flag `--reason` in its own copy of this line; the flag is refused
-now, and the recorder's message names the replacement.) No `--effort-applied` here: the guard is spawned with the `Agent` tool,
+`model pr-sentinel` call above — the route included, verbatim. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
 which carries no effort, so the applied depth is genuinely unmeasured and the
 record says so by leaving the key out;
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
