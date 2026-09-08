@@ -204,6 +204,41 @@ function codexModelPolicy(pluginDir, codexHome, opts = {}) {
     // wearing its own fallback as a disguise.
     pc = require(path.resolve(pluginDir, 'scripts', 'pipeline-config.cjs'));
     const loaded = pc.loadConfig(cwd);
+    // A PROJECT CONFIG THAT DOES NOT PARSE IS NOT READ (ADR-004 D2).
+    //
+    // `loadConfig` returns DEFAULTS in `config` so a reader always has something
+    // to render, and `valid: false` beside it so a WRITER knows not to. This is
+    // a writer: it bakes the tier into eleven `.toml` files, once, at install
+    // time — and every dispatch for the life of that install then reads it back
+    // out of a file. Ignoring `valid` wrote THIS REPO's shipped palette (its
+    // ceiling included) into every agent and presented it as the operator's
+    // decision, with nothing on any face saying the file could not be read.
+    //
+    // The EFFORT is withheld with the model, not kept: it is resolved off the
+    // same `loaded.config`, so writing it would be one default presented as
+    // something the file said in place of two.
+    //
+    // Withheld, not failed. This is INSTALL time rather than a delivery
+    // mutation — the lowest of the three severities — so the refusal degrades to
+    // `inert`, which is the same answer the `catch` below gives and the previous
+    // behaviour of an empty palette: every skill, every agent and the fragment
+    // are still written, and every agent stays on the CLI default. A refusal
+    // that turns a working install into a broken one is a worse outcome than the
+    // defect it fixes.
+    //
+    // An ABSENT config is `valid: true, error: null, warnings: []` and must NOT
+    // refuse: a fresh project has no `.planning/config.json`, and an installer
+    // runs before any project exists.
+    if (!loaded.valid) {
+      const reason = `gen-codex-shipyard: no policy is in effect — ${loaded.error.file} `
+        + `${loaded.error.message}. No model and no effort is written into any agent, so every `
+        + 'agent stays on the CLI default rather than on this repository\'s shipped default '
+        + 'palette; the fix is the file, not a flag.';
+      log(`${reason}\n`);
+      // Returned BEFORE the GSD remapper is built: a remap read while the
+      // project's own policy is unknown would be one more value nobody chose.
+      return { ...inert, configInvalid: reason };
+    }
     // Force the codex branch of the policy regardless of where we generate from:
     // the 1M tier is Claude-only and must degrade here, and the effort axis is
     // flat here and nowhere else.
@@ -329,6 +364,24 @@ function tomlBasic(value) {
   return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+// A `#` comment runs to end of LINE and TOML forbids control characters other
+// than tab inside one — and `policy.configInvalid` is not our own prose, it
+// carries `loadConfig`'s verbatim `JSON.parse` message, which for a SHORT
+// unparseable file embeds a snippet of the file's own bytes (V8-version-
+// dependent: older Node has no snippet form at all). A hand-typed corrupt
+// config is exactly the shape that reaches this — multi-line, and free to
+// carry any control byte the human's editor wrote. Collapsing to one printable
+// line before it becomes a comment is what keeps every downstream line a
+// `name = value` pair or a comment and nothing else, which is the whole of
+// what these files need to still parse (ADR-004 D6, audit F21).
+function tomlComment(text) {
+  const oneLine = String(text)
+    .replace(/[\x00-\x08\x0A-\x1F\x7F]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `# ${oneLine}\n`;
+}
+
 // First markdown heading or first sentence → a one-line agent description.
 function deriveDescription(body, roleName) {
   const heading = body.match(/^#\s+(.+)$/m);
@@ -401,7 +454,13 @@ function main() {
   };
   const emittedAgents = [];
   const policy = codexModelPolicy(pluginDir, codexHome);
+  // The reason rides every RESULT, not stderr alone: an installer's log scrolls
+  // past, while the `.toml` is what the next reader opens when an agent turns
+  // out to carry no model. A `#` comment is valid TOML and adds no key, so the
+  // file says why it is silent instead of looking like an oversight.
+  const refusalComment = policy.configInvalid ? tomlComment(policy.configInvalid) : '';
   const agentToml = (agentName, description, sandbox, model, effort, body) =>
+    refusalComment +
     `name = ${tomlBasic(agentName)}\n` +
     `description = ${tomlBasic(description)}\n` +
     `sandbox_mode = ${tomlBasic(sandbox)}\n` +
@@ -485,12 +544,17 @@ function main() {
     skills: emittedSkills,
     agents: emittedAgents.map((a) => a.agentName),
     gsdLib,
+    // Conditional, never a `null` key: a reader should see the field only when
+    // the refusal actually fired, and an always-present field reads as a state
+    // rather than an exception.
+    ...(policy.configInvalid ? { config_invalid: policy.configInvalid } : {}),
   };
   writeFile(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 
   process.stdout.write(
     `staged ${emittedSkills.length} skills, ${emittedAgents.length} agents → ${outDir} (phase ${phase})\n`,
   );
+  if (policy.configInvalid) process.stdout.write(`${policy.configInvalid}\n`);
 }
 
 module.exports = {

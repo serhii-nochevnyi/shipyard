@@ -82,7 +82,7 @@ function loadConfig(cwd) {
 module.exports = { loadConfig };
 `;
 
-function fixture({ palette, project, defaults, codexStubVersion } = {}) {
+function fixture({ palette, project, projectRaw, defaults, codexStubVersion } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexgen-'));
   const home = path.join(dir, 'home');
   const lib = path.join(home, '.codex', 'gsd-core', 'bin', 'lib');
@@ -98,7 +98,13 @@ function fixture({ palette, project, defaults, codexStubVersion } = {}) {
 
   const proj = path.join(dir, 'proj');
   fs.mkdirSync(proj, { recursive: true });
-  if (palette !== undefined || project) {
+  if (projectRaw !== undefined) {
+    // A config that does NOT PARSE cannot be expressed through JSON.stringify,
+    // so this one is written verbatim. Deliberately the only way to reach that
+    // state in this fixture: an invalid config is a fact about the bytes.
+    fs.mkdirSync(path.join(proj, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(proj, '.planning', 'config.json'), projectRaw);
+  } else if (palette !== undefined || project) {
     const cfg = { ...(project || {}) };
     if (palette !== undefined) cfg.pipeline = { ...(cfg.pipeline || {}), codex_models: palette };
     fs.mkdirSync(path.join(proj, '.planning'), { recursive: true });
@@ -149,6 +155,33 @@ function generate(opts = {}) {
     }
   }
   return { ...f, out, run: r, agents, stderr: r.stderr || '' };
+}
+
+// A minimal line-level TOML shape check — no full parser, but enough to catch
+// the class of bug a regex-only assertion cannot: every non-blank line must
+// either be a `#` comment or a `key = value` pair. A raw line of prose (a
+// verbatim JSON.parse error can embed one) is neither, and a regex like
+// `/^model = "(.*)"$/m` finds its target line regardless of what garbage sits
+// beside it — which is exactly why `agents[name].text` matching that regex was
+// never evidence the FILE parses.
+function assertLooksLikeToml(text, label) {
+  // `developer_instructions = '''…'''` legitimately spans many raw lines (the
+  // agent's own prose body) — those are content, not structure, and the check
+  // below is about STRUCTURE lines only, so everything between a `'''` that
+  // opens one and the `'''` that closes it is skipped.
+  let inMultiline = false;
+  for (const line of text.split('\n')) {
+    if (inMultiline) {
+      if (line.trim() === "'''") inMultiline = false;
+      continue;
+    }
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) continue;
+    if (/=\s*'''$/.test(trimmed)) { inMultiline = true; continue; }
+    assert.ok(/^[A-Za-z0-9_-]+\s*=\s*.+$/.test(trimmed),
+      `${label}: line is neither a comment nor a key = value pair: ${JSON.stringify(line)}`);
+  }
+  assert.ok(!inMultiline, `${label}: an opened ''' block never closed`);
 }
 
 // ── the palette, and what each role gets from it ─────────────────────────────
@@ -383,6 +416,132 @@ test('compareVersions is numeric, not lexical', () => {
   assert.strictEqual(gen.compareVersions('0.153.1', '0.153.1'), 0);
   assert.strictEqual(gen.compareVersions('0.99.0', '0.153.0'), -1);
   assert.strictEqual(gen.compareVersions('1.0', '1.0.0'), 0);
+});
+
+suite('a project config that does not parse is refused, not baked (ADR-004 D2)');
+
+// The generator is the LAST of ADR-004 D2's readers. `pc.loadConfig` answers
+// `{ valid: false }` for a file that exists and does not parse, and returns
+// DEFAULTS in `config` so a reader still has something to render — so a reader
+// that ignores `valid` bakes this repo's shipped palette into eleven agent files
+// and presents it as the operator's decision. On this runtime that is written
+// ONCE, at install time, and then every dispatch for the life of the install
+// reads it back out of a `.toml`.
+//
+// Install time is the lowest of the three severities the backlog ranks (it is
+// not a delivery mutation), and that cuts BOTH ways: the refusal must withhold
+// the tiers without turning a working install into a broken one. So exit 0,
+// every skill, every agent and the fragment still written — asserted below
+// rather than promised in a sentence.
+const CORRUPT = '{ "pipeline": { "codex_models": "a-floor:low, a-ceiling:high"';
+
+test('a corrupt config bakes NO tier, and every agent file carries the reason', () => {
+  const g = generate({ projectRaw: CORRUPT });
+  assert.strictEqual(g.run.status, 0, g.stderr);
+  assert.ok(Object.keys(g.agents).length >= 7, Object.keys(g.agents).join(', '));
+  for (const [name, a] of Object.entries(g.agents)) {
+    assert.strictEqual(a.model, null, `${name} must carry no model key`);
+    // The EFFORT is withheld too, and for the same reason as the model: it is
+    // resolved off `loaded.config`, which is DEFAULTS here. A written effort
+    // would be a default presented as something the file said.
+    assert.strictEqual(a.effort, null, `${name} must carry no effort key`);
+    assert.ok(/no policy is in effect/.test(a.text), `${name} does not say why it has no model`);
+  }
+  assert.ok(/no policy is in effect/.test(g.stderr), g.stderr);
+  assert.ok(g.stderr.includes(path.join('.planning', 'config.json')), `stderr must name the file: ${g.stderr}`);
+  assert.ok(/not valid JSON/.test(g.stderr), g.stderr);
+});
+
+test('the refused answer is never the DEFAULT palette answer', () => {
+  // The defect, stated as an assertion: on base the integrator was written at
+  // the shipped ceiling off a file that says nothing readable at all.
+  const g = generate({ projectRaw: CORRUPT });
+  for (const [name, a] of Object.entries(g.agents)) {
+    assert.ok(a.model !== FLOOR.model, `${name} names the default floor off an unreadable config`);
+    assert.ok(a.model !== CEILING.model, `${name} names the default ceiling off an unreadable config`);
+  }
+  // Nothing to escalate TO, so no dead -deep file either.
+  assert.ok(!Object.keys(g.agents).some((n) => n.endsWith('-deep')), Object.keys(g.agents).join(', '));
+});
+
+test('an install still completes — the refusal withholds tiers, not the install', () => {
+  const g = generate({ projectRaw: CORRUPT });
+  assert.strictEqual(g.run.status, 0, g.stderr);
+  for (const skill of ['shipyard-route', 'shipyard-deliver', 'shipyard-delivery-rules']) {
+    assert.ok(fs.existsSync(path.join(g.out, 'skills', skill, 'SKILL.md')), `missing skill ${skill}`);
+  }
+  assert.ok(fs.existsSync(path.join(g.out, 'config.fragment.toml')), 'the agents must still be registered');
+  const manifest = JSON.parse(fs.readFileSync(path.join(g.out, 'manifest.json'), 'utf8'));
+  assert.strictEqual(manifest.agents.length, 7);
+});
+
+test('the manifest carries the reason, so a caller need not scrape stderr', () => {
+  const g = generate({ projectRaw: CORRUPT });
+  const manifest = JSON.parse(fs.readFileSync(path.join(g.out, 'manifest.json'), 'utf8'));
+  assert.ok(manifest.config_invalid, 'manifest.json must carry the refusal');
+  assert.ok(/no policy is in effect/.test(manifest.config_invalid), manifest.config_invalid);
+});
+
+// `CORRUPT` above is truncated JSON: V8 answers a short, POSITIONAL message
+// ("Unexpected end of JSON input") with no snippet of the file's own bytes, so
+// it never reaches the multi-line form the reason-comment embeds verbatim. A
+// short file that is not JSON AT ALL (never even starts parsing a structure)
+// gets the other shape: V8 quotes the offending bytes back, newlines included —
+// this is the shape a human hand-typing a placeholder into the file produces,
+// and it is a `# ` comment away from splitting into a bare, unparseable line
+// (Copilot round; arch-review, PR #71, ADR-004 D6 / audit F21).
+const CORRUPT_MULTILINE = 'TODO\nfix this later\n';
+
+test('a config whose parse error embeds a multi-line snippet still yields parseable TOML', () => {
+  const g = generate({ projectRaw: CORRUPT_MULTILINE });
+  assert.strictEqual(g.run.status, 0, g.stderr);
+  assert.ok(Object.keys(g.agents).length >= 7, Object.keys(g.agents).join(', '));
+  for (const [name, a] of Object.entries(g.agents)) {
+    assert.strictEqual(a.model, null, `${name} must carry no model key`);
+    assert.ok(/no policy is in effect/.test(a.text), `${name} does not say why it has no model`);
+    // The refusal reason is multi-line at the source (loadConfig's JSON.parse
+    // message quotes the file's own "TODO\nfix this later\n" back), so a file
+    // that still line-parses is the whole of what this test is proving.
+    assertLooksLikeToml(a.text, name);
+  }
+});
+
+test('NO config file at all is not a refusal — the regression the guard could introduce', () => {
+  // A fresh project has no `.planning/config.json`, and an installer runs before
+  // any project exists: `valid: true, error: null, warnings: []`. If this ever
+  // refuses, installation stops working for the commonest case there is.
+  const g = generate();
+  assert.strictEqual(g.run.status, 0, g.stderr);
+  assert.strictEqual(g.agents['shipyard-integrator'].model, CEILING.model, g.stderr);
+  assert.strictEqual(g.agents['shipyard-ci-fix'].model, FLOOR.model, g.stderr);
+  assert.ok(!/no policy is in effect/.test(g.stderr), g.stderr);
+  const manifest = JSON.parse(fs.readFileSync(path.join(g.out, 'manifest.json'), 'utf8'));
+  assert.strictEqual(manifest.config_invalid, undefined, 'an absent config is not an invalid one');
+  for (const [name, a] of Object.entries(g.agents)) {
+    assert.ok(!/no policy is in effect/.test(a.text), `${name} must carry no refusal`);
+  }
+});
+
+test('a config that PARSES is still read, palette and all', () => {
+  const g = generate({ palette: 'p-floor:low, p-ceiling:high' });
+  assert.strictEqual(g.agents['shipyard-integrator'].model, 'p-ceiling', g.stderr);
+  assert.ok(!/no policy is in effect/.test(g.stderr), g.stderr);
+});
+
+test('codexModelPolicy carries the reason on its own result, and answers inert', () => {
+  // The unit under the process: one role in, one `{model, effort}` out. Both
+  // halves are null, exactly as the "could not load the model policy" branch
+  // beside it answers — the previous, safe behaviour, reached deliberately.
+  const f = fixture({ projectRaw: CORRUPT });
+  const lines = [];
+  const policy = gen.codexModelPolicy(PLUGIN, f.codexHome, {
+    cwd: f.proj, env: { SHIPYARD_CODEX_CLI_VERSION: CEILING_FLOOR_CLI }, log: (m) => lines.push(m),
+  });
+  assert.ok(policy.configInvalid, 'the policy object must carry the reason');
+  assert.deepStrictEqual(policy.palette, []);
+  assert.deepStrictEqual(policy.forRole('executor'), { model: null, effort: null });
+  assert.deepStrictEqual(policy.forRole('integrator'), { model: null, effort: null });
+  assert.ok(/no policy is in effect/.test(lines.join('')), lines.join(''));
 });
 
 suite('a GSD remap still wins');

@@ -2370,4 +2370,136 @@ test('formatFront prints the behind-line FIRST, before any bucket a reader might
   assert.ok(/^front: /.test(formatFront(clean)[0]), formatFront(clean)[0]);
 });
 
+suite('front — D8: the standalone CLI refuses a policy it cannot read (ADR-004 D2)');
+
+// The reviewer's demonstration on PR #60, turned into a fixture. `deliver.md`
+// advertises this CLI as "re-runnable on its own", so its answer is reachable
+// from documented usage — and on a config that does not parse it used to resolve
+// `auto_merge` off the DEFAULTS and offer a paid `finalize` dispatch (a fixer
+// that pushes) with nothing on either face saying the file was unreadable.
+//
+// Measured on the base of this ticket: `--json` for a corrupt config differed
+// from a valid `epic` in the `capacity` block ALONE (T-26-12's cap already
+// refuses there) — every bucket, every `why` and the whole `sentinel` block were
+// identical, and no field carried a reason. So the buckets are what these tests
+// assert, not the rendered text.
+const dfs = require('fs');
+const dos = require('os');
+const { spawnSync: dspawn } = require('child_process');
+const D_SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
+
+// One open PR: green, undrafted, APPROVED, targeting the stack, and carrying NO
+// `gate_status: arch-review=conform` trailer. That is the board where the
+// auto_merge answer decides between a dispatch and a human: with `epic` the
+// missing trailer is the run's work (`finalize`), with `off` an approved green PR
+// is a person's merge (`waiting.merge_human`).
+function demoBoard(configText) {
+  const dir = dfs.mkdtempSync(path.join(dos.tmpdir(), 'shipyard-front-cfg-'));
+  const graph = path.join(dir, '.planning', 'graph');
+  dfs.mkdirSync(graph, { recursive: true });
+  dfs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': {} } }));
+  dfs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({
+    'T-01-01': {
+      status: 'pr-open', pr: 7, draft: false, review_decision: 'APPROVED',
+      merge_scope: 'stacked', checks: { total: 3, failing: 0, pending: 0 },
+      threads: { unresolved: 0 }, base: 'epic/1-x', pr_base: 'epic/1-x',
+    },
+  }));
+  if (configText !== undefined) {
+    dfs.writeFileSync(path.join(dir, '.planning', 'config.json'), configText);
+  }
+  return dir;
+}
+const frontCli = (dir, args = []) => dspawn(process.execPath, [path.join(D_SCRIPTS, 'front.cjs'), ...args],
+  { cwd: dir, encoding: 'utf8' });
+const frontJson = (dir) => {
+  const r = frontCli(dir, ['--json']);
+  assert.strictEqual(r.status, 0, `front --json must exit 0 (${r.stderr})`);
+  return JSON.parse(r.stdout);
+};
+// The comparable half: everything the run acts on, with `capacity` left out —
+// that block already differed on base, and it is not what decides a dispatch.
+const boardShape = (f) => ({ actionable: f.actionable, waiting: f.waiting, parked: f.parked, sentinel: f.sentinel });
+
+const CORRUPT = '{ this is not json';
+
+test('a corrupt config offers NO finalize, and the reason rides both faces', () => {
+  const j = frontJson(demoBoard(CORRUPT));
+  assert.deepStrictEqual(j.actionable.finalize, [],
+    'a config that does not parse authorizes no dispatch, and finalize is a fixer that pushes');
+  assert.strictEqual(j.actionable_count, 0);
+  assert.deepStrictEqual(j.waiting.merge_human, ['T-01-01'],
+    'the ticket is not lost — it is a human\'s merge until the file parses');
+  assert.ok(typeof j.config_invalid === 'string' && j.config_invalid,
+    `the refusal must ride the machine face too: ${JSON.stringify(Object.keys(j))}`);
+  assert.ok(/config\.json/.test(j.config_invalid), j.config_invalid);
+  // ci-wait.cjs's template: the reason is carried on the RESULT, not only where
+  // it came due, and it names the file rather than a flag.
+  assert.ok(/no policy is in effect|does not parse|not valid JSON/.test(j.config_invalid), j.config_invalid);
+
+  const human = frontCli(demoBoard(CORRUPT));
+  assert.strictEqual(human.status, 0, human.stderr);
+  assert.strictEqual(human.stdout.split('\n')[0], j.config_invalid,
+    `the refusal leads the human face: ${JSON.stringify(human.stdout.split('\n').slice(0, 3))}`);
+  assert.ok(!/finalize/.test(human.stdout.split('\n')[1] || ''), human.stdout);
+});
+
+test('the corrupt answer equals the answer a file that SAYS off gives, never the default epic', () => {
+  // The defect stated exactly: the default is `epic`, so an unreadable file used
+  // to produce the `epic` board — the CLI presenting its own default as
+  // something the project had decided.
+  const corrupt = boardShape(frontJson(demoBoard(CORRUPT)));
+  const off = boardShape(frontJson(demoBoard(JSON.stringify({ pipeline: { auto_merge: 'off' } }))));
+  const epic = boardShape(frontJson(demoBoard(JSON.stringify({ pipeline: { auto_merge: 'epic' } }))));
+  assert.deepStrictEqual(corrupt, off, 'an unknown policy authorizes what the most restrictive one does');
+  assert.notDeepStrictEqual(corrupt, epic, 'and it must NOT be the default epic board');
+});
+
+test('NO config file at all is not a refusal — that is the regression the guard could introduce', () => {
+  // `loadConfig` reports an absent file as `valid: true, error: null`: nobody has
+  // configured this project yet, and the defaults are exactly the right answer.
+  const absent = frontJson(demoBoard(undefined));
+  assert.deepStrictEqual(absent.actionable.finalize, ['T-01-01'], 'defaults still apply to an unconfigured project');
+  assert.strictEqual(absent.config_invalid, undefined, 'and nothing is refused, so nothing is reported');
+  assert.deepStrictEqual(
+    boardShape(absent),
+    boardShape(frontJson(demoBoard(JSON.stringify({ pipeline: { auto_merge: 'epic' } })))),
+    'absent behaves exactly as the shipped default says'
+  );
+});
+
+test('a refused board is never a FIXPOINT — withholding the work must not read as finishing it', () => {
+  // The trap this change could have walked into. Emptying the actionable buckets
+  // is HOW the mutations are withheld, and an empty board reads exactly like a
+  // finished one: on base the corrupt answer at least said `fixpoint: NO —
+  // NOTHING may be dispatched`, so a refusal that left this line alone would have
+  // traded a paid `finalize` for an unearned "everything is delivered → Step 5",
+  // which is a worse offer rather than a safer one. Step 5 is the integrator.
+  const j = frontJson(demoBoard(CORRUPT));
+  assert.strictEqual(j.fixpoint, false, 'a policy nobody can read is not a finished phase');
+  const human = frontCli(demoBoard(CORRUPT)).stdout;
+  assert.ok(/^fixpoint: NO/m.test(human), human);
+  assert.ok(!/fixpoint: YES/.test(human), human);
+  assert.ok(!/Step 5/.test(human), `Step 5 is the integrator, and integrating is a mutation: ${human}`);
+  // ...and the line does not order a retry: nothing will have changed.
+  assert.ok(/not a round to retry/.test(human), human);
+
+  // The absent case keeps its ordinary verdict, whatever it is.
+  const absent = frontCli(demoBoard(undefined)).stdout;
+  assert.ok(!/no policy is in effect/.test(absent), absent);
+});
+
+test('formatFront prints the refusal before any bucket, and ahead of the behind-line', () => {
+  const f = computeFront({ T: {} }, { T: { status: 'pending', ready: true } });
+  f.config_invalid = 'config unreadable: .planning/config.json — fix it';
+  f.behind = { event: 'merge', ticket: 'T-27-02', ts: '2026-09-08T10:00:00.000Z', why: 'the board is behind' };
+  const lines = formatFront(f);
+  assert.strictEqual(lines[0], f.config_invalid, JSON.stringify(lines.slice(0, 3)));
+  assert.strictEqual(lines[1], f.behind.why, JSON.stringify(lines.slice(0, 3)));
+  // A front nobody flagged renders exactly as it did before.
+  const clean = computeFront({ T: {} }, { T: { status: 'pending', ready: true } });
+  assert.ok(/^front: /.test(formatFront(clean)[0]), formatFront(clean)[0]);
+});
+
+
 done();

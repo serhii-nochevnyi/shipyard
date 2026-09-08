@@ -256,6 +256,13 @@ function strategyFor(state) {
   return Object.prototype.hasOwnProperty.call(STRATEGIES, state) ? STRATEGIES[state] : undefined;
 }
 
+// Every `pipeline.*` knob that goes through the shared positive-number rule
+// below (loadConfig). Exported and read back by both the rule's own loop and
+// its test, so a knob added here needs no second, hand-mirrored copy to drift
+// out of sync with the rule that actually enforces it.
+const NUMERIC_KNOBS = ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours',
+  'plan_defect_signatures', 'fable_window_tokens', 'max_concurrent_agents'];
+
 const DEFAULTS = {
   integration_mode: 'epic-stacked',   // | direct-to-main
   model_policy: 'balanced',           // economy | balanced | premium
@@ -675,12 +682,50 @@ function loadConfig(root) {
     warnings.push(`pipeline.model_policy "${cfg.model_policy}" is unknown — falling back to balanced`);
     cfg.model_policy = 'balanced';
   }
-  for (const numeric of ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours', 'plan_defect_signatures', 'fable_window_tokens', 'max_concurrent_agents']) {
-    const n = Number(cfg[numeric]);
+  // ONE numeric rule for every positive-number knob, and it is shared on purpose:
+  // a bespoke coercion per knob is one more place to get the fallback direction
+  // wrong. Two values used to pass it silently, and BOTH were properties of the
+  // rule rather than of any knob — so they were shipped accepted for every one of
+  // these seven at once, and probing only the endpoints is exactly how:
+  //
+  //   `true`  — `Number(true) === 1`, a positive finite number, so
+  //             `max_concurrent_agents: true` capped a whole session at ONE agent
+  //             with no warning. `false` (→ 0 → the default) is the mirror, which
+  //             is why checking `false` proved nothing. A boolean is not a number:
+  //             it is refused BEFORE Number(), and a numeric STRING still works,
+  //             because a hand-edited config.json legitimately acquires those.
+  //   `4.5`   — survived intact and produced a FRACTIONAL board (`free: 0.5` is
+  //             truthy, so front.cjs's `free === 0` fixpoint branch never fired
+  //             while nothing could actually be dispatched). Floored, and the
+  //             floor is reported: a silently rounded knob is a value the operator
+  //             did not set.
+  //
+  // The floor runs BEFORE the positivity check, so `0.5` floors to 0 and then
+  // falls back to the default like any other non-positive value. That is
+  // deliberate rather than incidental: `front.cjs`'s `capMax` reserves `max === 0`
+  // for exactly one fact — no policy could be READ — and `formatFront` words its
+  // line off it, so letting a parsing file resolve 0 would make the board report
+  // it as unparseable. A malformed number in a readable file falls back; only an
+  // unreadable file dispatches nothing.
+  for (const numeric of NUMERIC_KNOBS) {
+    const given = cfg[numeric];
+    if (typeof given === 'boolean') {
+      warnings.push(
+        `pipeline.${numeric} is ${given}, which is not a number — using ${DEFAULTS[numeric]} `
+        + '(a boolean coerces to 1 or 0, so it would silently read as a value nobody set)'
+      );
+      cfg[numeric] = DEFAULTS[numeric];
+      continue;
+    }
+    const asNumber = Number(given);
+    const n = Number.isFinite(asNumber) ? Math.floor(asNumber) : asNumber;
     if (!Number.isFinite(n) || n <= 0) {
       warnings.push(`pipeline.${numeric} must be a positive number — using ${DEFAULTS[numeric]}`);
       cfg[numeric] = DEFAULTS[numeric];
     } else {
+      if (n !== asNumber) {
+        warnings.push(`pipeline.${numeric} is ${asNumber}, which is not a whole number — using ${n}`);
+      }
       cfg[numeric] = n;
     }
   }
@@ -1092,7 +1137,7 @@ module.exports = {
   routeOf, parseRoute, ROUTE_RE, runtimeToken,
   parseCodexModelEntry, normalizeCodexModels,
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
-  DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS,
+  DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS, NUMERIC_KNOBS,
 };
 
 // ── CLI ─────────────────────────────────────────────────────────────────────

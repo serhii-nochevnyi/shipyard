@@ -15,6 +15,7 @@ const mod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'sc
 const {
   loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
   TIERS, EFFORTS, DEFAULTS, ROLES, SIGNATURE_STATES, DEFAULT_CODEX_MODELS, SONNET_ROLES,
+  NUMERIC_KNOBS,
 } = require(mod);
 const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
@@ -115,6 +116,71 @@ test('a cap of 0 or a malformed cap warns and falls back — a broken knob must 
       warnings.some((w) => /max_concurrent_agents must be a positive number/.test(w)),
       `${JSON.stringify(bad)}: ${warnings.join('; ')}`
     );
+  }
+});
+
+// ── the shared numeric rule, probed at the ENDPOINTS AND THE MIDDLE ─────────
+//
+// Both defects below were shipped ACCEPTED because only the endpoints were
+// probed, and both come from the one shared rule in `loadConfig` rather than
+// from any knob — so `max_attempts` behaves identically and is asserted beside
+// the cap on every case. `NUMERIC_KNOBS` is imported from the module itself
+// (not re-typed here) — Copilot's review on PR #71 found the list was a
+// hand-mirrored duplicate of the rule's own array, which is exactly the kind of
+// copy that drifts silently when a knob is added to one and not the other; the
+// module now exports the one array both the rule and this test read.
+
+test('a boolean is not a number: `true` must never read as a cap of ONE', () => {
+  // `Number(true) === 1`, so `max_concurrent_agents: true` passed the
+  // positive-number check and silently capped the whole session at ONE agent,
+  // with no warning at all. `false` was the mirror (`Number(false) === 0` → the
+  // default), which is why probing only `false` proved nothing.
+  for (const knob of NUMERIC_KNOBS) {
+    for (const bool of [true, false]) {
+      const { config, warnings } = withConfig({ [knob]: bool });
+      assert.strictEqual(config[knob], DEFAULTS[knob], `${knob}: ${bool} → ${config[knob]}`);
+      assert.ok(warnings.some((w) => new RegExp(`pipeline\\.${knob}`).test(w) && /not a number/.test(w)),
+        `${knob}: ${bool} must SAY so — ${warnings.join('; ')}`);
+    }
+  }
+});
+
+test('a fractional value is floored, and the warning names the floor', () => {
+  // 4.5 used to survive intact and produce a FRACTIONAL `free` on the board.
+  for (const knob of NUMERIC_KNOBS) {
+    const { config, warnings } = withConfig({ [knob]: 4.5 });
+    assert.strictEqual(config[knob], 4, `${knob}: 4.5 → ${config[knob]}`);
+    assert.ok(warnings.some((w) => new RegExp(`pipeline\\.${knob}`).test(w) && /4\.5/.test(w) && /4/.test(w)),
+      `${knob}: the floor must be reported — ${warnings.join('; ')}`);
+  }
+});
+
+test('a fraction below one is a MALFORMED knob, not a cap of zero', () => {
+  // The plan asked for `0.5` to floor to 0 so the capacity fixpoint branch
+  // fires. It must not: `front.cjs`'s `capMax` reserves `max === 0` for exactly
+  // one fact — "no policy could be read" — and `formatFront` words its line off
+  // that ("the project config does not parse"). A file that PARSES and says 0.5
+  // would then be reported as unparseable, which is a new lie in place of the old
+  // one. The defect `0.5` actually carried was the FRACTIONAL `free` (0.5 is
+  // truthy, so `free === 0` never fired while nothing could be dispatched); the
+  // floor plus this fallback removes fractions from the board entirely, so the
+  // branch's premise holds for every cap that can now exist.
+  for (const knob of NUMERIC_KNOBS) {
+    const { config, warnings } = withConfig({ [knob]: 0.5 });
+    assert.strictEqual(config[knob], DEFAULTS[knob], `${knob}: 0.5 → ${config[knob]}`);
+    assert.ok(warnings.some((w) => new RegExp(`pipeline\\.${knob} must be a positive number`).test(w)),
+      `${knob}: ${warnings.join('; ')}`);
+  }
+});
+
+test('a numeric STRING still resolves — the type check must not widen past booleans', () => {
+  // A hand-edited config.json acquires string values, and every other coercion in
+  // this file tolerates them. A type check that rejected them would break real
+  // configs to close a hole booleans opened.
+  for (const knob of NUMERIC_KNOBS) {
+    const { config, warnings } = withConfig({ [knob]: '4' });
+    assert.strictEqual(config[knob], 4, `${knob}: "4" → ${config[knob]}`);
+    assert.deepStrictEqual(warnings, [], `${knob}: "4" is a value, not a mistake — ${warnings.join('; ')}`);
   }
 });
 
@@ -1482,5 +1548,199 @@ test('the CLI emits the route on every --json call, beside the pair it explains'
     assert.strictEqual(parsed.effort.effort, j.effort);
   }
 });
+
+suite('the §7.5 ladder table — the halves the doc guard could not see');
+
+// `tests/smoke/docs-smoke.sh` already holds the table's role/tier/effort columns
+// against `model <role> --json`. Three things it cannot see, each verified by
+// arch-review on PR #59 to PASS the guard as shipped:
+//
+//   an EXEMPT row whose REASON is gone — and the reason is the half that stops
+//   the next reader deleting the row in good faith, which is the whole argument
+//   for the exemption existing in prose at all;
+//   a CONTRADICTORY DUPLICATE row — the guard's `rows.find(...)` takes the first
+//   match and its reverse check only tests membership, so a second `executor`
+//   row saying something else is invisible;
+//   the ESCALATION prose — moving `xhigh` from `--type alternatives` to
+//   `--type facts` changed nothing that any test read.
+//
+// They live in this file rather than in the smoke script because this ticket owns
+// this file, and because the comparison is against the resolver these tests
+// already import — no subprocess needed for the sweep.
+
+const DOC = path.join(__dirname, '..', '..', 'docs', 'gsd_multilevel_delivery_pipeline.md');
+
+function ladderFences() {
+  const text = fs.readFileSync(DOC, 'utf8');
+  const section = (text.split(/^## 7\.5\./m)[1] || '').split(/^## 8\./m)[0];
+  assert.ok(section, `${DOC} has no §7.5 model-policy section — there is nothing to compare`);
+  const fences = [...section.matchAll(/```text\n([\s\S]*?)\n```/g)].map((m) => m[1]);
+  assert.ok(fences.length >= 2,
+    `§7.5 must carry BOTH tables (the per-role ladder and the per-dispatch escalations); found ${fences.length}`);
+  return fences;
+}
+
+// A row is a line starting at column 0; the "why" column wraps onto indented
+// continuation lines, and joining them is the difference between reading a reason
+// and reading its first six words.
+function parseRows(fence, columns) {
+  const rows = [];
+  for (const line of fence.split('\n')) {
+    if (!line.trim()) continue;
+    if (/^\s/.test(line)) {
+      if (rows.length) rows[rows.length - 1].rest += ` ${line.trim()}`;
+      continue;
+    }
+    const parts = line.trim().split(/\s+/);
+    if (parts[0] === 'role') continue;                 // the header
+    rows.push({ cells: parts.slice(0, columns), rest: parts.slice(columns).join(' ') });
+  }
+  return rows;
+}
+
+// "(no reason given)" is NOT empty, and it is the exact mutant that passed the
+// shipped guard — so a non-empty check alone would still not have caught it.
+const PLACEHOLDER = /^\(?\s*(no reason(\s+given)?|none|n\/?a|tbd|todo|xxx|\?+|-+|\.{3})\s*\)?[.\s]*$/i;
+
+test('every role has exactly ONE row, so a contradictory duplicate cannot hide behind the first match', () => {
+  const rows = parseRows(ladderFences()[0], 3);
+  const seen = new Map();
+  for (const r of rows) {
+    const role = r.cells[0];
+    assert.ok(ROLES.includes(role), `§7.5 row for "${role}" is not a pipeline role`);
+    assert.ok(!seen.has(role),
+      `§7.5 has TWO rows for "${role}" (${seen.get(role)} and ${r.cells.slice(1, 3).join('/')}) — `
+      + 'the doc guard resolves that by first match, so the second row can say anything');
+    seen.set(role, r.cells.slice(1, 3).join('/'));
+  }
+  for (const role of ROLES) assert.ok(seen.has(role), `§7.5 has no row for ${role}`);
+});
+
+test('a row below the floor carries a REASON, and the reason is not a placeholder', () => {
+  const rows = parseRows(ladderFences()[0], 3);
+  const exempt = new Set();
+  for (const { cells, rest } of rows) {
+    const [role, tier] = cells;
+    if (tier === 'opus') {
+      assert.ok(!/^EXEMPT:/.test(rest), `${role} is at the floor, so "EXEMPT:" on its row is a contradiction`);
+      continue;
+    }
+    assert.ok(/^EXEMPT:/.test(rest),
+      `§7.5 puts ${role} at ${tier}, below the floor, with no "EXEMPT:" marker — an exemption without one `
+      + 'is a row the next reader deletes in good faith');
+    const reason = rest.replace(/^EXEMPT:\s*/, '').trim();
+    assert.ok(reason && !PLACEHOLDER.test(reason),
+      `${role}'s exemption reason is missing or a placeholder: ${JSON.stringify(reason)}`);
+    assert.ok(reason.length >= 40,
+      `${role}'s exemption reason is ${reason.length} chars — too short to stop a deletion: ${JSON.stringify(reason)}`);
+    exempt.add(role);
+  }
+  // Both directions, against the code's own set: SONNET_ROLES carries the reason
+  // in `pipeline-config.cjs`, and the two must name the same roles or one of them
+  // is documentation of something that is not shipped.
+  assert.deepStrictEqual([...exempt].sort(), [...SONNET_ROLES.keys()].sort(),
+    'the documented exemptions and SONNET_ROLES must be the same set');
+  for (const role of exempt) {
+    const why = SONNET_ROLES.get(role);
+    assert.ok(typeof why === 'string' && why.trim().length >= 40,
+      `SONNET_ROLES["${role}"] must carry its own reason too: ${JSON.stringify(why)}`);
+  }
+});
+
+// ── the escalation table, against the resolver ───────────────────────────────
+
+const escCfg = () => ({ ...DEFAULTS, models: {}, effort: {} });
+
+// One spelling of a signal, parsed from the flag the doc names. The vocabulary is
+// deliberately small and explicit: an unrecognized flag FAILS rather than
+// resolving to `{}`, because a silently ignored signal would make every row it
+// appears in trivially true.
+function signalsFor(spec, cfg) {
+  const t = spec.trim().split(/\s+/);
+  const out = {};
+  for (let i = 0; i < t.length; i += 1) {
+    if (t[i] === '--risk') { out.risk = t[++i]; continue; }
+    if (t[i] === '--type') { out.type = t[++i]; continue; }
+    if (t[i] === '--signature-state') { out.signatureState = t[++i]; continue; }
+    if (t[i] === '--checkpoint') { out.checkpoint = true; continue; }
+    if (t[i] === '--contested') { out.contested = true; continue; }
+    if (t[i] === '--input-tokens') {
+      // Named, never numbered: the threshold is `pipeline.fable_window_tokens`,
+      // so a literal in the document would go stale the first time it is tuned.
+      const rest = t.slice(i + 1).join(' ');
+      assert.strictEqual(rest, 'over pipeline.fable_window_tokens',
+        `the window row must name the knob, not a number: ${JSON.stringify(rest)}`);
+      out.inputTokens = cfg.fable_window_tokens + 1;
+      return out;
+    }
+    assert.fail(`§7.5's escalation table names a signal this test cannot parse: ${JSON.stringify(t[i])}`);
+  }
+  return out;
+}
+
+const escalationRows = () => parseRows(ladderFences()[1], 3).map(({ cells, rest }) => ({
+  role: cells[0], tier: cells[1], effort: cells[2], signal: rest,
+}));
+
+test('every documented escalation resolves to exactly the pair beside it', () => {
+  const cfg = escCfg();
+  const rows = escalationRows();
+  assert.ok(rows.length >= 9, `the table lost rows: ${rows.length}`);
+  for (const row of rows) {
+    const roles = row.role === '*' ? ROLES : [row.role];
+    assert.ok(row.role === '*' || ROLES.includes(row.role), `"${row.role}" is not a pipeline role`);
+    const signals = signalsFor(row.signal, cfg);
+    for (const role of roles) {
+      const model = resolveModel(role, signals, cfg);
+      const effort = resolveEffort(role, model, cfg, signals);
+      assert.strictEqual(`${model}/${effort}`, `${row.tier}/${row.effort}`,
+        `§7.5 says ${role} + "${row.signal}" is ${row.tier}/${row.effort}, the resolver says ${model}/${effort}`);
+    }
+    // An escalation that resolves to the role's baseline is not an escalation —
+    // which is what "moving xhigh from --type alternatives to --type facts"
+    // produces, and what the shipped guard could not see.
+    for (const role of roles) {
+      const baseModel = resolveModel(role, {}, cfg);
+      const base = `${baseModel}/${resolveEffort(role, baseModel, cfg, {})}`;
+      assert.notStrictEqual(base, `${row.tier}/${row.effort}`,
+        `§7.5 lists ${role} + "${row.signal}" as an escalation, but it resolves to that role's baseline ${base}`);
+    }
+  }
+});
+
+test('and the sweep: every single signal that moves a role is IN the table', () => {
+  // The lesson T-27-07 paid for, applied one file over: a LIST of known
+  // escalations has to be edited whenever one is added, which is the same failure
+  // the thing it guards had. So this enumerates the signal vocabulary the
+  // resolver reads and requires a documented row for every deviation it finds.
+  const cfg = escCfg();
+  const documented = new Set();
+  for (const row of escalationRows()) {
+    const roles = row.role === '*' ? ROLES : [row.role];
+    for (const role of roles) documented.add(`${role} ${row.signal.trim()}`);
+  }
+  const candidates = [];
+  for (const risk of ['low', 'medium', 'high']) candidates.push([`--risk ${risk}`, { risk }]);
+  candidates.push(['--checkpoint', { checkpoint: true }]);
+  for (const type of ['alternatives', 'research', 'implementation', 'facts']) candidates.push([`--type ${type}`, { type }]);
+  for (const st of SIGNATURE_STATES) candidates.push([`--signature-state ${st}`, { signatureState: st }]);
+  candidates.push(['--contested', { contested: true }]);
+  candidates.push(['--input-tokens over pipeline.fable_window_tokens', { inputTokens: cfg.fable_window_tokens + 1 }]);
+
+  const missing = [];
+  for (const role of ROLES) {
+    const baseModel = resolveModel(role, {}, cfg);
+    const base = `${baseModel}/${resolveEffort(role, baseModel, cfg, {})}`;
+    for (const [spelling, signals] of candidates) {
+      const model = resolveModel(role, signals, cfg);
+      const got = `${model}/${resolveEffort(role, model, cfg, signals)}`;
+      if (got === base) continue;
+      if (!documented.has(`${role} ${spelling}`)) missing.push(`${role} + ${spelling} → ${got} (baseline ${base})`);
+    }
+  }
+  assert.deepStrictEqual(missing, [],
+    `§7.5's escalation table is missing ${missing.length} row(s) the resolver actually has:\n  ${missing.join('\n  ')}`);
+});
+
 
 done();
