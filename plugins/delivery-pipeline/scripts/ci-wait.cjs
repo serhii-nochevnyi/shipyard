@@ -198,7 +198,12 @@ const leftBehind = Number(front.left_behind_count || 0);
 // capacity existed outlives an upgrade, and an absent field must read as "no cap
 // is in force" (refuse as before), never as a full board.
 const capacity = (front.capacity && typeof front.capacity === 'object') ? front.capacity : null;
-const capNum = (k) => (capacity !== null && typeof capacity[k] === 'number' && Number.isFinite(capacity[k]) ? capacity[k] : null);
+// `front.cjs` only ever emits non-negative counts (`Math.max(0, …)` for `free`,
+// a length or a collapsed sum for `max`/`in_flight`), so a negative value here
+// is not a smaller cap — it is a corrupted or hand-edited front, and must read
+// as unreadable exactly like `null`/a string/an object would.
+const capNum = (k) => (capacity !== null && typeof capacity[k] === 'number'
+  && Number.isFinite(capacity[k]) && capacity[k] >= 0 ? capacity[k] : null);
 const capFree = capNum('free');
 // `max`/`in_flight` are read the same defensive way for the human message below —
 // they gate nothing here, but an old or partially-written front must not print

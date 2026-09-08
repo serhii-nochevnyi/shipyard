@@ -518,7 +518,12 @@ const dispatched = (front.waiting && front.waiting.dispatched) || [];
 // existed outlives an upgrade, so an absent or unreadable field is `null` — "no
 // cap is in force" — and must never open the hatches below.
 const capacity = (front.capacity && typeof front.capacity === 'object') ? front.capacity : null;
-const capNum = (k) => (capacity !== null && typeof capacity[k] === 'number' && Number.isFinite(capacity[k]) ? capacity[k] : null);
+// `front.cjs` only ever emits non-negative counts (`Math.max(0, …)` for `free`,
+// a length or a collapsed sum for `max`/`in_flight`), so a negative value here
+// is not a smaller cap — it is a corrupted or hand-edited front, and must read
+// as unreadable exactly like `null`/a string/an object would.
+const capNum = (k) => (capacity !== null && typeof capacity[k] === 'number'
+  && Number.isFinite(capacity[k]) && capacity[k] >= 0 ? capacity[k] : null);
 const capMax = capNum('max');
 const capFree = capNum('free');
 // Read for the phantom-capacity message below the same defensive way as

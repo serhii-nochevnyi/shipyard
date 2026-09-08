@@ -776,4 +776,17 @@ test('capacity.free: null is unreadable, not a spent cap — Number(null) is 0, 
   assert.ok(/execute: T-01-05/.test(json.refusal), json.refusal);
 });
 
+test('capacity.free: -1 is unreadable, not a spent cap — front.cjs never emits a negative', () => {
+  // `front.cjs` clamps `free` at zero (`Math.max(0, …)`) and `max`/`in_flight`
+  // are a config value and a collapsed count, so a negative here is not a
+  // smaller cap — it is a corrupted or hand-edited front, and must read exactly
+  // like `null` does: unreadable, never a binding zero.
+  const { code, json } = asJson(ciOnly({
+    actionable_count: 1, actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05'] },
+    capacity: { max: 4, in_flight: 5, free: -1 },
+  }), stateWith());
+  assert.equal(code, 3, 'a negative free must not read as capFree <= 0 and suppress the refusal');
+  assert.ok(/execute: T-01-05/.test(json.refusal), json.refusal);
+});
+
 done();
