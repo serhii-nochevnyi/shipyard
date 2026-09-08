@@ -1513,6 +1513,109 @@ test('a checkpoint outranks the no-CI hold — a person holds that one for anoth
   assert.deepStrictEqual(f.waiting.merge_human, []);
 });
 
+suite('front — a check state that could not be READ is neither empty nor green');
+
+// The fourth state. An unreadable `gh pr checks` (a 503, a rate limit, an old
+// `gh` rejecting `--json bucket`) used to reach the board as `none_reported`,
+// which routes to `waiting.merge_human` and asks a person to confirm that this
+// repo has no CI — about a reading that never happened. Then it reached the board
+// as a synthetic pending row, which waits for the right reason while claiming one
+// check is running on a PR nobody read. `unavailable` is the fact as itself: no
+// work is owed, nobody is asked anything, and the next sync looks again.
+//
+// The assertions below deliberately discriminate from BOTH predecessors: the
+// bucket alone was already `waiting.ci` under the synthetic row, so the tally and
+// the why-message are what pin this behaviour rather than the routing.
+const unread = (note = 'gh: HTTP 503: Service Unavailable') =>
+  ({ total: 0, failing: 0, pending: 0, none_reported: false, unavailable: true, note });
+const unreadLanded = { ...landed, checks: unread() };
+
+test('green + conform + stacked, but the checks were never read → waiting.ci', () => {
+  const f = computeFront({ T: {} }, { T: { ...unreadLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, [], 'nothing read this branch');
+  assert.deepStrictEqual(f.waiting.ci, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, [], 'nobody is asked to confirm a reading that did not happen');
+  assert.ok(/checks unreadable/.test(f.why.T), f.why.T);
+  assert.ok(/HTTP 503/.test(f.why.T), 'the cause gh printed is what makes the message actionable');
+  assert.ok(/retried next sync/.test(f.why.T), f.why.T);
+  assert.ok(!/still running/.test(f.why.T), 'no phantom check: the synthetic row said exactly that');
+  assert.strictEqual(f.fixpoint, false, 'waiting on CI is never a fixpoint');
+});
+
+test('the same PR is not actionable in ANY bucket', () => {
+  // `finalize` is the one that would otherwise fire (a green, out-of-draft PR
+  // with an unrecorded gate is finalize work), so assert the whole board.
+  const f = computeFront(
+    { T: {}, D: {} },
+    { T: { ...unreadLanded, gate: undefined }, D: { ...unreadLanded, pr: 10, draft: true } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(Object.values(f.actionable).flat(), []);
+  assert.deepStrictEqual(f.waiting.ci.slice().sort(), ['D', 'T']);
+});
+
+test('a note the board never carried still names the state', () => {
+  // `note` is only ever written beside the flag, but a board can be hand-edited
+  // or written by an older release — the why-message must not read "undefined".
+  const f = computeFront({ T: {} }, { T: { ...landed, checks: { ...unread(), note: undefined } } }, { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.ci, ['T']);
+  assert.ok(/checks unreadable: gh pr checks did not answer/.test(f.why.T), f.why.T);
+});
+
+test('an OBSERVED empty list is untouched — it is still the human\'s merge (the control)', () => {
+  // `gh` exits 1 both for a failing check and for a PR with no checks at all, so
+  // an exit-1 answer of `[]` is the ordinary no-CI path, not an error. The two
+  // states must not converge again: this one names the setting, that one does not.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.merge_human, ['T']);
+  assert.deepStrictEqual(f.waiting.ci, []);
+  assert.ok(/merge_without_ci/.test(f.why.T), f.why.T);
+});
+
+test('merge_without_ci does NOT lift an unreadable answer', () => {
+  // The setting is a person saying "this repository has no CI". It says nothing
+  // about a call that failed, and reading it as consent for one would put the
+  // merge gate right back where Б3 found it.
+  const f = computeFront({ T: {} }, { T: { ...unreadLanded } }, { autoMerge: true, mergeWithoutCi: true });
+  assert.deepStrictEqual(f.actionable.merge, []);
+  assert.deepStrictEqual(f.waiting.ci, ['T']);
+});
+
+test('a failing check outranks it — a tally that WAS read is the louder fact', () => {
+  // Unreachable from state-sync (an unavailable answer has zero tallies), but the
+  // branch order is the contract with sentinel.cjs's duty, and a hand-written or
+  // half-migrated board must not lose a red.
+  const f = computeFront({ T: {} }, { T: { ...landed, checks: { ...unread(), failing: 2 } } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+});
+
+test('a MOVED BASE outranks it too, and the position is deliberate', () => {
+  // The permanent case is an old `gh` that cannot answer `--json bucket` at all,
+  // so routing to `waiting.ci` first would freeze base-merge for every round of
+  // the run — and `merge_state` comes from a different call, which no `pr checks`
+  // failure says anything about. `sentinel.cjs`'s duty holds the same order.
+  const f = computeFront(
+    { T: {} },
+    { T: { ...unreadLanded, merge_state: 'BEHIND', behind_by: 3 } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.ok(/base moved/.test(f.why.T), f.why.T);
+});
+
+test('a human_checkpoint ticket waits on the READING, and is never offered as a merge', () => {
+  // The opposite order from the no-CI hold, and for a mechanical reason: the
+  // checkpoint branch is `needsHuman(t) && green`, and `green` is now false here.
+  // Reached after this branch, that guard would fall through to the merge branch
+  // below it and the board would offer to squash a checkpoint PR nobody approved.
+  // So the checkpoint is not LOST, it is deferred: `waiting.ci` resolves by
+  // looking again, and the moment the reading succeeds the checkpoint answers.
+  const f = computeFront({ T: { human_checkpoint: true } }, { T: { ...unreadLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, [], 'the one answer that would be unrecoverable');
+  assert.deepStrictEqual(f.waiting.ci, ['T']);
+  assert.deepStrictEqual(f.waiting.human, []);
+});
+
 suite('front — the project config is consulted only when a no-CI PR is on the board');
 
 // Reviewer-found on PR #44. `heldForNoCi` resolved `merge_without_ci` EAGERLY to

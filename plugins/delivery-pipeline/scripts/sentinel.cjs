@@ -31,7 +31,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
-const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { classify, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 // The checkpoint predicates live in front.cjs and are imported, not copied.
 // A `checkpointParentOf` used to exist here AND there, and the standing rule — the
 // board must never offer what the guard refuses — was held by nothing but the
@@ -165,17 +165,27 @@ function behindBy(base, head, repo) {
 // MERGED. The returned shape is unchanged; only who decides is.
 //
 // A `gh` invocation that FAILED (non-zero exit with nothing parseable on
-// stdout — an old `gh` rejecting `bucket`, a network blip, a missing binary)
-// is not the same fact as "this PR genuinely has no checks configured", and
-// must not collapse into it: that collapse is what let a startup failure read
-// as green above. ANY stdout that parses to an array is authoritative and
+// stdout — an old `gh` rejecting `bucket`, a 503, a rate limit, a missing
+// binary) is not the same fact as "this PR genuinely has no checks configured",
+// and must not collapse into it: that collapse is what let a startup failure
+// read as green above. ANY stdout that parses to an array is authoritative and
 // used as-is, EMPTY OR NOT and regardless of exit status — a non-zero exit
 // with valid JSON is normal (the docstring above: exit code is data, not an
 // error). Only when there is nothing parseable to trust does exit status
-// decide: exit 0 with empty output means "no checks"; anything else
-// unreadable becomes a single synthetic row with an unknown bucket, which
-// `classify` already fails closed to `pending` — so the merge gate re-ticks
-// instead of merging on silence.
+// decide: exit 0 with empty output means "no checks"; anything else unreadable
+// hands `rows: null` to `classify`, which reports it as the FOURTH state,
+// `unavailable`.
+//
+// It used to hand over a synthetic `[{ bucket: 'unreadable' }]` row to borrow
+// `classify`'s fail-closed `pending`. That waited for the right reason and said
+// the wrong thing — "1 check(s) still running" about a check nobody ever saw,
+// on the guard's own live read — and it kept the fact in two places at once:
+// the row here and the flag there. The flag is the fact.
+//
+// The returned shape stays a TALLY, because that is what every caller in this
+// file reads (`checks.failing`, `heldForNoCi(checks)`, `c.pending`); it simply
+// carries `unavailable` and the `note` now. state-sync's `ghChecks` returns rows
+// instead — same distinction, different side of `classify`.
 function ghChecks(pr, repo) {
   const r = spawnSync('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', CHECK_FIELDS], { encoding: 'utf8' });
   const stdout = (r.stdout || '').trim();
@@ -188,9 +198,17 @@ function ghChecks(pr, repo) {
   } else if (r.status === 0) {
     rows = []; // gh succeeded and reported nothing — genuinely no checks
   }
-  if (rows === null) rows = [{ bucket: 'unreadable' }];
+  // `null` travels straight through: `classify` is the one place that decides
+  // what the shape of the answer means, and it answers `unavailable: true`.
   const c = classify(rows);
-  return { failing: c.failing, pending: c.pending, total: c.total, none_reported: c.none_reported };
+  const out = { failing: c.failing, pending: c.pending, total: c.total, none_reported: c.none_reported, unavailable: c.unavailable };
+  // The cause, for the duty's why and the merge refusal — derived by the module
+  // that owns the provenance order rather than written out here. It was a copy of
+  // state-sync's chain, and a rule kept in two places is one the two can differ
+  // on: on the exit-0-with-a-non-array-answer cell both said "exited 0", which
+  // names nothing at all for whoever reads the refusal.
+  if (c.unavailable) out.note = unavailableNote(r);
+  return out;
 }
 
 const defaultBranchCache = new Map();
@@ -420,6 +438,17 @@ function dutyItems() {
       item.action = 'review-fix';
       item.unresolved = unresolved;
       item.why = `${unresolved} unresolved review thread(s)${(c.pending || 0) > 0 ? ` (CI still running — service them NOW: a fix pushes anyway and restarts that run)` : ''} — fix or reply with reasoning, then RESOLVE each one`;
+    } else if (c.unavailable) {
+      // The board could not READ this PR's check state (a 503, a rate limit, an
+      // old `gh` rejecting `bucket`). Not "no checks", not "one check pending" —
+      // `wait-ci` because looking again is the whole remedy, and the note says
+      // what stopped the reading. Withholding only the landing actions, in the
+      // same position `front.cjs` puts this bucket: base-merge and review-fix
+      // above are real work that no `pr checks` failure says anything about, and
+      // the permanent case (an old `gh`) would freeze them for the whole run.
+      item.action = 'wait-ci';
+      item.why = `check state unreadable: ${c.note || 'gh pr checks did not answer'} — not "no checks" and not green; `
+        + 'the next state-sync reads again. Nothing to fix and nobody to ask.';
     } else if ((c.pending || 0) > 0) {
       item.action = 'wait-ci';
       item.why = `${c.pending} check(s) still running${unresolved === null ? ' — review threads unreadable this tick' : ''} — re-tick, do not block the main loop`;
@@ -701,6 +730,19 @@ function mergeOne(id) {
 
   const checks = ghChecks(s.pr, repo);
   res.checks = checks;
+  // ASKED FIRST, ahead of the tallies, because an `unavailable` answer has all of
+  // them at zero: `failing === 0 && pending === 0` is the green test, so the
+  // arithmetic below would pass a PR whose checks nobody read. This is the same
+  // shape of refusal as the errored `gh compare` at the end of this gate — an
+  // unknown is not a pass — and the note is quoted so the refusal is actionable
+  // rather than a dead end. No park and no human is asked: the next tick reads
+  // again, and `state-sync` records the same fact for the board.
+  if (checks.unavailable) {
+    return block(
+      `the check state could not be read: ${checks.note || 'gh pr checks did not answer'} — a green cannot be told ` +
+      'from a red without it, so the merge is refused rather than guessed. Nothing to fix; the next tick reads again.'
+    );
+  }
   if (checks.failing > 0) return block(`${checks.failing} failing check(s)`);
   if (checks.pending > 0) return block(`${checks.pending} check(s) still running`);
   // Б3. `failing === 0 && pending === 0` is the green test, and an EMPTY check

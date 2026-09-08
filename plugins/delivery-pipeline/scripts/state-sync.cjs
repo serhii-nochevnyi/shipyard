@@ -54,7 +54,7 @@ const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
 // the one this writer used to drop. See the comment at DISPATCHED below.
 const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
-const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
 const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
@@ -167,32 +167,64 @@ function ghTry(args) {
 // an error: reading it through the strict helper above made state-sync abort on
 // exactly the red/pending PRs the babysit loop exists to service.
 //
-// But a non-zero exit with NOTHING parseable on stdout is a different fact
-// again: gh itself failed to answer (an old `gh` rejecting `bucket`, a network
-// blip), and that is not "this PR has no checks" either. Collapsing the two
-// into the same `{ rows: [], none: true }` shape made `classify([])` read
-// `none_reported: true, failing: 0, pending: 0` — the exact tally the merge
-// gate treats as unblocked — off a call that never actually answered. ANY
-// stdout that parses to an array is trusted as-is, EMPTY OR NOT and whatever
-// the exit code — a non-zero exit with valid JSON is the normal case above,
-// not an error. Only when nothing parses does exit status decide: exit 0 with
-// empty output means "no checks"; anything else unreadable returns a
-// synthetic unknown-bucket row, which `classify` already fails closed to
-// `pending`, so the caller waits and re-ticks instead of merging on silence.
+// But an answer that never arrived is a different fact again: gh itself failed
+// (an old `gh` rejecting `bucket`, a 503, a rate limit, an expired token), and
+// that is not "this PR has no checks" either. Collapsing the two into the same
+// `{ rows: [] }` shape made `classify([])` read `none_reported: true, failing: 0,
+// pending: 0` — the exact tally the merge gate treats as unblocked — off a call
+// that never actually answered.
+//
+// THE SHAPE OF STDOUT DECIDES; the exit code is consulted only when stdout is
+// silent. Three cases, and the middle one is the whole point:
+//
+//   parses to an array   trusted as-is, EMPTY OR NOT and whatever the exit code.
+//                        A non-zero exit with valid JSON is the normal case
+//                        above, not an error.
+//   non-empty, not an    UNREADABLE, whatever the exit code. `gh` answered
+//   array                something else — malformed JSON, an API error object, a
+//                        notice contaminating stdout — and it exits 0 while
+//                        doing so, so a `status === 0` test here reads a
+//                        successful COMMAND as a readable ANSWER. This branch
+//                        used to be a bare `if` after the parse attempt rather
+//                        than an `else if`, so exit 0 manufactured `[]` locally;
+//                        `sentinel.cjs` and `ci-wait.cjs` both had the `else if`
+//                        and called the same `gh` answer unreadable, which left
+//                        the board and the guard disagreeing (ADR-004 F02 names
+//                        this cell "malformed JSON").
+//   empty                only here does the status decide: 0 means gh succeeded
+//                        and reported nothing — genuinely no checks — and
+//                        anything else is unreadable.
+//
+// Unreadable hands `rows: null` to `check-state.cjs`, which reports it as the
+// fourth state, `unavailable`. It used to hand over a synthetic
+// `[{ bucket: 'unreadable' }]` row instead, to borrow `classify`'s fail-closed
+// `pending`. That waited for the right reason and said the wrong thing — one
+// pending check, on a PR where nothing was read — and it put the fact in two
+// places at once: the row here and the flag there. The flag is the fact;
+// `rows: null` is how it is spelled on the way in, and this function returns
+// NOTHING else about it — `none`/`unavailable` were computed here too until the
+// only caller stopped reading them, which is one more second home for a fact
+// `classify` owns.
 function ghChecks(prNumber, repo) {
   const args = ['pr', 'checks', String(prNumber), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
   const r = spawnSync('gh', args, { encoding: 'utf8' });
   const stdout = (r.stdout || '').trim();
+  let rows = null;
   if (stdout) {
     try {
-      const rows = JSON.parse(stdout);
-      if (Array.isArray(rows)) return { rows, none: rows.length === 0 };
-    } catch { /* fall through to the no-data branch */ }
+      const parsed = JSON.parse(stdout);
+      if (Array.isArray(parsed)) rows = parsed;
+    } catch { /* not JSON at all — `null` travels on to `classify` */ }
+  } else if (r.status === 0) {
+    rows = []; // gh succeeded and printed nothing — genuinely no checks
   }
-  if (r.status === 0) return { rows: [], none: true };
-  const why = (r.stderr || '').trim().split('\n')[0] || `gh pr checks exited ${r.status}`;
-  return { rows: [{ bucket: 'unreadable' }], none: false, note: why };
+  if (Array.isArray(rows)) return { rows };
+  // The note is what reaches the board, the front's why-message and the merge
+  // refusal, so it has to name the CAUSE — and it is derived by the module that
+  // owns the provenance order, so the board and the guard cannot describe the
+  // same `gh` answer differently.
+  return { rows: null, note: unavailableNote(r) };
 }
 
 const { config: cfg, warnings: cfgWarnings } = loadConfig(ROOT);
@@ -385,7 +417,7 @@ for (const [id, t] of Object.entries(tickets)) {
       entry.merge_state = pr.mergeStateStatus || null;
       const gate = parseGate(pr.body);
       if (gate) entry.gate = gate;
-      const { rows, none, note } = ghChecks(pr.number, repo);
+      const { rows, note } = ghChecks(pr.number, repo);
       // check-state.cjs classifies; this file only records. The KEYS are the
       // board's contract — front.cjs's green test, escalation-record's
       // fingerprint and the stop gate all read exactly these — so the tallies
@@ -395,12 +427,18 @@ for (const [id, t] of Object.entries(tickets)) {
         total: c.total,
         failing: c.failing,
         pending: c.pending,
-        // `none` comes from ghChecks, and is true ONLY for a genuine exit-0
-        // empty answer — an unreachable/unparseable `gh` call now reports a
-        // synthetic unreadable row instead, so it lands in `c.pending`, not
-        // here.
-        none_reported: none,
+        // Both flags come from `classify`, not from `ghChecks`: the shape of the
+        // answer (`[]` versus nothing at all) is what decides, and one place
+        // decides it. `none_reported` is a genuine observed empty list — this PR
+        // has no checks configured. `unavailable` is the reading that did not
+        // happen, and it is recorded UNCONDITIONALLY beside it, because a board
+        // where the key is simply missing cannot say whether the last sync found
+        // the checks readable or predates the question.
+        none_reported: c.none_reported,
+        unavailable: c.unavailable,
       };
+      // Only ever set with `unavailable` — it is the cause `gh` printed, and it
+      // is what the front's why-message and the merge refusal quote.
       if (note) entry.checks.note = note;
     } else {
       entry.status = remoteBranches.has(t.branch) ? 'branched' : 'pending';
@@ -637,7 +675,13 @@ for (const [id, entry] of Object.entries(state)) {
   // time it has been mergeable. Carry a dedicated stamp, and when there is no
   // local history fall back to the PR's creation time (a conservative floor)
   // rather than inventing "0h" and suppressing the warning entirely.
-  const green = entry.checks && entry.checks.failing === 0 && entry.checks.pending === 0;
+  // `isGreen`, not the arithmetic that used to be written out here: an
+  // `unavailable` reading has all-zero tallies, so `failing === 0 && pending === 0`
+  // started this clock off a call that never answered — and the warning it feeds
+  // says "approved+green — awaiting merge", which is a claim about checks nobody
+  // read. The `entry.checks &&` guard stays: a ticket with no checks object at
+  // all has no clock, which is not the same as one whose checks are empty.
+  const green = entry.checks && isGreen(entry.checks);
   const mergeable = entry.status === 'pr-open' && !entry.draft && entry.review_decision === 'APPROVED' && green;
   if (mergeable) {
     entry.mergeable_since = (before && before.mergeable_since) || entry.pr_created_at || nowIso;
@@ -897,7 +941,15 @@ for (const [id, s] of Object.entries(state)) {
     console.log(`⚠ stale: ${id} PR #${s.pr} still a draft for ${ageLabel(s.since)}`);
   }
   if (s.checks && s.checks.none_reported) {
-    console.log(`⚠ ${id} PR #${s.pr}: no CI checks reported${s.checks.note ? ` (${s.checks.note})` : ''} — "green" here means "nothing to run", confirm that is expected`);
+    console.log(`⚠ ${id} PR #${s.pr}: no CI checks reported — "green" here means "nothing to run", confirm that is expected`);
+  }
+  // The fourth state gets its OWN line, and the two must not share one: this
+  // warning used to be the no-CI one with `(${note})` appended, which told a
+  // reader that a 503 meant "nothing to run" and asked them to confirm it.
+  // Nobody confirms a reading that did not happen — the note names the cause and
+  // the next sync looks again, so the line says that instead.
+  if (s.checks && s.checks.unavailable) {
+    console.log(`⚠ ${id} PR #${s.pr}: check state UNREADABLE this sync (${s.checks.note || 'gh pr checks did not answer'}) — not "no checks" and not green; the next sync reads again`);
   }
 }
 for (const [id, s] of Object.entries(state)) {
