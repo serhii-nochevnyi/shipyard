@@ -133,4 +133,32 @@ function isGreen(checks) {
   return !((c.failing || 0) > 0) && !((c.pending || 0) > 0);
 }
 
-module.exports = { classify, stateBucket, isGreen, CHECK_FIELDS, BUCKETS };
+// THE CAUSE OF AN UNREADABLE ANSWER, in the module that owns what one means.
+//
+// The note reaches the board's warning, the front's why-message, the guard's duty
+// and the merge refusal, so it has to name something a person can act on. It was
+// written out at BOTH `ghChecks` callers, which is the same second-home problem
+// `classify` exists to remove — and the callers had already drifted apart on the
+// shape of the answer. One order, stated once:
+//
+//   stderr       what `gh` itself printed ("HTTP 503: Service Unavailable", "API
+//                rate limit exceeded"). The best answer whenever there is one.
+//   spawn error  no `gh` on PATH at all. Its exit status is `null` and "exited
+//                null" names nothing, so this arm comes before the exit code.
+//   stdout       `gh` ANSWERED — just not with a JSON array (an API error
+//                object, a wrapper, a notice contaminating stdout). Its exit code
+//                is routinely 0 on this cell, so the status is worthless here and
+//                what it actually said is the only useful thing left. Collapsed
+//                to one line and clipped, because every consumer prints the note
+//                inside a one-line message.
+//   exit code    nothing on either stream: the status is all there is. A template
+//                literal, so the note is never empty while `unavailable` is true.
+function unavailableNote(r) {
+  const answered = (r.stdout || '').replace(/\s+/g, ' ').trim();
+  return (r.stderr || '').trim().split('\n').filter(Boolean)[0]
+    || (r.error ? r.error.message : '')
+    || (answered ? `gh pr checks answered but not with a JSON array: ${answered.length > 80 ? `${answered.slice(0, 80)}…` : answered}` : '')
+    || `gh pr checks exited ${r.status}`;
+}
+
+module.exports = { classify, stateBucket, isGreen, unavailableNote, CHECK_FIELDS, BUCKETS };

@@ -9,7 +9,7 @@
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 
-const { classify, stateBucket, isGreen, CHECK_FIELDS } = require(path.join(
+const { classify, stateBucket, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'check-state.cjs'
 ));
 
@@ -190,6 +190,46 @@ test('the flag is read for truth, and an ABSENT one is not a claim', () => {
   assert.strictEqual(isGreen({ failing: 0, pending: 0, unavailable: 1 }), false);
   assert.strictEqual(isGreen({ failing: 0, pending: 0, unavailable: false }), true);
   assert.strictEqual(isGreen({ failing: 0, pending: 0 }), true);
+});
+
+// ── the CAUSE, in the order the one function states it ──────────────────────
+// Both `ghChecks` callers wrote this chain out, and a rule kept in two places is
+// one the two can differ on. Each arm gets a case, because the arms are the rule.
+
+test('gh\'s own message wins whenever there is one', () => {
+  const note = unavailableNote({
+    stdout: '', stderr: 'gh: HTTP 503: Service Unavailable (api.github.com)\nplus noise', status: 1,
+  });
+  assert.strictEqual(note, 'gh: HTTP 503: Service Unavailable (api.github.com)', 'the first line, not the noise after it');
+});
+
+test('a failed SPAWN is named by its error, not by its status', () => {
+  // No `gh` on PATH: the status is `null` and "exited null" names nothing, which
+  // is why this arm precedes the exit-code fallback.
+  const note = unavailableNote({ stdout: '', stderr: '', status: null, error: new Error('spawnSync gh ENOENT') });
+  assert.strictEqual(note, 'spawnSync gh ENOENT');
+});
+
+test('an ANSWER that is not a JSON array is quoted — exit 0 names nothing', () => {
+  // THE CELL THIS TICKET'S FIRST PASS LEFT OPEN. gh exits 0 and answers an API
+  // error object, so the status arm below would have said "exited 0" — true, and
+  // useless to whoever reads the merge refusal at 3am.
+  const note = unavailableNote({ stdout: '{"message":"Bad credentials"}', stderr: '', status: 0 });
+  assert.match(note, /not with a JSON array/);
+  assert.match(note, /Bad credentials/, 'what gh said is the only useful thing left here');
+});
+
+test('a quoted answer is one line and clipped, because every consumer prints it inline', () => {
+  const note = unavailableNote({ stdout: `<html>\n  <body>${'x'.repeat(200)}</body>\n</html>`, stderr: '', status: 0 });
+  assert.strictEqual(note.includes('\n'), false, 'a newline would break the board\'s one-line warning');
+  assert.match(note, /…$/, 'clipped quotes say so rather than looking complete');
+  assert.strictEqual(note.length < 140, true, `note is ${note.length} chars`);
+});
+
+test('the exit code is the LAST resort, and the note is never empty', () => {
+  // Nothing on either stream: the status is all there is.
+  assert.strictEqual(unavailableNote({ stdout: '', stderr: '', status: 8 }), 'gh pr checks exited 8');
+  assert.strictEqual(unavailableNote({ stdout: '   ', stderr: '  \n ', status: 1 }), 'gh pr checks exited 1');
 });
 
 done();

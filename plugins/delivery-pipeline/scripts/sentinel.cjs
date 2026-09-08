@@ -31,7 +31,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
-const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { classify, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 // The checkpoint predicates live in front.cjs and are imported, not copied.
 // A `checkpointParentOf` used to exist here AND there, and the standing rule — the
 // board must never offer what the guard refuses — was held by nothing but the
@@ -202,14 +202,12 @@ function ghChecks(pr, repo) {
   // what the shape of the answer means, and it answers `unavailable: true`.
   const c = classify(rows);
   const out = { failing: c.failing, pending: c.pending, total: c.total, none_reported: c.none_reported, unavailable: c.unavailable };
-  if (c.unavailable) {
-    // The cause, for the duty's why and the merge refusal. A spawn failure has
-    // no stderr and a `null` status ("exited null" names nothing), so the spawn
-    // error is read before that fallback.
-    out.note = (r.stderr || '').trim().split('\n').filter(Boolean)[0]
-      || (r.error ? r.error.message : '')
-      || `gh pr checks exited ${r.status}`;
-  }
+  // The cause, for the duty's why and the merge refusal — derived by the module
+  // that owns the provenance order rather than written out here. It was a copy of
+  // state-sync's chain, and a rule kept in two places is one the two can differ
+  // on: on the exit-0-with-a-non-array-answer cell both said "exited 0", which
+  // names nothing at all for whoever reads the refusal.
+  if (c.unavailable) out.note = unavailableNote(r);
   return out;
 }
 

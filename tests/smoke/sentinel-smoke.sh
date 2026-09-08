@@ -792,6 +792,12 @@ case "\$argv" in
   # \`gh pr checks\` exits 1 for a PR with no checks AT ALL as well as for a red
   # one, so that exit code is DATA and the two must stay tellable apart.
   "pr checks 501"*)
+    # SENTINEL_SMOKE_CHECKS_JUNK is the THIRD mode: gh exits 0 and answers
+    # something that is not a JSON array (an API error object, a wrapper, a
+    # notice contaminating stdout). Exit 0 certifies that the COMMAND ran, never
+    # that the ANSWER was readable, so the exit code must not be consulted at all
+    # while stdout is non-empty.
+    if [ -n "\${SENTINEL_SMOKE_CHECKS_JUNK:-}" ]; then echo '{"message":"Bad credentials"}'; exit 0; fi
     if [ -n "\${SENTINEL_SMOKE_CHECKS_OK:-}" ]; then echo '[]'; exit 1; fi
     echo "gh: HTTP 503: Service Unavailable (api.github.com)" >&2; exit 1 ;;
   "pr view 501 --json"*)
@@ -901,6 +907,85 @@ fi
   && ok "…and a readable answer does start that clock (the paired control)" \
   || bad "an observed empty list is green for the merge clock" "got: $(urq T-05-01 mergeable_since)"
 has "…and it routes to the no-CI hold instead, unchanged" "$W/ur-board2.txt" "merge (human): T-05-01"
+
+# ── exit 0 is not a certificate that the ANSWER was readable ────────────────
+# The remaining cell of the same collapse, and the one ADR-004's F02 names as
+# "malformed JSON": `gh` exits 0 and prints something that is not a JSON array.
+# `state-sync.cjs` consulted the exit code even when stdout was non-empty, so it
+# manufactured `[]` LOCALLY instead of handing the shape to `classify` — while
+# `sentinel.cjs` and `ci-wait.cjs`, which both look at the exit code only when
+# stdout is empty, called the same `gh` answer unreadable. One `gh` behaviour,
+# two verdicts, and the board's was the one that asks a person to confirm that
+# this repository has no CI.
+#
+# Deliberately AFTER the readable control above, which left `mergeable_since` on
+# the board: that field is only ever written inside the `if (mergeable)` branch,
+# so this run must not merely fail to start the awaiting-merge clock — it has to
+# STOP one that is already running.
+( cd "$urproj" && PATH="$W/bin8:$PATH" SENTINEL_SMOKE_CHECKS_JUNK=1 \
+    node "$SCRIPTS/state-sync.cjs" > "$W/ur-board3.txt" 2>"$W/ur-sync3.err" ) \
+  || bad "state-sync survives a gh that exits 0 with a non-array answer" "$(cat "$W/ur-sync3.err")"
+[[ "$(urq T-05-01 checks unavailable)" == "true" && "$(urq T-05-01 checks none_reported)" == "false" ]] \
+  && ok "exit 0 with non-array stdout is UNREADABLE, not an observed empty list" \
+  || bad "exit 0 does not certify that the answer was readable" \
+     "got: unavailable=$(urq T-05-01 checks unavailable) none_reported=$(urq T-05-01 checks none_reported)"
+[[ "$(urq T-05-01 checks pending)" == "0" && "$(urq T-05-01 checks total)" == "0" ]] \
+  && ok "…with no phantom check here either" \
+  || bad "the tallies stay at zero" "got: pending=$(urq T-05-01 checks pending) total=$(urq T-05-01 checks total)"
+[[ "$(urq T-05-01 mergeable_since)" == "undefined" ]] \
+  && ok "…and the awaiting-merge clock the readable run started is STOPPED" \
+  || bad "an unreadable read clears mergeable_since" "got: $(urq T-05-01 mergeable_since)"
+# THE NOTE, on every surface that quotes it. gh printed nothing to stderr and did
+# not fail to spawn, so the exit-code fallback was the only arm left and it said
+# "gh pr checks exited 0" — which names no cause whatever. The provenance rule is
+# one order stated once (stderr → spawn error → unparseable stdout → exit code),
+# so this cell quotes what gh actually answered.
+case "$(urq T-05-01 checks note)" in
+  *"Bad credentials"*) ok "the note quotes the unparseable answer, not \"exited 0\"" ;;
+  *) bad "the note names what gh answered" "got: $(urq T-05-01 checks note)" ;;
+esac
+has "the sync warns in the UNREADABLE words here too" "$W/ur-board3.txt" "check state UNREADABLE"
+hasnt "…and never asks a person to confirm this repo has no CI" "$W/ur-board3.txt" "no CI checks reported"
+has "the board holds it as a wait that resolves by looking again" "$W/ur-board3.txt" "ci: T-05-01"
+hasnt "…and never offers it as a merge" "$W/ur-board3.txt" "merge: T-05-01"
+
+if node -e '
+const f = require(process.argv[1]);
+const actionable = Object.values(f.actionable || {}).flat();
+if (actionable.includes("T-05-01")) { console.error("still actionable: " + actionable.join(", ")); process.exit(1); }
+if (!((f.waiting || {}).ci || []).includes("T-05-01")) { console.error("waiting=" + JSON.stringify(f.waiting)); process.exit(1); }
+if (((f.waiting || {}).merge_human || []).includes("T-05-01")) { console.error("asked a human to confirm a reading that did not happen"); process.exit(1); }
+const why = f.why["T-05-01"] || "";
+if (!/checks unreadable/.test(why) || !/Bad credentials/.test(why)) { console.error("why=" + why); process.exit(1); }
+process.exit(0);
+' "$urproj/.planning/graph/delivery-front.json" 2>"$W/ur-front3.err"; then
+  ok "the front names the answer gh gave as the cause"
+else
+  bad "the front holds the exit-0 unreadable PR" "$(cat "$W/ur-front3.err")"
+fi
+
+( cd "$urproj" && PATH="$W/bin8:$PATH" SENTINEL_SMOKE_CHECKS_JUNK=1 \
+    node "$SCRIPTS/sentinel.cjs" duty --json > "$W/ur-duty3.json" 2>/dev/null ) || true
+if node -e '
+const i = require(process.argv[1]).items.find((x) => x.ticket === "T-05-01");
+process.exit(i && i.action === "wait-ci" && /unreadable/.test(i.why) && /Bad credentials/.test(i.why) ? 0 : 1);
+' "$W/ur-duty3.json" 2>/dev/null; then
+  ok "the guard's duty quotes the same cause the board does"
+else
+  bad "duty names the exit-0 unreadable cause" "$(head -30 "$W/ur-duty3.json")"
+fi
+
+( cd "$urproj" && PATH="$W/bin8:$PATH" SENTINEL_SMOKE_CHECKS_JUNK=1 \
+    node "$SCRIPTS/sentinel.cjs" merge T-05-01 --json > "$W/ur-merge3.json" 2>/dev/null ) || true
+if node -e '
+const r = require(process.argv[1]).results[0];
+const refused = r && r.merged === false && r.would_merge !== true;
+process.exit(refused && r.blockers.some((b) => /Bad credentials/.test(b) && /could not be read/.test(b)) ? 0 : 1);
+' "$W/ur-merge3.json" 2>/dev/null; then
+  ok "the gate refuses it quoting the answer, so the remedy is not a guess"
+else
+  bad "the gate refuses the exit-0 unreadable merge" "$(head -30 "$W/ur-merge3.json")"
+fi
 
 # ── a resync writes the front it means ───────────────────────────────────────
 # THREE writers produce delivery-front.json — front.cjs's CLI, dispatch-record's

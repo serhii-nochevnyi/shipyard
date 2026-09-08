@@ -54,7 +54,7 @@ const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
 // the one this writer used to drop. See the comment at DISPATCHED below.
 const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
-const { classify, isGreen, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
 const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
@@ -167,47 +167,64 @@ function ghTry(args) {
 // an error: reading it through the strict helper above made state-sync abort on
 // exactly the red/pending PRs the babysit loop exists to service.
 //
-// But a non-zero exit with NOTHING parseable on stdout is a different fact
-// again: gh itself failed to answer (an old `gh` rejecting `bucket`, a 503, a
-// rate limit, an expired token), and that is not "this PR has no checks"
-// either. Collapsing the two into the same `{ rows: [], none: true }` shape
-// made `classify([])` read `none_reported: true, failing: 0, pending: 0` — the
-// exact tally the merge gate treats as unblocked — off a call that never
-// actually answered. ANY stdout that parses to an array is trusted as-is, EMPTY
-// OR NOT and whatever the exit code — a non-zero exit with valid JSON is the
-// normal case above, not an error. Only when nothing parses does exit status
-// decide: exit 0 with empty output means "no checks"; anything else unreadable
-// hands `rows: null` to `check-state.cjs`, which reports it as the fourth
-// state, `unavailable`.
+// But an answer that never arrived is a different fact again: gh itself failed
+// (an old `gh` rejecting `bucket`, a 503, a rate limit, an expired token), and
+// that is not "this PR has no checks" either. Collapsing the two into the same
+// `{ rows: [] }` shape made `classify([])` read `none_reported: true, failing: 0,
+// pending: 0` — the exact tally the merge gate treats as unblocked — off a call
+// that never actually answered.
 //
-// It used to hand over a synthetic `[{ bucket: 'unreadable' }]` row instead, to
-// borrow `classify`'s fail-closed `pending`. That waited for the right reason
-// and said the wrong thing — one pending check, on a PR where nothing was read —
-// and it put the fact in two places at once: the row here and the flag there.
-// The flag is the fact; `rows: null` is how it is spelled on the way in.
+// THE SHAPE OF STDOUT DECIDES; the exit code is consulted only when stdout is
+// silent. Three cases, and the middle one is the whole point:
+//
+//   parses to an array   trusted as-is, EMPTY OR NOT and whatever the exit code.
+//                        A non-zero exit with valid JSON is the normal case
+//                        above, not an error.
+//   non-empty, not an    UNREADABLE, whatever the exit code. `gh` answered
+//   array                something else — malformed JSON, an API error object, a
+//                        notice contaminating stdout — and it exits 0 while
+//                        doing so, so a `status === 0` test here reads a
+//                        successful COMMAND as a readable ANSWER. This branch
+//                        used to be a bare `if` after the parse attempt rather
+//                        than an `else if`, so exit 0 manufactured `[]` locally;
+//                        `sentinel.cjs` and `ci-wait.cjs` both had the `else if`
+//                        and called the same `gh` answer unreadable, which left
+//                        the board and the guard disagreeing (ADR-004 F02 names
+//                        this cell "malformed JSON").
+//   empty                only here does the status decide: 0 means gh succeeded
+//                        and reported nothing — genuinely no checks — and
+//                        anything else is unreadable.
+//
+// Unreadable hands `rows: null` to `check-state.cjs`, which reports it as the
+// fourth state, `unavailable`. It used to hand over a synthetic
+// `[{ bucket: 'unreadable' }]` row instead, to borrow `classify`'s fail-closed
+// `pending`. That waited for the right reason and said the wrong thing — one
+// pending check, on a PR where nothing was read — and it put the fact in two
+// places at once: the row here and the flag there. The flag is the fact;
+// `rows: null` is how it is spelled on the way in, and this function returns
+// NOTHING else about it — `none`/`unavailable` were computed here too until the
+// only caller stopped reading them, which is one more second home for a fact
+// `classify` owns.
 function ghChecks(prNumber, repo) {
   const args = ['pr', 'checks', String(prNumber), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
   const r = spawnSync('gh', args, { encoding: 'utf8' });
   const stdout = (r.stdout || '').trim();
+  let rows = null;
   if (stdout) {
     try {
-      const rows = JSON.parse(stdout);
-      if (Array.isArray(rows)) return { rows, none: rows.length === 0, unavailable: false };
-    } catch { /* fall through to the no-data branch */ }
+      const parsed = JSON.parse(stdout);
+      if (Array.isArray(parsed)) rows = parsed;
+    } catch { /* not JSON at all — `null` travels on to `classify` */ }
+  } else if (r.status === 0) {
+    rows = []; // gh succeeded and printed nothing — genuinely no checks
   }
-  if (r.status === 0) return { rows: [], none: true, unavailable: false };
+  if (Array.isArray(rows)) return { rows };
   // The note is what reaches the board, the front's why-message and the merge
-  // refusal, so it has to name the CAUSE: `gh` prints "HTTP 503" or "API rate
-  // limit exceeded" to stderr and nothing to stdout, and a refusal that says
-  // only "unreadable" is a dead end for whoever reads it at 3am.
-  // A SPAWN failure (no `gh` on PATH) has neither stderr nor a status — the exit
-  // code there is `null` and "exited null" names nothing — so the spawn error is
-  // read next, exactly as `ghTry` above reads it.
-  const why = (r.stderr || '').trim().split('\n').filter(Boolean)[0]
-    || (r.error ? r.error.message : '')
-    || `gh pr checks exited ${r.status}`;
-  return { rows: null, none: false, unavailable: true, note: why };
+  // refusal, so it has to name the CAUSE — and it is derived by the module that
+  // owns the provenance order, so the board and the guard cannot describe the
+  // same `gh` answer differently.
+  return { rows: null, note: unavailableNote(r) };
 }
 
 const { config: cfg, warnings: cfgWarnings } = loadConfig(ROOT);
