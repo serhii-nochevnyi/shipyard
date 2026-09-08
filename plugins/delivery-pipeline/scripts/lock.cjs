@@ -173,15 +173,19 @@ function takeover(lockPath, identity, ttlMs) {
     fs.renameSync(lockPath, dead);
   } catch {
     // ENOENT — the holder released, or another contender's normal acquire has the
-    // name. Nothing was moved and nothing needs undoing.
+    // name. Nothing was moved and nothing needs undoing. The claim is ours and
+    // empty, so it goes now rather than waiting for the sweep: this is the common
+    // benign outcome of a race, not a takeover that happened.
+    try { fs.rmdirSync(claim); } catch { /* the empty-claim rule catches it */ }
     return false;
   }
   if (identityOf(ownerRecord(dead).raw, dead) !== identity) {
     // We moved a directory that is not the one we judged: the dead holder
     // released and someone acquired normally between our read and our rename. Put
     // it back — an unrestored live lock is two writers in the section, which is
-    // the entire defect this function exists to close. The claim stays, so nobody
-    // repeats this attempt with the same stale observation.
+    // the entire defect this function exists to close. (The claim is empty again
+    // once it is back, so the empty-claim rule above sweeps it after the grace and
+    // a later contender is free to judge whatever is there THEN.)
     try { fs.renameSync(dead, lockPath); } catch { /* a new holder already took the name */ }
     process.stderr.write(
       `lock: stood down from taking over "${path.basename(lockPath)}" — it changed hands while we were reading it.\n`
@@ -228,6 +232,14 @@ function sweepClaims(lockPath, ttlMs) {
 //
 // It never throws. `withLock` calls it from a `finally`, so a throw here would
 // replace the body's own error — or invent one for a section that succeeded.
+//
+// One residual window, stated rather than hidden: the read and the `rm` are two
+// syscalls, so an expired holder that releases at the exact instant its successor
+// finishes its `mkdir` can still remove a fresh directory. It needs the same
+// conjunction as `takeover`'s residual — a holder already past the TTL, releasing
+// inside a microsecond window — and closing it would mean moving the directory
+// aside instead of removing it, which reintroduces a restore race that is strictly
+// worse. This is not F12: F12 was unconditional and reproduced on demand.
 function releaseOwned(lockPath, owner) {
   if (!fs.existsSync(lockPath)) return;
   const holder = readOwner(lockPath);

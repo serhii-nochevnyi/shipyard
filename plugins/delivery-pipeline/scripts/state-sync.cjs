@@ -236,17 +236,33 @@ const nowIso = new Date().toISOString();
 // ages an observation window must move one of the two and not the other.
 const OBSERVED_AT = process.env.SHIPYARD_STATE_OBSERVED_AT || nowIso;
 
+const notices = [];
+
 // The snapshot on disk, as it stands right now. Read INSIDE the lock and nowhere
 // else — a read taken before queueing for the lock is precisely the stale input
 // this guard exists to reject.
+//
+// A file that will not parse FAILS OPEN: no snapshot is known, so this run
+// publishes as generation 1 and the comparison cannot refuse anything. Failing
+// closed would be worse by a wide margin — one bad byte would wedge every sync on
+// the project forever — but the reader has to be told, or a generation counter
+// silently restarting at 1 reads as "the board was never published".
 function readMeta() {
+  if (!fs.existsSync(META)) return null;   // the ordinary first run: nothing to say
   try {
     const m = JSON.parse(fs.readFileSync(META, 'utf8'));
-    return m && typeof m === 'object' ? m : null;
-  } catch { return null; }
+    if (m && typeof m === 'object') return m;
+    notices.push(`${path.basename(META)} does not hold an object — publishing as generation 1; nothing older can be recognised this run`);
+    return null;
+  } catch (e) {
+    notices.push(
+      `${path.basename(META)} is unreadable (${e.message}) — publishing as generation 1. ` +
+      'A concurrent sync that started before this one can no longer be recognised as newer; ' +
+      'delete the file if a run was killed mid-write.'
+    );
+    return null;
+  }
 }
-
-const notices = [];
 
 // GSD's `git.base_branch` is the project's integration branch — it is what
 // /gsd-ship targets. Honour it over the repo's default branch: in a repo that
