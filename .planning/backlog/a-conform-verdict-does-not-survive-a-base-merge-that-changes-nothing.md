@@ -62,6 +62,37 @@ to it, which is the right place for a rule about its own work to be tested.
 1. `git diff <judged-sha> <candidate-sha>` is empty, **and**
 2. `git diff <old-base>...<judged>` equals `git diff <new-base>...<candidate>`.
 
+**Amended 2026-09-08 — the pair is a PROOF, and there is a better way to check
+it.** Put to the `arch-review` role a second time (on T-25-05's own cascade
+step, where both conditions held), it accepted them and then improved on them:
+
+- **The pair ENTAILS equal base trees**, so it is a proof rather than a
+  heuristic: for paths inside the diff, base = head minus the identical diff;
+  for paths outside it, base = head, and the head trees are equal. That settles
+  that this ticket should exist.
+- **So compare the base TREES directly instead of the diffs.** Condition 2
+  compares diff *output* — a rendering that depends on rename detection, context
+  size, whitespace handling and `diff.algorithm`, and is only meaningful if both
+  invocations are flag-identical. Two object identities have no such surface.
+  Measured on T-25-05: the two bases were different COMMITS
+  (`0185770` on the ticket branch, `1fc2724` the same content squash-landed on
+  the epic) with the SAME merge-base tree `9e2e46695b34…`, and the two head
+  trees were the same object `5dbbcea0f41e…`. The judgement's subject is a
+  function of exactly those two trees.
+- **The real blocker is that the trailer records only `head=`.** `gateConform`
+  cannot apply either rule without knowing which base was judged. So the
+  trailer must also record the **merge-base TREE** — not the base branch name:
+  the old base branch gets reaped (it merely happened to survive here), and a
+  rule that must recompute `mergebase(origin/<old-base>, …)` breaks the moment
+  it is gone. A tree sha is immortal.
+
+One more property worth having for free: **an identical head tree is
+independent proof that `base-merge` was clean.** A duplicating merge — the
+`epicKey` case on #56, where git accepted two identical blocks in different
+places and `const epicKey` twice was a SyntaxError — cannot leave the tree
+unchanged. That is a stronger check than the script's own "merged cleanly" on
+stdout, which is a statement about git rather than about the file.
+
 Verified together here: the two trees are the same object
 (`2d64461ecc2c006511e4d46e2957bacf59bea102`) and the two diffs are byte-for-byte
 identical at 7 files / +120/-46.
