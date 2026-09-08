@@ -66,7 +66,13 @@ fs.writeFileSync(GH, [
   // `--repo`: with `--repo acme/demo` its argv starts `pr view 9 --repo` too, the
   // same prefix as the reviewers.cjs call below, and the first matching case wins.
   // No other stubbed call asks for `body,headRefOid`.
-  '  *"--json body,headRefOid"*) cat "$SHIPYARD_TRAILER_PRVIEW" ;;',
+  // `carry` runs both `gh` calls with `cwd: <worktree>` — recorded here (only
+  // when a carry test asks for it via SHIPYARD_TRAILER_CARRY_CWD) so a test can
+  // assert the process actually ran there rather than in whatever directory the
+  // test runner itself started from.
+  '  *"--json body,headRefOid"*)',
+  '    if [ -n "${SHIPYARD_TRAILER_CARRY_CWD:-}" ]; then pwd > "$SHIPYARD_TRAILER_CARRY_CWD"; fi',
+  '    cat "$SHIPYARD_TRAILER_PRVIEW" ;;',
   // reviewers.cjs asks for the review DECISION with an explicit --repo, which is
   // a different argv shape from the body read below. Unanswered it merely warns
   // (the call is tolerated), but then every writer case would run with a stub
@@ -80,6 +86,7 @@ fs.writeFileSync(GH, [
   // stub's stdout would depend on shell quoting, which is the thing that made
   // hand-assembling this trailer unreliable in the first place.
   '  "pr edit 9"*)',
+  '    if [ -n "${SHIPYARD_TRAILER_CARRY_CWD:-}" ]; then pwd > "$SHIPYARD_TRAILER_CARRY_CWD"; fi',
   '    prev=""',
   '    for a in "$@"; do',
   '      if [ "$prev" = "--body" ]; then printf \'%s\' "$a" > "$SHIPYARD_TRAILER_EDIT"; fi',
@@ -859,7 +866,7 @@ const conformTrailerFor = (head, baseTree) => `${PREAMBLE}gate_status: arch-revi
 // The carry runner. `--worktree` is passed explicitly rather than relying on the
 // cwd, because that is how base-merge.cjs calls it (an agent's cwd is its own
 // worktree, which may not be the one being merged).
-function carry(fixture, { body, headRefOid, baseRefName = 'base', args, from, to } = {}) {
+function carry(fixture, { body, headRefOid, baseRefName = 'base', args, from, to, cwdLog } = {}) {
   fs.writeFileSync(PRVIEW, JSON.stringify({
     number: 9,
     baseRefName,
@@ -872,6 +879,7 @@ function carry(fixture, { body, headRefOid, baseRefName = 'base', args, from, to
     PATH: `${BIN}${path.delimiter}${process.env.PATH}`,
     SHIPYARD_TRAILER_PRVIEW: PRVIEW,
     SHIPYARD_TRAILER_EDIT: EDIT,
+    ...(cwdLog ? { SHIPYARD_TRAILER_CARRY_CWD: cwdLog } : {}),
   };
   const r = spawnSync(process.execPath, [TRAILER, ...(args || [
     'carry', 'T-01-01', '--pr', '9',
@@ -1097,6 +1105,30 @@ test('the same tree under a new sha carries the verdict onto the new head', () =
   assert.strictEqual(gate['drift-check'], 'fresh', 'every other recorded key survives');
   assert.strictEqual(gate.carried_from, fx.from, 'the head a judge actually read is recorded');
   assert.strictEqual(JSON.parse(r.stdout).carried, true, r.stdout);
+});
+
+test('carry runs both gh calls with cwd: <worktree>, not the caller\'s own cwd', () => {
+  // base-merge.cjs invokes `carry` from ITS OWN cwd (a conveyor project
+  // directory, not necessarily the ticket worktree). Without `--repo`, `gh`
+  // resolves the repo from the process cwd — so if the two `gh` calls here ran
+  // in the test process's cwd instead of the fixture's git repo, `gh` would
+  // resolve the wrong repository (or none at all) the moment `--repo` is
+  // omitted. The fixture repo is a fresh tempdir distinct from wherever this
+  // test process itself runs, so this only passes if `cwd: worktree` is
+  // actually threaded through.
+  const fx = carryRepo();
+  const cwdLog = path.join(W, 'carry-cwd.txt');
+  try { fs.unlinkSync(cwdLog); } catch { /* not written yet */ }
+  const r = carry(fx, { cwdLog });
+  assert.strictEqual(r.status, 0, `expected the carry to be proved\n${r.stdout}\n${r.stderr}`);
+  assert.ok(fs.existsSync(cwdLog), 'neither gh call recorded a cwd — the stub case did not match');
+  // Realpath both sides: bash's `pwd` reports the OS's canonical cwd, which on
+  // macOS resolves /var's symlink to /private/var — a difference in spelling,
+  // not in which directory `gh` actually ran in.
+  const recorded = fs.realpathSync(fs.readFileSync(cwdLog, 'utf8').trim());
+  const expected = fs.realpathSync(fx.repo);
+  assert.strictEqual(recorded, expected, `gh ran in "${recorded}", expected the worktree "${expected}"`);
+  assert.notStrictEqual(recorded, fs.realpathSync(process.cwd()), 'gh must not run in the test process\'s own cwd');
 });
 
 test('checks=green NEVER carries — a green is measured by CI against a base', () => {

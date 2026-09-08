@@ -454,7 +454,11 @@ if (require.main === module) {
     }
 
     // ── the verdict on the PR, and what it says it judged ─────────────────────
-    const view = spawnSync('gh', ['pr', 'view', String(pr), ...repoArg, '--json', 'body,headRefOid,baseRefName'], { encoding: 'utf8' });
+    // `cwd: worktree`, matching every git call above: without `--repo` (the
+    // common same-repo case — cross-repo tickets are the only ones that pass
+    // it), `gh` resolves the repo from the process cwd, which is the caller's
+    // (base-merge.cjs's own cwd), not necessarily this worktree.
+    const view = spawnSync('gh', ['pr', 'view', String(pr), ...repoArg, '--json', 'body,headRefOid,baseRefName'], { encoding: 'utf8', cwd: worktree });
     if (view.status !== 0) {
       die(`gh pr view ${pr} failed: ${(view.stderr || '').trim() || `exit ${view.status}`}`);
     }
@@ -538,7 +542,7 @@ if (require.main === module) {
     const body = `${kept.join('\n')}\n\n${trailer}\n`;
 
     try {
-      execFileSync('gh', ['pr', 'edit', String(pr), ...repoArg, '--body', body], { stdio: ['ignore', 'pipe', 'pipe'] });
+      execFileSync('gh', ['pr', 'edit', String(pr), ...repoArg, '--body', body], { stdio: ['ignore', 'pipe', 'pipe'], cwd: worktree });
     } catch (e) {
       die(`gh pr edit ${pr} failed: ${e.stderr ? String(e.stderr).trim() : e.message}`);
     }
