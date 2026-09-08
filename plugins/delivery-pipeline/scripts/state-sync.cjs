@@ -227,7 +227,11 @@ function ghChecks(prNumber, repo) {
   return { rows: null, note: unavailableNote(r) };
 }
 
-const { config: cfg, warnings: cfgWarnings } = loadConfig(ROOT);
+// `valid` is the field a WRITER checks (ADR-004 D2): this script writes the board
+// the loop acts on and prints the auto-merge policy the guard enforces, so an
+// unparseable config must not reach either as the DEFAULTS. Absent is a different
+// fact and keeps its old behaviour — the defaults are the right answer there.
+const { config: cfg, warnings: cfgWarnings, valid: CFG_VALID } = loadConfig(ROOT);
 
 if (!fs.existsSync(TICKETS)) fail('missing .planning/graph/tickets.json — run validate-graph first');
 let graph;
@@ -707,7 +711,10 @@ for (const [id, s] of Object.entries(state)) {
 // so they are computed here; ciEstimates DOES (see below), so computeFront
 // itself moves inside the locked section, after the append. The dispatch overlay
 // is read inside that section too, for a different reason — see it below.
-const AUTO_MERGE = cfg.auto_merge === 'epic' && mode === 'epic-stacked';
+// An unparseable config authorizes nothing, so the policy this board publishes —
+// `auto_merge` in delivery-front.json, `autoMerge` into computeFront, and the
+// line printed below — is `off` whatever the defaults say.
+const AUTO_MERGE = CFG_VALID && cfg.auto_merge === 'epic' && mode === 'epic-stacked';
 // Drift verdicts recorded by earlier runs, minus any whose plan has since been
 // re-planned (drift-record binds each verdict to the plan's content hash, so the
 // park lifts by itself). Without this the front hands a stale plan back to an
@@ -865,9 +872,19 @@ if (epicNotice) console.log(`note: ${epicNotice}`);
 for (const n of notices) console.log(`⚠ ${n}`);
 console.log(`integration mode: ${mode}${mode === 'epic-stacked' ? ` (→ ${DEFAULT_BRANCH} via epic)` : ` (→ ${DEFAULT_BRANCH})`} [base from ${DEFAULT_BRANCH_SOURCE}]`);
 console.log(`model policy: ${cfg.model_policy} | workflow: ${cfg.use_workflow === false ? 'forced-off' : 'auto'} | max attempts: ${cfg.max_attempts}`);
+// The `⚠ config: … INVALID …` line comes from the warnings loop above (loadConfig
+// composes it, so the board and every other reader quote one sentence). This line
+// carries the CONSEQUENCE, and the epic-stacked note below it must not fire on an
+// invalid config: `auto_merge` is then the default rather than something the file
+// set, and blaming the integration mode for it would name the wrong cause.
+const autoMergeNote = !CFG_VALID
+  ? ' — the configuration does not parse, so no policy is in effect (fix .planning/config.json and re-sync)'
+  : (cfg.auto_merge === 'epic' && !AUTO_MERGE
+    ? ` — auto_merge is set but ${mode} targets the integration branch directly, so it does not apply`
+    : '');
 console.log(
-  `sentinel: ${cfg.sentinel} | auto-merge: ${AUTO_MERGE ? `epic (ticket PRs → their base; ${DEFAULT_BRANCH} stays a human merge)` : 'off (every merge is a human action)'}` +
-  (cfg.auto_merge === 'epic' && !AUTO_MERGE ? ` — auto_merge is set but ${mode} targets the integration branch directly, so it does not apply` : '')
+  `sentinel: ${CFG_VALID ? cfg.sentinel : 'off'} | auto-merge: ${AUTO_MERGE ? `epic (ticket PRs → their base; ${DEFAULT_BRANCH} stays a human merge)` : 'off (every merge is a human action)'}` +
+  autoMergeNote
 );
 if (cfg.gsd.base_branch) {
   console.log(`note: integrating into "${cfg.gsd.base_branch}" per git.base_branch — pass it to epic-branch.sh as the base ref`);

@@ -15,14 +15,20 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 const SENTINEL = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'sentinel.cjs');
 const roots = [];
 
-function project({ tickets, state, config }) {
+// `configRaw` writes the config file BYTE FOR BYTE, which is the only way to
+// build the one fixture that matters here: a config that cannot be parsed at all.
+// JSON.stringify cannot produce one.
+function project({ tickets, state, config, configRaw }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sentinel-'));
   roots.push(root);
   const graph = path.join(root, '.planning', 'graph');
   fs.mkdirSync(graph, { recursive: true });
   fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets, epics: {} }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
-  fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify(config || { pipeline: {} }));
+  fs.writeFileSync(
+    path.join(root, '.planning', 'config.json'),
+    configRaw !== undefined ? configRaw : JSON.stringify(config || { pipeline: {} })
+  );
   return root;
 }
 
@@ -1439,6 +1445,98 @@ test('without it the prompt is byte-identical to the one the fixer got before', 
   while (to < lines.length && /base-merge/.test(lines[to])) to++;
   if (lines[to] === '') to++;
   assert.strictEqual(lines.slice(0, from).concat(lines.slice(to)).join('\n'), plain.prompts[0]);
+});
+
+suite('a corrupt configuration permits no mutation (ADR-004 D2)');
+
+// The audit's own fixture, byte for byte: a config TRUNCATED mid-object that
+// contained `auto_merge: "off"`. Before this ticket loadConfig turned it into the
+// DEFAULTS — `auto_merge: epic` — dropped the warning, and the guard reported
+// `would_merge: true` for a PR the file forbade merging. The ticket that could
+// not be told apart from an absent file is the whole defect.
+const TRUNCATED = '{"pipeline": {"auto_merge": "off"';
+const cfgTickets = { 'T-OK': { branch: 'ticket/T-OK', epic: 'epic/21-x' } };
+const cfgState = { 'T-OK': openGreen(9, 'ticket/T-OK', 'epic/21-x') };
+const cfgEnv = () => onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-OK', STUB_PR: '9' });
+
+test('the control: with a VALID config this very PR is a dry-run merge', () => {
+  // Without this the refusal below proves nothing — a gate that refused
+  // everything would satisfy it just as well.
+  const root = project({ tickets: cfgTickets, state: cfgState, config: { pipeline: {}, git: { base_branch: 'main' } } });
+  const r = JSON.parse(run(root, ['merge', 'T-OK', '--json', '--dry-run'], { env: cfgEnv() }).stdout).results[0];
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+test('merge --dry-run refuses on a truncated config and NAMES the file', () => {
+  const root = project({ tickets: cfgTickets, state: cfgState, configRaw: TRUNCATED });
+  const out = JSON.parse(run(root, ['merge', 'T-OK', '--json', '--dry-run'], { env: cfgEnv() }).stdout);
+  const r = out.results[0];
+  assert.strictEqual(r.would_merge, undefined, 'not even a dry run may say it would land');
+  assert.strictEqual(r.merged, false);
+  assert.ok(/config unreadable/.test(r.blockers[0]), r.blockers.join('; '));
+  assert.ok(r.blockers[0].includes(path.join('.planning', 'config.json')),
+    `the refusal must name the file a person can open: ${r.blockers[0]}`);
+  assert.ok(/not valid JSON/.test(r.blockers[0]), r.blockers[0]);
+  assert.strictEqual(out.auto_merge, 'off', 'the default epic policy must not be reported as in effect');
+  assert.strictEqual(out.config_valid, false);
+});
+
+test('the config refusal comes FIRST — before the ticket lookup', () => {
+  // `unknown ticket` would send a reader to the graph looking for a defect that
+  // is in one file it can open.
+  const root = project({ tickets: cfgTickets, state: cfgState, configRaw: TRUNCATED });
+  const r = JSON.parse(run(root, ['merge', 'NOPE', '--json'], { env: onPath(denyGh()) }).stdout).results[0];
+  assert.ok(/config unreadable/.test(r.blockers[0]), r.blockers.join('; '));
+});
+
+test('merge --all does not report an empty board — it reports the refusal', () => {
+  // `results: []` alone reads as "nothing is mergeable right now", which is the
+  // silent success this rule exists to forbid.
+  const root = project({ tickets: cfgTickets, state: cfgState, configRaw: TRUNCATED });
+  const out = run(root, ['merge', '--all', '--json'], { env: onPath(denyGh()) });
+  assert.strictEqual(out.status, 0, 'a refusal is data, not a crash');
+  const j = JSON.parse(out.stdout);
+  assert.deepStrictEqual(j.results, []);
+  assert.ok(/config unreadable/.test(j.refusal), j.refusal);
+  const text = run(root, ['merge', '--all'], { env: onPath(denyGh()) }).stdout;
+  assert.ok(/refused/.test(text) && /config unreadable/.test(text), text);
+  assert.ok(!/nothing is mergeable/.test(text), text);
+});
+
+test('duty emits ONE config-invalid line and no actions at all', () => {
+  const root = project({ tickets: cfgTickets, state: cfgState, configRaw: TRUNCATED });
+  const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
+  assert.strictEqual(d.config_valid, false);
+  assert.deepStrictEqual(d.items, [], 'every action is a dispatch decision taken from the policy');
+  assert.strictEqual(d.actionable_count, 0);
+  assert.strictEqual(d.auto_merge, 'off');
+  assert.strictEqual(d.clear, false, 'nothing is finished — a person owes a one-line fix');
+  const lines = run(root, ['duty'], { env: onPath(denyGh()) }).stdout.trim().split('\n');
+  assert.strictEqual(lines.length, 1, `one line, not a board: ${lines.join(' | ')}`);
+  assert.ok(/^config-invalid: /.test(lines[0]), lines[0]);
+  assert.ok(lines[0].includes(path.join('.planning', 'config.json')), lines[0]);
+});
+
+test('a config that parses to null is a refusal, not a stack trace', () => {
+  // `JSON.parse('null')` returns null and `raw.pipeline` threw a TypeError on it,
+  // so this fixture used to take the whole guard down with a Node stack.
+  const root = project({ tickets: cfgTickets, state: cfgState, configRaw: 'null' });
+  const out = run(root, ['merge', 'T-OK', '--json'], { env: onPath(denyGh()) });
+  assert.strictEqual(out.status, 0, out.stderr);
+  const r = JSON.parse(out.stdout).results[0];
+  assert.ok(/not a JSON object/.test(r.blockers[0]), r.blockers.join('; '));
+});
+
+test('an ABSENT config is untouched by all of this — the defaults still apply', () => {
+  // The other half of the distinction. Nobody has configured this project yet,
+  // and `epic` is the right answer.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sentinel-'));
+  roots.push(root);
+  fs.mkdirSync(path.join(root, '.planning', 'graph'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: cfgTickets, epics: {} }));
+  fs.writeFileSync(path.join(root, '.planning', 'graph', 'delivery-state.json'), JSON.stringify(cfgState));
+  const r = JSON.parse(run(root, ['merge', 'T-OK', '--json', '--dry-run'], { env: cfgEnv() }).stdout).results[0];
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
 });
 
 for (const r of roots) {

@@ -87,13 +87,77 @@ test('non-positive numeric knobs fall back with a warning', () => {
   assert.strictEqual(warnings.filter((w) => /must be a positive number/.test(w)).length, 2);
 });
 
-test('malformed JSON degrades to defaults with a warning, never throws', () => {
+// ── absent is not the same fact as unparseable (ADR-004 D2, audit F03) ──────
+// A truncated config that CONTAINED `auto_merge: off` used to resolve to the
+// default `epic` with nothing but a warning, and the sentinel merged under it.
+// `config` still carries the defaults (a board has to render) but `valid` is the
+// field every writer checks, and it is the ONLY thing that separates "nobody has
+// configured this yet" from "what this project decided is unknown".
+function withRawText(text) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cfg-'));
   fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
-  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{broken');
-  const { config, warnings } = loadConfig(dir);
+  if (text !== undefined) fs.writeFileSync(path.join(dir, '.planning', 'config.json'), text);
+  return { dir, ...loadConfig(dir) };
+}
+
+test('malformed JSON degrades to defaults with a warning, never throws', () => {
+  const { config, warnings } = withRawText('{broken');
   assert.strictEqual(config.model_policy, 'balanced');
   assert.ok(warnings.some((w) => /not valid JSON/.test(w)));
+});
+
+test('an ABSENT config is valid — the defaults are the right answer there', () => {
+  const { valid, error, warnings } = withRawText(undefined);
+  assert.strictEqual(valid, true);
+  assert.strictEqual(error, null);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('a config that parses to an object is valid', () => {
+  const { valid, error } = withRawText('{"pipeline":{"auto_merge":"off"}}');
+  assert.strictEqual(valid, true);
+  assert.strictEqual(error, null);
+});
+
+test('the truncated config that started this: valid:false, and it names the file', () => {
+  // The audit's own fixture. It SAID auto_merge: off; the reader cannot know
+  // that, which is exactly why nothing may act on the defaults it returns.
+  const { config, valid, error, warnings } = withRawText('{"pipeline": {"auto_merge": "off"');
+  assert.strictEqual(valid, false, 'a file that exists and does not parse is not valid');
+  assert.ok(error, 'and the reason travels with the verdict');
+  assert.strictEqual(error.relative, path.join('.planning', 'config.json'));
+  assert.ok(path.isAbsolute(error.file), 'the absolute path is the datum — callers run from worktrees');
+  assert.ok(/not valid JSON/.test(error.message), error.message);
+  assert.strictEqual(config.auto_merge, 'epic', 'readers still get the defaults');
+  assert.ok(warnings.some((w) => /INVALID/.test(w) && /no policy is in effect/.test(w)),
+    `the warning must not also say "using defaults": ${warnings.join('; ')}`);
+});
+
+test('the resolve CLI carries the same verdict — it is loadConfig\'s shell face', () => {
+  const { dir } = withRawText('{"pipeline": {"auto_merge": "off"');
+  const out = spawnSync(process.execPath, [mod, 'resolve'], { cwd: dir, encoding: 'utf8' });
+  assert.strictEqual(out.status, 0, out.stderr);
+  const j = JSON.parse(out.stdout);
+  assert.strictEqual(j.valid, false, 'a shell reader must be able to see it, not only a require()');
+  assert.ok(/not valid JSON/.test(j.error.message), out.stdout);
+  assert.strictEqual(j.config.auto_merge, 'epic', 'the defaults are still shown — and now labelled');
+
+  const good = spawnSync(process.execPath, [mod, 'resolve'], { cwd: withRawText(undefined).dir, encoding: 'utf8' });
+  const gj = JSON.parse(good.stdout);
+  assert.strictEqual(gj.valid, true);
+  assert.strictEqual(gj.error, null);
+});
+
+test('a config that parses but is not an OBJECT is invalid, never a crash', () => {
+  // `JSON.parse('null')` returns null and the next line read `raw.pipeline` off
+  // it — a TypeError that took state-sync and the sentinel down with a stack
+  // trace instead of a refusal.
+  for (const [text, what] of [['null', 'null'], ['[]', 'an array'], ['"x"', 'string'], ['', null]]) {
+    const { valid, error, config } = withRawText(text);
+    assert.strictEqual(valid, false, `${JSON.stringify(text)} must be invalid`);
+    assert.strictEqual(config.model_policy, 'balanced', 'and still readable');
+    if (what) assert.ok(error.message.includes(what), `${JSON.stringify(text)} → ${error.message}`);
+  }
 });
 
 test('jira defaults are present and unknown jira keys warn', () => {

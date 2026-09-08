@@ -102,16 +102,32 @@ function readJson(file, what) {
 const graph = readJson(TICKETS, 'the ticket graph');
 const tickets = graph.tickets || {};
 const state = readJson(STATE, 'the delivery state');
-const { config: cfg } = loadConfig(ROOT);
+const { config: cfg, valid: CFG_VALID, error: CFG_ERROR } = loadConfig(ROOT);
+
+// A CONFIGURATION THAT DOES NOT PARSE PERMITS NO MUTATION (ADR-004 D2, audit
+// F03). The guard is the loudest case of that rule: `loadConfig` reports the
+// defaults for readers, and this file's whole mandate — merge, and the dispatch
+// decisions `duty` hands out — used to be taken FROM those defaults. A truncated
+// config that said `auto_merge: off` therefore resolved to `epic` and the guard
+// squashed PRs under a policy the file forbade, with the warning dropped on the
+// floor one line above.
+//
+// Defaults are for an ABSENT file. Unparseable means the project's policy is
+// unknown, and an unknown policy authorizes nothing. There is deliberately no
+// `--allow-defaults`: the fix is the file.
+const CONFIG_REFUSAL = CFG_VALID ? null
+  : `config unreadable: ${CFG_ERROR.relative} — ${CFG_ERROR.message} — fix it before any merge`;
 
 // auto_merge is only meaningful in epic-stacked: in direct-to-main a ticket PR
 // targets the integration branch itself, and that merge is a human's.
-const AUTO_MERGE = cfg.auto_merge === 'epic' && cfg.integration_mode === 'epic-stacked';
-const AUTO_MERGE_WHY = cfg.auto_merge !== 'epic'
-  ? 'pipeline.auto_merge is off'
-  : cfg.integration_mode !== 'epic-stacked'
-    ? `integration_mode is ${cfg.integration_mode} — ticket PRs target the integration branch, which only a human merges`
-    : null;
+const AUTO_MERGE = CFG_VALID && cfg.auto_merge === 'epic' && cfg.integration_mode === 'epic-stacked';
+const AUTO_MERGE_WHY = !CFG_VALID
+  ? CONFIG_REFUSAL
+  : cfg.auto_merge !== 'epic'
+    ? 'pipeline.auto_merge is off'
+    : cfg.integration_mode !== 'epic-stacked'
+      ? `integration_mode is ${cfg.integration_mode} — ticket PRs target the integration branch, which only a human merges`
+      : null;
 
 // ── gh plumbing ─────────────────────────────────────────────────────────────
 function gh(args, { tolerate = false } = {}) {
@@ -575,7 +591,33 @@ function dutyItems() {
 // its attempt budget on work no hypothesis was ever wrong about.
 const ACTIONABLE = new Set(['ci-fix', 'review-fix', 'arch-review', 'undraft', 'merge', 'base-merge']);
 
+// The one line an invalid configuration is allowed to produce, and the reason it
+// is a line and not a board: every action `duty` hands out is a dispatch decision
+// taken from the policy, so composing a board here would be improvising one.
+const CONFIG_INVALID_LINE = CFG_VALID ? null
+  : `config-invalid: ${CFG_ERROR.relative} — ${CFG_ERROR.message}. The guard is standing down: `
+    + 'no PR is driven and nothing is merged until the file parses. Fix the file (there is no flag).';
+
 function dutySummary() {
+  // No items, and none of the buckets a caller might act on. `clear` is FALSE
+  // because nothing is finished — a person owes a one-line fix, and reporting
+  // `clear: true` here would tell the run the tail was handled.
+  if (!CFG_VALID) {
+    return {
+      config_valid: false,
+      config_error: CFG_ERROR,
+      config_invalid: CONFIG_INVALID_LINE,
+      auto_merge: 'off',
+      auto_merge_note: CONFIG_REFUSAL,
+      guarded: 0,
+      items: [],
+      actionable_count: 0,
+      waiting_count: 0,
+      human_count: 0,
+      parked_count: 0,
+      clear: false,
+    };
+  }
   const items = dutyItems();
   const actionable = items.filter((i) => ACTIONABLE.has(i.action));
   const waiting = items.filter((i) => i.action === 'wait-ci');
@@ -600,6 +642,9 @@ function dutySummary() {
 }
 
 function formatDuty(d) {
+  // Exactly one line: the header plus "NOT clear — 0 actionable now, 0 waiting on
+  // CI" reads as a bug in the guard rather than as a fact about the file.
+  if (d.config_valid === false) return [d.config_invalid];
   const lines = [`sentinel duty: ${d.guarded} PR(s) under guard | auto-merge: ${d.auto_merge}${d.auto_merge_note ? ` (${d.auto_merge_note})` : ''}`];
   for (const i of d.items) {
     const where = i.repo ? `@${i.repo}` : '';
@@ -629,6 +674,10 @@ function mergeOne(id) {
   const res = { ticket: id, pr: s ? s.pr : null, merged: false, dry_run: dryRun, blockers: [], retargeted: [] };
   const block = (why) => { res.blockers.push(why); return res; };
 
+  // Before anything else, including the ticket lookup: a corrupt config is the
+  // loudest fact about this invocation, and `unknown ticket` would send a reader
+  // looking at the graph for a defect that is in one file it can open.
+  if (!CFG_VALID) return block(CONFIG_REFUSAL);
   if (!s) return block('unknown ticket (not in delivery-state.json)');
   if (!AUTO_MERGE) return block(`auto-merge refused: ${AUTO_MERGE_WHY}`);
   if (s.status !== 'pr-open') return block(`status is ${s.status}, not pr-open`);
@@ -913,7 +962,12 @@ if (cmd === 'merge') {
   const target = argv[1];
   let ids;
   if (target === '--all' || argv.includes('--all')) {
-    ids = dutyItems().filter((i) => i.action === 'merge').map((i) => i.ticket);
+    // Nothing to select from when the policy is unknown — and asking `duty` for
+    // the merge bucket would be composing that selection out of defaults the
+    // file may well have forbidden. The refusal is reported below instead of
+    // being reported as an empty board, because `results: []` reads as "nothing
+    // is mergeable right now", which is the silent success D2 exists to forbid.
+    ids = CFG_VALID ? dutyItems().filter((i) => i.action === 'merge').map((i) => i.ticket) : [];
   } else if (target && !target.startsWith('--')) {
     ids = [target];
   } else {
@@ -922,7 +976,13 @@ if (cmd === 'merge') {
 
   const results = ids.map(mergeOne);
   if (asJson) {
-    process.stdout.write(JSON.stringify({ auto_merge: AUTO_MERGE ? 'epic' : 'off', results }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({
+      auto_merge: AUTO_MERGE ? 'epic' : 'off',
+      ...(CFG_VALID ? {} : { config_valid: false, config_error: CFG_ERROR, refusal: CONFIG_REFUSAL }),
+      results,
+    }, null, 2) + '\n');
+  } else if (!CFG_VALID && !results.length) {
+    console.log(`sentinel merge: refused — ${CONFIG_REFUSAL}`);
   } else if (!results.length) {
     console.log('sentinel merge: nothing is mergeable right now');
   } else {

@@ -49,10 +49,14 @@ const heldState = (over = {}) => stateWith({
   ...over,
 });
 
-function project(front, state) {
+// `configRaw` writes .planning/config.json byte for byte — the only way to build
+// an UNPARSEABLE one. Absent by default, which is the case every other test in
+// this file means: nobody has configured the project, so the defaults apply.
+function project(front, state, configRaw) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-ciwait-'));
   const g = path.join(dir, '.planning', 'graph');
   fs.mkdirSync(g, { recursive: true });
+  if (configRaw !== undefined) fs.writeFileSync(path.join(dir, '.planning', 'config.json'), configRaw);
   if (front !== null) fs.writeFileSync(path.join(g, 'delivery-front.json'), JSON.stringify(front));
   if (state !== null) fs.writeFileSync(path.join(g, 'delivery-state.json'), JSON.stringify(state));
   // escalation-record refuses to write beside a graph with no tickets.json — the
@@ -405,6 +409,50 @@ test('the budget is tunable, and garbage in the env var does not disable it', ()
   const b2 = pending(d2);
   const { json: j2 } = asJson(null, null, shortWait, { dir: d2, bin: b2, env: { SHIPYARD_CI_WAIT_MAX_EMPTY: 'three' } });
   assert.equal(j2.escalated.length, 0, 'a garbage value falls back to the default, it does not park at once');
+});
+
+suite('ci-wait — a corrupt configuration permits no park (ADR-004 D2)');
+
+// The park is a MUTATION: it hands the ticket to a person and drops it off the
+// front. An unparseable config means the project's policy is unknown, and an
+// unknown policy authorizes nothing — so the wait still happens (waiting mutates
+// nothing) and the escalation is withheld, with the reason, until the file parses.
+const TRUNCATED = '{"pipeline": {"auto_merge": "off"';
+
+test('three empty windows on an invalid config file earn NO escalation', () => {
+  const dir = project(ciOnly(), stateWith(), TRUNCATED);
+  const bin = pending(dir);
+  let json;
+  for (let i = 0; i < 3; i += 1) ({ json } = asJson(null, null, shortWait, { dir, bin }));
+  assert.equal(waits(dir).tickets['T-01-01'].empty_windows, 3,
+    'the empty window is a FACT and is still counted');
+  assert.equal(escalations(dir), null, 'but nothing was parked');
+  assert.equal(json.escalated.length, 1, 'the withheld park is still reported to the caller');
+  assert.equal(json.escalated[0].ok, false);
+  assert.equal(json.escalated[0].refused, true, 'a deliberate refusal, not a failed write');
+  assert.ok(/does not parse/.test(json.escalated[0].error), json.escalated[0].error);
+});
+
+test('and it says so on window ONE, not only when the park came due', () => {
+  // The caller is a loop; learning on window 3 that the termination path is
+  // withheld is learning 45 minutes late.
+  const dir = project(ciOnly(), stateWith(), TRUNCATED);
+  const { code, json } = asJson(null, null, shortWait, { dir, bin: pending(dir) });
+  assert.equal(code, 0, 'a waiter never dies noisily — least of all over a config file');
+  assert.equal(json.config_valid, false);
+  assert.ok(/config\.json/.test(json.config_error.relative), JSON.stringify(json.config_error));
+  assert.ok(/no escalation is filed/.test(json.config_note), json.config_note);
+  assert.equal(json.escalated.length, 0, 'no park was due yet, and none was invented');
+});
+
+test('a VALID config parks exactly as before — the control', () => {
+  const dir = project(ciOnly(), stateWith(), '{"pipeline":{"auto_merge":"off"}}');
+  const bin = pending(dir);
+  let json;
+  for (let i = 0; i < 3; i += 1) ({ json } = asJson(null, null, shortWait, { dir, bin }));
+  assert.equal(json.escalated[0].ok, true, 'a readable config authorizes the park');
+  assert.ok(escalations(dir).tickets['T-01-01'], 'and the record is on disk');
+  assert.equal(json.config_valid, undefined, 'and nothing is said about a file that is fine');
 });
 
 suite('ci-wait — an outage is not a stall');
