@@ -198,7 +198,13 @@ const leftBehind = Number(front.left_behind_count || 0);
 // capacity existed outlives an upgrade, and an absent field must read as "no cap
 // is in force" (refuse as before), never as a full board.
 const capacity = (front.capacity && typeof front.capacity === 'object') ? front.capacity : null;
-const capFree = capacity !== null && Number.isFinite(Number(capacity.free)) ? Number(capacity.free) : null;
+const capNum = (k) => (capacity !== null && Number.isFinite(Number(capacity[k])) ? Number(capacity[k]) : null);
+const capFree = capNum('free');
+// `max`/`in_flight` are read the same defensive way for the human message below —
+// they gate nothing here, but an old or partially-written front must not print
+// `undefined`/garbled numbers into an operator-facing line.
+const capMax = capNum('max');
+const capInFlight = capNum('in_flight');
 const capBinds = capFree !== null && capFree <= 0;
 if (actionableCount > 0 && leftBehind < actionableCount && !capBinds) {
   const named = ['execute', 'publish', 'fix', 'finalize', 'merge']
@@ -503,8 +509,8 @@ const label = watch.map((w) => `${w.id}#${w.pr}${w.via.length ? ` (holding ${w.v
 // makes waiting correct anyway — and a line that misdescribes the board it just
 // read is how a reader learns to stop reading it.
 const offer = capBinds && actionableCount > 0
-  ? `every move on the board is beyond capacity (${capacity.max} agent(s) allowed, `
-    + `${capacity.in_flight} in flight)`
+  ? `every move on the board is beyond capacity (${capMax ?? '?'} agent(s) allowed, `
+    + `${capInFlight ?? '?'} in flight)`
   : 'the board offers nothing but pipelines';
 if (!JSON_OUT) {
   process.stdout.write(

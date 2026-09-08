@@ -521,6 +521,10 @@ const capacity = (front.capacity && typeof front.capacity === 'object') ? front.
 const capNum = (k) => (capacity !== null && Number.isFinite(Number(capacity[k])) ? Number(capacity[k]) : null);
 const capMax = capNum('max');
 const capFree = capNum('free');
+// Read for the phantom-capacity message below the same defensive way as
+// max/free: capacityFull only guarantees capMax/capFree are finite, not
+// `in_flight`, so the message must not print a raw, possibly-garbled field.
+const capInFlight = capNum('in_flight');
 // Only front.cjs can express 0, and only for one reason: the project config does
 // not parse, so no policy is in effect. Nothing may be dispatched, and no refusal
 // of a stop can fix a file.
@@ -646,7 +650,7 @@ const named = ORDER
 // with the clear command — otherwise the refusal reads as an order to dispatch
 // past a cap the board says is spent.
 const phantom = capacityFull
-  ? `\nThe board reports capacity ${capacity.in_flight}/${capacity.max} agents in flight, i.e. FULL — but no `
+  ? `\nThe board reports capacity ${capInFlight ?? '?'}/${capMax} agents in flight, i.e. FULL — but no `
     + 'mark on it is recent enough to be an agent at work, so nothing is coming to wake this session.'
     + goneText()
   : '';
