@@ -70,3 +70,54 @@ either way: an untracked path that the base adds must still refuse, and refuse
 with a message naming that path.
 
 Related: [[the-dispatch-records-periphery]], [[a-wiring-line-no-test-asserts]].
+
+## Same root, second victim — and this one is the E2BIG blocker
+
+Measured 2026-09-08, later the same run. `ticket-worktree.sh gc` classifies a
+worktree `dirty` on the same evidence, and `dirty` is a class gc **never**
+prunes, by deliberate design (it may hold work that exists nowhere else).
+
+```
+$ ticket-worktree.sh gc
+  dirty   T-27-02   … uncommitted changes — never removed by gc
+  dirty   T-27-04   … uncommitted changes — never removed by gc
+  dirty   T-27-05   … uncommitted changes — never removed by gc
+  dirty   T-27-06   … uncommitted changes — never removed by gc
+  dirty   T-27-07   … uncommitted changes — never removed by gc
+  ── 5 worktree(s); 0 removable (0 landed, 0 gone)
+
+$ git -C …/T-27-02 status --short     # merged ticket, PR #64 landed in the epic
+?? .shipyard-evidence.md
+?? .shipyard-pr-body.md
+```
+
+Nothing but the two scratch files, in every one — including two tickets whose
+PRs are MERGED. So **gc can never reclaim a single executed ticket's worktree.**
+
+That is the missing half of a story this repo already treats as serious.
+`CLAUDE.md` and `deliver.md` both call the worktree count a DELIVERY BLOCKER
+rather than housekeeping: past a few dozen the sandbox profile exceeds the argv
+limit (E2BIG) and every sandboxed command in the session starts failing. gc is
+the mechanism built to stop that, it warns at
+`SHIPYARD_WORKTREE_WARN_AT` (20), and it cannot act on its own on anything the
+conveyor produced. Confirmed at this run's cold start: 32 worktrees, gc's own
+verdict `0 removable`, and the E2BIG warning printed — the count only came down
+because the reaper works from `delivery-state`'s `reapable` instead.
+
+So the two mechanisms disagree about the same worktrees, and each is internally
+consistent: the reaper asks "has this ticket's work LANDED" (a fact about the
+world) and gc asks "could this directory hold work that exists nowhere else" (a
+fact about the directory). The scratch files make the second question answer yes
+forever.
+
+The fix is the same one line of intent as above — the dirtiness test must ask
+about TRACKED content — and the same caution applies: do not special-case the two
+filenames. For gc there is one extra subtlety worth a test: a `landed`+untracked
+worktree should prune, but gc must still refuse a worktree holding untracked
+files that are NOT the conveyor's scratch, because those really can be work
+existing nowhere else. Distinguishing "untracked and ignorable" from "untracked
+and precious" without a filename list means the scratch files should be
+`.gitignore`d — which T-26-14 explicitly decided against, on the reasoning that
+`scope-gate` reads `git diff` and never sees them. That reasoning was right about
+`scope-gate` and wrong about every other reader of `git status`, and this is the
+second reader it has cost.
