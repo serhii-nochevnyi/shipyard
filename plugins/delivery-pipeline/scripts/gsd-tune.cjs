@@ -147,7 +147,32 @@ function mergedSkills(have) {
 // Verify against `VALID_PROFILES`, never against the catalog's field names.
 const PROFILE_FOR_POLICY = { economy: 'budget', balanced: 'balanced', premium: 'quality' };
 
-const { config: pipeline } = loadConfig(ROOT);
+const { config: pipeline, valid: PIPE_VALID, error: PIPE_ERROR } = loadConfig(ROOT);
+
+// A PROJECT CONFIG THAT DOES NOT PARSE IS NOT READ (ADR-004 D2, audit F03).
+//
+// Project mode is already immune by accident of arithmetic: `CONFIG` is that
+// same file, and the hard fail above ("refusing to rewrite a file I cannot
+// parse") fires first. `--global` writes a DIFFERENT file — ~/.gsd/defaults.json
+// — while still reading the project's config for `model_profile`, so a corrupt
+// one produced `model_profile → "balanced" … mirrors pipeline.model_policy =
+// "balanced"`, and would have written it. The values are conservative; the
+// MISATTRIBUTION is the defect, because a report that tells the operator what the
+// file says is the one thing this script exists to be trusted about.
+//
+// Withholding the WHOLE write rather than only the derived row, and the reason is
+// the scope: this file is inherited by every directory on the machine with no
+// `.planning/` of its own. Writing part of a machine-wide policy while the
+// project's own policy is unknown is the same misattribution one step further on.
+//
+// An ABSENT file is `valid: true, error: null` and must NOT refuse — that is the
+// commonest case there is here, since an installer runs `--global` before any
+// project exists.
+const CONFIG_REFUSAL = (GLOBAL && !PIPE_VALID)
+  ? `gsd-tune: no policy is in effect — ${PIPE_ERROR.file} ${PIPE_ERROR.message}. `
+    + 'The settings below that mirror it are withheld rather than reported off defaults, and '
+    + '--apply writes nothing machine-wide until the file parses; the fix is the file, not a flag.'
+  : null;
 
 // Project mode only. `git.branching_strategy: none` is a CONVEYOR requirement,
 // and the global file is inherited by every unconfigured directory on the
@@ -309,7 +334,18 @@ const TUNING_ALL = [
     `the delivery-rules skill in the form the "${runtime}" runtime resolves — merged in, not replacing what's already there`],
 ];
 
-const TUNING = TUNING_ALL.filter(([key]) => !GLOBAL || GLOBAL_SAFE.has(key));
+// The rows whose WANT is derived from the project's `pipeline.*` — the only ones
+// a refusal has to withhold. Named as a set rather than tested by regex so that a
+// row added here is a deliberate act: a new pipeline-derived want that is not
+// listed would be reported off the defaults again, which is the whole defect.
+const PIPELINE_DERIVED = new Set([
+  'model_profile',                       // mirrors pipeline.model_policy
+  ...CLAUDE_1M_AGENTS.map((a) => `model_overrides.${a}`), // reads pipeline.fable
+]);
+
+const TUNING = TUNING_ALL
+  .filter(([key]) => !GLOBAL || GLOBAL_SAFE.has(key))
+  .filter(([key]) => !CONFIG_REFUSAL || !PIPELINE_DERIVED.has(key));
 
 const get = (o, dotted) => dotted.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
 function set(o, dotted, value) {
@@ -363,7 +399,11 @@ for (const [group, list] of [['required', REQUIRED], ['tuning', TUNING]]) {
 // machine with no Codex install never sees Astra's.
 const blockers = [];
 
-if (runtime === 'claude' && pipeline.fable === 'auto') {
+// A floor keyed on a value the file does not say is a finding invented from a
+// default. Under a refusal `pipeline.fable` is the shipped `off`, so the check
+// would simply not fire — but stating the guard keeps it that way if the default
+// ever moves, and it is the same rule the derived rows above obey.
+if (!CONFIG_REFUSAL && runtime === 'claude' && pipeline.fable === 'auto') {
   const have = cliVersion('claude');
   if (have && cmpVersion(have, FABLE_FLOOR) < 0) {
     blockers.push({
@@ -396,7 +436,7 @@ if (runtime === 'codex') {
 // generator did not write is nothing to report. The generator refuses such an
 // entry at install time; this is the same fact one layer later, for a host that
 // was downgraded, or an agent file written before the palette gained the floor.
-if (codexToml) {
+if (codexToml && !CONFIG_REFUSAL) {
   const codexHave = cliVersion('codex');
   for (const entry of Array.isArray(pipeline.codex_models) ? pipeline.codex_models : []) {
     if (!entry || !entry.min_cli || !entry.model) continue;
@@ -426,10 +466,17 @@ const runtimeHandover = GLOBAL && typeof raw.runtime === 'string' && raw.runtime
 if (AS_JSON) {
   console.log(JSON.stringify({
     runtime, detected_by: how, applied: APPLY, scope: GLOBAL ? 'global' : 'project',
+    // Carried on the result rather than only where it came due — ci-wait.cjs's
+    // template. A caller reading `drift` cannot otherwise tell a row that was
+    // withheld from a row that already agrees.
+    ...(CONFIG_REFUSAL ? { config_invalid: CONFIG_REFUSAL } : {}),
     runtime_handover: runtimeHandover, drift, blockers,
   }, null, 2));
 } else {
   console.log(`gsd-tune: runtime "${runtime}" (${how}) — ${CONFIG}${GLOBAL ? '  [global defaults]' : ''}`);
+  // FIRST, before any row a reader might act on: the project's own policy could
+  // not be read, so the rows that mirror it are absent rather than defaulted.
+  if (CONFIG_REFUSAL) console.log(`\n  ${CONFIG_REFUSAL}`);
   if (runtimeHandover) {
     console.log(
       `\n  ⚠ these global defaults currently say runtime "${runtimeHandover}".\n` +
@@ -485,6 +532,20 @@ if (!drift.length && !staleGlobalOverrides.length && !blockers.length) process.e
 // has to keep saying so, or the one finding a write cannot fix would be the one
 // finding a caller stops seeing.
 if (!drift.length && !staleGlobalOverrides.length) process.exit(1);
+
+// The mutation, withheld. A refusal is not a failed write and must not read as
+// one (ci-wait.cjs's rule): nothing was attempted, and the remedy is the project
+// file rather than a retry or a flag. Placed BEFORE the write loop, because
+// `blockers` does not stop it — that class is "no key fixes this", and this one
+// is "the keys are unknowable".
+if (CONFIG_REFUSAL) {
+  if (!AS_JSON) {
+    console.log(`\n  NOT ${APPLY ? 'applied' : 'reported in full'}: ${CONFIG}${APPLY ? ' is unchanged' : ''}.`);
+    console.log('  Fix the project config and run this again — from a directory whose'
+      + ' .planning/config.json parses,\n  since that is the file these values mirror.');
+  }
+  process.exit(1);
+}
 
 if (!APPLY) {
   if (!AS_JSON) {

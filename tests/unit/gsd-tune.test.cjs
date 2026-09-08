@@ -530,4 +530,105 @@ test('NEITHER runtime gets model_overrides machine-wide', () => {
   }
 });
 
+suite('gsd-tune --global — a project config that does not parse is refused, not read (ADR-004 D2)');
+
+// The third of the three ADR-004 D2 gaps arch-review found on PR #60. PROJECT
+// mode is already immune: `CONFIG` is the same file, and the hard fail above
+// ("refusing to rewrite a file I cannot parse") catches it. `--global` writes a
+// DIFFERENT file — ~/.gsd/defaults.json — while still reading the project's
+// `.planning/config.json` for `model_profile`, so a corrupt project config
+// produced `model_profile → "balanced" … mirrors pipeline.model_policy =
+// "balanced"`: the script telling the operator that the file said something the
+// file does not say, and offering to write it machine-wide.
+//
+// The values it picks are conservative; the MISATTRIBUTION is the defect, and
+// the machine-wide scope is what makes it worth a refusal rather than a warning.
+
+// cwd and HOME in one directory: the project config that must be read (or
+// refused) is the one at the cwd, and the file written is under HOME.
+function globalWorkspace(projectConfigText) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsdtune-global-'));
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  if (projectConfigText !== undefined) {
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), projectConfigText);
+  }
+  return dir;
+}
+const runGlobalIn = (dir, args = []) =>
+  spawnSync(process.execPath, [SCRIPT, '--global', ...args], { cwd: dir, encoding: 'utf8', env: hermetic({ HOME: dir }) });
+const CORRUPT_PROJECT = '{ "pipeline": { "model_policy": "premium"';
+
+test('the report carries the refusal and drops every row it would have to invent', () => {
+  const dir = globalWorkspace(CORRUPT_PROJECT);
+  const r = runGlobalIn(dir, ['--runtime', 'claude', '--json']);
+  const out = JSON.parse(r.stdout);
+  assert.ok(typeof out.config_invalid === 'string' && out.config_invalid,
+    `the refusal must ride the machine face: ${JSON.stringify(Object.keys(out))}`);
+  assert.ok(/config\.json/.test(out.config_invalid), out.config_invalid);
+  const d = keyed(out.drift);
+  assert.equal(d['model_profile'], undefined,
+    'the only global row that reads the project config must not be reported off defaults');
+  assert.notEqual(r.status, 0, 'a refusal is a finding, and the exit code has to say so');
+});
+
+test('the human face names the file instead of attributing a value to it', () => {
+  const dir = globalWorkspace(CORRUPT_PROJECT);
+  const r = runGlobalIn(dir, ['--runtime', 'claude']);
+  assert.ok(/mirrors pipeline\.model_policy/.test(r.stdout) === false,
+    `this sentence is the misattribution itself: ${r.stdout}`);
+  assert.ok(/does not parse|not valid JSON|no policy is in effect/.test(r.stdout), r.stdout);
+});
+
+test('--apply writes NOTHING while the policy is unknown', () => {
+  const dir = globalWorkspace(CORRUPT_PROJECT);
+  const target = path.join(dir, '.gsd', 'defaults.json');
+  const r = runGlobalIn(dir, ['--runtime', 'claude', '--apply']);
+  assert.ok(!fs.existsSync(target),
+    `a machine-wide file must not be written under an unknown policy: ${fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : ''}`);
+  assert.notEqual(r.status, 0, r.stdout);
+});
+
+test('--apply leaves an EXISTING global file byte-for-byte alone', () => {
+  const dir = globalWorkspace(CORRUPT_PROJECT);
+  fs.mkdirSync(path.join(dir, '.gsd'), { recursive: true });
+  const target = path.join(dir, '.gsd', 'defaults.json');
+  fs.writeFileSync(target, JSON.stringify({ runtime: 'codex', models: { planning: 'sonnet' } }, null, 2));
+  const before = fs.readFileSync(target, 'utf8');
+  runGlobalIn(dir, ['--runtime', 'claude', '--apply']);
+  assert.equal(fs.readFileSync(target, 'utf8'), before, 'withholding a mutation means writing no bytes at all');
+});
+
+test('a project with NO config file at all behaves exactly as before', () => {
+  // `loadConfig` reports an absent file as `valid: true, error: null`: a project
+  // nobody has configured has decided nothing, and the shipped defaults are the
+  // right answer. This is the regression the refusal could introduce — and the
+  // one an installer meets, since it runs before any project exists.
+  const dir = globalWorkspace(undefined);
+  const r = runGlobalIn(dir, ['--runtime', 'claude', '--json']);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.config_invalid, undefined, 'nothing was refused, so nothing is reported');
+  const d = keyed(out.drift);
+  assert.ok(d['model_profile'], 'the row is reported, off the defaults that legitimately apply');
+  assert.equal(d['model_profile'].want, 'balanced');
+
+  const applied = runGlobalIn(dir, ['--runtime', 'claude', '--apply']);
+  assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.gsd', 'defaults.json'), 'utf8')).model_profile, 'balanced');
+});
+
+test('a project config that PARSES is still read, and its policy still mirrors', () => {
+  const dir = globalWorkspace(JSON.stringify({ pipeline: { model_policy: 'premium' } }));
+  const out = JSON.parse(runGlobalIn(dir, ['--runtime', 'claude', '--json']).stdout);
+  assert.equal(out.config_invalid, undefined);
+  assert.equal(keyed(out.drift)['model_profile'].want, 'quality', 'premium → quality, from the file');
+});
+
+test('PROJECT mode is untouched: the same file is still a hard fail, not a soft refusal', () => {
+  const dir = globalWorkspace(CORRUPT_PROJECT);
+  const r = spawnSync(process.execPath, [SCRIPT, '--runtime', 'claude'], { cwd: dir, encoding: 'utf8', env: hermetic({ HOME: dir }) });
+  assert.equal(r.status, 2, `project mode refuses to rewrite a file it cannot parse: ${r.stdout}${r.stderr}`);
+  assert.ok(/not valid JSON/.test(r.stderr), r.stderr);
+});
+
+
 done();

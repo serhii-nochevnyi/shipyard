@@ -1261,7 +1261,15 @@ function behindWarning(graphDir, generatedAt = stateDerivedAt(graphDir)) {
 
 function formatFront(front) {
   const lines = [];
-  // FIRST, before any bucket a reader might believe: this board is behind
+  // FIRST of all, before even the staleness warning: the POLICY this board was
+  // computed under could not be read (ADR-004 D2). Every bucket below is the
+  // most restrictive reading rather than the project's own decision, and a
+  // reader who believes the buckets without knowing that is the person this line
+  // exists for. Set only by this file's CLI — `state-sync.cjs` degrades rather
+  // than refusing (T-26-02's deliberate choice), so the durable board is
+  // unchanged.
+  if (front.config_invalid) lines.push(front.config_invalid);
+  // THEN, before any bucket a reader might believe: this board is behind
   // reality and the remedy is a resync (see behindWarning). Absent on a front
   // computed by a caller that did not look — this file's CLI does.
   if (front.behind && front.behind.why) lines.push(front.behind.why);
@@ -1323,7 +1331,24 @@ function formatFront(front) {
         + `${front.actionable_count - cap.free} actionable item(s) wait for the next round`);
   }
 
-  if (front.fixpoint) {
+  // FIRST branch of the chain, ahead of the YES: a board computed under a policy
+  // nobody could read must never say `fixpoint: YES → Step 5`. Withholding the
+  // dispatches is what empties the actionable buckets, and an empty board then
+  // reads exactly like a finished one — so refusing the mutations and leaving
+  // this line alone would trade a paid `finalize` for an unearned "go integrate",
+  // which is a worse offer, not a safer one. `Step 5` is the integrator, and
+  // integrating under an unknown policy is precisely the mutation being withheld.
+  //
+  // Same shape as the `max: 0` sentence below and for the same reason: this is a
+  // not-a-fixpoint whose remedy is a PERSON's, so it must not order the loop to
+  // recompute — nothing will have changed.
+  if (front.config_invalid) {
+    lines.push(
+      'fixpoint: NO — and not a round to retry either. No policy is in effect, so every mutation refuses: '
+      + 'nothing above may be dispatched, merged or integrated, and recomputing changes nothing. '
+      + 'A person fixes the config file; the buckets above are the most restrictive reading until then.'
+    );
+  } else if (front.fixpoint) {
     lines.push(
       front.counts.blocked || front.counts.merge_human || front.counts.human
         ? 'fixpoint: YES — nothing actionable and no checks running; only human actions and blockers remain → Step 5'
@@ -1449,11 +1474,32 @@ if (require.main === module) {
   // auto_merge decides whether an unmerged green PR is the sentinel's work or a
   // human's, so the standalone CLI has to read it too (state-sync passes it in).
   const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-  const { config, valid } = loadConfig(root);
-  const autoMerge = config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
+  const { config, valid, error } = loadConfig(root);
+  // A CONFIGURATION THAT DOES NOT PARSE PERMITS NO MUTATION (ADR-004 D2, audit
+  // F03), and this CLI is a reachable surface for it: `deliver.md` advertises it
+  // as re-runnable on its own. `loadConfig` keeps `config` populated so a board
+  // can still RENDER, which is exactly the trap — reading `.auto_merge` off it
+  // returned the DEFAULT `epic`, so an unreadable file produced the epic board
+  // and the CLI presented its own default as the project's decision. Measured by
+  // the reviewer of PR #60: corrupt and valid-`epic` gave the same buckets, the
+  // same `why` and the same `sentinel` block, and the answer included a paid
+  // `finalize` dispatch — a fixer that pushes — with nothing saying why.
+  //
+  // Defaults are for an ABSENT file (`valid: true, error: null`), and that case
+  // must keep working: an unconfigured project has decided nothing, and the
+  // shipped defaults are the right answer there. Unparseable means the policy is
+  // UNKNOWN, and an unknown policy authorizes nothing. Same posture as
+  // `sentinel.cjs`'s CONFIG_REFUSAL and `ci-wait.cjs`'s refusal: count the fact,
+  // withhold the mutation, carry the reason on the result. There is deliberately
+  // no `--allow-defaults`; the fix is the file.
+  const configRefusal = valid ? null
+    : `front: no policy is in effect — ${error.relative} ${error.message}. `
+      + 'Every board below is the most restrictive reading, not this project\'s decision: '
+      + 'nothing may be merged and nothing may be dispatched until the file parses.';
+  const autoMerge = valid && config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
   // Passed explicitly here because this CLI has already paid for the config —
   // computeFront's own lazy fallback serves the callers that have not.
-  const mergeWithoutCi = config.merge_without_ci === true;
+  const mergeWithoutCi = valid && config.merge_without_ci === true;
   // The concurrency cap, same reasoning — but only when the file PARSES. An
   // invalid config authorizes no dispatch at all, and that answer is
   // computeFront's to give (it resolves the same 0); passing the populated
@@ -1487,6 +1533,20 @@ if (require.main === module) {
   // machine reader cannot miss what a human is shown.
   const behind = behindWarning(dir);
   if (behind) front.behind = behind;
+  // Carried on EVERY result rather than only where it came due — ci-wait.cjs's
+  // template, and the reason it is a template: the caller that reads `--json` is
+  // not the caller that reads the text, and a refusal only one of them can see is
+  // a refusal the other acts against.
+  if (configRefusal) {
+    front.config_invalid = configRefusal;
+    // …and the VERDICT moves with it, on both faces. `computeFront` is pure and
+    // is handed no config, so it cannot know: it sees an empty board — which is
+    // what withholding the dispatches produces — and answers `fixpoint: true`.
+    // A machine reader taking that field would then be told the phase is
+    // finished. `state-sync.cjs`'s durable board is untouched: it degrades
+    // rather than refusing (T-26-02), so it never sets this field.
+    front.fixpoint = false;
+  }
   if (argv.includes('--json')) {
     process.stdout.write(JSON.stringify(front, null, 2) + '\n');
   } else {

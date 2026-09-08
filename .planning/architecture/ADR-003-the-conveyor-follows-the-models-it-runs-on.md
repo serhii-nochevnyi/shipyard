@@ -11,17 +11,30 @@ Three things moved under the conveyor within a fortnight, and the repository
 records none of them:
 
 - **Claude Code.** Since v2.1.219 the `opus` alias resolves to Opus 5, since
-  v2.1.255 `fable` resolves to Fable 5.1; the Agent tool's `model` field now
-  accepts full model ids and `inherit` as well as the four aliases
-  (code.claude.com/docs/en/model-config, read 2026-09-07). The container pins
-  Claude Code **2.1.200** — inside the image `opus` is still Opus 4.8 and
-  `fable` is Fable 5. `CLAUDE.md`, `deliver.md`, `investigate.md`, `README.md`
-  and `docs/` all state that the Agent tool REJECTS full ids; that is TRUE and
-  stays. What they lack is the distinction from subagent frontmatter, and the
-  version floors. Fable bills usage credits on some plans and asks
-  for consent once; in a background or Remote Control session that prompt
-  waits `dialogExpiry` (5 min) and then ENDS THE TURN without sending — an
-  autonomy break for any org that has not consented yet.
+  v2.1.255 `fable` resolves to Fable 5.1. The model-config page
+  (code.claude.com/docs/en/model-config, read 2026-09-07) lists full model ids
+  and `inherit` alongside the four aliases — and that list is about SUBAGENT
+  FRONTMATTER, the `model:` field in a `.claude/agents/*.md` file, which does
+  take them. It is NOT the Agent TOOL's `model` parameter, which is
+  enum-validated against exactly the four aliases, so a full id or a suffixed
+  alias like `opus[1m]` is rejected on input. Two surfaces, one word: a docs
+  page listing full ids is not permission for a dispatch to emit one.
+  *(Corrected 2026-09-08. This paragraph originally attributed that list to the
+  Agent tool's own parameter — the same conflation D4 below exists to remove, so
+  the two halves of this ADR contradicted each other from the day it was
+  accepted, and the Context was the half a reader reaches first. The surfaces
+  are NAMED rather than the sentence deleted, because "but the docs page lists
+  them" is the objection the next reader raises and the answer is that the page
+  describes the other surface. The wrong sentence is deliberately not quoted
+  back: a record that repeats a false claim verbatim is a record no `grep` can
+  clear.)* The container pins Claude Code **2.1.200** — inside the image `opus`
+  is still Opus 4.8 and `fable` is Fable 5. `CLAUDE.md`, `deliver.md`,
+  `investigate.md`, `README.md` and `docs/` all state that the Agent tool
+  REJECTS full ids; that is TRUE and stays. What they lack is the distinction
+  from subagent frontmatter, and the version floors. Fable bills usage credits
+  on some plans and asks for consent once; in a background or Remote Control
+  session that prompt waits `dialogExpiry` (5 min) and then ENDS THE TURN
+  without sending — an autonomy break for any org that has not consented yet.
 - **Codex.** `gpt-6-astra` shipped 2026-09-03 (1M context, efforts
   low…max, opt-in per the Codex CLI notes; first-class config in CLI 0.153.1).
   This host's `~/.codex/config.toml` already names it as the default. GSD

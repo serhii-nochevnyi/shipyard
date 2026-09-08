@@ -684,6 +684,38 @@ at all — it is a ceiling reached mechanically, by caller-measured window
 pressure, by exhausted repair depth, or by a judgment already contested through
 a journalled `violation`, and only while `pipeline.fable` is `auto`.
 
+Those escalations are a TABLE too, for the same reason the rows above are: the
+sentence describing them was three reviews stale and no test could read it.
+`tests/unit/pipeline-config.test.cjs` compares every row below against the
+resolver AND sweeps every single signal the resolver reads, so an escalation that
+moves between signals fails, and one added in code with this table untouched
+fails as well. `*` is every role. The values are what the SHIPPED config
+resolves — with `pipeline.fable` at its default `off`, a fired ceiling route
+degrades to the floor model at `max` rather than reaching `fable`:
+
+```text
+role          tier     effort   the dispatch signal that reaches it
+executor      opus     xhigh    --risk high
+executor      opus     xhigh    --checkpoint
+research      opus     xhigh    --type alternatives
+ci-fix        opus     max      --signature-state repeat
+ci-fix        opus     max      --signature-state repeat_exhausted
+review-fix    opus     max      --signature-state repeat
+review-fix    opus     max      --signature-state repeat_exhausted
+pr-sentinel   sonnet   max      --signature-state repeat
+pr-sentinel   opus     max      --signature-state repeat_exhausted
+arch-review   opus     max      --contested
+integrator    opus     max      --contested
+*             opus     max      --input-tokens over pipeline.fable_window_tokens
+```
+
+Two rows there are worth reading twice. `pr-sentinel` keeps its `sonnet`
+exemption on a repeating signature and LOSES it on an exhausted one, because a
+fired ceiling route outranks the exemption — the depth has already been spent, so
+what moves is the model. And the last row is why the threshold is named rather
+than written as a number: it is `pipeline.fable_window_tokens`, a knob, and a
+literal here would go stale the first time anyone tuned it.
+
 **The policy is code, not prose.** `scripts/pipeline-config.cjs model <role>
 [--risk|--type|--files|--attempt|…]` returns the tier for a spawn, applying the
 role × risk × attempt matrix, the `model_policy` profile, and any

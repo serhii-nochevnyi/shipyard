@@ -40,7 +40,12 @@ fixpoint: NO — 12 item(s) are actionable RIGHT NOW. Ending the run here is a d
 ```
 
 The same structure is written to `.planning/graph/delivery-front.json`
-(`front.cjs` — re-runnable on its own, `--json` for the machine view). The buckets:
+(`front.cjs` — re-runnable on its own, `--json` for the machine view). Being
+re-runnable on its own is also why it REFUSES on a project `.planning/config.json`
+that does not parse: it resolves no policy from the defaults, leads both faces
+with a `config_invalid` line, and gives the most restrictive board rather than the
+default one. An ABSENT config is not that case — nobody has configured the project
+and the defaults are the answer. The buckets:
 
 ```text
 actionable now  execute  — ready, no branch yet          → Step 3   [main loop]
