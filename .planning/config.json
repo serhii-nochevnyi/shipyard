@@ -107,5 +107,8 @@
   "model_overrides": {
     "gsd-planner": "opus",
     "gsd-code-reviewer": "opus"
+  },
+  "delivery_pipeline": {
+    "max_concurrent_agents": 8
   }
 }

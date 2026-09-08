@@ -867,7 +867,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, plugins/delivery-pipeline/scripts/base-merge.cjs, plugins/delivery-pipeline/references/arch-review.md, tests/unit/trailer.test.cjs, tests/unit/files-contract.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-27-02-a-verdict-survives-a-head-move-it-provab
     epic: epic/27-the-conveyor-measures-its-own-state
     primary_parent: T-27-01
@@ -883,7 +883,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/sentinel.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-27-03-a-base-is-chosen-for-where-the-merge-lan
     epic: epic/27-the-conveyor-measures-its-own-state
     primary_parent: T-27-02
@@ -899,7 +899,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/epic-branch.sh, plugins/delivery-pipeline/scripts/ticket-worktree.sh, plugins/delivery-pipeline/commands/deliver.md, tests/smoke/worktree-smoke.sh]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-27-04-an-epic-learns-what-landed-under-it-and
     epic: epic/27-the-conveyor-measures-its-own-state
     primary_parent: T-27-03
