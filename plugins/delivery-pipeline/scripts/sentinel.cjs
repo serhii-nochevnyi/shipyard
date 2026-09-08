@@ -57,7 +57,11 @@ const {
 // and offered the tickets the guard was refusing. It lives next door rather than
 // in front.cjs because front.cjs imports it too, and one direction is the whole
 // property. The binding is below, where PARKED exists.
-const { parentIsMoving: parentIsMovingIn } = require(path.join(__dirname, 'parent-moving.cjs'));
+const {
+  parentIsMoving: parentIsMovingIn,
+  limbBaseOf: limbBaseOfIn,
+  limbRemedy: limbRemedyIn,
+} = require(path.join(__dirname, 'parent-moving.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -474,35 +478,18 @@ const parentIsMoving = (id) => parentIsMovingIn(id, { tickets, state, parked: PA
 // reported checks is not one the guard may walk towards landing. Same function
 // as the board's, so `merge` and the `merge` bucket cannot disagree.
 const heldForNoCi = (checks) => noCiHold(checks, { autoMerge: AUTO_MERGE, mergeWithoutCi: cfg.merge_without_ci });
-// The fourth shared predicate: a base inside the stack whose own ticket has
-// already MERGED is a LIMB, not the stack (PR #52's shape — see mergeOne's own
-// comment on this same check). Its content is already in the epic; the branch
-// merely survives (`deleteBranchOnMerge=false`), so a squash landing there goes
-// nowhere. `mergeOne` refuses this on the merge path; without this predicate
-// duty kept answering `merge` for it every round, which is exactly the "front
-// offers what the guard refuses" pathology this file's comments name elsewhere.
-// Read off the BOARD, matching `mergeOne`'s own justification: `merged` is
-// TERMINAL, so a cached read can only be stale in the direction "it has merged
-// since", never "it has not merged after all" — no false refusal to pay for.
-function limbBaseOf(id, s, base) {
-  if (!base) return null;
-  const repo = s.repo || null;
-  const entry = Object.entries(tickets).find(
-    ([tid, o]) => tid !== id && (o.repo || null) === repo && o.branch === base
-  );
-  if (!entry) return null;
-  const [baseId] = entry;
-  return (state[baseId] || {}).status === 'merged' ? baseId : null;
-}
-const limbRemedy = (id, s, repo, base, limbId) => {
-  const t = tickets[id] || {};
-  const epicOf = s.epic || t.epic;
-  return `base "${base}" is ${limbId}, whose ticket is already MERGED — the branch survives the squash but ` +
-    `its content is in ${epicOf || 'the epic'}, so landing here would strand this work on a limb nothing merges ` +
-    `onward (PR #52). Retarget it${epicOf ? ` onto ${epicOf}` : ''} and bring the base in, then it lands: ` +
-    `\`gh pr edit ${s.pr}${repo ? ` --repo ${repo}` : ''}${epicOf ? ` --base ${epicOf}` : ' --base <epic>'}\`, ` +
-    `then \`base-merge.cjs ${id} --worktree <p> --base ${epicOf || '<epic>'}\`, push.`;
-};
+// The fourth and fifth shared predicates, bound the same way: a base inside the
+// stack whose own ticket has already MERGED is a LIMB, not the stack (PR #52's
+// shape), and the sentence that says so with its remedy. Both are
+// parent-moving.cjs's — that module owns "what is this ticket's parent doing to
+// its base", and it owns the reason too: `mergeOne` refuses a limb, and while
+// the predicate lived HERE the BOARD never learned the refusal, so `computeFront`
+// answered `actionable.merge` for exactly the PR the gate declined every round.
+// `base` stays an argument because the two readers do not measure the same one:
+// duty and the board ask about the base the board holds, `mergeOne` about
+// `pr.baseRefName` from the live view.
+const limbBaseOf = (id, base) => limbBaseOfIn(id, base, { tickets, state });
+const limbRemedy = (id, base, limbId) => limbRemedyIn(id, base, limbId, { tickets, state });
 
 function dutyItems() {
   const items = [];
@@ -665,15 +652,21 @@ function dutyItems() {
       // handed an action its own gate will decline.
       item.action = 'human-merge';
       item.why = NO_CI_WHY;
-    } else if (AUTO_MERGE && s.merge_scope === 'stacked' && limbBaseOf(id, s, base)) {
-      // Ready in every other respect, and `mergeOne` refuses this against LIVE
-      // GitHub regardless: the base is a limb (PR #52's shape). Say so first, so
-      // the guard is not handed an action its own gate will decline every round.
-      item.action = 'human-merge';
-      item.why = `green + conform, but its ${limbRemedy(id, s, item.repo, base, limbBaseOf(id, s, base))}`;
     } else if (AUTO_MERGE && s.merge_scope === 'stacked') {
-      item.action = 'merge';
-      item.why = `green + conform → squash into ${base}`;
+      // One arm, one `limbBaseOf` call — folded together per Copilot review on
+      // #66: the limb check and the plain merge used to be two branches each
+      // re-scanning `tickets` via `limbBaseOf`'s `Object.entries().find()`.
+      // Ready in every other respect; `mergeOne` refuses a limb base (PR #52's
+      // shape) against LIVE GitHub regardless, so say so first here rather than
+      // hand the guard an action its own gate will decline every round.
+      const limbId = limbBaseOf(id, base);
+      if (limbId) {
+        item.action = 'human-merge';
+        item.why = `green + conform, but its ${limbRemedy(id, base, limbId)}`;
+      } else {
+        item.action = 'merge';
+        item.why = `green + conform → squash into ${base}`;
+      }
     } else {
       item.action = 'human-merge';
       item.why = AUTO_MERGE
@@ -894,11 +887,12 @@ function mergeOne(id) {
     }
 
     // A base inside the stack whose own ticket has already MERGED is a LIMB, not
-    // the stack — `limbBaseOf`'s own comment above has the shape (PR #52) and the
-    // reason a cached BOARD read is sound here (`merged` is TERMINAL). Shared
-    // with `dutyItems()` so the board cannot offer what this refuses.
-    const limbId = limbBaseOf(id, s, pr.baseRefName);
-    if (limbId) return block(limbRemedy(id, s, repo, pr.baseRefName, limbId));
+    // the stack — `parent-moving.cjs`'s `limbBaseOf` carries the shape (PR #52)
+    // and the reason a cached BOARD read is sound here (`merged` is TERMINAL).
+    // Shared with `dutyItems()` AND with `computeFront`, so neither the duty
+    // chain nor the board can offer what this refuses.
+    const limbId = limbBaseOf(id, pr.baseRefName);
+    if (limbId) return block(limbRemedy(id, pr.baseRefName, limbId));
   }
 
   if (pr.reviewDecision === 'CHANGES_REQUESTED') return block('review decision is CHANGES_REQUESTED');
