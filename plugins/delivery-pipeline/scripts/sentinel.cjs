@@ -474,6 +474,35 @@ const parentIsMoving = (id) => parentIsMovingIn(id, { tickets, state, parked: PA
 // reported checks is not one the guard may walk towards landing. Same function
 // as the board's, so `merge` and the `merge` bucket cannot disagree.
 const heldForNoCi = (checks) => noCiHold(checks, { autoMerge: AUTO_MERGE, mergeWithoutCi: cfg.merge_without_ci });
+// The fourth shared predicate: a base inside the stack whose own ticket has
+// already MERGED is a LIMB, not the stack (PR #52's shape — see mergeOne's own
+// comment on this same check). Its content is already in the epic; the branch
+// merely survives (`deleteBranchOnMerge=false`), so a squash landing there goes
+// nowhere. `mergeOne` refuses this on the merge path; without this predicate
+// duty kept answering `merge` for it every round, which is exactly the "front
+// offers what the guard refuses" pathology this file's comments name elsewhere.
+// Read off the BOARD, matching `mergeOne`'s own justification: `merged` is
+// TERMINAL, so a cached read can only be stale in the direction "it has merged
+// since", never "it has not merged after all" — no false refusal to pay for.
+function limbBaseOf(id, s, base) {
+  if (!base) return null;
+  const repo = s.repo || null;
+  const entry = Object.entries(tickets).find(
+    ([tid, o]) => tid !== id && (o.repo || null) === repo && o.branch === base
+  );
+  if (!entry) return null;
+  const [baseId] = entry;
+  return (state[baseId] || {}).status === 'merged' ? baseId : null;
+}
+const limbRemedy = (id, s, repo, base, limbId) => {
+  const t = tickets[id] || {};
+  const epicOf = s.epic || t.epic;
+  return `base "${base}" is ${limbId}, whose ticket is already MERGED — the branch survives the squash but ` +
+    `its content is in ${epicOf || 'the epic'}, so landing here would strand this work on a limb nothing merges ` +
+    `onward (PR #52). Retarget it${epicOf ? ` onto ${epicOf}` : ''} and bring the base in, then it lands: ` +
+    `\`gh pr edit ${s.pr}${repo ? ` --repo ${repo}` : ''}${epicOf ? ` --base ${epicOf}` : ' --base <epic>'}\`, ` +
+    `then \`base-merge.cjs ${id} --worktree <p> --base ${epicOf || '<epic>'}\`, push.`;
+};
 
 function dutyItems() {
   const items = [];
@@ -636,6 +665,12 @@ function dutyItems() {
       // handed an action its own gate will decline.
       item.action = 'human-merge';
       item.why = NO_CI_WHY;
+    } else if (AUTO_MERGE && s.merge_scope === 'stacked' && limbBaseOf(id, s, base)) {
+      // Ready in every other respect, and `mergeOne` refuses this against LIVE
+      // GitHub regardless: the base is a limb (PR #52's shape). Say so first, so
+      // the guard is not handed an action its own gate will decline every round.
+      item.action = 'human-merge';
+      item.why = `green + conform, but its ${limbRemedy(id, s, item.repo, base, limbBaseOf(id, s, base))}`;
     } else if (AUTO_MERGE && s.merge_scope === 'stacked') {
       item.action = 'merge';
       item.why = `green + conform → squash into ${base}`;
@@ -859,31 +894,11 @@ function mergeOne(id) {
     }
 
     // A base inside the stack whose own ticket has already MERGED is a LIMB, not
-    // the stack: its content is in the epic, the branch merely survives
-    // (`deleteBranchOnMerge=false`), and a squash landing there goes nowhere.
-    // That is PR #52 exactly — T-26-03 squashed onto a parent branch already
-    // merged into `epic/26`, so the epic never received the work while the
-    // ticket read `merged`, the PR read merged and the front was empty. Same
-    // shape as the BEHIND rule two gates down: a state that looks mergeable and
-    // is not.
-    //
-    // Read off the BOARD rather than re-queried, and that is sound here where it
-    // would not be elsewhere: `merged` is TERMINAL — GitHub never un-merges a PR
-    // — so a cached read can only be stale in the direction "it has merged
-    // since", never "it has not merged after all". There is therefore no false
-    // refusal to pay for, and the stale window in the other direction is what
-    // the post-merge reachability assertion below catches. Two guards, one class,
-    // split at the only point where the cache can lie.
-    if ((state[baseId] || {}).status === 'merged') {
-      const epicOf = s.epic || t.epic;
-      return block(
-        `base "${pr.baseRefName}" is ${baseId}, whose ticket is already MERGED — the branch survives the squash but ` +
-        `its content is in ${epicOf || 'the epic'}, so landing here would strand this work on a limb nothing merges ` +
-        `onward (PR #52). Retarget it${epicOf ? ` onto ${epicOf}` : ''} and bring the base in, then it lands: ` +
-        `\`gh pr edit ${s.pr}${repo ? ` --repo ${repo}` : ''}${epicOf ? ` --base ${epicOf}` : ' --base <epic>'}\`, ` +
-        `then \`base-merge.cjs ${id} --worktree <p> --base ${epicOf || '<epic>'}\`, push.`
-      );
-    }
+    // the stack — `limbBaseOf`'s own comment above has the shape (PR #52) and the
+    // reason a cached BOARD read is sound here (`merged` is TERMINAL). Shared
+    // with `dutyItems()` so the board cannot offer what this refuses.
+    const limbId = limbBaseOf(id, s, pr.baseRefName);
+    if (limbId) return block(limbRemedy(id, s, repo, pr.baseRefName, limbId));
   }
 
   if (pr.reviewDecision === 'CHANGES_REQUESTED') return block('review decision is CHANGES_REQUESTED');
