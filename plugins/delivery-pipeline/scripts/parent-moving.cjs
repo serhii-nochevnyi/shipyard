@@ -1,6 +1,9 @@
 'use strict';
 
-// "IS THIS TICKET'S PARENT STILL MOVING?" — in ONE home, for both readers.
+// "WHAT IS THIS TICKET'S PARENT DOING TO ITS BASE?" — in ONE home, for every
+// reader. Two questions, one subject: is the parent still MOVING (its PR open,
+// so this branch's base is about to change under it), and has it already moved
+// so far that the base is a LIMB (the parent merged, its branch left behind).
 //
 // The board must never offer what the guard refuses. `checkpointParentOf` (in
 // front.cjs) already holds one half of that rule from a single definition; this
@@ -81,4 +84,61 @@ function movingParentWhy(parent, state) {
   return `${parent} (${pr}: open, checks reported green)`;
 }
 
-module.exports = { movingParentOf, parentIsMoving, movingParentWhy };
+// ── the LIMB base, in the same ONE home, for the same reason ────────────────
+//
+// A parent that has already MERGED is not moving — but the branch it merged from
+// usually still exists (`deleteBranchOnMerge=false`), and a child whose PR still
+// literally targets it is stacked on a LIMB rather than on the stack: the
+// parent's content is in the epic, so a squash landing on that branch goes
+// nowhere and the work is stranded. That is PR #52's shape, and it was measured
+// in a real phase — the epic did not contain the work while every board printed
+// `merged`.
+//
+// WHY IT LIVES HERE and not in sentinel.cjs, where it was born: the merge gate
+// learned to refuse this and the BOARD never learned it, so `computeFront` kept
+// answering `actionable.merge` for the very ticket `mergeOne` declined every
+// round — the "front offers what the guard refuses" pathology that this whole
+// module exists to make structurally impossible. One predicate, three readers:
+// the duty chain, the merge gate, and the board.
+//
+// WHY `base` IS A PARAMETER rather than read off the state entry: the two
+// callers do not measure the same base and must not be made to. `dutyItems` and
+// `computeFront` ask about the base the BOARD holds (`pr_base || base`), while
+// `mergeOne` asks about `pr.baseRefName` from the live `gh pr view` — the whole
+// point of that path being a re-verification.
+//
+// Read off the BOARD for the parent's status, and that is sound rather than
+// convenient: `merged` is TERMINAL, so a cached read can only be stale in the
+// direction "it has merged since", never "it has not merged after all" — there
+// is no false refusal to pay for.
+function limbBaseOf(id, base, ctx = {}) {
+  const { tickets, state } = ctx;
+  if (!base) return null;
+  const s = ((state || {})[id]) || {};
+  const repo = s.repo || null;
+  const entry = Object.entries(tickets || {}).find(
+    ([tid, o]) => tid !== id && (o.repo || null) === repo && o.branch === base
+  );
+  if (!entry) return null;
+  const [baseId] = entry;
+  return (((state || {})[baseId] || {}).status === 'merged') ? baseId : null;
+}
+
+// The sentence both readers print. Shared for the same reason the predicate is:
+// a remedy the guard states and the board paraphrases is two remedies, and the
+// operator has to guess which one is current. It names the retarget AND the
+// base-merge, because either alone leaves the branch wrong.
+function limbRemedy(id, base, limbId, ctx = {}) {
+  const { tickets, state } = ctx;
+  const s = ((state || {})[id]) || {};
+  const t = ((tickets || {})[id]) || {};
+  const repo = s.repo || null;
+  const epicOf = s.epic || t.epic;
+  return `base "${base}" is ${limbId}, whose ticket is already MERGED — the branch survives the squash but ` +
+    `its content is in ${epicOf || 'the epic'}, so landing here would strand this work on a limb nothing merges ` +
+    `onward (PR #52). Retarget it${epicOf ? ` onto ${epicOf}` : ''} and bring the base in, then it lands: ` +
+    `\`gh pr edit ${s.pr}${repo ? ` --repo ${repo}` : ''}${epicOf ? ` --base ${epicOf}` : ' --base <epic>'}\`, ` +
+    `then \`base-merge.cjs ${id} --worktree <p> --base ${epicOf || '<epic>'}\`, push.`;
+}
+
+module.exports = { movingParentOf, parentIsMoving, movingParentWhy, limbBaseOf, limbRemedy };
