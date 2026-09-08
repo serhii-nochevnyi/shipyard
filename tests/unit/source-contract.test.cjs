@@ -54,9 +54,17 @@ suite('source contract');
 
 test('state-sync passes its epic records into computeFront', () => {
   const src = readRepo('plugins/delivery-pipeline/scripts/state-sync.cjs');
+  // Assert the SHAPE of the contract — a field literally named `epics:`
+  // reaching computeFront's options object — not the name of the local
+  // variable that happens to hold it today. A rename of `epicInfo` that still
+  // passes `epics: <whatever>` satisfies the contract and must not fail here;
+  // only the call SITE is inspected, so a match elsewhere in the file (e.g. a
+  // comment) cannot satisfy it either.
+  const call = (src.match(/computeFront\(tickets,\s*state,\s*\{[\s\S]*?\n\s*\}\);/) || [])[0];
+  assert.ok(call, 'expected to find the computeFront(tickets, state, { ... }) call in state-sync.cjs');
   assert.ok(
-    /epics:\s*epicInfo/.test(src),
-    'state-sync.cjs must pass epicInfo into computeFront as `epics` — without it leftBehind() sees no epic records and every left_behind count reads 0'
+    /epics:\s*\w+/.test(call),
+    'state-sync.cjs must pass an `epics:` field into computeFront — without it leftBehind() sees no epic records and every left_behind count reads 0'
   );
 });
 
@@ -66,7 +74,15 @@ test('no script in the deterministic layer contains a NUL byte', () => {
     'capabilities/delivery-pipeline/checks',
     'scripts'
   );
-  assert.ok(files.length > 20, `expected the deterministic layer to hold scripts, git listed ${files.length}`);
+  // A raw count is an arbitrary threshold that drifts as the deterministic
+  // layer grows or gets consolidated — asserting that a specific, always-
+  // present script actually came back is a stable check that a broken sweep
+  // (wrong cwd, wrong paths, `git ls-files` returning nothing) still catches,
+  // without needing an edit every time the file count moves.
+  assert.ok(
+    files.includes('plugins/delivery-pipeline/scripts/front.cjs'),
+    `expected the deterministic-layer sweep to include plugins/delivery-pipeline/scripts/front.cjs, git listed ${files.length} files total: ${files.join(', ')}`
+  );
   const binary = [];
   for (const rel of files) {
     const buf = fs.readFileSync(path.join(REPO, rel));

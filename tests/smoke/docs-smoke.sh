@@ -243,7 +243,7 @@ add_pin() { # add_pin <file> <every extracted value, newline-separated>
     exit 1
   fi
   if [[ "$count" -gt 1 ]]; then
-    echo "docs smoke: $file declares GSD_CORE_VERSION $count times — the build takes the LAST one, so a guard reading the first is blind to whatever the later line says:$all"
+    echo "docs smoke: $file declares GSD_CORE_VERSION $count times — which one is effective depends on this file's own resolution rules (not every syntax lets the later line win: a Makefile '?=' keeps the FIRST, a Dockerfile ARG default follows the LAST), so a guard reading any single line cannot know which value the build actually uses:$all"
     echo "  leave exactly one declaration per file"
     exit 1
   fi
