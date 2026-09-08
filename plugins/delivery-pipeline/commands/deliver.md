@@ -993,6 +993,15 @@ the branch exists and only the publish half is missing (skip straight to 5).
 **Phase B — implement (fan-out).** Agents code → verify → COMMIT. They do not push
 and do not open PRs.
 
+**The wave is exactly the first `front.capacity.free` tickets of the actionable order,
+never more** — even when the front lists more, and even when the extra ones look cheap:
+`capacity.free` is `max_concurrent_agents` minus every agent already in flight (the guard
+and its fixers included, since each one costs the session the same as an executor). The
+remainder is taken on the next round, in order; a wave wider than the cap is CUT, not
+refused. `free: 0` means dispatch nothing this round — collect what is out, then
+recompute. When the cap prints `0 agents` the project config does not parse and nothing
+may be dispatched at all: fix the file.
+
 4. Launch the executor agent IN THE WORKTREE. Get its model from
    `pipeline-config.cjs model executor --json --risk <risk> --type <type>
    --files <n> [--checkpoint]` and pass the returned `model` and `effort` verbatim.

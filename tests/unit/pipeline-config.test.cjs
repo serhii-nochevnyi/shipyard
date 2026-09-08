@@ -87,6 +87,56 @@ test('non-positive numeric knobs fall back with a warning', () => {
   assert.strictEqual(warnings.filter((w) => /must be a positive number/.test(w)).length, 2);
 });
 
+// ── the concurrency cap (ADR-005 D11) ───────────────────────────────────────
+//
+// No choice of TIER addresses a per-session spend limit: the policy is per
+// dispatch and the limit is per session, so the missing axis is how many
+// dispatches are open at once. This is that axis, and it rides the SAME numeric
+// rule as every other positive-number knob — deliberately, because a bespoke
+// coercion here is one more place for the fallback direction to be got wrong.
+test('max_concurrent_agents defaults to the largest wave measured on this repo', () => {
+  assert.strictEqual(DEFAULTS.max_concurrent_agents, 4);
+  assert.strictEqual(withConfig(undefined).config.max_concurrent_agents, 4);
+  const set = withConfig({ max_concurrent_agents: 2 });
+  assert.strictEqual(set.config.max_concurrent_agents, 2);
+  assert.deepStrictEqual(set.warnings, []);
+});
+
+test('a cap of 0 or a malformed cap warns and falls back — a broken knob must not stall the run', () => {
+  // The knob's OWN failure direction is the default, not zero: a typo in the
+  // number is not a decision to dispatch nothing, and a run that stalls on a
+  // typo is a run whose operator switches the cap off. (The other direction —
+  // a config file that does not PARSE — is front.cjs's, and there the answer is
+  // zero, because then no policy is in effect at all.)
+  for (const bad of [0, -1, 'lots', null, {}]) {
+    const { config, warnings } = withConfig({ max_concurrent_agents: bad });
+    assert.strictEqual(config.max_concurrent_agents, DEFAULTS.max_concurrent_agents, JSON.stringify(bad));
+    assert.ok(
+      warnings.some((w) => /max_concurrent_agents must be a positive number/.test(w)),
+      `${JSON.stringify(bad)}: ${warnings.join('; ')}`
+    );
+  }
+});
+
+test('the cap is DECLARED in capability.json, so GSD tooling can set it', () => {
+  // `pipeline.*` is not a valid GSD config key, so a knob that exists only there
+  // cannot be set with `/gsd-config --set`. Declaring it under the capability's
+  // own namespace is what makes it settable — and `delivery_pipeline.*` wins
+  // over `pipeline.*`, so the declared spelling is also the authoritative one.
+  const cap = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'capabilities', 'delivery-pipeline', 'capability.json'), 'utf8'
+  ));
+  const declared = (cap.config || {})['delivery_pipeline.max_concurrent_agents'];
+  assert.ok(declared, 'capability.json must declare delivery_pipeline.max_concurrent_agents');
+  assert.strictEqual(declared.type, 'number');
+  assert.strictEqual(declared.default, DEFAULTS.max_concurrent_agents);
+});
+
+test('the declared namespace wins for the cap, as it does for every other knob', () => {
+  const { config } = withRaw({ pipeline: { max_concurrent_agents: 9 }, delivery_pipeline: { max_concurrent_agents: 3 } });
+  assert.strictEqual(config.max_concurrent_agents, 3);
+});
+
 // ── absent is not the same fact as unparseable (ADR-004 D2, audit F03) ──────
 // A truncated config that CONTAINED `auto_merge: off` used to resolve to the
 // default `epic` with nothing but a warning, and the sentinel merged under it.
