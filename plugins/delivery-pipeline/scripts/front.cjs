@@ -106,23 +106,6 @@ const { isGreen } = require(path.join(__dirname, 'check-state.cjs'));
 // came to answer nothing at all to `grep -n require`.
 const epicKey = (phase, repo) => `${String(phase ?? '')}\0${repo || ''}`;
 
-// ── the identity of one phase's epic, in ONE home ───────────────────────────
-//
-// The key `state-sync.cjs`'s `epicInfo` is keyed by, and it lives here for the
-// same reason the predicates below do: two files have to agree about it, so only
-// one of them may own it. `state-sync` imports it (this module is pure and
-// importable; that one parses argv and can exit at load time, so it cannot be
-// imported back). One epic NAME per phase, but a separate branch — and a
-// separate integration PR — in every repository the phase touches, so the repo
-// is part of the identity and not a detail of it.
-//
-// The separator is written as the ESCAPE `\0` and never as the byte itself. It
-// is the one character neither a phase number nor an `owner/name` slug can
-// contain, so no two pairs collide on a key; a literal NUL in the source, on the
-// other hand, makes the whole file binary to `grep`, which is how state-sync.cjs
-// came to answer nothing at all to `grep -n require`.
-const epicKey = (phase, repo) => `${String(phase ?? '')}\0${repo || ''}`;
-
 // ── the checkpoint predicates, in ONE home ──────────────────────────────────
 //
 // `sentinel.cjs` imports both of these rather than keeping its own copies. Until
