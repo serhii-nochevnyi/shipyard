@@ -47,12 +47,28 @@ plans written the same day), executors about 45%, guards about 22%.
 
 ## Decision
 
-- **D1 — The floor is `opus`.** No built-in path resolves a role below it.
-  `sonnet` and `haiku` remain valid values a user may configure; nothing in the
-  ladder chooses them. The reason is not that the cheaper tiers are bad, it is
-  that the conveyor's failure mode is a wrong green reaching an epic, and every
-  mechanical gate above the executor costs more to run than the difference
-  between tiers.
+- **D1 — The floor is `opus`, with exactly two named exemptions.** No built-in
+  path resolves a role below `opus` EXCEPT `pr-sentinel` and `drift-check`,
+  which stay on `sonnet`. `haiku` is chosen by nothing at all; all four tiers
+  remain values a user may configure. The reason for the floor is not that the
+  cheaper tiers are bad, it is that the conveyor's failure mode is a wrong green
+  reaching an epic, and every mechanical gate above the executor costs more to
+  run than the difference between tiers.
+
+  **The two exemptions, amended 2026-09-08** — the operator's decision, with the
+  measurement, and recorded HERE because an exemption whose only home is a
+  requirement line is an exemption the next reader deletes in good faith:
+  - **`pr-sentinel`.** Its merge decision is not the model's: `sentinel.cjs
+    mergeOne` re-verifies open/undrafted/green/threads-zero/conform/not-CHANGES_REQUESTED/not-checkpoint
+    against LIVE GitHub and refuses on anything unproven. The model drives a PR
+    towards green; the gate decides whether it lands. It is also **44% of all
+    dispatches** in the journal, the highest-volume role in the system.
+  - **`drift-check`.** Its product is a file list and a set of reuse pointers,
+    not a judgement — and D2's amendment moves the plan-defect burden onto it,
+    which is work it does at `high` effort on `sonnet` for ~1–2% of the bill.
+  Together they are **57% of dispatches and 25% of subagent tokens**, and a tier
+  step there is ≈2.5× on the 82–87% of a model line that effort cannot reach
+  (see D2's amendment). Everything else keeps the floor.
 - **D2 — On Claude, depth is EFFORT, keyed on the role and its signals.** The
   dependency inverts: today the effort tier is derived from the model, which
   collapses to a single value the moment the model is constant. Proven, not
@@ -179,17 +195,35 @@ plans written the same day), executors about 45%, guards about 22%.
   ONLY escalation available on Codex is the model, which is what D8's variants
   make reachable.
 
-  | | Claude (D2's ladder) | Codex (two values) |
+  *Table amended 2026-09-08 to match D1's exemptions, D2's effort decision and
+  D4's withdrawal of the integrator's exception. Four rows were stale and are
+  marked; the earlier values are kept struck through in the text below the
+  table, because a reader who remembers the old grid needs to see that it moved
+  rather than wonder whether they misread it.*
+
+  | | Claude (D1/D2's ladder) | Codex (two values) |
   |---|---|---|
-  | mechanical: drift-check | opus / low | terra / low |
+  | drift-check | **sonnet / high** | terra / low |
+  | pr-sentinel | **sonnet / high** | terra / high |
   | research, repair roles | opus / high | terra / high |
-  | ordinary executor | opus / xhigh | terra / high |
-  | judges, and a repeated repair | opus / max | terra / high |
-  | integrator, unconditionally | fable / max | astra / high |
+  | ordinary executor | **opus / high** | terra / high |
+  | executor at `risk: high` or a checkpoint | opus / xhigh | terra / high |
+  | judges | **opus / xhigh** | terra / high |
+  | a repeated repair | opus / max | terra / high |
+  | integrator | **opus / xhigh** | astra / high |
   | the earned ceiling (D4's routes) | fable | astra / high |
 
-  The MODELS mirror each other exactly — one workhorse floor, one senior
-  ceiling that is earned, one unconditional exception for the integrator. Only
+  What moved: drift-check from `opus`/`low`; pr-sentinel out of the floor
+  altogether; the ordinary executor from `xhigh` (its job is to implement a
+  contract, not to falsify it); the judges from `max` to `xhigh` (nothing has
+  measured headroom at `xhigh`, which is what `max` is reserved for); and the
+  integrator from `fable`/`max` unconditionally to `opus`/`xhigh` earning
+  `fable` through D4's window route.
+
+  The MODELS still mirror each other on the Codex side — one workhorse floor and
+  one senior ceiling, taken statically by the integrator there because a static
+  `.toml` cannot resolve a route. On Claude there is no unconditional exception
+  any more. Only
   the effort column differs, and it differs for a measured reason rather than a
   structural one.
 
@@ -239,9 +273,14 @@ plans written the same day), executors about 45%, guards about 22%.
   Caches are model-scoped, so an escalation that changes model forfeits the
   prefix a guard has been reusing across rounds — and a guard re-reads the same
   diff and the same ADR corpus every round. That is why `arch-review` stays on
-  ONE model at `xhigh` and reaches `fable` only through D4's routes, while the
-  integrator takes `fable` unconditionally: one call per phase has no cache to
-  lose. Measured prices make the same point from the other side. Anthropic and
+  ONE model at `xhigh` and reaches `fable` only through D4's routes. *(Amended
+  2026-09-08: this clause used to continue "while the integrator takes `fable`
+  unconditionally: one call per phase has no cache to lose". The cache argument
+  is sound and survives — a single call per phase forfeits nothing — but it only
+  ever showed that the escalation is CHEAP there, never that it is NEEDED. D4's
+  amendment withdraws the exception on the measurement the cache argument never
+  supplied: 291k tokens against a 1M window, at 2× the price.)* Measured prices
+  make the same point from the other side. Anthropic and
   OpenAI are within a few percent tier for tier per 1M tokens — Sonnet 5 $2/$10
   against Terra $2/$12, Opus 5 $5/$25 against Sol $5/$30, Fable 5.1 $10/$50
   against Astra $10/$50 — so the symmetry in D6 costs the same on both sides and
@@ -265,7 +304,26 @@ One ticket, T-25-04, last in phase 25's chain, and high risk with a checkpoint
 because it changes the model of every dispatch in the conveyor. The floor and
 the two judgment efforts are in `.planning/config.json` from today so the
 policy is in force before the code enforces it; T-25-04 moves them into the
-resolver and the project config then drops them. `drift-check` at `opus`/`low`
-is the one role whose cost rises without a quality argument behind it, and the
-honest fix for it is not a tier but Step 2's own condition, which did not ask
-for fifteen of this session's judges.
+resolver and the project config then drops them.
+
+**Amended 2026-09-08, and this is the operator's first action after T-25-04
+lands, not a tidy-up.** The paragraph above said `drift-check` at `opus`/`low`
+was the one role whose cost rose without a quality argument; D1's exemption
+settles that by keeping it on `sonnet`, at `high`. What replaces it is sharper
+and it points the other way: **the two keys this ADR put in
+`.planning/config.json` now SHADOW the ceiling they were meant to stand in
+for.** `ladderTier` reads `cfg.models[role]` above the route logic, so with
+`pipeline.models.arch-review` and `.integrator` set to `opus`, R1 and R3 cannot
+fire at all — demonstrated by the review of PR #57:
+`model arch-review --input-tokens 300000` answers `opus`/`max` and prints
+*"the window ceiling route fired … but pipeline.models.\"arch-review\" = \"opus\"
+outranks it"*. **Drop both keys when T-25-04 lands**, or the ceiling it builds
+is inert here while its tests say it works. `pipeline.effort.*` is already
+absent, so that half needs nothing.
+
+And one consequence that is a spend decision rather than a cleanup:
+`model_overrides.gsd-planner` / `.gsd-code-reviewer` set to `fable` become Step
+0 drift the moment `gsd-tune` starts wanting `opus` for them. The two ways out
+are NOT equivalent — flipping the overrides to `opus` is a config edit, while
+setting `pipeline.fable: auto` also opens every ceiling route AND activates the
+≥ 2.1.255 version blocker. Decide it deliberately.
