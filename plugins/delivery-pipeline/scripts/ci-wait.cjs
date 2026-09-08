@@ -210,7 +210,14 @@ const capFree = capNum('free');
 // `undefined`/garbled numbers into an operator-facing line.
 const capMax = capNum('max');
 const capInFlight = capNum('in_flight');
-const capBinds = capFree !== null && capFree <= 0;
+// Both fields must be readable, matching stop-gate.cjs's `capacityFull`: a
+// `free` of 0 or less means nothing while `max` is unreadable, because a
+// partially-written front (`free: 0`, `max` missing or garbled) is not
+// evidence the cap is spent — it is evidence the front cannot be trusted, and
+// the two readers must agree about which case that is. An unreadable `max`
+// falls back to the pre-cap refusal (no cap in force), exactly like an absent
+// `capacity` object does above.
+const capBinds = capMax !== null && capFree !== null && capFree <= 0;
 if (actionableCount > 0 && leftBehind < actionableCount && !capBinds) {
   const named = ['execute', 'publish', 'fix', 'finalize', 'merge']
     .filter((k) => (front.actionable?.[k] || []).length)

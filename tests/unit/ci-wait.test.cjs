@@ -789,4 +789,20 @@ test('capacity.free: -1 is unreadable, not a spent cap — front.cjs never emits
   assert.ok(/execute: T-01-05/.test(json.refusal), json.refusal);
 });
 
+test('capacity.max unreadable with free: 0 does not bind — the readers must agree, not just this one', () => {
+  // `capBinds` used to be derived from `free` alone. A partially-written front
+  // (`free: 0`, `max` missing or garbled) then read as a spent cap here while
+  // stop-gate.cjs's `capacityFull` — which requires `max` to be a readable
+  // number greater than zero — would call the SAME board not full. Two readers
+  // disagreeing about one board is the exact defect this ticket exists to
+  // remove, so an unreadable `max` must fall back to "no cap in force" (the
+  // pre-cap refusal) here too, matching stop-gate's own requirement.
+  const { code, json } = asJson(ciOnly({
+    actionable_count: 1, actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05'] },
+    capacity: { max: 'corrupt', in_flight: 4, free: 0 },
+  }), stateWith());
+  assert.equal(code, 3, 'an unreadable max must not let a readable free: 0 alone bind the cap');
+  assert.ok(/execute: T-01-05/.test(json.refusal), json.refusal);
+});
+
 done();
