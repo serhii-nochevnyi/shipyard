@@ -50,6 +50,28 @@ const tracked = (...dirs) =>
     .split('\0')
     .filter(Boolean);
 
+// Extract a call site by scanning for balanced parens from the first
+// `name(` — tolerant of reformatting (single line, different indentation, a
+// trailing comma) that a fixed-shape regex would break on. Only the first
+// occurrence of `<name>(` is matched, which is enough here: `computeFront`'s
+// only call syntax in state-sync.cjs is the real dispatch — every other
+// mention is either a destructured import (`{ computeFront, ... }`, no `(`
+// immediately after) or plain prose in a comment.
+const extractCall = (src, name) => {
+  const start = src.indexOf(`${name}(`);
+  if (start === -1) return null;
+  let depth = 0;
+  for (let i = start + name.length; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  return null; // unbalanced — never a valid call site
+};
+
 suite('source contract');
 
 test('state-sync passes its epic records into computeFront', () => {
@@ -59,8 +81,11 @@ test('state-sync passes its epic records into computeFront', () => {
   // variable that happens to hold it today. A rename of `epicInfo` that still
   // passes `epics: <whatever>` satisfies the contract and must not fail here;
   // only the call SITE is inspected, so a match elsewhere in the file (e.g. a
-  // comment) cannot satisfy it either.
-  const call = (src.match(/computeFront\(tickets,\s*state,\s*\{[\s\S]*?\n\s*\}\);/) || [])[0];
+  // comment) cannot satisfy it either. The call site is located by balanced
+  // parens (see extractCall above), not by a fixed line-break shape, so a
+  // harmless reformat of the call (single line, different indentation, a
+  // trailing comma) does not break this test.
+  const call = extractCall(src, 'computeFront');
   assert.ok(call, 'expected to find the computeFront(tickets, state, { ... }) call in state-sync.cjs');
   assert.ok(
     /epics:\s*\w+/.test(call),
