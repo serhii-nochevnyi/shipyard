@@ -15,6 +15,7 @@ const mod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'sc
 const {
   loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
   TIERS, EFFORTS, DEFAULTS, ROLES, SIGNATURE_STATES, DEFAULT_CODEX_MODELS, SONNET_ROLES,
+  NUMERIC_KNOBS,
 } = require(mod);
 const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
@@ -123,10 +124,11 @@ test('a cap of 0 or a malformed cap warns and falls back — a broken knob must 
 // Both defects below were shipped ACCEPTED because only the endpoints were
 // probed, and both come from the one shared rule in `loadConfig` rather than
 // from any knob — so `max_attempts` behaves identically and is asserted beside
-// the cap on every case. The list is read from the module's own defaults, so a
-// knob added to the rule is covered without editing this test.
-const NUMERIC_KNOBS = ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours',
-  'plan_defect_signatures', 'fable_window_tokens', 'max_concurrent_agents'];
+// the cap on every case. `NUMERIC_KNOBS` is imported from the module itself
+// (not re-typed here) — Copilot's review on PR #71 found the list was a
+// hand-mirrored duplicate of the rule's own array, which is exactly the kind of
+// copy that drifts silently when a knob is added to one and not the other; the
+// module now exports the one array both the rule and this test read.
 
 test('a boolean is not a number: `true` must never read as a cap of ONE', () => {
   // `Number(true) === 1`, so `max_concurrent_agents: true` passed the
