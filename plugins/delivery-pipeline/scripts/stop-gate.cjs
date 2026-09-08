@@ -518,9 +518,18 @@ const dispatched = (front.waiting && front.waiting.dispatched) || [];
 // existed outlives an upgrade, so an absent or unreadable field is `null` — "no
 // cap is in force" — and must never open the hatches below.
 const capacity = (front.capacity && typeof front.capacity === 'object') ? front.capacity : null;
-const capNum = (k) => (capacity !== null && Number.isFinite(Number(capacity[k])) ? Number(capacity[k]) : null);
+// `front.cjs` only ever emits non-negative counts (`Math.max(0, …)` for `free`,
+// a length or a collapsed sum for `max`/`in_flight`), so a negative value here
+// is not a smaller cap — it is a corrupted or hand-edited front, and must read
+// as unreadable exactly like `null`/a string/an object would.
+const capNum = (k) => (capacity !== null && typeof capacity[k] === 'number'
+  && Number.isFinite(capacity[k]) && capacity[k] >= 0 ? capacity[k] : null);
 const capMax = capNum('max');
 const capFree = capNum('free');
+// Read for the phantom-capacity message below the same defensive way as
+// max/free: capacityFull only guarantees capMax/capFree are finite, not
+// `in_flight`, so the message must not print a raw, possibly-garbled field.
+const capInFlight = capNum('in_flight');
 // Only front.cjs can express 0, and only for one reason: the project config does
 // not parse, so no policy is in effect. Nothing may be dispatched, and no refusal
 // of a stop can fix a file.
@@ -646,7 +655,7 @@ const named = ORDER
 // with the clear command — otherwise the refusal reads as an order to dispatch
 // past a cap the board says is spent.
 const phantom = capacityFull
-  ? `\nThe board reports capacity ${capacity.in_flight}/${capacity.max} agents in flight, i.e. FULL — but no `
+  ? `\nThe board reports capacity ${capInFlight ?? '?'}/${capMax} agents in flight, i.e. FULL — but no `
     + 'mark on it is recent enough to be an agent at work, so nothing is coming to wake this session.'
     + goneText()
   : '';

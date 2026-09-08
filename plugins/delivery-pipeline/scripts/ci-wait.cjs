@@ -198,8 +198,26 @@ const leftBehind = Number(front.left_behind_count || 0);
 // capacity existed outlives an upgrade, and an absent field must read as "no cap
 // is in force" (refuse as before), never as a full board.
 const capacity = (front.capacity && typeof front.capacity === 'object') ? front.capacity : null;
-const capFree = capacity !== null && Number.isFinite(Number(capacity.free)) ? Number(capacity.free) : null;
-const capBinds = capFree !== null && capFree <= 0;
+// `front.cjs` only ever emits non-negative counts (`Math.max(0, …)` for `free`,
+// a length or a collapsed sum for `max`/`in_flight`), so a negative value here
+// is not a smaller cap — it is a corrupted or hand-edited front, and must read
+// as unreadable exactly like `null`/a string/an object would.
+const capNum = (k) => (capacity !== null && typeof capacity[k] === 'number'
+  && Number.isFinite(capacity[k]) && capacity[k] >= 0 ? capacity[k] : null);
+const capFree = capNum('free');
+// `max`/`in_flight` are read the same defensive way for the human message below —
+// they gate nothing here, but an old or partially-written front must not print
+// `undefined`/garbled numbers into an operator-facing line.
+const capMax = capNum('max');
+const capInFlight = capNum('in_flight');
+// Both fields must be readable, matching stop-gate.cjs's `capacityFull`: a
+// `free` of 0 or less means nothing while `max` is unreadable, because a
+// partially-written front (`free: 0`, `max` missing or garbled) is not
+// evidence the cap is spent — it is evidence the front cannot be trusted, and
+// the two readers must agree about which case that is. An unreadable `max`
+// falls back to the pre-cap refusal (no cap in force), exactly like an absent
+// `capacity` object does above.
+const capBinds = capMax !== null && capFree !== null && capFree <= 0;
 if (actionableCount > 0 && leftBehind < actionableCount && !capBinds) {
   const named = ['execute', 'publish', 'fix', 'finalize', 'merge']
     .filter((k) => (front.actionable?.[k] || []).length)
@@ -503,8 +521,8 @@ const label = watch.map((w) => `${w.id}#${w.pr}${w.via.length ? ` (holding ${w.v
 // makes waiting correct anyway — and a line that misdescribes the board it just
 // read is how a reader learns to stop reading it.
 const offer = capBinds && actionableCount > 0
-  ? `every move on the board is beyond capacity (${capacity.max} agent(s) allowed, `
-    + `${capacity.in_flight} in flight)`
+  ? `every move on the board is beyond capacity (${capMax ?? '?'} agent(s) allowed, `
+    + `${capInFlight ?? '?'} in flight)`
   : 'the board offers nothing but pipelines';
 if (!JSON_OUT) {
   process.stdout.write(

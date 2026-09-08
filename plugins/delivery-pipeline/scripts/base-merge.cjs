@@ -36,7 +36,26 @@
 // matcher — an inexact "does this declaration own this path" put a declared file
 // in the FIRST branch and discarded exactly the work the rule exists to protect,
 // so ownership is answered by path-owner.cjs and by nothing local to this file.
+//
+// AND THE VERDICT THIS MERGE DID NOT INVALIDATE (ADR-006 D2). Because this is
+// the only thing in the conveyor that moves a head WITHOUT adding content, it is
+// the only place a carried architecture verdict can be PROVED — measured on
+// T-25-05, a merge whose whole tree was byte-identical cost a full re-judgement
+// at ~150k tokens, 42% of that ticket's cost, once per cascade step per ticket.
+// So after a merge it completed, this script hands the pre-merge and post-merge
+// heads to `gate-trailer.cjs carry`, which re-derives both object identities
+// itself and refuses otherwise. A merge that changed content resolves to a
+// different tree and is refused BY CONSTRUCTION, so this caller needs no
+// judgement of its own — and a refusal is not a failure here: the verdict is
+// simply owed again, exactly as before.
+//
+// One consequence worth naming: the carry runs BEFORE the push (this script does
+// not push), so between the two the trailer names a head origin has not seen and
+// every reader says `stale`. That is the fail-closed direction — a verdict that
+// counted a moment ago now does not — and it resolves the moment the fixer
+// pushes, which is the next thing its own instructions tell it to do.
 
+const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -63,7 +82,7 @@ const base = flag('base');
 // IN the worktree, which has no .planning/ of its own when the project keeps it
 // untracked. See graph-dir.cjs for the order and why each step exists.
 const { loadTickets, resolveBaseRef } = require(path.join(__dirname, 'graph-dir.cjs'));
-const { tickets } = loadTickets(argv, worktree, 'base-merge');
+const { tickets, graphDir } = loadTickets(argv, worktree, 'base-merge');
 const t = tickets[ticket];
 if (!t) fail(`ticket ${ticket} is not in the graph`);
 const declared = Array.isArray(t.files) ? t.files : [];
@@ -132,11 +151,66 @@ if (!noFetch) git(['fetch', 'origin', '--prune'], { tolerate: true });
 // caller must be able to see which ref was actually measured.
 const baseRef = resolveBaseRef(worktree, base);
 
+// The head the architecture verdict was rendered against, read before anything
+// moves it. Everything the carry proves is about this sha and the one after.
+const preMergeHead = git(['rev-parse', 'HEAD'], { tolerate: true }).out;
+
+// WHICH PR, from the BOARD rather than from a flag. No prompt has to learn a new
+// argument for the carry to happen — this script is named in ci-fix.md,
+// review-fix.md and pr-sentinel.md, none of which can be taught here — and a
+// project whose graph carries no delivery state simply keeps the behaviour this
+// script had before the carry existed.
+function boardPr(id) {
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(graphDir, 'delivery-state.json'), 'utf8'));
+    const n = Number(((state || {})[id] || {}).pr);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  } catch { return null; }
+}
+
+// Returns null when no carry was ATTEMPTED (the head did not move, or nothing
+// knows this ticket's PR), and the carry's own outcome otherwise. Never throws
+// and never changes this script's exit status: the merge either happened or it
+// did not, and whether a verdict survived it is a separate fact.
+function carryVerdict() {
+  const postMergeHead = git(['rev-parse', 'HEAD'], { tolerate: true }).out;
+  // Nothing moved, so the trailer already names this head: there is nothing to
+  // carry, and re-stamping the same line would be a `gh` call for no reason.
+  if (!preMergeHead || !postMergeHead || preMergeHead === postMergeHead) return null;
+  const pr = boardPr(ticket);
+  if (!pr) return null;
+  const r = spawnSync('node', [
+    path.join(__dirname, 'gate-trailer.cjs'), 'carry', ticket, '--pr', String(pr),
+    ...(t.repo ? ['--repo', t.repo] : []),
+    '--from', preMergeHead, '--to', postMergeHead, '--worktree', worktree, '--json',
+  ], { encoding: 'utf8' });
+  try {
+    const out = JSON.parse(r.stdout);
+    if (out && typeof out.carried === 'boolean') return out;
+  } catch { /* fall through to the stderr reason below */ }
+  return {
+    ticket,
+    pr,
+    carried: false,
+    reason: (r.stderr || '').trim().split('\n').pop()
+      || `gate-trailer.cjs carry exited ${r.status} without a verdict`,
+  };
+}
+
+const carryLine = (c) => (c.carried
+  ? `The architecture verdict CARRIED onto ${c.to.slice(0, 7)}: the head tree and the base tree are `
+    + 'the same objects the judge measured. CI still re-runs — a green is measured against a base.'
+  : `No verdict carried — ${c.reason}. arch-review is owed against the new head.`);
+
 const merge = git(['merge', '--no-edit', baseRef], { tolerate: true });
 if (merge.status === 0) {
   const msg = /Already up to date/i.test(merge.out) ? 'already up to date' : 'merged cleanly';
-  if (asJson) console.log(JSON.stringify({ ticket, base: baseRef, requested_base: base, result: msg, taken_from_base: [], unresolved: [], contested: [] }, null, 2));
-  else console.log(`base-merge: ${ticket} — ${msg} with ${baseRef}`);
+  const carry = carryVerdict();
+  if (asJson) console.log(JSON.stringify({ ticket, base: baseRef, requested_base: base, result: msg, taken_from_base: [], unresolved: [], contested: [], carry }, null, 2));
+  else {
+    console.log(`base-merge: ${ticket} — ${msg} with ${baseRef}`);
+    if (carry) console.log(carryLine(carry));
+  }
   process.exit(0);
 }
 
@@ -168,7 +242,9 @@ for (const p of conflicted) {
 }
 
 if (real.length) {
-  const payload = { ticket, base: baseRef, requested_base: base, result: 'conflicts remain', taken_from_base: taken, unresolved: real, contested };
+  // No carry: nothing was committed, so the head has not moved and there is
+  // nothing to prove about it.
+  const payload = { ticket, base: baseRef, requested_base: base, result: 'conflicts remain', taken_from_base: taken, unresolved: real, contested, carry: null };
   if (asJson) console.log(JSON.stringify(payload, null, 2));
   else {
     console.error(`base-merge: ${ticket} — ${taken.length} path(s) taken from ${baseRef}, ${real.length} REAL conflict(s) left:`);
@@ -189,10 +265,12 @@ if (real.length) {
 }
 
 git(['commit', '--no-edit']);
-const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved mechanically', taken_from_base: taken, unresolved: [], contested: [] };
+const carry = carryVerdict();
+const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved mechanically', taken_from_base: taken, unresolved: [], contested: [], carry };
 if (asJson) console.log(JSON.stringify(payload, null, 2));
 else {
   console.log(`base-merge: ${ticket} — merged ${baseRef}; ${taken.length} undeclared path(s) taken from the base:`);
   for (const p of taken) console.log(`  - ${p}`);
   console.log('Push without --force. The PR diff now narrows to this ticket\'s own work.');
+  if (carry) console.log(carryLine(carry));
 }

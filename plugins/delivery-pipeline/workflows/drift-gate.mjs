@@ -9,7 +9,7 @@ export const meta = {
 //     tickets: [ { id, planPath, model, effort } ],  // both optional; the
 //                                                   // defaults below are the
 //                                                   // ladder's drift-check row
-//                                                    // (default sonnet / low)
+//                                                    // (default sonnet / high)
 //     driftRefPath: "<abs path to references/drift-check.md>",
 //     baseRef: "origin/<git.base_branch>",   // optional but strongly advised —
 //                        // the ref that defines "has landed". Omit it and the

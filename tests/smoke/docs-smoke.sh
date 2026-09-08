@@ -214,41 +214,143 @@ for (const a of actionable.split(',').map((s) => s.trim().replace(/^['"]|['"]$/g
 NODE
 
 # ── every home of the gsd-core pin must agree ────────────────────────────────
-# The pin lives in five files and nothing made them agree: T-25-01 moved three
-# of them to 1.13.0 and left `docker-compose.yml` and `.env.example` on 1.7.0,
+# The BUILD pin lives in five files and nothing made them agree: one ticket
+# moved three of them and left `docker-compose.yml` and `.env.example` behind,
 # so `cp .env.example .env && docker compose build` installed the release
 # ADR-003 D1 moved off — a functional regression, not a doc nit. Compare the
 # homes against EACH OTHER rather than against a literal: a spot-check would
 # need editing on every bump and would rot exactly the same way.
+#
+# No `head -1` anywhere in the extraction. The first cut of this check took the
+# FIRST match per file, so a duplicate `ARG GSD_CORE_VERSION=` in `Dockerfile`
+# (or a trailing duplicate in `.env.example`) left the guard green while the
+# EFFECTIVE value was the LATER one — the guard read a value the build does not
+# use. More than one declaration in one file is now the error, and it names all
+# of them.
 pin_files=()
 pin_values=()
-add_pin() { # add_pin <file> <extracted value>
-  [[ -n "${2:-}" ]] || {
-    echo "docs smoke: cannot read GSD_CORE_VERSION out of $1 — the pin-agreement check would be comparing nothing (two empty extractions are equal)"
+add_pin() { # add_pin <file> <every extracted value, newline-separated>
+  local file="$1" raw="${2:-}" line value="" all="" count=0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    count=$((count + 1))
+    value="$line"
+    all="$all
+    $file = $line"
+  done <<< "$raw"
+  if [[ "$count" == 0 ]]; then
+    echo "docs smoke: cannot read GSD_CORE_VERSION out of $file — the pin-agreement check would be comparing nothing (two empty extractions are equal)"
     exit 1
-  }
-  pin_files+=("$1")
-  pin_values+=("$2")
+  fi
+  if [[ "$count" -gt 1 ]]; then
+    echo "docs smoke: $file declares GSD_CORE_VERSION $count times — which one is effective depends on this file's own resolution rules (not every syntax lets the later line win: a Makefile '?=' keeps the FIRST, a Dockerfile ARG default follows the LAST), so a guard reading any single line cannot know which value the build actually uses:$all"
+    echo "  leave exactly one declaration per file"
+    exit 1
+  fi
+  pin_files+=("$file")
+  pin_values+=("$value")
 }
+# Dockerfile FIRST: it is the reference the sweep below measures everything
+# against, and `add_pin` has just proved it single-valued.
 add_pin Dockerfile \
-  "$(sed -n 's/^ARG GSD_CORE_VERSION=//p' Dockerfile | head -1)"
+  "$(sed -n 's/^ARG GSD_CORE_VERSION=//p' Dockerfile)"
 add_pin Makefile \
-  "$(sed -n 's/^GSD_CORE_VERSION[[:space:]]*?=[[:space:]]*//p' Makefile | head -1)"
+  "$(sed -n 's/^GSD_CORE_VERSION[[:space:]]*?=[[:space:]]*//p' Makefile)"
 add_pin docker-compose.yml \
-  "$(sed -n 's/.*GSD_CORE_VERSION:[[:space:]]*\${GSD_CORE_VERSION:-\([^}]*\)}.*/\1/p' docker-compose.yml | head -1)"
+  "$(sed -n 's/.*GSD_CORE_VERSION:[[:space:]]*\${GSD_CORE_VERSION:-\([^}]*\)}.*/\1/p' docker-compose.yml)"
 add_pin .env.example \
-  "$(sed -n 's/^GSD_CORE_VERSION=//p' .env.example | head -1)"
+  "$(sed -n 's/^GSD_CORE_VERSION=//p' .env.example)"
 add_pin tests/smoke/codex-shipyard-smoke.sh \
-  "$(sed -n 's/^GSD_CORE_VERSION="\${GSD_CORE_VERSION:-\([^}]*\)}".*/\1/p' tests/smoke/codex-shipyard-smoke.sh | head -1)"
+  "$(sed -n 's/^GSD_CORE_VERSION="\${GSD_CORE_VERSION:-\([^}]*\)}".*/\1/p' tests/smoke/codex-shipyard-smoke.sh)"
 
+# Both halves report before either exits. The sweep is the half that names
+# README.md and the spec document, and a `Dockerfile`-only bump fails the
+# agreement check too — exiting there would hide exactly the finding the sweep
+# exists to make.
+pin_failed=0
 if [[ "$(printf '%s\n' "${pin_values[@]}" | sort -u | wc -l | tr -d ' ')" != "1" ]]; then
   echo "docs smoke: GSD_CORE_VERSION disagrees across its homes — a bare 'cp .env.example .env && docker compose build' would install a version the pin was moved off:"
   for i in "${!pin_files[@]}"; do
     echo "    ${pin_files[$i]} = ${pin_values[$i]}"
   done
   echo "  bring every home to one value (or teach this check about a home that is deliberately different)"
-  exit 1
+  pin_failed=1
 fi
+
+# ── …and every OTHER tracked mention of it, swept rather than listed ─────────
+# The five homes above are a LIST, which is the failure the pin itself had: an
+# inventory of the literal found eleven sites across eight files, and a guard
+# that must be edited whenever a ninth appears is one revision behind the tree
+# by construction. So the build pin — already proved single-valued — becomes the
+# reference value and every TRACKED file is swept for a mention of it.
+#
+# `git ls-files`, not the working tree: a sweep over the tree would judge
+# untracked scratch files and worktree debris, which nobody ships.
+PIN="${pin_values[0]}" node - <<'NODE' || pin_failed=1
+const fs = require('fs');
+const { execFileSync } = require('child_process');
+
+const pin = process.env.PIN;
+const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' })
+  .split('\0')
+  .filter(Boolean);
+
+// Two spellings, because the pin is written two ways in this tree: the runnable
+// one (`npx --yes @opengsd/gsd-core@<semver>`) and the spec document's prose
+// heading form (a section title ending `(pin: <semver>)`). The prose form must
+// name GSD on the same line — a bare `pin:` plus a version is some other
+// tool's, and a sweep claiming it disagreed about gsd-core would be lying.
+// Neither example above may be written out as a real version: this file is
+// swept like every other, so a literal in a comment here would fail the guard
+// it belongs to.
+const SPELLINGS = [
+  /gsd-core@(\d+\.\d+\.\d+)/gi,
+  /pin:\s*(\d+\.\d+\.\d+)/gi,
+];
+const disagree = [];
+for (const file of files) {
+  // `.planning/` quotes historical values ON PURPOSE: a plan that says the
+  // pins were moved off some earlier release is correct precisely because it
+  // names the value we no longer install, and rewriting it would falsify the
+  // record.
+  if (file.startsWith('.planning/')) continue;
+  let buf;
+  try {
+    buf = fs.readFileSync(file);
+  } catch (e) {
+    continue; // a submodule, or a tracked path this checkout does not materialise
+  }
+  if (buf.includes(0)) continue; // binary: no prose pin to read
+  buf.toString('utf8').split('\n').forEach((text, i) => {
+    // A version on a line that never names GSD is some other tool's, and a
+    // sweep claiming it disagreed about gsd-core would be lying. The runnable
+    // spelling satisfies this by containing the package name; the prose one
+    // needs it.
+    if (!/gsd/i.test(text)) return;
+    // The spec document's §10.5 is DATED BY ITS OWN TITLE: it records the
+    // reorientation from one GSD minor to the next, so the version in it is a
+    // fact about that reorientation and not a claim about what the image
+    // installs today.
+    if (/^##\s*10\.5\./.test(text)) return;
+    for (const re of SPELLINGS) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text))) {
+        if (m[1] !== pin) disagree.push(`    ${file}:${i + 1} = ${m[1]}\n        ${text.trim()}`);
+      }
+    }
+  });
+}
+
+if (disagree.length) {
+  console.error(`docs smoke: the build pin is ${pin}, but tracked files still name another gsd-core version:`);
+  console.error(disagree.join('\n'));
+  console.error('  bring every mention to the build pin (or, when a mention is deliberately historical, exclude it HERE with its reason)');
+  process.exit(1);
+}
+NODE
+
+[[ "$pin_failed" == 0 ]] || exit 1
 
 # ── the documented model ladder must match the resolver ──────────────────────
 # `docs/gsd_multilevel_delivery_pipeline.md` is what README.md calls the FULL
