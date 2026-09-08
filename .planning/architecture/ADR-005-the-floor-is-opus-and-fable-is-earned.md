@@ -69,6 +69,57 @@ plans written the same day), executors about 45%, guards about 22%.
   draft of this decision made the two-value Codex rule universal. It is not —
   the operator's measurement that `max` and `xhigh` buy nothing for their cost
   is a CODEX fact, recorded in D6. On Claude the ladder stands.)*
+
+  **Amended 2026-09-08 — the executor drops to `high`, and effort is not a cost
+  lever.** Two operator decisions, both with the measurement that settles them.
+
+  *Effort is a QUALITY knob, not a price one.* Reconstructed from this project's
+  own usage ledger (the `sonnet` and `fable-5` lines reproduce to the cent, the
+  `opus` line within 3%): output is **12–19%** of a model line, and cache-read
+  plus cache-write are **82–87%**. Effort moves only output, and thinking was
+  36% of the `opus` line's output — so `xhigh` → `high` changes about **3.4% of
+  a run**. The tier multiplies all of it (≈2.5× between `opus` and `sonnet`), so
+  a tier step is roughly thirteen times the lever an effort step is. Every
+  argument in this ADR that treats an effort choice as a spend decision is
+  therefore wrong, this one included until now. Effort is chosen for the work,
+  and the bill is decided by the tier and by how much each agent reads.
+
+  *So the executor's effort is chosen on its JOB, and its job is not to catch
+  plan defects.* The operator's position, adopted: an executor implements a
+  contract; falsifying that contract belongs upstream. The table becomes `high`
+  for the executor, with `xhigh` kept where a defect is expensive rather than
+  merely possible — `risk: high` or `human_checkpoint`, which is 6 of this
+  project's 49 tickets. The mechanical escalation survives; the flat default
+  drops.
+
+  **What this decision costs, stated so nobody is surprised by it.** On
+  2026-09-08 four of five executors corrected their own plan: one refused the
+  plan's literal predicate (`landed === true` is true in two states where
+  nothing landed), one overruled a reuse candidate this repository's own drift
+  judge had suggested, one mutation-checked its own assertion, and one **built a
+  forty-round six-way race probe and disproved the plan's prescribed atomic step
+  twice** — that step produced two simultaneous lock holders about one run in
+  four. Of those four, two were statically readable and belong upstream. The
+  race probe is not: it required running an experiment against the code with the
+  code in hand, which neither the planner nor the drift judge does. **That case
+  has no upstream home, and lowering the executor's effort accepts it.**
+
+  *Where the burden goes.* `drift-check` is the role whose stated job already is
+  "does this plan still match the codebase", and it runs BEFORE an executor is
+  paid. It is the natural home, and it cannot carry this at `low`. Since effort
+  is nearly free (12% of a `sonnet` line) while its tier is not, the answer is
+  `sonnet` at **`high`** — the cheapest possible place to put plan-defect
+  detection, at roughly one to two percent of the whole bill. Upstream of that,
+  plan quality is a DECOMPOSE-time matter (`/gsd-plan-review-convergence`, and
+  the planner's own tier), not a ladder one.
+
+  **A precondition this ADR cannot supply.** The conveyor cannot answer its own
+  ladder questions: `dispatch` events carry `ts, event, ticket, role, pr, by`
+  and record **neither the model nor the effort** the dispatch ran at — 196
+  events, none of them. So `high` versus `xhigh` on the executor is adopted on
+  the operator's judgement of the ROLE, not on evidence, and no future revision
+  can do better until the journal records what it dispatched. That field is the
+  first thing to add.
 - **D3 — A configured effort override must not silently disable the escalation
   it outranks.** `cfg.effort[role]` is read before the signature rule, so
   shipping the effort table as configuration would have disabled the repair
