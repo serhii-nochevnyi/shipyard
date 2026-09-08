@@ -256,6 +256,41 @@ graph) and UAT gates — the same gates the Claude runtime uses.
 Because Codex has no Workflow tool, `deliver` runs its built-in agent path:
 deterministic bookkeeping in Node scripts, agentic work via Codex `spawn_agent`.
 
+**Which model each Codex agent runs, and how to change it.** On Claude the model
+is chosen per dispatch; on Codex an agent is a static `.toml`, so it is written at
+install time from a palette you declare — `delivery_pipeline.codex_models` (or
+`pipeline.codex_models`) in `.planning/config.json`, an ordered
+`model[:effort][@min_cli]` list:
+
+```json
+{ "delivery_pipeline": { "codex_models": "gpt-5.6-terra:high, gpt-6-astra:high@0.153.1" } }
+```
+
+- The **first** entry is the workhorse floor every agent gets; the **last** is the
+  ceiling. `effort` is the effort to *use* for that model, not the deepest it
+  accepts — a role may ask for less (the mechanical drift judge stays at `low`)
+  and never more. `min_cli` is the Codex CLI version that can first configure the
+  model: below it the generator writes the previous entry for every role and says
+  so, rather than an agent your CLI may ignore.
+- The **integrator** takes the ceiling on every call — one dispatch per phase, the
+  largest input in the system. Everything else reaches it through an escalation
+  agent: `$shipyard-ci-fix-deep`, `$shipyard-review-fix-deep`,
+  `$shipyard-pr-sentinel-deep` and `$shipyard-arch-review-deep` are the same
+  contracts at the ceiling, dispatched when a failure signature comes back after
+  a `rethink` or when the journal already holds an architecture `violation` for
+  the ticket. That is **eleven** agent files, not seven; a one-entry palette
+  produces seven and no dead variants.
+- An **empty** palette (`"codex_models": []`) writes no `model` key at all and
+  leaves every agent on your CLI default. A GSD remap
+  (`model_policy.runtime_tiers.codex.<tier>`,
+  `model_profile_overrides.codex.<tier>`) still wins over the palette, resolved
+  through GSD's own resolver — set it where the installer runs, since GSD reads
+  the config of the current directory and a project config outranks
+  `~/.gsd/defaults.json`.
+- Effort on Codex is deliberately two-valued (`low` for the mechanical role,
+  `high` for everything else): the deeper levels were measured to cost more
+  without a better result, so depth there comes from the model instead.
+
 <!-- keep in sync with commands/decompose.md -->
 **One config detail matters on Codex.** The delivery-rules contract reaches GSD's
 planner and executor through `agent_skills` in `.planning/config.json`, and the

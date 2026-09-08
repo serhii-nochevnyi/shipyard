@@ -53,6 +53,19 @@ GSD_BEFORE="$(gsd_owned_state)"
 # than the one it installed. Exported once; every install call below inherits it.
 export SHIPYARD_GSD_AUTO_INSTALL=0
 
+# The palette's ceiling entry declares the Codex CLI version that can first
+# CONFIGURE it, and below that version the generator writes the floor entry for
+# every role — correct behaviour, but it would make every assertion below depend
+# on whichever `codex` happens to be on this host (or on none being there at
+# all). Pin the probe to exactly the version the palette asks for, read FROM the
+# palette so this file carries no version literal of its own. The refusal path is
+# unit-tested (tests/unit/gen-codex-shipyard.test.cjs), including the real
+# `codex --version` probe against a stub on PATH.
+PALETTE_FLOOR_MODEL="$(node -e 'process.stdout.write(require("./plugins/delivery-pipeline/scripts/pipeline-config.cjs").DEFAULT_CODEX_MODELS[0].model)')"
+PALETTE_CEILING="$(node -e 'const p=require("./plugins/delivery-pipeline/scripts/pipeline-config.cjs").DEFAULT_CODEX_MODELS; const e=p[p.length-1]; process.stdout.write([e.model, e.effort||"", e.min_cli||"0.0.0"].join(" "))')"
+read -r PALETTE_CEILING_MODEL PALETTE_CEILING_EFFORT PALETTE_CEILING_MIN_CLI <<<"$PALETTE_CEILING"
+export SHIPYARD_CODEX_CLI_VERSION="$PALETTE_CEILING_MIN_CLI"
+
 # ── install shipyard (full, phase 2) ─────────────────────────────────────────
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 
@@ -132,11 +145,60 @@ grep -q 'pipeline-config.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "del
 grep -q 'shipyard-auto-route:begin' "$CODEX_HOME/AGENTS.md" \
   || { echo "auto-route block missing from \$CODEX_HOME/AGENTS.md"; exit 1; }
 
-# agents present + registered; gsd agents intact
-for a in shipyard-arch-review shipyard-ci-fix shipyard-drift-check shipyard-integrator shipyard-inv-research shipyard-pr-sentinel shipyard-review-fix; do
+# agents present + registered; gsd agents intact. Eleven, not seven: on this
+# runtime an agent is a FILE, so the four roles that escalate need a second one
+# at the palette's ceiling — a signal cannot reach an agent that does not exist.
+for a in shipyard-arch-review shipyard-ci-fix shipyard-drift-check shipyard-integrator shipyard-inv-research shipyard-pr-sentinel shipyard-review-fix \
+         shipyard-ci-fix-deep shipyard-review-fix-deep shipyard-pr-sentinel-deep shipyard-arch-review-deep; do
   [[ -f "$CODEX_HOME/agents/$a.toml" ]] || { echo "missing agent $a.toml"; exit 1; }
   grep -q "^\[agents\.$a\]" "$CODEX_HOME/config.toml" || { echo "agent $a not registered in config.toml"; exit 1; }
 done
+# The integrator is already at the ceiling on every call — one per phase, largest
+# input in the system — so it gets no escalation variant to be a dead file.
+[[ ! -e "$CODEX_HOME/agents/shipyard-integrator-deep.toml" ]] \
+  || { echo "shipyard-integrator-deep must not exist"; exit 1; }
+
+# Every agent carries the model the palette implies and the effort its role asks
+# for. This is the property the whole ticket exists for: before it, all seven
+# agents carried whatever GSD's catalog said for one capped tier, so the judge and
+# the drift check were the same model and the operator's palette was ignored.
+agent_field() { grep -m1 "^$2 = " "$CODEX_HOME/agents/$1.toml" | sed 's/^[^=]*= "//; s/"$//'; }
+check_agent() {
+  local name="$1" want_model="$2" want_effort="$3" got_model got_effort
+  got_model="$(agent_field "$name" model)"
+  got_effort="$(agent_field "$name" model_reasoning_effort)"
+  [[ "$got_model" == "$want_model" ]] \
+    || { echo "$name: model is '$got_model', expected '$want_model'"; exit 1; }
+  [[ "$got_effort" == "$want_effort" ]] \
+    || { echo "$name: effort is '$got_effort', expected '$want_effort'"; exit 1; }
+}
+check_agent shipyard-drift-check "$PALETTE_FLOOR_MODEL" low
+for a in shipyard-inv-research shipyard-ci-fix shipyard-review-fix shipyard-pr-sentinel shipyard-arch-review; do
+  check_agent "$a" "$PALETTE_FLOOR_MODEL" high
+done
+check_agent shipyard-integrator "$PALETTE_CEILING_MODEL" "$PALETTE_CEILING_EFFORT"
+for a in shipyard-ci-fix-deep shipyard-review-fix-deep shipyard-pr-sentinel-deep shipyard-arch-review-deep; do
+  check_agent "$a" "$PALETTE_CEILING_MODEL" "$PALETTE_CEILING_EFFORT"
+done
+
+# The efforts retired on this runtime must not reappear: they cost more without a
+# better result (measured), and `ultra` is not in the vocabulary at all.
+if grep -hE '^model_reasoning_effort = "(xhigh|max|ultra)"' "$CODEX_HOME/agents"/shipyard-*.toml; then
+  echo "a generated agent asks for an effort this runtime retired (above)"; exit 1
+fi
+
+# The variants are only reachable if the prose names them. Both artifact kinds
+# carry it: the deliver SKILL the operator reads, and the guard's own agent file.
+for role in ci-fix review-fix pr-sentinel arch-review; do
+  grep -q "shipyard-$role-deep" "$SKILLS/shipyard-deliver/SKILL.md" \
+    || { echo "the deliver skill never names shipyard-$role-deep"; exit 1; }
+  grep -q "shipyard-$role-deep" "$CODEX_HOME/agents/shipyard-pr-sentinel.toml" \
+    || { echo "the pr-sentinel agent never names shipyard-$role-deep"; exit 1; }
+done
+grep -q 'repeat_exhausted' "$SKILLS/shipyard-deliver/SKILL.md" \
+  || { echo "the deliver skill states no trigger for the repair escalation"; exit 1; }
+grep -q 'repeat_exhausted' "$CODEX_HOME/agents/shipyard-pr-sentinel.toml" \
+  || { echo "the pr-sentinel agent states no trigger for the repair escalation"; exit 1; }
 [[ "$(gsd_owned_state)" == "$GSD_BEFORE" ]] \
   || { echo "gsd-core-owned state drifted after install: $GSD_BEFORE -> $(gsd_owned_state)"; exit 1; }
 
@@ -150,7 +212,12 @@ EXPECTED_AGENTS="$(node -e '
   if (!table) { console.error("cannot find the ROLES table"); process.exit(1); }
   const roles = [...table[1].matchAll(/^\s*.([a-z-]+).:\s*\{[^}]*phase:\s*(\d+)/gm)];
   if (!roles.length) { console.error("ROLES table parsed to nothing"); process.exit(1); }
-  console.log(roles.filter(([, , ph]) => Number(ph) <= 2).length);
+  const eligible = roles.filter(([, , ph]) => Number(ph) <= 2);
+  // …plus the escalation variant each escalating role gets. Derived from the
+  // generator, for the same reason the role count is: a literal here rots the
+  // moment a role joins either set.
+  const deep = require("./scripts/gen-codex-shipyard.cjs").DEEP_ROLES;
+  console.log(eligible.length + eligible.filter(([, role]) => deep.has(role)).length);
 ')"
 
 # Our fragment must sit ABOVE gsd-core's marker. Its installer removes
@@ -266,6 +333,40 @@ node scripts/gen-codex-shipyard.cjs --plugin plugins/delivery-pipeline \
 [[ ! -e "$WORK/p1/skills/shipyard-deliver" ]] || { echo "phase 1 leaked deliver skill"; exit 1; }
 [[ ! -e "$WORK/p1/agents/shipyard-arch-review.toml" ]] || { echo "phase 1 leaked a phase-2 agent"; exit 1; }
 [[ -e "$WORK/p1/agents/shipyard-inv-research.toml" ]] || { echo "phase 1 missing inv-research agent"; exit 1; }
+# `find`, not `ls`: with `set -o pipefail` a glob that matches nothing makes the
+# whole substitution fail and takes the script down before it can assert.
+P1_DEEP="$(find "$WORK/p1/agents" -name '*-deep.toml' | wc -l | tr -d ' ')"
+[[ "$P1_DEEP" -eq 0 ]] || { echo "phase 1 emitted an escalation variant for a role it does not ship"; exit 1; }
+
+# ── a GSD remap still wins over the palette ──────────────────────────────────
+# The claim the docs made and the generator never honoured: it read
+# `runtimeTierDefaults` straight out of gsd-core's catalog, where no user key can
+# reach, so a custom remap changed nothing. It is now resolved through GSD's OWN
+# resolver — which is exactly why this belongs in the smoke and not only in the
+# unit test: the unit test stubs that resolver, so only this asserts against the
+# gsd-core actually installed. Note the cwd rule while you are here: GSD reads
+# the config of the directory it is RUN in, so a remap must live where the
+# installer runs, and a project config outranks ~/.gsd/defaults.json entirely.
+mkdir -p "$WORK/remapproj/.planning"
+cat > "$WORK/remapproj/.planning/config.json" <<'EOF'
+{
+  "runtime": "codex",
+  "model_policy": { "runtime_tiers": { "codex": { "sonnet": "x-model" } } }
+}
+EOF
+( cd "$WORK/remapproj" && node "$ROOT/scripts/gen-codex-shipyard.cjs" \
+    --plugin "$ROOT/plugins/delivery-pipeline" --out "$WORK/remap" \
+    --codex-home "$CODEX_HOME" --phase 2 >/dev/null )
+REMAP_AGENTS="$(find "$WORK/remap/agents" -name 'shipyard-*.toml' | wc -l | tr -d ' ')"
+[[ "$REMAP_AGENTS" -gt 0 ]] || { echo "the remap run generated no agents at all"; exit 1; }
+for f in "$WORK/remap/agents"/shipyard-*.toml; do
+  grep -q '^model = "x-model"$' "$f" \
+    || { echo "$(basename "$f") ignored the GSD remap: $(grep -m1 '^model = ' "$f" || echo 'no model key')"; exit 1; }
+done
+# One model for the whole tier leaves the escalation variant nothing to be, and a
+# duplicate file that reads as an escalation is worse than no file at all.
+REMAP_DEEP="$(find "$WORK/remap/agents" -name '*-deep.toml' | wc -l | tr -d ' ')"
+[[ "$REMAP_DEEP" -eq 0 ]] || { echo "a remapped tier still produced $REMAP_DEEP duplicate -deep agents"; exit 1; }
 
 # The bundle carries no editor leftovers. Three `*.mjs.bak` files — stale copies
 # of the Workflow prompt builders — reached both installed runtimes before the

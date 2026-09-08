@@ -14,7 +14,7 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 const mod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs');
 const {
   loadConfig, resolveModel, resolveEffort, strategyFor,
-  TIERS, EFFORTS, DEFAULTS, SIGNATURE_STATES,
+  TIERS, EFFORTS, DEFAULTS, SIGNATURE_STATES, DEFAULT_CODEX_MODELS,
 } = require(mod);
 const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
@@ -340,17 +340,85 @@ test('a per-role effort override wins', () => {
   assert.strictEqual(resolveEffort('executor', 'sonnet', config), 'max');
 });
 
-test('minimal clamps to low (not in Workflow\'s enum) and max clamps on codex', () => {
+test('minimal clamps to low (not in Workflow\'s enum); max is no longer clamped on codex', () => {
   const minimal = withConfig({ effort: { executor: 'minimal' } });
   assert.strictEqual(resolveEffort('executor', 'sonnet', minimal.config), 'low');
+  const minimalOnCodex = withRaw({ runtime: 'codex', pipeline: { effort: { executor: 'minimal' } } });
+  assert.strictEqual(resolveEffort('executor', 'sonnet', minimalOnCodex.config), 'low');
+  // ADR-005 D7: both halves of the old clamp's justification were false. GSD's
+  // `codexModelEffort._baseline` advertises `max` for every model, and
+  // `advertisedCodexEffort` hands that baseline back for a model it does not
+  // name — which the palette's ceiling is. No built-in path asks for `max`
+  // there, so the clamp only ever rewrote an operator's explicit choice.
   const onCodex = withRaw({ runtime: 'codex', pipeline: { effort: { executor: 'max' } } });
-  assert.strictEqual(resolveEffort('executor', 'sonnet', onCodex.config), 'xhigh');
+  assert.strictEqual(resolveEffort('executor', 'sonnet', onCodex.config), 'max');
 });
 
 test('an invalid effort value is rejected with a warning, not honoured', () => {
   const { config, warnings } = withConfig({ effort: { executor: 'ludicrous' } });
   assert.strictEqual(config.effort.executor, undefined);
   assert.ok(warnings.some((w) => /effort/.test(w)));
+});
+
+suite('codex_models — the palette a static agent file is written from');
+
+test('no config → the shipped palette, floor first and ceiling last', () => {
+  const { config, warnings } = withConfig(undefined);
+  assert.deepStrictEqual(config.codex_models, DEFAULT_CODEX_MODELS);
+  assert.deepStrictEqual(warnings, []);
+  // The order IS the policy: first entry is the workhorse every role gets, last
+  // is the ceiling only the integrator and the `-deep` agents reach.
+  assert.ok(config.codex_models.length >= 2, 'the shipped palette has a ceiling to escalate to');
+});
+
+test('the palette a caller mutates does not become the next caller\'s default', () => {
+  const first = withConfig(undefined).config;
+  first.codex_models.length = 0;
+  assert.deepStrictEqual(withConfig(undefined).config.codex_models, DEFAULT_CODEX_MODELS);
+});
+
+test('the string form (the one GSD can set) parses to the same list', () => {
+  const { config, warnings } = withConfig({ codex_models: 'a:high, b:low@1.2.3' });
+  assert.deepStrictEqual(config.codex_models, [
+    { model: 'a', effort: 'high' },
+    { model: 'b', effort: 'low', min_cli: '1.2.3' },
+  ]);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('an entry with no usable model id is skipped, never half-honoured', () => {
+  const { config, warnings } = withConfig({ codex_models: [{ effort: 'high' }, { model: 42 }, { model: ' keep ' }] });
+  assert.deepStrictEqual(config.codex_models, [{ model: 'keep' }]);
+  assert.strictEqual(warnings.filter((w) => /codex_models/.test(w)).length, 2, warnings.join('; '));
+});
+
+test('a bad effort or min_cli is dropped with a warning, the model survives', () => {
+  const { config, warnings } = withConfig({ codex_models: [{ model: 'm', effort: 'ultra', min_cli: 'soon' }] });
+  assert.deepStrictEqual(config.codex_models, [{ model: 'm' }]);
+  assert.ok(warnings.some((w) => /ultra/.test(w)), warnings.join('; '));
+  assert.ok(warnings.some((w) => /min_cli/.test(w)), warnings.join('; '));
+});
+
+test('`ultra` is not in the effort vocabulary — no path selects a model that advertises it', () => {
+  assert.ok(!EFFORTS.includes('ultra'));
+});
+
+test('an explicitly EMPTY palette is honoured: "write no model" is a choice', () => {
+  const { config, warnings } = withConfig({ codex_models: [] });
+  assert.deepStrictEqual(config.codex_models, []);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('a palette that is not a list at all keeps the shipped one, with a warning', () => {
+  const { config, warnings } = withConfig({ codex_models: 7 });
+  assert.deepStrictEqual(config.codex_models, DEFAULT_CODEX_MODELS);
+  assert.ok(warnings.some((w) => /codex_models/.test(w)), warnings.join('; '));
+});
+
+test('an unknown entry field is dropped rather than carried into the agent file', () => {
+  const { config, warnings } = withConfig({ codex_models: [{ model: 'm', reasoning: 'deep' }] });
+  assert.deepStrictEqual(config.codex_models, [{ model: 'm' }]);
+  assert.ok(warnings.some((w) => /reasoning/.test(w)), warnings.join('; '));
 });
 
 suite('repos — sibling checkouts a multi-repo phase is driven in');
@@ -492,13 +560,14 @@ test('an UNSET runtime degrades to opus rather than guessing the paid tier', () 
   }
 });
 
-test('on Codex NO role takes the premium model — depth moves into effort', () => {
+test('on Codex NO role resolves to the premium TIER — the palette decides the model', () => {
   // GSD gives its top Codex model to exactly two of 34 agents, both planners;
   // its reviewer, executor, fixer and debugger are all on the workhorse. The
   // conveyor has no planner among its ROLES (decomposition is the main loop's),
   // so a straight tier-for-tier mapping was not the same policy on another
-  // runtime — it was a more expensive one. Depth is expressed the way GSD
-  // expresses it: same model, higher effort.
+  // runtime — it was a more expensive one. What the cap decides is the TIER the
+  // generator renders a palette entry for; which concrete model that is comes
+  // from `pipeline.codex_models`, and the escalation from its ceiling.
   const { config } = withConfig({});
   const codex = asRuntime(config, 'codex');
   for (const role of ['arch-review', 'integrator', 'executor', 'review-fix']) {
@@ -506,26 +575,37 @@ test('on Codex NO role takes the premium model — depth moves into effort', () 
     assert.ok(!['opus', 'fable'].includes(m), `${role} must not take the premium tier, got ${m}`);
   }
   for (const role of ['arch-review', 'integrator']) {
-    assert.strictEqual(resolveEffort(role, resolveModel(role, {}, codex), codex, {}), 'xhigh',
-      `${role}: judgment stays heavy even when the model is capped`);
+    assert.strictEqual(resolveEffort(role, resolveModel(role, {}, codex), codex, {}), 'high',
+      `${role}: the working effort, which on this runtime is the deepest one measured to pay`);
   }
 });
 
-test('a capped runtime still distinguishes a repeating repair from a baseline one', () => {
-  // Both arrive as the same alias once capped, so the escalation would vanish
-  // unless effort carries it — which is exactly gsd-debugger vs gsd-executor.
-  // The TRIGGER is what ADR-001 D1 changed: it used to be `attempt >= 2`, it is
-  // now the signature history saying the same failure came back unchanged.
+test('on Codex the effort axis is two values wide — the escalation is the MODEL', () => {
+  // ADR-005 D6: measured, not assumed. `xhigh` and `max` cost more there without
+  // a better result, and the ceiling model's best results are at `high`. So the
+  // ladder that expresses depth through effort does not apply on this runtime,
+  // and neither risk nor a repeating signature deepens anything: what escalates
+  // is the model, through a second agent FILE per repair role (D8). The strategy
+  // half of the repeat rule survives untouched — that is the part that changes
+  // the hypothesis rather than the spend.
   const { config } = withConfig({});
   const codex = asRuntime(config, 'codex');
   const at = (signatureState) => resolveEffort(
     'ci-fix', resolveModel('ci-fix', { signatureState }, codex), codex, { signatureState });
   assert.strictEqual(at('first'), 'high', 'first strike');
-  assert.strictEqual(at('repeat'), 'xhigh', 'the same failure, back again');
-  // risk still raises the ladder above its own baseline, and the cap must not eat
-  // that either — the same reason the `escalated` comparison exists at all.
+  assert.strictEqual(at('repeat'), 'high', 'no deeper rung to escalate into');
+  assert.strictEqual(strategyFor('repeat'), 'rethink', 'the strategy still changes');
   const risky = { risk: 'high' };
-  assert.strictEqual(resolveEffort('ci-fix', resolveModel('ci-fix', risky, codex), codex, risky), 'xhigh');
+  assert.strictEqual(resolveEffort('ci-fix', resolveModel('ci-fix', risky, codex), codex, risky), 'high');
+  // The one distinction that remains on the axis: the mechanical role stays cheap.
+  assert.strictEqual(resolveEffort('drift-check', resolveModel('drift-check', {}, codex), codex, {}), 'low');
+});
+
+test('an explicit effort override still outranks the flat axis', () => {
+  // Otherwise the rule that exists to stop us paying for depth we did not
+  // measure would also silence a person who measured something else.
+  const onCodex = withRaw({ runtime: 'codex', pipeline: { effort: { 'arch-review': 'xhigh' } } });
+  assert.strictEqual(resolveEffort('arch-review', 'sonnet', onCodex.config), 'xhigh');
 });
 
 test('an executor whose baseline was already top tier is NOT treated as escalated', () => {
