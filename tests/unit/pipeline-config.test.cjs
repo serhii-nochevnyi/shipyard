@@ -1075,7 +1075,7 @@ const pair = (j) => { const { route, ...rest } = j; return rest; };
 
 const CONSENTED = { runtime: 'claude', pipeline: { fable: 'auto' } };
 
-test('without --signature-state the --json shape is unchanged from today', () => {
+test('without --signature-state the model/effort pair is unchanged, and route is added beside it', () => {
   const r = runCli(['model', 'ci-fix', '--json']);
   assert.strictEqual(r.status, 0, r.err);
   assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model', 'route']);
@@ -1403,6 +1403,19 @@ test('every route the resolver can emit parses under its own grammar', () => {
     assert.strictEqual(parsed.effort.effort, resolveEffort(role, parsed.tier.model, cfg, signals),
       `${route}: effort value`);
   }
+});
+
+test('a whitespace-only runtime slugs to unset, not to a bare hyphen', () => {
+  // A whitespace/punctuation-only `gsd.runtime` collapses under the slug regex
+  // to a single "-", which is non-empty and used to slip past the `|| 'unset'`
+  // fallback — leaking into a route token as `cap:-`, indistinguishable from a
+  // real value on a review of the journal.
+  const route = routeOf('executor', {}, withCfg({ gsd: { runtime: '   ' } }));
+  assert.ok(!route.includes(':-('), `route must not carry a bare-hyphen token: ${route}`);
+  assert.strictEqual(
+    routeOf('executor', {}, withCfg({ gsd: { runtime: 'codex' } })).includes('cap:codex'),
+    true
+  );
 });
 
 test('the rule names the branch that actually fired, on both halves', () => {

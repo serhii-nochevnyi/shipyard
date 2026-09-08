@@ -798,8 +798,17 @@ function capForRuntime(tier, cfg) {
 // emit a route with a space in it, which `parseRoute` — the grammar
 // dispatch-record validates against — would reject, and a legitimate dispatch
 // would be refused for a spelling in someone's config.
-const runtimeToken = (cfg) =>
-  String((cfg.gsd && cfg.gsd.runtime) || 'unset').toLowerCase().replace(/[^a-z0-9-]+/g, '-') || 'unset';
+const runtimeToken = (cfg) => {
+  // A whitespace-only (or otherwise all-punctuation) runtime slugs to a bare
+  // "-", which is non-empty and so slips past the `|| 'unset'` fallback below —
+  // it would leak into a route token as e.g. `cap:-`. Trim the leading/trailing
+  // hyphens the replace can produce before testing for emptiness.
+  const slug = String((cfg.gsd && cfg.gsd.runtime) || 'unset')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'unset';
+};
 
 // ── the ceiling: three mechanical routes to `fable` (ADR-005 D4) ─────────────
 //
@@ -896,10 +905,6 @@ function tierRoute(role, signals = {}, cfg = DEFAULTS) {
   return SONNET_ROLES.has(role)
     ? { value: 'sonnet', rule: 'floor:exempt' }
     : { value: 'opus', rule: 'floor' };
-}
-
-function ladderTier(role, signals = {}, cfg = DEFAULTS) {
-  return tierRoute(role, signals, cfg).value;
 }
 
 // The tier the Agent tool is handed, and which rule produced it — the cap is
