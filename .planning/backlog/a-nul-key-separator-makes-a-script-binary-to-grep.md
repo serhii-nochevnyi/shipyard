@@ -52,9 +52,18 @@ real property, and the replacement must be shown to keep it. A unit assertion
 that no script contains byte 0x00 is the cheap regression guard, and it belongs
 with the other file-level contracts in `tests/unit/files-contract.test.cjs`.
 
-## Found in the same read, unrelated and equally small
+## A retracted second finding, kept as the lesson
 
-The editor's own diagnostics report `state-sync.cjs:143` — `'ghTry' is declared
-but its value is never read`. Dead binding on `main`, no behavioural effect,
-and nothing in `make test-fast` lints for it. Worth removing by whoever next
-opens the file for a declared reason.
+This note first recorded a second defect: the editor's diagnostics reported
+`state-sync.cjs:143` — `'ghTry' is declared but its value is never read` — and
+it was written down here as a dead binding on `main`. **That was wrong.**
+`main`'s `state-sync.cjs` contains no `ghTry` at all; the symbol exists only in
+T-26-03's worktree, where its executor was mid-change and had declared the
+helper a moment before adding its call sites (it now has two, and the file is
+green).
+
+The lesson is about the SOURCE, not the symbol: an editor diagnostic carries no
+statement about WHICH checkout it came from, and this repository routinely has
+twenty worktrees of the same file open at once. A finding taken from a
+diagnostic must be confirmed against a named ref — `git show main:<path>` — or
+it records a half-finished edit as a defect of the shipped tree.
