@@ -95,3 +95,34 @@ Worth its own ticket, and it belongs with T-27-06's family — the front saying
 what it knows about itself. Shape: when a child's failing signature equals its
 primary parent's, the child is `waiting: parent`, not `fix`, with a why that
 names the parent's PR.
+
+## `--parked` on `front.cjs` renders; only `state-sync.cjs` makes it stick
+
+My own error, 2026-09-08, and the stop gate is what caught it — which is the
+best possible evidence that the gate earns its place.
+
+Both commands accept `--parked`:
+
+```
+front.cjs      [--json] [--parked <T,T>]     # renders a board
+state-sync.cjs [--parked <T,T>]              # rebuilds AND WRITES delivery-front.json
+```
+
+I parked T-27-04 with the first one. The terminal showed exactly what I wanted —
+`front: 0 actionable now` — so the park looked done. It was not: `front.cjs`
+computes and prints, and the DURABLE board is written by `state-sync`. The stop
+gate reads only `delivery-front.json`, so it still saw `fix: T-27-04` and
+refused the stop, correctly, with the run's own rule quoted back at me:
+"a parked item leaves the front; an ignored one does not."
+
+The flag is identical, the printed answer is identical, and one of the two is a
+no-op for everything that ENFORCES. `deliver.md` does say the front is
+"re-runnable on its own" and that state-sync writes the file — but it never says
+that parking through the renderer persists nothing, and the two invocations are
+listed one line apart in the script list.
+
+Cheap fix, and it is the same shape as this phase's other findings: have
+`front.cjs` say what it did. When `--parked` is passed to the renderer, print
+one line — `parked: T-27-04 (this render only — `state-sync --parked` writes the
+board the stop gate reads)`. No behaviour change, and the trap stops being
+invisible.
