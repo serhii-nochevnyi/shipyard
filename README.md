@@ -153,12 +153,15 @@ threads *and* the bots' PR-level comments), records the arch-review verdict as a
 `gate_status:` trailer, and then **lands the ticket PR in the epic branch** —
 `scripts/sentinel.cjs merge`, which re-verifies the whole gate against live
 GitHub and refuses on anything unproven. It retargets cascade children and
-reports back. Knobs: `pipeline.sentinel` (`auto` | `off`), `pipeline.auto_merge`
-(`epic` | `off`). **The epic → `main` PR is never auto-merged** — the phase lands
-by a human's hand, which is what the epic-as-quarantine is for. Without a
-background-agent runtime (Codex) the same duty runs as a mandatory pass at the
-top of every round. Both writers take a lock: state files are replaced
-atomically, and `git worktree add` is serialized against the guard's pushes.
+reports back. That `gate_status:` line lives in the PR BODY and is the conveyor's
+own — GSD 1.13's TDD audit reads a `gate-status:` COMMIT trailer, a different
+mechanism one hyphen away, and neither reads the other. Knobs:
+`pipeline.sentinel` (`auto` | `off`), `pipeline.auto_merge` (`epic` | `off`).
+**The epic → `main` PR is never auto-merged** — the phase lands by a human's hand,
+which is what the epic-as-quarantine is for. Without a background-agent runtime
+(Codex) the same duty runs as a mandatory pass at the top of every round. Both
+writers take a lock: state files are replaced atomically, and `git worktree add`
+is serialized against the guard's pushes.
 
 **Worktrees are garbage-collected, not just reaped.** The reaper walks the current
 ticket graph, so it structurally cannot see a worktree whose ticket was
@@ -192,16 +195,29 @@ node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve      # effect
 ```
 
 It only ever emits the tier aliases `opus`, `sonnet`, `haiku`, `fable` — the values
-the Agent tool accepts — and with `--json` it also returns the reasoning `effort`,
-which follows the resolved tier (GSD's ladder: light→low, standard→high,
-heavy→xhigh). So escalating a repair to the top tier makes it think harder too.
+the Agent tool validates `model` against, and the only ones it accepts: a full model
+ID or a suffixed alias like `opus[1m]` is rejected on input. (Full model ids and
+`inherit` live on a different surface — a subagent's own `model:` frontmatter in
+`.claude/agents/*.md` — not on the tool parameter the conveyor dispatches through,
+so a model-config page listing them is not permission to emit one.) With `--json` it
+also returns the reasoning `effort`, which follows the resolved tier (GSD's ladder:
+light→low, standard→high, heavy→xhigh). So escalating a repair to the top tier makes
+it think harder too.
 
-`fable` is Claude Fable 5: Opus-tier with a **1M-token context window** and
-adaptive thinking. It is the only alias that expresses "top tier with 1M context".
-It is a paid model, so it is never a default — opt in per role:
+`fable` is Claude Fable 5.1 (Claude Code 2.1.255 on; `opus` is Opus 5 from 2.1.219
+on): Opus-tier with a **1M-token context window** and adaptive thinking. It is the
+only alias that expresses "top tier with 1M context", which is exactly why it is the
+**default for the two judgment roles** — `arch-review` reads a whole diff against
+every ADR at once, and the integrator reconciles across repositories — wherever
+GSD's `runtime` says `claude`. Everywhere else that tier does not exist, so the
+ladder degrades to `opus` and the runtime cap takes it from there. It is a paid
+model: it may bill usage credits and asks for consent ONCE, and in a background or
+Remote Control session that prompt waits out `dialogExpiry` (5 min) and then ends
+the turn without sending — so an org that has never answered it opts **out** per
+role until someone has, interactively:
 
 ```json
-{ "pipeline": { "models": { "integrator": "fable", "arch-review": "fable" } } }
+{ "pipeline": { "models": { "integrator": "opus", "arch-review": "opus" } } }
 ```
 
 Configuration lives in `.planning/config.json` under two namespaces:
@@ -234,7 +250,7 @@ agent path, and `agent_skills` needs the bare skill form (both spelled out below
 Prerequisite — gsd-core installed for Codex:
 
 ```bash
-npx --yes @opengsd/gsd-core@1.7.0 --codex --global
+npx --yes @opengsd/gsd-core@1.13.0 --codex --global
 ```
 
 Then install shipyard from a checkout (the generator and the deterministic scripts
@@ -407,7 +423,7 @@ Per path — only the container path needs Docker at all:
 - **Host Claude Code**: the `claude` CLI and gsd-core installed for it.
 - **Host Codex CLI**: the `codex` CLI with its own access (ChatGPT plan or API
   key) and gsd-core installed for Codex
-  (`npx --yes @opengsd/gsd-core@1.7.0 --codex --global`).
+  (`npx --yes @opengsd/gsd-core@1.13.0 --codex --global`).
 - **Any path that opens PRs**: `gh` authenticated, plus a valid `GITHUB_TOKEN` or
   `GH_TOKEN` for git/gh access inside the container (optional there).
 - a local SSH agent if you need private Git access at runtime (recommended over
@@ -474,6 +490,8 @@ The overlay image installs the following during build:
 The base image bakes in:
 
 - Claude Code CLI (`@anthropic-ai/claude-code`, pinned version) installed via npm.
+  The pin is what the tier aliases MEAN inside the image: from Claude Code 2.1.263
+  on, `opus` is Opus 5 (2.1.219 on) and `fable` is Claude Fable 5.1 (2.1.255 on).
 - Git identity: whatever you passed as `GIT_USER_NAME` / `GIT_USER_EMAIL` (required build args, no default)
 - Git defaults: `init.defaultBranch=main`, `push.autoSetupRemote=true`, `color.ui=auto`,
   `fetch.prune=true`, `pull.rebase=false`, `pull.ff=only`

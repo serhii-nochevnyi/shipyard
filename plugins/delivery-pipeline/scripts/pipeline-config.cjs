@@ -48,11 +48,19 @@
 const fs = require('fs');
 const path = require('path');
 
-// The Agent tool validates `model` against exactly these aliases.
-// `fable` is Claude Fable 5: Opus-tier, 1M-token context, adaptive thinking at
-// xhigh effort. It is the only alias that expresses "top tier WITH a 1M window"
-// — which is what this repo's long-broken `opus[1m]` was reaching for. It is a
-// paid model, so it is opt-in via `models`, never a default.
+// The Agent tool validates `model` against exactly these aliases: a full model id
+// (`claude-opus-…`) or a suffixed alias (`opus[1m]`) is rejected on input. Full ids
+// and `inherit` do exist, but on a DIFFERENT surface — a subagent's own `model:`
+// frontmatter in `.claude/agents/*.md` — which is not the parameter a dispatch goes
+// through, so a docs page listing them is not permission to emit one here.
+// `opus` is Opus 5 from Claude Code 2.1.219 on. `fable` is Claude Fable 5.1 from
+// 2.1.255 on: Opus-tier, 1M-token context, adaptive thinking at xhigh effort, and
+// the only alias that expresses "top tier WITH a 1M window" — which is what this
+// repo's long-broken `opus[1m]` was reaching for. It is the DEFAULT for the two
+// judgment roles (see `ladderTier`), not an opt-in. It is a paid model that may
+// bill usage credits and asks for consent once, so the hatch is opt-OUT: set
+// `models.arch-review` / `models.integrator` to `opus` until a human has answered
+// that prompt interactively.
 const TIERS = ['opus', 'sonnet', 'haiku', 'fable'];
 const TOP_TIERS = new Set(['opus', 'fable']);
 

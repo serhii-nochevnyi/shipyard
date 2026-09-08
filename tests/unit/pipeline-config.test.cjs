@@ -580,6 +580,29 @@ test('on Codex NO role resolves to the premium TIER — the palette decides the 
   }
 });
 
+test('ADR-003 D3 — the 1M tier is the judges DEFAULT, and Codex gets the capped tier', () => {
+  // The decision as a test. It had lived as prose in five files, three of which
+  // said the opposite ("paid, so it is opt-in only" / "never a default") while
+  // `ladderTier` had been handing the 1M tier to both judgment roles since it was
+  // written. The user settled it on 2026-09-07: the CODE is the decision and the
+  // prose is what changes — so the fact is pinned here, and the next drift is a
+  // failing test rather than a sentence nobody measured. Nothing is configured on
+  // purpose: an override would prove only that overrides work.
+  const { config, warnings } = withConfig({});
+  assert.deepStrictEqual(warnings, []);
+  assert.strictEqual(config.models['arch-review'], undefined, 'no override — the LADDER decides');
+  assert.strictEqual(config.models.integrator, undefined, 'no override — the LADDER decides');
+  for (const role of ['arch-review', 'integrator']) {
+    assert.strictEqual(resolveModel(role, {}, asRuntime(config, 'claude')), 'fable',
+      `${role}: the 1M tier with nothing configured — a default, not an opt-in`);
+    // The exact capped value, not merely "not the premium tier": what the Codex
+    // generator renders is a palette entry for THIS alias, so a change of cap has
+    // to be a change of test.
+    assert.strictEqual(resolveModel(role, {}, asRuntime(config, 'codex')), 'sonnet',
+      `${role}: the workhorse tier, because the premium one is not the policy there`);
+  }
+});
+
 test('on Codex the effort axis is two values wide — the escalation is the MODEL', () => {
   // ADR-005 D6: measured, not assumed. `xhigh` and `max` cost more there without
   // a better result, and the ceiling model's best results are at `high`. So the
