@@ -13,8 +13,8 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const mod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs');
 const {
-  loadConfig, resolveModel, resolveEffort, strategyFor,
-  TIERS, EFFORTS, DEFAULTS, SIGNATURE_STATES,
+  loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
+  TIERS, EFFORTS, DEFAULTS, ROLES, SIGNATURE_STATES, DEFAULT_CODEX_MODELS, SONNET_ROLES,
 } = require(mod);
 const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
@@ -121,67 +121,122 @@ test('every role × profile × risk combination returns a valid tier alias', () 
   }
 });
 
-suite('resolveModel — policy shape');
+suite('the floor is opus, with two named exemptions (ADR-005 D1, amended D2)');
 
 const cfg = (over = {}) => ({ ...DEFAULTS, models: {}, ...over });
 
-test('judgment stays top tier even under economy', () => {
-  // Never cheapened by the profile. cfg() leaves gsd.runtime UNSET, which resolves
-  // to opus — the safe default (see topTier): a smaller window on Claude beats an
-  // unresolvable model id on Codex.
-  for (const role of ['integrator', 'arch-review']) {
-    assert.strictEqual(resolveModel(role, { risk: 'low' }, cfg({ model_policy: 'economy' })), 'opus');
+// THE TIER MATRIX, EXHAUSTIVELY. Every role at every risk, with and without every
+// signal the resolver reads: `opus` for all of them except `pr-sentinel` and
+// `drift-check`, which are `sonnet` under every one of those combinations, and
+// `haiku`, which no built-in path returns at all. Read this beside SONNET_ROLES
+// in pipeline-config.cjs — the two exemptions carry their reason there, because a
+// bare exemption is the thing a later reader deletes.
+const SONNET_EXEMPT = new Set(['pr-sentinel', 'drift-check']);
+const EVERY_SIGNAL = [
+  {},
+  { risk: 'low' }, { risk: 'medium' }, { risk: 'high' },
+  { checkpoint: true }, { risk: 'high', checkpoint: true },
+  { type: 'research' }, { type: 'alternatives' }, { type: 'implementation' },
+  { files: 1 }, { files: 2 }, { files: 9 },
+  { codeChange: false }, { codeChange: true },
+  { attempt: 5, previousFailed: true },
+  { signatureState: 'first' }, { signatureState: 'progress' }, { signatureState: 'repeat' },
+  { signatureState: 'flake_candidate' }, { signatureState: 'plan_defect' },
+  { inputTokens: 1000 }, { inputTokens: 250000 },
+];
+
+test('every role at every risk under every signal: opus, or sonnet for the two exempt', () => {
+  for (const profile of ['economy', 'balanced', 'premium']) {
+    for (const role of ROLES) {
+      for (const risk of ['low', 'medium', 'high']) {
+        for (const extra of EVERY_SIGNAL) {
+          const want = SONNET_EXEMPT.has(role) ? 'sonnet' : 'opus';
+          const got = resolveModel(role, { risk, ...extra }, cfg({ model_policy: profile }));
+          assert.strictEqual(got, want,
+            `${profile}/${role}/${risk}/${JSON.stringify(extra)} → ${got}, wanted ${want}`);
+        }
+      }
+    }
   }
 });
 
-test('executor: high risk → opus, low risk with a tiny surface → sonnet', () => {
-  assert.strictEqual(resolveModel('executor', { risk: 'high', files: 1 }, cfg()), 'opus');
-  assert.strictEqual(resolveModel('executor', { risk: 'low', files: 2 }, cfg()), 'sonnet');
-  assert.strictEqual(resolveModel('executor', { risk: 'low', files: 9 }, cfg()), 'opus');
-  assert.strictEqual(resolveModel('executor', { risk: 'low', files: 9, type: 'research' }, cfg()), 'sonnet');
+test('haiku is returned by no built-in path at all — that is the whole of "the floor"', () => {
+  for (const profile of ['economy', 'balanced', 'premium']) {
+    for (const role of ROLES) {
+      for (const risk of ['low', 'medium', 'high']) {
+        for (const extra of EVERY_SIGNAL) {
+          assert.notStrictEqual(
+            resolveModel(role, { risk, ...extra }, cfg({ model_policy: profile })), 'haiku',
+            `${profile}/${role}/${risk}/${JSON.stringify(extra)}`);
+        }
+      }
+    }
+  }
+  // It stays a VALUE a user may configure, which is why TIERS keeps it.
+  assert.ok(TIERS.includes('haiku'));
+  assert.strictEqual(resolveModel('executor', { risk: 'high' }, cfg({ models: { executor: 'haiku' } })), 'haiku');
 });
 
-test('executor: human_checkpoint forces opus regardless of risk', () => {
-  assert.strictEqual(resolveModel('executor', { risk: 'low', files: 1, checkpoint: true }, cfg()), 'opus');
+test('the rows that used to be sonnet, named one by one', () => {
+  // Each of these returned `sonnet` before ADR-005 D1, and each is the reason a
+  // wrong green could reach an epic on a cheaper model than the gate above it.
+  assert.strictEqual(resolveModel('executor', { risk: 'low', files: 2 }, cfg()), 'opus', 'the executor light path');
+  assert.strictEqual(resolveModel('executor', { risk: 'low', files: 9, type: 'research' }, cfg()), 'opus');
+  assert.strictEqual(resolveModel('executor', { risk: 'medium' }, cfg({ model_policy: 'economy' })), 'opus');
+  assert.strictEqual(resolveModel('ci-fix', { risk: 'low' }, cfg()), 'opus', 'a lint fix is still a code change');
+  assert.strictEqual(resolveModel('review-fix', { codeChange: false }, cfg()), 'opus', 'a reply is still a judgement');
+  assert.strictEqual(resolveModel('research', { type: 'facts' }, cfg()), 'opus');
 });
 
-test('executor: economy starts medium risk on sonnet, balanced does not', () => {
-  assert.strictEqual(resolveModel('executor', { risk: 'medium', files: 5 }, cfg({ model_policy: 'economy' })), 'sonnet');
-  assert.strictEqual(resolveModel('executor', { risk: 'medium', files: 5 }, cfg()), 'opus');
-});
-
-test('ci-fix: risk decides the tier, the attempt count decides nothing (ADR-001 D1)', () => {
-  // This case used to read `attempt >= 2 -> opus`. D1 removed that input: raising
-  // the model on a repeat is "try harder", and the loss it produced is one wrong
-  // hypothesis re-tried by three models in sequence (phase 19, T-19-05: four
-  // attempts, three escalations, one deterministically failing job). The tier is
-  // role x risk; what a repeat changes is the STRATEGY, not the model.
-  assert.strictEqual(resolveModel('ci-fix', {}, cfg()), 'sonnet');
-  assert.strictEqual(resolveModel('ci-fix', { attempt: 5, previousFailed: true }, cfg()), 'sonnet');
-  assert.strictEqual(resolveModel('ci-fix', { risk: 'high' }, cfg()), 'opus');
-});
-
-test('review-fix: reply-only is cheap, a code change is not; unknown defaults to opus', () => {
-  assert.strictEqual(resolveModel('review-fix', { codeChange: false }, cfg()), 'sonnet');
-  assert.strictEqual(resolveModel('review-fix', {}, cfg()), 'opus');
-});
-
-test('premium raises everything except drift-check', () => {
-  assert.strictEqual(resolveModel('executor', { risk: 'low', files: 1 }, cfg({ model_policy: 'premium' })), 'opus');
-  assert.strictEqual(resolveModel('ci-fix', { attempt: 1 }, cfg({ model_policy: 'premium' })), 'opus');
+test('the two exemptions hold at high risk and under a checkpoint — the reason is not the stakes', () => {
+  // pr-sentinel's merge decision is enforced by sentinel.cjs against live GitHub,
+  // so raising the model does not make the gate stricter; drift-check returns a
+  // file list. Together they are 57% of all dispatches in the journal, which is
+  // why the exemption is worth having at all.
+  for (const signals of [{ risk: 'high' }, { checkpoint: true }, { risk: 'high', checkpoint: true }]) {
+    assert.strictEqual(resolveModel('pr-sentinel', signals, cfg()), 'sonnet', JSON.stringify(signals));
+    assert.strictEqual(resolveModel('drift-check', signals, cfg()), 'sonnet', JSON.stringify(signals));
+  }
   assert.strictEqual(resolveModel('drift-check', {}, cfg({ model_policy: 'premium' })), 'sonnet');
 });
 
-test('an explicit per-role override wins over the profile — except for judgment', () => {
-  assert.strictEqual(resolveModel('executor', { risk: 'high' }, cfg({ models: { executor: 'haiku' } })), 'haiku');
-  // a judgment override is honoured only because it is still a valid alias; the
-  // profile can never silently downgrade it
-  assert.strictEqual(resolveModel('arch-review', {}, cfg({ model_policy: 'economy' })), 'opus');
+test('the two judgment roles can never join the exempt set', () => {
+  // JUDGMENT_ROLES decides no TIER any more (the floor covers every role) and has
+  // one reader left, R3. The other half of what that set used to mean lives here:
+  // there is no mechanical safety net above a verdict, which is exactly the
+  // opposite of what makes pr-sentinel and drift-check exemptible.
+  for (const judge of ['arch-review', 'integrator']) {
+    assert.ok(!SONNET_ROLES.has(judge), judge);
+  }
+  assert.deepStrictEqual([...SONNET_ROLES.keys()].sort(), ['drift-check', 'pr-sentinel']);
+  for (const [role, why] of SONNET_ROLES) {
+    assert.ok(why && why.length > 40, `${role}: the exemption must carry its reason, not just its name`);
+  }
 });
 
-test('research: option design is heavy, fact gathering is not', () => {
-  assert.strictEqual(resolveModel('research', { type: 'alternatives' }, cfg()), 'opus');
-  assert.strictEqual(resolveModel('research', { type: 'facts' }, cfg()), 'sonnet');
+test('the profile no longer moves the ladder in either direction — the floor is not a preference', () => {
+  // `model_policy` survives because gsd-tune mirrors it onto GSD's own
+  // `model_profile`, which governs GSD's agents. It routes none of ours.
+  for (const role of ROLES) {
+    const balanced = resolveModel(role, { risk: 'medium' }, cfg());
+    for (const profile of ['economy', 'premium']) {
+      assert.strictEqual(resolveModel(role, { risk: 'medium' }, cfg({ model_policy: profile })), balanced,
+        `${role} moved under ${profile}`);
+    }
+  }
+});
+
+test('an explicit per-role override still wins over the floor', () => {
+  assert.strictEqual(resolveModel('executor', { risk: 'high' }, cfg({ models: { executor: 'sonnet' } })), 'sonnet');
+  assert.strictEqual(resolveModel('drift-check', {}, cfg({ models: { 'drift-check': 'opus' } })), 'opus');
+});
+
+test('the attempt count still decides nothing (ADR-001 D1)', () => {
+  // Raising the model on a repeat is "try harder", and the loss it produced is
+  // one wrong hypothesis re-tried by three models in sequence (phase 19, T-19-05:
+  // four attempts, three escalations, one deterministically failing job).
+  assert.strictEqual(resolveModel('ci-fix', { attempt: 5, previousFailed: true }, cfg()),
+    resolveModel('ci-fix', {}, cfg()));
 });
 
 suite('fable — the alias that expresses "top tier with a 1M window"');
@@ -197,20 +252,32 @@ test('fable is accepted as a per-role override (the old opus[1m] intent)', () =>
   assert.strictEqual(resolveModel('integrator', {}, config), 'fable');
 });
 
-test('fable is the default for the context-bound judges, and for nobody else', () => {
-  // It was opt-in only until the 1M window was recognised as the thing that
-  // actually distinguishes arch-review and integrator: both read the entire diff
-  // against every ADR at once. No other role gains from the window, so none may
-  // be billed for it — not even at high risk on a third attempt.
-  const JUDGES = new Set(['arch-review', 'integrator']);
+test('fable is NOBODY\'s default — not even the integrator, and not on Claude with consent', () => {
+  // It was the standing default for the two judgment roles on the window
+  // argument. ADR-005 retired that on a measurement: the largest input in the
+  // whole system is the phase epic diff at ~52k tokens, and the integrator's one
+  // run on 2026-09-08 consumed 291k end to end against `fable` costing exactly
+  // 2× `opus` on every component. So the window has to be MEASURED per dispatch
+  // (R1), not assumed per role — and `--input-tokens` is absent here.
   for (const profile of ['economy', 'balanced', 'premium']) {
-    for (const role of ALL_ROLES) {
-      const c = cfg({ model_policy: profile });
-      const got = resolveModel(role, { risk: 'high', attempt: 3 }, { ...c, gsd: { ...(c.gsd||{}), runtime: 'claude' } });
-      if (JUDGES.has(role)) assert.strictEqual(got, 'fable', `${profile}/${role} must take the 1M tier`);
-      else assert.notStrictEqual(got, 'fable', `${profile}/${role} defaulted to fable`);
+    for (const role of ROLES) {
+      const c = { ...cfg({ model_policy: profile }), fable: 'auto', gsd: { runtime: 'claude' } };
+      for (const signals of [{}, { risk: 'high' }, { risk: 'high', attempt: 3 }, { checkpoint: true }]) {
+        assert.notStrictEqual(resolveModel(role, signals, c), 'fable',
+          `${profile}/${role}/${JSON.stringify(signals)} defaulted to fable`);
+      }
     }
   }
+});
+
+test('the integrator has no standing exception any more: opus/xhigh with no flags', () => {
+  // The sentence that justified the exception — "it reads the largest input in
+  // the system, runs once per phase, and is the last mechanical judgment before a
+  // person merges" — is all true and none of it a measurement. What survives of
+  // it is the EFFORT: xhigh, and it never drops.
+  const c = { ...cfg(), fable: 'auto', gsd: { runtime: 'claude' } };
+  assert.strictEqual(resolveModel('integrator', {}, c), 'opus');
+  assert.strictEqual(resolveEffort('integrator', 'opus', c, {}), 'xhigh');
 });
 
 suite('GSD profile names are accepted as aliases');
@@ -314,7 +381,7 @@ test('response_language is surfaced (it governs conversation, not artifacts)', (
   assert.strictEqual(config.gsd.response_language, 'uk');
 });
 
-suite('resolveEffort — mirrors GSD light/standard/heavy defaults');
+suite('resolveEffort — the role-keyed table (ADR-005 D2 as amended 2026-09-08)');
 
 test('every role × model returns an effort Workflow accepts', () => {
   for (const role of ALL_ROLES) {
@@ -324,15 +391,79 @@ test('every role × model returns an effort Workflow accepts', () => {
   }
 });
 
-test('effort follows the resolved tier, so an escalated repair thinks harder', () => {
-  assert.strictEqual(resolveEffort('ci-fix', 'sonnet', cfg()), 'high');
-  assert.strictEqual(resolveEffort('ci-fix', 'opus', cfg()), 'xhigh');
-  assert.strictEqual(resolveEffort('integrator', 'fable', cfg()), 'xhigh');
-  assert.strictEqual(resolveEffort('executor', 'haiku', cfg()), 'low');
+// THE EFFORT TABLE, EXHAUSTIVELY — one row per (role, signal) so a later edit
+// cannot move a row quietly. Read it beside EFFORT_ROWS in pipeline-config.cjs:
+// the two are meant to be legible side by side.
+//
+//   role          signals                       effort
+const EFFORT_MATRIX = [
+  ['drift-check', {},                            'high'],   // was `low`: it now carries the plan-defect burden
+  ['drift-check', { risk: 'high' },              'high'],
+  ['drift-check', { signatureState: 'repeat' },  'high'],   // not a repair role; history does not deepen it
+  ['research',    {},                            'high'],
+  ['research',    { type: 'facts' },             'high'],
+  ['research',    { type: 'alternatives' },      'xhigh'],  // option design, not fact gathering
+  ['executor',    {},                            'high'],
+  ['executor',    { risk: 'low' },               'high'],
+  ['executor',    { risk: 'medium' },            'high'],
+  ['executor',    { risk: 'medium', files: 1 },  'high'],   // `files` is inert now
+  ['executor',    { risk: 'high' },              'xhigh'],  // a defect here is expensive, not merely possible
+  ['executor',    { checkpoint: true },          'xhigh'],
+  ['executor',    { risk: 'low', checkpoint: true }, 'xhigh'],
+  ['ci-fix',      {},                            'high'],
+  ['ci-fix',      { risk: 'high' },              'high'],
+  ['ci-fix',      { signatureState: 'first' },   'high'],
+  ['ci-fix',      { signatureState: 'progress' }, 'high'],
+  ['review-fix',  {},                            'high'],
+  ['review-fix',  { codeChange: false },         'high'],   // `codeChange` is inert now
+  ['review-fix',  { codeChange: true },          'high'],
+  ['pr-sentinel', {},                            'high'],   // NOT xhigh: sentinel.cjs is the gate, not the model
+  ['pr-sentinel', { risk: 'high' },              'high'],
+  ['pr-sentinel', { checkpoint: true },          'high'],
+  ['arch-review', {},                            'xhigh'],
+  ['arch-review', { risk: 'low' },               'xhigh'],
+  ['integrator',  {},                            'xhigh'],
+  ['integrator',  { risk: 'low' },               'xhigh'],
+  // The one built-in path to `max`, and it is EARNED by a repeated failure
+  // rather than chosen. `xhigh` stopped being a raise the moment the floor
+  // became opus, which is the regression this rung is restored from.
+  ['ci-fix',      { signatureState: 'repeat' },  'max'],
+  ['review-fix',  { signatureState: 'repeat' },  'max'],
+  ['pr-sentinel', { signatureState: 'repeat' },  'max'],
+  ['ci-fix',      { signatureState: 'repeat_exhausted' }, 'max'],
+];
+
+test('the effort table, row by row', () => {
+  for (const [role, signals, want] of EFFORT_MATRIX) {
+    const model = resolveModel(role, signals, cfg());
+    const got = resolveEffort(role, model, cfg(), signals);
+    assert.strictEqual(got, want, `${role} ${JSON.stringify(signals)} → ${got}, wanted ${want}`);
+  }
 });
 
-test('mechanical roles stay cheap even when the tier is raised', () => {
-  assert.strictEqual(resolveEffort('drift-check', 'opus', cfg()), 'low');
+test('the judges are xhigh and not max, deliberately', () => {
+  // Anthropic's effort guidance names `xhigh` the best setting for most coding
+  // and agentic work (it is Claude Code's own default) and says to reach `max`
+  // only when measurement shows headroom at the level below. Nothing has measured
+  // that here — so `max` stays reserved for the case that IS a measurement.
+  for (const role of ['arch-review', 'integrator']) {
+    for (const signals of [{}, { risk: 'high' }, { checkpoint: true }, { contested: false }]) {
+      assert.strictEqual(resolveEffort(role, resolveModel(role, signals, cfg()), cfg(), signals), 'xhigh',
+        `${role} ${JSON.stringify(signals)}`);
+    }
+  }
+});
+
+test('effort no longer follows the MODEL — that dependency is what collapsed', () => {
+  // Measured 2026-09-07 with the floor set through `pipeline.models.*`: the old
+  // rule read `TOP_TIERS.has(model) → heavy`, so with the tier constant every
+  // role except drift-check resolved to xhigh and `--signature-state repeat`
+  // stopped deepening anything. The model argument is still accepted and drives
+  // nothing, which is what these four assertions pin.
+  for (const model of TIERS) {
+    assert.strictEqual(resolveEffort('ci-fix', model, cfg()), 'high', model);
+    assert.strictEqual(resolveEffort('drift-check', model, cfg()), 'high', model);
+  }
 });
 
 test('a per-role effort override wins', () => {
@@ -340,17 +471,85 @@ test('a per-role effort override wins', () => {
   assert.strictEqual(resolveEffort('executor', 'sonnet', config), 'max');
 });
 
-test('minimal clamps to low (not in Workflow\'s enum) and max clamps on codex', () => {
+test('minimal clamps to low (not in Workflow\'s enum); max is no longer clamped on codex', () => {
   const minimal = withConfig({ effort: { executor: 'minimal' } });
   assert.strictEqual(resolveEffort('executor', 'sonnet', minimal.config), 'low');
+  const minimalOnCodex = withRaw({ runtime: 'codex', pipeline: { effort: { executor: 'minimal' } } });
+  assert.strictEqual(resolveEffort('executor', 'sonnet', minimalOnCodex.config), 'low');
+  // ADR-005 D7: both halves of the old clamp's justification were false. GSD's
+  // `codexModelEffort._baseline` advertises `max` for every model, and
+  // `advertisedCodexEffort` hands that baseline back for a model it does not
+  // name — which the palette's ceiling is. No built-in path asks for `max`
+  // there, so the clamp only ever rewrote an operator's explicit choice.
   const onCodex = withRaw({ runtime: 'codex', pipeline: { effort: { executor: 'max' } } });
-  assert.strictEqual(resolveEffort('executor', 'sonnet', onCodex.config), 'xhigh');
+  assert.strictEqual(resolveEffort('executor', 'sonnet', onCodex.config), 'max');
 });
 
 test('an invalid effort value is rejected with a warning, not honoured', () => {
   const { config, warnings } = withConfig({ effort: { executor: 'ludicrous' } });
   assert.strictEqual(config.effort.executor, undefined);
   assert.ok(warnings.some((w) => /effort/.test(w)));
+});
+
+suite('codex_models — the palette a static agent file is written from');
+
+test('no config → the shipped palette, floor first and ceiling last', () => {
+  const { config, warnings } = withConfig(undefined);
+  assert.deepStrictEqual(config.codex_models, DEFAULT_CODEX_MODELS);
+  assert.deepStrictEqual(warnings, []);
+  // The order IS the policy: first entry is the workhorse every role gets, last
+  // is the ceiling only the integrator and the `-deep` agents reach.
+  assert.ok(config.codex_models.length >= 2, 'the shipped palette has a ceiling to escalate to');
+});
+
+test('the palette a caller mutates does not become the next caller\'s default', () => {
+  const first = withConfig(undefined).config;
+  first.codex_models.length = 0;
+  assert.deepStrictEqual(withConfig(undefined).config.codex_models, DEFAULT_CODEX_MODELS);
+});
+
+test('the string form (the one GSD can set) parses to the same list', () => {
+  const { config, warnings } = withConfig({ codex_models: 'a:high, b:low@1.2.3' });
+  assert.deepStrictEqual(config.codex_models, [
+    { model: 'a', effort: 'high' },
+    { model: 'b', effort: 'low', min_cli: '1.2.3' },
+  ]);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('an entry with no usable model id is skipped, never half-honoured', () => {
+  const { config, warnings } = withConfig({ codex_models: [{ effort: 'high' }, { model: 42 }, { model: ' keep ' }] });
+  assert.deepStrictEqual(config.codex_models, [{ model: 'keep' }]);
+  assert.strictEqual(warnings.filter((w) => /codex_models/.test(w)).length, 2, warnings.join('; '));
+});
+
+test('a bad effort or min_cli is dropped with a warning, the model survives', () => {
+  const { config, warnings } = withConfig({ codex_models: [{ model: 'm', effort: 'ultra', min_cli: 'soon' }] });
+  assert.deepStrictEqual(config.codex_models, [{ model: 'm' }]);
+  assert.ok(warnings.some((w) => /ultra/.test(w)), warnings.join('; '));
+  assert.ok(warnings.some((w) => /min_cli/.test(w)), warnings.join('; '));
+});
+
+test('`ultra` is not in the effort vocabulary — no path selects a model that advertises it', () => {
+  assert.ok(!EFFORTS.includes('ultra'));
+});
+
+test('an explicitly EMPTY palette is honoured: "write no model" is a choice', () => {
+  const { config, warnings } = withConfig({ codex_models: [] });
+  assert.deepStrictEqual(config.codex_models, []);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('a palette that is not a list at all keeps the shipped one, with a warning', () => {
+  const { config, warnings } = withConfig({ codex_models: 7 });
+  assert.deepStrictEqual(config.codex_models, DEFAULT_CODEX_MODELS);
+  assert.ok(warnings.some((w) => /codex_models/.test(w)), warnings.join('; '));
+});
+
+test('an unknown entry field is dropped rather than carried into the agent file', () => {
+  const { config, warnings } = withConfig({ codex_models: [{ model: 'm', reasoning: 'deep' }] });
+  assert.deepStrictEqual(config.codex_models, [{ model: 'm' }]);
+  assert.ok(warnings.some((w) => /reasoning/.test(w)), warnings.join('; '));
 });
 
 suite('repos — sibling checkouts a multi-repo phase is driven in');
@@ -446,14 +645,17 @@ test('delivery_pipeline.merge_without_ci outranks pipeline.merge_without_ci', ()
 
 suite('pr-sentinel model routing');
 
-test('the guard starts cheap and is raised by risk, not by attempts (ADR-001 D1)', () => {
+test('the guard stays on sonnet at every risk — and that is a reversal of the floor', () => {
+  // The exemption is about WHAT DECIDES, not about what is at stake: the merge
+  // gate is re-verified against live GitHub inside sentinel.cjs, which refuses on
+  // anything unproven, so a bigger model does not make it stricter. It is also
+  // 44% of all dispatches, which is why the exemption is worth its explanation.
   const { config } = withConfig(undefined);
-  assert.strictEqual(resolveModel('pr-sentinel', {}, config), 'sonnet');
-  // was `attempt: 2 -> opus`, dropped with ci-fix's for the same reason: a PR that
-  // resisted twice needs a different hypothesis, not a bigger model.
-  assert.strictEqual(resolveModel('pr-sentinel', { attempt: 2 }, config), 'sonnet');
-  assert.strictEqual(resolveModel('pr-sentinel', { risk: 'high' }, config), 'opus');
-  assert.strictEqual(resolveModel('pr-sentinel', { checkpoint: true }, config), 'opus');
+  assert.ok(SONNET_ROLES.has('pr-sentinel'), 'and the reason travels with it, in code');
+  for (const signals of [{}, { attempt: 2 }, { risk: 'high' }, { checkpoint: true },
+    { risk: 'high', checkpoint: true }, { signatureState: 'repeat' }]) {
+    assert.strictEqual(resolveModel('pr-sentinel', signals, config), 'sonnet', JSON.stringify(signals));
+  }
 });
 
 test('it is a real role, so an override for it is honoured rather than warned away', () => {
@@ -471,12 +673,14 @@ suite('model ladder — the top tier is runtime-aware');
 // nobody can resolve.
 const asRuntime = (config, runtime) => ({ ...config, gsd: { ...(config.gsd || {}), runtime } });
 
-test('the two judgment roles take the 1M tier on Claude', () => {
-  // These are the roles the window actually distinguishes: arch-review reads the
-  // whole diff against every ADR at once, the integrator reconciles across repos.
-  const { config } = withConfig({});
+test('the 1M tier is reached only through a route, and only on Claude', () => {
+  // Nothing about the ROLE unlocks it any more; what unlocks it is a measured
+  // input, an exhausted repair or a contested verdict — and consent.
+  const { config } = withConfig({ fable: 'auto' });
   for (const role of ['arch-review', 'integrator']) {
-    assert.strictEqual(resolveModel(role, {}, asRuntime(config, 'claude')), 'fable', role);
+    assert.strictEqual(resolveModel(role, {}, asRuntime(config, 'claude')), 'opus', `${role} by default`);
+    assert.strictEqual(resolveModel(role, { inputTokens: 300000 }, asRuntime(config, 'claude')), 'fable',
+      `${role} with a measured input over the threshold`);
   }
 });
 
@@ -492,13 +696,14 @@ test('an UNSET runtime degrades to opus rather than guessing the paid tier', () 
   }
 });
 
-test('on Codex NO role takes the premium model — depth moves into effort', () => {
+test('on Codex NO role resolves to the premium TIER — the palette decides the model', () => {
   // GSD gives its top Codex model to exactly two of 34 agents, both planners;
   // its reviewer, executor, fixer and debugger are all on the workhorse. The
   // conveyor has no planner among its ROLES (decomposition is the main loop's),
   // so a straight tier-for-tier mapping was not the same policy on another
-  // runtime — it was a more expensive one. Depth is expressed the way GSD
-  // expresses it: same model, higher effort.
+  // runtime — it was a more expensive one. What the cap decides is the TIER the
+  // generator renders a palette entry for; which concrete model that is comes
+  // from `pipeline.codex_models`, and the escalation from its ceiling.
   const { config } = withConfig({});
   const codex = asRuntime(config, 'codex');
   for (const role of ['arch-review', 'integrator', 'executor', 'review-fix']) {
@@ -506,26 +711,58 @@ test('on Codex NO role takes the premium model — depth moves into effort', () 
     assert.ok(!['opus', 'fable'].includes(m), `${role} must not take the premium tier, got ${m}`);
   }
   for (const role of ['arch-review', 'integrator']) {
-    assert.strictEqual(resolveEffort(role, resolveModel(role, {}, codex), codex, {}), 'xhigh',
-      `${role}: judgment stays heavy even when the model is capped`);
+    assert.strictEqual(resolveEffort(role, resolveModel(role, {}, codex), codex, {}), 'high',
+      `${role}: the working effort, which on this runtime is the deepest one measured to pay`);
   }
 });
 
-test('a capped runtime still distinguishes a repeating repair from a baseline one', () => {
-  // Both arrive as the same alias once capped, so the escalation would vanish
-  // unless effort carries it — which is exactly gsd-debugger vs gsd-executor.
-  // The TRIGGER is what ADR-001 D1 changed: it used to be `attempt >= 2`, it is
-  // now the signature history saying the same failure came back unchanged.
+test('ADR-005 D4 — the judges default to the floor, and Codex gets the capped tier', () => {
+  // The reversal of ADR-003 D3, as a test. `fable` was the judges' default on the
+  // window argument until the window was measured: the ADR corpus is ~8k tokens,
+  // the largest ticket diff of the phase ~16k, the phase epic diff ~52k. Nothing
+  // is configured on purpose — an override would prove only that overrides work.
+  const { config, warnings } = withConfig({});
+  assert.deepStrictEqual(warnings, []);
+  assert.strictEqual(config.models['arch-review'], undefined, 'no override — the LADDER decides');
+  assert.strictEqual(config.models.integrator, undefined, 'no override — the LADDER decides');
+  assert.strictEqual(config.fable, 'off', 'and the ceiling is shut until a person opens it');
+  for (const role of ['arch-review', 'integrator']) {
+    assert.strictEqual(resolveModel(role, {}, asRuntime(config, 'claude')), 'opus',
+      `${role}: the floor with nothing configured, on the runtime that HAS the 1M tier`);
+    // The exact capped value, not merely "not the premium tier": what the Codex
+    // generator renders is a palette entry for THIS alias, so a change of cap has
+    // to be a change of test.
+    assert.strictEqual(resolveModel(role, {}, asRuntime(config, 'codex')), 'sonnet',
+      `${role}: the workhorse tier, because the premium one is not the policy there`);
+  }
+});
+
+test('on Codex the effort axis is two values wide — the escalation is the MODEL', () => {
+  // ADR-005 D6: measured, not assumed. `xhigh` and `max` cost more there without
+  // a better result, and the ceiling model's best results are at `high`. So the
+  // ladder that expresses depth through effort does not apply on this runtime,
+  // and neither risk nor a repeating signature deepens anything: what escalates
+  // is the model, through a second agent FILE per repair role (D8). The strategy
+  // half of the repeat rule survives untouched — that is the part that changes
+  // the hypothesis rather than the spend.
   const { config } = withConfig({});
   const codex = asRuntime(config, 'codex');
   const at = (signatureState) => resolveEffort(
     'ci-fix', resolveModel('ci-fix', { signatureState }, codex), codex, { signatureState });
   assert.strictEqual(at('first'), 'high', 'first strike');
-  assert.strictEqual(at('repeat'), 'xhigh', 'the same failure, back again');
-  // risk still raises the ladder above its own baseline, and the cap must not eat
-  // that either — the same reason the `escalated` comparison exists at all.
+  assert.strictEqual(at('repeat'), 'high', 'no deeper rung to escalate into');
+  assert.strictEqual(strategyFor('repeat'), 'rethink', 'the strategy still changes');
   const risky = { risk: 'high' };
-  assert.strictEqual(resolveEffort('ci-fix', resolveModel('ci-fix', risky, codex), codex, risky), 'xhigh');
+  assert.strictEqual(resolveEffort('ci-fix', resolveModel('ci-fix', risky, codex), codex, risky), 'high');
+  // The one distinction that remains on the axis: the mechanical role stays cheap.
+  assert.strictEqual(resolveEffort('drift-check', resolveModel('drift-check', {}, codex), codex, {}), 'low');
+});
+
+test('an explicit effort override still outranks the flat axis', () => {
+  // Otherwise the rule that exists to stop us paying for depth we did not
+  // measure would also silence a person who measured something else.
+  const onCodex = withRaw({ runtime: 'codex', pipeline: { effort: { 'arch-review': 'xhigh' } } });
+  assert.strictEqual(resolveEffort('arch-review', 'sonnet', onCodex.config), 'xhigh');
 });
 
 test('an executor whose baseline was already top tier is NOT treated as escalated', () => {
@@ -548,16 +785,18 @@ test('no OTHER role is silently upgraded to the paid tier', () => {
   }
 });
 
-test('the 1M tier still resolves heavy effort, like any top tier', () => {
+test('a judge on the 1M tier still thinks at its own row, not deeper', () => {
   const { config } = withConfig({});
   assert.strictEqual(resolveEffort('arch-review', 'fable', asRuntime(config, 'claude')), 'xhigh');
 });
 
-test('premium does not widen the paid tier beyond the judges', () => {
-  const { config } = withConfig({ model_policy: 'premium' });
+test('premium reaches the paid tier for nobody — the profile cannot buy the ceiling', () => {
+  const { config } = withConfig({ model_policy: 'premium', fable: 'auto' });
   const c = asRuntime(config, 'claude');
-  assert.strictEqual(resolveModel('arch-review', {}, c), 'fable', 'judges keep it');
-  assert.strictEqual(resolveModel('executor', {}, c), 'opus', 'premium raises to opus, not to fable');
+  for (const role of ROLES) {
+    assert.strictEqual(resolveModel(role, { risk: 'high' }, c),
+      SONNET_ROLES.has(role) ? 'sonnet' : 'opus', role);
+  }
 });
 
 test('an explicit override still wins over the runtime default', () => {
@@ -584,25 +823,29 @@ test('attempt and previousFailed are inert for every repair role', () => {
   }
 });
 
-test('role x risk remains: risk and a checkpoint still raise the repair tier', () => {
+test('risk no longer raises a repair tier — the floor got there first', () => {
   assert.strictEqual(resolveModel('ci-fix', { risk: 'high' }, cfg()), 'opus');
-  assert.strictEqual(resolveModel('ci-fix', { risk: 'low' }, cfg()), 'sonnet');
-  assert.strictEqual(resolveModel('pr-sentinel', { risk: 'high' }, cfg()), 'opus');
-  assert.strictEqual(resolveModel('pr-sentinel', { checkpoint: true }, cfg()), 'opus');
-  // review-fix keeps its own signal: it is about the nature of the work (a reply
-  // versus a code change), never about how many attempts came before.
-  assert.strictEqual(resolveModel('review-fix', { codeChange: false }, cfg()), 'sonnet');
+  assert.strictEqual(resolveModel('ci-fix', { risk: 'low' }, cfg()), 'opus');
+  assert.strictEqual(resolveModel('review-fix', { codeChange: false }, cfg()), 'opus');
   assert.strictEqual(resolveModel('review-fix', {}, cfg()), 'opus');
+  // What risk moves now is the DEPTH, and only for the executor (see EFFORT_MATRIX).
+  assert.strictEqual(resolveEffort('ci-fix', 'opus', cfg(), { risk: 'high' }), 'high');
 });
 
-test('no signature state moves the TIER, at any risk — escalation is by strategy', () => {
+test('only one signature state moves the TIER, and only through the ceiling', () => {
+  // Every other state holds it: a repeat changes the STRATEGY and the depth, not
+  // the model, because a bigger model on the hypothesis that just failed is the
+  // failure mode rather than the remedy (ADR-001 D1). `repeat_exhausted` is the
+  // one exception, and it is the ceiling's own route (R2) rather than a repair
+  // rung — the deeper effort has already been spent by then.
   for (const role of REPAIR_ROLES) {
     for (const risk of ['low', 'medium', 'high']) {
       const baseline = resolveModel(role, { risk }, cfg());
       for (const signatureState of SIGNATURE_STATES) {
         const got = resolveModel(role, { risk, signatureState }, cfg());
-        assert.strictEqual(got, baseline, `${role}/${risk}/${signatureState} moved the tier`);
         assert.ok(TIERS.includes(got), `${got} is not a tier alias`);
+        if (signatureState === 'repeat_exhausted') continue;
+        assert.strictEqual(got, baseline, `${role}/${risk}/${signatureState} moved the tier`);
       }
     }
   }
@@ -622,6 +865,11 @@ test('every state maps to exactly the strategy the loop switches on', () => {
       first: 'fix',
       progress: 'continue',
       repeat: 'rethink',
+      // Deliberately the SAME verb: what changes on an exhausted repeat is the
+      // model, and the advice to the fixer is unchanged. A seventh verb would be
+      // a contract only the resolver knew about — references/ci-fix.md and
+      // references/pr-sentinel.md are what a fixer actually reads.
+      repeat_exhausted: 'rethink',
       flake_candidate: 'rerun',
       flake: 'quarantine',
       plan_defect: 'park',
@@ -638,24 +886,32 @@ test('an unknown state has no strategy — it is ignored, never guessed', () => 
   assert.strictEqual(strategyFor('constructor'), undefined);
 });
 
-test('repeat deepens the EFFORT at the held tier, for repair roles', () => {
+test('repeat deepens the EFFORT to max at the held tier — the rung the floor had erased', () => {
+  // THE MEASUREMENT THAT MADE THIS TICKET. On 2026-09-07, with the floor set
+  // through `pipeline.models.*`, every role except drift-check resolved to
+  // opus/xhigh — so `--signature-state repeat` raised the effort to a value it
+  // already had, and the repair ladder's depth rung was silently gone. `max` is
+  // the restored rung, and it is the only built-in path to `max`.
   for (const role of REPAIR_ROLES) {
     const signals = { signatureState: 'repeat' };
     assert.strictEqual(
-      resolveEffort(role, resolveModel(role, signals, cfg()), cfg(), signals), 'xhigh', role);
+      resolveEffort(role, resolveModel(role, signals, cfg()), cfg(), signals), 'max', role);
+    assert.notStrictEqual(
+      resolveEffort(role, resolveModel(role, {}, cfg()), cfg(), { signatureState: 'first' }), 'max',
+      `${role}: a first strike must not already be at the deepest rung, or the raise is not a raise`);
   }
   // ci-fix in particular: same tier as a first strike, deeper thinking on it
-  assert.strictEqual(resolveModel('ci-fix', { signatureState: 'repeat' }, cfg()), 'sonnet');
-  assert.strictEqual(resolveEffort('ci-fix', 'sonnet', cfg(), { signatureState: 'first' }), 'high');
-  assert.strictEqual(resolveEffort('ci-fix', 'sonnet', cfg(), { signatureState: 'progress' }), 'high');
+  assert.strictEqual(resolveModel('ci-fix', { signatureState: 'repeat' }, cfg()), 'opus');
+  assert.strictEqual(resolveEffort('ci-fix', 'opus', cfg(), { signatureState: 'first' }), 'high');
+  assert.strictEqual(resolveEffort('ci-fix', 'opus', cfg(), { signatureState: 'progress' }), 'high');
 });
 
 test('a non-repair role is not deepened by a signature state', () => {
-  const light = { risk: 'low', files: 1, signatureState: 'repeat' };
-  assert.strictEqual(resolveModel('executor', light, cfg()), 'sonnet');
-  assert.strictEqual(resolveEffort('executor', 'sonnet', cfg(), light), 'high');
-  // mechanical work stays cheap whatever the history says
-  assert.strictEqual(resolveEffort('drift-check', 'sonnet', cfg(), { signatureState: 'repeat' }), 'low');
+  const signals = { risk: 'low', files: 1, signatureState: 'repeat' };
+  assert.strictEqual(resolveModel('executor', signals, cfg()), 'opus');
+  assert.strictEqual(resolveEffort('executor', 'opus', cfg(), signals), 'high');
+  // an executor has no failure history to read, and drift-check is not a repair
+  assert.strictEqual(resolveEffort('drift-check', 'sonnet', cfg(), { signatureState: 'repeat' }), 'high');
 });
 
 test('an explicit effort override still outranks the repeat rule', () => {
@@ -684,17 +940,25 @@ suite('the CLI contract the babysit loop calls');
 
 // A temp cwd with no .planning/: default config, runtime UNSET — which is the
 // state the acceptance criteria are written against.
-function runCli(args) {
+function runCli(args, raw) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cli-'));
+  if (raw !== undefined) {
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
+  }
   const r = spawnSync(process.execPath, [mod, ...args], { cwd: dir, encoding: 'utf8' });
   return { status: r.status, out: (r.stdout || '').trim(), err: r.stderr || '', json: () => JSON.parse(r.stdout) };
 }
+// The ceiling exists only where the runtime declares the 1M tier AND a person has
+// consented, so every route test needs both. Anything less is the DEGRADED path,
+// which is asserted separately — on purpose: that asymmetry is the design.
+const CONSENTED = { runtime: 'claude', pipeline: { fable: 'auto' } };
 
 test('without --signature-state the --json shape is unchanged from today', () => {
   const r = runCli(['model', 'ci-fix', '--json']);
   assert.strictEqual(r.status, 0, r.err);
   assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model']);
-  assert.deepStrictEqual(r.json(), { model: 'sonnet', effort: 'high' });
+  assert.deepStrictEqual(r.json(), { model: 'opus', effort: 'high' });
 });
 
 test('--attempt/--previous-failed are still accepted and resolve the same tier', () => {
@@ -710,9 +974,9 @@ test('--attempt/--previous-failed are still accepted and resolve the same tier',
 
 test('--signature-state repeat: same tier, deeper effort, a strategy to change', () => {
   assert.deepStrictEqual(runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat']).json(),
-    { model: 'sonnet', effort: 'xhigh', strategy: 'rethink' });
+    { model: 'opus', effort: 'max', strategy: 'rethink' });
   assert.deepStrictEqual(runCli(['model', 'ci-fix', '--json', '--signature-state', 'first']).json(),
-    { model: 'sonnet', effort: 'high', strategy: 'fix' });
+    { model: 'opus', effort: 'high', strategy: 'fix' });
 });
 
 test('the three do-not-dispatch states surface as their pinned strings', () => {
@@ -741,6 +1005,239 @@ test('resolve reports the new key', () => {
   const r = runCli(['resolve']);
   assert.strictEqual(r.status, 0, r.err);
   assert.strictEqual(JSON.parse(r.out).config.plan_defect_signatures, 3);
+});
+
+suite('the ceiling — three mechanical routes, never a default (ADR-005 D4)');
+
+test('R1 window: a measured input over the threshold earns it; under it does not', () => {
+  assert.strictEqual(
+    runCli(['model', 'arch-review', '--input-tokens', '300000'], CONSENTED).out, 'fable');
+  assert.deepStrictEqual(
+    runCli(['model', 'arch-review', '--json', '--input-tokens', '200000'], CONSENTED).json(),
+    { model: 'opus', effort: 'xhigh' },
+    'under the threshold nothing fired, so the role keeps its own row — xhigh, not max');
+  // The threshold is configuration: five times the largest input measured here.
+  assert.strictEqual(DEFAULTS.fable_window_tokens, 250000);
+  assert.strictEqual(
+    runCli(['model', 'arch-review', '--input-tokens', '200000'],
+      { runtime: 'claude', pipeline: { fable: 'auto', fable_window_tokens: 150000 } }).out, 'fable');
+});
+
+test('R1 is measured per dispatch, so every role can reach it — and none does by default', () => {
+  for (const role of ROLES) {
+    assert.strictEqual(runCli(['model', role, '--input-tokens', '300000'], CONSENTED).out, 'fable', role);
+    assert.notStrictEqual(runCli(['model', role], CONSENTED).out, 'fable', `${role} with no measurement`);
+  }
+});
+
+test('R2 exhausted depth: the third occurrence of one signature, from the journal', () => {
+  const r = runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat_exhausted'], CONSENTED);
+  assert.deepStrictEqual(r.json(), { model: 'fable', effort: 'max', strategy: 'rethink' },
+    'the model rises and the depth STAYS at max — backing the thinking off here is neither ladder');
+  assert.deepStrictEqual(
+    runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat'], CONSENTED).json(),
+    { model: 'opus', effort: 'max', strategy: 'rethink' }, 'a second occurrence is not exhausted');
+  // It is a REPAIR route: an executor has no failure history to read.
+  assert.strictEqual(
+    runCli(['model', 'executor', '--signature-state', 'repeat_exhausted'], CONSENTED).out, 'opus');
+  // And the verdict itself comes from failure-signature.cjs, not from a threshold
+  // re-implemented here — one subject, one owner.
+  const { VERDICTS } = require(sigMod);
+  assert.ok(VERDICTS.includes('repeat_exhausted'));
+});
+
+test('R3 contested judgment: a verdict that has already been faulted once', () => {
+  assert.strictEqual(runCli(['model', 'arch-review', '--contested'], CONSENTED).out, 'fable');
+  assert.strictEqual(runCli(['model', 'integrator', '--contested'], CONSENTED).out, 'fable');
+  assert.strictEqual(runCli(['model', 'arch-review'], CONSENTED).out, 'opus', 'absent, it cannot fire');
+});
+
+test('R3 is scoped to the two judgment roles — one stray flag must not open the ceiling', () => {
+  // Both facts that set the flag are a JUDGE's own prior verdict (a journalled
+  // `arch_review … verdict=violation`, or an integrator `needs-fix` on this
+  // epic). A fixer carrying it is not a re-judgement, and a route any role could
+  // open with one flag is not a ceiling that has to be earned.
+  for (const role of ROLES) {
+    const got = runCli(['model', role, '--contested'], CONSENTED).out;
+    if (role === 'arch-review' || role === 'integrator') assert.strictEqual(got, 'fable', role);
+    else assert.notStrictEqual(got, 'fable', `${role} reached the ceiling on --contested`);
+  }
+  assert.strictEqual(fableRoute('executor', { contested: true },
+    { ...cfg(), fable: 'auto', gsd: { runtime: 'claude' } }), null);
+});
+
+test('with pipeline.fable off or absent, a fired route degrades to opus at max and says why', () => {
+  // `off` is the default because an unconsented Fable request in a background
+  // session waits out `dialogExpiry` and then ends the turn WITHOUT SENDING:
+  // silence is not consent. The escalation still happens, one rung lower, on the
+  // axis that IS available.
+  for (const raw of [{ runtime: 'claude' }, { runtime: 'claude', pipeline: { fable: 'off' } }]) {
+    const r = runCli(['model', 'arch-review', '--json', '--input-tokens', '300000'], raw);
+    assert.deepStrictEqual(r.json(), { model: 'opus', effort: 'max' }, JSON.stringify(raw));
+    assert.ok(/pipeline\.fable/.test(r.err), `the reason must name the setting: ${r.err}`);
+  }
+  // Under the threshold nothing fired, so there is nothing to degrade and nothing
+  // to report — a warning on every dispatch is how a warning gets ignored.
+  const quiet = runCli(['model', 'arch-review', '--json', '--input-tokens', '200000'], { runtime: 'claude' });
+  assert.deepStrictEqual(quiet.json(), { model: 'opus', effort: 'xhigh' });
+  assert.strictEqual(quiet.err, '', quiet.err);
+});
+
+test('a fired route outranks the sonnet exemptions — and degrades the same way when shut', () => {
+  // The exemptions say "the model is not the gate here"; a route firing is the
+  // measured evidence that on THIS dispatch it is. So the guard leaves its
+  // exemption behind — to the ceiling with consent, and to the FLOOR at max
+  // without it, never to `sonnet` at max.
+  assert.deepStrictEqual(
+    runCli(['model', 'pr-sentinel', '--json', '--signature-state', 'repeat_exhausted'], CONSENTED).json(),
+    { model: 'fable', effort: 'max', strategy: 'rethink' });
+  const shut = runCli(['model', 'pr-sentinel', '--json', '--signature-state', 'repeat_exhausted'],
+    { runtime: 'claude' });
+  assert.deepStrictEqual(shut.json(), { model: 'opus', effort: 'max', strategy: 'rethink' });
+  assert.ok(/pipeline\.fable/.test(shut.err), shut.err);
+  // With no route, the exemption holds at every depth.
+  assert.deepStrictEqual(
+    runCli(['model', 'pr-sentinel', '--json', '--signature-state', 'repeat'], CONSENTED).json(),
+    { model: 'sonnet', effort: 'max', strategy: 'rethink' });
+});
+
+test('a route on a runtime with no 1M tier degrades the same way, naming the runtime', () => {
+  // The asymmetry is deliberate: `opus` instead of `fable` costs a smaller window
+  // on work that usually fits, while `fable` off Claude is a model id nothing
+  // resolves. On Codex the escalation is a `-deep` agent FILE (ADR-005 D8).
+  const unset = runCli(['model', 'arch-review', '--json', '--input-tokens', '300000'],
+    { pipeline: { fable: 'auto' } });
+  assert.deepStrictEqual(unset.json(), { model: 'opus', effort: 'max' });
+  assert.ok(/runtime/.test(unset.err), unset.err);
+  const codex = runCli(['model', 'arch-review', '--json', '--input-tokens', '300000'],
+    { runtime: 'codex', pipeline: { fable: 'auto' } });
+  assert.deepStrictEqual(codex.json(), { model: 'sonnet', effort: 'high' },
+    'the capped tier and the flat axis — this runtime\'s own ladder, untouched');
+});
+
+test('an override outranks a fired route, and the resolver says so rather than swallowing it', () => {
+  // Expressing the floor through `pipeline.models.*` — how it was piloted — is
+  // exactly this case, and it would have made every escalation unreachable.
+  const r = runCli(['model', 'arch-review', '--input-tokens', '300000'],
+    { runtime: 'claude', pipeline: { fable: 'auto', models: { 'arch-review': 'opus' } } });
+  assert.strictEqual(r.out, 'opus');
+  assert.ok(/outranks it/.test(r.err), r.err);
+});
+
+test('fableRoute is a pure function of the signals it is given', () => {
+  const consented = { ...cfg(), fable: 'auto', gsd: { runtime: 'claude' } };
+  assert.strictEqual(fableRoute('arch-review', {}, consented), null);
+  assert.strictEqual(fableRoute('arch-review', { inputTokens: 300000 }, consented).route, 'window');
+  assert.strictEqual(fableRoute('ci-fix', { signatureState: 'repeat_exhausted' }, consented).route, 'exhausted');
+  assert.strictEqual(fableRoute('integrator', { contested: true }, consented).route, 'contested');
+  // Nothing numeric, nothing fires: `Number(undefined)` is NaN and NaN > n is
+  // false, which is the shape of the defect this whole rule came from.
+  for (const bad of [undefined, '', 'lots', null]) {
+    assert.strictEqual(fableRoute('arch-review', { inputTokens: bad }, consented), null, String(bad));
+  }
+});
+
+test('pipeline.fable is coerced like every other consent knob: only a real value opts in', () => {
+  assert.strictEqual(withConfig({}).config.fable, 'off', 'the default is shut');
+  assert.strictEqual(withConfig({ fable: 'auto' }).config.fable, 'auto');
+  assert.strictEqual(withConfig({ fable: true }).config.fable, 'auto');
+  const bad = withConfig({ fable: 'yes please' });
+  assert.strictEqual(bad.config.fable, 'off');
+  assert.ok(bad.warnings.some((w) => /pipeline\.fable/.test(w)), bad.warnings.join('; '));
+  const window = withConfig({ fable_window_tokens: 0 });
+  assert.strictEqual(window.config.fable_window_tokens, 250000);
+  assert.ok(window.warnings.some((w) => /fable_window_tokens/.test(w)), window.warnings.join('; '));
+  assert.strictEqual(withConfig({ fable_window_tokens: 400000 }).config.fable_window_tokens, 400000);
+  // and the GSD-native namespace wins here as everywhere
+  assert.strictEqual(withRaw({ pipeline: { fable: 'off' }, delivery_pipeline: { fable: 'auto' } }).config.fable, 'auto');
+});
+
+suite('a signal that is ABSENT must never resolve UPWARD (ADR-004, on the ladder)');
+
+test('the two signals whose rows the floor removed are INERT, not upgrades', () => {
+  // The measured defects this rule came from: the executor's light path read
+  // `Number(signals.files) <= 2`, false on every dispatch that omitted `--files`,
+  // so 173 dispatches all bought the dearer answer; and review-fix's cheap branch
+  // read `codeChange === false`, which an ABSENT flag and an explicit "yes, code
+  // changed" both satisfied identically. Under the opus floor neither row exists,
+  // so the fix is structural rather than a branch: all three values agree.
+  for (const files of [undefined, 1, 2, 9, 'not a number']) {
+    const signals = { risk: 'medium', files };
+    assert.strictEqual(resolveModel('executor', signals, cfg()), 'opus', `files=${files}`);
+    assert.strictEqual(resolveEffort('executor', 'opus', cfg(), signals), 'high', `files=${files}`);
+  }
+  for (const codeChange of [undefined, false, true]) {
+    const signals = { codeChange };
+    assert.strictEqual(resolveModel('review-fix', signals, cfg()), 'opus', `codeChange=${codeChange}`);
+    assert.strictEqual(resolveEffort('review-fix', 'opus', cfg(), signals), 'high', `codeChange=${codeChange}`);
+  }
+});
+
+test('both spellings of the code-change signal are parsed, so silence is distinguishable', () => {
+  // The flag routes nothing now, but "no flag" and "yes, code changed" must stop
+  // being the same value on the record: the next row keyed on it would inherit
+  // the defect otherwise.
+  for (const flags of [[], ['--code-change'], ['--no-code-change']]) {
+    assert.deepStrictEqual(runCli(['model', 'review-fix', '--json', ...flags]).json(),
+      { model: 'opus', effort: 'high' }, flags.join(' '));
+  }
+});
+
+test('an absent signal resolves DOWN, for every role and every row it reads', () => {
+  // The property, stated over the whole table rather than per case: whatever the
+  // dispatch omits, the answer is never dearer than the answer it would have got
+  // with the signal supplied.
+  const DEARER = ['low', 'medium', 'high', 'xhigh', 'max'];
+  const withAll = { risk: 'high', type: 'alternatives', checkpoint: true, inputTokens: 300000, contested: true };
+  const consented = { ...cfg(), fable: 'auto', gsd: { runtime: 'claude' } };
+  for (const role of ROLES) {
+    const bare = resolveEffort(role, resolveModel(role, {}, consented), consented, {});
+    const full = resolveEffort(role, resolveModel(role, withAll, consented), consented, withAll);
+    assert.ok(DEARER.indexOf(bare) <= DEARER.indexOf(full), `${role}: ${bare} > ${full} with nothing passed`);
+    assert.notStrictEqual(resolveModel(role, {}, consented), 'fable', `${role} reached the ceiling on silence`);
+  }
+});
+
+test('a row a dispatch could not reach for want of a signal is named on stderr', () => {
+  // The direction of the warning inverted with the table: a missing signal is no
+  // longer a cost surprise, it is a DEPTH the dispatch quietly declined. It still
+  // has to be visible in a dispatch line rather than only in a shallow verdict.
+  const noRisk = runCli(['model', 'executor', '--json']);
+  assert.deepStrictEqual(noRisk.json(), { model: 'opus', effort: 'high' });
+  assert.ok(/--risk/.test(noRisk.err) && /xhigh/.test(noRisk.err), noRisk.err);
+  const noType = runCli(['model', 'research', '--json']);
+  assert.ok(/--type/.test(noType.err), noType.err);
+  const noTokens = runCli(['model', 'integrator', '--json']);
+  assert.ok(/--input-tokens/.test(noTokens.err), noTokens.err);
+  // A dispatch that passes what the role reads is SILENT — a warning that fires
+  // every time is how a warning teaches its reader to ignore warnings.
+  const supplied = runCli(['model', 'executor', '--json', '--risk', 'medium']);
+  assert.strictEqual(supplied.err, '', supplied.err);
+  assert.deepStrictEqual(supplied.json(), { model: 'opus', effort: 'high' });
+  assert.strictEqual(runCli(['model', 'ci-fix', '--json']).err, '', 'a role with no signal-keyed row says nothing');
+});
+
+test('signalGaps names the flag and what it decides, for each role that reads one', () => {
+  assert.deepStrictEqual(signalGaps('ci-fix', {}), [], 'no signal-keyed row, no gap');
+  assert.strictEqual(signalGaps('executor', {}).length, 1);
+  assert.deepStrictEqual(signalGaps('executor', { risk: 'low' }), []);
+  assert.deepStrictEqual(signalGaps('research', { type: 'facts' }), []);
+  assert.deepStrictEqual(signalGaps('arch-review', { inputTokens: 10 }), []);
+  assert.strictEqual(signalGaps('arch-review', { inputTokens: 'huge' }).length, 1,
+    'a value that is not a number is not a measurement');
+  // own-property only: a role name off Object.prototype is not a role
+  assert.deepStrictEqual(signalGaps('toString', {}), []);
+});
+
+test('an effort override on a repair role is honoured, and warned about (ADR-005 D3)', () => {
+  // It is read BEFORE the signature rule, so it also switches off the depth rung
+  // a repeated failure earns — which is why the effort TABLE could not be shipped
+  // as configuration at all.
+  const { config, warnings } = withConfig({ effort: { 'ci-fix': 'low' } });
+  assert.strictEqual(resolveEffort('ci-fix', 'opus', config, { signatureState: 'repeat' }), 'low');
+  assert.ok(warnings.some((w) => /ci-fix/.test(w) && /max/.test(w)), warnings.join('; '));
+  // A non-repair role gets no such warning: there is no escalation to shadow.
+  assert.deepStrictEqual(withConfig({ effort: { 'arch-review': 'max' } }).warnings, []);
 });
 
 done();

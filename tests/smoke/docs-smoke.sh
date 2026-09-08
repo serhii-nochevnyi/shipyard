@@ -213,6 +213,101 @@ for (const a of actionable.split(',').map((s) => s.trim().replace(/^['"]|['"]$/g
 }
 NODE
 
+# ── every home of the gsd-core pin must agree ────────────────────────────────
+# The pin lives in five files and nothing made them agree: T-25-01 moved three
+# of them to 1.13.0 and left `docker-compose.yml` and `.env.example` on 1.7.0,
+# so `cp .env.example .env && docker compose build` installed the release
+# ADR-003 D1 moved off — a functional regression, not a doc nit. Compare the
+# homes against EACH OTHER rather than against a literal: a spot-check would
+# need editing on every bump and would rot exactly the same way.
+pin_files=()
+pin_values=()
+add_pin() { # add_pin <file> <extracted value>
+  [[ -n "${2:-}" ]] || {
+    echo "docs smoke: cannot read GSD_CORE_VERSION out of $1 — the pin-agreement check would be comparing nothing (two empty extractions are equal)"
+    exit 1
+  }
+  pin_files+=("$1")
+  pin_values+=("$2")
+}
+add_pin Dockerfile \
+  "$(sed -n 's/^ARG GSD_CORE_VERSION=//p' Dockerfile | head -1)"
+add_pin Makefile \
+  "$(sed -n 's/^GSD_CORE_VERSION[[:space:]]*?=[[:space:]]*//p' Makefile | head -1)"
+add_pin docker-compose.yml \
+  "$(sed -n 's/.*GSD_CORE_VERSION:[[:space:]]*\${GSD_CORE_VERSION:-\([^}]*\)}.*/\1/p' docker-compose.yml | head -1)"
+add_pin .env.example \
+  "$(sed -n 's/^GSD_CORE_VERSION=//p' .env.example | head -1)"
+add_pin tests/smoke/codex-shipyard-smoke.sh \
+  "$(sed -n 's/^GSD_CORE_VERSION="\${GSD_CORE_VERSION:-\([^}]*\)}".*/\1/p' tests/smoke/codex-shipyard-smoke.sh | head -1)"
+
+if [[ "$(printf '%s\n' "${pin_values[@]}" | sort -u | wc -l | tr -d ' ')" != "1" ]]; then
+  echo "docs smoke: GSD_CORE_VERSION disagrees across its homes — a bare 'cp .env.example .env && docker compose build' would install a version the pin was moved off:"
+  for i in "${!pin_files[@]}"; do
+    echo "    ${pin_files[$i]} = ${pin_values[$i]}"
+  done
+  echo "  bring every home to one value (or teach this check about a home that is deliberately different)"
+  exit 1
+fi
+
+# ── the documented model ladder must match the resolver ──────────────────────
+# `docs/gsd_multilevel_delivery_pipeline.md` is what README.md calls the FULL
+# SPECIFICATION, so its §7.5 table outranks the README for anyone who follows
+# the pointer — and it went three reviews stale while every ticket that changed
+# the ladder was `conform` on its own diff. The fix is a doc test that READS THE
+# CODE: one row per role, compared against `model <role> --json`.
+node - <<'NODE'
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+const fail = (m) => { console.error(`docs smoke: ${m}`); process.exit(1); };
+
+const doc = 'docs/gsd_multilevel_delivery_pipeline.md';
+const text = fs.readFileSync(doc, 'utf8');
+// Bound the parse to §7.5 so a role name mentioned anywhere else in a 900-line
+// document cannot stand in for the row this test is looking for.
+const section = (text.split(/^## 7\.5\./m)[1] || '').split(/^## 8\./m)[0];
+if (!section) fail(`${doc} has no §7.5 model-policy section — the table this check compares against is gone`);
+const fence = (section.match(/```text\n([\s\S]*?)\n```/) || [])[1];
+if (!fence) fail(`${doc} §7.5 has no \`\`\`text block of roles — the ladder is documented as prose no test can check`);
+const rows = fence.split('\n');
+
+const script = path.resolve('plugins/delivery-pipeline/scripts/pipeline-config.cjs');
+const { ROLES } = require('./plugins/delivery-pipeline/scripts/pipeline-config.cjs');
+
+// The resolver reads `<cwd>/.planning/config.json`, and this project itself
+// legitimately carries `pipeline.models` overrides. The table documents SHIPPED
+// policy, so resolve from a config-free directory — otherwise the doc would be
+// measured against whatever this one checkout happens to be tuned to.
+const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-docs-ladder-'));
+try {
+  for (const role of ROLES) {
+    const row = rows.find((l) => new RegExp(`^${role}\\s`).test(l));
+    if (!row) fail(`${doc} §7.5 has no row for the role "${role}" — every role the resolver routes must be in the table`);
+    const [, tier, effort] = row.trim().split(/\s+/);
+    const out = execFileSync(process.execPath, [script, 'model', role, '--json'],
+      { cwd: bare, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const got = JSON.parse(out);
+    if (got.model !== tier || got.effort !== effort) {
+      fail(`${doc} §7.5 says ${role} is ${tier}/${effort}, but \`pipeline-config.cjs model ${role} --json\` returns ${got.model}/${got.effort} — the code is the policy, so update the table`);
+    }
+  }
+  // A row for something the resolver does not route is the other half of the
+  // drift: a renamed or retired role left standing in the specification.
+  for (const row of rows) {
+    if (!/^\S/.test(row)) continue;             // continuation lines of the "why" column
+    const first = row.trim().split(/\s+/)[0];
+    if (first === 'role' || !first) continue;   // the header
+    if (!ROLES.includes(first)) {
+      fail(`${doc} §7.5 has a row for "${first}", which is not a pipeline role (roles: ${ROLES.join(', ')})`);
+    }
+  }
+} finally {
+  fs.rmSync(bare, { recursive: true, force: true });
+}
+NODE
+
 # ── CI runs the same Node the image ships ────────────────────────────────────
 # .github/workflows/test.yml duplicates Dockerfile.base's NODE_VERSION, because
 # a workflow cannot read a Dockerfile ARG. A duplicated constant drifts
