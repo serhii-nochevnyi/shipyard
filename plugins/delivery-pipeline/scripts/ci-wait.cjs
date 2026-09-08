@@ -491,7 +491,22 @@ if (!JSON_OUT) {
 
 // Node has no synchronous sleep, and a busy loop would burn a core for fifteen
 // minutes. Sleeping in a child process is the portable version.
-const sleep = (s) => spawnSync(process.execPath, ['-e', `setTimeout(()=>{}, ${Math.round(s * 1000)})`], { timeout: (s + 5) * 1000 });
+//
+// `s` arrives FRACTIONAL — the caller passes the time left until the deadline in
+// seconds, and `--interval` takes any positive number — so both numbers handed
+// to `spawnSync` are derived from ONE rounding rather than rounded separately.
+// `timeout` must be an unsigned integer or Node throws `ERR_OUT_OF_RANGE`, and
+// it used to be `(s + 5) * 1000`: at s = 1.376 that is 6375.999999999999 and the
+// call threw. It threw on the LAST sleep of a wait, because `Math.min(INTERVAL_S,
+// …)` only picks the fractional value inside the final interval — so the throw
+// landed immediately before the deadline branch, and the empty-window counting
+// and three-strikes escalation this script exists to reach never ran. A waiter
+// that dies noisily teaches the loop to stop calling it, which is the hole in the
+// first place (see the header). Found by phase 26's integrator, 2026-09-08.
+const sleep = (s) => {
+  const ms = Math.round(s * 1000);
+  return spawnSync(process.execPath, ['-e', `setTimeout(()=>{}, ${ms})`], { timeout: ms + 5000 });
+};
 
 let rounds = 0;
 // A ticket earns an entry here the first time `checksOf` returns a READABLE
