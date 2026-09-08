@@ -652,15 +652,21 @@ function dutyItems() {
       // handed an action its own gate will decline.
       item.action = 'human-merge';
       item.why = NO_CI_WHY;
-    } else if (AUTO_MERGE && s.merge_scope === 'stacked' && limbBaseOf(id, base)) {
-      // Ready in every other respect, and `mergeOne` refuses this against LIVE
-      // GitHub regardless: the base is a limb (PR #52's shape). Say so first, so
-      // the guard is not handed an action its own gate will decline every round.
-      item.action = 'human-merge';
-      item.why = `green + conform, but its ${limbRemedy(id, base, limbBaseOf(id, base))}`;
     } else if (AUTO_MERGE && s.merge_scope === 'stacked') {
-      item.action = 'merge';
-      item.why = `green + conform → squash into ${base}`;
+      // One arm, one `limbBaseOf` call — folded together per Copilot review on
+      // #66: the limb check and the plain merge used to be two branches each
+      // re-scanning `tickets` via `limbBaseOf`'s `Object.entries().find()`.
+      // Ready in every other respect; `mergeOne` refuses a limb base (PR #52's
+      // shape) against LIVE GitHub regardless, so say so first here rather than
+      // hand the guard an action its own gate will decline every round.
+      const limbId = limbBaseOf(id, base);
+      if (limbId) {
+        item.action = 'human-merge';
+        item.why = `green + conform, but its ${limbRemedy(id, base, limbId)}`;
+      } else {
+        item.action = 'merge';
+        item.why = `green + conform → squash into ${base}`;
+      }
     } else {
       item.action = 'human-merge';
       item.why = AUTO_MERGE
