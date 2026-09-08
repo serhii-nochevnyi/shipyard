@@ -463,3 +463,53 @@ ADR-006 made this phase's acceptance rule was actually kept, including the one
 case (#64's M4) where it caught a guard that passed for the wrong reason. That
 last one is the strongest evidence the phase did what it set out to do — the rule
 found a defect in the ticket that wrote it.
+
+---
+
+## Addendum, 2026-09-09 — the fix-ticket landed; the three landing edits are post-merge BY CONSTRUCTION
+
+**Fix-ticket 1 is delivered.** T-27-09 (PR #72) merged into the epic. It wired
+`--base-tree <base_tree>` into both documented `gate-trailer.cjs write`
+invocations, each naming arch-review's own `base_tree:` output field as the
+source so a caller cannot substitute a branch name or an abbreviation, and added
+`--base-tree` to `tests/unit/trailer.test.cjs`'s `OPTIONAL_FLAGS` so both docs
+are now pinned against `USAGE` the way `--repo` already was.
+
+The evidence is in the order it was produced: the `OPTIONAL_FLAGS` row went in
+FIRST and failed 70/1 naming `deliver.md`, before any doc edit — so the green
+suite that preceded this ticket is now itself on record as the defect. The
+mutation (flag removed from a doc) was watched to fail and reverted. arch-review
+`conform`, degenerate-green clean, and the epic-reachability check passed
+byte-for-byte on all three files. No script changed; the mechanism was correct
+all along and only unreachable.
+
+**Items 2, 3 and 4 must happen AFTER the epic merges, and not out of caution —
+each would be wrong if done now.**
+
+- **ADR-003 D2's strikethrough** — the epic already modifies that file
+  (T-27-08). Editing it on the planning branch now produces a merge conflict for
+  the human doing the integration merge.
+- **The `CLAUDE.md` corrections** — every behaviour they would describe
+  (`ci-wait` no longer refusing on a board the cap has spent, the two new
+  stop-gate hatches, `epic-branch.sh refresh`, `gate-trailer.cjs carry`) lives in
+  the EPIC. `CLAUDE.md` on the default branch describes the code on the default
+  branch. Writing them before the merge is prose asserting a behaviour the
+  deployed code does not have — this repository's own named recurring defect, and
+  the subject of the phase these edits close.
+- **`max_concurrent_agents` back to `4`** — the agent-shaped count is in the
+  epic, and the conveyor executes `front.cjs` from the project checkout. Set to
+  `4` before the merge and the next session counts dispatch RECORDS against a cap
+  of four, which is the stall the value was raised to avoid.
+
+This is a live instance of the rule the phase itself surfaced: **a conveyor
+change is in force when it reaches the branch the conveyor RUNS from, not when
+its ticket merges.** The guard that landed T-27-09 hit the same wall from the
+other side — the `gate-trailer.cjs write --base-tree …` command the docs now
+prescribe exits 2 (`unexpected argument`) when run from the project root,
+because `main` has no such flag yet; it ran the call from the ticket worktree,
+which carries the epic's code, and said so. Docs and flag land together in this
+same epic, so the gap closes at the merge and leaves nothing behind.
+
+**Standing verdict.** The blocking half of `needs-fix` is resolved. The
+non-blocking half is a checklist for the minutes after the merge, recorded in
+`.planning/backlog/phase-27-followups.md`.
