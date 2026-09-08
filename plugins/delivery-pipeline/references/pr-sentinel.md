@@ -323,10 +323,11 @@ reinit is not optional.
   own id (the task id the Workflow tool returns, or the agent id the Agent tool
   returns) belongs in your report — `mark` stores the ticket, the role, the time
   and what you dispatched it at, and no id.
-  **The pair is the one `pipeline-config.cjs model <role> --json …` just gave you**,
-  including the `rethink` deepening — re-deriving it here would record the ladder's
-  opinion instead of your dispatch, and recording nothing is why the journal cannot
-  today say what any fix round ran at. Add `--effort-applied <effort>` only when the
+  **The pair AND the route are the ones `pipeline-config.cjs model <role> --json …`
+  just gave you**, including the `rethink` deepening — re-deriving either here
+  would record the ladder's opinion instead of your dispatch, and recording
+  nothing is why the journal cannot today say what any fix round ran at. Add
+  `--effort-applied <effort>` only when the
   Workflow tool carried the fixer (its `agent()` takes an effort); an `Agent`-spawned
   fixer runs at the session's own depth, so the flag is OMITTED and its absence is
   the honest "unmeasured". On the Codex bundle add

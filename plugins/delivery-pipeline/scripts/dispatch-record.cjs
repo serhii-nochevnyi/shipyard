@@ -352,6 +352,18 @@ function parseMarkFlags(argv, role) {
         '  and the route it returned together (--effort-applied is the other claim, and is not checked).'
       );
     }
+    // `route` and `{model, effort}` are the SAME claim in two encodings — not
+    // two claims the way `effort`/`effort_applied` are (that pair is left alone
+    // above on purpose: they measure different things). So a caller who passes
+    // `--route` alone is not under-specifying; the pair is read out of the
+    // route's own parse rather than left absent, which is what closes the gap
+    // Copilot found: a `--route`-only mark used to store a `reason` naming a
+    // model and effort while leaving the structured `model`/`effort` fields
+    // empty, and a reader of `model_overrides` or the ladder query would see a
+    // route text and no pair to cross-check it against. Disagreement is still
+    // refused above, before this ever runs.
+    if (decided.model === undefined) decided.model = parsed.tier.model;
+    if (decided.effort === undefined) decided.effort = parsed.effort.effort;
     decided.reason = route;
   }
   const agentFile = given.get('agent-file');

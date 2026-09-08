@@ -11,7 +11,7 @@
 //
 //   node pipeline-config.cjs resolve                      # effective config, JSON
 //   node pipeline-config.cjs model <role> [flags]         # one tier alias
-//   node pipeline-config.cjs model <role> --json [flags]  # {model, effort}
+//   node pipeline-config.cjs model <role> --json [flags]  # {model, effort, route}
 //                                                        # + strategy, with --signature-state
 //
 //   flags: --risk low|medium|high  --type <plan type>  --checkpoint
@@ -795,9 +795,13 @@ function capForRuntime(tier, cfg) {
 
 // A runtime name reaches the route from the CONFIG, so it is slugged before it
 // becomes a rule token: an operator's `runtime: "Claude Code"` would otherwise
-// emit a route with a space in it, which `parseRoute` — the grammar
-// dispatch-record validates against — would reject, and a legitimate dispatch
-// would be refused for a spelling in someone's config.
+// risk a route with a space in it, which `parseRoute` — the grammar
+// dispatch-record validates against — would reject. Today both call sites below
+// gate on an EXACT `=== 'codex'` match against the raw value before either ever
+// reaches this function, so `runtimeToken` only ever sees `'codex'` in practice —
+// this guards a FUTURE caller (a broadened match, a third call site) rather than
+// a live failure, and the function's own contract (never a bare punctuation
+// remnant, see below) should hold regardless of who calls it or how.
 const runtimeToken = (cfg) => {
   // A whitespace-only (or otherwise all-punctuation) runtime slugs to a bare
   // "-", which is non-empty and so slips past the `|| 'unset'` fallback below —
