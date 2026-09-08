@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Deterministic worktree lifecycle for ticket executors.
 #
-#   ticket-worktree.sh create <ticket-id> <branch> <base-ref>   # cuts from origin/<base-ref>
+#   ticket-worktree.sh create <ticket-id> <branch> <base-ref>   # cuts from origin/<base-ref> when it exists, else the given ref
 #   ticket-worktree.sh remove <ticket-id>
 #   ticket-worktree.sh path   <ticket-id>
 #   ticket-worktree.sh list            # human: `git worktree list`
