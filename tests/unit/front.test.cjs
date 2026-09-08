@@ -244,6 +244,32 @@ test('blocked tickets are parked with their reason and do not prevent a fixpoint
   assert.ok(f.why.T.includes('parent has no branch yet'));
 });
 
+// An UNKNOWN integration state is a blocker like any other here, and that is the
+// point: `state-sync.cjs` used to map a failed `gh api compare` onto zero commits
+// ahead, so the child of a merged cross-phase parent arrived with `ready: true`
+// and this function correctly filed it under `execute` — a base missing its own
+// declared dependency, handed to an executor. The board's job is to carry the
+// verdict, so the fix is upstream; this pins that the front does carry it, with
+// the reason a person needs, rather than needing a bucket of its own.
+test('a cross-phase child whose integration state was never observed is parked, not executable', () => {
+  const f = computeFront(
+    { C: { depends_on: ['P'] } },
+    {
+      P: { status: 'merged' },
+      C: {
+        status: 'pending',
+        ready: false,
+        blocked_by: ['P'],
+        blocked_reasons: { P: 'integration state unknown (gh compare failed: API rate limit exceeded) — retried next sync' },
+      },
+    }
+  );
+  assert.deepStrictEqual(f.actionable.execute, [], 'nothing may start on a base nobody has seen');
+  assert.deepStrictEqual(f.parked.blocked, ['C']);
+  assert.ok(/integration state unknown/.test(f.why.C), f.why.C);
+  assert.ok(/retried next sync/.test(f.why.C), 'the park is provisional, and says so');
+});
+
 test('a run-parked PR leaves the front (otherwise babysit loops forever)', () => {
   const state = { T: { status: 'pr-open', pr: 7, checks: checks(1, 0) } };
   assert.strictEqual(computeFront({ T: {} }, state).actionable_count, 1);

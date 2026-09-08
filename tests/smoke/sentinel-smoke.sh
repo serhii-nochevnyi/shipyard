@@ -995,6 +995,182 @@ else
   bad "the guard agrees the park lifted" "$(cat "$W/rs-duty.err"; head -20 "$W/rs-duty.json")"
 fi
 
+# ── a cross-phase parent is landed only when the comparison SAID so ──────────
+# `landed` was `!exists || ahead === 0` over `parseInt(cmp) || 0`, so a failed or
+# unparseable `gh api compare` — a rate limit, a network blip, an empty answer —
+# arrived as the number 0 and read as "the whole phase is already on main".
+# Reproduced in the audit (F07): parent P merged into its epic, the epic still
+# ahead of main, a rate-limited compare, and every phase-N+1 child of P became
+# `ready: true` on a base that does not contain P. Integration state is
+# `landed | not-landed | unknown`, and `unknown` parks the dependents with the
+# reason instead of being mapped to landed.
+#
+# Its own fixture and its own stub: this needs a MERGED parent in phase 1, a
+# second phase whose epic does not exist yet, and a compare it can fail on
+# demand — none of which the shared `$proj` above has.
+xproj="$W/crossphase"
+mkdir -p "$xproj/.planning/graph" "$W/bin6"
+cat > "$W/bin6/gh" <<'STUB'
+#!/usr/bin/env bash
+argv="$*"
+case "$argv" in
+  "repo view --json defaultBranchRef"*) echo "main" ;;
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  "pr list --state all"*)
+    echo '[{"number":601,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-01-parent","headRefOid":"6666666666666666666666666666666666666666","baseRefName":"epic/01-demo","mergedAt":"2026-01-02T00:00:00Z","createdAt":"2026-01-01T00:00:00Z","url":"https://example/601","title":"T-01-01: parent"}]' ;;
+  "pr list --state open"*) echo '[]' ;;
+  # phase 2's epic is deliberately absent: an epic that never started is landed
+  # by construction and is never compared, so the ONE compare this fixture makes
+  # is phase 1's — the fact under test.
+  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/01-demo\nticket/T-01-01-parent\n' ;;
+  # Ordered BEFORE the generic compare below, and the only call this fixture
+  # varies. Exit 1 with the message GitHub actually sends: `gh` fails, the
+  # tolerant helper returns null, and nothing about the phase has been observed.
+  "api repos/{owner}/{repo}/compare/main...epic/01-demo"*)
+    case "${SMOKE_COMPARE:-0}" in
+      fail) echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1 ;;
+      # An exit-0 answer that is not a commit count is the same absence of
+      # evidence: `parseInt("null") || 0` was the other half of the collapse.
+      garbage) echo "null" ;;
+      *) echo "${SMOKE_COMPARE:-0}" ;;
+    esac ;;
+  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
+  "pr list --head "*) echo "[]" ;;
+  *) echo "stub gh6: unhandled call: $argv" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin6/gh"
+cat > "$xproj/.planning/graph/tickets.json" <<'JSON'
+{
+  "epics": {
+    "1": { "branch": "epic/01-demo", "repos": [null] },
+    "2": { "branch": "epic/02-demo", "repos": [null] }
+  },
+  "tickets": {
+    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-parent",
+                 "title": "parent", "depends_on": [], "risk": "low" },
+    "T-02-01": { "phase": "2", "epic": "epic/02-demo", "branch": "ticket/T-02-01-child",
+                 "title": "child", "depends_on": ["T-01-01"], "risk": "low" }
+  }
+}
+JSON
+echo '{"pipeline":{}}' > "$xproj/.planning/config.json"
+xboard="$W/x-board.txt"
+xstate="$xproj/.planning/graph/delivery-state.json"
+xsync() { ( cd "$xproj" && PATH="$W/bin6:$PATH" env "$@" node "$SCRIPTS/state-sync.cjs" \
+    > "$xboard" 2>"$W/x-sync.err" ) \
+  || bad "state-sync runs on the cross-phase fixture" "$(cat "$W/x-sync.err")"; }
+xq() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).reduce((o,k)=>o&&o[k],s);process.stdout.write(String(v))' "$xstate" "$@"; }
+
+# The control first: a compare that answers 0 is positive evidence, and the child
+# is ready. This is the behaviour that must NOT change.
+xsync SMOKE_COMPARE=0
+has "a compare that answers 0 lands the phase and readies the child" "$xboard" "ready: T-02-01"
+[[ "$(xq T-02-01 ready)" == "true" ]] \
+  && ok "…and the board file says so too" \
+  || bad "an observed 0 readies the cross-phase child" "got: $(xq T-02-01 ready)"
+
+# A phase still ahead of main is not-landed — the existing block, kept honest.
+xsync SMOKE_COMPARE=3
+has "a phase still ahead of the base blocks its cross-phase children" "$xboard" "blocked: T-02-01"
+has "…and says the epic is what they are waiting for" "$xboard" "epic still ahead"
+
+# The defect: a compare that never answered.
+xsync SMOKE_COMPARE=fail
+has "a FAILED compare blocks the child instead of readying it" "$xboard" "blocked: T-02-01"
+has "…and names the reason a person can act on" "$xboard" "integration state unknown"
+has "…including the command that could not answer" "$xboard" "gh compare failed"
+has "…and that it is retried rather than final" "$xboard" "retried next sync"
+hasnt "…and never offers it as ready" "$xboard" "ready: T-02-01"
+[[ "$(xq T-02-01 ready)" == "false" ]] \
+  && ok "the board file agrees: nothing was proven, so nothing is ready" \
+  || bad "a failed compare must not ready the child" "got: $(xq T-02-01 ready)"
+
+# An exit-0 answer that is not a commit count is the same absence of evidence.
+xsync SMOKE_COMPARE=garbage
+has "an unparseable compare is unknown too, not zero" "$xboard" "integration state unknown"
+hasnt "…and its child is not ready either" "$xboard" "ready: T-02-01"
+
+# The board's epic line must not report a count it does not have: `null ahead of
+# main` is how "we could not tell" gets read as "nothing to land".
+xsync SMOKE_COMPARE=fail
+hasnt "the epic line never prints a null commit count" "$xboard" "null ahead of"
+has "…it says the state is unknown, and why" "$xboard" "integration state unknown"
+
+# …and the front the stop gate reads must place the child in the parked bucket,
+# not in `execute`. One fact, both readers.
+xfront="$xproj/.planning/graph/delivery-front.json"
+if node -e '
+const f = require(process.argv[1]);
+const actionable = Object.values(f.actionable || {}).flat();
+if (actionable.includes("T-02-01")) { console.error("actionable=" + JSON.stringify(f.actionable)); process.exit(1); }
+if (!((f.parked || {}).blocked || []).includes("T-02-01")) { console.error("parked=" + JSON.stringify(f.parked)); process.exit(1); }
+if (!/integration state unknown/.test(f.why["T-02-01"] || "")) { console.error("why=" + f.why["T-02-01"]); process.exit(1); }
+process.exit(0);
+' "$xfront" 2>"$W/x-front.err"; then
+  ok "the front parks the child on the unknown state and quotes the reason"
+else
+  bad "the front parks the child on an unknown integration state" "$(cat "$W/x-front.err")"
+fi
+
+# ── direct-to-main applies the same preconditions as epic-stacked ────────────
+# The availability and `unreachable_paths` checks lived INSIDE the epic-stacked
+# branch (audit F27), so in direct-to-main — including the legacy fallback a
+# pre-epic tickets.json triggers — a dependency-free ticket became `ready` while
+# its declared paths escaped the repo or its repository was unreachable. Both are
+# facts about whether the ticket can be executed AT ALL, so they belong above the
+# mode split.
+dmproj="$W/directmain"
+mkdir -p "$dmproj/.planning/graph" "$W/bin7"
+cat > "$W/bin7/gh" <<'STUB'
+#!/usr/bin/env bash
+argv="$*"
+case "$argv" in
+  "repo view --json defaultBranchRef"*) echo "main" ;;
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  # The foreign repo answers nothing: no access, or a typo in delivery.repo.
+  # loadRepo tolerates that and marks the repo unavailable.
+  *"--repo acme/other"*) echo "gh: Could not resolve to a Repository (HTTP 404)" >&2; exit 1 ;;
+  "api repos/acme/other/"*) echo "gh: Could not resolve to a Repository (HTTP 404)" >&2; exit 1 ;;
+  "pr list --state all"*) echo '[]' ;;
+  "pr list --state open"*) echo '[]' ;;
+  "api repos/{owner}/{repo}/branches"*) printf 'main\n' ;;
+  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
+  "pr list --head "*) echo "[]" ;;
+  *) echo "stub gh7: unhandled call: $argv" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin7/gh"
+cat > "$dmproj/.planning/graph/tickets.json" <<'JSON'
+{
+  "epics": {},
+  "tickets": {
+    "T-03-01": { "phase": "3", "branch": "ticket/T-03-01-escapes", "title": "escapes",
+                 "depends_on": [], "risk": "low", "unreachable_paths": true },
+    "T-03-02": { "phase": "3", "branch": "ticket/T-03-02-foreign", "title": "foreign",
+                 "depends_on": [], "risk": "low", "repo": "acme/other" }
+  }
+}
+JSON
+echo '{"pipeline":{"integration_mode":"direct-to-main"}}' > "$dmproj/.planning/config.json"
+dmboard="$W/dm-board.txt"
+dmstate="$dmproj/.planning/graph/delivery-state.json"
+( cd "$dmproj" && PATH="$W/bin7:$PATH" node "$SCRIPTS/state-sync.cjs" > "$dmboard" 2>"$W/dm-sync.err" ) \
+  || bad "state-sync runs in direct-to-main" "$(cat "$W/dm-sync.err")"
+dmq() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).reduce((o,k)=>o&&o[k],s);process.stdout.write(String(v))' "$dmstate" "$@"; }
+
+has "direct-to-main is the mode under test" "$dmboard" "integration mode: direct-to-main"
+has "a ticket whose paths escape the repo is blocked in direct-to-main too" "$dmboard" "blocked: T-03-01"
+has "…with the plan blocker, not a dependency one" "$dmboard" "awaiting plan"
+[[ "$(dmq T-03-01 ready)" == "false" ]] \
+  && ok "…and the board file never calls it ready" \
+  || bad "an unreachable-paths ticket is not ready in direct-to-main" "got: $(dmq T-03-01 ready)"
+has "an unreachable repository blocks its ticket in direct-to-main too" "$dmboard" "awaiting repo"
+[[ "$(dmq T-03-02 ready)" == "false" ]] \
+  && ok "…and that ticket is not ready either" \
+  || bad "a ticket in an unreachable repo is not ready in direct-to-main" "got: $(dmq T-03-02 ready)"
+hasnt "neither is offered to an executor that would find nothing" "$dmboard" "ready: T-03-01"
+
 
 echo
 echo "$pass passed, $fail failed"
