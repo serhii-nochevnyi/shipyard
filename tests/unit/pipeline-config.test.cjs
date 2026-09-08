@@ -409,6 +409,41 @@ test('delivery_pipeline.* still wins over pipeline.* for these keys', () => {
   assert.strictEqual(config.auto_merge, 'off');
 });
 
+suite('merge_without_ci — "this repo has no CI" is a claim only the project can make');
+
+// A PR with NO reported checks is not a green PR: nothing ran. The board and the
+// guard both refuse to land one, so the escape hatch for a repo that genuinely
+// has no pipeline has to be an explicit setting rather than an inference — and
+// it fails towards the human, exactly like `preauthorized`.
+
+test('the default is false — absence of checks is never taken as a pass', () => {
+  assert.strictEqual(withConfig(undefined).config.merge_without_ci, false);
+  assert.strictEqual(DEFAULTS.merge_without_ci, false);
+});
+
+test('a real true opts in', () => {
+  assert.strictEqual(withConfig({ merge_without_ci: true }).config.merge_without_ci, true);
+});
+
+test('the string spellings JSON config files acquire are accepted', () => {
+  assert.strictEqual(withConfig({ merge_without_ci: 'true' }).config.merge_without_ci, true);
+  assert.strictEqual(withConfig({ merge_without_ci: 'false' }).config.merge_without_ci, false);
+});
+
+test('anything else is false WITH a warning — a value that looks like consent is not', () => {
+  const { config, warnings } = withConfig({ merge_without_ci: 'yes' });
+  assert.strictEqual(config.merge_without_ci, false);
+  assert.ok(warnings.some((w) => /merge_without_ci/.test(w)), warnings.join('; '));
+});
+
+test('delivery_pipeline.merge_without_ci outranks pipeline.merge_without_ci', () => {
+  const { config } = withRaw({
+    pipeline: { merge_without_ci: true },
+    delivery_pipeline: { merge_without_ci: false },
+  });
+  assert.strictEqual(config.merge_without_ci, false);
+});
+
 suite('pr-sentinel model routing');
 
 test('the guard starts cheap and is raised by risk, not by attempts (ADR-001 D1)', () => {

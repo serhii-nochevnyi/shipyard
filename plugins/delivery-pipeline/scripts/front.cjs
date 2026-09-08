@@ -16,7 +16,10 @@
 //   actionable now (work the run can start this second, no waiting involved):
 //     execute   — undelivered, ready, no branch yet
 //     publish   — branch pushed, PR missing (an executor died between the two)
-//     fix       — open PR with failing checks
+//     fix       — open PR with failing checks, or one whose BASE HAS MOVED (the
+//                 remedy is base-merge, and the guard's duty says so by name:
+//                 every other answer about such a PR measures a merge base that
+//                 no longer exists)
 //     finalize  — open PR, checks green: threads/arch-review/conform gate/undraft
 //     merge     — open PR green + conform, targeting the STACK (epic/parent):
 //                 the sentinel squashes it in (auto-merge only, see below)
@@ -26,21 +29,32 @@
 //                 actionable, because taking it again is duplicate work; not
 //                 parked, because nobody has given up; and never a fixpoint,
 //                 because the round has to come back for the result
+//     parent    — stacked on a parent whose PR is still open (parent-moving.cjs).
+//                 The guard has answered `wait-parent` here since it was written;
+//                 the board had no such bucket, so the same ticket read as
+//                 fix/finalize/merge — work the loop would not take (the bucket is
+//                 the guard's) and the guard would not do either
 //   parked (compatible with a fixpoint — only a human or a replan moves these):
 //     merge_human — green, out of draft, but the merge is a human action
-//                   (auto-merge off, direct-to-main, or the PR targets the
-//                   integration branch)
+//                   (auto-merge off, direct-to-main, the PR targets the
+//                   integration branch, or NO checks were reported at all — see
+//                   noCiHold: "nothing ran" is not a green the run may land on)
 //     human     — a human_checkpoint ticket that has cleared its gate and whose
-//                 judgement nobody has supplied yet (a person holds the key), or
-//                 a child held behind an OPEN checkpoint parent until it lands
+//                 judgement nobody has supplied yet (a person holds the key), a
+//                 child held behind an OPEN checkpoint parent until it lands, or
+//                 a PR whose CHANGES_REQUESTED verdict stands with NO unresolved
+//                 thread left — a fixer has nothing to service there, only a
+//                 reviewer can re-review or dismiss it
 //     blocked   — dependencies unsatisfied, or parked by the run (--parked)
 //     done      — merged
 //
-// fixpoint = no actionable work, nothing waiting on CI, and nothing out with an
-// agent. A PR whose checks are still running is NOT a fixpoint: the round has to
-// come back to it. But it is also not a reason to block — the run serves the rest
-// of the front meanwhile, and only ever `--watch`es when that PR is the last
-// thing left. A dispatched ticket reads the same way for the same reason.
+// fixpoint = no actionable work, nothing waiting on CI, nothing held behind a
+// moving parent, and nothing out with an agent. A PR whose checks are still
+// running is NOT a fixpoint: the round has to come back to it. But it is also not
+// a reason to block — the run serves the rest of the front meanwhile, and when a
+// wait IS all that is left the sanctioned move is `ci-wait.cjs`, a foreground wait
+// with a budget that returns on the first PR to settle. A dispatched ticket and a
+// child held behind a moving parent read the same way for the same reason.
 //
 // OWNERSHIP. fix/finalize/merge are the PR SENTINEL's duty (sentinel.cjs), which
 // runs alongside the main loop; execute/publish belong to the main loop. The
@@ -59,6 +73,14 @@ const { escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'))
 // that decides when it lifts. (dispatch-record.cjs requires front.cjs back, but
 // only lazily and only from its CLI, so there is no half-built module here.)
 const { dispatchWhy, activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
+// The OTHER predicate the guard and the board must not spell twice — "is this
+// ticket's parent still being driven?". It lived in sentinel.cjs alone, which is
+// why the board offered tickets the guard was refusing. One home, one direction:
+// this module imports nothing back.
+const { movingParentOf, movingParentWhy } = require(path.join(__dirname, 'parent-moving.cjs'));
+// The trailer's classification comes from its own module — the board and the
+// guard (sentinel.cjs) must never disagree about whether a verdict counts.
+const { gateConform: trailerConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
 
 // ── the checkpoint predicates, in ONE home ──────────────────────────────────
 //
@@ -103,6 +125,126 @@ function checkpointParentOf(id, tickets, state) {
   if (!parent) return null;
   if (!((tickets && tickets[parent]) || {}).human_checkpoint) return null;
   return ((state && state[parent]) || {}).status === 'pr-open' ? parent : null;
+}
+
+// ── the NO-CI hold, in the same ONE home, for the same reason ───────────────
+//
+// `none_reported` means nothing ran, not that everything passed. It used to
+// count as green all the way into `actionable.merge`, so a PR in a repo whose
+// pipeline never registered was squashed into the epic with no test having run;
+// state-sync warns about it in a line nobody reads at 3am.
+//
+// So both readers withhold the two actions that walk such a PR towards landing —
+// the squash itself, and the mechanical `undraft` that readies it for one — and
+// report the merge as a human's. Only those two: the architecture verdict and
+// the review threads are real work whatever CI did, and a `finalize` withheld
+// there would strand a PR nobody is servicing.
+//
+// Gated on `autoMerge` deliberately. With auto-merge off the human merges it in
+// either case, and readying the PR is a courtesy to them (the duty's
+// `checks_note` already says what "green" meant) — holding the draft there
+// would leave a PR nobody can land at all.
+// The three facts are ANDed, so their ORDER cannot change the answer — but it
+// decides whether the front's config read happens at all, which is why the cheap
+// ones are settled first. `merge_without_ci` is the only expensive input (on the
+// board it comes from the project's config file), so it is consulted LAST and may
+// arrive as a THUNK: a caller that already holds the value passes the value, and
+// one that would have to go and find it passes a function that is never called
+// unless a PR with no reported checks is actually in hand. Reviewer-found on
+// PR #44: front.cjs resolved it eagerly to build this options object, so every
+// `computeFront` opened the file — including the overwhelming majority of boards
+// where no PR has `none_reported` and the answer is `false` either way. The
+// short-circuit lives HERE rather than at the call site on purpose: the rule has
+// two readers (this board and sentinel.cjs's guard) and duplicating any conjunct
+// into one of them is how the two come to disagree.
+function noCiHold(checks, opts = {}) {
+  if (opts.autoMerge !== true) return false;
+  if ((checks || {}).none_reported !== true) return false;
+  const mergeWithoutCi = typeof opts.mergeWithoutCi === 'function'
+    ? opts.mergeWithoutCi()
+    : opts.mergeWithoutCi;
+  return mergeWithoutCi !== true;
+}
+
+// ONE sentence for the fact, quoted by the board and the guard rather than
+// written twice: the remedy is a decision with two branches, and a reader who is
+// told only one of them ("wait") never reaches for the setting.
+const NO_CI_WHY = 'no CI checks were reported — nothing ran, so "green" here is the absence of evidence '
+  + 'rather than evidence. Either confirm this repo has no CI '
+  + '(`delivery_pipeline.merge_without_ci: true`) or wait for the checks to register; until then the merge '
+  + 'is a human\'s.';
+
+// ── the verdict a fixer cannot service, in the same ONE home ────────────────
+//
+// A review DECISION outlives the threads it was filed with: a reviewer who
+// requested changes in a summary comment, or a bot whose threads were all
+// resolved while its verdict stood, leaves CHANGES_REQUESTED with ZERO
+// unresolved threads. Both readers used to send a fixer at that state — the
+// guard as `review-fix`, the board as `finalize` ("review not settled") — and
+// the fixer returned having done nothing, because there was nothing to service:
+// the threads are closed and the verdict is not lifted by resolving them or by
+// pushing. The signature then repeated until the attempt budget escalated a
+// ticket nobody owed work on.
+//
+// The owner is a PERSON, so this is `waiting.human` and not `parked`: nobody
+// owes work, a reviewer holds the key.
+//
+// UNKNOWN is not zero. The count comes from a GraphQL call that can fail, and
+// "we could not read the threads" must fail towards the work — parking a PR on a
+// human over an API hiccup is the more expensive mistake. Only a real 0 routes.
+function reviewStandsAlone(reviewDecision, unresolvedCount) {
+  if (reviewDecision !== 'CHANGES_REQUESTED') return false;
+  return unresolvedCount === 0;
+}
+
+// ONE sentence, quoted by both readers. It has to name the ACT that lifts the
+// state, or the reader is told to wait with no idea for what.
+const REVIEW_STANDS_WHY = 'CHANGES_REQUESTED stands with no unresolved thread — a reviewer must re-review '
+  + 'or dismiss the verdict. A fixer has nothing to service: every thread is closed, and the verdict is '
+  + 'lifted neither by resolving them nor by pushing.';
+
+// ── the base moved under the branch, in the same ONE home again ─────────────
+//
+// A green measured against a base that has since MOVED is not a green:
+// retargeting a cascade child updates where it points and re-runs nothing, so
+// its check result still describes a merge base that no longer exists.
+// `sentinel.cjs merge` has refused on this since T-24-05 — with a message and no
+// action, while the board went on offering the merge that refusal was waiting
+// for. One predicate, two readers, and the remedy is named rather than described.
+//
+// TWO signals, because neither alone suffices (the merge gate's own reasoning):
+// `merge_state` is GitHub's `mergeStateStatus`, authoritative but reported as
+// BEHIND only where branch protection requires up-to-date branches; `behind_by`
+// is our own `gh api compare` count, which works everywhere but is a second
+// opinion rather than a verdict. DIRTY is the third state and a different fact —
+// conflicts, not staleness — with the same remedy and a different sentence.
+function baseMoved(facts) {
+  const f = facts || {};
+  const st = String(f.merge_state || '').toUpperCase();
+  const n = Number(f.behind_by);
+  const behind = Number.isFinite(n) && n > 0 ? n : null;
+  if (st === 'DIRTY') return { kind: 'dirty', behind };
+  if (st === 'BEHIND') return { kind: 'behind', behind };
+  if (behind !== null) return { kind: 'behind', behind };
+  return null;
+}
+
+// The remedy, as a command and not as a description. `base-merge.cjs` takes the
+// base's edition for conflicts in files the ticket does not declare and leaves
+// the real ones for judgement; the anti-rebase rule travels with it, because a
+// pushed branch rebased is a force-push that dismisses approvals and re-anchors
+// every thread the round just resolved.
+function baseMergeWhy(moved, base) {
+  const where = base ? `\`${base}\`` : 'its base';
+  const how = 'In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` '
+    + '(or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a '
+    + 'force-push that dismisses approvals and re-anchors resolved threads.';
+  if (moved.kind === 'dirty') {
+    return `merge conflicts with ${where} — the base moved and the two editions disagree. ${how}`;
+  }
+  const far = moved.behind !== null ? `${moved.behind} commit(s)` : 'some commits';
+  return `the base moved: ${where} is ${far} ahead of this branch, so any green here was measured against a `
+    + `merge base that no longer exists. ${how}`;
 }
 
 const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
@@ -150,19 +292,81 @@ function computeFront(tickets, state, opts = {}) {
   // in; the front never guesses it, because the difference is whether an unmerged
   // green PR is the run's work or a human's.
   const autoMerge = opts.autoMerge === true;
+  // "This repo has no CI" is a claim only the PROJECT can make, so it is a
+  // config knob (`delivery_pipeline.merge_without_ci`) and never an inference.
+  // The caller may pass it and that always wins; otherwise it is resolved from
+  // the project's own config the first time a PR with no checks is actually
+  // seen — lazily, so an ordinary board still reads no file here.
+  //
+  // The fallback exists because computeFront has THREE callers (state-sync.cjs,
+  // dispatch-record.cjs and the CLI below) and a board that answered
+  // `merge_human` while sentinel.cjs — which reads the config directly — landed
+  // the same PR is exactly the board/guard disagreement the shared predicates
+  // above exist to prevent.
+  //
+  // So the fallback must not resolve from `process.cwd()`. state-sync and this
+  // CLI run at the project root and would be served by it, but
+  // `dispatch-record.cjs refreshFront` is DOCUMENTED to run from a ticket
+  // worktree — which has no `.planning/` of its own when the project keeps it
+  // untracked — and it rewrites `delivery-front.json` from what it computes. A
+  // cwd read there would answer `false` on a project that had explicitly set
+  // `merge_without_ci: true`, so every dispatch mark would silently demote the
+  // very PRs the guard is entitled to land: the disagreement, reintroduced by
+  // the fallback meant to prevent it. Calling that "conservative" was the excuse
+  // (reviewer-found on PR #44) — the two answers are not more and less cautious,
+  // they are inconsistent, and the board must never contradict the guard.
+  //
+  // `graph-dir.cjs` is this repo's one answer to "which project does this
+  // invocation belong to": `--graph`/`SHIPYARD_GRAPH_DIR` → cwd → the worktree's
+  // OWN repository. The project root is the graph's grandparent. Only when
+  // nothing resolves does it fall back to the cwd — and an unreadable config is
+  // still `false`, because absence is not consent.
+  let mergeWithoutCiCache;
+  const mergeWithoutCi = () => {
+    if (opts.mergeWithoutCi !== undefined) return opts.mergeWithoutCi === true;
+    if (mergeWithoutCiCache === undefined) {
+      try {
+        const { resolveGraphDir } = require(path.join(__dirname, 'graph-dir.cjs'));
+        const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
+        const { dir, how } = resolveGraphDir(process.argv.slice(2), process.cwd());
+        const root = how === 'none' ? process.cwd() : path.resolve(dir, '..', '..');
+        mergeWithoutCiCache = loadConfig(root).config.merge_without_ci === true;
+      } catch (e) {
+        mergeWithoutCiCache = false; // unreadable config → the safe answer, never the permissive one
+      }
+    }
+    return mergeWithoutCiCache;
+  };
+  // The resolver is handed over UNCALLED. `noCiHold` settles `autoMerge` and
+  // `none_reported` first and only then asks for it, so the promise the comment
+  // above makes — "an ordinary board still reads no file here" — is kept by the
+  // predicate's own structure rather than by this line remembering to.
+  const heldForNoCi = (s) => noCiHold(s.checks, { autoMerge, mergeWithoutCi });
   // Expected CI length per ticket, in seconds, supplied by the caller —
   // `ciEstimates` below derives it and BOTH entry points pass it in. It is data,
   // not a lookup: computeFront is a pure function over its inputs and reads no
   // file, so the journal is opened by the caller or not at all.
   const ciEst = opts.ci_estimates || {};
-  // The parent rule, bound to this call's graph. `sentinel.cjs` binds the SAME
-  // function over its own — the two cannot disagree because there is only one.
+  // The parent rules, bound to this call's graph. `sentinel.cjs` binds the SAME
+  // functions over its own — the two cannot disagree because there is only one of
+  // each.
   const checkpointParent = (id) => checkpointParentOf(id, tickets, state);
+  // The guard's parked set is `--parked` ∪ escalations ∪ drift verdicts (see
+  // sentinel.cjs's PARKED). The board holds the same three facts under three
+  // names, so the union is built here rather than passed: a narrower set on
+  // either side means the two disagree the moment a human parks a parent.
+  const parkedForParent = new Set([...parkedIds, ...Object.keys(drifted), ...Object.keys(escalated)]);
+  const movingParent = (id) => movingParentOf(id, { tickets, state, parked: parkedForParent });
 
   const actionable = { execute: [], publish: [], fix: [], finalize: [], merge: [] };
-  const waiting = { ci: [], dispatched: [], merge_human: [], human: [] };
+  const waiting = { ci: [], dispatched: [], parent: [], merge_human: [], human: [] };
   const parked = { blocked: [], done: [] };
   const why = {};
+  // Which parent each `waiting.parent` child is held behind. The FRONT decides
+  // who that is, so `ci-wait.cjs` can watch the parent's pipeline without
+  // re-deriving graph semantics from tickets.json — the board is the one place
+  // that answers "what is this run waiting for".
+  const parentOf = {};
 
   for (const id of Object.keys(state)) {
     const s = state[id] || {};
@@ -214,6 +418,25 @@ function computeFront(tickets, state, opts = {}) {
     }
 
     if (s.status === 'pr-open') {
+      // FIRST inside the branch, and the position is the whole point: `dutyItems`
+      // tests `parentIsMoving` BEFORE the failing-checks branch, so a red child of
+      // an open parent is `wait-parent` and not `ci-fix`. Placed after the checks
+      // chain instead, the board would still offer `fix`/`finalize`/`merge` on
+      // exactly the tickets that cost a second CI round — which is the
+      // disagreement this bucket exists to end. Do not reorder.
+      //
+      // NOTE for T-24-09: the stop gate's CI-only branch reads `waiting.ci`
+      // alone, so a board holding nothing but `waiting.parent` still permits a
+      // stop today. That ticket extends the gate; this one gives it the bucket to
+      // read.
+      const movingBase = movingParent(id);
+      if (movingBase) {
+        waiting.parent.push(id);
+        parentOf[id] = movingBase;
+        why[id] = `PR #${s.pr}: stacked on ${movingParentWhy(movingBase, state)} — driving this one to green now `
+          + 'buys a green the base move will undo. Drive the parent; this follows when it lands.';
+        continue;
+      }
       const c = s.checks || {};
       // `none_reported` means nothing ran, not that everything passed —
       // state-sync warns about it separately; for the front it counts as green
@@ -222,9 +445,27 @@ function computeFront(tickets, state, opts = {}) {
       if ((c.failing || 0) > 0) {
         actionable.fix.push(id);
         why[id] = `PR #${s.pr}: ${c.failing} failing check(s)`;
+      } else if (baseMoved(s)) {
+        // Same bucket as a failing check and the same owner (the guard), because
+        // it is the same shape of work: something has to change on the branch
+        // before anything else about it means anything. Placed AFTER the failing
+        // branch on purpose — a red check is the louder fact and the fixer sees
+        // the stale base in its own dispatch either way — and BEFORE `waiting.ci`,
+        // because a run measuring a moved base is a run to restart, not to wait
+        // for. `dutyItems` orders the same two facts the same way.
+        actionable.fix.push(id);
+        why[id] = `PR #${s.pr}: ${baseMergeWhy(baseMoved(s), s.pr_base || s.base)}`;
       } else if ((c.pending || 0) > 0) {
         waiting.ci.push(id);
         why[id] = `PR #${s.pr}: ${c.pending} check(s) still running`;
+      } else if (s.draft && gateConform(s) && heldForNoCi(s)) {
+        // A certified draft with nothing left but the readying, in a repo where
+        // nothing ran. `finalize` here would be dispatched every round to do that
+        // one mechanical step the guard now withholds — "every round re-proposes
+        // the same impossible action", which is the loop this bucket exists to
+        // end. An UNCERTIFIED draft falls through: arch-review is still owed.
+        waiting.merge_human.push(id);
+        why[id] = `PR #${s.pr}: ${NO_CI_WHY} It is left as a draft, which is what a draft says.`;
       } else if (s.draft) {
         // Draft is the pre-gate state: threads, arch-review and the conform gate
         // are all still ahead, and every one of them is work the run can do now.
@@ -240,6 +481,19 @@ function computeFront(tickets, state, opts = {}) {
         // stacked base) is still enforced there, exactly as for any other ticket.
         waiting.human.push(id);
         why[id] = `PR #${s.pr}: human_checkpoint — awaiting approval/merge`;
+      } else if (reviewStandsAlone(s.review_decision, s.unresolved_count)) {
+        // A verdict with nothing behind it to service. `waiting.human`, NOT
+        // parked: nobody owes work, a reviewer holds the key — the same class as
+        // a child held behind an open checkpoint parent. Placed after the
+        // checkpoint branch because that person is already being waited for, and
+        // after the draft branches because a draft still owes arch-review and the
+        // conform gate, which are real work whatever the reviewer said.
+        //
+        // The thread count is state's (`unresolved_count`); the guard reads it
+        // live off the same `reviewers.cjs unresolved` call it already makes. The
+        // predicate is shared so the two cannot disagree about the same PR.
+        waiting.human.push(id);
+        why[id] = `PR #${s.pr}: ${REVIEW_STANDS_WHY}`;
       } else if (autoMerge && gateConform(s) && s.merge_scope === 'stacked' && checkpointParent(id)) {
         // Ready in every respect, and still not the run's to land: the base is a
         // parent whose ticket is a human_checkpoint with an OPEN PR. Squashing
@@ -265,6 +519,12 @@ function computeFront(tickets, state, opts = {}) {
         why[id] = needsHuman(tickets && tickets[parent])
           ? `PR #${s.pr}: green + conform, but its base is ${parent} — a human_checkpoint PR still open. It merges once that one lands.`
           : `PR #${s.pr}: green + conform, but its base is ${parent} — a pre-authorized human_checkpoint PR still open. Nobody is reading it, but it lands first; this one follows.`;
+      } else if (autoMerge && gateConform(s) && s.merge_scope === 'stacked' && heldForNoCi(s)) {
+        // Ready in every other respect, and nothing verified it. `sentinel.cjs
+        // merge` refuses this against LIVE GitHub, so the board must not offer
+        // it — the front must never offer what the guard declines.
+        waiting.merge_human.push(id);
+        why[id] = `PR #${s.pr}: ${NO_CI_WHY}`;
       } else if (autoMerge && s.review_decision !== 'CHANGES_REQUESTED' && gateConform(s) && s.merge_scope === 'stacked') {
         // The sentinel's merge: into the epic or a parent ticket branch only.
         // `merge_scope` is set by state-sync; an integration-branch target never
@@ -283,7 +543,11 @@ function computeFront(tickets, state, opts = {}) {
         // recorded on the PR. With auto-merge on that trailer IS the gate, so
         // the run owes the work rather than parking on a human.
         actionable.finalize.push(id);
-        why[id] = `PR #${s.pr}: green, no \`gate_status: arch-review=conform\` trailer — threads + arch-review still owed`;
+        // The words follow the STATE, not just its absence: "no trailer" about a
+        // body that visibly carries one sends the run looking for the wrong
+        // thing, and the stale case has to name both SHAs or the remedy
+        // ("re-judge THIS head") is a guess.
+        why[id] = `PR #${s.pr}: green, ${gateWhy(s.gate, s.head_sha)} — threads + arch-review still owed`;
       } else {
         // Green, out of draft, not approved: bot/human review is still open, so
         // there are threads to service and an arch-review verdict to record.
@@ -322,6 +586,7 @@ function computeFront(tickets, state, opts = {}) {
     merge: actionable.merge.length,
     ci: waiting.ci.length,
     dispatched: waiting.dispatched.length,
+    parent: waiting.parent.length,
     merge_human: waiting.merge_human.length,
     human: waiting.human.length,
     blocked: parked.blocked.length,
@@ -330,8 +595,12 @@ function computeFront(tickets, state, opts = {}) {
   const actionableCount = ORDER.reduce((n, k) => n + actionable[k].length, 0);
   // A dispatch counts against the fixpoint exactly as a running CI queue does:
   // the work is moving and its result has to be collected. Saying YES here would
-  // hand the human a summary written before the answers came back.
-  const fixpoint = actionableCount === 0 && waiting.ci.length === 0 && waiting.dispatched.length === 0;
+  // hand the human a summary written before the answers came back. A child held
+  // behind a moving parent is the same class of fact: the parent is being driven,
+  // and when it lands this ticket becomes work again — so the round has to come
+  // back for it.
+  const fixpoint = actionableCount === 0 && waiting.ci.length === 0
+    && waiting.dispatched.length === 0 && waiting.parent.length === 0;
   // SHALLOWEST FIRST within a stack — the THIRD sort key now; the full order is
   // stated at the comparator below. A ticket stacked on an open parent is
   // work that will have to be redone: when the parent lands, this branch's base
@@ -431,6 +700,12 @@ function computeFront(tickets, state, opts = {}) {
   const sentinel = {
     duty: SENTINEL_BUCKETS.flatMap((k) => actionable[k]),
     waiting_ci: waiting.ci.slice(),
+    // Held children are the guard's too (deliver.md's bucket table marks
+    // `parent` [SENTINEL]) and count exactly as `waiting_ci` does: the guard has
+    // to come back when the parent lands. Without this the board would print
+    // `sentinel: clear` over a guard that still owes a whole subtree, and
+    // deliver.md reads that line as one of the two conditions for completion.
+    waiting_parent: waiting.parent.slice(),
     // The guard's share of the dispatched list — the tickets that left `duty`
     // BECAUSE they were handed to the guard or to one of its fixers. Without
     // this the board would print `sentinel: clear — no open PR needs guarding`
@@ -439,7 +714,7 @@ function computeFront(tickets, state, opts = {}) {
     dispatched: waiting.dispatched.filter((id) => SENTINEL_ROLES.has(roleOfDispatch(dispatched[id]))),
   };
   sentinel.clear = sentinel.duty.length === 0 && sentinel.waiting_ci.length === 0
-    && sentinel.dispatched.length === 0;
+    && sentinel.dispatched.length === 0 && sentinel.waiting_parent.length === 0;
 
   // How much of the actionable list is work the run has already moved past. The
   // stop condition has to distinguish "there is live work" from "there is only
@@ -449,13 +724,21 @@ function computeFront(tickets, state, opts = {}) {
   const actionableIds = ORDER.flatMap((k) => actionable[k]);
   const leftBehindCount = actionableIds.filter((id) => leftBehind(id)).length;
 
-  return { actionable, waiting, parked, why, counts, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, sentinel, roles: BUCKET_ROLES };
+  return { actionable, waiting, parked, why, counts, parent_of: parentOf, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, sentinel, roles: BUCKET_ROLES };
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
-// (it survives a squash merge) and parsed by state-sync into state[id].gate.
+// (it survives a squash merge) and parsed by state-sync into state[id].gate,
+// beside the head it was rendered against (state[id].head_sha).
+//
+// A verdict for ANOTHER head does not count: the observed sequence is verdict →
+// undraft → a bot review lands on the undrafted PR → review-fix pushes → CI goes
+// green again, and the untouched trailer would otherwise offer a merge of a diff
+// arch-review never saw. `sentinel.cjs merge` refuses that against the LIVE head,
+// so the board has to refuse it too — the front must never offer what the guard
+// declines, or every round re-proposes the same impossible action.
 function gateConform(s) {
-  return String(((s && s.gate) || {})['arch-review'] || '').toLowerCase() === 'conform';
+  return trailerConform((s || {}).gate, (s || {}).head_sha);
 }
 
 // EXPECTED CI LENGTH, as a per-repo median over the delivery journal.
@@ -590,19 +873,30 @@ function formatFront(front) {
   const wparts = [];
   if (front.waiting.ci.length) wparts.push(`ci: ${front.waiting.ci.join(', ')}`);
   if ((front.waiting.dispatched || []).length) wparts.push(`dispatched: ${front.waiting.dispatched.join(', ')}`);
+  // Rendered with the parent it is held behind: "parent: C" alone sends the
+  // reader to the graph to find out WHICH pipeline they are waiting for.
+  if ((front.waiting.parent || []).length) {
+    const held = front.waiting.parent
+      .map((id) => `${id}→${(front.parent_of || {})[id] || '?'}`)
+      .join(', ');
+    wparts.push(`parent: ${held}`);
+  }
   if (front.waiting.merge_human.length) wparts.push(`merge (human): ${front.waiting.merge_human.join(', ')}`);
   if (front.waiting.human.length) wparts.push(`checkpoint (human): ${front.waiting.human.join(', ')}`);
   if (wparts.length) lines.push(`waiting: ${wparts.join(' | ')}`);
 
   // The sentinel's share of the front, named separately: it is the part that a
   // background guard can take over so the main loop keeps cascading.
-  const s = front.sentinel || { duty: [], waiting_ci: [], dispatched: [], clear: true };
+  const s = front.sentinel || { duty: [], waiting_ci: [], dispatched: [], waiting_parent: [], clear: true };
   const sDispatched = s.dispatched || [];
+  const sHeld = s.waiting_parent || [];
   lines.push(s.clear
     ? 'sentinel: clear — no open PR needs guarding'
     : `sentinel: ${s.duty.length} duty${s.duty.length ? ` (${s.duty.join(', ')})` : ''}` +
       `${sDispatched.length ? ` + ${sDispatched.length} already with an agent (${sDispatched.join(', ')})` : ''}` +
-      `${s.waiting_ci.length ? ` + ${s.waiting_ci.length} waiting on CI` : ''} — post/keep the guard, do NOT wait on it`);
+      `${s.waiting_ci.length ? ` + ${s.waiting_ci.length} waiting on CI` : ''}` +
+      `${sHeld.length ? ` + ${sHeld.length} held behind a moving parent (${sHeld.join(', ')})` : ''}` +
+      ' — post/keep the guard, do NOT wait on it');
 
   if (front.fixpoint) {
     lines.push(
@@ -612,8 +906,9 @@ function formatFront(front) {
     );
   } else if (front.actionable_count === 0 && front.counts.dispatched) {
     // Nothing to start, and the reason is that it has all been started. This
-    // deserves its own sentence: the CI wording below sanctions a `--watch`,
-    // and there is nothing to watch — the result arrives with the agents.
+    // deserves its own sentence: the wording below sends the run to `ci-wait.cjs`,
+    // and there is nothing there to wait for — the result arrives with the agents,
+    // and that wake-up is free and sooner (ci-wait.cjs refuses for this reason).
     lines.push(
       `fixpoint: NO — ${front.counts.dispatched} ticket(s) are with an agent right now` +
       `${front.counts.ci ? `, and ${front.counts.ci} PR(s) are running CI` : ''}. ` +
@@ -622,9 +917,19 @@ function formatFront(front) {
       'so a run that dies here leaves nothing hidden.'
     );
   } else if (front.actionable_count === 0) {
+    // Nothing to start, and what is left is a pipeline. Both waits belong here:
+    // a ticket's own checks, and a ticket held behind a parent whose checks are
+    // the thing it is actually waiting for. Naming `gh pr checks --watch` was the
+    // old wording and it sanctioned exactly what this repo removed — a block with
+    // no budget, no record and no result the loop can read. `ci-wait.cjs` is the
+    // one legitimate wait: it refuses whenever the board has a move, watches the
+    // parents of anything held, and returns on the first PR to settle.
+    const waits = [];
+    if (front.counts.ci) waits.push(`${front.counts.ci} PR(s) still running CI`);
+    if (front.counts.parent) waits.push(`${front.counts.parent} PR(s) held behind a parent still being driven`);
     lines.push(
-      `fixpoint: NO — ${front.counts.ci} PR(s) still running CI. Do NOT end the run: serve them when they report ` +
-      '(watch is legal here — they are the only thing left).'
+      `fixpoint: NO — ${waits.join(' + ')}. Do NOT end the run: serve them when they report ` +
+      '(run ci-wait.cjs — it waits in the foreground and returns on the first PR to settle).'
     );
   } else if (front.left_behind_count && front.left_behind_count === front.actionable_count) {
     // Every actionable item is in a phase the run has already moved past. Saying
@@ -646,7 +951,13 @@ function formatFront(front) {
   return lines;
 }
 
-module.exports = { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf };
+module.exports = {
+  computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, noCiHold, NO_CI_WHY,
+  // Shared with sentinel.cjs for the same reason as everything above it: the
+  // board must never offer what the guard refuses, and two texts for one rule is
+  // how they came to disagree in the first place.
+  reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy,
+};
 
 // ── CLI: read the state files this project already has and print the verdict ──
 if (require.main === module) {
@@ -672,6 +983,9 @@ if (require.main === module) {
   const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
   const { config } = loadConfig(root);
   const autoMerge = config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
+  // Passed explicitly here because this CLI has already paid for the config —
+  // computeFront's own lazy fallback serves the callers that have not.
+  const mergeWithoutCi = config.merge_without_ci === true;
   // The durable parks — drift verdicts and escalations — must be read here too.
   // deliver.md advertises this CLI as "re-runnable on its own", and it silently
   // was not equivalent: state-sync passed both in, so the same graph produced two
@@ -683,7 +997,7 @@ if (require.main === module) {
   // park's kind, and the flat map keeps the kind only as a text prefix.
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
   const front = computeFront(tickets, state, {
-    parked, autoMerge, drifted: activeDrift(root), escalated: activeParks(root, state),
+    parked, autoMerge, mergeWithoutCi, drifted: activeDrift(root), escalated: activeParks(root, state),
     // Same reason as the two stores above: this CLI is advertised as re-runnable
     // on its own, and a board that re-offers a ticket an agent is holding is not
     // the same board.

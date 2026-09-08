@@ -16,8 +16,9 @@ records none of them:
   (code.claude.com/docs/en/model-config, read 2026-09-07). The container pins
   Claude Code **2.1.200** — inside the image `opus` is still Opus 4.8 and
   `fable` is Fable 5. `CLAUDE.md`, `deliver.md`, `investigate.md`, `README.md`
-  and `docs/` all state that the Agent tool REJECTS full ids; that was true when
-  written and is false now. Fable bills usage credits on some plans and asks
+  and `docs/` all state that the Agent tool REJECTS full ids; that is TRUE and
+  stays. What they lack is the distinction from subagent frontmatter, and the
+  version floors. Fable bills usage credits on some plans and asks
   for consent once; in a background or Remote Control session that prompt
   waits `dialogExpiry` (5 min) and then ENDS THE TURN without sending — an
   autonomy break for any org that has not consented yet.
@@ -66,10 +67,13 @@ distinguishes their work; the prose is what changes.
   the user's own `config.toml` the moment nothing overrides it.
 - **D3 — `fable` stays the default for judgment on Claude; the prose says so and
   names the consent hazard.** Aliases remain the ONLY thing shipyard emits,
-  now as policy (GSD's layer stays authoritative) rather than as a tool
-  constraint, since the constraint is gone.
+  and for the Agent tool that is enforced by the tool itself (enum-validated),
+  not only by our policy. `opus[1m]` is therefore unreachable from a dispatch:
+  an agent can have a 1M window only as `fable` (native) or `sonnet` (Sonnet 5,
+  native) — the fact that re-opens the judgment tier.
 - **D4 — Prose names the tools as they are.** Every sentence claiming the Agent
-  tool rejects full ids is rewritten; "Fable 5" → "Fable 5.1"; one line
+  tool rejects full ids is KEPT and gains the frontmatter distinction plus the
+  version floors; "Fable 5" → "Fable 5.1"; one line
   disambiguates GSD's `gate-status:` commit trailer from the conveyor's
   `gate_status:` PR trailer; `opus` = Opus 5 with the version floor stated.
 - **Not decided here.** `best` (Claude Code's "latest Fable where available,

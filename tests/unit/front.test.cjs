@@ -62,7 +62,13 @@ test('watching CI is only sanctioned when nothing else is actionable', () => {
   );
   assert.ok(formatFront(busy).join('\n').includes('actionable RIGHT NOW'));
   const idle = computeFront({ A: {} }, { A: { status: 'pr-open', pr: 1, checks: checks(0, 2) } });
-  assert.ok(formatFront(idle).join('\n').includes('watch is legal here'));
+  // …and when it IS the only thing left, the sanctioned move is `ci-wait.cjs` —
+  // a foreground wait that returns on the first PR to settle. `gh pr checks
+  // --watch` is never named again: it blocks the session with no budget, no
+  // record and no way for the loop to read what happened.
+  const out = formatFront(idle).join('\n');
+  assert.ok(/ci-wait\.cjs/.test(out), out);
+  assert.ok(!/watch is legal/.test(out), 'the old wording sanctioned the very thing this repo removed');
 });
 
 test('approved + green + out of draft is a human merge when auto-merge is off', () => {
@@ -129,6 +135,70 @@ test('a human_checkpoint ticket is never auto-merged, however green', () => {
   const f = computeFront({ T: { human_checkpoint: true } }, { T: { ...landed } }, { autoMerge: true });
   assert.deepStrictEqual(f.actionable.merge, []);
   assert.deepStrictEqual(f.waiting.human, ['T']);
+});
+
+suite('front — a conform verdict is bound to the head it judged');
+
+// The trailer records WHICH diff arch-review judged. Landing a PR whose head has
+// moved since is landing a diff nobody reviewed: the observed sequence is
+// verdict → undraft → a bot review lands on the undrafted PR → review-fix pushes
+// → CI goes green again → the stale trailer still reads `conform`. The board must
+// owe the verdict again, not offer the merge.
+
+const conformAt = (head) => ({ ...conform, head });
+
+test('a trailer whose head is not the PR head owes arch-review again', () => {
+  const f = computeFront(
+    { T: {} },
+    { T: { ...landed, gate: conformAt('abc123'), head_sha: 'def456' } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.actionable.merge, [], 'a verdict for another diff must not be a merge');
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+  // The reason has to name both SHAs, or the remedy ("re-judge this head") is a
+  // guess: a bare "no conform trailer" is false — there IS one, for other code.
+  assert.ok(/abc123/.test(f.why.T) && /def456/.test(f.why.T), f.why.T);
+  assert.ok(/arch-review/.test(f.why.T), f.why.T);
+});
+
+test('the same head is conform — the ordinary path is unchanged', () => {
+  const f = computeFront(
+    { T: {} },
+    { T: { ...landed, gate: conformAt('abc123'), head_sha: 'abc123' } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+});
+
+test('a stale trailer is absent for the merge_human branch too, not just for merge', () => {
+  // The `merge_scope !== 'stacked'` branch reads the same gate. A stale verdict
+  // leaking through here would tell a human "green + conform" about a diff the
+  // architecture verdict never covered.
+  const f = computeFront(
+    { T: {} },
+    { T: { ...landed, merge_scope: 'integration', pr_base: 'main', gate: conformAt('abc123'), head_sha: 'def456' } },
+    { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+});
+
+test('a pre-head-binding trailer on a pre-head-binding board is still conform', () => {
+  // Backwards compatibility, and only in this direction: with no head on either
+  // side there is nothing to compare, so the verdict of the previous release
+  // stands. This is the case that must not regress a board mid-upgrade.
+  const f = computeFront({ T: {} }, { T: { ...landed } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+});
+
+test('but a headless trailer on a board that KNOWS the head is absent', () => {
+  // Fail-closed: the board carries a head, the trailer does not, so nothing can
+  // say which diff was judged. It bites only a PR verdicted before the upgrade
+  // and not merged before it — one re-review, never a silent merge.
+  const f = computeFront({ T: {} }, { T: { ...landed, head_sha: 'def456' } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, []);
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+  assert.ok(/predates head binding/.test(f.why.T), f.why.T);
 });
 
 suite('front — sentinel ownership');
@@ -355,10 +425,94 @@ test('once the parent lands, the same child is a merge again', () => {
   assert.deepStrictEqual(f.actionable.merge, ['C'], 'the hold is scoped to an OPEN parent');
 });
 
-test('a non-checkpoint parent does not hold the child', () => {
+test('a non-checkpoint parent holds the child too — as waiting.parent, not as a person\'s move', () => {
+  // The OTHER shared test, and the disagreement it hid. `sentinel.cjs` has
+  // answered `wait-parent` here since it was written; the board offered the very
+  // same ticket as a merge. The loop dispatched nothing (the bucket is the
+  // guard's), the guard declined the work the board offered, `ci-wait.cjs`
+  // refused because something was "actionable", and the stop gate blocked over
+  // it — round after round on the proving ground.
   const t = { P: { branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } };
   const f = computeFront(t, cpState('pr-open'), { autoMerge: true });
-  assert.deepStrictEqual(f.actionable.merge, ['C'], 'only a CHECKPOINT parent holds it');
+  assert.deepStrictEqual(f.actionable.merge, [], 'the front must never offer what the guard refuses');
+  assert.deepStrictEqual(f.waiting.parent, ['C'], 'it is held behind a parent that is still moving');
+  assert.deepStrictEqual(f.waiting.human, [], 'and nobody is waited FOR: the guard drives the parent itself');
+  assert.strictEqual(f.parent_of.C, 'P', 'the board names the parent, so ci-wait.cjs need not re-derive it');
+  assert.ok(/\bP\b/.test(f.why.C), f.why.C);
+});
+
+suite('front — a parent that is still moving is a bucket, not work');
+
+// D4. The guard's `wait-parent` had no counterpart on the board, so a held child
+// read as `finalize`/`fix`/`merge`: work the main loop would not take (the bucket
+// belongs to the guard) and the guard would not do either. Everything downstream
+// then read the board wrong — `ci-wait.cjs` refused ("something is actionable"),
+// and the stop gate blocked on a front whose only content was a wait.
+const mvTickets = { P: { branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } };
+// A parent whose own CI is still running, and a child green + conform behind it.
+const mvState = (childOver = {}) => ({
+  P: { status: 'pr-open', pr: 1, draft: false, checks: checks(0, 2), branch: 'ticket/P' },
+  C: {
+    status: 'pr-open', pr: 2, draft: false, checks: checks(), gate: conform,
+    merge_scope: 'stacked', pr_base: 'ticket/P', branch: 'ticket/C', ...childOver,
+  },
+});
+
+test('a board whose only move is a moving parent has nothing actionable and is not a fixpoint', () => {
+  const f = computeFront(mvTickets, mvState(), { autoMerge: true });
+  assert.strictEqual(f.actionable_count, 0, 'nothing here is the run\'s to start');
+  assert.deepStrictEqual(f.waiting.parent, ['C']);
+  assert.deepStrictEqual(f.waiting.ci, ['P'], 'the parent is the pipeline being waited for');
+  assert.strictEqual(f.counts.parent, 1, 'counted, so a board summary cannot omit it');
+  assert.strictEqual(f.fixpoint, false, 'a parent still moving is never an ending');
+});
+
+test('a RED child of a moving parent is held as well — the guard orders it that way', () => {
+  // `dutyItems` tests `parentIsMoving` BEFORE the failing-checks branch: fixing a
+  // child now buys a green the base move undoes. The board must order it the
+  // same way or the two disagree on exactly the tickets that cost CI twice.
+  const f = computeFront(mvTickets, mvState({ checks: checks(2, 0) }), { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, [], 'not fix work while the base is about to move');
+  assert.deepStrictEqual(f.waiting.parent, ['C']);
+});
+
+test('the reason names the parent AND what it is doing', () => {
+  const f = computeFront(mvTickets, mvState(), { autoMerge: true });
+  assert.ok(/\bP\b/.test(f.why.C), f.why.C);
+  assert.ok(/check/.test(f.why.C), `it says what the parent is doing: ${f.why.C}`);
+});
+
+test('a PARKED parent is not a moving parent — the child is offered again', () => {
+  // `parentIsMoving`'s exact semantics, parked half: the guard reads its own
+  // PARKED set (flag + escalations + drift verdicts), so the board must build
+  // the same set or the two disagree the moment a human parks a parent.
+  const f = computeFront(mvTickets, mvState(), { autoMerge: true, parked: ['P'] });
+  assert.deepStrictEqual(f.waiting.parent, [], 'nothing is moving behind a parked parent');
+  assert.deepStrictEqual(f.actionable.merge, ['C']);
+});
+
+test('a CHECKPOINT parent still routes to waiting.human, not to waiting.parent', () => {
+  // The two holds are different facts with different remedies: a person holds
+  // the key in one, the guard drives the parent in the other.
+  const f = computeFront(cpTickets, cpState('pr-open'), { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.parent, [], 'a checkpoint parent is not a parent being DRIVEN');
+  assert.ok(f.waiting.human.includes('C'), 'the child waits on the person holding the parent');
+  // …and the parent itself is that person's, which is why it is here too: the
+  // fixture's P is green and out of draft, so its own checkpoint is what is left.
+  assert.ok(f.waiting.human.includes('P'), f.why.P);
+});
+
+test('the held child is the guard\'s share, so the board never calls it clear', () => {
+  const f = computeFront(mvTickets, mvState(), { autoMerge: true });
+  assert.deepStrictEqual(f.sentinel.waiting_parent, ['C']);
+  assert.strictEqual(f.sentinel.clear, false, 'the guard has to come back when the parent lands');
+});
+
+test('formatFront renders it under waiting, and the verdict names ci-wait.cjs', () => {
+  const out = formatFront(computeFront(mvTickets, mvState(), { autoMerge: true })).join('\n');
+  assert.ok(/waiting: [^\n]*parent: C/.test(out), out);
+  assert.ok(/fixpoint: NO/.test(out), out);
+  assert.ok(/ci-wait\.cjs/.test(out), 'the one legitimate wait is a script, not a `--watch`');
 });
 
 suite('front — the standalone CLI is equivalent to state-sync');
@@ -1037,5 +1191,289 @@ test('a dispatched wave and a running CI queue are reported as two different wai
   assert.ok(/waiting: ci: B \| dispatched: A/.test(out), out);
   assert.ok(/1 ticket\(s\) are with an agent right now, and 1 PR\(s\) are running CI/.test(out), out);
 });
+
+suite('front — a PR where nothing ran is not a green PR');
+
+// Б3. `none_reported` used to count as green all the way into `actionable.merge`,
+// so a PR in a repo whose CI never registered was squashed into the epic with no
+// test having run. state-sync warns about it in a line nobody reads at 3am; the
+// honest bucket is `waiting.merge_human`, unless the project SAYS it has no CI.
+
+const noCi = { total: 0, failing: 0, pending: 0, none_reported: true };
+const noCiLanded = { ...landed, checks: noCi };
+
+test('green + conform + stacked, but nothing ran → waiting.merge_human', () => {
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, [], 'nothing verified this branch');
+  assert.deepStrictEqual(f.waiting.merge_human, ['T']);
+  // The remedy is a decision, so the reason has to name both halves of it.
+  assert.ok(/merge_without_ci/.test(f.why.T), f.why.T);
+  assert.ok(/register/.test(f.why.T), f.why.T);
+  assert.strictEqual(f.fixpoint, true, 'nobody owes work — a person holds this one');
+});
+
+test('...and the same PR merges when the project says it has no CI (the control)', () => {
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true, mergeWithoutCi: true });
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+});
+
+test('a pipeline that reported is untouched (the second control)', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+});
+
+test('a certified draft where nothing ran is held too, not finalized', () => {
+  // `finalize` would be dispatched every round to do the one mechanical thing
+  // left (ready the PR) — the "every round re-proposes the same impossible
+  // action" loop. The guard withholds that `undraft`, so the board must not
+  // offer it.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.finalize, []);
+  assert.deepStrictEqual(f.waiting.merge_human, ['T']);
+  assert.ok(/merge_without_ci/.test(f.why.T), f.why.T);
+});
+
+test('an UNCERTIFIED draft where nothing ran is still finalize work', () => {
+  // The architecture verdict and the review threads are real work whatever CI
+  // did, so only the two landing actions are withheld.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded, draft: true, gate: undefined } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+});
+
+test('with auto-merge off nothing is withheld — the human merges it either way', () => {
+  // Readying a PR nobody may auto-merge is a courtesy to the person who will,
+  // and the duty's `checks_note` already tells them what "green" meant. Holding
+  // the draft here would leave a PR nobody can land.
+  const f = computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } });
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+});
+
+test('a checkpoint outranks the no-CI hold — a person holds that one for another reason', () => {
+  const f = computeFront({ T: { human_checkpoint: true } }, { T: { ...noCiLanded } }, { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.human, ['T']);
+  assert.deepStrictEqual(f.waiting.merge_human, []);
+});
+
+suite('front — the project config is consulted only when a no-CI PR is on the board');
+
+// Reviewer-found on PR #44. `heldForNoCi` resolved `merge_without_ci` EAGERLY to
+// build noCiHold's options object, so every `computeFront` opened the project's
+// config file — including the ordinary board where no PR reports `none_reported`
+// and the setting cannot change a single answer. What makes it worth a test
+// rather than a shrug is that the comment beside the resolver already promised
+// the opposite ("lazily, so an ordinary board still reads no file here"): the
+// file asserted a behaviour the code did not have. These pin the promise so it
+// cannot rot back, and they measure the READ, not the clock.
+const cfgMod = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
+));
+
+// front.cjs requires pipeline-config.cjs lazily, INSIDE the resolver, so the
+// spy goes on the cached module object it looks the export up on.
+function configReadsDuring(fn) {
+  const real = cfgMod.loadConfig;
+  let reads = 0;
+  cfgMod.loadConfig = (...args) => { reads += 1; return real(...args); };
+  try { fn(); } finally { cfgMod.loadConfig = real; }
+  return reads;
+}
+
+test('an ordinary board reads no config at all', () => {
+  const reads = configReadsDuring(() => {
+    const f = computeFront(
+      { A: {}, B: {}, C: {} },
+      {
+        A: { ...landed }, B: { ...landed },
+        C: { status: 'pr-open', pr: 11, draft: true, checks: checks() },
+      },
+      { autoMerge: true }
+    );
+    assert.deepStrictEqual(f.actionable.merge.slice().sort(), ['A', 'B']);
+  });
+  assert.strictEqual(reads, 0, 'nothing reports none_reported, so merge_without_ci cannot change an answer');
+});
+
+test('a board with no-CI PRs reads it ONCE, however many of them there are', () => {
+  const reads = configReadsDuring(() => {
+    const f = computeFront(
+      { A: {}, B: {} },
+      { A: { ...noCiLanded }, B: { ...noCiLanded } },
+      { autoMerge: true }
+    );
+    assert.deepStrictEqual(f.waiting.merge_human.slice().sort(), ['A', 'B']);
+  });
+  assert.strictEqual(reads, 1, 'resolved on first need, memoized for the rest of the call');
+});
+
+test('a caller that pins the setting reads nothing, even with a no-CI PR', () => {
+  const reads = configReadsDuring(() => {
+    const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true, mergeWithoutCi: true });
+    assert.deepStrictEqual(f.actionable.merge, ['T']);
+  });
+  assert.strictEqual(reads, 0, 'the passed option always wins, so there is nothing to look up');
+});
+
+test('with auto-merge off the config is not consulted either', () => {
+  // The hold is gated on autoMerge, and that is the cheapest fact of the three,
+  // so it is settled before anything goes looking for a file.
+  const reads = configReadsDuring(() => {
+    computeFront({ T: {} }, { T: { ...noCiLanded, draft: true } });
+  });
+  assert.strictEqual(reads, 0);
+});
+
+// The predicate is shared with sentinel.cjs, which passes the resolved VALUE
+// rather than a resolver. Both spellings must mean the same thing or the board
+// and the guard disagree about the PR in front of them.
+test('noCiHold takes the setting as a value or as a thunk, with one meaning', () => {
+  const { noCiHold } = require(path.join(
+    __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
+  ));
+  const held = (mergeWithoutCi) => noCiHold(noCi, { autoMerge: true, mergeWithoutCi });
+  assert.strictEqual(held(false), true, 'value: not allowed → held');
+  assert.strictEqual(held(() => false), true, 'thunk: same');
+  assert.strictEqual(held(true), false, 'value: allowed → not held');
+  assert.strictEqual(held(() => true), false, 'thunk: same');
+  assert.strictEqual(held(undefined), true, 'absent is not permission (sentinel passes cfg.merge_without_ci raw)');
+  // And the thunk is never called when a cheaper fact already settles it.
+  let called = 0;
+  const counting = () => { called += 1; return true; };
+  assert.strictEqual(noCiHold(noCi, { autoMerge: false, mergeWithoutCi: counting }), false);
+  assert.strictEqual(noCiHold(checks(), { autoMerge: true, mergeWithoutCi: counting }), false);
+  assert.strictEqual(called, 0, 'auto-merge off and a reported pipeline both answer without it');
+});
+
+// Reviewer-found on PR #44 (round 2). The lazy fallback resolved the project
+// from `process.cwd()`, but `dispatch-record.cjs refreshFront` is documented to
+// run from a ticket worktree — which has no `.planning/` of its own — and it
+// REWRITES delivery-front.json from what it computes. So on a project that had
+// explicitly opted in, every dispatch mark demoted the PRs the guard was
+// entitled to land: the board/guard disagreement, reintroduced by the fallback
+// written to prevent it. It resolves through graph-dir.cjs now, the same way
+// base-merge and scope-gate do.
+test('the fallback resolves the PROJECT, not the cwd — a worktree reads the project setting', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const { execFileSync } = require('child_process');
+  const git = (cwd, ...args) => execFileSync('git', args, {
+    cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+      GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
+  });
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'front-wt-'));
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project, { recursive: true });
+  git(project, 'init', '-q', '-b', 'main', '.');
+  fs.writeFileSync(path.join(project, 'f.txt'), 'x\n');
+  git(project, 'add', '-A');
+  git(project, 'commit', '-qm', 'init');
+  // .planning/ is written AFTER the commit and never tracked: that is the
+  // proving ground's own layout, and it is what makes a worktree graphless.
+  fs.mkdirSync(path.join(project, '.planning', 'graph'), { recursive: true });
+  fs.writeFileSync(path.join(project, '.planning', 'graph', 'tickets.json'),
+    JSON.stringify({ tickets: { T: {} } }));
+  fs.writeFileSync(path.join(project, '.planning', 'config.json'),
+    JSON.stringify({ delivery_pipeline: { merge_without_ci: true } }));
+  const wt = path.join(root, 'wt');
+  git(project, 'worktree', 'add', '-q', '-b', 'ticket/T', wt);
+  assert.ok(!fs.existsSync(path.join(wt, '.planning')), 'fixture: the worktree must carry no graph of its own');
+
+  const cwd = process.cwd();
+  try {
+    process.chdir(wt);
+    const f = computeFront({ T: {} }, { T: { ...noCiLanded } }, { autoMerge: true });
+    assert.deepStrictEqual(f.actionable.merge, ['T'],
+      'the project said it has no CI; a caller standing in a worktree must read the same answer as the guard');
+    assert.deepStrictEqual(f.waiting.merge_human, []);
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
+suite('front — CHANGES_REQUESTED with no thread left is a person\'s, not a fixer\'s');
+
+// A reviewer who requested changes in a summary comment — or a bot whose threads
+// were all resolved while its verdict stood — leaves ZERO threads. The board
+// called that "review not settled" and offered it as `finalize`, the guard sent
+// review-fix, and review-fix returned having done nothing: the signature
+// repeated until the attempt budget escalated the ticket. Nobody owed work; a
+// person held the key. One predicate, two readers, like checkpointParent.
+
+const crState = (over = {}) => ({
+  T: {
+    ...landed, review_decision: 'CHANGES_REQUESTED', ...over,
+  },
+});
+
+test('threads 0 → waiting.human, and the reason names what a person must do', () => {
+  const f = computeFront({ T: {} }, crState({ unresolved_count: 0 }), { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.human, ['T']);
+  assert.strictEqual(f.actionable_count, 0, 'a fixer has nothing to service here');
+  assert.ok(/re-review or dismiss/.test(f.why.T), f.why.T);
+});
+
+test('threads 1 → unchanged: the review work is still the run\'s', () => {
+  const f = computeFront({ T: {} }, crState({ unresolved_count: 1 }), { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.human, []);
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+});
+
+test('an UNKNOWN thread count is not zero — the board does not park on a guess', () => {
+  const f = computeFront({ T: {} }, crState(), { autoMerge: true });
+  assert.deepStrictEqual(f.waiting.human, []);
+  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+});
+
+test('and a checkpoint still outranks it — that person is being waited for already', () => {
+  const f = computeFront(
+    { T: { human_checkpoint: true } }, crState({ unresolved_count: 0 }), { autoMerge: true }
+  );
+  assert.deepStrictEqual(f.waiting.human, ['T']);
+  assert.ok(/human_checkpoint/.test(f.why.T), f.why.T);
+});
+
+suite('front — a base that moved is base-merge work, and says so');
+
+// The remedy for a moved base was reachable by prose alone: `mergeOne` refused
+// with a message, the duty had no action for it, and the board offered the merge
+// the gate was about to refuse. Both readers now name the same fix, through the
+// same predicate.
+
+test('GitHub\'s own BEHIND verdict is fix work whose reason names base-merge.cjs', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed, merge_state: 'BEHIND' } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.deepStrictEqual(f.actionable.merge, [], 'the guard would refuse that merge');
+  assert.ok(/base-merge/.test(f.why.T), f.why.T);
+});
+
+test('a commit count alone is enough — a stale-but-clean branch reports CLEAN', () => {
+  // mergeStateStatus only says BEHIND where branch protection requires
+  // up-to-date branches; elsewhere the compare is the only witness.
+  const f = computeFront({ T: {} }, { T: { ...landed, merge_state: 'CLEAN', behind_by: 3 } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.ok(/3 commit/.test(f.why.T), f.why.T);
+});
+
+test('DIRTY is the same duty with a different word — conflicts, not staleness', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed, merge_state: 'DIRTY' } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.ok(/conflict/.test(f.why.T), f.why.T);
+});
+
+test('a red PR is still ci-fix work first — the failing check is the louder fact', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed, checks: checks(2, 0), merge_state: 'BEHIND' } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.ok(/failing check/.test(f.why.T), f.why.T);
+});
+
+test('CLEAN and zero behind is untouched (the control)', () => {
+  const f = computeFront({ T: {} }, { T: { ...landed, merge_state: 'CLEAN', behind_by: 0 } }, { autoMerge: true });
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+  assert.deepStrictEqual(f.actionable.fix, []);
+});
+
 
 done();

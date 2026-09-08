@@ -1,7 +1,7 @@
 {
   "id": "delivery-pipeline",
   "role": "feature",
-  "version": "0.45.0",
+  "version": "0.46.0",
   "title": "Delivery pipeline loop gates",
   "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: a blocking plan:post gate runs the ticket-graph validator (Gate 2), so a decomposition without materialized, valid PLAN files cannot pass planning.",
   "tier": "full",
@@ -52,6 +52,11 @@
       "type": "string",
       "default": "epic",
       "description": "Ticket-PR landing: 'epic' lets the sentinel squash a green + arch-conform ticket PR into its base (phase epic or parent ticket branch) once the gate is re-verified against live GitHub; 'off' leaves every merge to a human. The epic -> integration-branch PR is NEVER auto-merged, and human_checkpoint tickets are always excluded."
+    },
+    "delivery_pipeline.merge_without_ci": {
+      "type": "boolean",
+      "default": false,
+      "description": "Set this only in a repository that genuinely has no CI. A pull request with NO reported checks is not a green pull request - nothing ran - so by default both the board and the sentinel withhold the two actions that walk it towards landing (the squash merge, and readying it out of draft) and report the merge as a human's. With this true, an empty check list counts as green again and the sentinel lands such a pull request itself."
     }
   },
   "steps": [],

@@ -211,77 +211,53 @@
   },
   "T-24-03": {
     "branch": "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro",
-    "pr": null,
-    "status": "pending",
+    "pr": 32,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/32",
     "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T09:10:42.244Z"
+    "reapable": true,
+    "since": "2026-09-07T13:47:20.037Z"
   },
   "T-24-04": {
     "branch": "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro",
+    "pr": 42,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/42",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": false,
-    "blocked_by": [
-      "T-24-03"
-    ],
-    "blocked_reasons": {
-      "T-24-03": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-07T09:10:42.244Z"
+    "reapable": true,
+    "since": "2026-09-07T15:29:03.099Z"
   },
   "T-24-05": {
     "branch": "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i",
+    "pr": 44,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/44",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": false,
-    "blocked_by": [
-      "T-24-04"
-    ],
-    "blocked_reasons": {
-      "T-24-04": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-07T09:10:42.244Z"
+    "reapable": true,
+    "since": "2026-09-07T19:35:52.586Z"
   },
   "T-24-06": {
     "branch": "ticket/T-24-06-the-guard-names-a-remedy-that-exists",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno",
+    "pr": 45,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/45",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": false,
-    "blocked_by": [
-      "T-24-05"
-    ],
-    "blocked_reasons": {
-      "T-24-05": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-07T09:10:42.244Z"
+    "reapable": true,
+    "since": "2026-09-07T19:58:00.710Z"
   },
   "T-24-07": {
     "branch": "ticket/T-24-07-the-prose-names-only-what-the-scripts-im",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-24-06-the-guard-names-a-remedy-that-exists",
+    "pr": 46,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/46",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": false,
-    "blocked_by": [
-      "T-24-06"
-    ],
-    "blocked_reasons": {
-      "T-24-06": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-07T09:10:42.244Z"
+    "reapable": true,
+    "since": "2026-09-07T20:13:11.811Z"
   },
   "T-24-08": {
     "branch": "ticket/T-24-08-a-record-is-lifted-only-by-a-fact-its-ow",
@@ -305,59 +281,45 @@
   },
   "T-24-10": {
     "branch": "ticket/T-24-10-the-ci-waiter-tells-a-stall-from-an-outa",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro",
+    "pr": 43,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/43",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": false,
-    "blocked_by": [
-      "T-24-03"
-    ],
-    "blocked_reasons": {
-      "T-24-03": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-07T09:10:42.244Z"
+    "reapable": true,
+    "since": "2026-09-07T14:46:11.816Z"
   },
   "T-24-11": {
     "branch": "ticket/T-24-11-a-resync-writes-the-front-it-means",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-24-07-the-prose-names-only-what-the-scripts-im",
+    "pr": 47,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/47",
+    "base": "epic/24-the-conveyor-stops-interrupting-itself",
     "epic": "epic/24-the-conveyor-stops-interrupting-itself",
-    "ready": false,
-    "blocked_by": [
-      "T-24-07"
-    ],
-    "blocked_reasons": {
-      "T-24-07": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-07T09:49:26.042Z"
+    "reapable": true,
+    "since": "2026-09-07T20:21:49.178Z"
   },
   "T-25-01": {
     "branch": "ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor",
+    "pr": 33,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/33",
+    "base": "epic/25-the-conveyor-follows-the-models-it-runs-on",
+    "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
+    "reapable": true,
+    "since": "2026-09-07T13:47:20.037Z"
+  },
+  "T-25-02": {
+    "branch": "ticket/T-25-02-a-codex-agent-carries-the-model-its-effo",
     "pr": null,
     "status": "pending",
     "base": "epic/25-the-conveyor-follows-the-models-it-runs-on",
     "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T10:25:41.319Z"
-  },
-  "T-25-02": {
-    "branch": "ticket/T-25-02-a-codex-agent-carries-effort-not-a-model",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor",
-    "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
     "ready": false,
     "blocked_by": [
-      "T-25-01",
       "T-24-07"
     ],
     "blocked_reasons": {
-      "T-25-01": "parent has no branch yet (nothing to cascade from)",
       "T-24-07": "cross-phase parent must land on main first (phase 24 epic still ahead)"
     },
     "reapable": false,
@@ -367,7 +329,7 @@
     "branch": "ticket/T-25-03-the-prose-names-the-models-the-runtimes",
     "pr": null,
     "status": "pending",
-    "base": "ticket/T-25-02-a-codex-agent-carries-effort-not-a-model",
+    "base": "ticket/T-25-02-a-codex-agent-carries-the-model-its-effo",
     "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
     "ready": false,
     "blocked_by": [
@@ -381,15 +343,31 @@
     "reapable": false,
     "since": "2026-09-07T10:25:41.319Z"
   },
-  "T-26-01": {
-    "branch": "ticket/T-26-01-one-ownership-matcher-exact-by-construct",
+  "T-25-04": {
+    "branch": "ticket/T-25-04-the-floor-is-opus-the-depth-is-effort-an",
     "pr": null,
     "status": "pending",
+    "base": "ticket/T-25-03-the-prose-names-the-models-the-runtimes",
+    "epic": "epic/25-the-conveyor-follows-the-models-it-runs-on",
+    "ready": false,
+    "blocked_by": [
+      "T-25-03"
+    ],
+    "blocked_reasons": {
+      "T-25-03": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-07T14:17:59.561Z"
+  },
+  "T-26-01": {
+    "branch": "ticket/T-26-01-one-ownership-matcher-exact-by-construct",
+    "pr": 37,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/37",
     "base": "epic/26-positive-evidence-before-a-mutation",
     "epic": "epic/26-positive-evidence-before-a-mutation",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T10:25:41.319Z"
+    "reapable": true,
+    "since": "2026-09-07T14:56:31.931Z"
   },
   "T-26-03": {
     "branch": "ticket/T-26-03-readiness-needs-positive-evidence",
@@ -411,13 +389,13 @@
   },
   "T-26-04": {
     "branch": "ticket/T-26-04-gc-removes-only-what-is-proven-landed",
-    "pr": null,
-    "status": "pending",
+    "pr": 38,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/38",
     "base": "epic/26-positive-evidence-before-a-mutation",
     "epic": "epic/26-positive-evidence-before-a-mutation",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T10:25:41.319Z"
+    "reapable": true,
+    "since": "2026-09-07T15:36:02.311Z"
   },
   "T-26-05": {
     "branch": "ticket/T-26-05-locks-prove-ownership-snapshots-carry-a",
@@ -437,43 +415,43 @@
   },
   "T-26-06": {
     "branch": "ticket/T-26-06-the-codex-config-merge-writes-toml-the-r",
-    "pr": null,
-    "status": "pending",
+    "pr": 39,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/39",
     "base": "epic/26-positive-evidence-before-a-mutation",
     "epic": "epic/26-positive-evidence-before-a-mutation",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T10:25:41.319Z"
+    "reapable": true,
+    "since": "2026-09-07T14:59:43.919Z"
   },
   "T-26-07": {
     "branch": "ticket/T-26-07-tuning-merges-another-owner-s-list-never",
-    "pr": null,
-    "status": "pending",
+    "pr": 34,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/34",
     "base": "epic/26-positive-evidence-before-a-mutation",
     "epic": "epic/26-positive-evidence-before-a-mutation",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T10:25:41.319Z"
+    "reapable": true,
+    "since": "2026-09-07T13:47:20.037Z"
   },
   "T-26-08": {
     "branch": "ticket/T-26-08-jira-identity-is-namespaced-by-repositor",
-    "pr": null,
-    "status": "pending",
+    "pr": 35,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/35",
     "base": "epic/26-positive-evidence-before-a-mutation",
     "epic": "epic/26-positive-evidence-before-a-mutation",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T10:25:41.319Z"
+    "reapable": true,
+    "since": "2026-09-07T13:54:59.718Z"
   },
   "T-26-09": {
     "branch": "ticket/T-26-09-workflow-input-is-validated-before-any-d",
-    "pr": null,
-    "status": "pending",
+    "pr": 36,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/36",
     "base": "epic/26-positive-evidence-before-a-mutation",
     "epic": "epic/26-positive-evidence-before-a-mutation",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-07T10:25:41.319Z"
+    "reapable": true,
+    "since": "2026-09-07T13:52:10.616Z"
   },
   "T-26-10": {
     "branch": "ticket/T-26-10-left-behind-is-evidence-not-arithmetic",
@@ -516,13 +494,49 @@
     "ready": false,
     "blocked_by": [
       "T-26-11",
-      "T-25-03"
+      "T-25-04"
     ],
     "blocked_reasons": {
       "T-26-11": "parent has no branch yet (nothing to cascade from)",
-      "T-25-03": "cross-phase parent must land on main first (phase 25 epic still ahead)"
+      "T-25-04": "cross-phase parent must land on main first (phase 25 epic still ahead)"
     },
     "reapable": false,
     "since": "2026-09-07T10:25:41.319Z"
+  },
+  "T-26-12": {
+    "branch": "ticket/T-26-12-a-wave-is-cut-to-a-concurrency-the-sessi",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-26-02-a-corrupt-configuration-permits-no-mutat",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "ready": false,
+    "blocked_by": [
+      "T-26-02"
+    ],
+    "blocked_reasons": {
+      "T-26-02": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-07T15:53:31.569Z"
+  },
+  "T-26-13": {
+    "branch": "ticket/T-26-13-drift-is-judged-against-the-base-the-tic",
+    "pr": 48,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/48",
+    "base": "epic/26-positive-evidence-before-a-mutation",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "reapable": true,
+    "since": "2026-09-07T20:20:26.325Z"
+  },
+  "T-26-14": {
+    "branch": "ticket/T-26-14-a-workflow-returns-a-reference-not-a-doc",
+    "pr": 49,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/49",
+    "base": "epic/26-positive-evidence-before-a-mutation",
+    "epic": "epic/26-positive-evidence-before-a-mutation",
+    "reapable": true,
+    "since": "2026-09-07T20:10:58.505Z"
   }
 }

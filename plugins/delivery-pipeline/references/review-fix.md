@@ -25,6 +25,19 @@ eventually wait for is the one that validates the final code.
 
 ## Procedure — for EACH thread independently
 
+**If your dispatch says the base moved (`base-merge`), that is step 0.** Before
+you read a single thread: a comment anchored to a diff computed against a base
+that has since moved is a comment about code that is not on the branch any more,
+and a reply written from it is wrong in a way the reviewer cannot correct. Merge
+the base in — never rebase, it re-anchors the very threads you are about to
+resolve:
+
+```
+node <plugin-root>/scripts/base-merge.cjs <ticket> --worktree <yours> --base <base ref>
+```
+
+Then re-read the threads: some will have gone outdated by themselves.
+
 **Before you propose any change, consult the prior-attempt record.** A
 hypothesis already in it has been tried and did not hold: it is EXCLUDED, not a
 candidate to refine — re-proposing it is the defect the record exists to
@@ -87,8 +100,11 @@ and escalate rather than cycle through one of them again.
   unresolved thread you meant to close — that is the loop above, one round later.
   Read its `review_decision` too, not only the thread count: a `CHANGES_REQUESTED`
   verdict outlives the threads it was filed with and is not lifted by resolving
-  them or by pushing. If it still stands with every thread closed, say so — that
-  is a fact for the orchestrator, not a thread you can close.
+  them or by pushing. If it still stands with every thread closed, **that is not
+  your case** — say so and stop. There is nothing left for a fixer to service, so
+  the guard routes that state to a human (`wait-human`): a reviewer has to
+  re-review or dismiss the verdict. Pushing at it again only dismisses approvals
+  and burns an attempt from this ticket's budget.
 
 ## Output (final message, structured)
 - `hypothesis: <one sentence>` — what you believed was wrong and what your

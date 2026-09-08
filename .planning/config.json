@@ -92,16 +92,24 @@
       "light": "low",
       "standard": "high",
       "heavy": "xhigh"
+    },
+    "agent_overrides": {
+      "gsd-planner": "xhigh",
+      "gsd-code-reviewer": "xhigh"
     }
   },
   "runtime": "claude",
-  "model_overrides": {
-    "gsd-planner": "fable",
-    "gsd-code-reviewer": "fable"
-  },
   "pipeline": {
     "jira": {
       "enabled": false
+    },
+    "models": {
+      "arch-review": "opus",
+      "integrator": "opus"
     }
+  },
+  "model_overrides": {
+    "gsd-planner": "fable",
+    "gsd-code-reviewer": "fable"
   }
 }

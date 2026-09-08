@@ -183,10 +183,15 @@ const { ROLES } = require('./plugins/delivery-pipeline/scripts/pipeline-config.c
 const actionable = (sentinel.match(/const ACTIONABLE = new Set\(\[([^\]]*)\]/) || [])[1];
 if (!actionable) fail('cannot find the sentinel ACTIONABLE set');
 // Steps the guard performs ITSELF — no agent is dispatched, so no model is
-// resolved: `undraft` is a bare `gh pr ready`, and `merge` is `sentinel.cjs
-// merge`, which re-verifies the gate against live GitHub in the script precisely
-// so that no agent can be talked into it.
-const MECHANICAL = new Set(['undraft', 'merge']);
+// resolved: `undraft` is a bare `gh pr ready`; `merge` is `sentinel.cjs merge`,
+// which re-verifies the gate against live GitHub in the script precisely so that
+// no agent can be talked into it; and `base-merge` is `base-merge.cjs`, the
+// remedy ci-fix.md and review-fix.md name for a moved base. That last one is
+// mechanical for the same reason the other two are — the script does the merge,
+// so there is no hypothesis to form and nothing for the ladder to route — and it
+// journals itself as `base_merge`, which log-event.cjs accepts as its own event
+// rather than as an attempt.
+const MECHANICAL = new Set(['undraft', 'merge', 'base-merge']);
 
 // The conflict remedy must not contradict the force-push ban sitting beside it.
 // Rebasing a branch that already has a PR IS a force-push, and in a cascade the

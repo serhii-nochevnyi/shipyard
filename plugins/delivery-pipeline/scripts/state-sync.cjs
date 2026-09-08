@@ -45,8 +45,19 @@ const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { computeFront, formatFront, ciEstimates } = require(path.join(__dirname, 'front.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
-const { activeEscalations } = require(path.join(__dirname, 'escalation-record.cjs'));
+// The park RECORDS, never the flat `activeEscalations` view: the board's lifting
+// sentence is chosen from the park's KIND, and the flat map keeps the kind only
+// as a text prefix. front.cjs's CLI and dispatch-record's refreshFront already
+// read it this way; this file was the last caller that did not.
+const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
+// "An agent is holding this one" — the third durable fact GitHub cannot know, and
+// the one this writer used to drop. See the comment at DISPATCHED below.
+const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
+const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+// The trailer's parser lives with its writer (gate-trailer.cjs), because a
+// verdict the board and the guard must agree on cannot be held by three copies.
+const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -69,7 +80,11 @@ const RUN_PARKED = parkedArg === -1
 // 7s without — and it is only ever read for OPEN PRs. So the bulk window skips
 // it and a second, open-only pass fills it in (a handful of rows, ~1s). state-sync
 // runs on every babysit round, so its wall time is the conveyor's tick rate.
-const PR_FIELDS = 'number,state,isDraft,headRefName,baseRefName,mergedAt,createdAt,url,title';
+const PR_FIELDS = 'number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title';
+// `headRefOid` is one scalar and carries none of the reviewDecision cost: it is
+// the head the `gate_status:` trailer is bound to, so without it the board can
+// read a conform verdict and not know it was rendered against a diff that has
+// since been pushed over.
 // `body` rides along in the open-only pass for the same reason as reviewDecision:
 // it is only read for OPEN PRs (the `gate_status:` trailer the conform gate
 // writes), and pulling bodies across the whole 1000-row window is expensive.
@@ -105,8 +120,21 @@ function gh(args, { tolerate = false } = {}) {
 // printing the requested JSON on stdout. A non-zero exit is therefore DATA, not
 // an error: reading it through the strict helper above made state-sync abort on
 // exactly the red/pending PRs the babysit loop exists to service.
+//
+// But a non-zero exit with NOTHING parseable on stdout is a different fact
+// again: gh itself failed to answer (an old `gh` rejecting `bucket`, a network
+// blip), and that is not "this PR has no checks" either. Collapsing the two
+// into the same `{ rows: [], none: true }` shape made `classify([])` read
+// `none_reported: true, failing: 0, pending: 0` — the exact tally the merge
+// gate treats as unblocked — off a call that never actually answered. ANY
+// stdout that parses to an array is trusted as-is, EMPTY OR NOT and whatever
+// the exit code — a non-zero exit with valid JSON is the normal case above,
+// not an error. Only when nothing parses does exit status decide: exit 0 with
+// empty output means "no checks"; anything else unreadable returns a
+// synthetic unknown-bucket row, which `classify` already fails closed to
+// `pending`, so the caller waits and re-ticks instead of merging on silence.
 function ghChecks(prNumber, repo) {
-  const args = ['pr', 'checks', String(prNumber), '--json', 'name,state'];
+  const args = ['pr', 'checks', String(prNumber), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
   const r = spawnSync('gh', args, { encoding: 'utf8' });
   const stdout = (r.stdout || '').trim();
@@ -118,7 +146,7 @@ function ghChecks(prNumber, repo) {
   }
   if (r.status === 0) return { rows: [], none: true };
   const why = (r.stderr || '').trim().split('\n')[0] || `gh pr checks exited ${r.status}`;
-  return { rows: [], none: true, note: why };
+  return { rows: [{ bucket: 'unreadable' }], none: false, note: why };
 }
 
 const { config: cfg, warnings: cfgWarnings } = loadConfig(ROOT);
@@ -226,22 +254,6 @@ function prsForBranch(repo, branch) {
   try { return JSON.parse(out); } catch { return []; }
 }
 
-// The conform gate records its verdicts as a `gate_status:` trailer in the PR
-// body precisely so they survive a squash merge and can be re-read by anything.
-// The front and the sentinel both key the "may this land?" decision on it, so it
-// is parsed here once instead of being re-derived per consumer.
-function parseGate(body) {
-  const line = String(body || '').split('\n').reverse().find((l) => /^\s*gate_status:/i.test(l));
-  if (!line) return null;
-  const out = {};
-  for (const part of line.replace(/^\s*gate_status:/i, '').split(',')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    out[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
-  }
-  return Object.keys(out).length ? out : null;
-}
-
 // ── per-ticket status ───────────────────────────────────────────────────────
 const state = {};
 for (const [id, t] of Object.entries(tickets)) {
@@ -273,13 +285,26 @@ for (const [id, t] of Object.entries(tickets)) {
       entry.url = pr.url;
       entry.pr_base = pr.baseRefName;
       entry.pr_created_at = pr.createdAt;
+      // The head the verdict must be ABOUT, recorded beside the verdict itself:
+      // `gateConform(gate, head_sha)` is absent when they disagree, so a push
+      // after arch-review re-owes the verdict instead of inheriting it.
+      entry.head_sha = pr.headRefOid || null;
       const gate = parseGate(pr.body);
       if (gate) entry.gate = gate;
       const { rows, none, note } = ghChecks(pr.number, repo);
+      // check-state.cjs classifies; this file only records. The KEYS are the
+      // board's contract — front.cjs's green test, escalation-record's
+      // fingerprint and the stop gate all read exactly these — so the tallies
+      // are copied across by name rather than spread in.
+      const c = classify(rows);
       entry.checks = {
-        total: rows.length,
-        failing: rows.filter((c) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT'].includes(c.state)).length,
-        pending: rows.filter((c) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(c.state)).length,
+        total: c.total,
+        failing: c.failing,
+        pending: c.pending,
+        // `none` comes from ghChecks, and is true ONLY for a genuine exit-0
+        // empty answer — an unreachable/unparseable `gh` call now reports a
+        // synthetic unreadable row instead, so it lands in `c.pending`, not
+        // here.
         none_reported: none,
       };
       if (note) entry.checks.note = note;
@@ -476,16 +501,26 @@ for (const [id, s] of Object.entries(state)) {
 // ── the actionable front and the stop verdict (front.cjs) ───────────────────
 // AUTO_MERGE/DRIFTED/ESCALATED do not depend on this run's own journal append,
 // so they are computed here; ciEstimates DOES (see below), so computeFront
-// itself moves inside the locked section, after the append.
+// itself moves inside the locked section, after the append. The dispatch overlay
+// is read inside that section too, for a different reason — see it below.
 const AUTO_MERGE = cfg.auto_merge === 'epic' && mode === 'epic-stacked';
 // Drift verdicts recorded by earlier runs, minus any whose plan has since been
 // re-planned (drift-record binds each verdict to the plan's content hash, so the
 // park lifts by itself). Without this the front hands a stale plan back to an
 // executor on every run, however many times it has already been judged.
 const DRIFTED = activeDrift(ROOT);
-// Escalations recorded by earlier runs, minus any whose PR has since moved. The
+// Parks recorded by earlier runs, minus any whose subject has since moved. The
 // state we just rebuilt IS the comparison, so it is passed in rather than re-read.
-const ESCALATED = activeEscalations(ROOT, state);
+//
+// The RECORDS ({kind, reason}), not the flat {ticket: reason} view this file used
+// to read. The two park kinds expire against different subjects and are therefore
+// described by different sentences, and the flat view has already thrown the kind
+// away — so a `plan_defect` park arrived here wearing the ESCALATION lifetime
+// ("it lifts once the PR moves"), which is false for a verdict bound to the plan
+// hash: pushing to the PR lifts nothing, and the human told otherwise waits for an
+// event that cannot come. escalation-record says the bare string must not be
+// rendered; this was the one caller that still did.
+const ESCALATED = activeParks(ROOT, state);
 
 const front = withLock(lockDirFor(ROOT), 'state', () => {
   if (transitions.length) {
@@ -501,6 +536,30 @@ const front = withLock(lockDirFor(ROOT), 'state', () => {
   // review of this PR.
   const front = computeFront(tickets, state, {
     parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED, escalated: ESCALATED,
+    // The dispatches still in force — the tickets an agent is holding RIGHT NOW.
+    //
+    // Three writers produce delivery-front.json (front.cjs's CLI, dispatch-record's
+    // `refreshFront`, and this file) and this one was blind to the overlay, so a
+    // resync turned the board back into `execute: …/finalize: …` with
+    // `waiting.dispatched: []` until the next `dispatch-record.cjs mark` happened
+    // to rewrite it. The stop gate reads that file: in the window between, it
+    // blocked over work already in flight — three times in one session on
+    // 2026-09-07, each time after a background guard synced while six to ten
+    // tickets were with agents, each time repaired by hand with `mark`. The guards
+    // sync on their own schedule, so no sequencing of the main loop's own calls
+    // closes that window; only this does. Expiry stays entirely
+    // `activeDispatches`'s decision — nothing here decides how long one lives.
+    //
+    // READ INSIDE THE LOCK, and that is the whole reason it is not hoisted beside
+    // DRIFTED/ESCALATED above. `mark` writes its store under the `dispatch-record`
+    // lock and only THEN takes `state` to refresh the board, so a read taken
+    // before we queue for `state` can miss a record whose own front write we are
+    // about to overwrite: our older overlay wins and the ticket is offered again —
+    // this ticket's defect, one window narrower. It is refreshFront's own rule
+    // ("the READ, the COMPUTE and the WRITE all sit inside the `state` lock"),
+    // which exists because reading first and locking only the write is the
+    // lost-update this repo has already paid for twice.
+    dispatched: activeDispatches(ROOT, state),
     // Expected CI length per ticket, a per-repo median over the LOCAL journal —
     // the front's last ordering key before the id (front.cjs). Note what does
     // NOT feed it: no per-PR `gh` field. Adding one to the bulk window is the
@@ -509,7 +568,14 @@ const front = withLock(lockDirFor(ROOT), 'state', () => {
   });
   writeAtomic(STATE, JSON.stringify(state, null, 2) + '\n');
   writeAtomic(path.join(GRAPH_DIR, 'delivery-state.yaml'), yaml.join('\n') + '\n');
-  writeAtomic(FRONT, JSON.stringify({ generated_at: nowIso, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', ...front }, null, 2) + '\n');
+  // `dispatches_applied_at` is stamped the way `refreshFront` stamps it, and
+  // UNCONDITIONALLY — including when no dispatch is live. Its absence is the
+  // signature of a writer blind to the overlay, which is exactly the defect this
+  // stamp exists to make visible; making it conditional would restore that
+  // ambiguity for every quiet board. Here it equals `generated_at` by
+  // construction (one sync, one moment); after a `mark` it runs ahead, which is
+  // why the stop gate reads `generated_at` alone for freshness and never this.
+  writeAtomic(FRONT, JSON.stringify({ generated_at: nowIso, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', dispatches_applied_at: nowIso, ...front }, null, 2) + '\n');
   return front;
 }, { label: 'state-sync' });
 

@@ -413,7 +413,7 @@ tickets:
     repo: null
     wave: 6
     depends_on: [T-24-05]
-    files: [plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/reviewers.cjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/review-fix.md, tests/unit/sentinel.test.cjs, tests/unit/front.test.cjs, tests/unit/reviewers.test.cjs, tests/smoke/sentinel-smoke.sh]
+    files: [plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/reviewers.cjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/smoke/docs-smoke.sh, tests/unit/log-event.test.cjs, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/review-fix.md, tests/unit/sentinel.test.cjs, tests/unit/front.test.cjs, tests/unit/reviewers.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
     preauthorized: false
@@ -429,7 +429,7 @@ tickets:
     repo: null
     wave: 7
     depends_on: [T-24-06]
-    files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json, CLAUDE.md, README.md, tests/unit/files-contract.test.cjs]
+    files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json, CLAUDE.md, README.md, tests/unit/files-contract.test.cjs, tests/smoke/docs-smoke.sh]
     risk: low
     human_checkpoint: false
     preauthorized: false
@@ -519,17 +519,17 @@ tickets:
     pr_base: epic/25-the-conveyor-follows-the-models-it-runs-on
     jira: null
   T-25-02:
-    title: 'A Codex agent carries effort, not a model'
+    title: A Codex agent carries the model its effort needs
     plan: '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-02-PLAN.md'
     phase: '25'
     repo: null
     wave: 8
     depends_on: [T-25-01, T-24-07]
-    files: [scripts/gen-codex-shipyard.cjs, tests/smoke/codex-shipyard-smoke.sh, tests/unit/gen-codex-shipyard.test.cjs, CLAUDE.md, README.md]
+    files: [scripts/gen-codex-shipyard.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, capabilities/delivery-pipeline/capability.json, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/smoke/codex-shipyard-smoke.sh, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/pipeline-config.test.cjs, CLAUDE.md, README.md]
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-25-02-a-codex-agent-carries-effort-not-a-model
+    branch: ticket/T-25-02-a-codex-agent-carries-the-model-its-effo
     epic: epic/25-the-conveyor-follows-the-models-it-runs-on
     primary_parent: T-25-01
     pr_base: ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor
@@ -548,7 +548,23 @@ tickets:
     branch: ticket/T-25-03-the-prose-names-the-models-the-runtimes
     epic: epic/25-the-conveyor-follows-the-models-it-runs-on
     primary_parent: T-25-02
-    pr_base: ticket/T-25-02-a-codex-agent-carries-effort-not-a-model
+    pr_base: ticket/T-25-02-a-codex-agent-carries-the-model-its-effo
+    jira: null
+  T-25-04:
+    title: 'The floor is opus, the depth is effort, and fable is earned'
+    plan: '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-04-PLAN.md'
+    phase: '25'
+    repo: null
+    wave: 10
+    depends_on: [T-25-03]
+    files: ['.env.example', docker-compose.yml, k8s/configmap.yaml, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/commands/deliver.md, capabilities/delivery-pipeline/capability.json, CLAUDE.md, README.md, tests/unit/pipeline-config.test.cjs, tests/unit/failure-signature.test.cjs, tests/unit/gsd-tune.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-25-04-the-floor-is-opus-the-depth-is-effort-an
+    epic: epic/25-the-conveyor-follows-the-models-it-runs-on
+    primary_parent: T-25-03
+    pr_base: ticket/T-25-03-the-prose-names-the-models-the-runtimes
     jira: null
   T-26-01:
     title: 'One ownership matcher, exact by construction'
@@ -562,22 +578,6 @@ tickets:
     human_checkpoint: true
     preauthorized: true
     branch: ticket/T-26-01-one-ownership-matcher-exact-by-construct
-    epic: epic/26-positive-evidence-before-a-mutation
-    primary_parent: null
-    pr_base: epic/26-positive-evidence-before-a-mutation
-    jira: null
-  T-26-03:
-    title: Readiness needs positive evidence
-    plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-03-PLAN.md'
-    phase: '26'
-    repo: null
-    wave: 9
-    depends_on: [T-24-11, T-24-10]
-    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs, tests/smoke/sentinel-smoke.sh]
-    risk: medium
-    human_checkpoint: false
-    preauthorized: false
-    branch: ticket/T-26-03-readiness-needs-positive-evidence
     epic: epic/26-positive-evidence-before-a-mutation
     primary_parent: null
     pr_base: epic/26-positive-evidence-before-a-mutation
@@ -597,22 +597,6 @@ tickets:
     epic: epic/26-positive-evidence-before-a-mutation
     primary_parent: null
     pr_base: epic/26-positive-evidence-before-a-mutation
-    jira: null
-  T-26-05:
-    title: 'Locks prove ownership; snapshots carry a generation'
-    plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-05-PLAN.md'
-    phase: '26'
-    repo: null
-    wave: 10
-    depends_on: [T-26-03]
-    files: [plugins/delivery-pipeline/scripts/lock.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/lock.test.cjs, tests/smoke/sentinel-smoke.sh]
-    risk: medium
-    human_checkpoint: false
-    preauthorized: false
-    branch: ticket/T-26-05-locks-prove-ownership-snapshots-carry-a
-    epic: epic/26-positive-evidence-before-a-mutation
-    primary_parent: T-26-03
-    pr_base: ticket/T-26-03-readiness-needs-positive-evidence
     jira: null
   T-26-06:
     title: The Codex config merge writes TOML the runtime can parse
@@ -678,12 +662,92 @@ tickets:
     primary_parent: null
     pr_base: epic/26-positive-evidence-before-a-mutation
     jira: null
+  T-26-13:
+    title: Drift is judged against the base the ticket is cut from
+    plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-13-PLAN.md'
+    phase: '26'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/drift-needed.cjs, tests/unit/drift-needed.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-26-13-drift-is-judged-against-the-base-the-tic
+    epic: epic/26-positive-evidence-before-a-mutation
+    primary_parent: null
+    pr_base: epic/26-positive-evidence-before-a-mutation
+    jira: null
+  T-26-14:
+    title: 'A workflow returns a reference, not a document'
+    plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-14-PLAN.md'
+    phase: '26'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/workflows/executors.mjs, tests/unit/workflows-args.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-26-14-a-workflow-returns-a-reference-not-a-doc
+    epic: epic/26-positive-evidence-before-a-mutation
+    primary_parent: null
+    pr_base: epic/26-positive-evidence-before-a-mutation
+    jira: null
+  T-26-15:
+    title: The board is given the facts its predicates read
+    plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-15-PLAN.md'
+    phase: '26'
+    repo: null
+    wave: 9
+    depends_on: [T-24-11]
+    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, tests/smoke/sentinel-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-26-15-the-board-is-given-the-facts-its-predica
+    epic: epic/26-positive-evidence-before-a-mutation
+    primary_parent: null
+    pr_base: epic/26-positive-evidence-before-a-mutation
+    jira: null
+  T-26-03:
+    title: Readiness needs positive evidence
+    plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-03-PLAN.md'
+    phase: '26'
+    repo: null
+    wave: 10
+    depends_on: [T-26-15, T-24-10]
+    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs, tests/smoke/sentinel-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-26-03-readiness-needs-positive-evidence
+    epic: epic/26-positive-evidence-before-a-mutation
+    primary_parent: T-26-15
+    pr_base: ticket/T-26-15-the-board-is-given-the-facts-its-predica
+    jira: null
+  T-26-05:
+    title: 'Locks prove ownership; snapshots carry a generation'
+    plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-05-PLAN.md'
+    phase: '26'
+    repo: null
+    wave: 11
+    depends_on: [T-26-03]
+    files: [plugins/delivery-pipeline/scripts/lock.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/lock.test.cjs, tests/smoke/sentinel-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-26-05-locks-prove-ownership-snapshots-carry-a
+    epic: epic/26-positive-evidence-before-a-mutation
+    primary_parent: T-26-03
+    pr_base: ticket/T-26-03-readiness-needs-positive-evidence
+    jira: null
   T-26-10:
     title: 'Left behind is evidence, not arithmetic'
     plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-10-PLAN.md'
     phase: '26'
     repo: null
-    wave: 11
+    wave: 12
     depends_on: [T-26-05]
     files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/front.test.cjs, tests/unit/stop-gate.test.cjs, tests/unit/ci-wait.test.cjs]
     risk: medium
@@ -699,7 +763,7 @@ tickets:
     plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-11-PLAN.md'
     phase: '26'
     repo: null
-    wave: 12
+    wave: 13
     depends_on: [T-26-10]
     files: [plugins/delivery-pipeline/scripts/check-state.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/check-state.test.cjs, tests/unit/front.test.cjs, tests/unit/sentinel.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
@@ -715,8 +779,8 @@ tickets:
     plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-02-PLAN.md'
     phase: '26'
     repo: null
-    wave: 13
-    depends_on: [T-26-11, T-25-03]
+    wave: 14
+    depends_on: [T-26-11, T-25-04]
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/ci-wait.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
@@ -725,4 +789,20 @@ tickets:
     epic: epic/26-positive-evidence-before-a-mutation
     primary_parent: T-26-11
     pr_base: ticket/T-26-11-unavailable-is-not-empty
+    jira: null
+  T-26-12:
+    title: A wave is cut to a concurrency the session can afford
+    plan: '.planning/phases/26-positive-evidence-before-a-mutation/26-12-PLAN.md'
+    phase: '26'
+    repo: null
+    wave: 15
+    depends_on: [T-26-02]
+    files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, capabilities/delivery-pipeline/capability.json, tests/unit/pipeline-config.test.cjs, tests/unit/front.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-26-12-a-wave-is-cut-to-a-concurrency-the-sessi
+    epic: epic/26-positive-evidence-before-a-mutation
+    primary_parent: T-26-02
+    pr_base: ticket/T-26-02-a-corrupt-configuration-permits-no-mutat
     jira: null

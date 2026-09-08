@@ -465,4 +465,305 @@ test('only the journal TAIL is read, so a long-lived project stays fast', () => 
   assert.ok(/T-21-04 was MERGED/.test(v.reason), 'and it is the right one');
 });
 
+suite('stop-gate — one block per ROUND, not one per turn');
+
+// `stop_hook_active` caps the gate at one block per TURN. A stacked cascade needs
+// one round per TICKET — merge, the next child goes BEHIND, base-merge, push, CI,
+// merge — and the loop legitimately tries to end the turn after each dispatch. So
+// the gate blocked once, the loop resumed, dispatched, tried to stop again, and
+// that stop went through with three tickets still to land. The hatch was written
+// to bound the cost of a FALSE block; it must not also bound the number of TRUE
+// ones. A per-session ledger beside the front makes the distinction mechanical:
+// re-block when the BOARD ADVANCED since the last block, under a hard cap.
+
+const graphOf = (dir) => path.join(dir, '.planning', 'graph');
+const ledgerFile = (dir) => path.join(graphOf(dir), 'stop-gate-ledger.json');
+const minsAgo = (m) => new Date(Date.now() - m * 60 * 1000).toISOString();
+
+function putFront(dir, front) {
+  fs.mkdirSync(graphOf(dir), { recursive: true });
+  fs.writeFileSync(path.join(graphOf(dir), 'delivery-front.json'), JSON.stringify(front));
+}
+
+function putJournal(dir, events) {
+  fs.mkdirSync(graphOf(dir), { recursive: true });
+  fs.writeFileSync(path.join(graphOf(dir), 'delivery-log.jsonl'),
+    events.map((e) => (typeof e === 'string' ? e : JSON.stringify(e))).join('\n') + '\n');
+}
+
+function putDispatches(dir, tickets) {
+  fs.mkdirSync(graphOf(dir), { recursive: true });
+  fs.writeFileSync(path.join(graphOf(dir), 'dispatches.json'),
+    JSON.stringify({ tickets }, null, 2) + '\n');
+}
+
+function ledgerOf(dir) {
+  try { return JSON.parse(fs.readFileSync(ledgerFile(dir), 'utf8')); } catch { return null; }
+}
+
+// Like runIn, but the whole result — the ledger's failure line and the cap notice
+// go to STDERR, because a non-JSON line on stdout is not a hook verdict.
+function runFull(cwd, payload = {}, env = {}) {
+  const r = spawnSync('node', [SCRIPT], {
+    cwd, input: JSON.stringify(payload), encoding: 'utf8',
+    env: { ...process.env, ...env },
+  });
+  assert.equal(r.status, 0, `the hook must always exit 0 (stderr: ${r.stderr})`);
+  const out = (r.stdout || '').trim();
+  return { verdict: out ? JSON.parse(out) : null, stderr: r.stderr || '' };
+}
+
+test('a board that ADVANCED re-blocks inside the same turn', () => {
+  // The measured sequence, and the whole point of the ledger: the second stop is
+  // the same board (allow, unchanged), the third is a board that MOVED — a merge
+  // landed and a resync ran — and today that one goes through.
+  const dir = project(live({ generated_at: minsAgo(2) }));
+  const S = { session_id: 'sess-round' };
+
+  const first = runIn(dir, S);
+  assert.ok(first && first.decision === 'block', 'the first stop blocks as it always did');
+  assert.equal(ledgerOf(dir).blocks, 1, 'and the block is recorded against the session');
+
+  assert.equal(runIn(dir, { ...S, stop_hook_active: true }), null,
+    'the same board twice is a loop, and the anti-loop rule still holds');
+
+  putFront(dir, live({
+    generated_at: fresh(), actionable_count: 1, left_behind_count: 0,
+    actionable: { execute: [], publish: [], fix: [], finalize: ['T-01-09'], merge: [] },
+  }));
+  const third = runIn(dir, { ...S, stop_hook_active: true });
+  assert.ok(third && third.decision === 'block',
+    'a board that advanced is a new round, and the cascade needs one block per round');
+  assert.ok(/T-01-09/.test(third.reason), 'and the refusal names what the NEW board holds');
+  assert.equal(ledgerOf(dir).blocks, 2, 'the ledger counts rounds, not turns');
+});
+
+test('a journal event newer than the last block is advancement too', () => {
+  // The board need not be resynced for the world to move: a merge lands, the
+  // journal records it, and the next stop is a new round even against the same
+  // `generated_at`.
+  const dir = project(live({ generated_at: minsAgo(5) }));
+  const S = { session_id: 'sess-journal' };
+  assert.ok(runIn(dir, S).decision === 'block', 'the first stop blocks');
+  assert.equal(runIn(dir, { ...S, stop_hook_active: true }), null, 'nothing moved yet');
+
+  putJournal(dir, [ev({ event: 'merge', ticket: 'T-01-02', pr: 7 })]);
+  const after = runIn(dir, { ...S, stop_hook_active: true });
+  assert.ok(after && after.decision === 'block', 'a merge the board has not seen is a new round');
+  assert.ok(/was MERGED/.test(after.reason), 'and the evidence branch is the one that says so');
+
+  assert.equal(runIn(dir, { ...S, stop_hook_active: true }), null,
+    'the SAME event is not a second round — advancement is measured, not re-counted');
+});
+
+test('twelve advancing rounds block; the thirteenth allows and says why', () => {
+  // A cascade deeper than this is a phase nobody should be running in one turn,
+  // and a gate with no ceiling at all is a gate that can trap a session.
+  const dir = project(live());
+  const S = { session_id: 'sess-cap' };
+  for (let i = 0; i < 12; i++) {
+    putFront(dir, live({ generated_at: new Date(Date.now() - (13 - i) * 1000).toISOString() }));
+    const v = runIn(dir, { ...S, stop_hook_active: i > 0 });
+    assert.ok(v && v.decision === 'block', `round ${i + 1} of a live cascade must still block`);
+  }
+  assert.equal(ledgerOf(dir).blocks, 12, 'twelve rounds, twelve blocks');
+
+  putFront(dir, live({ generated_at: fresh() }));
+  const past = runFull(dir, { ...S, stop_hook_active: true });
+  assert.equal(past.verdict, null, 'past the cap the gate gets out of the way');
+  assert.ok(/SHIPYARD_STOP_GATE_MAX_BLOCKS/.test(past.stderr),
+    'and says which knob decided, so the operator is not guessing');
+  assert.equal(ledgerOf(dir).blocks, 12, 'the cap does not keep counting');
+});
+
+test('the cap is tunable, and garbage in it falls back to the default', () => {
+  const dir = project(live({ generated_at: minsAgo(3) }));
+  const S = { session_id: 'sess-cap-2' };
+  assert.ok(runIn(dir, S, { SHIPYARD_STOP_GATE_MAX_BLOCKS: '1' }).decision === 'block',
+    'the first block is under any cap of 1 or more');
+  putFront(dir, live({ generated_at: fresh() }));
+  assert.equal(runIn(dir, { ...S, stop_hook_active: true }, { SHIPYARD_STOP_GATE_MAX_BLOCKS: '1' }), null,
+    'a cap of one means one');
+  // Garbage must not disable the ROUNDS, which is the direction that ends runs.
+  assert.ok(runIn(dir, { ...S, stop_hook_active: true }, { SHIPYARD_STOP_GATE_MAX_BLOCKS: 'lots' })
+    .decision === 'block', 'a garbage cap falls back to 12, not to zero');
+});
+
+test('a payload with no session_id keeps the old one-block rule', () => {
+  // The ledger is keyed by the session the hook was called for. Without one
+  // there is nothing to count rounds against, and inventing a key would make
+  // every stop in the repository look like the same run.
+  const dir = project(live({ generated_at: minsAgo(2) }));
+  assert.ok(runIn(dir, {}).decision === 'block', 'a first stop still blocks');
+  assert.equal(ledgerOf(dir), null, 'and no ledger is written for a payload that cannot own one');
+  putFront(dir, live({ generated_at: fresh() }));
+  assert.equal(runIn(dir, { stop_hook_active: true }), null,
+    'so the anti-loop hatch stays exactly as permissive as it was');
+});
+
+test('a ledger this session does not own neither silences nor traps it', () => {
+  const dir = project(live());
+  fs.writeFileSync(ledgerFile(dir), JSON.stringify({
+    session_id: 'someone-else', blocks: 99, last_generated_at: fresh(), last_moved_at: null,
+  }));
+  const v = runIn(dir, { session_id: 'mine' });
+  assert.ok(v && v.decision === 'block', 'another run\'s cap is not this run\'s');
+  const led = ledgerOf(dir);
+  assert.equal(led.session_id, 'mine', 'the ledger belongs to the session that is stopping');
+  assert.equal(led.blocks, 1, 'counting starts from this session\'s first block');
+});
+
+test('an unwritable ledger changes nothing but a line on stderr', () => {
+  // ci-wait.cjs's rule for the same class of bookkeeping: a store left as a
+  // DIRECTORY by some accident (measured) must not take the decision down with
+  // it. The gate always exits 0 and the verdict stands.
+  const dir = project(live());
+  fs.mkdirSync(ledgerFile(dir), { recursive: true });
+  const r = runFull(dir, { session_id: 'sess-ro' });
+  assert.ok(r.verdict && r.verdict.decision === 'block', 'the refusal is unaffected');
+  assert.ok(/ledger/.test(r.stderr), 'and one line says the bookkeeping did not happen');
+});
+
+test('a read-only graph directory is survivable', () => {
+  const dir = project(live());
+  fs.chmodSync(graphOf(dir), 0o555);
+  try {
+    const r = runFull(dir, { session_id: 'sess-ro-2' });
+    assert.ok(r.verdict && r.verdict.decision === 'block', 'the decision never depends on the write');
+  } finally { fs.chmodSync(graphOf(dir), 0o755); }
+});
+
+test('a corrupt ledger is a ledger this session does not own', () => {
+  const dir = project(live());
+  fs.writeFileSync(ledgerFile(dir), '{not json');
+  assert.equal(runIn(dir, { session_id: 'sess-corrupt', stop_hook_active: true }), null,
+    'with no provable advancement, a stop already blocked once goes through');
+  assert.ok(runIn(dir, { session_id: 'sess-corrupt' }).decision === 'block', 'and a first stop blocks');
+  assert.equal(ledgerOf(dir).blocks, 1, 'the corrupt file is replaced by a real record');
+});
+
+suite('stop-gate — a journal event from a run that ENDED is not evidence');
+
+// `movedSince` counted an event of ANY age. A run that ended on a sentinel merge
+// leaves such an event in the journal forever, and this hook is GLOBAL — so the
+// first stop of every later session in that repository was blocked with "the
+// board is behind reality" over a merge from days ago. Bound the event by the
+// same ceiling the stale-board rule uses: older than that is a run that ended.
+
+test('a five-hour-old merge against a six-hour-old board is a run that ended', () => {
+  const fiveHours = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+  assert.equal(
+    run(ancient(), {}, {}, [{ ts: fiveHours, event: 'merge', ticket: 'T-21-01', pr: 645 }]),
+    null, 'an event past the resync ceiling describes a run that is over');
+  // The same event, minutes old, is the case the evidence branch was written for.
+  const v = run(ancient(), {}, {}, [ev({ event: 'merge', ticket: 'T-21-01', pr: 645 })]);
+  assert.ok(v && v.decision === 'block', 'a fresh merge on an ancient board still blocks');
+});
+
+test('the event bound follows SHIPYARD_STOP_GATE_RESYNC_MS, not a second number', () => {
+  // One ceiling, one knob: a project with a slower cadence widens both at once.
+  const fiveHours = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+  const v = run(ancient(), {}, { SHIPYARD_STOP_GATE_RESYNC_MS: String(8 * 60 * 60 * 1000) },
+    [{ ts: fiveHours, event: 'merge', ticket: 'T-21-01', pr: 645 }]);
+  assert.ok(v && v.decision === 'block', 'inside a widened ceiling the same event is evidence again');
+});
+
+suite('stop-gate — a dispatch that outlived its launch is not an agent at work');
+
+// The CI-only branch is opened by ANY `waiting.dispatched` entry, on the sound
+// reasoning that an agent completion is a free wake-up. A mark written BEFORE a
+// launch that never happened is not that: it is 90 minutes of silence with
+// nothing coming. So the hatch now asks `dispatches.json` how old the mark is.
+
+const ciOnly = (dispatched = []) => ({
+  generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {},
+  waiting: { ci: ['T-01-01'], dispatched, merge_human: [], human: [] },
+});
+
+test('a ten-minute-old dispatch still opens the CI hatch', () => {
+  const dir = project(ciOnly(['T-01-02']));
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(10) } });
+  assert.equal(runIn(dir, { session_id: 'sess-disp' }), null,
+    'an agent ten minutes into a fix round is exactly the free wake-up this hatch is for');
+});
+
+test('an hour-old dispatch does not, and the refusal names it', () => {
+  const dir = project(ciOnly(['T-01-02']));
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60) } });
+  const v = runIn(dir, { session_id: 'sess-disp' });
+  assert.ok(v && v.decision === 'block', 'a mark this old is not evidence anyone is working');
+  assert.ok(/T-01-02/.test(v.reason), 'the refusal names the ticket');
+  assert.ok(/dispatch-record\.cjs clear/.test(v.reason), 'and how to return it to the board');
+  assert.ok(/ci-wait\.cjs/.test(v.reason), 'while still naming the wait, which is the actual next move');
+});
+
+test('a dispatched ticket with no record keeps the hatch open', () => {
+  // Unknown age is not proof the agent is gone, and the direction that traps a
+  // session is the one this hook must never take. Positive evidence only.
+  const dir = project(ciOnly(['T-01-02']));
+  assert.equal(runIn(dir, { session_id: 'sess-disp-2' }), null, 'no store, no suspicion');
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: 'not a date' } });
+  assert.equal(runIn(dir, { session_id: 'sess-disp-3' }), null, 'an undateable mark is not an old one');
+});
+
+test('one live dispatch beside a suspect one still opens the hatch', () => {
+  const dir = project(ciOnly(['T-01-02', 'T-01-03']));
+  putDispatches(dir, {
+    'T-01-02': { role: 'executor', at: minsAgo(60) },
+    'T-01-03': { role: 'ci-fix', at: minsAgo(5) },
+  });
+  assert.equal(runIn(dir, { session_id: 'sess-disp-4' }), null,
+    'one agent still out is one wake-up still coming');
+});
+
+test('the suspect window is tunable', () => {
+  const dir = project(ciOnly(['T-01-02']));
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(10) } });
+  assert.ok(runIn(dir, { session_id: 'sess-disp-5' },
+    { SHIPYARD_STOP_GATE_DISPATCH_SUSPECT_MS: '60000' }).decision === 'block',
+    'a project with faster rounds can say so');
+  assert.equal(runIn(dir, { session_id: 'sess-disp-6' },
+    { SHIPYARD_STOP_GATE_DISPATCH_SUSPECT_MS: 'soon' }), null,
+    'and garbage falls back to the default rather than suspecting everything');
+});
+
+test('the two new reads stay inside the hook budget', () => {
+  // A hook has ~75ms. There was no timing assertion in this file before — the
+  // journal-tail test measures the READ, not the clock — so this measures the
+  // DELTA between a bare board and one with everything the gate now reads
+  // beside it (a 4000-line journal, a ledger, a dispatch store). Node's own
+  // startup dominates both and cancels out; min-of-3, because the minimum is
+  // the stable statistic on a machine doing other things. It is a tripwire for
+  // an O(size) regression, not a microbenchmark.
+  const filler = Array.from({ length: 4000 }, (_, i) => ({
+    ts: new Date(Date.now() - (5000 - i) * 1000).toISOString(),
+    event: 'status_change', ticket: `T-99-${i}`, to: 'merged', pad: 'x'.repeat(80),
+  }));
+  const bare = project(live());
+  const loaded = project(live({
+    actionable_count: 2, left_behind_count: 0,
+    waiting: { ci: [], dispatched: ['T-01-02'], merge_human: [], human: [] },
+  }));
+  putJournal(loaded, filler);
+  putDispatches(loaded, { 'T-01-02': { role: 'executor', at: minsAgo(5) } });
+  fs.writeFileSync(ledgerFile(loaded), JSON.stringify({
+    session_id: 'sess-budget', blocks: 1, last_generated_at: minsAgo(30), last_moved_at: null,
+  }));
+
+  const timed = (dir) => {
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const t = Date.now();
+      const v = runIn(dir, { session_id: 'sess-budget' });
+      best = Math.min(best, Date.now() - t);
+      assert.ok(v && v.decision === 'block', 'both sides must take the same branch');
+    }
+    return best;
+  };
+  const a = timed(bare);
+  const b = timed(loaded);
+  console.log(`      bare ${a}ms, with journal+ledger+dispatches ${b}ms`);
+  assert.ok(b - a < 400, `the extra reads cost ${b - a}ms, which is not "one small JSON read"`);
+});
+
 done();
