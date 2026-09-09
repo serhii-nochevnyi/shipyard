@@ -2109,6 +2109,12 @@ const { ROLES } = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
 ));
 
+// A guard record in the shape `activeDispatches` returns: the role, WHEN it was
+// handed over, and WHICH agent holds it. The identity is what the collapse is
+// keyed on (ADR-007 D1) — `at` is deliberately a parameter so the "time is not
+// an identity" case below can move it without touching anything else.
+const guard = (agentId, at = new Date().toISOString()) => ({ role: 'pr-sentinel', at, agent_id: agentId });
+
 test('every ladder role has a cardinality, and only the guard runs as one agent per round', () => {
   // Same shape as dispatch-record.cjs's own role-table test: a role added to the
   // ladder must not silently inherit somebody else's cardinality, because the
@@ -2130,8 +2136,13 @@ test('one guard holding four guarded PRs is ONE agent — in_flight 1, free 3', 
   // THE WHOLE TICKET. Four `pr-sentinel` records, one agent, and the two ready
   // tickets beside them are dispatchable. On the record-counting code this is
   // `in_flight: 4, free: 0` and the wave never leaves.
+  //
+  // The four records name the SAME agent (ADR-007 D1): the collapse is keyed on
+  // the identity `dispatch-record.cjs mark --agent-id` records, so this board is
+  // one agent because one guard was posted — not because four records share a
+  // role string.
   const { ids, tickets, state } = readyBoard(6);
-  const dispatched = Object.fromEntries(ids.slice(0, 4).map((id) => [id, 'pr-sentinel']));
+  const dispatched = Object.fromEntries(ids.slice(0, 4).map((id) => [id, guard('agent-guard-a')]));
   const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
   assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 1, free: 3 });
   // The truncation still names everything: the collapse changes the BUDGET, not
@@ -2153,7 +2164,7 @@ test('a guard beside three per-ticket agents is 4, and the guard\'s extra ticket
   // ci-fix + an arch-review (3).
   const { ids, tickets, state } = readyBoard(8);
   const dispatched = {
-    [ids[0]]: 'pr-sentinel', [ids[1]]: 'pr-sentinel', [ids[2]]: 'pr-sentinel',
+    [ids[0]]: guard('agent-guard-a'), [ids[1]]: guard('agent-guard-a'), [ids[2]]: guard('agent-guard-a'),
     [ids[3]]: 'executor', [ids[4]]: 'ci-fix', [ids[5]]: 'arch-review',
   };
   const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
@@ -2175,6 +2186,102 @@ test('a record shape the store never wrote is one agent, not a free one', () => 
   assert.strictEqual(f.capacity.in_flight, 3, 'one guard + two unnameable agents');
 });
 
+// ── AND TWO GUARDS ARE TWO AGENTS (ADR-007 D1) ──────────────────────────────
+//
+// The collapse above was keyed on the ROLE STRING, so every `pr-sentinel` record
+// in the store was the same agent — while `deliver.md` sanctions two live guards
+// ("Re-post a guard for PRs opened after it started (or hand them to the running
+// one with `SendMessage`)"). Reported reproduction: four agents genuinely out,
+// `max=4, in_flight=3, free=1`, so the cap authorised a fifth. T-27-01 fixed the
+// SAFE error (over-count → a stall) and introduced the unsafe one in the same
+// mechanism: an under-count spends past the cap, which is not a cap.
+//
+// So the collapse is keyed on the identity of the agent that holds the record —
+// `dispatch-record.cjs mark --agent-id`, the id the launch returned — and an
+// unidentified record is its own agent, because unknown must resolve UPWARD for
+// the same reason `DEFAULT_CARDINALITY` is 'ticket'.
+suite('front — two guards are two agents');
+
+test('two guards posted over different waves are TWO agents, not one', () => {
+  // THE DEFECT, as a board. One guard over two PRs, a second guard over one, and
+  // two executors beside them: four agents are out and the cap of four is spent.
+  // On the role-keyed Set this is `in_flight: 3, free: 1` — an authorisation to
+  // dispatch a fifth agent.
+  const { ids, tickets, state } = readyBoard(8);
+  const at = new Date().toISOString();
+  const dispatched = {
+    [ids[0]]: guard('agent-guard-a'), [ids[1]]: guard('agent-guard-a'),
+    [ids[2]]: guard('agent-guard-b'),
+    [ids[3]]: { role: 'executor', at, agent_id: 'agent-exec-a' },
+    [ids[4]]: { role: 'executor', at, agent_id: 'agent-exec-b' },
+  };
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 4, free: 0 });
+  // And the truncation is what the count is FOR: nothing may go out this round.
+  assert.deepStrictEqual(f.actionable.execute, ids.slice(5), 'the board still names the work');
+  assert.strictEqual(f.fixpoint, false);
+});
+
+test('new tickets handed to the RUNNING guard are still one agent — time is not an identity', () => {
+  // `at` is the tempting substitute for an identity and it is wrong: deliver.md
+  // tells the run to hand PRs opened later to the guard already running, so a
+  // second, third and fourth record legitimately appear minutes apart with no
+  // second agent behind them. Keyed on `at` this board would report four.
+  const { ids, tickets, state } = readyBoard(6);
+  const t0 = Date.now();
+  const dispatched = Object.fromEntries(ids.slice(0, 4).map((id, i) => [
+    id, guard('agent-guard-a', new Date(t0 - i * 13 * 60_000).toISOString()),
+  ]));
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 1, free: 3 });
+});
+
+test('a guard record with NO identity is its own agent, and is never counted free', () => {
+  // An older board — a record written before the field existed, or by a caller
+  // that omitted it — must still read, and it must cost. Two anonymous guard
+  // records are therefore two agents: the direction a spend gate has to fail in,
+  // and the direction T-27-01's own error already had.
+  const { ids, tickets, state } = readyBoard(6);
+  const at = new Date().toISOString();
+  const anon = { role: 'pr-sentinel', at };
+  const f = computeFront(tickets, state, {
+    maxConcurrentAgents: 4,
+    dispatched: { [ids[0]]: anon, [ids[1]]: anon },
+  });
+  assert.strictEqual(f.capacity.in_flight, 2, 'two records nobody can tell apart are two agents');
+
+  // The MIXED board is the one that would hide an anonymous record inside an
+  // identified guard's collapse: one guard over two PRs (1) + one anonymous
+  // record (1) = 2, and never 1.
+  const mixed = computeFront(tickets, state, {
+    maxConcurrentAgents: 4,
+    dispatched: { [ids[0]]: guard('agent-guard-a'), [ids[1]]: guard('agent-guard-a'), [ids[2]]: anon },
+  });
+  assert.deepStrictEqual(mixed.capacity, { max: 4, in_flight: 2, free: 2 });
+  // A bare role string is the flattened shape and carries no identity either.
+  const flat = computeFront(tickets, state, {
+    maxConcurrentAgents: 4,
+    dispatched: { [ids[0]]: guard('agent-guard-a'), [ids[1]]: 'pr-sentinel' },
+  });
+  assert.strictEqual(flat.capacity.in_flight, 2, 'a flattened record is an agent of its own');
+});
+
+test('an identity is per AGENT, not per role — one agent id under two roles is not one agent', () => {
+  // The Set is keyed on the pair, so a reused label cannot make a guard and a
+  // fixer collapse into each other. `ci-fix` is 'ticket' cardinality anyway; the
+  // assertion pins that the identity never becomes a discount across roles.
+  const { ids, tickets, state } = readyBoard(6);
+  const at = new Date().toISOString();
+  const f = computeFront(tickets, state, {
+    maxConcurrentAgents: 4,
+    dispatched: {
+      [ids[0]]: guard('agent-shared'),
+      [ids[1]]: { role: 'ci-fix', at, agent_id: 'agent-shared' },
+    },
+  });
+  assert.strictEqual(f.capacity.in_flight, 2);
+});
+
 // ── THE SHARED FULL-BOARD FIXTURE ────────────────────────────────────────────
 //
 // Four executors out under a cap of four, two more tickets ready: `free: 0` with
@@ -2190,7 +2297,17 @@ const fullBoard = () => {
   return computeFront(
     Object.fromEntries(ids.map((id) => [id, {}])),
     Object.fromEntries(ids.map((id) => [id, { status: 'pending', ready: true }])),
-    { maxConcurrentAgents: 4, dispatched: Object.fromEntries(FULL_OUT.map((id) => [id, 'executor'])) }
+    {
+      maxConcurrentAgents: 4,
+      // One identity per executor, because that is what the store now records —
+      // and `executor` is 'ticket' cardinality, so the ids change NOTHING about
+      // the count. That is the point: the ci-wait and stop-gate copies of this
+      // board pass bare `'executor'` strings and must keep reporting the same
+      // 4/4/0 through this same computeFront.
+      dispatched: Object.fromEntries(FULL_OUT.map((id, i) => [
+        id, { role: 'executor', at: new Date().toISOString(), agent_id: `agent-exec-${i + 1}` },
+      ])),
+    }
   );
 };
 

@@ -6,7 +6,8 @@
 //
 //   dispatch-record.cjs mark  <ticket> <role> [--model <alias>] [--effort <level>]
 //                             [--effort-applied <level>] [--route <resolver route>]
-//                             [--agent-file <name>] [--graph <dir>]
+//                             [--agent-file <name>] [--agent-id <launch id>]
+//                             [--graph <dir>]
 //   dispatch-record.cjs clear <ticket>        [--graph <dir>]
 //   dispatch-record.cjs list  [--json]        [--graph <dir>]
 //
@@ -159,7 +160,7 @@ const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
 //     would compare rows that were never in force against rows that were.
 // So the Agent path omits `--effort-applied`, its absence means "nobody measured
 // this", and the recorder must not helpfully fill it in from the other flag.
-const MARK_FLAGS = ['model', 'effort', 'effort-applied', 'route', 'agent-file'];
+const MARK_FLAGS = ['model', 'effort', 'effort-applied', 'route', 'agent-file', 'agent-id'];
 
 // ── `reason` is the RESOLVER's route, never the caller's sentence ────────────
 //
@@ -192,7 +193,50 @@ const MARK_FIELD = {
   // from, not what a reader greps for.
   route: 'reason',
   'agent-file': 'agent_file',
+  'agent-id': 'agent_id',
 };
+
+// ── WHO holds it, not just WHAT it is (ADR-007 D1) ───────────────────────────
+//
+// The record named the ROLE and nothing about the agent, and `front.cjs` then
+// collapsed a guard's N records to one agent by adding that role string to a Set.
+// Two guards are legitimate — `deliver.md` tells the run to re-post one for PRs
+// opened after the first started — so two of them counted as one, and the
+// reported board was `max=4, in_flight=3, free=1` with four agents genuinely
+// out: an authorisation to spend past the cap, which is not a cap.
+//
+// So the dispatch carries the identity of the agent holding it: the id the LAUNCH
+// returned (the Workflow tool a task id, the Agent tool an agent id), passed
+// verbatim. That provenance rule is `--route`'s, for the same reason — a value
+// the caller composes and a value the mechanism returned cannot share one field
+// and stay countable. A hand-typed label is the ONE way this field can make the
+// count wrong (two guards under one name read as one agent), and no validation
+// can catch it, so the refusal below says so and deliver.md says so too.
+//
+// It is OPTIONAL like every other decided field, and its absence is not an error:
+// an older store must still read, and `agentsInFlight` counts a record with no
+// identity as its own agent — unknown resolves UPWARD wherever the answer is a
+// budget to spend. That is why the refusal tells a caller with no id to OMIT the
+// flag rather than invent one: an anonymous record over-counts (a stall), an
+// invented one under-counts (a spend), and only the second is unsafe.
+const AGENT_ID_MAX = 200;
+
+// ONE rule for "is this string safe to hold as an agent identity", read by both
+// the write path (mark, below) and the read path (`agentIdOf`, near the bottom).
+// Two copies of this check would be free to disagree about a hand-edited or
+// pre-validation record, and `front.cjs`'s Set key relies on the invariant this
+// enforces — no whitespace or control character in either half of the joined
+// `role\u0000identity` key — holding for every record it ever reads, not only
+// ones this script itself wrote.
+function agentIdSafetyIssue(id) {
+  if (typeof id !== 'string') return 'it is not a string';
+  if (id.trim() === '') return 'it is blank';
+  if (/[\s\u0000-\u001f\u007f]/.test(id)) {
+    return 'it contains whitespace or a control character, so two spellings of one id would count as two agents';
+  }
+  if (id.length > AGENT_ID_MAX) return `it is longer than ${AGENT_ID_MAX} characters, which no launch id is`;
+  return null;
+}
 
 // ── the Codex half: which FILE was invoked ───────────────────────────────────
 //
@@ -315,6 +359,35 @@ function parseMarkFlags(argv, role) {
       );
     }
     decided[MARK_FIELD[flag]] = level;
+  }
+  // The agent's identity. Opaque by nature — a launch id has no vocabulary to
+  // check against, and inventing an allowlist for one is the mistake this repo
+  // refused for Codex model ids (an unknown id cannot be told from a new one).
+  // So only what cannot be COMPARED or JOURNALLED is refused: nothing, blank,
+  // whitespace or a control character inside (two spellings of one id would count
+  // as two agents, and a newline would break the journal into two lines), and an
+  // absurd length. Everything else is stored exactly as passed.
+  const agentId = given.get('agent-id');
+  if (agentId !== undefined) {
+    // The SAME predicate `agentIdOf` reads back with, so a value accepted here
+    // can never later fail that check -- and a hand-edited or pre-validation
+    // record that would NOT pass this check is exactly the one `agentIdOf`
+    // must refuse to trust when reading it back.
+    const why = agentIdSafetyIssue(agentId);
+    if (why !== null) {
+      // Echoed via JSON.stringify, never raw interpolation: an id refused
+      // BECAUSE it holds a newline or control character must not then inject
+      // that same newline or control character into this stderr message.
+      fail(
+        `--agent-id ${JSON.stringify(agentId)} cannot identify an agent: ${why}.\n` +
+        '  Pass the id the LAUNCH returned, verbatim — the Workflow tool returns a task id, the Agent tool an\n' +
+        '  agent id — and never a label you compose: two guards recorded under one hand-typed name count as\n' +
+        '  ONE agent, and the cap then authorises a spend past itself.\n' +
+        '  Holding no id at all, OMIT the flag: an unidentified record counts as its own agent, which is the\n' +
+        '  safe direction.'
+      );
+    }
+    decided.agent_id = agentId;
   }
   // The RESOLVER's route, checked against the resolver's own grammar and then
   // against the pair recorded beside it. The grammar check is what stops a
@@ -504,6 +577,31 @@ function mutate(cwd, fn) {
 
 const roleOf = (rec) => (typeof rec === 'string' ? rec : ((rec && rec.role) || 'an agent'));
 
+/**
+ * WHICH agent holds this record, or `null` when nothing identifies one.
+ *
+ * Exported and read by `front.cjs`'s counter rather than re-derived there: "what
+ * counts as an identity" is one rule, and two copies of it would be free to
+ * disagree about a blank string — with the disagreement showing up as a cap that
+ * authorises one more agent than it means to. A bare role string (the flattened
+ * shape) and a record from before the field existed both answer `null`, which
+ * `agentsInFlight` spends a whole agent on.
+ *
+ * Runs the SAME `agentIdSafetyIssue` the write path enforces, not only the
+ * `trim() !== ''` half of it: `front.cjs` joins `role\u0000agent` into a Set
+ * key on the promise that neither half holds whitespace or a control
+ * character, but that promise is only as good as what THIS function lets
+ * through — a hand-edited store, or a record written before the write-side
+ * check existed, is not bound by it. An id this function would refuse to
+ * WRITE is exactly the one it must refuse to trust on READ; both answer
+ * `null`, which is the same safe direction as no identity at all — an extra
+ * agent counted, never one silently discounted through a collision.
+ */
+const agentIdOf = (rec) => {
+  const id = rec && typeof rec === 'object' ? rec.agent_id : undefined;
+  return typeof id === 'string' && agentIdSafetyIssue(id) === null ? id : null;
+};
+
 function ageMinutes(rec) {
   const at = Date.parse((rec && rec.at) || '');
   return Number.isFinite(at) ? Math.max(0, Math.round((Date.now() - at) / 60000)) : null;
@@ -534,8 +632,13 @@ function dispatchWhy(id, rec) {
 }
 
 /**
- * The dispatches still in force: {ticket: {role, at}} — the shape `computeFront`
- * takes as `opts.dispatched`. Callers get both expiry triggers for free.
+ * The dispatches still in force: {ticket: {role, at, agent_id?}} — the shape
+ * `computeFront` takes as `opts.dispatched`. Callers get both expiry triggers for
+ * free.
+ *
+ * `agent_id` is present only when the record carries one, because the counter
+ * that reads it treats a missing identity as an agent of its own and a `null`
+ * would have to be special-cased into the same answer twice.
  *
  * `state` may be passed in by a caller that already has it, otherwise it is read
  * from disk.
@@ -572,7 +675,10 @@ function activeDispatches(cwd = process.cwd(), state = null) {
         : fingerprint(s);
       if (current !== rec.fingerprint) continue;
     }
-    out[id] = { role: roleOf(rec), at: rec.at };
+    const agent = agentIdOf(rec);
+    out[id] = agent === null
+      ? { role: roleOf(rec), at: rec.at }
+      : { role: roleOf(rec), at: rec.at, agent_id: agent };
   }
   return out;
 }
@@ -652,7 +758,7 @@ function refreshFront(cwd) {
 }
 
 module.exports = {
-  activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
+  activeDispatches, dispatchWhy, dispatchFingerprint, agentIdOf, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
   MARK_FLAGS, MARK_FIELD, REFUSED_FLAGS, codexAgentFiles, agentFilesFor, agentRoleName,
   CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_AGENT_PREFIX,
 };

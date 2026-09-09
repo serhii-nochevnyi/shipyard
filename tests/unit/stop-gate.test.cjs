@@ -864,13 +864,20 @@ test('a guard holding four PRs is ONE agent, so a board of five ready tickets st
   // board reports `free: 3`, so this work CAN be taken and walking away from it
   // is the defect this hook exists for. Before the collapse the same board read
   // as full and the gate would now stay silent on it.
+  //
+  // The four records name the SAME guard, because the collapse is keyed on the
+  // identity `dispatch-record.cjs mark --agent-id` records (ADR-007 D1) and no
+  // longer on the role string. Four BARE `'pr-sentinel'` values — the shape this
+  // fixture had while the collapse was role-keyed — are four ANONYMOUS agents,
+  // which is the direction that rule resolves an unknown holder in.
   const ids = ['T-27-81', 'T-27-82', 'T-27-83', 'T-27-84', 'T-27-85'];
+  const guarded = { role: 'pr-sentinel', at: fresh(), agent_id: 'agent-guard-a' };
   const front = {
     generated_at: fresh(),
     ...computeFront(
       Object.fromEntries(ids.map((id) => [id, {}])),
       Object.fromEntries(ids.map((id) => [id, { status: 'pending', ready: true }])),
-      { maxConcurrentAgents: 4, dispatched: Object.fromEntries(ids.slice(0, 4).map((id) => [id, 'pr-sentinel'])) }
+      { maxConcurrentAgents: 4, dispatched: Object.fromEntries(ids.slice(0, 4).map((id) => [id, guarded])) }
     ),
   };
   assert.deepEqual(front.capacity, { max: 4, in_flight: 1, free: 3 });
