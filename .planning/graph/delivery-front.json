@@ -1,7 +1,10 @@
 {
-  "generated_at": "2026-09-07T20:21:55.819Z",
+  "generated_at": "2026-09-09T14:27:00.775Z",
+  "observed_at": "2026-09-09T14:27:00.775Z",
+  "generation": 144,
   "parked_by_run": [],
   "auto_merge": "epic",
+  "dispatches_applied_at": "2026-09-09T14:27:00.775Z",
   "actionable": {
     "execute": [],
     "publish": [],
@@ -12,21 +15,12 @@
   "waiting": {
     "ci": [],
     "dispatched": [],
+    "parent": [],
     "merge_human": [],
     "human": []
   },
   "parked": {
-    "blocked": [
-      "T-25-02",
-      "T-25-03",
-      "T-25-04",
-      "T-26-03",
-      "T-26-05",
-      "T-26-10",
-      "T-26-11",
-      "T-26-02",
-      "T-26-12"
-    ],
+    "blocked": [],
     "done": [
       "T-20-01",
       "T-20-02",
@@ -59,6 +53,11 @@
       "T-24-10",
       "T-24-11",
       "T-25-01",
+      "T-25-02",
+      "T-25-03",
+      "T-25-04",
+      "T-25-05",
+      "T-25-06",
       "T-26-01",
       "T-26-04",
       "T-26-06",
@@ -66,20 +65,35 @@
       "T-26-08",
       "T-26-09",
       "T-26-13",
-      "T-26-14"
+      "T-26-14",
+      "T-26-15",
+      "T-26-03",
+      "T-26-05",
+      "T-26-10",
+      "T-26-11",
+      "T-26-02",
+      "T-26-12",
+      "T-27-01",
+      "T-27-02",
+      "T-27-03",
+      "T-27-04",
+      "T-27-05",
+      "T-27-06",
+      "T-27-07",
+      "T-27-08",
+      "T-27-09",
+      "T-28-01",
+      "T-28-02",
+      "T-28-03",
+      "T-28-04",
+      "T-28-05",
+      "T-28-06",
+      "T-28-07",
+      "T-28-08",
+      "T-28-09"
     ]
   },
-  "why": {
-    "T-25-02": "T-24-07 (cross-phase parent must land on main first (phase 24 epic still ahead))",
-    "T-25-03": "T-25-02 (parent has no branch yet (nothing to cascade from)); T-24-07 (cross-phase parent must land on main first (phase 24 epic still ahead))",
-    "T-25-04": "T-25-03 (parent has no branch yet (nothing to cascade from))",
-    "T-26-03": "T-24-11 (cross-phase parent must land on main first (phase 24 epic still ahead)); T-24-10 (cross-phase parent must land on main first (phase 24 epic still ahead))",
-    "T-26-05": "T-26-03 (parent has no branch yet (nothing to cascade from))",
-    "T-26-10": "T-26-05 (parent has no branch yet (nothing to cascade from))",
-    "T-26-11": "T-26-10 (parent has no branch yet (nothing to cascade from))",
-    "T-26-02": "T-26-11 (parent has no branch yet (nothing to cascade from)); T-25-04 (cross-phase parent must land on main first (phase 25 epic still ahead))",
-    "T-26-12": "T-26-02 (parent has no branch yet (nothing to cascade from))"
-  },
+  "why": {},
   "counts": {
     "execute": 0,
     "publish": 0,
@@ -88,17 +102,25 @@
     "merge": 0,
     "ci": 0,
     "dispatched": 0,
+    "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 9,
-    "done": 39
+    "blocked": 0,
+    "done": 69
   },
+  "parent_of": {},
   "actionable_count": 0,
   "left_behind_count": 0,
   "fixpoint": true,
+  "capacity": {
+    "max": 4,
+    "in_flight": 0,
+    "free": 4
+  },
   "sentinel": {
     "duty": [],
     "waiting_ci": [],
+    "waiting_parent": [],
     "dispatched": [],
     "clear": true
   },

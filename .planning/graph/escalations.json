@@ -1,3 +1,15 @@
 {
-  "tickets": {}
+  "tickets": {
+    "T-27-03": {
+      "kind": "plan_defect",
+      "reason": "files_modified omits two files the base-resolution change reaches, and both are needed to keep the guard/board invariant this same ticket already had arch-review catch once (ADR-002 D4): (1) tests/unit/parent-moving.test.cjs line 147 'a landed parent releases the child on both sides at once' still asserts the PR #52 shape as a pass (merged parent P, child C.pr_base still literally 'ticket/P' -> expects action 'merge'); a5ed0a4 corrected the identical fixture shape in sentinel.test.cjs but missed this sibling file. Verified empirically: patching only the fixture's C.pr_base to the retargeted epic value (as a5ed0a4 did elsewhere) makes all 12 assertions in this file pass against the current worktree code -- the code is right, the test fixture is stale. (2) plugins/delivery-pipeline/scripts/front.cjs has no limbBaseOf/limbRemedy awareness: computeFront() still puts C in actionable.merge for the exact un-retargeted PR-52-shape fixture while sentinel.cjs dutyItems() answers human-merge -- reproduced by direct call, front.cjs returned actionable.merge:['C']. This is the same front-offers-what-the-guard-refuses pathology a5ed0a4 fixed for sentinel.cjs alone; front.cjs was never given the shared predicate. Fix shape: extract limbBaseOf/limbRemedy (currently private to sentinel.cjs, lines ~487-499) into a shared module on the parent-moving.cjs pattern, import from both front.cjs and sentinel.cjs, update computeFront's merge-eligibility to exclude a limb base, and widen files_modified to include front.cjs and tests/unit/parent-moving.test.cjs (plus its own PLAN.md) before re-attempting.",
+      "plan": "/Volumes/KINGSTON/claude-shipyard/.planning/phases/27-the-conveyor-measures-its-own-state/27-03-PLAN.md",
+      "plan_hash": "c1d4cb5410cdb5c8",
+      "signatures": [
+        "2570b45482b75a7e"
+      ],
+      "pr": 66,
+      "at": "2026-09-08T19:34:40.748Z"
+    }
+  }
 }

@@ -442,3 +442,365 @@
 {"ts":"2026-09-07T20:20:26.325Z","event":"status_change","ticket":"T-26-13","from":"pr-open","to":"merged","pr":48}
 {"ts":"2026-09-07T20:21:38.184Z","event":"merge","ticket":"T-24-11","pr":47,"base":"epic/24-the-conveyor-stops-interrupting-itself","repo":null,"by":"sentinel"}
 {"ts":"2026-09-07T20:21:49.178Z","event":"status_change","ticket":"T-24-11","from":"pr-open","to":"merged","pr":47}
+{"ts":"2026-09-08T06:48:21.271Z","event":"status_change","ticket":"T-26-15","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T07:03:21.636Z","event":"dispatch","ticket":"T-26-15","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T07:03:21.678Z","event":"dispatch","ticket":"T-25-02","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T07:11:17.458Z","event":"dispatch","ticket":"T-26-15","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T07:11:17.502Z","event":"dispatch","ticket":"T-25-02","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T07:53:58.913Z","event":"attempt","ticket":"T-26-15","pr":50,"role":"executor","attempt":1,"outcome":"pushed","head":"e1ffc11"}
+{"ts":"2026-09-08T07:53:58.946Z","event":"attempt","ticket":"T-25-02","pr":51,"role":"executor","attempt":1,"outcome":"pushed","head":"d2cfb7c"}
+{"ts":"2026-09-08T07:53:59.064Z","event":"status_change","ticket":"T-25-02","from":"pending","to":"pr-open","pr":51}
+{"ts":"2026-09-08T07:53:59.064Z","event":"status_change","ticket":"T-26-15","from":"pending","to":"pr-open","pr":50}
+{"ts":"2026-09-08T07:55:44.785Z","event":"dispatch","ticket":"T-26-15","role":"arch-review","pr":50,"by":"dispatch-record"}
+{"ts":"2026-09-08T07:55:44.825Z","event":"dispatch","ticket":"T-25-02","role":"arch-review","pr":51,"by":"dispatch-record"}
+{"ts":"2026-09-08T07:58:02.510Z","event":"dispatch","ticket":"T-26-03","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T07:58:02.552Z","event":"dispatch","ticket":"T-25-03","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T07:59:25.252Z","event":"dispatch","ticket":"T-26-03","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T07:59:25.294Z","event":"dispatch","ticket":"T-25-03","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T08:00:38.856Z","event":"degenerate_green","ticket":"T-26-15","pr":50,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T08:04:49.303Z","event":"degenerate_green","ticket":"T-25-02","pr":51,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T08:08:47.569Z","event":"merge","ticket":"T-26-15","pr":50,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T08:08:57.186Z","event":"merge","ticket":"T-25-02","pr":51,"base":"epic/25-the-conveyor-follows-the-models-it-runs-on","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T08:09:04.273Z","event":"status_change","ticket":"T-25-02","from":"pr-open","to":"merged","pr":51}
+{"ts":"2026-09-08T08:09:04.273Z","event":"status_change","ticket":"T-26-15","from":"pr-open","to":"merged","pr":50}
+{"ts":"2026-09-08T08:18:13.170Z","event":"attempt","ticket":"T-26-03","pr":52,"role":"executor","attempt":1,"outcome":"pushed","head":"37ddf85"}
+{"ts":"2026-09-08T08:18:13.216Z","event":"attempt","ticket":"T-25-03","pr":53,"role":"executor","attempt":1,"outcome":"pushed","head":"797e4ec"}
+{"ts":"2026-09-08T08:18:13.351Z","event":"status_change","ticket":"T-25-03","from":"pending","to":"pr-open","pr":53}
+{"ts":"2026-09-08T08:18:13.351Z","event":"status_change","ticket":"T-26-03","from":"pending","to":"pr-open","pr":52}
+{"ts":"2026-09-08T08:18:54.409Z","event":"escalation","ticket":"T-25-04","pr":null,"reason":"Held for an operator decision on its own scope, not for a defect. Measured 2026-09-08 on this repository: the ticket raises the floor to opus everywhere the ladder returns sonnet today, which is 104 of 173 role dispatches in the journal (77 of them pr-sentinel) at 2.5x sonnet's input and output price; and its only cheap effort row, 'high when risk is low and files <= 2', is unreachable twice over — deliver.md:864 passes --risk and --type but never --files (so Number(undefined) <= 2 is false on every ticket), and only 6 of 49 tickets satisfy the condition even if it did. Shipping it as planned therefore raises the bill and leaves the differentiation theoretical. Its effort table is also inert for 53% of dispatches: pr-sentinel and arch-review are spawned through the Agent tool, which has no effort parameter, and only drift-gate/executors/fix-round are Workflows. The decision asked of the operator: widen this ticket with the signal plumbing (pass --files, derive --code-change, and make an absent signal never resolve upward), and whether a separate ticket should give pr-sentinel and arch-review a Workflow. Clear this park once that is answered.","by":"escalation-record"}
+{"ts":"2026-09-08T08:19:20.021Z","event":"dispatch","ticket":"T-26-05","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T08:20:24.796Z","event":"dispatch","ticket":"T-26-03","role":"arch-review","pr":52,"by":"dispatch-record"}
+{"ts":"2026-09-08T08:21:16.193Z","event":"dispatch","ticket":"T-26-05","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T08:21:49.519Z","event":"dispatch","ticket":"T-25-03","role":"arch-review","pr":53,"by":"dispatch-record"}
+{"ts":"2026-09-08T08:27:31.353Z","event":"degenerate_green","ticket":"T-25-03","pr":53,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T08:27:45.570Z","event":"degenerate_green","ticket":"T-26-03","pr":52,"findings":0,"modes":""}
+{"ts":"2026-09-08T08:29:31.568Z","event":"merge","ticket":"T-26-03","pr":52,"base":"ticket/T-26-15-the-board-is-given-the-facts-its-predica","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T08:31:49.629Z","event":"status_change","ticket":"T-26-03","from":"pr-open","to":"merged","pr":52}
+{"ts":"2026-09-08T08:32:23.207Z","event":"dispatch","ticket":"T-25-03","role":"review-fix","pr":53,"by":"dispatch-record"}
+{"ts":"2026-09-08T08:40:11.346Z","event":"attempt","ticket":"T-25-03","pr":53,"role":"review-fix","attempt":1,"outcome":"pushed","head":"2efe2ef","hypothesis":"the Codex generator rewrites bare .claude/ paths as well as the word Claude, so the two new (.claude/agents/*.md) parentheticals in the converted commands/ files shipped as .codex/agents/*.md — a surface that does not exist there; the fix removes the rewritable path rather than escaping it"}
+{"ts":"2026-09-08T08:40:55.313Z","event":"dispatch","ticket":"T-25-03","role":"arch-review","pr":53,"by":"dispatch-record"}
+{"ts":"2026-09-08T08:41:51.951Z","event":"degenerate_green","ticket":"T-25-03","pr":53,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T08:45:50.339Z","event":"attempt","ticket":"T-25-03","pr":53,"role":"review-fix","attempt":2,"outcome":"pushed","head":"b9fd669","hypothesis":"Copilot's separable-verb nit was valid — verified against the BRANCH, where CLAUDE.md and README.md both write 'that prompt waits out' and only deliver.md inverted it; one change must not ship two spellings of its own sentence"}
+{"ts":"2026-09-08T08:46:21.974Z","event":"dispatch","ticket":"T-25-03","role":"arch-review","pr":53,"by":"dispatch-record"}
+{"ts":"2026-09-08T08:46:56.300Z","event":"degenerate_green","ticket":"T-25-03","pr":53,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T08:50:35.122Z","event":"base_merge","ticket":"T-25-03","pr":53,"base":"epic/25-the-conveyor-follows-the-models-it-runs-on","head":"eb8030b"}
+{"ts":"2026-09-08T08:51:54.039Z","event":"dispatch","ticket":"T-25-03","role":"arch-review","pr":53,"by":"dispatch-record"}
+{"ts":"2026-09-08T08:52:55.126Z","event":"degenerate_green","ticket":"T-25-03","pr":53,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T08:54:34.057Z","event":"merge","ticket":"T-25-03","pr":53,"base":"epic/25-the-conveyor-follows-the-models-it-runs-on","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T08:54:42.779Z","event":"status_change","ticket":"T-25-03","from":"pr-open","to":"merged","pr":53}
+{"ts":"2026-09-08T08:58:42.234Z","event":"base_merge","ticket":"T-26-05","pr":54,"base":"epic/26-positive-evidence-before-a-mutation","head":"a5fcff8"}
+{"ts":"2026-09-08T08:58:42.278Z","event":"attempt","ticket":"T-26-05","pr":54,"role":"executor","attempt":1,"outcome":"pushed","head":"a5fcff8"}
+{"ts":"2026-09-08T08:58:42.363Z","event":"status_change","ticket":"T-26-05","from":"pending","to":"pr-open","pr":54}
+{"ts":"2026-09-08T08:59:18.169Z","event":"dispatch","ticket":"T-26-10","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T09:01:04.597Z","event":"dispatch","ticket":"T-26-05","role":"arch-review","pr":54,"by":"dispatch-record"}
+{"ts":"2026-09-08T09:01:04.640Z","event":"dispatch","ticket":"T-26-10","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T09:08:16.792Z","event":"degenerate_green","ticket":"T-26-05","pr":54,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T09:12:14.932Z","event":"dispatch","ticket":"T-26-05","role":"arch-review","pr":54,"by":"dispatch-record"}
+{"ts":"2026-09-08T09:23:27.086Z","event":"degenerate_green","ticket":"T-26-05","pr":54,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T09:26:07.482Z","event":"merge","ticket":"T-26-05","pr":54,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T09:27:31.231Z","event":"status_change","ticket":"T-26-05","from":"pr-open","to":"merged","pr":54}
+{"ts":"2026-09-08T09:32:53.926Z","event":"base_merge","ticket":"T-26-10","pr":55,"base":"epic/26-positive-evidence-before-a-mutation","head":"79f48d4"}
+{"ts":"2026-09-08T09:32:53.969Z","event":"attempt","ticket":"T-26-10","pr":55,"role":"executor","attempt":1,"outcome":"pushed","head":"79f48d4"}
+{"ts":"2026-09-08T09:32:54.064Z","event":"status_change","ticket":"T-26-10","from":"pending","to":"pr-open","pr":55}
+{"ts":"2026-09-08T09:34:09.157Z","event":"dispatch","ticket":"T-26-11","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T09:36:04.505Z","event":"dispatch","ticket":"T-26-10","role":"arch-review","pr":55,"by":"dispatch-record"}
+{"ts":"2026-09-08T09:36:04.555Z","event":"dispatch","ticket":"T-26-11","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T09:53:29.718Z","event":"degenerate_green","ticket":"T-26-10","pr":55,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T09:58:24.145Z","event":"merge","ticket":"T-26-10","pr":55,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T09:58:56.974Z","event":"status_change","ticket":"T-26-10","from":"pr-open","to":"merged","pr":55}
+{"ts":"2026-09-08T10:11:06.994Z","event":"base_merge","ticket":"T-26-11","pr":56,"base":"epic/26-positive-evidence-before-a-mutation","head":"1f394fa"}
+{"ts":"2026-09-08T10:11:07.032Z","event":"attempt","ticket":"T-26-11","pr":56,"role":"executor","attempt":1,"outcome":"pushed","head":"1f394fa"}
+{"ts":"2026-09-08T10:11:07.119Z","event":"status_change","ticket":"T-26-11","from":"pending","to":"pr-open","pr":56}
+{"ts":"2026-09-08T10:13:48.936Z","event":"dispatch","ticket":"T-26-11","role":"arch-review","pr":56,"by":"dispatch-record"}
+{"ts":"2026-09-08T10:21:16.124Z","event":"degenerate_green","ticket":"T-26-11","pr":56,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T10:23:44.967Z","event":"dispatch","ticket":"T-26-11","role":"review-fix","pr":56,"by":"dispatch-record"}
+{"ts":"2026-09-08T10:37:48.138Z","event":"attempt","ticket":"T-26-11","pr":56,"role":"review-fix","attempt":2,"outcome":"pushed","head":"f3126f2","hypothesis":"not a missing else but a caller compensating BEFORE classify — state-sync manufactured [] locally off the exit code; the fix moves both the shape decision and the note derivation into the module that owns the vocabulary"}
+{"ts":"2026-09-08T10:38:12.618Z","event":"dispatch","ticket":"T-26-11","role":"arch-review","pr":56,"by":"dispatch-record"}
+{"ts":"2026-09-08T10:41:25.048Z","event":"degenerate_green","ticket":"T-26-11","pr":56,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T10:42:35.521Z","event":"status_change","ticket":"T-25-05","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T10:43:11.592Z","event":"merge","ticket":"T-26-11","pr":56,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T10:44:53.782Z","event":"dispatch","ticket":"T-25-04","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T10:44:53.830Z","event":"status_change","ticket":"T-26-11","from":"pr-open","to":"merged","pr":56}
+{"ts":"2026-09-08T11:39:04.696Z","event":"attempt","ticket":"T-25-04","pr":57,"role":"executor","attempt":1,"outcome":"pushed","head":185770}
+{"ts":"2026-09-08T11:39:04.783Z","event":"status_change","ticket":"T-25-04","from":"pending","to":"pr-open","pr":57}
+{"ts":"2026-09-08T11:41:35.840Z","event":"dispatch","ticket":"T-25-05","role":"drift-check","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T11:42:32.474Z","event":"dispatch","ticket":"T-25-04","role":"arch-review","pr":57,"by":"dispatch-record"}
+{"ts":"2026-09-08T11:43:38.727Z","event":"dispatch","ticket":"T-25-05","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T11:54:52.594Z","event":"degenerate_green","ticket":"T-25-04","pr":57,"findings":7,"modes":"weakened_assertion:7"}
+{"ts":"2026-09-08T11:56:53.158Z","event":"arch_review","ticket":"T-25-04","pr":57,"verdict":"conform","head":"018577019b9ff8c09058738d1686e7ade33ed10c"}
+{"ts":"2026-09-08T11:59:17.777Z","event":"attempt","ticket":"T-25-05","pr":58,"role":"executor","attempt":1,"outcome":"pushed","head":"b54548a"}
+{"ts":"2026-09-08T11:59:17.870Z","event":"status_change","ticket":"T-25-05","from":"pending","to":"pr-open","pr":58}
+{"ts":"2026-09-08T12:02:16.659Z","event":"dispatch","ticket":"T-25-05","role":"arch-review","pr":58,"by":"dispatch-record"}
+{"ts":"2026-09-08T12:13:57.111Z","event":"degenerate_green","ticket":"T-25-05","pr":58,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T12:15:40.679Z","event":"arch_review","ticket":"T-25-05","pr":58,"verdict":"conform","head":"b54548a"}
+{"ts":"2026-09-08T12:56:47.790Z","event":"status_change","ticket":"T-25-04","from":"pr-open","to":"merged","pr":57}
+{"ts":"2026-09-08T12:57:43.545Z","event":"base_merge","ticket":"T-25-05","pr":58,"base":"epic/25-the-conveyor-follows-the-models-it-runs-on","head":"bab93bd"}
+{"ts":"2026-09-08T13:02:58.712Z","event":"dispatch","ticket":"T-25-05","role":"arch-review","pr":58,"by":"dispatch-record"}
+{"ts":"2026-09-08T13:06:40.888Z","event":"arch_review","ticket":"T-25-05","pr":58,"verdict":"conform","head":"bab93bda3fc004ae17c31d47f5ab328f596633d2"}
+{"ts":"2026-09-08T13:08:11.031Z","event":"merge","ticket":"T-25-05","pr":58,"base":"epic/25-the-conveyor-follows-the-models-it-runs-on","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T13:08:42.603Z","event":"status_change","ticket":"T-25-05","from":"pr-open","to":"merged","pr":58}
+{"ts":"2026-09-08T13:34:52.434Z","event":"integrator","epic":25,"pr":40,"verdict":"needs-fix","head":"e8dc9da89e477d00b5f579d1e0bf1f18b65704ed"}
+{"ts":"2026-09-08T13:39:56.769Z","event":"status_change","ticket":"T-25-06","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T13:40:41.946Z","event":"dispatch","ticket":"T-25-06","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T13:53:23.871Z","event":"attempt","ticket":"T-25-06","pr":59,"role":"executor","attempt":1,"outcome":"pushed","head":"cd25b67"}
+{"ts":"2026-09-08T13:53:28.772Z","event":"status_change","ticket":"T-25-06","from":"pending","to":"pr-open","pr":59}
+{"ts":"2026-09-08T13:55:51.242Z","event":"dispatch","ticket":"T-25-06","role":"arch-review","pr":59,"by":"dispatch-record"}
+{"ts":"2026-09-08T14:04:56.830Z","event":"degenerate_green","ticket":"T-25-06","pr":59,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T14:09:50.110Z","event":"arch_review","ticket":"T-25-06","pr":59,"verdict":"conform","head":"cd25b67c987ec9a23783d6bfacf172215204915c"}
+{"ts":"2026-09-08T14:10:49.946Z","event":"merge","ticket":"T-25-06","pr":59,"base":"epic/25-the-conveyor-follows-the-models-it-runs-on","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T14:10:52.901Z","event":"status_change","ticket":"T-25-06","from":"pr-open","to":"merged","pr":59}
+{"ts":"2026-09-08T14:25:28.187Z","event":"integrator","epic":25,"pr":40,"verdict":"passed","head":"d6890dba32f41c1ff7f91ca9509200b8e4f1c918"}
+{"ts":"2026-09-08T14:39:12.748Z","event":"dispatch","ticket":"T-26-02","role":"drift-check","pr":null,"model":"sonnet","effort":"high","by":"dispatch-record"}
+{"ts":"2026-09-08T14:41:39.136Z","event":"dispatch","ticket":"T-26-02","role":"executor","pr":null,"model":"opus","effort":"high","by":"dispatch-record"}
+{"ts":"2026-09-08T15:01:52.720Z","event":"attempt","ticket":"T-26-02","pr":60,"role":"executor","attempt":1,"outcome":"pushed","head":"77c0729"}
+{"ts":"2026-09-08T15:01:52.811Z","event":"status_change","ticket":"T-26-02","from":"pending","to":"pr-open","pr":60}
+{"ts":"2026-09-08T15:02:32.800Z","event":"dispatch","ticket":"T-26-12","role":"drift-check","pr":null,"model":"sonnet","effort":"high","by":"dispatch-record"}
+{"ts":"2026-09-08T15:05:01.355Z","event":"dispatch","ticket":"T-26-02","role":"arch-review","pr":60,"model":"opus","effort":"xhigh","by":"dispatch-record"}
+{"ts":"2026-09-08T15:05:01.421Z","event":"dispatch","ticket":"T-26-12","role":"executor","pr":null,"model":"opus","effort":"high","by":"dispatch-record"}
+{"ts":"2026-09-08T15:18:44.086Z","event":"degenerate_green","ticket":"T-26-02","pr":60,"findings":0}
+{"ts":"2026-09-08T15:19:12.784Z","event":"arch_review","ticket":"T-26-02","pr":60,"verdict":"conform","head":"77c0729bd2e0ab1dbe632bc4779dff25d21008df"}
+{"ts":"2026-09-08T15:21:24.154Z","event":"merge","ticket":"T-26-02","pr":60,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T15:22:28.816Z","event":"status_change","ticket":"T-26-02","from":"pr-open","to":"merged","pr":60}
+{"ts":"2026-09-08T15:23:50.128Z","event":"attempt","ticket":"T-26-12","pr":61,"role":"executor","attempt":1,"outcome":"pushed","head":8995137}
+{"ts":"2026-09-08T15:24:48.047Z","event":"attempt","ticket":"T-26-12","pr":61,"role":"executor","attempt":1,"outcome":"push_failed","note":"the earlier attempt row for T-26-12 saying outcome=pushed head=8995137 was WRONG — the push had failed with 'src refspec does not match any' because the orchestrator hand-typed a truncated branch name (…-the-sess) instead of reading tickets.json (…-the-sessi). This row corrects the record; the real push is the row after it."}
+{"ts":"2026-09-08T15:24:48.090Z","event":"attempt","ticket":"T-26-12","pr":61,"role":"executor","attempt":1,"outcome":"pushed","head":8995137}
+{"ts":"2026-09-08T15:25:32.505Z","event":"base_merge","ticket":"T-26-12","pr":61,"base":"epic/26-positive-evidence-before-a-mutation","head":"bba2c63"}
+{"ts":"2026-09-08T15:26:23.956Z","event":"status_change","ticket":"T-26-12","from":"pending","to":"pr-open","pr":61}
+{"ts":"2026-09-08T15:28:23.494Z","event":"dispatch","ticket":"T-26-12","role":"arch-review","pr":61,"model":"opus","effort":"xhigh","by":"dispatch-record"}
+{"ts":"2026-09-08T15:36:53.208Z","event":"degenerate_green","ticket":"T-26-12","pr":61,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T15:38:51.216Z","event":"arch_review","ticket":"T-26-12","pr":61,"verdict":"conform","head":"bba2c638ba98b2781d2c0c66130695626c9f53de"}
+{"ts":"2026-09-08T15:41:16.794Z","event":"merge","ticket":"T-26-12","pr":61,"base":"epic/26-positive-evidence-before-a-mutation","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T15:41:28.195Z","event":"status_change","ticket":"T-26-12","from":"pr-open","to":"merged","pr":61}
+{"ts":"2026-09-08T16:07:49.624Z","event":"integrator","epic":26,"pr":41,"verdict":"passed","head":"695efeb419a420dbe7e81c8346a3f89f08bf1fca"}
+{"ts":"2026-09-08T17:29:22.399Z","event":"status_change","ticket":"T-27-01","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T17:29:22.399Z","event":"status_change","ticket":"T-27-02","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T17:29:22.399Z","event":"status_change","ticket":"T-27-03","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T17:29:22.399Z","event":"status_change","ticket":"T-27-04","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T17:29:22.399Z","event":"status_change","ticket":"T-27-05","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T17:29:22.399Z","event":"status_change","ticket":"T-27-06","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T17:29:22.399Z","event":"status_change","ticket":"T-27-07","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T17:29:22.399Z","event":"status_change","ticket":"T-27-08","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T17:31:38.068Z","event":"dispatch","ticket":"T-27-01","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T17:31:38.119Z","event":"dispatch","ticket":"T-27-02","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T17:31:38.161Z","event":"dispatch","ticket":"T-27-07","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T18:07:39.855Z","event":"status_change","ticket":"T-27-01","from":"pending","to":"pr-open","pr":63}
+{"ts":"2026-09-08T18:07:39.855Z","event":"status_change","ticket":"T-27-02","from":"pending","to":"pr-open","pr":64}
+{"ts":"2026-09-08T18:07:39.855Z","event":"status_change","ticket":"T-27-07","from":"pending","to":"pr-open","pr":65}
+{"ts":"2026-09-08T18:08:42.867Z","event":"dispatch","ticket":"T-27-01","role":"pr-sentinel","pr":63,"by":"dispatch-record"}
+{"ts":"2026-09-08T18:08:42.912Z","event":"dispatch","ticket":"T-27-02","role":"pr-sentinel","pr":64,"by":"dispatch-record"}
+{"ts":"2026-09-08T18:08:42.957Z","event":"dispatch","ticket":"T-27-07","role":"pr-sentinel","pr":65,"by":"dispatch-record"}
+{"ts":"2026-09-08T18:09:07.540Z","event":"dispatch","ticket":"T-27-03","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T18:10:53.685Z","event":"degenerate_green","ticket":"T-27-01","pr":63,"findings":0,"modes":""}
+{"ts":"2026-09-08T18:13:03.712Z","event":"dispatch","ticket":"T-27-01","role":"review-fix","pr":63,"model":"opus","effort":"high","reason":"ticket/T-27-01-the-cap-counts-agents-and-the-three-capa","by":"dispatch-record"}
+{"ts":"2026-09-08T18:13:03.756Z","event":"dispatch","ticket":"T-27-07","role":"review-fix","pr":65,"model":"opus","effort":"high","reason":"ticket/T-27-07-a-guard-asserts-a-sweep-not-a-list-of-kn","by":"dispatch-record"}
+{"ts":"2026-09-08T18:15:02.404Z","event":"dispatch","ticket":"T-27-02","role":"review-fix","pr":64,"model":"opus","effort":"high","reason":"ticket/T-27-02-a-verdict-survives-a-head-move-it-provab","by":"dispatch-record"}
+{"ts":"2026-09-08T18:17:03.655Z","event":"attempt","ticket":"T-27-01","pr":63,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","head":"7be2f5721ce02b1cef0e094f955959e2d876c70e","hypothesis":"Display strings in ci-wait.cjs and stop-gate.cjs read raw capacity.max/in_flight instead of the already-computed defensive locals, and drift-gate.mjs's header comment still said sonnet/low after the effort default changed to high"}
+{"ts":"2026-09-08T18:20:05.180Z","event":"attempt","ticket":"T-27-02","pr":64,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","head":"a63bb34110881fd4e6bf544eeb8872653b31d791","hypothesis":"gate-trailer.cjs carry's gh pr view and gh pr edit calls ran with no cwd option, so repo resolution silently fell back to the caller's process cwd instead of the --worktree the carry was given"}
+{"ts":"2026-09-08T18:21:34.922Z","event":"attempt","ticket":"T-27-07","pr":65,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","head":"c67a301ec08cb0c2809da8c3652eef7ef711d618","hypothesis":"source-contract.test.cjs asserted a stand-in (a hardcoded variable name, an arbitrary file-count threshold) instead of the real contract, and docs-smoke.sh's duplicate-pin message claimed a universal last-wins precedence that Makefile ?= assignments do not follow"}
+{"ts":"2026-09-08T18:23:01.295Z","event":"dispatch","ticket":"T-27-01","role":"review-fix","pr":63,"model":"opus","effort":"high","reason":"ticket/T-27-01-the-cap-counts-agents-and-the-three-capa","by":"dispatch-record"}
+{"ts":"2026-09-08T18:24:33.377Z","event":"degenerate_green","ticket":"T-27-02","pr":64,"findings":0,"modes":""}
+{"ts":"2026-09-08T18:25:25.441Z","event":"merge","ticket":"T-27-02","pr":64,"base":"epic/27-the-conveyor-measures-its-own-state","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-08T18:25:32.147Z","event":"status_change","ticket":"T-27-02","from":"pr-open","to":"merged","pr":64}
+{"ts":"2026-09-08T18:27:12.817Z","event":"attempt","ticket":"T-27-01","pr":63,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","head":"1962c5e8f1ea489c48a7c9fc6134c0bbc8579c6a","hypothesis":"capNum() in ci-wait.cjs and stop-gate.cjs coerced capacity[k] through Number(), so a malformed/partial capacity.max or capacity.free of null became the number 0 instead of falling through to unreadable the way undefined already did"}
+{"ts":"2026-09-08T18:28:36.469Z","event":"dispatch","ticket":"T-27-07","role":"review-fix","pr":65,"model":"opus","effort":"high","reason":"ticket/T-27-07-a-guard-asserts-a-sweep-not-a-list-of-kn","by":"dispatch-record"}
+{"ts":"2026-09-08T18:32:56.278Z","event":"attempt","ticket":"T-27-07","pr":65,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","head":"d85a4dbf8ecd1d121abc9f67b5951d27792b9212","hypothesis":"The computeFront(...) extraction regex anchored on a literal newline before }); so it structurally required multi-line formatting; replaced with a balanced-paren scan that is formatting-agnostic while still failing when epics: is absent"}
+{"ts":"2026-09-08T18:35:43.721Z","event":"attempt","ticket":"T-27-01","pr":63,"n":3,"role":"review-fix","model":"opus","outcome":"pushed","head":"1771730a282d863729095f91586efb7e025d5374","hypothesis":"capNum() in ci-wait.cjs and stop-gate.cjs accepted any finite number including negatives, but front.cjs never emits a negative max/in_flight/free, so a negative value is a corrupted or hand-edited front and must read as unreadable exactly like null does"}
+{"ts":"2026-09-08T18:38:40.886Z","event":"attempt","ticket":"T-27-07","pr":65,"n":3,"role":"review-fix","model":"opus","outcome":"pushed","head":"7cc44019b7dceb27e641ae14f60d5111ac0b8f64","hypothesis":"the epics: call-site regex required a bare-identifier value and would break on epicInfo ?? [], epicInfo.map(...), or the shorthand form, and a real comment block ahead of the epics: line also defeated the punctuation-adjacency check; stripped comments before testing and loosened the value shape while keeping the key-position anchor"}
+{"ts":"2026-09-08T18:41:30.167Z","event":"attempt","ticket":"T-27-01","pr":63,"n":4,"role":"review-fix","model":"opus","outcome":"pushed","head":"e1d05c5b910dcd04a411755bd1c8e3836c052e26","hypothesis":"ci-wait.cjs derived capBinds from free alone, so a partially-written front with a readable free:0 but unreadable max would bind the cap here while stop-gate.cjs's capacityFull (which requires a readable max>0) would call the same board not full; required max to be readable too so the two readers agree"}
+{"ts":"2026-09-08T18:42:58.360Z","event":"degenerate_green","ticket":"T-27-07","pr":65,"findings":0,"modes":""}
+{"ts":"2026-09-08T18:43:38.820Z","event":"merge","ticket":"T-27-07","pr":65,"base":"epic/27-the-conveyor-measures-its-own-state","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T18:45:10.695Z","event":"degenerate_green","ticket":"T-27-01","pr":63,"findings":0,"modes":""}
+{"ts":"2026-09-08T18:45:19.292Z","event":"status_change","ticket":"T-27-07","from":"pr-open","to":"merged","pr":65}
+{"ts":"2026-09-08T18:47:38.157Z","event":"status_change","ticket":"T-27-03","from":"pending","to":"pr-open","pr":66}
+{"ts":"2026-09-08T18:49:06.098Z","event":"dispatch","ticket":"T-27-04","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T18:49:06.142Z","event":"dispatch","ticket":"T-27-01","role":"pr-sentinel","pr":63,"by":"dispatch-record"}
+{"ts":"2026-09-08T18:49:06.183Z","event":"dispatch","ticket":"T-27-03","role":"pr-sentinel","pr":66,"by":"dispatch-record"}
+{"ts":"2026-09-08T18:57:42.367Z","event":"degenerate_green","ticket":"T-27-01","pr":63,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T18:58:22.769Z","event":"merge","ticket":"T-27-01","pr":63,"base":"epic/27-the-conveyor-measures-its-own-state","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T18:58:32.187Z","event":"status_change","ticket":"T-27-01","from":"pr-open","to":"merged","pr":63}
+{"ts":"2026-09-08T19:03:53.936Z","event":"attempt","ticket":"T-27-03","pr":66,"n":1,"role":"review-fix","model":"opus","outcome":"no-op","head":"44b760ecffe3f42c34dfdec48e3190e2cfcf2876","hypothesis":"Copilot claimed treeBlobs()'s unencoded slash-containing ref in git/trees/<ref> could 404 on branch names like epic/06-demo; verified live against GitHub (byte-identical responses encoded vs unencoded) and against this PR's own sentinel-smoke.sh fixture, which actively fails (404) when encodeURIComponent(ref) is applied and passes at 160/160 with the current unencoded form -- the suggested fix is a regression, not a remedy, so left the code as-is and replied with the evidence"}
+{"ts":"2026-09-08T19:22:04.548Z","event":"attempt","ticket":"T-27-03","pr":66,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","head":"a5ed0a4c980768678f8e3cbb07a1011e29f059b5","hypothesis":"arch-review (re-judged at head 44b760e) found ADR-002 D4 violation: the merge gate's new limb refusal (a base ticket already merged) had no duty counterpart, so dutyItems() kept answering merge for a limb child every round while sentinel.cjs merge refused it every round -- the front-offers-what-the-guard-refuses pathology. Extracted the gate's limb test/remedy into shared predicates (limbBaseOf/limbRemedy) used by both dutyItems() and mergeOne(), matching the file's existing one-predicate-two-readers convention; duty now answers human-merge instead of merge for a limb base. Also fixed two test fixtures asserting the old PR#52 shape as a pass, and added a regression test"}
+{"ts":"2026-09-08T19:25:43.683Z","event":"dispatch","ticket":"T-27-03","role":"pr-sentinel","pr":66,"by":"dispatch-record"}
+{"ts":"2026-09-08T19:31:56.796Z","event":"status_change","ticket":"T-27-04","from":"pending","to":"pr-open","pr":68}
+{"ts":"2026-09-08T19:32:32.564Z","event":"dispatch","ticket":"T-27-05","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T19:34:40.748Z","event":"plan_defect","ticket":"T-27-03","pr":66,"reason":"files_modified omits two files the base-resolution change reaches, and both are needed to keep the guard/board invariant this same ticket already had arch-review catch once (ADR-002 D4): (1) tests/unit/parent-moving.test.cjs line 147 'a landed parent releases the child on both sides at once' still asserts the PR #52 shape as a pass (merged parent P, child C.pr_base still literally 'ticket/P' -> expects action 'merge'); a5ed0a4 corrected the identical fixture shape in sentinel.test.cjs but missed this sibling file. Verified empirically: patching only the fixture's C.pr_base to the retargeted epic value (as a5ed0a4 did elsewhere) makes all 12 assertions in this file pass against the current worktree code -- the code is right, the test fixture is stale. (2) plugins/delivery-pipeline/scripts/front.cjs has no limbBaseOf/limbRemedy awareness: computeFront() still puts C in actionable.merge for the exact un-retargeted PR-52-shape fixture while sentinel.cjs dutyItems() answers human-merge -- reproduced by direct call, front.cjs returned actionable.merge:['C']. This is the same front-offers-what-the-guard-refuses pathology a5ed0a4 fixed for sentinel.cjs alone; front.cjs was never given the shared predicate. Fix shape: extract limbBaseOf/limbRemedy (currently private to sentinel.cjs, lines ~487-499) into a shared module on the parent-moving.cjs pattern, import from both front.cjs and sentinel.cjs, update computeFront's merge-eligibility to exclude a limb base, and widen files_modified to include front.cjs and tests/unit/parent-moving.test.cjs (plus its own PLAN.md) before re-attempting.","plan":"/Volumes/KINGSTON/claude-shipyard/.planning/phases/27-the-conveyor-measures-its-own-state/27-03-PLAN.md","signatures":["2570b45482b75a7e"],"plan_hash":"c1d4cb5410cdb5c8","by":"escalation-record"}
+{"ts":"2026-09-08T19:34:48.407Z","event":"attempt","ticket":"T-27-03","pr":66,"n":3,"role":"review-fix","model":"opus","outcome":"escalate","signature":"2570b45482b75a7e","head":"a5ed0a4c980768678f8e3cbb07a1011e29f059b5","hypothesis":"Signed the CI failure (verdict=first, sig 2570b45482b75a7e): tests/unit/parent-moving.test.cjs's 'a landed parent releases the child on both sides at once' asserts the pre-ticket PR#52-shape as a pass, which a5ed0a4 already retired in the sibling sentinel.test.cjs but missed here; separately computeFront() in front.cjs has no limb predicate and still answers actionable.merge for the same un-retargeted fixture that dutyItems() now refuses -- reproduced directly (front.cjs returned merge:['C']). Both fixes touch files outside T-27-03's declared files_modified (front.cjs, tests/unit/parent-moving.test.cjs), so this is a plan-scope defect, not a fixable-in-scope failure; recorded mark-plan-defect instead of dispatching a fixer."}
+{"ts":"2026-09-08T19:39:17.385Z","event":"dispatch","ticket":"T-27-03","role":"ci-fix","pr":66,"by":"dispatch-record"}
+{"ts":"2026-09-08T19:53:47.386Z","event":"fix_round","ticket":"T-27-03","pr":66,"outcome":"escalate","pushed":false}
+{"ts":"2026-09-08T19:53:47.417Z","event":"attempt","ticket":"T-27-03","pr":66,"n":4,"role":"ci-fix","model":"opus","outcome":"escalate","signature":"2570b45482b75a7e","head":"f97d153","hypothesis":"The gate learned a refusal the board never did: n=2 taught limbBaseOf/limbRemedy to sentinel.cjs alone, so computeFront kept answering actionable.merge for exactly the PR the gate declined. Moved both predicates into parent-moving.cjs, imported in front.cjs and sentinel.cjs, added front's limb branch at duty's own chain position routing to waiting.merge_human and reusing limbRemedy verbatim; parent-moving.test.cjs 13/13, sentinel 98/98, smoke 160/160, mutation (limbBase stubbed to null) watched to fail on the agreement assertion. Committed locally f97d153, deliberately unpushed so the signature does not churn. Escalated on scope, not on code: make test-fast is still red on exactly two front.test.cjs controls (:488, :1331) driven from the cpState() helper at :471, whose child carries pr_base 'ticket/P' — with P merged that IS a limb, so both encode the PR#52 shape as a pass; that file is not in this ticket's files_modified."}
+{"ts":"2026-09-08T19:55:44.355Z","event":"dispatch","ticket":"T-27-03","role":"pr-sentinel","pr":66,"by":"dispatch-record"}
+{"ts":"2026-09-08T20:00:51.493Z","event":"status_change","ticket":"T-27-05","from":"pending","to":"pr-open","pr":69}
+{"ts":"2026-09-08T20:01:38.518Z","event":"dispatch","ticket":"T-27-06","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T20:05:06.062Z","event":"attempt","ticket":"T-27-03","pr":66,"n":5,"role":"ci-fix","model":"opus","outcome":"pushed","signature":"2570b45482b75a7e","head":"41ddf4cddfe7aa106ea5c069f98e3c30c7371644","hypothesis":"front.test.cjs's cpState() helper encoded the same PR#52 limb shape as a pass in its two 'parent lands' controls (child pr_base literally the merged parent's own ticket branch); gave cpState() a base param and pointed the two merged-parent controls at the retargeted epic value, matching what sentinel.cjs writes post-merge. Also folded sentinel.cjs's duty limb-check and merge arms into one, computing limbBaseOf() once (Copilot nitpick on #66). make test-fast now exits 0; front.test.cjs 140/140; sentinel-smoke.sh 160/160. Pushed f97d153 (already-verified, previously withheld) and this fix together as one push."}
+{"ts":"2026-09-08T20:08:35.366Z","event":"arch_review","ticket":"T-27-03","pr":66,"verdict":"conform","head":"41ddf4cddfe7aa106ea5c069f98e3c30c7371644"}
+{"ts":"2026-09-08T20:08:42.486Z","event":"degenerate_green","ticket":"T-27-03","pr":66,"findings":0,"modes":""}
+{"ts":"2026-09-08T20:11:10.610Z","event":"merge","ticket":"T-27-03","pr":66,"base":"epic/27-the-conveyor-measures-its-own-state","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-08T20:12:12.159Z","event":"status_change","ticket":"T-27-03","from":"pr-open","to":"merged","pr":66}
+{"ts":"2026-09-08T20:14:15.384Z","event":"dispatch","ticket":"T-27-04","role":"pr-sentinel","pr":68,"by":"dispatch-record"}
+{"ts":"2026-09-08T20:14:15.431Z","event":"dispatch","ticket":"T-27-05","role":"pr-sentinel","pr":69,"by":"dispatch-record"}
+{"ts":"2026-09-08T20:15:51.618Z","event":"status_change","ticket":"T-27-06","from":"pending","to":"pr-open","pr":70}
+{"ts":"2026-09-08T20:16:07.063Z","event":"base_merge","ticket":"T-27-04","pr":68,"base":"epic/27-the-conveyor-measures-its-own-state","head":"a9b133ed63743f8871553dc1a98d575922b424fc"}
+{"ts":"2026-09-08T20:16:58.079Z","event":"base_merge","ticket":"T-27-05","pr":69,"base":"ticket/T-27-04-an-epic-learns-what-landed-under-it-and","head":"dd8a9d6e22bd2634cfecdf685a7f303617589af8"}
+{"ts":"2026-09-08T20:17:33.020Z","event":"dispatch","ticket":"T-27-08","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T20:20:40.664Z","event":"attempt","ticket":"T-27-04","pr":68,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","signature":"copilot-lock-mtime-stat-f","head":"4f904fcc7ace991a1d533ecfa825e71cdae3ab42","hypothesis":"epic-branch.sh's lock_mtime chained stat -f then stat -c with a bare || and no digits check, so GNU's -f failure prints a filesystem report to stdout that gets used as the mtime in arithmetic; matched ticket-worktree.sh's isolated try-each-spelling pattern"}
+{"ts":"2026-09-08T20:22:36.309Z","event":"attempt","ticket":"T-27-04","pr":68,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","signature":"copilot-create-header-wording","head":"529549ead821e61824f069a082df5be3950a2faf","hypothesis":"the create usage header claimed cuts from origin/<base-ref> unconditionally, but resolve_base() falls back to the given ref when origin lacks it; reworded the header to match deliver.md's precise wording"}
+{"ts":"2026-09-08T20:23:05.261Z","event":"base_merge","ticket":"T-27-05","pr":69,"base":"ticket/T-27-04-an-epic-learns-what-landed-under-it-and","head":"f162c71d987952c5fb218d163031ece1de01de8d"}
+{"ts":"2026-09-08T20:26:04.602Z","event":"dispatch","ticket":"T-27-04","role":"pr-sentinel","pr":68,"by":"dispatch-record"}
+{"ts":"2026-09-08T20:26:04.651Z","event":"dispatch","ticket":"T-27-05","role":"pr-sentinel","pr":69,"by":"dispatch-record"}
+{"ts":"2026-09-08T20:35:38.490Z","event":"degenerate_green","ticket":"T-27-04","pr":68,"findings":0,"modes":""}
+{"ts":"2026-09-08T20:35:40.439Z","event":"degenerate_green","ticket":"T-27-05","pr":69,"findings":0,"modes":""}
+{"ts":"2026-09-08T20:37:01.645Z","event":"merge","ticket":"T-27-04","pr":68,"base":"epic/27-the-conveyor-measures-its-own-state","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-08T20:37:58.806Z","event":"status_change","ticket":"T-27-04","from":"pr-open","to":"merged","pr":68}
+{"ts":"2026-09-08T20:38:58.454Z","event":"base_merge","ticket":"T-27-05","pr":69,"base":"epic/27-the-conveyor-measures-its-own-state","head":"29f3d417bab84340e4635269171e3335b59bdd48"}
+{"ts":"2026-09-08T20:43:32.276Z","event":"dispatch","ticket":"T-27-05","role":"pr-sentinel","pr":69,"by":"dispatch-record"}
+{"ts":"2026-09-08T20:44:08.260Z","event":"attempt","ticket":"T-27-05","pr":69,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","signature":"copilot-agent-file-role-mapping-not-1to1","head":"ffc19de2ba2e2e6c47bfb99b7cfb4eb0739a474d","hypothesis":"deliver.md's Codex --agent-file guidance implied shipyard-<role>[-deep] is 1:1 for every role, but dispatch-record.cjs's agentFilesFor maps research to shipyard-inv-research and gives executor no agent file at all; reworded the guidance to name both exceptions and the refusal a mismatch gets"}
+{"ts":"2026-09-08T20:51:42.950Z","event":"attempt","ticket":"T-27-05","pr":69,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","signature":"copilot-runtimetoken-whitespace-hyphen-leak","head":"c89ad81417e32caab315090fe7c925d31d017dd0","hypothesis":"runtimeToken() slugged a whitespace-only gsd.runtime to a bare '-', which is non-empty and slipped past the || 'unset' fallback and would leak into a route token as cap:-; trimmed leading/trailing hyphens before the emptiness check and added a regression test. Also removed ladderTier(), a dead backward-compat wrapper from this same diff's tierRoute refactor with zero callers and no export, and renamed a test whose name claimed the --json shape was unchanged while its own assertion required the new route key"}
+{"ts":"2026-09-08T20:55:25.508Z","event":"dispatch","ticket":"T-27-08","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T21:06:01.003Z","event":"attempt","ticket":"T-27-05","pr":69,"n":3,"role":"review-fix","model":"opus","outcome":"pushed","signature":"archreview-pr-sentinel-reason-flag-stale","head":"9f2260adfecae77137473d4cc94af7eca937c299","hypothesis":"arch-review found references/pr-sentinel.md still documented the now-refused --reason flag and a bare head=<sha> (ADR-002 D10, prose must name only what the scripts implement); deliver.md's parenthetical documented the contradiction instead of fixing the file pr-sentinel actually reads. Fixed both lines, removed the parenthetical, added pr-sentinel.md to files_modified, and hardened DOC_MARKS to fail on a documented --reason invocation"}
+{"ts":"2026-09-08T21:06:04.185Z","event":"status_change","ticket":"T-27-08","from":"pending","to":"pr-open","pr":71}
+{"ts":"2026-09-08T21:11:27.919Z","event":"attempt","ticket":"T-27-05","pr":69,"n":4,"role":"review-fix","model":"opus","outcome":"pushed","signature":"copilot-runtimetoken-test-vacuous-assertion","head":"f7d6fd80a74caf7f6f7826638655cee68363c0d7","hypothesis":"the round-2 regression test asserted against routeOf()'s output, but both call sites gating runtimeToken() require an exact unslugged 'codex' match first, so a whitespace runtime never reaches a cap:/flat: token and the assertion passed vacuously; exported runtimeToken() and tested it directly instead of through a route shape that cannot exhibit the bug"}
+{"ts":"2026-09-08T21:23:32.042Z","event":"degenerate_green","ticket":"T-27-05","pr":69,"findings":0,"modes":""}
+{"ts":"2026-09-08T21:26:52.852Z","event":"attempt","ticket":"T-27-05","pr":69,"n":5,"role":"review-fix","model":"opus","outcome":"pushed","signature":"copilot-route-only-mark-leaves-pair-absent","head":"dca371adae4b98d0a213e19f0df7988f07d84e75","hypothesis":"a --route-only mark (no --model/--effort) left the structured model/effort fields absent while the route text named both, since the cross-check only fires when the flags are present to compare against; backfilled model/effort from the route's own validated parse when the caller omits them, keeping the disagreement refusal when they are given. Also closed three cheap non-blocking doc gaps the same arch-review pass named: a stale usage synopsis, an overclaiming comment on an unreachable path, and a pr-sentinel.md sentence that undercounted its own invocation's fields"}
+{"ts":"2026-09-08T21:40:27.282Z","event":"degenerate_green","ticket":"T-27-05","pr":69,"findings":0,"modes":""}
+{"ts":"2026-09-08T21:40:47.345Z","event":"merge","ticket":"T-27-05","pr":69,"base":"epic/27-the-conveyor-measures-its-own-state","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T21:41:16.358Z","event":"status_change","ticket":"T-27-05","from":"pr-open","to":"merged","pr":69}
+{"ts":"2026-09-08T21:44:40.833Z","event":"dispatch","ticket":"T-27-06","role":"pr-sentinel","pr":70,"by":"dispatch-record"}
+{"ts":"2026-09-08T21:44:40.880Z","event":"dispatch","ticket":"T-27-08","role":"pr-sentinel","pr":71,"by":"dispatch-record"}
+{"ts":"2026-09-08T21:47:32.660Z","event":"attempt","ticket":"T-27-06","pr":70,"n":1,"role":"ci-fix","model":"none","outcome":"pushed","signature":"2570b45482b75a7e","head":"2aa59f5b8669b4f3d3c86fda70c28e1465c7ea89","hypothesis":"failure was inherited from a frozen divergence: the branch was cut before parent-moving's limb refusal reached front.cjs; a base-merge (real conflict resolved in deliver.md's dispatch-record note, which was already fixed on the epic side) fixes it, no code change to the ticket's own logic"}
+{"ts": "2026-09-08T21:50:49.109Z", "event": "attempt", "ticket": "T-27-06", "pr": 70, "n": 2, "role": "ci-fix", "model": "none", "outcome": "pushed", "signature": "2570b45482b75a7e", "head": "e79e8e07dc40dcc43699ae263b7b6dae02fabfff", "hypothesis": "the base-merge left a duplicate cleanup()/trap block in epic-branch.sh (undeclared file, git 3-way merge could not recognize both sides added identical content independently since squash merges share no ancestor commit) \u2014 removed the duplicate, took the base edition verbatim, no ticket-scope logic touched"}
+{"ts":"2026-09-08T21:52:30.165Z","event":"attempt","ticket":"T-27-06","pr":70,"n":3,"role":"review-fix","model":"none","outcome":"no-op","signature":"none","head":"e79e8e07dc40dcc43699ae263b7b6dae02fabfff","hypothesis":"Copilot's duplicate-cleanup thread was already fixed by the n=2 base-merge cleanup commit; replied confirming the fix and resolved the thread, no additional code change"}
+{"ts":"2026-09-08T21:53:48.313Z","event":"degenerate_green","ticket":"T-27-06","pr":70,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T21:54:27.465Z","event":"merge","ticket":"T-27-06","pr":70,"base":"epic/27-the-conveyor-measures-its-own-state","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T21:54:46.769Z","event":"status_change","ticket":"T-27-06","from":"pr-open","to":"merged","pr":70}
+{"ts":"2026-09-08T21:59:37.208Z","event":"attempt","ticket":"T-27-08","pr":71,"n":1,"role":"ci-fix","model":"none","outcome":"pushed","signature":"2570b45482b75a7e","head":"0d2e216375c1a9318bbe6db732a14ad5403f2641","hypothesis":"base moved to epic/27 after T-27-06 merged (retarget); base-merge pulled in the epic's D6/T-27-06 content. 5 real conflicts in declared files (deliver.md dispatch-record note already fixed on epic side, front.cjs D8 config_invalid ordering vs D6 behind-warning ordering, pipeline-config.cjs dead ladderTier() removed + runtimeToken export, matching test files) resolved on their merits; epic-branch.sh (undeclared) again carried the duplicate cleanup()/trap the base-merge introduces — took the base edition verbatim, same as T-27-06"}
+{"ts":"2026-09-08T22:02:20.986Z","event":"attempt","ticket":"T-27-08","pr":71,"n":2,"role":"review-fix","model":"none","outcome":"pushed","signature":"none","head":"a10cf417f759c4745dc25619cba4c7229a936b24","hypothesis":"Copilot's NUMERIC_KNOBS thread was valid: the list was a hand-mirrored duplicate of loadConfig's array, not read from it as the comment claimed. Exported NUMERIC_KNOBS from pipeline-config.cjs and had both the coercion loop and the test import the one array; replied and resolved"}
+{"ts":"2026-09-08T22:05:34.844Z","event":"dispatch","ticket":"T-27-08","role":"pr-sentinel","pr":71,"by":"dispatch-record"}
+{"ts":"2026-09-08T22:08:06.328Z","event":"attempt","ticket":"T-27-08","pr":71,"n":3,"role":"review-fix","model":"none","outcome":"pushed","signature":"none","head":"d6ea7aecf80c5f829324fce784de6871414a565d","hypothesis":"Copilot's second-round thread was valid: the config-invalid refusal sentences said the file forbids merge entirely, but a waiting.merge_human bucket in the same board is a human's own option, not one of the withheld automated mutations. Tightened both sentences to say auto-merged and note the exception; replied via resolve, no code behavior change"}
+{"ts":"2026-09-08T22:10:54.895Z","event":"dispatch","ticket":"T-27-08","role":"pr-sentinel","pr":71,"by":"dispatch-record"}
+{"ts":"2026-09-08T22:18:05.370Z","event":"attempt","ticket":"T-27-08","pr":71,"n":4,"role":"review-fix","model":"opus","outcome":"pushed","signature":"none","head":"2b16fef4b8ea6cd421c45161395d970bedc718b8","hypothesis":"Copilot's third-round comment was valid and unaddressed: gsd-tune.cjs checked drift/staleGlobalOverrides/blockers emptiness and exited 0 before checking CONFIG_REFUSAL, so a machine whose global defaults already agreed on every non-derived row would exit 0 on a refused run. Reordered CONFIG_REFUSAL ahead of the empty-drift exit; added and mutation-verified a regression test"}
+{"ts":"2026-09-08T22:22:16.754Z","event":"dispatch","ticket":"T-27-08","role":"pr-sentinel","pr":71,"by":"dispatch-record"}
+{"ts":"2026-09-08T22:24:17.722Z","event":"degenerate_green","ticket":"T-27-08","pr":71,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T22:36:19.247Z","event":"attempt","ticket":"T-27-08","pr":71,"n":5,"role":"review-fix","model":"opus","outcome":"pushed","signature":"none","head":"2f7c03d560635f37b8efbd3efbde55db0212ac2c","hypothesis":"arch-review's own judge (this guard round) reproduced a real violation of ADR-004 D6/audit F21: gen-codex-shipyard.cjs's refusalComment embedded loadConfig's verbatim JSON.parse message into a TOML comment, and for a short non-JSON config that message can itself be multi-line with control bytes (verified against real Node), which splits into unparseable TOML past line 1 of the comment. Added tomlComment() to sanitize before embedding, plus a regression test reaching the multi-line snippet shape and asserting real TOML line-structure rather than a regex match; mutation-verified"}
+{"ts":"2026-09-08T22:36:24.212Z","event":"arch_review","ticket":"T-27-08","pr":71,"verdict":"violation","head":"2b16fef4b8ea6cd421c45161395d970bedc718b8"}
+{"ts":"2026-09-08T22:38:41.078Z","event":"degenerate_green","ticket":"T-27-08","pr":71,"findings":0,"modes":"none"}
+{"ts":"2026-09-08T22:52:49.809Z","event":"arch_review","ticket":"T-27-08","pr":71,"verdict":"conform","head":"2f7c03d560635f37b8efbd3efbde55db0212ac2c"}
+{"ts":"2026-09-08T22:53:16.433Z","event":"merge","ticket":"T-27-08","pr":71,"base":"epic/27-the-conveyor-measures-its-own-state","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T22:53:49.735Z","event":"status_change","ticket":"T-27-08","from":"pr-open","to":"merged","pr":71}
+{"ts":"2026-09-08T23:22:19.356Z","event":"status_change","ticket":"T-27-09","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-08T23:23:50.922Z","event":"dispatch","ticket":"T-27-09","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-08T23:32:43.078Z","event":"status_change","ticket":"T-27-09","from":"pending","to":"pr-open","pr":72}
+{"ts":"2026-09-08T23:35:38.007Z","event":"dispatch","ticket":"T-27-09","role":"pr-sentinel","pr":72,"by":"dispatch-record"}
+{"ts":"2026-09-08T23:37:42.196Z","event":"degenerate_green","ticket":"T-27-09","pr":72,"findings":0,"modes":""}
+{"ts":"2026-09-08T23:38:39.166Z","event":"arch_review","ticket":"T-27-09","pr":72,"verdict":"conform","head":"8ba88d321b9f1cfaf1a0de1d95300c2ca7db4fc6"}
+{"ts":"2026-09-08T23:38:49.582Z","event":"merge","ticket":"T-27-09","pr":72,"base":"epic/27-the-conveyor-measures-its-own-state","repo":null,"by":"sentinel"}
+{"ts":"2026-09-08T23:39:09.827Z","event":"status_change","ticket":"T-27-09","from":"pr-open","to":"merged","pr":72}
+{"ts":"2026-09-09T08:00:10.336Z","event":"status_change","ticket":"T-28-01","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-09T08:00:10.336Z","event":"status_change","ticket":"T-28-02","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-09T08:00:10.336Z","event":"status_change","ticket":"T-28-03","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-09T08:00:10.336Z","event":"status_change","ticket":"T-28-04","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-09T08:00:10.336Z","event":"status_change","ticket":"T-28-05","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-09T08:00:10.336Z","event":"status_change","ticket":"T-28-06","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-09T08:00:10.336Z","event":"status_change","ticket":"T-28-07","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-09T08:00:10.336Z","event":"status_change","ticket":"T-28-08","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-09T08:01:34.653Z","event":"dispatch","ticket":"T-28-01","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:01:34.703Z","event":"dispatch","ticket":"T-28-04","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:01:34.750Z","event":"dispatch","ticket":"T-28-02","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:01:34.799Z","event":"dispatch","ticket":"T-28-07","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:24:45.248Z","event":"status_change","ticket":"T-28-02","from":"pending","to":"pr-open","pr":73}
+{"ts":"2026-09-09T08:24:45.248Z","event":"status_change","ticket":"T-28-04","from":"pending","to":"pr-open","pr":74}
+{"ts":"2026-09-09T08:24:45.248Z","event":"status_change","ticket":"T-28-07","from":"pending","to":"pr-open","pr":75}
+{"ts":"2026-09-09T08:27:03.684Z","event":"dispatch","ticket":"T-28-08","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:27:03.732Z","event":"dispatch","ticket":"T-28-05","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:27:03.783Z","event":"dispatch","ticket":"T-28-02","role":"pr-sentinel","pr":73,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:27:03.820Z","event":"dispatch","ticket":"T-28-04","role":"pr-sentinel","pr":74,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:27:03.859Z","event":"dispatch","ticket":"T-28-07","role":"pr-sentinel","pr":75,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:30:38.909Z","event":"attempt","ticket":"T-28-04","pr":74,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","head":"c0251f8425432d2c105f965ff809e18cb01f3aa8","hypothesis":"Copilot correctly found that a non-ENOENT read failure on config.toml was silently treated as absence, hiding an unmeasurable-floors state; split ENOENT (silence) from other errors (new codex-config-unreadable blocker), mirroring the existing codex-agent-unreadable check."}
+{"ts":"2026-09-09T08:32:32.807Z","event":"degenerate_green","ticket":"T-28-02","pr":73,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T08:32:50.042Z","event":"arch_review","ticket":"T-28-02","pr":73,"verdict":"conform","head":"7a59d440c15e4af99e6c038ab082423948b6f14b"}
+{"ts":"2026-09-09T08:35:19.340Z","event":"attempt","ticket":"T-28-02","pr":73,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","head":"b6cf549d35c4a3e08e65018af4e2ce29c7812c7d","hypothesis":"Copilot found effort_applied=\"\" written as a present empty-string key instead of omitted, defeating the doc's own 'empty is absence' rule for presence-checking readers; deleted the key on empty and fixed the header table's dropped 'first' verdict."}
+{"ts":"2026-09-09T08:38:26.315Z","event":"attempt","ticket":"T-28-04","pr":74,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","head":"51e0128b5b186ca04b379f772159eef66143851e","hypothesis":"Copilot correctly flagged that registeredAgentFiles() used raw line regexes with no multi-line-string awareness, risking a false blocker from a config.toml value that happens to contain agents.*-shaped text; blanked multi-line-string content before the scan, scoped to gsd-tune.cjs only."}
+{"ts":"2026-09-09T08:41:41.587Z","event":"arch_review","ticket":"T-28-04","pr":74,"verdict":"conform","head":"51e0128b5b186ca04b379f772159eef66143851e"}
+{"ts":"2026-09-09T08:41:50.541Z","event":"degenerate_green","ticket":"T-28-04","pr":74,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T08:42:20.211Z","event":"arch_review","ticket":"T-28-07","pr":75,"verdict":"conform","head":"664df8dec7e7f632ffeac81e7cae621551df76b5"}
+{"ts":"2026-09-09T08:42:25.822Z","event":"degenerate_green","ticket":"T-28-07","pr":75,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T08:43:18.440Z","event":"arch_review","ticket":"T-28-02","pr":73,"verdict":"conform","head":"b6cf549d35c4a3e08e65018af4e2ce29c7812c7d"}
+{"ts":"2026-09-09T08:43:23.677Z","event":"degenerate_green","ticket":"T-28-02","pr":73,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T08:44:06.394Z","event":"merge","ticket":"T-28-02","pr":73,"base":"epic/28-a-mechanism-nobody-connected-is-not-a-mechanism","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-09T08:45:13.660Z","event":"status_change","ticket":"T-28-02","from":"pr-open","to":"merged","pr":73}
+{"ts":"2026-09-09T08:51:46.916Z","event":"arch_review","ticket":"T-28-04","pr":74,"verdict":"conform","head":"5603bd26e63a6c7249702a58f8f84d2a2c4602a7"}
+{"ts":"2026-09-09T08:51:52.224Z","event":"degenerate_green","ticket":"T-28-04","pr":74,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T08:52:01.712Z","event":"arch_review","ticket":"T-28-07","pr":75,"verdict":"conform","head":"6a64f81aa9b670ab21a1b76b155c07e81e7a2e75"}
+{"ts":"2026-09-09T08:52:07.591Z","event":"degenerate_green","ticket":"T-28-07","pr":75,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T08:52:45.039Z","event":"merge","ticket":"T-28-04","pr":74,"base":"epic/28-a-mechanism-nobody-connected-is-not-a-mechanism","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-09T08:53:19.037Z","event":"status_change","ticket":"T-28-01","from":"pending","to":"pr-open","pr":76}
+{"ts":"2026-09-09T08:53:19.037Z","event":"status_change","ticket":"T-28-04","from":"pr-open","to":"merged","pr":74}
+{"ts":"2026-09-09T08:53:19.037Z","event":"status_change","ticket":"T-28-05","from":"pending","to":"pr-open","pr":78}
+{"ts":"2026-09-09T08:53:19.037Z","event":"status_change","ticket":"T-28-08","from":"pending","to":"pr-open","pr":77}
+{"ts":"2026-09-09T08:54:20.960Z","event":"dispatch","ticket":"T-28-03","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:54:20.999Z","event":"dispatch","ticket":"T-28-01","role":"pr-sentinel","pr":76,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:54:21.039Z","event":"dispatch","ticket":"T-28-05","role":"pr-sentinel","pr":78,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:54:21.079Z","event":"dispatch","ticket":"T-28-08","role":"pr-sentinel","pr":77,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:57:43.475Z","event":"dispatch","ticket":"T-28-07","role":"pr-sentinel","pr":75,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:57:43.521Z","event":"dispatch","ticket":"T-28-01","role":"pr-sentinel","pr":76,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:57:43.563Z","event":"dispatch","ticket":"T-28-08","role":"pr-sentinel","pr":77,"by":"dispatch-record"}
+{"ts":"2026-09-09T08:57:43.599Z","event":"dispatch","ticket":"T-28-05","role":"pr-sentinel","pr":78,"by":"dispatch-record"}
+{"ts":"2026-09-09T09:03:41.875Z","event":"attempt","ticket":"T-28-07","pr":75,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","hypothesis":"Copilot found the dirty-worktree precheck read a failed git status as a clean tree because it inspected only .out under tolerate:true; check the exit status too and fail closed with the git error attached."}
+{"ts":"2026-09-09T09:09:07.683Z","event":"attempt","ticket":"T-28-01","pr":76,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","hypothesis":"Copilot found the --agent-id refusal echoed the raw value into stderr (log-injection risk) and agentIdOf() trusted trim()!=='' alone, weaker than the write-side control-char/length check front.cjs's Set key assumes holds; share one predicate and escape the echoed value."}
+{"ts":"2026-09-09T09:10:07.774Z","event":"status_change","ticket":"T-28-03","from":"pending","to":"pr-open","pr":80}
+{"ts":"2026-09-09T09:11:31.371Z","event":"dispatch","ticket":"T-28-06","role":"executor","pr":null,"by":"dispatch-record"}
+{"ts":"2026-09-09T09:12:49.411Z","event":"degenerate_green","ticket":"T-28-08","pr":77,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T09:14:20.111Z","event":"merge","ticket":"T-28-08","pr":77,"base":"epic/28-a-mechanism-nobody-connected-is-not-a-mechanism","repo":null,"by":"sentinel"}
+{"ts":"2026-09-09T09:17:01.822Z","event":"attempt","ticket":"T-28-01","pr":76,"n":2,"role":"ci-fix","model":"opus","signature":"2570b45482b75a7e","outcome":"pushed","head":"26ab96cbe848891b6c5cac7643c1ece451cb9960","hypothesis":"test-fast's binary-content sweep (source-contract.test.cjs) caught a literal NUL byte my own prior review-fix edit accidentally left in agentIdOf's doc comment (an editing-tool escaping accident, not a defect in the review-fix logic); replaced the raw byte with the escaped placeholder text the comment meant to show."}
+{"ts":"2026-09-09T09:17:49.293Z","event":"attempt","ticket":"T-28-05","pr":78,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","hypothesis":"Copilot found fs.copyFileSync(next,prev) for the manifest record follows a symlink at prevPath and hard-fails on a non-writable prevPath; write to a temp file + rename instead, non-fatal on failure. Also found the smoke's min_cli-below derivation goes negative for a ceiling ending in .0; decrement the rightmost non-zero component and pad trailing components high."}
+{"ts":"2026-09-09T09:18:40.779Z","event":"degenerate_green","ticket":"T-28-07","pr":75,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T09:18:48.960Z","event":"status_change","ticket":"T-28-08","from":"pr-open","to":"merged","pr":77}
+{"ts":"2026-09-09T09:24:09.209Z","event":"dispatch","ticket":"T-28-07","role":"pr-sentinel","pr":75,"by":"dispatch-record"}
+{"ts":"2026-09-09T09:24:09.250Z","event":"dispatch","ticket":"T-28-01","role":"pr-sentinel","pr":76,"by":"dispatch-record"}
+{"ts":"2026-09-09T09:24:09.293Z","event":"dispatch","ticket":"T-28-05","role":"pr-sentinel","pr":78,"by":"dispatch-record"}
+{"ts":"2026-09-09T09:24:09.334Z","event":"dispatch","ticket":"T-28-03","role":"pr-sentinel","pr":80,"by":"dispatch-record"}
+{"ts":"2026-09-09T09:25:43.556Z","event":"degenerate_green","ticket":"T-28-07","pr":75,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T09:25:54.803Z","event":"arch_review","ticket":"T-28-07","pr":75,"verdict":"conform","head":"48b25fd05b4b2bc63b5b7728826fc841394fbc72"}
+{"ts":"2026-09-09T09:26:42.722Z","event":"degenerate_green","ticket":"T-28-01","pr":76,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T09:26:42.749Z","event":"arch_review","ticket":"T-28-01","pr":76,"verdict":"conform","head":"2ae425c0ad5e4cf6199a412280612030fb9ffe34"}
+{"ts":"2026-09-09T09:27:28.215Z","event":"degenerate_green","ticket":"T-28-05","pr":78,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T09:27:28.242Z","event":"arch_review","ticket":"T-28-05","pr":78,"verdict":"conform","head":"1740ff7a31955b011f13d08106bc745cccb79194"}
+{"ts":"2026-09-09T09:28:23.815Z","event":"merge","ticket":"T-28-01","pr":76,"base":"epic/28-a-mechanism-nobody-connected-is-not-a-mechanism","repo":null,"by":"sentinel"}
+{"ts":"2026-09-09T09:29:37.109Z","event":"status_change","ticket":"T-28-01","from":"pr-open","to":"merged","pr":76}
+{"ts":"2026-09-09T09:34:46.137Z","event":"degenerate_green","ticket":"T-28-07","pr":75,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T09:34:46.164Z","event":"arch_review","ticket":"T-28-07","pr":75,"verdict":"conform","head":"5071a82827145dd0891e625b6a20e02210b79a08"}
+{"ts":"2026-09-09T09:36:12.817Z","event":"status_change","ticket":"T-28-06","from":"pending","to":"pr-open","pr":81}
+{"ts":"2026-09-09T09:36:41.489Z","event":"dispatch","ticket":"T-28-03","role":"pr-sentinel","pr":80,"by":"dispatch-record"}
+{"ts":"2026-09-09T09:40:10.526Z","event":"merge","ticket":"T-28-07","pr":75,"base":"epic/28-a-mechanism-nobody-connected-is-not-a-mechanism","repo":null,"by":"sentinel"}
+{"ts":"2026-09-09T09:40:25.870Z","event":"status_change","ticket":"T-28-07","from":"pr-open","to":"merged","pr":75}
+{"ts":"2026-09-09T09:49:26.133Z","event":"attempt","ticket":"T-28-03","pr":80,"n":1,"role":"review-fix","model":"opus","outcome":"pushed","head":"1be600dc3720fc11333bd1397ee49ee66b51d887","hypothesis":"Copilot: section() sliced from+1, dropping the section heading's leading character; the contested-probe grep matched event=arch_review across every ticket and verdict instead of this ticket's violation"}
+{"ts":"2026-09-09T09:49:26.164Z","event":"attempt","ticket":"T-28-03","pr":80,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","head":"570f8ef94d33230c3722bceccc21b5c2be6fd3dd","hypothesis":"Copilot: spelling, for ever to forever"}
+{"ts":"2026-09-09T09:49:26.195Z","event":"attempt","ticket":"T-28-03","pr":80,"n":3,"role":"review-fix","model":"opus","outcome":"pushed","head":"16834c02d4835b65f9055f41417cebf59c2ba8e7","hypothesis":"Copilot: the SHIPYARD_ROOT/CLAUDE_PLUGIN_ROOT sentence read as substituting the scripts subdirectory for the plugin root rather than the two root variables for each other"}
+{"ts":"2026-09-09T09:49:26.230Z","event":"attempt","ticket":"T-28-03","pr":80,"n":4,"role":"review-fix","model":"opus","outcome":"pushed","head":"38d903013cf501436561eb0fed75c79e5bb4f8fd","hypothesis":"Copilot: pointerWindow doc comment said forward-only but the code windows both sides of the pointer; the doc-contract test name hardcoded arch-review despite the SUBJECTS table being built for multiple mechanisms"}
+{"ts":"2026-09-09T09:49:32.840Z","event":"attempt","ticket":"T-28-05","pr":78,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","head":"6c36997f0b7c1c8c9c43a83ec6830bc433fefddd","hypothesis":"Copilot: fs.unlinkSync(target) was uncaught under the installer's set -euo pipefail, so a permission error on one orphan would abort the whole install instead of refusing that one file"}
+{"ts":"2026-09-09T09:49:32.873Z","event":"attempt","ticket":"T-28-05","pr":78,"n":3,"role":"review-fix","model":"opus","outcome":"pushed","head":"af947841e60020424cf5cb2939ff3255d9eddbd3","hypothesis":"Copilot: claimed was built from next.agent_files with no shape validation, so a malformed entry in the CURRENT manifest could not protect the real file it named and the previous manifest's genuine entries would read as orphaned"}
+{"ts":"2026-09-09T09:50:53.074Z","event":"degenerate_green","ticket":"T-28-03","pr":80,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T09:50:53.102Z","event":"arch_review","ticket":"T-28-03","pr":80,"verdict":"conform","head":"38d903013cf501436561eb0fed75c79e5bb4f8fd"}
+{"ts":"2026-09-09T09:51:27.705Z","event":"degenerate_green","ticket":"T-28-05","pr":78,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T09:51:27.736Z","event":"arch_review","ticket":"T-28-05","pr":78,"verdict":"conform","head":"af947841e60020424cf5cb2939ff3255d9eddbd3"}
+{"ts":"2026-09-09T09:52:16.830Z","event":"merge","ticket":"T-28-03","pr":80,"base":"epic/28-a-mechanism-nobody-connected-is-not-a-mechanism","repo":null,"by":"sentinel"}
+{"ts":"2026-09-09T09:53:05.567Z","event":"status_change","ticket":"T-28-03","from":"pr-open","to":"merged","pr":80}
+{"ts":"2026-09-09T09:56:50.336Z","event":"dispatch","ticket":"T-28-05","role":"pr-sentinel","pr":78,"by":"dispatch-record"}
+{"ts":"2026-09-09T09:56:50.384Z","event":"dispatch","ticket":"T-28-06","role":"pr-sentinel","pr":81,"by":"dispatch-record"}
+{"ts":"2026-09-09T10:00:23.221Z","event":"attempt","ticket":"T-28-06","pr":81,"n":1,"role":"ci-fix","model":"none","outcome":"pushed","signature":"base-merge-conflict","head":"c0dd4fdb019ec8dae5fa3d9b8701735de6675328","hypothesis":"deliver.md and judgment-contract.test.cjs conflicted because T-28-06 branched off T-28-03's pre-review-fix branch and T-28-03 landed in the epic squashed with later review-fix rewording (deliver.md's SHIPYARD_ROOT sentence) and additions (the fixed section()/pointerWindow() helpers and generic test names); resolved by taking the epic's post-review-fix content and re-applying T-28-06's own WIRED-table extension on top of it"}
+{"ts":"2026-09-09T10:02:23.563Z","event":"attempt","ticket":"T-28-06","pr":81,"n":2,"role":"review-fix","model":"opus","outcome":"pushed","signature":"copilot-review-round1","head":"4c8168a93e6b3241d6b5ea8dc7c2a7a5a81dc5a6","hypothesis":"two of Copilot's three findings were real doc/code mismatches (drift-needed.cjs's exit-code caveat and log-event.cjs's warn-vs-refuse behavior for effort_applied); the third (section() off-by-one) was already corrected by taking the epic's fixed helper during the base-merge resolution, so it needs a reply, not a fix"}
+{"ts":"2026-09-09T10:04:41.914Z","event":"dispatch","ticket":"T-28-05","role":"arch-review","pr":78,"model":"opus","effort":"xhigh","reason":"tier=floor(opus) effort=row(xhigh)","by":"dispatch-record"}
+{"ts":"2026-09-09T10:07:16.765Z","event":"dispatch","ticket":"T-28-06","role":"arch-review","pr":81,"model":"opus","effort":"xhigh","reason":"tier=floor(opus) effort=row(xhigh)","by":"dispatch-record"}
+{"ts":"2026-09-09T10:09:50.112Z","event":"arch_review","ticket":"T-28-05","pr":78,"verdict":"conform","head":"610dad8729957a3917ae50e32549b262c4a82d73"}
+{"ts":"2026-09-09T10:09:57.692Z","event":"degenerate_green","ticket":"T-28-05","pr":78,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T10:10:51.915Z","event":"merge","ticket":"T-28-05","pr":78,"base":"epic/28-a-mechanism-nobody-connected-is-not-a-mechanism","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-09T10:11:10.979Z","event":"status_change","ticket":"T-28-05","from":"pr-open","to":"merged","pr":78}
+{"ts":"2026-09-09T10:17:38.073Z","event":"arch_review","ticket":"T-28-06","pr":81,"verdict":"conform","head":"4c8168a93e6b3241d6b5ea8dc7c2a7a5a81dc5a6"}
+{"ts":"2026-09-09T10:21:34.500Z","event":"dispatch","ticket":"T-28-06","role":"pr-sentinel","pr":81,"by":"dispatch-record"}
+{"ts":"2026-09-09T10:37:49.828Z","event":"degenerate_green","ticket":"T-28-06","pr":81,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T10:38:38.581Z","event":"merge","ticket":"T-28-06","pr":81,"base":"epic/28-a-mechanism-nobody-connected-is-not-a-mechanism","repo":null,"by":"sentinel"}
+{"ts":"2026-09-09T10:39:08.310Z","event":"status_change","ticket":"T-28-06","from":"pr-open","to":"merged","pr":81}
+{"ts":"2026-09-09T14:19:53.253Z","event":"status_change","ticket":"T-28-09","from":null,"to":"pr-open","pr":82}
+{"ts":"2026-09-09T14:21:00.230Z","event":"dispatch","ticket":"T-28-09","role":"pr-sentinel","pr":82,"by":"dispatch-record"}
+{"ts":"2026-09-09T14:23:55.090Z","event":"degenerate_green","ticket":"T-28-09","pr":82,"findings":0,"modes":"none"}
+{"ts":"2026-09-09T14:24:52.581Z","event":"merge","ticket":"T-28-09","pr":82,"base":"epic/28-a-mechanism-nobody-connected-is-not-a-mechanism","repo":null,"by":"sentinel"}
+{"ts":"2026-09-09T14:25:15.660Z","event":"status_change","ticket":"T-28-09","from":"pr-open","to":"merged","pr":82}

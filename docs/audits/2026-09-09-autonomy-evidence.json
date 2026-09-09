@@ -1,0 +1,223 @@
+{
+  "reviewed_revision": "31ed89659d8a84257499c86bd0f9886cde9a8447",
+  "tested_revision": "43cc3594416ec5ff4b9b0321b53b8efc40149df9",
+  "runtime_trees_equal": true,
+  "tests": [
+    {
+      "command": "make test-fast",
+      "exit": 0
+    },
+    {
+      "command": "make test-codex-shipyard",
+      "exit": 0
+    }
+  ],
+  "previous_probes": [
+    {
+      "probe": "known-T-26-02",
+      "autoMerge": "epic",
+      "valid": false,
+      "warnings": [
+        ".planning/config.json is not valid JSON (Expected ',' or '}' after property value in JSON at position 31 (line 1 column 32)) — INVALID: no policy is in effect. Every mutation refuses (no merge, no escalation) until the file parses; the fix is the file, not a flag."
+      ]
+    },
+    {
+      "probe": "codex-agent-floor",
+      "applyExit": 0,
+      "exit": 0,
+      "blockers": [],
+      "drift": 0
+    },
+    {
+      "probe": "fable-old-pin",
+      "applyExit": 0,
+      "exit": 0,
+      "blockers": [],
+      "drift": 0
+    },
+    {
+      "probe": "codex-remap-bypasses-floor",
+      "palette": [
+        {
+          "model": "gpt-5.6-terra",
+          "effort": "high"
+        }
+      ],
+      "actual": {
+        "model": "gpt-6-astra",
+        "effort": "high"
+      },
+      "logs": [
+        "gen-codex-shipyard: not writing \"gpt-6-astra\" — configuring it needs Codex CLI 0.153.1, this host reports 0.147.0. Every role gets the previous palette entry instead."
+      ]
+    },
+    {
+      "probe": "upgrade-stale-deep-agents",
+      "freshLowDeep": [],
+      "installedDeep": [
+        "shipyard-arch-review-deep.toml",
+        "shipyard-ci-fix-deep.toml",
+        "shipyard-pr-sentinel-deep.toml",
+        "shipyard-review-fix-deep.toml"
+      ]
+    },
+    {
+      "probe": "nonconsecutive-exhaustion",
+      "sequence": [
+        "A",
+        "B",
+        "A",
+        "A"
+      ],
+      "verdicts": [
+        "first",
+        "progress",
+        "progress",
+        "repeat_exhausted"
+      ]
+    },
+    {
+      "probe": "workflow-strategy",
+      "identicalPrompts": true,
+      "hasRethink": false,
+      "effortApplied": "max"
+    }
+  ],
+  "current_probes": [
+    {
+      "probe": "two-live-guards",
+      "actual_agents_in_fixture": 4,
+      "expected_free": 0,
+      "observed_capacity": {
+        "max": 4,
+        "in_flight": 3,
+        "free": 1
+      }
+    },
+    {
+      "probe": "background-judgment-contract",
+      "reads_prior_arch_review": true,
+      "writes_arch_review": false,
+      "resolves_arch_review": false,
+      "supplies_input_measurement": false
+    },
+    {
+      "probe": "built-in-role-baseline",
+      "runtime": "claude",
+      "roles": [
+        {
+          "role": "integrator",
+          "tier_alias": "opus",
+          "requested_effort": "xhigh"
+        },
+        {
+          "role": "arch-review",
+          "tier_alias": "opus",
+          "requested_effort": "xhigh"
+        },
+        {
+          "role": "executor",
+          "tier_alias": "opus",
+          "requested_effort": "high"
+        },
+        {
+          "role": "ci-fix",
+          "tier_alias": "opus",
+          "requested_effort": "high"
+        },
+        {
+          "role": "review-fix",
+          "tier_alias": "opus",
+          "requested_effort": "high"
+        },
+        {
+          "role": "drift-check",
+          "tier_alias": "sonnet",
+          "requested_effort": "high"
+        },
+        {
+          "role": "research",
+          "tier_alias": "opus",
+          "requested_effort": "high"
+        },
+        {
+          "role": "pr-sentinel",
+          "tier_alias": "sonnet",
+          "requested_effort": "high"
+        }
+      ]
+    },
+    {
+      "probe": "built-in-role-baseline",
+      "runtime": "codex",
+      "roles": [
+        {
+          "role": "integrator",
+          "tier_alias": "sonnet",
+          "requested_effort": "high"
+        },
+        {
+          "role": "arch-review",
+          "tier_alias": "sonnet",
+          "requested_effort": "high"
+        },
+        {
+          "role": "executor",
+          "tier_alias": "sonnet",
+          "requested_effort": "high"
+        },
+        {
+          "role": "ci-fix",
+          "tier_alias": "sonnet",
+          "requested_effort": "high"
+        },
+        {
+          "role": "review-fix",
+          "tier_alias": "sonnet",
+          "requested_effort": "high"
+        },
+        {
+          "role": "drift-check",
+          "tier_alias": "sonnet",
+          "requested_effort": "low"
+        },
+        {
+          "role": "research",
+          "tier_alias": "sonnet",
+          "requested_effort": "high"
+        },
+        {
+          "role": "pr-sentinel",
+          "tier_alias": "sonnet",
+          "requested_effort": "high"
+        }
+      ]
+    },
+    {
+      "probe": "installed-script-parity",
+      "installed": "/Users/serhii/.codex/shipyard",
+      "files": [
+        {
+          "file": "front.cjs",
+          "exists": true,
+          "same": false
+        },
+        {
+          "file": "pipeline-config.cjs",
+          "exists": true,
+          "same": false
+        },
+        {
+          "file": "dispatch-record.cjs",
+          "exists": true,
+          "same": false
+        },
+        {
+          "file": "gsd-tune.cjs",
+          "exists": true,
+          "same": false
+        }
+      ]
+    }
+  ]
+}
