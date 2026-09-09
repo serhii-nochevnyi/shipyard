@@ -588,7 +588,7 @@ const roleOf = (rec) => (typeof rec === 'string' ? rec : ((rec && rec.role) || '
  * `agentsInFlight` spends a whole agent on.
  *
  * Runs the SAME `agentIdSafetyIssue` the write path enforces, not only the
- * `trim() !== ''` half of it: `front.cjs` joins `role agent` into a Set
+ * `trim() !== ''` half of it: `front.cjs` joins `role\u0000agent` into a Set
  * key on the promise that neither half holds whitespace or a control
  * character, but that promise is only as good as what THIS function lets
  * through — a hand-edited store, or a record written before the write-side
