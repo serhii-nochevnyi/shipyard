@@ -586,6 +586,75 @@ else
   bad "an escaping path parks ONE ticket instead of failing Gate 2 for all" "$out"
 fi
 
+# a declared path that cannot exist: warn + flag, and NEVER on a wildcard
+# T-27-08 was dispatched against `plugins/delivery-pipeline/scripts/
+# gen-codex-shipyard.cjs`, which is not where that script lives — a contract no
+# edit could fulfil, and Gate 2 had nothing to say about it because it never
+# asks whether a declared file EXISTS. It still must not FAIL: an implementation
+# plan legitimately declares files it is about to create, so a hard error here
+# would reject most of the graph. And the check must be blind to wildcards — a
+# glob matching nothing today is the ordinary shape of a to-be-created
+# declaration, so warning on one fires on every glob in every project.
+mkproj missingpaths
+mkdir -p "$WORK/missingpaths/.planning/phases/01-a" "$WORK/missingpaths/src"
+: > "$WORK/missingpaths/src/exists.ts"
+plan missingpaths '01-a/01-PLAN.md' T-01-01 '' \
+  '"src/exists.ts", "src/typo-nobody-caught.ts", "docs/*.md"' REQ-1
+if out="$(run_validator missingpaths)"; then
+  ok "a declared path that does not exist still validates (a plan may CREATE it)"
+  grep -q 'src/typo-nobody-caught.ts' <<<"$out" \
+    && ok "…and the warning names the entry that does not exist" \
+    || bad "the warning names the missing entry" "$out"
+  grep -q 'src/exists.ts' <<<"$out" \
+    && bad "an entry that DOES exist must not be warned about" "$out" \
+    || ok "…and says nothing about the entry that does exist"
+  grep -q 'docs/\*\.md' <<<"$out" \
+    && bad "a wildcard entry matching nothing must NOT be warned about" "$out" \
+    || ok "…and nothing about the wildcard entry that matches nothing"
+  node -e '
+    const t = require(process.argv[1]).tickets;
+    if (t["T-01-01"].missing_paths !== true) throw new Error("missing_paths flag not set");
+  ' "$WORK/missingpaths/.planning/graph/tickets.json" \
+    && ok "the ticket carries the missing_paths flag" \
+    || bad "the ticket carries the missing_paths flag"
+else
+  bad "a plan declaring a file it will create must not fail Gate 2" "$out"
+fi
+
+# …and a graph whose wildcard-free paths all exist carries neither
+mkproj allexist
+mkdir -p "$WORK/allexist/.planning/phases/01-a" "$WORK/allexist/src"
+: > "$WORK/allexist/src/a.ts"
+plan allexist '01-a/01-PLAN.md' T-01-01 '' '"src/a.ts"' REQ-1
+if out="$(run_validator allexist)"; then
+  grep -q 'do not exist in this repo\|does not exist in this repo' <<<"$out" \
+    && bad "no missing-path warning when every declared path exists" "$out" \
+    || ok "no missing-path warning when every declared path exists"
+  node -e '
+    const t = require(process.argv[1]).tickets;
+    if (t["T-01-01"].missing_paths !== false) throw new Error("missing_paths must be false, got " + t["T-01-01"].missing_paths);
+  ' "$WORK/allexist/.planning/graph/tickets.json" \
+    && ok "…and the flag is present and false, not absent" \
+    || bad "the flag is present and false"
+else
+  bad "a graph whose declared paths all exist validates" "$out"
+fi
+
+# a cross-repo ticket is exempt: its paths are relative to ANOTHER repo's root,
+# so this file system says nothing about them (the boundary state-sync and the
+# overlap check already draw).
+mkproj foreignpaths
+mkdir -p "$WORK/foreignpaths/.planning/phases/01-a"
+plan foreignpaths '01-a/01-PLAN.md' T-01-01 '' '"src/only-over-there.ts"' REQ-1 \
+  low false '' 'repo: acme/other'
+if out="$(run_validator foreignpaths)"; then
+  grep -q 'only-over-there' <<<"$out" \
+    && bad "a cross-repo ticket's paths are not measured against THIS repo" "$out" \
+    || ok "a cross-repo ticket's paths are not measured against this repo"
+else
+  bad "a cross-repo ticket validates" "$out"
+fi
+
 # a malformed repo slug is a hard error — it would silently target nothing
 mkproj badrepo
 mkdir -p "$WORK/badrepo/.planning/phases/01-a"
