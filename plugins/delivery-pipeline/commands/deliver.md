@@ -970,12 +970,14 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-needed.cjs <T> --json   # → {needed, 
 ```
 
 Run it for every ticket in scope, before the path split below, and dispatch a
-drift-check judge for the `needed: true` ones only. It always exits 0 with a
-verdict — the answer is the payload, not the exit code — and it answers `needed`
-for anything it cannot measure (no base, a missing plan, a cross-repo ticket with
-no local checkout), so an unknown is never mistaken for clean. Carry its `reason`
-into your progress note for the tickets it skips: a scan not run has to be a
-stated verdict, or it reads as a step forgotten.
+drift-check judge for the `needed: true` ones only. It exits 0 with a verdict —
+the answer is the payload, not the exit code — for every ticket it can evaluate,
+and it answers `needed` for anything it cannot measure (no base, a missing plan,
+a cross-repo ticket with no local checkout), so an unknown is never mistaken for
+clean. A non-zero exit (1 unknown ticket or bad usage, 2 no ticket graph) is a
+failure to ANSWER, not an answer — the script's own header states the same split.
+Carry its `reason` into your progress note for the tickets it skips: a scan not
+run has to be a stated verdict, or it reads as a step forgotten.
 
 **This SUPERSEDES the old prose condition, and the script's own header says so.**
 That condition — *"older than the last merge into the configured base, or more
@@ -1522,8 +1524,10 @@ loop:
        spends a person's attention — off a prior round whose row NAMES a real level,
        so an unrecorded depth reads as not-yet-spent and the loop rethinks once more
        instead of escalating early. Levels: the resolver's own vocabulary
-       (`low|medium|high|xhigh|max`), or `unknown`; `log-event.cjs` refuses anything
-       else.
+       (`low|medium|high|xhigh|max`), or `unknown`; `log-event.cjs` WARNS on anything
+       else and still logs the row as written — an unrecognised level is read
+       exactly like absence by the rethink rule above, so nothing downstream is
+       silently misled, but nothing refuses the write either.
      **A base merge in that round is journalled SEPARATELY, and it is not an
        attempt.** For each PR you passed `needsBaseMerge: true` whose push you just
        confirmed: `log-event.cjs base_merge ticket=<T> pr=<N> base=<the base ref you
