@@ -387,3 +387,33 @@ reasons differ — so a list without them invites someone to "get ahead".
 Item 1 is mechanical. Items 2 and 3 are the phase's own subject applied to its
 own close, which is the reason to do them deliberately rather than fold them
 into the merge commit.
+
+## Carried into phase 28 by its own executors (2026-09-09)
+
+Three items the phase-28 wave-1 executors flagged as outside their scope. Each
+is recorded rather than smuggled, which is the rule that made them visible:
+
+1. **`CLAUDE.md` drifts after T-28-04.** The generator now re-checks a GSD remap
+   against the palette's declared `min_cli`, and the preflight reads registered
+   agent files and an explicit `ANTHROPIC_DEFAULT_FABLE_MODEL`. No phase-28 plan
+   declares `CLAUDE.md`, so this needs the same post-merge treatment phase 27's
+   landing edits got — and for the same reason: `CLAUDE.md` on the default branch
+   describes the code on the default branch, so it cannot be corrected before the
+   epic lands.
+2. **`references/ci-fix.md:105` and `CLAUDE.md`'s validate-graph bullet are now
+   imprecise after T-28-07.** `base-merge` no longer refuses on untracked files
+   and Gate 2 now warns on a wildcard-free declared path that does not exist;
+   both descriptions predate that.
+3. **Orphaned SKILL directories need their own ticket.** T-28-05's manifest
+   reconciliation covers agent `.toml` files and their registrations. A shrunk
+   generation can also leave a `~/.agents/skills/shipyard-*/` directory behind,
+   and that is a different owner list with a different removal question — the
+   executor named it rather than widening its own ticket into it.
+
+One more, from the same executor and worth keeping as a fact about the tests
+rather than the code: **T-28-05's manifest location was forced by an undeclared
+unit test's directory scan.** The natural home for the manifest was taken
+because a test outside the ticket's `files_modified` enumerates that directory
+and would have counted the manifest as an agent. The ticket worked around it
+correctly and said so; if the manifest ever moves, that scan is the reason it is
+where it is.
