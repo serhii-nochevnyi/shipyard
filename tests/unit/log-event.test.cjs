@@ -274,4 +274,71 @@ test('attempt-history does not charge a mechanical merge to the repair record', 
   assert.deepStrictEqual(out.events, [], 'and it is not rendered to the next fixer as one');
 });
 
+suite('log-event — `effort_applied` is the depth an escalation rests on');
+
+// ADR-007 D2. `repeat_exhausted` claims the deeper effort has already been spent
+// on one failure signature, and the only thing that can prove it is the attempt
+// row for the round that spent it. So the field is part of THIS writer's
+// vocabulary, checked against the same `EFFORTS` list `dispatch-record.cjs`
+// checks `--effort-applied` against — one vocabulary, two writers, or the rows
+// cannot be read together.
+
+test('an effort level is recorded verbatim, and quietly', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['attempt', 'ticket=T-28-02', 'n=2', 'role=ci-fix',
+    'signature=9f2a', 'effort_applied=max']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(lines(graph)[0]).effort_applied, 'max');
+  assert.ok(!/WARNING/.test(r.stderr), `a valid level must not be warned about: ${r.stderr}`);
+});
+
+test('`unknown` is a legitimate value — the honest record of a spawn that carried no effort', () => {
+  // The Agent tool has no `effort` parameter, so an Agent-dispatched fixer runs at
+  // the session's own depth whatever the ladder chose. `unknown` says exactly
+  // that, and the verdict reads it as no evidence — which is why it must be
+  // accepted here rather than warned into looking like a mistake.
+  const { project, graph } = scratch();
+  const r = run(project, ['attempt', 'ticket=T-28-02', 'n=2', 'effort_applied=unknown']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(lines(graph)[0]).effort_applied, 'unknown');
+  assert.ok(!/WARNING/.test(r.stderr), r.stderr);
+});
+
+test('a value outside the vocabulary is warned about — and the attempt is still charged', () => {
+  // Warned, never refused. A refusal loses the whole `attempt` row, and that row
+  // is what charges the attempt: `attempt-history.cjs` derives `next_n` from it,
+  // so a lost row freezes the counter the oscillation backstop reads and the loop
+  // gains rounds it never spends. The value is kept as written — the reader's own
+  // rule then treats a level it does not recognise as no evidence, which errs
+  // toward rethinking again rather than escalating early.
+  const { project, graph } = scratch();
+  const r = run(project, ['attempt', 'ticket=T-28-02', 'n=2', 'effort_applied=maximum']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(/WARNING/.test(r.stderr), r.stderr);
+  assert.ok(/effort_applied/.test(r.stderr), 'the warning must name the field');
+  assert.ok(/repeat_exhausted/.test(r.stderr), 'and what reads it, so the cost is legible');
+  const rec = JSON.parse(lines(graph)[0]);
+  assert.strictEqual(lines(graph).length, 1, 'the round still happened, so the row is still written');
+  assert.strictEqual(rec.effort_applied, 'maximum', 'kept as written — this writer does not correct claims');
+});
+
+test('omitting it writes no key and says nothing', () => {
+  // Absence means UNMEASURED and is the normal state on the Agent path, so it is
+  // not a declared field: warning about it would fire on every honest row.
+  const { project, graph } = scratch();
+  const r = run(project, ['attempt', 'ticket=T-28-02', 'n=1', 'role=ci-fix']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const rec = JSON.parse(lines(graph)[0]);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(rec, 'effort_applied'), false);
+  assert.ok(!/WARNING/.test(r.stderr), r.stderr);
+});
+
+test('an empty value is absence too, not a bad level', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['attempt', 'ticket=T-28-02', 'n=1', 'effort_applied=']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(!/WARNING/.test(r.stderr), r.stderr);
+  assert.strictEqual(lines(graph).length, 1);
+});
+
 done();
