@@ -71,15 +71,41 @@
 // unreachable BY DESIGN. A reader with no writer that SAYS SO is a decision, not
 // drift, and the difference between the two is exactly what this table records.
 //
-// HOW THESE ROWS ERR. Weaker than `SUBJECTS`, and deliberately so: a row matches
-// its home FILE, not a line or a section, because the caller of a mechanism is
-// not always inside one bounded section (the fix-round args contract, step d's
-// journal line and the Step 2 gate live in three different parts of
-// `deliver.md`). So a row proves the document NAMES its caller and not that the
-// naming sits in the right paragraph. That is the whole claim these rows make,
-// and it is the claim that was false for all five of them. The mutation check in
-// the ticket's acceptance criteria is what keeps it honest: remove the caller,
-// watch the named row fail.
+// HOW THESE ROWS ERR — AND THE ONE WAY THEY COULD NOT ERR AT ALL. These rows
+// matched their home FILE at first, on the argument that the caller of a
+// mechanism is not always inside one bounded section. Measured, that made four
+// of the six unfailable: the integrator extracted the epic tip, deleted each
+// caller and nothing else, and only `behind_by` and `drift-needed.cjs` went red.
+// The cause is one sentence — the same document that CALLS an event also
+// documents its SCHEMA, so `log-event.cjs base_merge` and `effort_applied=` were
+// still there after step d's lines were gone; `needsBaseMerge` survived in the
+// prose explaining it, and `PARKED_RENDER_ONLY` in its own `const`. A guard that
+// certifies whatever it is pointed at is worse than no guard: `WIRED` was green
+// on a tree where four mechanisms had no caller left.
+//
+// So a home now declares WHERE the caller lives. `slice` bounds the match to the
+// paragraph or code block that calls (both anchors must be FOUND — a slice to
+// end-of-file is the false-green shape again), and a home without one uses a
+// pattern that only an invocation or an assignment can produce
+// (`entry\.behind_by\s*=`, `front\.parked_render_only\s*=`, `effort_applied=<`
+// with the template bracket the prose never writes).
+//
+// The BOUNDARY this must not cross, and it is why the slices are narrow rather
+// than the patterns broad: deleting only an event's schema documentation, with
+// its caller still in place, must NOT fail. A pin that fires on documentation
+// edits gets loosened by the next reader, and then four rows are unfailable
+// again. `judgment-contract` asserts that direction explicitly below.
+//
+// A row may declare SEVERAL homes — one per entry point that must reach the
+// mechanism. `effort_applied` and the `base_merge` event have two each (the main
+// loop's step d and the guard's own duties), and each home is its own test, so a
+// failure names which path lost its caller rather than which mechanism is
+// unreachable from somewhere.
+//
+// These rows stay weaker than `SUBJECTS`: they prove a document names its caller
+// in the right region, never that the surrounding instruction is correct. The
+// mutation check in the ticket's acceptance criteria is what keeps them honest —
+// remove the caller, watch the named row fail, per row and not per table.
 
 const fs = require('fs');
 const path = require('path');
@@ -154,16 +180,53 @@ const SUBJECTS = [
 // ── the wired-mechanism table (ADR-007 D6) ──────────────────────────────────
 //
 // One row = one mechanism, its READER (who acts on it, quoted so a failure says
-// what breaks) and the ONE home that must reach it. `caller` is the invocation
-// or assignment an agent or a script actually types — never the English words,
-// which occur all over both documents.
+// what breaks) and every home that must reach it. `caller` is the invocation or
+// assignment an agent or a script actually types — never the English words,
+// which occur all over both documents, and never a shape the event's own schema
+// documentation also has.
+
+// A SLICE is the region of a home where the CALLER lives, in the shape
+// `section()` below already reads. It is what makes a caller-deletion fail: the
+// document that calls an event also documents it, so the whole file matches
+// either way.
+const STEP_D = {
+  name: "deliver.md § step d — the main loop's post-push journal duty",
+  start: /^ {2}d\. after EACH push:/m,
+  // The babysit cycle is one fenced block and step d is its last item, so the
+  // closing fence is the section end. Anything past it is the prose ABOUT the
+  // cycle, which is exactly what must not satisfy a caller.
+  end: /^```$/m,
+};
+const FIX_ROUND_ARGS = {
+  name: 'deliver.md § the fix-round Workflow args literal',
+  // The args object, and nothing of the paragraph that explains it: that
+  // paragraph names `needsBaseMerge` twice and survived the deletion.
+  start: /^ {3}args: \{prs: \[\{id, pr, branch/m,
+  end: /^ {3}ciFixRefPath/m,
+};
+const SENTINEL_AFTER_PUSH = {
+  name: "pr-sentinel.md § After EVERY push — the guard's own attempt row",
+  start: /^## After EVERY push/m,
+  end: /^## Hard rules/m,
+};
+const SENTINEL_BASE_MERGE = {
+  name: "pr-sentinel.md § the `base-merge` duty",
+  start: /^\*\*`base-merge`\*\*/m,
+  end: /^\*\*`review-fix`\*\*/m,
+};
+
+// The invocation template a log line writes and a sentence about the field does
+// not: `effort_applied=<level|unknown>` in the command, versus "the honest
+// record is `effort_applied=unknown`" in the paragraph beside it — which is
+// INSIDE step d, so the bare key passes with the log line deleted.
+const EFFORT_APPLIED_KEY = /effort_applied=</;
+
 const WIRED = [
   {
     kind: 'wired',
     mechanism: 'behind_by',
     reader: '`front.cjs baseMoved` — a green measured against a base that has MOVED is not a green',
-    home: STATE_SYNC,
-    caller: [/entry\.behind_by\s*=/],
+    homes: [{ doc: STATE_SYNC, caller: [/entry\.behind_by\s*=/] }],
     why: 'GitHub reports `mergeStateStatus: BEHIND` only where branch protection requires up-to-date '
       + 'branches, so on an ordinary repo the compare count is the ONLY witness. With nothing writing it, '
       + 'the board offered exactly the merges `sentinel.cjs merge` refuses',
@@ -172,8 +235,7 @@ const WIRED = [
     kind: 'wired',
     mechanism: 'needsBaseMerge',
     reader: '`workflows/fix-round.mjs` — it makes the base merge step 0 of the fixer prompt',
-    home: DELIVER,
-    caller: [/needsBaseMerge/],
+    homes: [{ doc: DELIVER, slice: FIX_ROUND_ARGS, caller: [/needsBaseMerge/] }],
     why: 'until the fix round passes it, every fixer on the Workflow path measures the branch against a '
       + 'merge base that no longer exists: the test reproduces against the wrong code and the push may '
       + 'not even fast-forward',
@@ -182,18 +244,21 @@ const WIRED = [
     kind: 'wired',
     mechanism: 'the `base_merge` journal event',
     reader: '`pipeline-stats.cjs` and any reader of the journal asking which base moved in, and when',
-    home: DELIVER,
-    caller: [/log-event\.cjs base_merge/],
+    // TWO entry points perform this merge — the main loop in step d and the
+    // guard in its own duty — and neither writes the event for the other.
+    homes: [
+      { doc: DELIVER, slice: STEP_D, caller: [/log-event\.cjs base_merge/] },
+      { doc: PR_SENTINEL, slice: SENTINEL_BASE_MERGE, caller: [/log-event\.cjs base_merge/] },
+    ],
     why: '`log-event.cjs` declares the event with four required fields and `sentinel.cjs` says the duty '
-      + '"journals itself" — the script does no such thing, so the caller has to be named where the loop '
+      + '"journals itself" — the script does no such thing, so the caller has to be named where each path '
       + 'reads, or the event is a contract with no writer',
   },
   {
     kind: 'wired',
     mechanism: 'drift-needed.cjs',
     reader: 'Step 2 — which tickets get a drift judge at all',
-    home: DELIVER,
-    caller: [/drift-needed\.cjs/],
+    homes: [{ doc: DELIVER, caller: [/drift-needed\.cjs/] }],
     why: 'the script SUPERSEDES Step 2\'s prose condition and its own header says so; measured over one '
       + 'session it would have cut 17 scans (1.24M subagent tokens, 21% of the session\'s agent spend) to '
       + 'the four that produced every reuse candidate',
@@ -203,8 +268,15 @@ const WIRED = [
     mechanism: '`effort_applied` on the attempt event',
     reader: '`failure-signature.cjs` — `repeat_exhausted` may only be claimed off a prior round that '
       + 'RECORDS the depth it spent',
-    home: DELIVER,
-    caller: [/log-event\.cjs attempt/, /effort_applied=/],
+    // The guard is the second writer of attempt rows, and the one whose repair
+    // path can measure its own depth. Its line carried no `effort_applied` at
+    // all while the same file told it to record the depth with
+    // `dispatch-record.cjs --effort-applied`, which lands on a `dispatch` event
+    // the escalation rule never reads.
+    homes: [
+      { doc: DELIVER, slice: STEP_D, caller: [/log-event\.cjs attempt/, EFFORT_APPLIED_KEY] },
+      { doc: PR_SENTINEL, slice: SENTINEL_AFTER_PUSH, caller: [/log-event\.cjs attempt/, EFFORT_APPLIED_KEY] },
+    ],
     why: 'T-28-02 made the ceiling rung depend on this field and nothing on the attempt path wrote it, so '
       + '`repeat_exhausted` was unreachable — the safe direction (absent proof reads as not-yet-spent) '
       + 'and still the exact defect this phase exists to remove',
@@ -213,8 +285,10 @@ const WIRED = [
     kind: 'wired',
     mechanism: '`front.cjs --parked` says what it did',
     reader: 'the operator who passed the flag and believes the park is now durable',
-    home: FRONT,
-    caller: [/PARKED_RENDER_ONLY/],
+    // The ASSIGNMENT, in the shape `entry.behind_by =` already uses. The
+    // constant's own `const` line and its export both name `PARKED_RENDER_ONLY`
+    // and neither puts the notice on a board.
+    homes: [{ doc: FRONT, caller: [/front\.parked_render_only\s*=/] }],
     why: 'the same flag on `state-sync.cjs` writes the board the stop gate enforces on, while here it '
       + 'renders and persists nothing — measured when the gate correctly refused a stop whose board still '
       + 'listed an item the orchestrator believed it had parked (the behaviour is pinned in front.test.cjs)',
@@ -236,12 +310,15 @@ const WIRED = [
   },
 ];
 
+// Every home a row declares, whatever key it used: the `decided` row names one
+// document and no caller.
+const homesOf = (row) => row.homes || [{ doc: row.home }];
+
 // Extract a section by its two anchors, and REFUSE when either is missing: a
 // slice to end-of-file matches markers from every later duty, which is the
 // false-green shape this file exists to avoid.
-function section(spec) {
+function section(spec, text = fs.readFileSync(spec.doc, 'utf8')) {
   const label = path.basename(spec.doc);
-  const text = fs.readFileSync(spec.doc, 'utf8');
   const startMatch = text.match(spec.start);
   assert.ok(startMatch, `${label}: section anchor ${spec.start} not found — the document was restructured, so this contract is asserting nothing`);
   // Skip past the FULL matched anchor, not one character of it — a slice of
@@ -336,24 +413,83 @@ suite('every reader has a writer, or a recorded decision (ADR-007 D6)');
 // The table itself must be readable before any row can assert anything — a home
 // that moved makes every row below a no-op that passes.
 for (const row of WIRED) {
-  test(`the home declared for ${row.mechanism} exists`, () => {
-    assert.ok(fs.existsSync(row.home), `${row.home} does not exist — this row is asserting nothing`);
-  });
+  for (const home of homesOf(row)) {
+    test(`the home declared for ${row.mechanism} exists (${path.basename(home.doc)})`, () => {
+      assert.ok(fs.existsSync(home.doc), `${home.doc} does not exist — this row is asserting nothing`);
+    });
+  }
 }
 
 for (const row of WIRED.filter((r) => r.kind === 'wired')) {
-  const label = path.basename(row.home);
-  test(`${label} names the caller for ${row.mechanism}`, () => {
-    const text = fs.readFileSync(row.home, 'utf8');
-    for (const c of row.caller) {
-      assert.ok(
-        c.test(text),
-        `${row.mechanism} is read by ${row.reader}, and ${label} — the one place that must reach it — `
-        + `contains no match for ${c}. WHY IT MATTERS: ${row.why}. A mechanism nobody connected is not a mechanism.`
-      );
-    }
-  });
+  const homes = homesOf(row);
+  for (const home of homes) {
+    const where = home.slice ? home.slice.name : path.basename(home.doc);
+    const scope = homes.length > 1
+      ? 'one of the entry points that must reach it'
+      : 'the one place that must reach it';
+    test(`${where} names the caller for ${row.mechanism}`, () => {
+      // The slice is read INSIDE the test, so a document restructured out from
+      // under this row is a named failure and not a load-time crash.
+      const text = home.slice
+        ? section({ doc: home.doc, ...home.slice }).text
+        : fs.readFileSync(home.doc, 'utf8');
+      for (const c of home.caller) {
+        assert.ok(
+          c.test(text),
+          `${row.mechanism} is read by ${row.reader}, and ${where} — ${scope} — `
+          + `contains no match for ${c}. WHY IT MATTERS: ${row.why}. A mechanism nobody connected is not a mechanism.`
+        );
+      }
+    });
+  }
 }
+
+// THE BOUNDARY, ASSERTED. Every slice above exists to make a caller-deletion
+// fail; this test is the other direction, and it is the one that keeps the pin
+// installed. Deleting an event's SCHEMA documentation while its caller stands
+// must NOT fail — a pin that goes red on documentation edits gets loosened by
+// the next reader, and then the rows are unfailable again. So the assertion is
+// the mutation, standing: remove `deliver.md`'s event-schema section from the
+// text and require every DELIVER caller to still match. `pr-sentinel.md`
+// documents no event contracts — it invokes them — so the boundary is
+// `deliver.md`'s alone.
+//
+// It deliberately does NOT require the stripped section to still DECLARE those
+// events, because that requirement is the very failure it guards against: a
+// pin that reds when documentation is deleted is a pin that fires on
+// documentation edits. The residual weakness, named: if the schema
+// documentation ever moves OUT of the Telemetry section AND a caller slice
+// grows to include it, this test would strip the wrong block and prove nothing.
+// What it still catches — the case that was actually live — is a slice or a
+// pattern that matches the documentation instead of the call.
+test('deleting an event\'s schema documentation, caller in place, does not fire any row', () => {
+  const TELEMETRY = {
+    doc: DELIVER,
+    start: /^## Telemetry \(pipeline log\)/m,
+    end: /^## /m,
+  };
+  const full = fs.readFileSync(DELIVER, 'utf8');
+  const schema = section(TELEMETRY, full).text;
+  assert.ok(
+    schema.trim().length > 0,
+    'deliver.md\'s Telemetry section is empty, so this test strips nothing and asserts nothing'
+  );
+  const stripped = full.replace(schema, '\n');
+
+  for (const row of WIRED.filter((r) => r.kind === 'wired')) {
+    for (const home of homesOf(row).filter((h) => h.doc === DELIVER && h.slice)) {
+      const text = section({ doc: home.doc, ...home.slice }, stripped).text;
+      for (const c of home.caller) {
+        assert.ok(
+          c.test(text),
+          'with deliver.md\'s event-schema documentation removed and every caller left in place, '
+          + `${home.slice.name} no longer matches ${c} for ${row.mechanism} — this row is matching the `
+          + 'DOCUMENTATION and not the caller, which is how four of these six rows became unfailable'
+        );
+      }
+    }
+  }
+});
 
 for (const row of WIRED.filter((r) => r.kind === 'decided')) {
   const label = path.basename(row.home);

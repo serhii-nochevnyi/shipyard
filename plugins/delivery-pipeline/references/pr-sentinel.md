@@ -131,6 +131,22 @@ and stops on a conflict in a DECLARED one, which is real work: serve that half a
 rebase** — see the hard rule below; the PR is pushed, so a rebase is a
 force-push.
 
+**Journal the merge, and not as an attempt.** Once that push has landed:
+
+```bash
+node $SHIPYARD_ROOT/scripts/log-event.cjs base_merge ticket=<T> pr=<N> \
+     base=<the base ref you passed> head=<full 40-char sha> \
+     --graph <project>/.planning/graph
+```
+
+Nothing else writes this event: the duty is mechanical, so no agent reports it
+back, and the script does not journal itself whatever the comment beside its
+duty says. With no caller here the event is a contract with no writer and the
+journal cannot answer which base moved into what, or when. Two lines and not one
+field on the `attempt` row — charging a mechanical merge to the ticket's repair
+record would spend its attempt budget on work no hypothesis was ever wrong
+about.
+
 **`review-fix`** — reviewer feedback. Read ALL of it in one call:
 `node $SHIPYARD_ROOT/scripts/reviewers.cjs feedback <pr> [--repo owner/name]`.
 That returns unresolved threads AND the bots' PR-level comments (CodeRabbit's
@@ -315,7 +331,9 @@ branch). Record it in the report and move on.
 git -C <worktree> rev-parse HEAD                     # must equal the pushed head
 node $SHIPYARD_ROOT/scripts/reviewers.cjs reinit <pr> [--repo owner/name]
 node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> \
-     role=<ci-fix|review-fix> model=<tier> outcome=<pushed|no-op|escalate|flake> \
+     role=<ci-fix|review-fix> model=<tier> \
+     effort_applied=<level|unknown> \
+     outcome=<pushed|no-op|escalate|flake> \
      signature=<sig> head=<full 40-char sha> hypothesis="<one sentence: what you believed was wrong>" \
      --graph <project>/.planning/graph
 ```
@@ -325,6 +343,24 @@ round looks like progress and the loop never notices it is repeating itself — 
 re-propose what this one already ruled out. Write the fixer's own sentence, never
 an invented one: an invented hypothesis enters the record as something tried and
 excluded. `outcome=flake` is logged at an UNCHANGED `n`.
+
+**`effort_applied` is the depth the SPAWN carried, and it belongs on THIS row.**
+`failure-signature.cjs` reads the `attempt` row and nothing else, and it will
+only claim `repeat_exhausted` — the rung that opens the ceiling model and then
+spends a person's attention — off a prior round whose row NAMES a real level. So
+an unrecorded depth reads as not-yet-spent and the loop rethinks once more
+instead of escalating early. `dispatch-record.cjs --effort-applied` records the
+same fact about the DISPATCH, on a `dispatch` event, and is NOT a substitute for
+this key: the escalation rule never reads that event, so a guard that recorded
+only the flag has left the rung unreachable and every one of its rounds reads as
+not-yet-spent. Write what the spawn carried, never what the resolver decided —
+the two fields are separate exactly so the check cannot become a synonym. A
+fixer the Workflow tool carried has an effort to name (the one you passed it); a
+fixer the Agent tool spawned, or a fix you made in-process, has none, and the
+honest value is then the literal `unknown`, written rather than omitted. Levels
+are the resolver's own vocabulary (`low|medium|high|xhigh|max`), or `unknown`;
+anything else is WARNED about and still logged as written, and reads downstream
+exactly like absence.
 
 The attempt number is READ, never kept: `attempt-history.cjs <T> --json --graph
 <project>/.planning/graph` gives `next_n` (the `n=` this round logs) and
