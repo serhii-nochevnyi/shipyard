@@ -484,8 +484,29 @@ if (!CONFIG_REFUSAL && runtime === 'claude' && pipeline.fable === 'auto') {
 const codexConfig = path.join(process.env.CODEX_HOME || path.join(process.env.HOME || '', '.codex'), 'config.toml');
 const codexDir = path.dirname(codexConfig);
 let codexToml = '';
+// ENOENT is silence, honestly: no config.toml yet is not a finding. Any other
+// read failure (permissions, EISDIR, …) is NOT the same fact as absence — the
+// file exists and names something, but this run cannot see it, so every floor
+// and registration below is unmeasurable and would silently report nothing:
+// the exact false-green class this ticket removes one layer along.
 if (runtime === 'codex') {
-  try { codexToml = fs.readFileSync(codexConfig, 'utf8'); } catch { codexToml = ''; }
+  try {
+    codexToml = fs.readFileSync(codexConfig, 'utf8');
+  } catch (e) {
+    codexToml = '';
+    if (e.code !== 'ENOENT' && !CONFIG_REFUSAL) {
+      blockers.push({
+        what: 'codex-config-unreadable',
+        file: codexConfig,
+        head: `${codexConfig} exists and cannot be read (${e.code || e.message})`,
+        why:
+          `runtime is "codex", so floors and registrations are measured against ${codexConfig} — but it ` +
+          `cannot be read (${e.code || e.message}), so nothing below can be measured and none of it would ` +
+          'be reported: the same false-green class this ticket removes one layer along. Fix the file\'s ' +
+          'permissions or ownership so it can be read. Nothing here rewrites your config.',
+      });
+    }
+  }
 }
 
 // WHAT THIS HOST WILL ACTUALLY RUN IS NOT IN config.toml.

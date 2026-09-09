@@ -743,6 +743,32 @@ test('an unreadable registration is independent of the CLI version', () => {
   assert.equal(b[0].what, 'codex-agent-unreadable');
 });
 
+test('config.toml itself unreadable (not merely absent) is a blocker, not silence', () => {
+  // ENOENT (no config.toml yet) is honest silence. Anything else — permissions,
+  // EISDIR, whatever — means the file exists and names something this run
+  // cannot see, so every floor and registration below is unmeasurable and would
+  // otherwise report nothing: the same false-green class this ticket removes
+  // one layer along. A directory in the file's place forces a non-ENOENT read
+  // error (EISDIR) without touching permissions, which keeps the test portable.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexunreadable-'));
+  fs.mkdirSync(path.join(dir, 'config.toml'));
+  const b = blockersOf(project({ runtime: 'codex' }), [], { CODEX_HOME: dir });
+  assert.equal(b.length, 1, JSON.stringify(b));
+  assert.equal(b[0].what, 'codex-config-unreadable');
+  assert.ok(b[0].file.endsWith('config.toml'), b[0].file);
+  const r = run(project({ runtime: 'codex' }), [], { CODEX_HOME: dir });
+  assert.equal(r.status, 1, r.stdout);
+  assert.ok(r.stdout.includes('config.toml'), r.stdout);
+});
+
+test('config.toml genuinely absent (ENOENT) is silence, not a blocker', () => {
+  // The distinction this ticket draws: absence is a fact about install state
+  // ("no Codex config yet"), not about whether this run can see what is there.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexabsent-'));
+  const b = blockersOf(project({ runtime: 'codex' }), [], { CODEX_HOME: dir });
+  assert.deepEqual(b, []);
+});
+
 test('config.toml\'s own inline model still counts, and is not double-reported', () => {
   // A hand-written host legitimately puts a model in config.toml — this machine
   // does, on line 1 — so reading the registrations must ADD to that, not replace
