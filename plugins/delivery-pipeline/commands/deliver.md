@@ -1391,9 +1391,11 @@ loop:
   c. arch-review agent — judgment, never cheapened, and ONE procedure on both
      paths: MEASURE → RESOLVE → DISPATCH → RECORD. It is stated once, in
      ${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md under the `arch-review`
-     duty, and run from here verbatim — its commands spell the plugin root
-     `$SHIPYARD_ROOT/scripts`, which on this path is
-     `${CLAUDE_PLUGIN_ROOT}/scripts`: MEASURE the judged input (the diff size
+     duty, and run from here verbatim — its commands are written with
+     `$SHIPYARD_ROOT`, which names the same directory `${CLAUDE_PLUGIN_ROOT}`
+     does on this path: substitute one for the other and every
+     `/scripts/<name>.cjs` invocation there resolves unchanged.
+     MEASURE the judged input (the diff size
      the window route needs, and whether the journal already holds a contested
      verdict for this ticket), RESOLVE model and effort from the ladder as that
      entry invokes it, DISPATCH the judge (prompt
