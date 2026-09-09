@@ -417,3 +417,41 @@ because a test outside the ticket's `files_modified` enumerates that directory
 and would have counted the manifest as an agent. The ticket worked around it
 correctly and said so; if the manifest ever moves, that scan is the reason it is
 where it is.
+
+## Two guards failed on real work, one phase after they shipped (2026-09-09)
+
+ADR-006's Consequences made a witnessed mutation a required acceptance criterion
+because "an assertion nobody has seen fail is not a guard". Phase 28 produced the
+strongest evidence for that rule so far, twice, and neither was contrived.
+
+**T-27-07's 0x00 sweep caught a real NUL byte.** A guard editing
+`dispatch-record.cjs` on T-28-01's branch left a literal NUL in a doc comment —
+an editing-tool escaping accident, not a logic defect. CI failed, the guard
+signed the failure (`2570b45482b75a7e`, verdict `first`), fixed it and
+re-verified. The sweep lives in `tests/unit/source-contract.test.cjs`, whose own
+header states the class it exists for: one NUL anywhere in a file makes `grep`
+classify it as binary, "so a NUL in one of them hollows out the guards". T-27-07
+shipped that assertion having only ever seen it fail against a deliberate
+mutation. One phase later it failed against an accident nobody designed.
+
+**T-28-07 nearly shipped the inverse of its own fix.** The ticket relaxes
+`base-merge`'s dirtiness check to `git status --porcelain --untracked-files=no`.
+With that relaxation a FAILED `git status` reads as clean, because `.out` is
+empty when the command errors — so the ticket that removes "untracked means
+dirty" was about to add "a git error means clean". Copilot found it; the check
+now fails closed, naming git's own error:
+
+```js
+const dirtyCheck = git(['status','--porcelain','--untracked-files=no'], { tolerate: true });
+if (dirtyCheck.status !== 0) {
+  fail(`git status failed — cannot confirm the worktree is clean: ${dirtyCheck.err || 'unknown error'}`);
+}
+```
+
+That is the third time in two phases that a fix introduced the inverse error in
+the mechanism it was fixing — T-27-01 turned the cap's safe under-dispatch into
+an unsafe over-dispatch (which is why T-28-01 exists), and now this. The pattern
+is worth naming on its own: **relaxing a check relaxes what its FAILURE means,
+and the failure path is the one nobody writes a test for.** A ticket that widens
+a predicate should be asked, as an acceptance criterion, what its own error case
+now returns.
