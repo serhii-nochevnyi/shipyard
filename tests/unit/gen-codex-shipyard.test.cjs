@@ -594,4 +594,109 @@ test('phase 1 emits no -deep file — none of those roles exists yet', () => {
   assert.deepStrictEqual(Object.keys(g.agents), ['shipyard-inv-research']);
 });
 
+suite('the CLI floor is measured against what is EFFECTIVE (ADR-007 D4)');
+
+// The remap wins over the palette — deliberately, and that stays. What does NOT
+// follow is that it wins over the CLI: `forRole` returned the remapped model
+// before any `min_cli` comparison, so a version refusal that had just removed an
+// entry from the palette was undone by a key the same run read afterwards.
+// Measured on this repository: CLI 0.147.0 correctly drops the ceiling entry and
+// `model_profile_overrides.codex.sonnet.model` puts it straight back at `high`,
+// with the "not writing" line printed in the same run.
+//
+// Every role resolves to ONE tier on this runtime (capForRuntime caps them to the
+// workhorse), which is why remapping a single tier reaches all eleven files.
+
+test('a remap naming a palette model the CLI cannot configure is refused', () => {
+  const g = generate({
+    cliVersion: '0.147.0',
+    defaults: { model_profile_overrides: { codex: { sonnet: CEILING.model } } },
+  });
+  assert.strictEqual(g.run.status, 0, g.stderr);
+  assert.ok(!Object.values(g.agents).some((a) => a.model === CEILING.model),
+    `no agent may name ${CEILING.model} below its declared floor, however it was chosen: `
+    + Object.entries(g.agents).map(([n, a]) => `${n}=${a.model}`).join(', '));
+  // One line, naming the model and the version it needs — the same shape the
+  // palette refusal prints, because it is the same fact one step later.
+  assert.ok(g.stderr.includes(CEILING_FLOOR_CLI), `stderr must name the version needed: ${g.stderr}`);
+  assert.ok(g.stderr.includes(CEILING.model), `stderr must name the model refused: ${g.stderr}`);
+  assert.strictEqual((g.stderr.match(/not writing the remapped/g) || []).length, 1,
+    `one line, not one per role: ${g.stderr}`);
+  // The fallback is the palette entry the role would otherwise have taken — the
+  // same answer the palette's own refusal gives ("every role gets the previous
+  // palette entry instead"), and it always works.
+  assert.strictEqual(g.agents['shipyard-ci-fix'].model, FLOOR.model, g.stderr);
+  assert.strictEqual(g.agents['shipyard-integrator'].model, FLOOR.model, g.stderr);
+  assert.ok(!Object.keys(g.agents).some((n) => n.endsWith('-deep')),
+    'one usable entry leaves the escalation nothing to be');
+});
+
+test('a remapped model with NO palette entry is still written, at any CLI version', () => {
+  // The guard against over-correcting this into an allowlist, which ADR-005 D8
+  // rejected outright: GSD's catalog does not carry every model an operator has,
+  // so an unknown id cannot be told from a new one. Only a floor the palette
+  // itself DECLARES may refuse anything.
+  const g = generate({
+    cliVersion: '0.1.0',
+    defaults: { model_profile_overrides: { codex: { sonnet: 'operators-own-model' } } },
+  });
+  assert.strictEqual(g.run.status, 0, g.stderr);
+  for (const [name, a] of Object.entries(g.agents)) {
+    assert.strictEqual(a.model, 'operators-own-model', `${name} must keep the operator's remap`);
+  }
+  assert.ok(!/not writing the remapped/.test(g.stderr), `nothing to refuse: ${g.stderr}`);
+});
+
+test('a remap to a palette model the CLI CAN configure is written untouched', () => {
+  const g = generate({
+    cliVersion: CEILING_FLOOR_CLI,
+    defaults: { model_profile_overrides: { codex: { sonnet: CEILING.model } } },
+  });
+  assert.strictEqual(g.agents['shipyard-ci-fix'].model, CEILING.model, g.stderr);
+  assert.ok(!/not writing the remapped/.test(g.stderr), g.stderr);
+});
+
+test('the floor is read from the palette entry, not from the surviving palette', () => {
+  // The entry the filter DROPPED is the only place the remapped model's floor is
+  // declared, so the map has to be built before the filter runs. A lookup over
+  // the survivors alone finds nothing and the refusal never fires.
+  // Both in the PROJECT config: GSD's loader returns it outright when it exists,
+  // so a remap parked in ~/.gsd/defaults.json beside a project palette would
+  // never be read at all.
+  const g = generate({
+    cliVersion: '1.0.0',
+    palette: [
+      { model: 'usable', effort: 'high' },
+      { model: 'too-new', effort: 'high', min_cli: '2.0.0' },
+    ],
+    project: { model_profile_overrides: { codex: { sonnet: 'too-new' } } },
+  });
+  assert.strictEqual(g.agents['shipyard-ci-fix'].model, 'usable', g.stderr);
+  assert.ok(g.stderr.includes('2.0.0'), g.stderr);
+});
+
+test('the generator writes nothing outside --out', () => {
+  // It is told where the Codex home is and never touches it: placing files there
+  // is the installer's act, and this ticket adds two reads of that tree.
+  const snapshot = (dir) => {
+    const out = [];
+    const walk = (d, rel) => {
+      for (const ent of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const p = path.join(d, ent.name);
+        const r = path.join(rel, ent.name);
+        if (ent.isDirectory()) walk(p, r);
+        else out.push(`${r}:${fs.readFileSync(p, 'utf8').length}`);
+      }
+    };
+    walk(dir, '');
+    return out;
+  };
+  const f = fixture({ defaults: { model_profile_overrides: { codex: { sonnet: CEILING.model } } } });
+  const before = snapshot(f.home);
+  gen.codexModelPolicy(PLUGIN, f.codexHome, {
+    cwd: f.proj, env: { SHIPYARD_CODEX_CLI_VERSION: '0.147.0' }, log: () => {},
+  }).forRole('integrator');
+  assert.deepStrictEqual(snapshot(f.home), before, 'reading a config is not writing one');
+});
+
 done();
