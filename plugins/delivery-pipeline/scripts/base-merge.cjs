@@ -161,7 +161,14 @@ const git = (args, { tolerate = false } = {}) => {
 // conflicted paths" fail below, which prints git's stderr verbatim). Nothing is
 // matched against that text here: a locale-dependent string match on git output
 // would be a new fragility, and git's own wording is the better message.
-if (git(['status', '--porcelain', '--untracked-files=no'], { tolerate: true }).out) {
+// A `git status` that FAILS prints nothing, and reading that silence as "clean"
+// is the same bug ticket-worktree.sh's GC checks went fail-closed for: a status
+// this script could not establish is never treated as a status of "no changes".
+const dirtyCheck = git(['status', '--porcelain', '--untracked-files=no'], { tolerate: true });
+if (dirtyCheck.status !== 0) {
+  fail(`git status failed — cannot confirm the worktree is clean: ${dirtyCheck.err || 'unknown error'}`);
+}
+if (dirtyCheck.out) {
   fail('the worktree has uncommitted changes to tracked files — commit or stash before merging the base in');
 }
 

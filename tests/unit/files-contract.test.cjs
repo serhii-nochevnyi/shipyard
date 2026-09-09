@@ -218,6 +218,36 @@ test('a real tracked modification STILL refuses, with the same message', () => {
   );
 });
 
+test('a git status that FAILS is never read as a clean tree', () => {
+  // The precheck's `tolerate: true` call swallows a non-zero exit and looks only
+  // at stdout — so a `git status` that cannot run (a broken worktree, an
+  // unreadable gitdir, IO error) prints nothing and used to read exactly like a
+  // clean tree, letting the merge proceed with no cleanliness ever established.
+  // ticket-worktree.sh's own GC checks went fail-closed for the identical
+  // failure; this precheck must refuse rather than silently treat the silence
+  // as "no changes".
+  const { proj, repo } = cascade({ files: ['src/child.ts'] });
+  const realGit = spawnSync(
+    process.platform === 'win32' ? 'where' : 'command',
+    process.platform === 'win32' ? ['git'] : ['-v', 'git'],
+    { shell: process.platform !== 'win32', encoding: 'utf8' }
+  ).stdout.trim().split(/\r?\n/)[0];
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-fake-git-'));
+  const shimPath = path.join(shimDir, 'git');
+  fs.writeFileSync(
+    shimPath,
+    // base-merge invokes git as \`git -C <worktree> status …\`, so the
+    // subcommand is not always $1 — match it anywhere in the argument list.
+    `#!/bin/sh\nfor a in "$@"; do\n  if [ "$a" = "status" ]; then\n    echo "fatal: fake git status failure" >&2\n    exit 128\n  fi\ndone\nexec "${realGit}" "$@"\n`
+  );
+  fs.chmodSync(shimPath, 0o755);
+  const r = spawnSync(process.execPath, [BASE_MERGE, 'T-01-02', '--worktree', repo, '--base', 'epic', '--no-fetch'], {
+    cwd: proj, encoding: 'utf8', env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}` },
+  });
+  assert.strictEqual(r.status, 2, 'a failed status check must refuse, not proceed:\n' + r.stdout + r.stderr);
+  assert.ok(/git status failed/i.test(r.stderr), r.stderr);
+});
+
 test('an untracked path the incoming base ADDS refuses, and git names the path', () => {
   // The case the relaxed pre-check stops covering. `git merge` itself is the
   // guard here, so the assertion is on git's own refusal — and deliberately not
