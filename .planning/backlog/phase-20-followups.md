@@ -123,7 +123,21 @@ a test that cannot fail is worse than a missing one, because it reports safety.
 
 ## 6. CodeRabbit did not engage on any of the six PRs — OPERATIONAL, STILL LIVE
 
-**STILL LIVE — now EIGHT phases, re-measured 2026-09-09.** Phase 27 delivered
+> **CLOSED 2026-09-09 — answered by the operator: CodeRabbit is DISABLED on this
+> repository, deliberately.** Not a broken installation, not an authorization
+> lapse. The measurement below stands as a measurement and stops being a
+> question: zero reviews and zero comments across PRs #1-#75 is what a disabled
+> reviewer looks like. Copilot has been the whole bot-review leg for eight
+> phases and found four real defects in phase 27 and five in phase 28's first
+> wave, which is the honest measure of what one reviewer covers here.
+>
+> What the answer creates is smaller and precise, recorded in
+> [[a-disabled-reviewer-has-no-way-to-say-so]]: the conveyor has no way to be
+> TOLD a reviewer is off, so it asks once per PR and prints an "is it installed?"
+> diagnostic that reads as a possible defect to every reader — it read that way
+> to two phases of guards, to an external revision, and to this orchestrator.
+
+**STILL LIVE when written — was EIGHT phases, re-measured 2026-09-09.** Phase 27 delivered
 ten PRs (#63-#72) and `reviewers.cjs feedback` reported
 `coderabbit.engaged: false, last_activity: null` on every one of them, every
 round; `reinit` said "the previous one is still unanswered (CodeRabbit has never

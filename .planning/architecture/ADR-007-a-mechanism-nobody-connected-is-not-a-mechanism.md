@@ -215,9 +215,21 @@ ones the NEXT phase's own delivery depends on come first.
   bounds concurrency and measures no consumption) and it needs reliable quota
   telemetry first: an unavailable reading must not be read as zero or as a full
   tank. Its own investigation.
-- **CodeRabbit's non-engagement** — eight phases, PRs #1–#72, zero reviews and
-  zero comments. An app installation and authorization fact that no amount of
-  reading this repository can settle.
+- **CodeRabbit's non-engagement** — eight phases, PRs #1–#75, zero reviews and
+  zero comments. *(Settled 2026-09-09, after this ADR was accepted: the operator
+  answered that CodeRabbit is DISABLED on this repository, deliberately. The
+  sentence below was right that the repository could not settle it, and wrong to
+  leave it framed as a possible defect — so the correction is recorded here
+  rather than in a later document, which is D8's own rule applied to this ADR.)*
+  What remains is one narrow gap, and it is genuinely this ADR's family: the
+  conveyor has no way to be TOLD a reviewer is off. `reviewers.cjs` hardcodes
+  `coderabbitai` and neither it, `pipeline-config.cjs` nor `capability.json`
+  carries any such knob, so it asks once per PR — it does back off correctly
+  after an unanswered ask, so this is a diagnostic line that reads as a defect,
+  not a comment stream. Recorded as
+  `a-disabled-reviewer-has-no-way-to-say-so.md`; NOT adopted into phase 28,
+  because a decision this ADR does not carry is exactly the quiet widening its
+  own Consequences warns about.
 - **`delivery-rules`' missing rule** that routing around a defect outside a
   ticket's scope means recording it. Real, and a prompt contract rather than a
   mechanism.
