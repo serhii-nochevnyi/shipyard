@@ -1,3 +1,26 @@
+> **RE-FRAMED 2026-09-09 by the phase-28 integrator, and the re-framing is the
+> useful part: Codex is the CLEAREST instance, not the boundary.**
+>
+> The boundary is "wherever the dispatching mechanism cannot carry an effort",
+> which also includes **the Claude guard fixing something in-process** and **the
+> Agent fallback** — neither of which is a runtime question. Read this note's
+> title as naming an example.
+>
+> And the integrator split off a half that is NOT the same problem and IS
+> fixable, which this note originally folded in: `references/pr-sentinel.md` DOES
+> tell the guard to record the applied depth — via
+> `dispatch-record.cjs --effort-applied`, which lands on a **`dispatch`** event,
+> while `computeVerdict` reads the **`attempt`** row. So the one repair path that
+> CAN measure its depth was recording it where nothing reads it: a writer with no
+> reader beside a reader with no writer, in the phase's own subject. That half
+> shipped as **T-28-09** (PR #82, merged) and is closed.
+>
+> What remains open is only the half where no depth EXISTS to record, and its
+> remedy reverses ADR-007 D2's own "`unknown` is not evidence" sentence — a
+> decision about when the conveyor stops repairing on its own, which earns an ADR
+> and a checkpointed ticket rather than an edit. The proposed policy below stands;
+> its scope is wider than the title suggests.
+
 # On Codex the `-deep` variants became unreachable by their own evidence rule
 
 Found 2026-09-09 by the arch-review judge on phase 28's last merge, reported as
