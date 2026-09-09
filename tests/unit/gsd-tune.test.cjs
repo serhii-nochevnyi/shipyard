@@ -806,6 +806,34 @@ test('a relative config_file resolves against the Codex home', () => {
   assert.equal(b[0].what, 'codex-model-floor');
 });
 
+test('a `[agents.*]`-shaped LITERAL inside a multi-line string is not a header (Copilot, PR #73)', () => {
+  // The same class of bug merge-codex-config.cjs's scanner exists to prevent
+  // (ADR-004 D6): a table header is TOML grammar, not a line shape. Here a
+  // multi-line string value contains text that LOOKS like a header and a
+  // config_file assignment — on base this is misread as a real registration
+  // pointing at a file that does not exist, producing a false
+  // `codex-agent-unreadable` blocker on an otherwise-valid config.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexmlstring-'));
+  const realFile = path.join(dir, 'agents', 'shipyard-integrator.toml');
+  fs.mkdirSync(path.join(dir, 'agents'), { recursive: true });
+  fs.writeFileSync(realFile, `name = "shipyard-integrator"\nmodel = "${CEILING.model}"\n`);
+  fs.writeFileSync(path.join(dir, 'config.toml'), [
+    '[agents.shipyard-integrator]',
+    'description = "real"',
+    `config_file = "${realFile}"`,
+    '',
+    '[mcp_servers.example]',
+    'notes = """',
+    '[agents.decoy]',
+    'config_file = "/no/such/file.toml"',
+    '"""',
+  ].join('\n'));
+  const b = blockersOf(project({ runtime: 'codex' }), [],
+    { CODEX_HOME: dir, PATH: stubCli({ codex: OLD_CODEX }) });
+  assert.equal(b.length, 1, `only the real registration's floor, not a decoy blocker: ${JSON.stringify(b)}`);
+  assert.equal(b[0].what, 'codex-model-floor');
+});
+
 test('a Claude project still sees none of it', () => {
   // Unchanged gating, asserted again on the new read path: a dual-runtime host
   // has these files whatever this project delivers on.

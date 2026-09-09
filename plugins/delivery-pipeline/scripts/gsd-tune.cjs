@@ -526,10 +526,50 @@ if (runtime === 'codex') {
 // unrelated table is not an agent registration, and treating one as such would
 // put a false blocker in front of every Codex delivery — the unsafe direction for
 // a preflight, and the one that gets a gate switched off.
+// A `[agents.*]`-shaped or `config_file = "..."`-shaped LITERAL inside a
+// multi-line string is TEXT, not TOML grammar — the same class of bug
+// `merge-codex-config.cjs`'s scanner exists to prevent (ADR-004 D6, "a table
+// header is TOML grammar, not a line shape"). This reader is read-only and
+// report-only (never a reason to reach for that scanner's full machinery, and
+// this file's own `files_modified` does not extend there), so it carries just
+// enough of the same idea: blank out the CONTENT of every triple-quoted
+// multi-line string before the line-shaped scan below ever sees it. A `[` or
+// `config_file` inside one can then never be mistaken for a header or an
+// assignment — the unsafe direction for a preflight, since a false header
+// here produces a false `codex-agent-unreadable`/`codex-model-floor` blocker
+// on an otherwise-valid config.
+function blankMultilineStrings(toml) {
+  const lines = toml.split('\n');
+  const out = [];
+  let delim = null;
+  for (const raw of lines) {
+    if (delim) {
+      const end = raw.indexOf(delim);
+      if (end === -1) { out.push(''); continue; }
+      out.push(raw.slice(end + delim.length));
+      delim = null;
+      continue;
+    }
+    let line = '';
+    let rest = raw;
+    for (;;) {
+      const m = rest.match(/"""|'''/);
+      if (!m) { line += rest; break; }
+      line += rest.slice(0, m.index);
+      const after = rest.slice(m.index + 3);
+      const close = after.indexOf(m[0]);
+      if (close === -1) { delim = m[0]; break; }
+      rest = after.slice(close + 3);
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 function registeredAgentFiles(toml) {
   const files = [];
   let inAgents = false;
-  for (const line of toml.split('\n')) {
+  for (const line of blankMultilineStrings(toml).split('\n')) {
     const header = line.match(/^\s*\[([^\]]+)\]/);
     if (header) { inAgents = /^agents\./.test(header[1].trim()); continue; }
     if (!inAgents) continue;
