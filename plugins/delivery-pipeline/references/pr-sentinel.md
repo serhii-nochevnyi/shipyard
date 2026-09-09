@@ -146,24 +146,74 @@ verdict — `pipeline-config.cjs model review-fix --json [--no-code-change]
 [--signature-state <verdict>]` — it is a repair role, so a `repeat` deepens the
 effort at the same tier.
 
-**`arch-review`** — green, but no verdict is recorded. Run the architecture judge
-(`references/arch-review.md`, judgment work — do not cheapen it) and append the
-trailer as the LAST line of the PR body (it survives a squash merge). Threads are
-NOT part of this action any more: they are serviced by `review-fix` as soon as
-they appear, ahead of a still-running CI, so by the time a PR reaches here the
-thread count is already zero. A `violation` or `adr-outdated` verdict ends the
-action — do not undraft a PR the judge just faulted; that is fix work or a human's
-call, and bundling the two used to make both outcomes look alike.
+**`arch-review`** — green, but no verdict is recorded. **Judgment is ONE
+procedure, and this is where it is stated: measure → resolve → dispatch →
+record.** All four, in that order, on whichever path reached this PR — the
+inline cycle in `commands/deliver.md` points HERE instead of restating them,
+because two copies drifting apart is how this path came to read a
+`verdict=violation` that nothing on it ever wrote.
 
-  A RE-judgement of a PR whose journal already holds an `arch_review …
-  verdict=violation` is the judge's own escalation: on the Codex bundle dispatch
-  `$shipyard-arch-review-deep` (the same contract at the palette's ceiling
-  model), because a second reading at the same depth is what produced the
-  contested verdict in the first place. There is no `$shipyard-integrator-deep`
-  — the integrator runs at the ceiling on every call.
+1. **MEASURE the judged input.** Two facts, and an absent measurement cannot
+   fire the route that needs it, by design. The SIZE of what the judge reads —
+   bytes ÷ 4 over `gh pr diff <pr> --repo <owner/name>` plus the ADR corpus it
+   re-reads — is the `<n>` of step 2. Whether this is a CONTESTED re-judgement
+   is a fact about the journal and not an impression:
 
-Run the degenerate-green detector over the same diff you just judged, and record
-what it found beside the architecture verdict:
+   ```bash
+   grep '"event":"arch_review"' <project>/.planning/graph/delivery-log.jsonl \
+     | grep '"ticket":"<T>"' | grep '"verdict":"violation"'
+   ```
+
+   All three greps, not the first alone: `"event":"arch_review"` matches every
+   ticket's line, so the bare probe would read another ticket's `violation` — or
+   this ticket's own `conform` — as a contest. A prior line for THIS ticket
+   carrying `verdict=violation` is what `--contested` reports.
+
+2. **RESOLVE model and effort from the ladder** — never assumed, and never
+   inherited from whatever this guard itself is running at:
+
+   ```bash
+   node $SHIPYARD_ROOT/scripts/pipeline-config.cjs model arch-review --json \
+        --input-tokens <n> [--contested]
+   ```
+
+   `opus`/`xhigh` ordinarily, and the ceiling only where the input it is about
+   has actually grown. Where the harness passes the resolved pair into every
+   call, that answer IS the escalation and there is no second agent to name. On
+   the Codex bundle a `.toml` carries one model and nothing is passed per
+   dispatch, so a contested re-judgement is a different AGENT instead:
+   `$shipyard-arch-review-deep`, the same contract at the palette's ceiling
+   model — a second reading at the same depth is what produced the contested
+   verdict in the first place. There is no `$shipyard-integrator-deep`; the
+   integrator runs at the ceiling on every call, and an agent the generator did
+   not write does not exist, so check before naming one.
+
+3. **DISPATCH the judge**, judgment work — do not cheapen it. Its prompt is
+   `references/arch-review.md`, plus the diff it is about and
+   `.planning/architecture/`; then append the trailer as the LAST line of the PR
+   body (it survives a squash merge). Threads are NOT part of this action any
+   more: they are serviced by `review-fix` as soon as they appear, ahead of a
+   still-running CI, so by the time a PR reaches here the thread count is
+   already zero. A `violation` or `adr-outdated` verdict ends the action — do
+   not undraft a PR the judge just faulted; that is fix work or a human's call,
+   and bundling the two used to make both outcomes look alike.
+
+4. **RECORD the verdict — every verdict, before you leave this PR:**
+
+   ```bash
+   node $SHIPYARD_ROOT/scripts/log-event.cjs arch_review ticket=<T> pr=<N> \
+        verdict=<conform|violation|adr-outdated> head=<full 40-char sha> \
+        --graph <project>/.planning/graph
+   ```
+
+   This step is the ONLY writer of the fact step 1 reads. Skip it and step 2's
+   escalation is unreachable forever: the guard asks the journal whether this
+   verdict was already contested, and the journal was never told. `head` is the
+   full forty characters of the head the judge actually read — an abbreviation
+   is refused, because a reader holding only the journal cannot lengthen one.
+
+Alongside step 3, run the degenerate-green detector over the same diff the judge
+read, and record what it found beside the architecture verdict:
 
 ```bash
 node $SHIPYARD_ROOT/scripts/degenerate-green.cjs <T> --base <base> \
