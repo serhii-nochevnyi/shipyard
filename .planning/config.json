@@ -109,6 +109,6 @@
     "gsd-code-reviewer": "opus"
   },
   "delivery_pipeline": {
-    "max_concurrent_agents": 8
+    "max_concurrent_agents": 4
   }
 }

@@ -71,13 +71,31 @@ distinguishes their work; the prose is what changes.
   ≥ 2.1.255 in the image (Fable 5.1; Opus 5 needs 2.1.219), gsd-core 1.13.0 in
   the image and in the Codex smoke. An image pin is verified by a human — the
   CI never builds it — so the ticket carries a checkpoint.
-- **D2 — Codex agents carry EFFORT, not a model.** The generator stops writing
-  `model =` from the catalog. `model_reasoning_effort` stays, because effort is
-  what differentiates the roles on a capped runtime. A `model =` line is
-  written only when the user's GSD remap names one for that tier — resolved
-  through GSD's resolver, not by reading `runtimeTierDefaults` directly. No
-  model id is hardcoded anywhere in shipyard: Astra reaches the agents through
-  the user's own `config.toml` the moment nothing overrides it.
+- **D2 — Codex agents carry EFFORT, not a model.** ~~The generator stops
+  writing `model =` from the catalog.~~ ~~No model id is hardcoded anywhere in
+  shipyard: Astra reaches the agents through the user's own `config.toml` the
+  moment nothing overrides it.~~ — **both clauses SUPERSEDED by ADR-005 D6/D7/D8
+  (struck 2026-09-09). The generator writes `model =` on purpose now**: the
+  Codex palette (`pipeline.codex_models`, declared in `capability.json`) is an
+  ordered list of `{model, effort, min_cli}`, its first entry is the workhorse
+  floor every role gets and its last is the ceiling the integrator takes
+  unconditionally, and D8's `-deep` variants exist precisely because a static
+  `.toml` cannot be re-parameterised per dispatch. So a model id IS written into
+  eleven agent files, and the palette default is the one place an id may appear
+  as a value — enforced by `tests/unit/gen-codex-shipyard.test.cjs` over
+  `plugins/` and `scripts/`.
+
+  What survives is the rest of the decision, intact: `model_reasoning_effort`
+  stays and is still what differentiates the roles per file; and a user's GSD
+  remap still OUTRANKS the palette, resolved through GSD's own resolver rather
+  than by reading `runtimeTierDefaults` directly.
+
+  *Struck rather than rewritten, in D3's format and for D3's reason: the
+  sentence is why the decision existed, so a reader who remembers it must see
+  that it moved. Flagged by the integrator of phase 27's epic — ADR-005's
+  `Supersedes`, rewritten by T-27-08 in that same epic, already named this
+  clause retired while the clause itself still stood, which is the exact defect
+  one document over that D3's own note describes.*
 - **D3 — ~~`fable` stays the default for judgment on Claude~~ — SUPERSEDED by
   ADR-005 D1/D4 (amended 2026-09-08). `fable` is the default for NOTHING; it is
   a ceiling earned through three mechanical routes, and the prose names the
