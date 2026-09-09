@@ -142,6 +142,10 @@ for (const [id, t] of Object.entries(tickets)) {
 
   const match = matchTicketPr(id, t, prsFor(t));
   const pr = match ? match.pr : null;
+  // The guard's own merge record for this ticket, if it made one.
+  const guardMerge = events.find((e) => e.event === 'merge' && e.by === 'sentinel') || null;
+  const checkpointMerged = !!(pr && pr.state === 'MERGED' && t.human_checkpoint
+    && withinWindow(pr.mergedAt));
   const row = {
     ticket: id,
     phase: t.phase,
@@ -165,18 +169,38 @@ for (const [id, t] of Object.entries(tickets)) {
     // Windowed like the other warnings: a merge a person made last week is a
     // fact, not a thing to act on, and repeating it every run buries the one
     // that happened this morning.
-    // EXCEPT on a human_checkpoint ticket, where an unguarded merge is the
-    // contract, not an anomaly: `sentinel.cjs merge` refuses those outright
-    // ("the merge is the human's by contract"), so a guarded one is impossible
-    // by construction. Measured before this exclusion: 10 of 23 tickets flagged,
-    // and all 10 were exactly the 10 checkpoints — a warning that fires only on
-    // correct behaviour, which is how a user learns to ignore warnings. They are
-    // counted separately below instead, as a neutral fact.
-    checkpoint_merge: !!(pr && pr.state === 'MERGED' && t.human_checkpoint
-      && withinWindow(pr.mergedAt)),
+    // EXCEPT on a human_checkpoint ticket, where a merge outside this predicate
+    // is the contract and not an anomaly. Measured before the exclusion: 10 of
+    // 23 tickets flagged, and all 10 were exactly the 10 checkpoints — a warning
+    // that fires only on correct behaviour, which is how a user learns to ignore
+    // warnings. Checkpoints are attributed by the three predicates below instead.
     unguarded_merge: !!(pr && pr.state === 'MERGED' && !events.some((e) => e.event === 'merge')
       && !t.human_checkpoint
       && withinWindow(pr.mergedAt)),
+    // WHO merged a checkpoint, read off the `by`/`preauthorized` fields the
+    // guard's own `merge` event already carries. This was ONE neutral count, on
+    // the reasoning that `sentinel.cjs merge` refuses checkpoints outright ("the
+    // merge is the human's by contract"), so a guarded one is impossible by
+    // construction — true when it was written, and retired by a mechanism three
+    // files away: `delivery.preauthorized` shipped, `needsHuman()` returns false
+    // for a pre-authorized ticket, and the guard merges it after re-verifying
+    // every other gate. Measured on phase 27: three of the eight PRs the report
+    // called "merged by a person" were `{"by":"sentinel","preauthorized":true}`
+    // in the same journal this script reads.
+    //
+    // The discriminator is `by: 'sentinel'`, never the mere presence of a `merge`
+    // event: journals in the wild carry records a run wrote by hand (see the
+    // dedupe below), and such a record proves a merge happened, not who made it.
+    //
+    // Two legitimate cases, counted SEPARATELY because the pre-authorized one is
+    // the only measurement of what asking that question at plan time actually
+    // saved — the sole evidence that asking it was worth the operator's
+    // attention. The third is neither: a guard merge with NO pre-authorization
+    // recorded means the guard merged a checkpoint nobody authorized, so it is a
+    // WARNING. Folded into the neutral line, it was invisible.
+    checkpoint_human_merge: checkpointMerged && !guardMerge,
+    checkpoint_preauthorized_merge: checkpointMerged && !!guardMerge && guardMerge.preauthorized === true,
+    checkpoint_unauthorized_merge: checkpointMerged && !!guardMerge && guardMerge.preauthorized !== true,
   };
   rows.push(row);
 }
@@ -348,16 +372,40 @@ if (unguarded.length) {
     'going around its own guard, and this line used to report both identically.'
   );
 }
-// Stated, not warned. A checkpoint ticket CANNOT have a guarded merge — the gate
-// refuses those by contract — so counting them as anomalies made 10 of 23 tickets
-// look wrong while every one of them was correct.
-const checkpointMerges = rows.filter((r) => r.checkpoint_merge);
-if (checkpointMerges.length) {
+// Stated, not warned — twice, because a checkpoint can legitimately be landed by
+// either actor and one line cannot say both. Neither line may name a ticket the
+// other one landed: the single line this replaced credited the guard's three
+// pre-authorized merges to a person, and read as a correct sentence while doing
+// it.
+const label8 = (list) =>
+  list.slice(0, 8).map((r) => `${r.ticket}#${r.pr}`).join(', ') +
+  (list.length > 8 ? `, +${list.length - 8} more` : '');
+
+const humanMerges = rows.filter((r) => r.checkpoint_human_merge);
+if (humanMerges.length) {
   console.log(
-    `[${windowLabel}] ${checkpointMerges.length} human_checkpoint ticket PR(s) were merged by a person, as the ` +
-    'contract requires (the guard refuses them): ' +
-    checkpointMerges.slice(0, 8).map((r) => `${r.ticket}#${r.pr}`).join(', ') +
-    (checkpointMerges.length > 8 ? `, +${checkpointMerges.length - 8} more` : '')
+    `[${windowLabel}] ${humanMerges.length} human_checkpoint ticket PR(s) were merged by a person, as the ` +
+    `contract requires (no merge of the guard's is recorded for them): ${label8(humanMerges)}`
+  );
+}
+// Worth its own line rather than a footnote: this is the measurement of how much
+// waiting the pre-authorization question saved, and the only evidence that
+// asking it was worth the operator's attention.
+const preauthorizedMerges = rows.filter((r) => r.checkpoint_preauthorized_merge);
+if (preauthorizedMerges.length) {
+  console.log(
+    `[${windowLabel}] ${preauthorizedMerges.length} human_checkpoint ticket PR(s) were merged by the guard under ` +
+    `pre-authorization — a plan-time approval that saved that many waits: ${label8(preauthorizedMerges)}`
+  );
+}
+const unauthorizedCheckpointMerges = rows.filter((r) => r.checkpoint_unauthorized_merge);
+if (unauthorizedCheckpointMerges.length) {
+  console.log(
+    `⚠ [${windowLabel}] ${unauthorizedCheckpointMerges.length} human_checkpoint ticket PR(s) were merged by the ` +
+    `guard with NO pre-authorization recorded: ${label8(unauthorizedCheckpointMerges)}. ` +
+    'Either `sentinel.cjs merge` landed a checkpoint nobody authorized, or an approval was made and never ' +
+    'written into the plan\'s `delivery.preauthorized` — the journal cannot tell those apart, and both want ' +
+    'a person.'
   );
 }
 if (stranded.length) {
