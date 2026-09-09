@@ -74,6 +74,20 @@ Each of these is correct code that nothing reaches:
   exists because neither alone suffices: `mergeStateStatus: BEHIND` appears ONLY
   where branch protection requires up-to-date branches, while `behindBy()` works
   everywhere.
+
+  *(Corrected 2026-09-09 by T-28-06's executor, and the correction matters: this
+  was a RECORDED DECISION, not an oversight. The comment above `REVIEW_FIELDS`
+  argued the cost — "no `gh pr list` field carries it, so it would cost one
+  `gh api compare` PER PR PER ROUND, and state-sync's wall time is the
+  conveyor's tick rate". So it belonged in D6's second category, beside
+  `unresolved_count`, and this ADR filed it in the first. The reversal that
+  followed is measured rather than reasoned: `state-sync.cjs` already makes one
+  `gh pr checks` call per OPEN PR — CI state has no bulk field — so the compare
+  is one more call of a class the round already pays, and the 41s-vs-7s
+  measurement is about the BULK 1000-row window, not the open-only pass. It also
+  cannot "ride the OPEN-only pass" as D6 said, because no list field carries a
+  behind count; it is a separate call in the same branch. Recorded here rather
+  than in a later document, which is D8's own rule applied to this ADR.)*
 - **`drift-needed.cjs` is implemented and tested and called from no production
   command or reference.**
 - **`--parked` on `front.cjs` renders and persists nothing.** The same flag on
