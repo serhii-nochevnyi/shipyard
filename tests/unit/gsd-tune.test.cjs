@@ -743,6 +743,32 @@ test('an unreadable registration is independent of the CLI version', () => {
   assert.equal(b[0].what, 'codex-agent-unreadable');
 });
 
+test('config.toml itself unreadable (not merely absent) is a blocker, not silence', () => {
+  // ENOENT (no config.toml yet) is honest silence. Anything else — permissions,
+  // EISDIR, whatever — means the file exists and names something this run
+  // cannot see, so every floor and registration below is unmeasurable and would
+  // otherwise report nothing: the same false-green class this ticket removes
+  // one layer along. A directory in the file's place forces a non-ENOENT read
+  // error (EISDIR) without touching permissions, which keeps the test portable.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexunreadable-'));
+  fs.mkdirSync(path.join(dir, 'config.toml'));
+  const b = blockersOf(project({ runtime: 'codex' }), [], { CODEX_HOME: dir });
+  assert.equal(b.length, 1, JSON.stringify(b));
+  assert.equal(b[0].what, 'codex-config-unreadable');
+  assert.ok(b[0].file.endsWith('config.toml'), b[0].file);
+  const r = run(project({ runtime: 'codex' }), [], { CODEX_HOME: dir });
+  assert.equal(r.status, 1, r.stdout);
+  assert.ok(r.stdout.includes('config.toml'), r.stdout);
+});
+
+test('config.toml genuinely absent (ENOENT) is silence, not a blocker', () => {
+  // The distinction this ticket draws: absence is a fact about install state
+  // ("no Codex config yet"), not about whether this run can see what is there.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexabsent-'));
+  const b = blockersOf(project({ runtime: 'codex' }), [], { CODEX_HOME: dir });
+  assert.deepEqual(b, []);
+});
+
 test('config.toml\'s own inline model still counts, and is not double-reported', () => {
   // A hand-written host legitimately puts a model in config.toml — this machine
   // does, on line 1 — so reading the registrations must ADD to that, not replace
@@ -777,6 +803,34 @@ test('a relative config_file resolves against the Codex home', () => {
   const b = blockersOf(project({ runtime: 'codex' }), [],
     { CODEX_HOME: codexHome, PATH: stubCli({ codex: OLD_CODEX }) });
   assert.equal(b.length, 1, JSON.stringify(b));
+  assert.equal(b[0].what, 'codex-model-floor');
+});
+
+test('a `[agents.*]`-shaped LITERAL inside a multi-line string is not a header (Copilot, PR #73)', () => {
+  // The same class of bug merge-codex-config.cjs's scanner exists to prevent
+  // (ADR-004 D6): a table header is TOML grammar, not a line shape. Here a
+  // multi-line string value contains text that LOOKS like a header and a
+  // config_file assignment — on base this is misread as a real registration
+  // pointing at a file that does not exist, producing a false
+  // `codex-agent-unreadable` blocker on an otherwise-valid config.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexmlstring-'));
+  const realFile = path.join(dir, 'agents', 'shipyard-integrator.toml');
+  fs.mkdirSync(path.join(dir, 'agents'), { recursive: true });
+  fs.writeFileSync(realFile, `name = "shipyard-integrator"\nmodel = "${CEILING.model}"\n`);
+  fs.writeFileSync(path.join(dir, 'config.toml'), [
+    '[agents.shipyard-integrator]',
+    'description = "real"',
+    `config_file = "${realFile}"`,
+    '',
+    '[mcp_servers.example]',
+    'notes = """',
+    '[agents.decoy]',
+    'config_file = "/no/such/file.toml"',
+    '"""',
+  ].join('\n'));
+  const b = blockersOf(project({ runtime: 'codex' }), [],
+    { CODEX_HOME: dir, PATH: stubCli({ codex: OLD_CODEX }) });
+  assert.equal(b.length, 1, `only the real registration's floor, not a decoy blocker: ${JSON.stringify(b)}`);
   assert.equal(b[0].what, 'codex-model-floor');
 });
 

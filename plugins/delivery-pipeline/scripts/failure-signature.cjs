@@ -21,15 +21,21 @@
 // So a failure is identified by a normalized SIGNATURE — error class + test/job
 // id + file, hashed — and the policy reads that signature's HISTORY:
 //
-//   changed              → progress; hold the tier, continue
-//   same twice           → repeat; change STRATEGY, not tier (T-20-02)
-//   same a THIRD time    → repeat_exhausted; the deeper effort has been spent on
+//   nothing on record     → first; the opening attempt, strategy `fix`
+//   a DIFFERENT signature
+//   already on record     → progress; hold the tier, continue
+//   seen again, moved head→ repeat; change STRATEGY, not tier (T-20-02) — WHATEVER
+//                          appeared in between (ADR-007 D2)
+//   a THIRD time, and a
+//   round on record spent
+//   the depth            → repeat_exhausted; the deeper effort has been spent on
 //                          this failure already, so the next rung is the ceiling
-//                          MODEL (ADR-005 D4's second route) or a human
+//                          MODEL (ADR-005 D4's second route) or a human. Without
+//                          that record it is `repeat` again
 //   same at the same HEAD→ flake_candidate; re-run the job once before dispatching
 //   K distinct, no green → plan_defect; a person in the morning, not now (T-20-03)
 //
-// Four properties are load-bearing, and each is pinned by a test:
+// Five properties are load-bearing, and each is pinned by a test:
 //
 //  1. NORMALIZATION BEFORE EXTRACTION. Two prints of one failure differ by
 //     timestamps, ANSI colour, durations, line:column suffixes and the absolute
@@ -65,11 +71,44 @@
 //     worktrees too, hence `--graph` in ANY position and the refusal when it is
 //     absent — drift-record's rule, and for its reason: a record written beside
 //     no ticket graph is not misplaced, it is unreadable.
+//
+//  5. RECURRENCE, NOT ADJACENCY — AND EXHAUSTION MEANS THE DEPTH WAS SPENT
+//     (ADR-007 D2). The history is a SET with adjacency, not a count. `seen` was
+//     already a count of the signature's occurrences in the window, but the test
+//     that chose the verdict read only the LAST pair, so `A → B → A` came out
+//     `progress` — a failure the ticket had already attempted, read as novel. And
+//     `repeat` is the only verdict whose strategy is `rethink`, so the ladder
+//     skipped thinking again entirely and went from `progress` to the state that
+//     opens the ceiling model and then hands the ticket to a person: measured on
+//     four real forty-character heads at `--k 3` as
+//     `first → progress → progress → repeat_exhausted`, with two distinct
+//     signatures keeping the k-rule from intervening either.
+//     The mirror of that fix is what `repeat_exhausted` is now allowed to CLAIM.
+//     It says the deeper effort has already been spent on this exact failure, so
+//     it must be read off the record rather than off the count: a prior round
+//     carrying this signature, and not the first one (that round ran under `fix`),
+//     whose `effort_applied` names a real level. `unknown` and an absent field are
+//     both NOT evidence — absent proof reads as not-yet-spent, which keeps the
+//     failure direction on rethinking once more rather than escalating early.
+//     The level itself is not compared against a ladder here: the runtimes
+//     disagree about what the deeper rung IS (`max` on the Workflow path, `high`
+//     on the flat Codex axis), and re-deriving it would mean reading the config
+//     this file deliberately does not read. What the row records is what the round
+//     carried.
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
+// One vocabulary for a depth, shared with the other writer of it
+// (`dispatch-record.cjs`'s `--effort-applied`) and with the resolver that returns
+// it. Re-listing the levels here would be a copy that goes stale, and this one is
+// load-bearing: a level this file does not recognise is not evidence, so a
+// divergence would silently stop the ceiling from ever opening. Requiring the
+// module runs nothing — its config read is inside its own `require.main` guard —
+// so `compute`, which must work in a worktree with no project at all, is
+// untouched.
+const { EFFORTS } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 // The pinned enum. T-20-02's ladder and T-20-06's loop switch on these literals,
 // so a synonym or an eighth word is a silent no-op in whatever reads it.
@@ -77,18 +116,31 @@ const VERDICTS = ['first', 'progress', 'repeat', 'repeat_exhausted', 'flake_cand
 
 const DEFAULT_K = 3; // the same default T-20-02 declares as pipeline.plan_defect_signatures
 
-// How many PRIOR attempts carrying this signature make the current failure
-// "exhausted". `seen` counts priors only — the verdict is computed BEFORE the
-// round it is about is journalled (deliver.md a2 runs before step d) — so two
-// priors plus the failure in hand is the same failure a THIRD time:
+// How many PRIOR attempts carrying this signature bring the current failure to
+// the threshold of "exhausted". `seen` counts priors only — the verdict is
+// computed BEFORE the round it is about is journalled (deliver.md a2 runs before
+// step d) — so two priors plus the failure in hand is the same failure a THIRD
+// time:
 //
 //   1st  → first            strategy `fix`
 //   2nd  → repeat           strategy `rethink`, and the effort deepens to `max`
-//   3rd  → repeat_exhausted the deepest thinking has already failed on this
-//                           signature, so the next rung is the ceiling model
-//                           (ADR-005 D4 R2) and after that a human, never a
-//                           third model at the same depth.
+//   3rd  → repeat_exhausted IF a round on record spent that depth on this exact
+//                           signature: the deepest thinking has already failed on
+//                           it, so the next rung is the ceiling model (ADR-005
+//                           D4 R2) and after that a human, never a third model at
+//                           the same depth.
+//                           With no such record it is `repeat` again — the count
+//                           is the THRESHOLD and the record is the EVIDENCE, and
+//                           this rung spends a person's attention, so it is not
+//                           reached on an unproven claim (ADR-007 D2).
 const EXHAUSTED_PRIOR_REPEATS = 2;
+
+// What proves that a `rethink` was DISPATCHED at the deeper effort, and not only
+// decided on. `effort` is what the resolver returned; `effort_applied` is what the
+// spawn could actually carry, and only the Workflow path can carry one — so the
+// honest Agent-path row says `unknown` or says nothing, and neither is proof.
+const UNMEASURED_EFFORT = 'unknown';
+const isAppliedEffort = (level) => typeof level === 'string' && EFFORTS.includes(level);
 
 // A failure nobody could read SAYS SO IN ITS SIGNATURE. The k-rule reads nothing
 // but signature strings back out of the journal — no `error_class` is recorded
@@ -322,25 +374,27 @@ function isGreen(e, i, lastLiftAt) {
  *      → flake_candidate (the tree did not move; re-run before dispatching)
  *   3. k distinct signatures, current one included → plan_defect
  *   4. nothing on record → first
- *   5. the same as the most recent one → repeat (change strategy, hold the tier),
- *      or repeat_exhausted once `seen` has reached EXHAUSTED_PRIOR_REPEATS — the
- *      same failure a third time, after the deeper effort was already spent on it
+ *   5. seen anywhere in the window → repeat (change strategy, hold the tier), or
+ *      repeat_exhausted once `seen` has reached EXHAUSTED_PRIOR_REPEATS AND
+ *      `depth_spent` shows a rethink round actually applied the deeper effort to
+ *      this signature — the same failure a third time, after the depth was spent
  *   6. otherwise → progress
  *
  * Events are read in JOURNAL order, not by `ts`: the journal is append-only and
  * two events in the same second are ordered by their lines, not their clocks.
  *
  * `seen` is how many prior attempts carried THIS signature — the number the
- * "same twice → change strategy" consumer reads; `distinct` is the breadth the
- * k-rule reads. Both are measured over the WINDOW: the failures since the last
- * green, because that is what "with no green between them" means.
+ * "seen again → change strategy" consumer reads; `distinct` is the breadth the
+ * k-rule reads; `depth_spent` is whether the record proves a rethink already ran
+ * at the deeper effort on it. All three are measured over the WINDOW: the failures
+ * since the last green, because that is what "with no green between them" means.
  */
 function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
   let lastFlake = -1;
   let lastLift = -1;
   let lastSame = -1;          // most recent prior attempt carrying THIS signature
   let lastGreen = -1;         // the newest event proving the failures before it were fixed
-  const priorAttempts = [];   // { at, signature } for every signed prior attempt
+  const priorAttempts = [];   // { at, signature, effortApplied } per signed prior attempt
 
   // A `flake_lift` retracts the green its `flake` recorded, so the lifts have to
   // be known BEFORE the greens are read — one pass ahead of the main one, rather
@@ -356,7 +410,7 @@ function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
     else if (e.event === 'attempt' && typeof e.signature === 'string' && e.signature) {
       // Attempt events from before this phase carry no `signature` key at all.
       // That reads as "no signature recorded", never as an error.
-      priorAttempts.push({ at: i, signature: e.signature });
+      priorAttempts.push({ at: i, signature: e.signature, effortApplied: e.effort_applied });
       if (e.signature === signature) lastSame = i;
     }
     if (isGreen(e, i, lastLiftAt)) lastGreen = i;
@@ -364,7 +418,8 @@ function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
 
   // The window is "since the last green", not "the whole journal minus greens":
   // three distinct failures AFTER a green are still a plan defect.
-  const priorSignatures = priorAttempts.filter((a) => a.at > lastGreen).map((a) => a.signature);
+  const priorWindow = priorAttempts.filter((a) => a.at > lastGreen);
+  const priorSignatures = priorWindow.map((a) => a.signature);
 
   // `lastSame` is deliberately NOT windowed. The candidate rule asks whether the
   // TREE moved, and a green in between makes "same signature, same head" the
@@ -373,7 +428,21 @@ function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
     [...priorSignatures, signature].filter((s) => !isUnknownSignature(s))
   ).size;
   const seen = priorSignatures.filter((s) => s === signature).length;
-  const base = { signature, head, distinct, k, seen };
+
+  // Did a round in this window actually SPEND the deeper effort on this
+  // signature? Journal order, this signature only, and the FIRST occurrence
+  // dropped: that round was dispatched under `first`/`progress`, whose strategy is
+  // `fix`, so its depth proves a round ran and not that the ladder's deeper rung
+  // was ever reached. Every later occurrence was dispatched under `repeat`, i.e.
+  // `rethink`, so its own recorded depth is the depth that rethink carried.
+  // Windowed like everything else here: a rethink spent on a failure that was
+  // then FIXED says nothing about the failure that came back after the green.
+  const depth_spent = priorWindow
+    .filter((a) => a.signature === signature)
+    .slice(1)
+    .some((a) => isAppliedEffort(a.effortApplied));
+
+  const base = { signature, head, distinct, k, seen, depth_spent };
 
   if (lastFlake !== -1 && lastFlake > lastLift) return { verdict: 'flake', ...base };
 
@@ -390,11 +459,19 @@ function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
 
   if (distinct >= k) return { verdict: 'plan_defect', ...base };
   if (!priorSignatures.length) return { verdict: 'first', ...base };
-  if (priorSignatures[priorSignatures.length - 1] === signature) {
-    // `seen` is already the number the caller needs; the split is here rather
-    // than at the call site so the journal stays the single source and every
-    // consumer reads one word instead of re-deriving a threshold.
-    return { verdict: seen >= EXHAUSTED_PRIOR_REPEATS ? 'repeat_exhausted' : 'repeat', ...base };
+  if (seen > 0) {
+    // RECURRENCE, not adjacency (ADR-007 D2). The question this verdict answers
+    // is "has this exact failure already been attempted", and a different failure
+    // in between does not make it novel — `priorSignatures[last] === signature`
+    // asked the narrower question and made `repeat`, the only `rethink` rung,
+    // unreachable the moment two signatures alternated.
+    //
+    // `seen` is already the number the caller needs and `depth_spent` is the
+    // evidence; the split is here rather than at the call site so the journal
+    // stays the single source and every consumer reads one word instead of
+    // re-deriving a threshold.
+    const exhausted = seen >= EXHAUSTED_PRIOR_REPEATS && depth_spent;
+    return { verdict: exhausted ? 'repeat_exhausted' : 'repeat', ...base };
   }
   return { verdict: 'progress', ...base };
 }
@@ -495,6 +572,20 @@ if (require.main === module) {
       head: flags.head,
       k: Number.isFinite(k) && k > 0 ? k : DEFAULT_K,
     });
+    // The one place a verdict withholds a rung the count alone would have given,
+    // so it is also the one place that has to SAY SO. Silence here reads as a
+    // broken ladder: the operator sees a signature at the threshold, no ceiling
+    // route, and nothing to distinguish "the depth was never spent" from "the
+    // rung stopped working". stderr, because stdout is parsed.
+    if (got.verdict === 'repeat' && got.seen >= EXHAUSTED_PRIOR_REPEATS && !got.depth_spent) {
+      process.stderr.write(
+        `failure-signature: ${ticket}/${got.signature} is at the exhaustion threshold (seen=${got.seen}) but no prior round\n` +
+        `  records an \`effort_applied\` level, so \`repeat_exhausted\` would be an unproven claim — reading \`repeat\`\n` +
+        '  and rethinking again rather than opening the ceiling and then escalating.\n' +
+        `  Record the depth on the round that carries it: \`log-event.cjs attempt … effort_applied=<${EFFORTS.join('|')}>\`\n` +
+        `  on the Workflow path, or \`effort_applied=${UNMEASURED_EFFORT}\` where the spawn could carry none.\n`
+      );
+    }
     console.log(flags.json ? JSON.stringify(got) : got.verdict);
     process.exit(0);
   }
@@ -520,7 +611,7 @@ if (require.main === module) {
         ts, event: 'flake_rerun', ticket, signature: flags.signature, head: flags.head,
         outcome: 'red', by: 'failure-signature',
       });
-      console.log(`${ticket}: ${flags.signature} failed again at the same head — deterministic, the next verdict reads it as \`repeat\` (or \`repeat_exhausted\` if it is the third time)`);
+      console.log(`${ticket}: ${flags.signature} failed again at the same head — deterministic, the next verdict reads it as \`repeat\` (or \`repeat_exhausted\` if it is the third time AND a round on record spent the deeper effort on it)`);
     }
     process.exit(0);
   }
@@ -543,4 +634,5 @@ if (require.main === module) {
 module.exports = {
   computeSignature, computeVerdict, normalize, relativize,
   isUnknownSignature, UNKNOWN_PREFIX, VERDICTS, DEFAULT_K,
+  EXHAUSTED_PRIOR_REPEATS, UNMEASURED_EFFORT,
 };
