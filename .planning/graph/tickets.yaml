@@ -24,6 +24,9 @@ epics:
   '27':
     branch: epic/27-the-conveyor-measures-its-own-state
     repos: [null]
+  '28':
+    branch: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    repos: [null]
 tickets:
   T-20-01:
     title: 'Failure signature: normalize, history verdict, flake quarantine'
@@ -984,4 +987,132 @@ tickets:
     epic: epic/27-the-conveyor-measures-its-own-state
     primary_parent: null
     pr_base: epic/27-the-conveyor-measures-its-own-state
+    jira: null
+  T-28-01:
+    title: 'The cap counts distinct agents, not distinct roles'
+    plan: '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-01-PLAN.md'
+    phase: '28'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/dispatch-record.test.cjs, tests/unit/front.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-28-01-the-cap-counts-distinct-agents-not-disti
+    epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    primary_parent: null
+    pr_base: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    jira: null
+  T-28-02:
+    title: 'A signature''s history is a set with adjacency, not a count'
+    plan: '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-02-PLAN.md'
+    phase: '28'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, plugins/delivery-pipeline/scripts/attempt-history.cjs, tests/unit/failure-signature.test.cjs, tests/unit/log-event.test.cjs, tests/unit/attempt-history.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-28-02-a-signature-s-history-is-a-set-with-adja
+    epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    primary_parent: null
+    pr_base: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    jira: null
+  T-28-03:
+    title: 'One procedure for judgment, on both paths'
+    plan: '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-03-PLAN.md'
+    phase: '28'
+    repo: null
+    wave: 2
+    depends_on: [T-28-01]
+    files: [plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/commands/deliver.md, tests/unit/judgment-contract.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-28-03-one-procedure-for-judgment-on-both-paths
+    epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    primary_parent: T-28-01
+    pr_base: ticket/T-28-01-the-cap-counts-distinct-agents-not-disti
+    jira: null
+  T-28-04:
+    title: A floor is measured against what is effective
+    plan: '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-04-PLAN.md'
+    phase: '28'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [scripts/gen-codex-shipyard.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/gsd-tune.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-28-04-a-floor-is-measured-against-what-is-effe
+    epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    primary_parent: null
+    pr_base: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    jira: null
+  T-28-05:
+    title: An installer owns what it wrote
+    plan: '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-05-PLAN.md'
+    phase: '28'
+    repo: null
+    wave: 2
+    depends_on: [T-28-04]
+    files: [scripts/install-shipyard-codex.sh, scripts/gen-codex-shipyard.cjs, tests/smoke/codex-shipyard-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-28-05-an-installer-owns-what-it-wrote
+    epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    primary_parent: T-28-04
+    pr_base: ticket/T-28-04-a-floor-is-measured-against-what-is-effe
+    jira: null
+  T-28-06:
+    title: 'Every reader has a writer, or a recorded decision'
+    plan: '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-06-PLAN.md'
+    phase: '28'
+    repo: null
+    wave: 3
+    depends_on: [T-28-03]
+    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/front.test.cjs, tests/unit/judgment-contract.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-28-06-every-reader-has-a-writer-or-a-recorded
+    epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    primary_parent: T-28-03
+    pr_base: ticket/T-28-03-one-procedure-for-judgment-on-both-paths
+    jira: null
+  T-28-07:
+    title: 'Dirty means tracked, and a declared path that cannot exist is warned about'
+    plan: '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-07-PLAN.md'
+    phase: '28'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/base-merge.cjs, plugins/delivery-pipeline/scripts/ticket-worktree.sh, plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/unit/files-contract.test.cjs, tests/smoke/worktree-smoke.sh, tests/smoke/graph-validator-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-28-07-dirty-means-tracked-and-a-declared-path
+    epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    primary_parent: null
+    pr_base: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    jira: null
+  T-28-08:
+    title: A clean exit is not evidence of a coherent result
+    plan: '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-08-PLAN.md'
+    phase: '28'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/source-contract.test.cjs, tests/unit/pipeline-stats.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-28-08-a-clean-exit-is-not-evidence-of-a-cohere
+    epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    primary_parent: null
+    pr_base: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
     jira: null

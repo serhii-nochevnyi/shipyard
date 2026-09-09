@@ -166,6 +166,27 @@ script — not in a prompt.** Every requirement below is an instance of it.
   shared numeric rule rejects a non-integer, and no ADR asserts what a later
   amendment retired.
 
+- **REQ-54** — The concurrency cap counts DISTINCT agents: two live guards are
+  two, one guard over many PRs is one, and time of dispatch is not an identity.
+- **REQ-55** — A signature's history is a set with adjacency, not a count, so
+  `repeat` is reachable whenever the same failure recurs at a moved head; and
+  `repeat_exhausted` means the depth was APPLIED, not merely decided.
+- **REQ-56** — Judgment follows one procedure — measure, resolve, dispatch,
+  record — on the background path and the inline one alike, asserted by a
+  contract test over both entry points.
+- **REQ-57** — A model floor is measured against what is EFFECTIVE: after the
+  last remap, against the agent files actually registered, and including an
+  explicit environment pin.
+- **REQ-58** — An installer owns what it wrote: an old manifest reconciled
+  against the new one, only its own files removed, proven by a two-stage smoke.
+- **REQ-59** — Every reader has a writer or a recorded decision, and a mechanism
+  shipped with no caller is a finding rather than a surprise.
+- **REQ-60** — "Is this worktree dirty" asks about TRACKED content, and a
+  declared path that cannot exist is warned about at decomposition time.
+- **REQ-61** — A clean exit is not evidence of a coherent result: a merge that
+  duplicated a definition is caught, and a metric never credits one actor's act
+  to another.
+
 ## Phases
 
 ### Phase 20: Autonomy of the drive-to-green loop
@@ -303,3 +324,22 @@ cascade gives a child only its PRIMARY parent's work — the diamond-child gap
 ADR-006 parks — so a single-parent spine is what keeps the last ticket's base
 complete. T-27-02 and T-27-07 share no file with that chain and run as their own
 roots beside T-27-01, which puts the phase's largest saving in the first wave.
+
+### Phase 28: A mechanism nobody connected is not a mechanism
+**Requirements**: REQ-54, REQ-55, REQ-56, REQ-57, REQ-58, REQ-59, REQ-60, REQ-61
+
+Decomposed from ADR-007, which extends ADR-006 one layer inward: from facts the
+conveyor asserts without measuring, to mechanisms it builds and never wires.
+Three families. ADR-006's own closing shape returns twice — `repeat` unreachable
+when signatures alternate, and two guards counted as one agent, the second
+introduced BY phase 27's fix and turning the cap's error direction from
+under-dispatch to over-dispatch. Nine readers with no writers, the headline
+being phase 27's own D2, which shipped complete and inert because a deferral
+addressed to a phase was nobody's `files_modified` line. And the installed Codex
+bundle predating three phases entirely, with `AGENT_CARDINALITY` absent from the
+`front.cjs` the Codex skill actually executes. Eight tickets: T-28-01 first
+because its error direction is over-dispatch and the phase is dispatched under
+it, T-28-02 second because it governs how this phase's own repair rounds
+escalate; T-28-04 and T-28-05 are one family and gate the bundle regeneration
+that follows the phase. Five run as roots — the contested-path rule forces only
+two short chains, not phase 27's spine.
