@@ -40,7 +40,12 @@ fixpoint: NO — 12 item(s) are actionable RIGHT NOW. Ending the run here is a d
 ```
 
 The same structure is written to `.planning/graph/delivery-front.json`
-(`front.cjs` — re-runnable on its own, `--json` for the machine view). The buckets:
+(`front.cjs` — re-runnable on its own, `--json` for the machine view). Being
+re-runnable on its own is also why it REFUSES on a project `.planning/config.json`
+that does not parse: it resolves no policy from the defaults, leads both faces
+with a `config_invalid` line, and gives the most restrictive board rather than the
+default one. An ABSENT config is not that case — nobody has configured the project
+and the defaults are the answer. The buckets:
 
 ```text
 actionable now  execute  — ready, no branch yet          → Step 3   [main loop]
@@ -105,18 +110,34 @@ instead, and the front reads it back by itself:
   one.
   **Pass what the resolver decided, every time** — the values you already hold from
   the `pipeline-config.cjs model <role> --json` call you made to launch, plus
-  `--reason "<the branch that fired>"` (`risk: high`, `signature repeat`,
-  `role baseline`). It is the whole reason the record exists: without them the
+  `--route "<its route field, verbatim>"`. That call now returns a third field,
+  `route`, naming which rule chose the tier and which chose the effort
+  (`tier=floor(opus) effort=row(high)`); pass it unchanged. **Do not compose a
+  sentence about the ladder** — the old `--reason` took one and is now refused,
+  because a caller's reading of the mechanism and the mechanism's own answer are
+  indistinguishable once they share a field, and this field exists to be counted.
+  It is the whole reason the record exists: without them the
   journal can say a judge was dispatched and not what it ran at, so every row of
   the ladder stays a matter of argument. With them a ladder review is one query
   (below).
+  **A sha the journal records is the full forty characters** — `$(git rev-parse HEAD)`,
+  never `--short` and never an abbreviation pasted from a PR page. `log-event.cjs`
+  refuses a shorter one outright: `gate_status` records a head that way, and a
+  reader holding only the journal cannot lengthen an abbreviation, so the two
+  formats never compare and a live architecture verdict reads as stale.
   Add `--effort-applied <level>` **on the Workflow path only** — `agent()` carries
   an effort, the Agent tool has no such parameter, so an Agent-dispatched role runs
   at the session's own effort whatever the ladder chose. Omitting the flag is the
   honest record of that: absence means UNMEASURED, and the recorder will not fill
   it in. Never pass the resolved value as the applied one.
   On the Codex bundle add `--agent-file shipyard-<role>[-deep]` — the file you
-  actually dispatched, which is where that runtime's model choice lives.
+  actually dispatched, which is where that runtime's model choice lives. That
+  pattern is not 1:1 for every role, so check `dispatch-record.cjs`'s own mapping
+  rather than assuming it: `research` dispatches ship as `shipyard-inv-research`
+  (the investigation loop's own name for it, not `shipyard-research`), and
+  `executor` has no agent file at all — an executor is dispatched by the main
+  loop, not a `.toml`, so its `mark` omits `--agent-file` rather than naming a
+  file nothing ships. Naming a file the role does not claim is refused.
 Reserve `--parked` for what genuinely holds only for this session.
 
 **The ladder review, as one query.** Run it from the project (not a worktree) when
@@ -499,7 +520,7 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs <duty|merge <T|--all>|report> [-
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve | model <role> [flags]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved|feedback|status> <pr> [--json] [--repo owner/name]
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|root|list [--json]> ...
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|pr|status|retarget> ...
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|refresh|pr|status|retarget> ...
 node ${CLAUDE_PLUGIN_ROOT}/scripts/scope-gate.cjs <T> --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--graph <dir>]
@@ -616,7 +637,7 @@ session:
 ```text
 attempt    — each babysit round on a PR:
              log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<ci-fix|review-fix> model=<tier> \
-               outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<sha> hypothesis="<the fixer's own>"
+               outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha> hypothesis="<the fixer's own>"
 fix_round  — for EACH item from a fix-round Workflow result:
              log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false>
 escalation — any escalation to a human — NOT through log-event:
@@ -633,6 +654,11 @@ UNCHANGED `n`: a quarantined failure is not charged.
 
 `merge` and `status_change` are written by `sentinel.cjs merge` and
 `state-sync.cjs` themselves — do NOT log them by hand; log-event refuses.
+
+Logging is not syncing: an `attempt … outcome=pushed` or a `fix_round …
+pushed=true` records a write that moved GitHub, and the cached state the board is
+computed from knows nothing about it. Re-run `state-sync.cjs` before the next
+board read (see Step 4's cycle).
 
 Four more events are refused there, and for a sharper reason than duplication —
 they are not a metric ABOUT a state, they ARE the state, so a hand-written one is
@@ -782,6 +808,54 @@ itself a STOP signal, not a reason to improvise.
    NEVER construct tickets.json by hand, bypassing validate-graph.
 2. `state-sync.cjs` — rebuild delivery-state from the actual GitHub
    (the local file is just a cache).
+2a. **`epic-branch.sh refresh <epic>` — let each LIVE epic learn what landed
+   under it.** Nothing in delivery used to merge the base INTO an epic at all:
+   two epics were measured 27 then 31 commits behind, each containing zero
+   occurrences of the predicates their next tickets were written against, while
+   `ticket-worktree.sh create` reported success four separate times.
+
+   **WHICH epics, and it is read off the board state-sync just printed — not off
+   `tickets.json.epics`.** One line per phase per repo:
+   `epic phase 26: epic/26-… — 0 ahead of main, PR #41 merged`. Refresh the ones
+   whose integration PR is **not `merged` and not `closed`** — i.e. `no epic PR
+   yet`, `not started`, or `PR #N open`. Run it once per repo the phase spans
+   (`tickets.json.epics[<phase>].repos`), inside that checkout.
+   - **A phase that SHIPPED must never be refreshed.** The graph keeps every
+     phase forever and a merged phase's epic branch often still exists on origin
+     — three of them did on 2026-09-08 (`epic/24`, `epic/25`, `epic/26`). Its
+     base has moved on past the integration merge, so `refresh` would happily
+     merge and push onto a dead branch, once per cold start, and the next board
+     would then report that finished phase as commits ahead of the base. `PR …
+     merged` is the only thing that tells a shipped epic from a freshly `ensure`d
+     one: BOTH read `0 ahead`, so an ahead-count or an ancestry test cannot make
+     this distinction — and skipping the fresh one is precisely the defect this
+     verb exists to fix.
+   - Do NOT pre-filter the survivors by "whose base has moved" — that is a
+     measurement and the script owns it: it fetches, compares `origin/<epic>`
+     against `origin/<base>`, and when the epic already contains the base it
+     merges nothing and pushes nothing, says `already up to date`, and only
+     fast-forwards the LOCAL refs.
+   - `nothing to refresh: origin/<epic> does not exist` is EXPECTED OUTPUT, not a
+     fault, and it exits 0 — a phase that has not started yet (Step 3.0 creates
+     that branch, with `ensure`), or one that shipped and had its epic reaped. Do
+     NOT `ensure` an epic because a refresh mentioned it: that would recreate a
+     dead branch and push it for a phase that shipped weeks ago.
+   - The verb also moves the LOCAL base and epic refs (it says which ones and
+     from where). That half is what makes the next `create` cut from the right
+     tip: a refresh pushes from a detached worktree, and nothing about that moves
+     a local ref.
+   - A CONFLICT is a refusal, never a resolution: non-zero, the conflicting paths
+     named, the epic untouched. Show it to the user — it is a decision about
+     somebody's work and neither the script nor you may take it. Delivery
+     continues for every other epic.
+   - **If ANY refresh printed `"pushed":true`, run `state-sync.cjs` once more
+     before showing the board.** The condition is that JSON field, not a
+     judgement: a push moved the base under every open ticket PR stacked on that
+     epic, so their `mergeStateStatus` and check results are now about a merge
+     base that no longer exists, and the board you are about to show was measured
+     before it. Those PRs going `BEHIND` is the sentinel's existing path (its
+     merge gate reads `mergeStateStatus`/`behindBy`; the fixer merges the base in
+     with `base-merge.cjs`), not new work for you here.
 2b. **Reaper (`reapable`-only, self-healing).** Cleanup is reconciliation-based,
    not happy-path-only: using the fresh delivery-state, sweep the tails of previous
    (even interrupted) runs. The decision is NOT yours to infer — `state-sync`
@@ -893,9 +967,9 @@ attempts and landing nothing. When in doubt, RUN the check: it is a cheap
 read-only judge, and the failure it prevents is the most expensive one there is.
 
 - **Workflow path** (available and `use_workflow ≠ false`): `Workflow({scriptPath:
-  <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, model, effort}],
+  <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, baseRef, model, effort}],
   driftRefPath: <references/drift-check.md>,
-  baseRef: "origin/<the configured base>",
+  baseRef: "origin/<the configured base>",   // the round-level FALLBACK only
   recordCmd: "node <plugin-root>/scripts/drift-record.cjs",
   graphDir: "<project>/.planning/graph"}})`.
   `model` and `effort` come from `pipeline-config.cjs model drift-check --json`
@@ -914,6 +988,17 @@ the working tree, and the working tree is whatever branch the session is on —
 possibly one cut before the work existed, where every path is missing and the
 judge concludes "untouched" about code that is sitting on the base under those
 exact names. Tell it the ref and it checks the right tree.
+
+**And pass it PER TICKET** — `tickets[].baseRef` = `origin/<state[T].base>` from
+`delivery-state.json`, read exactly as `worktreePath`/`prBase` are read for the
+executors. In epic-stacked delivery the base IS a per-ticket fact: a root ticket
+is cut from the phase epic, a dependent one from its primary parent's branch, and
+two tickets picked in the same round routinely differ. One value for the whole
+round forces a mixed-base round into one invocation per base, and handing every
+judge the configured base instead is worse than useless — each then reads a diff
+dominated by the work its own ticket is deliberately stacked on top of, and calls
+that "movement since the plan was written". The round-level `baseRef` stays as the
+fallback for a ticket that carries none.
 
 `drifted` → **record it**, then exclude the ticket from scope and give the user a
 drift summary plus a route to /shipyard:decompose:
@@ -987,8 +1072,15 @@ the branch exists and only the publish half is missing (skip straight to 5).
    The branch name is taken ONLY from tickets.json (canonical format
    `ticket/<ID>-<slug-from-ticket-title>`, already sanitized by validate-graph) —
    don't construct it by hand. `create` is idempotent: an existing worktree already
-   on that branch is reused (a resumed run is normal), and a base that exists only
-   on the remote is resolved via `origin/<base>`.
+   on that branch is reused (a resumed run is normal). The base it cuts from is
+   **`origin/<base>` whenever that exists** — the edition the board named — and it
+   prints the ref it measured; a LOCAL branch of the same name is reported and not
+   obeyed, because a bare name resolves `refs/heads` first and a stale local epic
+   is how four worktrees in one session were cut from a pre-merge tip while
+   `create` reported success. Anything it REUSES (a worktree, or a branch whose
+   worktree is gone) comes with its distance from that base — a branch that is
+   commits behind is not re-cut, it may hold work that exists nowhere else, so the
+   base is merged in later by the fixer (`base-merge.cjs`).
 
 **Phase B — implement (fan-out).** Agents code → verify → COMMIT. They do not push
 and do not open PRs.
@@ -1028,14 +1120,16 @@ may be dispatched at all: fix the file.
     above returns immediately with an id (the Workflow tool a task id, the Agent
     tool an agent id); once you hold that id the agent exists, and only then, for
     every ticket you just handed out:
-    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --reason "<branch>"`
+    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --route "<route>"`
     (add `--effort-applied <effort>` when you took the Workflow path — it carries an
     effort into the spawn and the Agent fallback cannot, so on the fallback the flag
     is OMITTED, never guessed; add `--graph <project>/.planning/graph` when you are
-    not standing in the project). `<model>`, `<effort>` and the branch are the ones
-    the `pipeline-config.cjs model executor --json …` call above already returned —
-    nothing is re-derived here, or the record would hold the ladder's opinion instead
-    of what was dispatched. Keep the launch id in your own turn — the record stores
+    not standing in the project). `<model>`, `<effort>` and `<route>` are all three
+    fields the `pipeline-config.cjs model executor --json …` call above already
+    returned — nothing is re-derived and nothing is paraphrased here, or the record
+    would hold your reading of the ladder instead of the ladder's own answer. The
+    recorder checks the route against the pair, so a route copied from the previous
+    round is refused rather than filed. Keep the launch id in your own turn — the record stores
     the ticket, the role, the time and the resolved pair, and no id — because the id
     is what you collect and clear against.
     **Marking first is how the board comes to describe an agent that does not
@@ -1097,8 +1191,29 @@ may be dispatched at all: fix the file.
    then `gh pr create --base <state[T].base> --head <branch> --draft
    --title "<T>: <title>" --body <the agent's prBody>` (add
    `--repo <state[T].repo>` for a foreign-repo ticket).
-   `--base` is the RESOLVED base of the ticket (the epic branch for a root; the
-   primary parent's branch for a dependent), NOT main directly in epic-stacked.
+   `--base` is the RESOLVED base of the ticket, NOT main directly in
+   epic-stacked. **The base is one field with two jobs: it decides what the
+   review diff shows AND where the squash LANDS.** A primary parent's ticket
+   branch is a legal base only while that parent's PR is still OPEN — the
+   post-merge retarget then gives both properties. Once the parent has MERGED
+   its branch is a limb (it survives the squash, but its content is already in
+   the epic), so the base is the EPIC. `state-sync.cjs` resolves this and says
+   which rule it applied in `state[T].base_reason` — take the base from
+   `state[T].base` and never re-derive it from the graph's decompose-time
+   `pr_base`, which was computed before any PR existed.
+   When the resolved base is the epic and the ticket HAS a primary parent, keep
+   the diff a single slice by merging the base in first, then open the PR:
+
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <state[T].base>
+   ```
+
+   With the parent's work already in the epic that makes the child's diff
+   against the epic exactly its own slice again — both properties, one order of
+   operations, and the merge target is right. Optimising the diff alone is what
+   produced PR #52: three files, a perfect review slice, squashed onto a branch
+   already merged into `epic/26`, which therefore never received the work while
+   the ticket read `merged` and the front read empty.
    PR body: the FIRST line — a machine-readable marker `Ticket: <T>` (a safety net for
    state-sync matching if a re-decomposition renames the canonical branch);
    then Problem / Scope / Dependency slice / Test evidence /
@@ -1126,9 +1241,9 @@ spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose'
 
 Record that hand-over the same way the executors' was, and in the same order —
 the `Agent` call returns an agent id, and THEN
-`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --reason "<branch>"`
-for every ticket on the guarded list, taking the pair from the `model pr-sentinel`
-call above. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
+`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>"`
+for every ticket on the guarded list, taking all three fields from the
+`model pr-sentinel` call above — the route included, verbatim. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
 which carries no effort, so the applied depth is genuinely unmeasured and the
 record says so by leaving the key out;
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
@@ -1178,7 +1293,7 @@ loop:
 
        flake — already quarantined. Do NOT dispatch a fixer and do NOT CHARGE THE
          ATTEMPT: the round is logged as `log-event.cjs attempt … n=<next_n>
-         outcome=flake signature=<sig> head=<sha>`, and `outcome=flake` is the
+         outcome=flake signature=<sig> head=<full 40-char sha>`, and `outcome=flake` is the
          reason `next_n` does not move — `attempt-history.cjs` skips a quarantined
          round when it counts, so the next real round reuses this number.
          Re-run the job (`gh run rerun <run-id> --failed`) or leave it
@@ -1279,16 +1394,25 @@ loop:
        tests/unit/trailer.test.cjs.
      record the verdict in the journal either way, because it is what a later
        `--contested` reads: `log-event.cjs arch_review ticket=<T> pr=<N>
-       verdict=<conform|violation|adr-outdated> head=<sha>
+       verdict=<conform|violation|adr-outdated> head=<full 40-char sha>
        --graph <project>/.planning/graph`
      violation    → fix in the worktree → push → step d
      adr-outdated → `escalation-record.cjs mark <T> "adr-outdated: …"` (changing the ADR is a human's call), continue the front
      conform      → check the green criteria:
        all checks passed ∧ unresolved=0 ∧ arch conform
        → record the verdicts in the PR body as a trailer (survives squash-merge):
-         node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs write <pr> [--repo owner/name] --arch-review conform --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped>
-         it reads the live body and the live head, and writes ONE `gate_status:`
-         line carrying every key plus `head=<sha>` — the diff the verdict is
+         node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs write <pr> [--repo owner/name] --arch-review conform --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped> --base-tree <base_tree>
+         `<base_tree>` is arch-review's own `base_tree:` output field, copied
+         verbatim: all forty hex characters of the merge-base TREE the judge
+         measured (references/arch-review.md). Never a branch name and never an
+         abbreviation — the writer refuses both, and there is no fallback that
+         computes one here, because a base_tree nobody measured is an assertion
+         rather than a proof. Omit it and the trailer still writes, but no later
+         `gate-trailer.cjs carry` can ever reuse this verdict across a base move:
+         it refuses on absent proof, and the ~150k-token re-judgement is bought
+         again.
+         The writer reads the live body and the live head, and writes ONE `gate_status:`
+         line carrying every key plus `head=<full 40-char sha>` — the diff the verdict is
          about. NEVER hand-assemble that line: a second one hides the verdict
          above it (the reader takes the LAST), and a trailer with no `head=` is
          ABSENT to every reader once the board knows the head. The writer also
@@ -1331,7 +1455,7 @@ loop:
        `attempt-history.cjs <T> --json` → `next_n`
      log the round with the keys the NEXT round reads back:
        `log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<role> model=<tier>
-        outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<sha>
+        outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha>
         hypothesis="<the fixer's own one sentence, verbatim>"`
        `signature`+`head` are what the next `verdict` compares; `hypothesis` is
        what `attempt-history.cjs` hands the next fixer so it cannot re-propose what
@@ -1345,6 +1469,20 @@ loop:
        else would ever stop it. This is not dead code — do not remove it.
      → step a
 ```
+
+**A journal write is not a board refresh — after a push, the next board read is
+`state-sync.cjs`, never `front.cjs`.** `log-event.cjs` is a dumb append-only
+writer: it records the attempt and touches nothing else, while the push it
+records re-ran the checks and, after a merge, retargeted children. `front.cjs`
+recomputes its buckets from the CACHED `delivery-state.json`, so read straight
+after a journal write it reports a board computed BEFORE that write — which is
+how "0 actionable" got concluded from a state that had never seen the push
+(2026-09-08). `dispatch-record.cjs mark|clear` is the ONE exception: it refreshes
+the overlay itself, so reading the front right after a mark is correct. The same
+obligation covers every write that moves GitHub — a push, a merge, a thread
+resolve, an undraft, a PR opened. The front now warns when it can prove it is
+behind (`⚠ this board is BEHIND reality …`); treat that line as the resync order
+it is, and do not act on any bucket printed under it.
 
 Every `park blocked` here does NOT end the run — it's an exit from the cycle of ONE PR.
 After it, return to the actionable front (Step 3/4 for the rest); the run

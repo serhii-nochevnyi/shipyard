@@ -25,6 +25,29 @@ checks against them.
 
 ## Output (final message, structured)
 - `verdict: conform | violation | adr-outdated`
+- `base_tree: <40 hex characters>` — **the tree of the merge base you judged
+  against**, for a `conform` verdict. Measure it, do not guess it. From the PR
+  alone, which is all your inputs give you:
+
+  ```
+  gh api repos/<owner>/<name>/compare/<base ref>...<head> --jq .merge_base_commit.sha
+  gh api repos/<owner>/<name>/git/commits/<that sha>      --jq .tree.sha
+  ```
+
+  Or, with a checkout of the branch to hand:
+
+  ```
+  git -C <worktree> rev-parse "$(git -C <worktree> merge-base <base ref> <head>)^{tree}"
+  ```
+
+  It is recorded in the PR body beside the head
+  (`gate-trailer.cjs write … --base-tree <sha>`), and it is what lets a later
+  base move that provably changes nothing keep this verdict instead of buying it
+  again — a re-judgement measured at ~150k tokens, 42% of one ticket's cost.
+  The proof is two object identities (the head trees equal, the base trees
+  equal), so an abbreviated value is refused on write: report all forty
+  characters. Report a TREE and never a branch name — the base branch gets
+  reaped, and a tree sha is immortal.
 - for `violation`: list each violated ADR/section, the offending hunk
   (file:line), and the minimal remediation direction
 - for `adr-outdated`: which decision, what reality contradicts it, and what

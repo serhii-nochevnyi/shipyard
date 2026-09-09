@@ -21,8 +21,9 @@
 //   * this project has a conveyor front at all;
 //   * the front is FRESH — or stale in the narrow way that means the LOOP forgot
 //     to resync rather than that the run is over (see THE TWO STALE CASES);
-//   * something is actionable, OR the board's only content is `waiting.ci` — the
-//     run is allowed to WAIT, but not to walk away from the wait (see WAITING);
+//   * something is actionable AND THE CAP ALLOWS IT TO BE TAKEN, OR the board's
+//     only content is `waiting.ci` — the run is allowed to WAIT, but not to walk
+//     away from the wait (see WAITING and CAPACITY);
 //   * that work is not entirely left-behind — a phase the run has moved past is
 //     "a decision, not motion" (front.cjs), and demanding motion there is how a
 //     guard starts lying;
@@ -171,6 +172,28 @@
 // proving ground has measured, shorter than the TTL) no longer opens it. POSITIVE
 // EVIDENCE ONLY: no record, or one that cannot be dated, is not proof the agent
 // is gone.
+//
+// ── CAPACITY: A FULL BOARD IS A BOARD WITH AN AGENT OUT (ADR-006 D1) ────────
+// `front.cjs` publishes `capacity {max, in_flight, free}` and already refuses to
+// call a capped board a fixpoint. This hook did not read the field at all, so on
+// the ordinary full board — every agent the cap allows is out, more tickets ready
+// — it blocked the stop and ordered the run to "take the actionable items RIGHT
+// NOW": the one thing the cap exists to prevent, told to the session by the gate
+// that is supposed to enforce the board. Two mechanisms reading one board and
+// giving opposite orders is worse than either alone.
+//
+// So `free <= 0` is treated as what it is — an agent is out, and that wake-up is
+// free and sooner — through the SAME hatch and the same plausibility rule as the
+// CI branch below: a dispatch MARK with no agent behind it must not buy silence
+// here either. When every mark is suspect the block still lands, and it now
+// carries the `dispatch-record.cjs clear` line, because a phantom `in_flight` is
+// exactly how a board would look full while nothing is coming.
+//
+// A `max` of 0 means one thing only (front.cjs guarantees it): the project config
+// does not parse, so NO policy is in effect and nothing may be dispatched at all.
+// A board that correctly cannot dispatch anything is not a defect to block on —
+// the remedy is a person editing a file, which no refusal of a stop can produce —
+// so the hook stays silent and lets front.cjs's own line say why.
 //
 // `SHIPYARD_STOP_GATE=off` turns the whole hook off in one word. An operator who
 // wants silence should be able to say so plainly, rather than discovering that
@@ -491,6 +514,30 @@ const count = Number(front.actionable_count || 0);
 const leftBehind = Number(front.left_behind_count || 0);
 const dispatched = (front.waiting && front.waiting.dispatched) || [];
 
+// The cap, read defensively: a `delivery-front.json` written before capacity
+// existed outlives an upgrade, so an absent or unreadable field is `null` — "no
+// cap is in force" — and must never open the hatches below.
+const capacity = (front.capacity && typeof front.capacity === 'object') ? front.capacity : null;
+// `front.cjs` only ever emits non-negative counts (`Math.max(0, …)` for `free`,
+// a length or a collapsed sum for `max`/`in_flight`), so a negative value here
+// is not a smaller cap — it is a corrupted or hand-edited front, and must read
+// as unreadable exactly like `null`/a string/an object would.
+const capNum = (k) => (capacity !== null && typeof capacity[k] === 'number'
+  && Number.isFinite(capacity[k]) && capacity[k] >= 0 ? capacity[k] : null);
+const capMax = capNum('max');
+const capFree = capNum('free');
+// Read for the phantom-capacity message below the same defensive way as
+// max/free: capacityFull only guarantees capMax/capFree are finite, not
+// `in_flight`, so the message must not print a raw, possibly-garbled field.
+const capInFlight = capNum('in_flight');
+// Only front.cjs can express 0, and only for one reason: the project config does
+// not parse, so no policy is in effect. Nothing may be dispatched, and no refusal
+// of a stop can fix a file.
+if (capMax === 0) allow();
+// A full board: every agent the policy allows is out, so nothing on the board may
+// be taken this round however much of it is actionable.
+const capacityFull = capMax !== null && capMax > 0 && capFree !== null && capFree <= 0;
+
 // Actionable work nobody has taken, or a dispatch that outlived the run that
 // made it. The second is the silent-stall shape dispatch-record.cjs is built to
 // expire out of; on a board this old the expiry has not been recomputed, so the
@@ -541,18 +588,20 @@ if (age !== null && age > FRESH_MS) {
   );
 }
 
-// The board is fresh (the branches above returned for anything older) and offers
-// no move. If PRs are still in CI, the run may wait — with `ci-wait.cjs`, in the
-// foreground — but it may not stop, because nothing will bring it back.
-if (count <= 0 || leftBehind >= count) {
-  const ci = (front.waiting && front.waiting.ci) || [];
-  if (!ci.length) allow();
-  // A dispatch opens this hatch only while it can still plausibly have an agent
-  // behind it. See dispatchAges: a mark can be written before the launch, so a
-  // launch that never happened was 90 minutes of silence with nothing coming.
-  const { plausible, suspect } = dispatchAges(graphDir, dispatched);
-  if (plausible.length) allow();
-  const gone = suspect.length
+// WHO IS OUT — read at most once, and only when a branch below actually asks. A
+// mark opens a hatch only while it can still plausibly have an agent behind it
+// (see dispatchAges): a mark can be written before the launch, so a launch that
+// never happened was 90 minutes of silence with nothing coming.
+let agesCache = null;
+const agentsOut = () => (agesCache || (agesCache = dispatchAges(graphDir, dispatched)));
+
+// The dispatch marks that did NOT keep this quiet, as a sentence. Shared by the
+// CI branch and the front-is-not-empty verdict below: on a board the cap called
+// FULL, a suspect mark is the whole explanation for why the gate is blocking
+// anyway, so the reader must get the same line either way.
+const goneText = () => {
+  const { suspect } = agentsOut();
+  return suspect.length
     ? '\nThe dispatch mark(s) on this board did NOT keep this quiet: ' +
       `${suspect.map((d) => `${d.id} → ${d.role}, marked ${d.mins}m ago`).join('; ')}.\n` +
       'A mark that old is not an agent at work — it is what a mark written before a launch that never\n' +
@@ -562,6 +611,22 @@ if (count <= 0 || leftBehind >= count) {
       'The --graph is not optional: this hook\'s cwd is the SESSION\'s, and a clear run from the wrong\n' +
       'one reports "no dispatch recorded" and changes nothing.'
     : '';
+};
+
+// THE CAPACITY HATCH, ahead of the arithmetic below and deliberately not inside
+// it: the with-an-agent hatch used to sit behind `count <= 0`, so a full board
+// with work on it never reached it. An agent IS out here — the cap says so — and
+// its completion is the wake-up this session is waiting for.
+if (capacityFull && agentsOut().plausible.length) allow();
+
+// The board is fresh (the branches above returned for anything older) and offers
+// no move. If PRs are still in CI, the run may wait — with `ci-wait.cjs`, in the
+// foreground — but it may not stop, because nothing will bring it back.
+if (count <= 0 || leftBehind >= count) {
+  const ci = (front.waiting && front.waiting.ci) || [];
+  if (!ci.length) allow();
+  if (agentsOut().plausible.length) allow();
+  const gone = goneText();
   verdict(
     `shipyard: nothing is actionable, but ${ci.length} PR(s) are still in CI (${ci.join(', ')}) — ` +
     'so this is a WAIT, not a fixpoint, and stopping here ends the run for good.\n' +
@@ -585,6 +650,16 @@ const named = ORDER
   .map((k) => `${k}: ${front.actionable[k].join(', ')}`)
   .join(' | ');
 
+// The one way to reach this line on a FULL board: every dispatch mark is suspect,
+// so the `in_flight` that made it look full has no agent behind it. Say that,
+// with the clear command — otherwise the refusal reads as an order to dispatch
+// past a cap the board says is spent.
+const phantom = capacityFull
+  ? `\nThe board reports capacity ${capInFlight ?? '?'}/${capMax} agents in flight, i.e. FULL — but no `
+    + 'mark on it is recent enough to be an agent at work, so nothing is coming to wake this session.'
+    + goneText()
+  : '';
+
 verdict(
   `shipyard: the delivery front is not empty — ${count} item(s) are actionable RIGHT NOW (${named}).\n` +
   'Ending the run here is a defect, not a choice (deliver.md, the Principle). Do not summarise and stop:\n' +
@@ -592,5 +667,6 @@ verdict(
   '  2. take the actionable items — shallowest stack depth first, the guard owns fix/review/arch-review/merge;\n' +
   '  3. loop back and recompute. Stop only on `fixpoint: YES`.\n' +
   'If an item genuinely must not be taken, park it with a reason (`drift-record.cjs mark` when the plan\n' +
-  'predates what shipped) so the front stops offering it — do not leave it listed and walk away.' + whereToSync
+  'predates what shipped) so the front stops offering it — do not leave it listed and walk away.'
+  + phantom + whereToSync
 );

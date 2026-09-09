@@ -6,7 +6,7 @@
 
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
-const { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, epicKey } = require(path.join(
+const { computeFront, formatFront, ciEstimates, needsHuman, checkpointParentOf, epicKey, AGENT_CARDINALITY } = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'
 ));
 
@@ -468,11 +468,19 @@ suite('front — a child never lands into an open human_checkpoint parent');
 // is reading, and the post-merge retarget then sends that child's own children to
 // the epic — content actually sitting in a checkpoint branch.
 const cpTickets = { P: { human_checkpoint: true, branch: 'ticket/P' }, C: { primary_parent: 'P', branch: 'ticket/C' } };
-const cpState = (parentStatus) => ({
+// `base` is the child's own `pr_base`. Every existing caller leaves it at the
+// default — the parent's own ticket branch, the shape while that parent's PR
+// is still open. Once the parent MERGES, its ticket branch is a LIMB (its
+// content is already in the epic; the branch only still exists because
+// nothing deleted it) — `limbBaseOf` refuses a merge onto it (PR #52), so a
+// "parent landed" fixture must pass the RETARGETED base (the epic) to assert
+// the ordinary post-retarget shape rather than the limb `sentinel.cjs merge`
+// would refuse.
+const cpState = (parentStatus, base = 'ticket/P') => ({
   P: { status: parentStatus, pr: 1, draft: false, checks: checks(), branch: 'ticket/P' },
   C: {
     status: 'pr-open', pr: 2, draft: false, checks: checks(), gate: conform,
-    merge_scope: 'stacked', pr_base: 'ticket/P', branch: 'ticket/C',
+    merge_scope: 'stacked', pr_base: base, branch: 'ticket/C',
   },
 });
 
@@ -486,7 +494,10 @@ test('while the parent PR is open the child waits on the human, not on the run',
 });
 
 test('once the parent lands, the same child is a merge again', () => {
-  const f = computeFront(cpTickets, cpState('merged'), { autoMerge: true });
+  // Post-merge the child has already been retargeted onto the epic — this is
+  // NOT the limb shape (pr_base naming the merged parent's own ticket branch),
+  // which `limbBaseOf` refuses regardless of who the parent is (PR #52).
+  const f = computeFront(cpTickets, cpState('merged', 'epic/27-x'), { autoMerge: true });
   assert.deepStrictEqual(f.actionable.merge, ['C'], 'the hold is scoped to an OPEN parent');
 });
 
@@ -1329,7 +1340,10 @@ test('while a PRE-AUTHORIZED parent PR is open, its child is not offered for mer
 });
 
 test('once that pre-authorized parent lands, the same child is a merge (the control)', () => {
-  const f = computeFront(paTickets, cpState('merged'), { autoMerge: true });
+  // Same reasoning as the non-authorized control above: post-merge the child
+  // is retargeted onto the epic, not left naming the merged parent's own
+  // ticket branch, which would be the limb `limbBaseOf` refuses (PR #52).
+  const f = computeFront(paTickets, cpState('merged', 'epic/27-x'), { autoMerge: true });
   assert.deepStrictEqual(f.actionable.merge, ['C'], 'the hold is scoped to an OPEN parent');
 });
 
@@ -1962,8 +1976,9 @@ test('4 of the 7 with an agent → free 0, fixpoint NO, and the reason names cap
 
 test('every dispatch role counts against the cap — the guard is an agent too', () => {
   // "It is an agent, it holds tickets, and this session's failure included one."
-  // So `in_flight` counts the raw dispatch records, not the actionable buckets:
-  // a pr-sentinel and a ci-fix cost a session exactly what an executor costs.
+  // So `in_flight` counts AGENTS and not actionable buckets: a pr-sentinel and a
+  // ci-fix cost a session exactly what an executor costs. THREE roles, three
+  // agents — one record each, so the collapse below changes nothing here.
   const { ids, tickets, state } = readyBoard(5);
   const dispatched = { [ids[0]]: 'pr-sentinel', [ids[1]]: 'ci-fix', [ids[2]]: 'review-fix' };
   const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
@@ -2077,5 +2092,414 @@ test('formatFront survives a front written before capacity existed', () => {
   assert.ok(out.some((l) => /^fixpoint: NO/.test(l)), out.join('\n'));
   assert.strictEqual(out.find((l) => /^capacity:/.test(l)), undefined);
 });
+
+// ── THE COUNTING UNIT IS THE AGENT, NOT THE RECORD (ADR-006 D1) ─────────────
+//
+// The cap was shipped counting `Object.keys(dispatched)`, and `deliver.md` marks
+// a `pr-sentinel` record for EVERY guarded ticket while Step 4 spawns ONE guard.
+// So a single agent holding four open PRs reported `in_flight: 4` → `free: 0`
+// under the default of 4, and no executor launched until a PR merged. That is
+// the ORDINARY mid-phase board, and the number the default was measured on is an
+// executor wave. The remedy is a counting fix — collapse a role that runs once
+// per round to one agent — and not the per-role weighting T-26-12 put out of
+// scope for want of a cost model.
+suite('front — the cap counts AGENTS, not records');
+
+const { ROLES } = require(path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
+));
+
+test('every ladder role has a cardinality, and only the guard runs as one agent per round', () => {
+  // Same shape as dispatch-record.cjs's own role-table test: a role added to the
+  // ladder must not silently inherit somebody else's cardinality, because the
+  // fallback decides how much of the cap it spends.
+  for (const role of ROLES) {
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(AGENT_CARDINALITY, role),
+      `${role} has no entry in AGENT_CARDINALITY — the counter would guess`
+    );
+    assert.ok(['round', 'ticket'].includes(AGENT_CARDINALITY[role]),
+      `${role}: ${AGENT_CARDINALITY[role]} is not a cardinality`);
+  }
+  const perRound = Object.keys(AGENT_CARDINALITY).filter((r) => AGENT_CARDINALITY[r] === 'round');
+  assert.deepStrictEqual(perRound, ['pr-sentinel'],
+    'the guard is the only role dispatched once per round; every other role is one agent per ticket');
+});
+
+test('one guard holding four guarded PRs is ONE agent — in_flight 1, free 3', () => {
+  // THE WHOLE TICKET. Four `pr-sentinel` records, one agent, and the two ready
+  // tickets beside them are dispatchable. On the record-counting code this is
+  // `in_flight: 4, free: 0` and the wave never leaves.
+  const { ids, tickets, state } = readyBoard(6);
+  const dispatched = Object.fromEntries(ids.slice(0, 4).map((id) => [id, 'pr-sentinel']));
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 1, free: 3 });
+  // The truncation still names everything: the collapse changes the BUDGET, not
+  // what the board reports as work.
+  assert.deepStrictEqual(f.actionable.execute, ids.slice(4));
+  assert.strictEqual(f.fixpoint, false, 'a guard is still out');
+});
+
+test('four executors are still four agents — the collapse is per role, never a blanket one', () => {
+  const { ids, tickets, state } = readyBoard(6);
+  const dispatched = Object.fromEntries(ids.slice(0, 4).map((id) => [id, 'executor']));
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 4, free: 0 });
+});
+
+test('a guard beside three per-ticket agents is 4, and the guard\'s extra tickets are free', () => {
+  // The mixed board, which is the one that decides whether the collapse is a
+  // role rule or a discount: one guard over three PRs (1) + an executor + a
+  // ci-fix + an arch-review (3).
+  const { ids, tickets, state } = readyBoard(8);
+  const dispatched = {
+    [ids[0]]: 'pr-sentinel', [ids[1]]: 'pr-sentinel', [ids[2]]: 'pr-sentinel',
+    [ids[3]]: 'executor', [ids[4]]: 'ci-fix', [ids[5]]: 'arch-review',
+  };
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 4, free: 0 });
+});
+
+test('a record shape the store never wrote is one agent, not a free one', () => {
+  // `activeDispatches` hands over {ticket: {role, at}} and a bare string is the
+  // flattened form; an EMPTY or unknown role must resolve to the per-ticket
+  // cardinality, because a dispatch nobody can name is still an agent that was
+  // paid for. Resolving upward is the failure direction a spend gate must take.
+  const { ids, tickets, state } = readyBoard(5);
+  const dispatched = {
+    [ids[0]]: { role: 'pr-sentinel', at: new Date().toISOString() },
+    [ids[1]]: { at: new Date().toISOString() },
+    [ids[2]]: 'a-role-nothing-dispatches',
+  };
+  const f = computeFront(tickets, state, { maxConcurrentAgents: 4, dispatched });
+  assert.strictEqual(f.capacity.in_flight, 3, 'one guard + two unnameable agents');
+});
+
+// ── THE SHARED FULL-BOARD FIXTURE ────────────────────────────────────────────
+//
+// Four executors out under a cap of four, two more tickets ready: `free: 0` with
+// work on the board. The SAME fixture is restated in tests/unit/ci-wait.test.cjs
+// and tests/unit/stop-gate.test.cjs, each computing it through THIS front.cjs —
+// the point of the ticket is that the three mechanisms which read capacity agree
+// about ONE board, and three suites reading three hand-built boards would not
+// show that. Change it here and change it there.
+const FULL_OUT = ['T-27-91', 'T-27-92', 'T-27-93', 'T-27-94'];
+const FULL_READY = ['T-27-95', 'T-27-96'];
+const fullBoard = () => {
+  const ids = [...FULL_OUT, ...FULL_READY];
+  return computeFront(
+    Object.fromEntries(ids.map((id) => [id, {}])),
+    Object.fromEntries(ids.map((id) => [id, { status: 'pending', ready: true }])),
+    { maxConcurrentAgents: 4, dispatched: Object.fromEntries(FULL_OUT.map((id) => [id, 'executor'])) }
+  );
+};
+
+test('the shared full board: free 0, fixpoint NO, and the reason is capacity rather than work', () => {
+  const f = fullBoard();
+  assert.deepStrictEqual(f.capacity, { max: 4, in_flight: 4, free: 0 });
+  assert.deepStrictEqual(f.actionable.execute, FULL_READY);
+  assert.deepStrictEqual(f.waiting.dispatched, FULL_OUT);
+  assert.strictEqual(f.fixpoint, false);
+  const line = fixpointLine(f);
+  assert.ok(/capacity/.test(line), line);
+  assert.ok(!/actionable RIGHT NOW/.test(line), `a full board must not be ordered to dispatch: ${line}`);
+});
+
+// ── IS THIS BOARD BEHIND REALITY? (T-27-06) ──────────────────────────────────
+//
+// The main loop's cheap board read is `front.cjs`, which recomputes the buckets
+// from the CACHED `delivery-state.json`. Only `state-sync.cjs` re-derives that
+// state from GitHub — so after a write that moved the world (a push, a merge)
+// the front prints buckets computed BEFORE it. Found 2026-09-08: the push was
+// journalled, the front was read, "0 actionable" was concluded, and the
+// conclusion was right only by accident.
+//
+// The rule is `stop-gate.cjs`'s, duplicated (never shared — the installer copies
+// that hook as a single file): read the journal's TAIL, count `merge` and a
+// pushed `attempt`/`fix_round`, and exclude everything a resync would not teach
+// the board.
+//
+// Deliberately at the END of this file: T-27-03 owns the import line and the
+// checkpoint fixtures above, so this suite carries its own requires.
+
+const bfs = require('fs');
+const bos = require('os');
+const {
+  behindWarning, movedSince, stateDerivedAt,
+} = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'front.cjs'));
+
+const AT = Date.parse('2026-09-08T10:00:00.000Z');   // the state was derived here
+const AFTER = '2026-09-08T10:07:00.000Z';            // …and this happened after
+const BEFORE = '2026-09-08T09:00:00.000Z';
+
+// A graph dir holding exactly the journal these cases are about.
+function journalDir(events) {
+  const dir = bfs.mkdtempSync(path.join(bos.tmpdir(), 'shipyard-front-behind-'));
+  bfs.writeFileSync(
+    path.join(dir, 'delivery-log.jsonl'),
+    events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : '')
+  );
+  return dir;
+}
+const MERGE = { ts: AFTER, event: 'merge', ticket: 'T-27-02', pr: 47, by: 'sentinel' };
+const PUSH = { ts: AFTER, event: 'attempt', ticket: 'T-27-02', pr: 47, n: 2, outcome: 'pushed' };
+
+suite('front — the board says when it is behind reality');
+
+test('a journalled merge newer than the state prints one behind-line naming state-sync', () => {
+  const w = behindWarning(journalDir([{ ts: BEFORE, event: 'status_change', ticket: 'T-27-01' }, MERGE]), AT);
+  assert.ok(w, 'a merge after the state was derived is proof the board is behind');
+  assert.strictEqual(w.event, 'merge');
+  assert.strictEqual(w.ticket, 'T-27-02');
+  assert.strictEqual(w.ts, AFTER);
+  assert.ok(/state-sync/.test(w.why), `the remedy must be named: ${w.why}`);
+  assert.ok(/behind/i.test(w.why), w.why);
+  // It must not repeat the stale board's contents as fact — those contents are
+  // what is wrong. No bucket name, no count, no verdict.
+  assert.ok(!/fixpoint|actionable/i.test(w.why), `the line must not restate the board: ${w.why}`);
+});
+
+test('a pushed attempt is the same proof — the push is what re-runs the checks', () => {
+  const w = behindWarning(journalDir([PUSH]), AT);
+  assert.ok(w, 'a push moved the world');
+  assert.strictEqual(w.event, 'attempt');
+  assert.ok(/state-sync/.test(w.why), w.why);
+});
+
+test('a pushed fix_round counts too, at whatever spelling of true it was written with', () => {
+  for (const pushed of [true, 'true']) {
+    const w = behindWarning(journalDir([{ ts: AFTER, event: 'fix_round', ticket: 'T-27-02', pushed }]), AT);
+    assert.ok(w, `fix_round pushed=${JSON.stringify(pushed)} must count`);
+  }
+  assert.strictEqual(
+    behindWarning(journalDir([{ ts: AFTER, event: 'fix_round', ticket: 'T-27-02', pushed: false }]), AT), null,
+    'a fix_round that pushed nothing moved nothing'
+  );
+});
+
+// THE ASSERTION THAT MATTERS MOST. `status_change` is written BY state-sync, so
+// it is contemporaneous with the state by construction, and `dispatch` is
+// already overlaid onto the board by dispatch-record's own refresh. Counting
+// either is the false block that fired five times across phases 20 and 22 — and
+// a warning that fires on a contemporaneous event teaches its reader to skip it,
+// which is how this repository lost a gate before.
+test('a tail of ONLY status_change and dispatch newer than the state prints NOTHING', () => {
+  const dir = journalDir([
+    { ts: AFTER, event: 'status_change', ticket: 'T-27-01', from: 'pr-open', to: 'merged', pr: 44 },
+    { ts: AFTER, event: 'dispatch', ticket: 'T-27-02', role: 'executor' },
+    { ts: AFTER, event: 'reuse_scan', ticket: 'T-27-02', hits: 0 },
+    { ts: AFTER, event: 'attempt', ticket: 'T-27-02', outcome: 'no-op' },
+  ]);
+  assert.strictEqual(behindWarning(dir, AT), null);
+});
+
+// A DELIBERATE divergence from the twin in stop-gate.cjs, pinned here so nobody
+// "fixes" the two back into agreement: the stop gate cannot see a park, while
+// this CLI reads the escalation store LIVE on every run (`activeParks`). An
+// escalation is therefore already in the board it is about to print.
+test('an escalation newer than the state prints nothing — this CLI reads the park store live', () => {
+  const dir = journalDir([{ ts: AFTER, event: 'escalation', ticket: 'T-27-02', reason: 'held by hand' }]);
+  assert.strictEqual(behindWarning(dir, AT), null);
+});
+
+test('an event OLDER than the state proves nothing — that is what a resync looks like', () => {
+  assert.strictEqual(behindWarning(journalDir([{ ...MERGE, ts: BEFORE }]), AT), null);
+});
+
+// The seek rule. A read that starts mid-file lands mid-line, so the first line
+// is a fragment and is dropped — ONLY then. Dropping it unconditionally ate the
+// only event in a short journal, which is every project not running for weeks.
+test('a one-event journal keeps its first line', () => {
+  const dir = journalDir([MERGE]);
+  const w = behindWarning(dir, AT);
+  assert.ok(w, 'the only line in the journal is not a fragment');
+  assert.strictEqual(w.ticket, 'T-27-02');
+});
+
+test('a journal past the read window still reads its tail, and its first line IS a fragment', () => {
+  // Padded past 64KB so the read actually seeks: the merge is at the very end,
+  // and the fragment at the front must not throw or count.
+  const pad = [];
+  for (let i = 0; i < 900; i += 1) {
+    pad.push({ ts: BEFORE, event: 'status_change', ticket: `T-19-${String(i).padStart(3, '0')}`, from: 'pending', to: 'pr-open', note: 'x'.repeat(60) });
+  }
+  const dir = journalDir([...pad, MERGE]);
+  assert.ok(bfs.statSync(path.join(dir, 'delivery-log.jsonl')).size > 64 * 1024, 'fixture must exceed the tail window');
+  const w = behindWarning(dir, AT);
+  assert.ok(w, 'the newest events are at the end, which is the end we read');
+  assert.strictEqual(w.ticket, 'T-27-02');
+});
+
+test('no journal, and an unreadable one, are no evidence — never a warning', () => {
+  const dir = bfs.mkdtempSync(path.join(bos.tmpdir(), 'shipyard-front-nojournal-'));
+  assert.strictEqual(behindWarning(dir, AT), null);
+  // and a line that is not JSON at all is skipped rather than fatal
+  bfs.writeFileSync(path.join(dir, 'delivery-log.jsonl'), '{not json\n' + JSON.stringify(MERGE) + '\n');
+  assert.ok(behindWarning(dir, AT), 'one broken line must not hide the event beside it');
+});
+
+test('the newest qualifying event wins, so the line names the most recent write', () => {
+  const dir = journalDir([
+    { ...PUSH, ts: '2026-09-08T10:01:00.000Z' },
+    { ...MERGE, ts: '2026-09-08T10:09:00.000Z', ticket: 'T-27-05' },
+  ]);
+  const m = movedSince(dir, AT);
+  assert.strictEqual(m.event.ticket, 'T-27-05');
+  assert.strictEqual(m.event.event, 'merge');
+});
+
+test('with NO derivation timestamp there is no warning — a line off a guessed time is a guess', () => {
+  // `stateDerivedAt` reads the stamp state-sync wrote and nothing else: this
+  // repo TRACKS .planning/, so a checkout rewrites every mtime and an
+  // mtime-based answer would either disarm the guard or invent a time.
+  const dir = journalDir([MERGE]);
+  assert.strictEqual(stateDerivedAt(dir), null, 'no board on disk, no stamp');
+  assert.strictEqual(behindWarning(dir, null), null);
+  bfs.writeFileSync(path.join(dir, 'delivery-front.json'), JSON.stringify({ generated_at: new Date(AT).toISOString() }));
+  assert.strictEqual(stateDerivedAt(dir), AT, 'the front carries the sync stamp (dispatch-record preserves it)');
+  assert.ok(behindWarning(dir), 'and behindWarning resolves it by itself');
+});
+
+test('formatFront prints the behind-line FIRST, before any bucket a reader might believe', () => {
+  const f = computeFront({ T: {} }, { T: { status: 'pending', ready: true } });
+  f.behind = { event: 'merge', ticket: 'T-27-02', ts: AFTER, why: 'the board is behind — run state-sync' };
+  const lines = formatFront(f);
+  assert.strictEqual(lines[0], f.behind.why, `the warning must lead: ${JSON.stringify(lines.slice(0, 2))}`);
+  // and a front with no such field renders exactly as it did before
+  const clean = computeFront({ T: {} }, { T: { status: 'pending', ready: true } });
+  assert.ok(/^front: /.test(formatFront(clean)[0]), formatFront(clean)[0]);
+});
+
+suite('front — D8: the standalone CLI refuses a policy it cannot read (ADR-004 D2)');
+
+// The reviewer's demonstration on PR #60, turned into a fixture. `deliver.md`
+// advertises this CLI as "re-runnable on its own", so its answer is reachable
+// from documented usage — and on a config that does not parse it used to resolve
+// `auto_merge` off the DEFAULTS and offer a paid `finalize` dispatch (a fixer
+// that pushes) with nothing on either face saying the file was unreadable.
+//
+// Measured on the base of this ticket: `--json` for a corrupt config differed
+// from a valid `epic` in the `capacity` block ALONE (T-26-12's cap already
+// refuses there) — every bucket, every `why` and the whole `sentinel` block were
+// identical, and no field carried a reason. So the buckets are what these tests
+// assert, not the rendered text.
+const dfs = require('fs');
+const dos = require('os');
+const { spawnSync: dspawn } = require('child_process');
+const D_SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
+
+// One open PR: green, undrafted, APPROVED, targeting the stack, and carrying NO
+// `gate_status: arch-review=conform` trailer. That is the board where the
+// auto_merge answer decides between a dispatch and a human: with `epic` the
+// missing trailer is the run's work (`finalize`), with `off` an approved green PR
+// is a person's merge (`waiting.merge_human`).
+function demoBoard(configText) {
+  const dir = dfs.mkdtempSync(path.join(dos.tmpdir(), 'shipyard-front-cfg-'));
+  const graph = path.join(dir, '.planning', 'graph');
+  dfs.mkdirSync(graph, { recursive: true });
+  dfs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': {} } }));
+  dfs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({
+    'T-01-01': {
+      status: 'pr-open', pr: 7, draft: false, review_decision: 'APPROVED',
+      merge_scope: 'stacked', checks: { total: 3, failing: 0, pending: 0 },
+      threads: { unresolved: 0 }, base: 'epic/1-x', pr_base: 'epic/1-x',
+    },
+  }));
+  if (configText !== undefined) {
+    dfs.writeFileSync(path.join(dir, '.planning', 'config.json'), configText);
+  }
+  return dir;
+}
+const frontCli = (dir, args = []) => dspawn(process.execPath, [path.join(D_SCRIPTS, 'front.cjs'), ...args],
+  { cwd: dir, encoding: 'utf8' });
+const frontJson = (dir) => {
+  const r = frontCli(dir, ['--json']);
+  assert.strictEqual(r.status, 0, `front --json must exit 0 (${r.stderr})`);
+  return JSON.parse(r.stdout);
+};
+// The comparable half: everything the run acts on, with `capacity` left out —
+// that block already differed on base, and it is not what decides a dispatch.
+const boardShape = (f) => ({ actionable: f.actionable, waiting: f.waiting, parked: f.parked, sentinel: f.sentinel });
+
+const CORRUPT = '{ this is not json';
+
+test('a corrupt config offers NO finalize, and the reason rides both faces', () => {
+  const j = frontJson(demoBoard(CORRUPT));
+  assert.deepStrictEqual(j.actionable.finalize, [],
+    'a config that does not parse authorizes no dispatch, and finalize is a fixer that pushes');
+  assert.strictEqual(j.actionable_count, 0);
+  assert.deepStrictEqual(j.waiting.merge_human, ['T-01-01'],
+    'the ticket is not lost — it is a human\'s merge until the file parses');
+  assert.ok(typeof j.config_invalid === 'string' && j.config_invalid,
+    `the refusal must ride the machine face too: ${JSON.stringify(Object.keys(j))}`);
+  assert.ok(/config\.json/.test(j.config_invalid), j.config_invalid);
+  // ci-wait.cjs's template: the reason is carried on the RESULT, not only where
+  // it came due, and it names the file rather than a flag.
+  assert.ok(/no policy is in effect|does not parse|not valid JSON/.test(j.config_invalid), j.config_invalid);
+
+  const human = frontCli(demoBoard(CORRUPT));
+  assert.strictEqual(human.status, 0, human.stderr);
+  assert.strictEqual(human.stdout.split('\n')[0], j.config_invalid,
+    `the refusal leads the human face: ${JSON.stringify(human.stdout.split('\n').slice(0, 3))}`);
+  assert.ok(!/finalize/.test(human.stdout.split('\n')[1] || ''), human.stdout);
+});
+
+test('the corrupt answer equals the answer a file that SAYS off gives, never the default epic', () => {
+  // The defect stated exactly: the default is `epic`, so an unreadable file used
+  // to produce the `epic` board — the CLI presenting its own default as
+  // something the project had decided.
+  const corrupt = boardShape(frontJson(demoBoard(CORRUPT)));
+  const off = boardShape(frontJson(demoBoard(JSON.stringify({ pipeline: { auto_merge: 'off' } }))));
+  const epic = boardShape(frontJson(demoBoard(JSON.stringify({ pipeline: { auto_merge: 'epic' } }))));
+  assert.deepStrictEqual(corrupt, off, 'an unknown policy authorizes what the most restrictive one does');
+  assert.notDeepStrictEqual(corrupt, epic, 'and it must NOT be the default epic board');
+});
+
+test('NO config file at all is not a refusal — that is the regression the guard could introduce', () => {
+  // `loadConfig` reports an absent file as `valid: true, error: null`: nobody has
+  // configured this project yet, and the defaults are exactly the right answer.
+  const absent = frontJson(demoBoard(undefined));
+  assert.deepStrictEqual(absent.actionable.finalize, ['T-01-01'], 'defaults still apply to an unconfigured project');
+  assert.strictEqual(absent.config_invalid, undefined, 'and nothing is refused, so nothing is reported');
+  assert.deepStrictEqual(
+    boardShape(absent),
+    boardShape(frontJson(demoBoard(JSON.stringify({ pipeline: { auto_merge: 'epic' } })))),
+    'absent behaves exactly as the shipped default says'
+  );
+});
+
+test('a refused board is never a FIXPOINT — withholding the work must not read as finishing it', () => {
+  // The trap this change could have walked into. Emptying the actionable buckets
+  // is HOW the mutations are withheld, and an empty board reads exactly like a
+  // finished one: on base the corrupt answer at least said `fixpoint: NO —
+  // NOTHING may be dispatched`, so a refusal that left this line alone would have
+  // traded a paid `finalize` for an unearned "everything is delivered → Step 5",
+  // which is a worse offer rather than a safer one. Step 5 is the integrator.
+  const j = frontJson(demoBoard(CORRUPT));
+  assert.strictEqual(j.fixpoint, false, 'a policy nobody can read is not a finished phase');
+  const human = frontCli(demoBoard(CORRUPT)).stdout;
+  assert.ok(/^fixpoint: NO/m.test(human), human);
+  assert.ok(!/fixpoint: YES/.test(human), human);
+  assert.ok(!/Step 5/.test(human), `Step 5 is the integrator, and integrating is a mutation: ${human}`);
+  // ...and the line does not order a retry: nothing will have changed.
+  assert.ok(/not a round to retry/.test(human), human);
+
+  // The absent case keeps its ordinary verdict, whatever it is.
+  const absent = frontCli(demoBoard(undefined)).stdout;
+  assert.ok(!/no policy is in effect/.test(absent), absent);
+});
+
+test('formatFront prints the refusal before any bucket, and ahead of the behind-line', () => {
+  const f = computeFront({ T: {} }, { T: { status: 'pending', ready: true } });
+  f.config_invalid = 'config unreadable: .planning/config.json — fix it';
+  f.behind = { event: 'merge', ticket: 'T-27-02', ts: '2026-09-08T10:00:00.000Z', why: 'the board is behind' };
+  const lines = formatFront(f);
+  assert.strictEqual(lines[0], f.config_invalid, JSON.stringify(lines.slice(0, 3)));
+  assert.strictEqual(lines[1], f.behind.why, JSON.stringify(lines.slice(0, 3)));
+  // A front nobody flagged renders exactly as it did before.
+  const clean = computeFront({ T: {} }, { T: { status: 'pending', ready: true } });
+  assert.ok(/^front: /.test(formatFront(clean)[0]), formatFront(clean)[0]);
+});
+
 
 done();

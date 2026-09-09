@@ -23,7 +23,9 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 
 const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
 const SENTINEL = path.join(SCRIPTS, 'sentinel.cjs');
-const { movingParentOf, parentIsMoving, movingParentWhy } = require(path.join(SCRIPTS, 'parent-moving.cjs'));
+const {
+  movingParentOf, parentIsMoving, movingParentWhy, limbBaseOf,
+} = require(path.join(SCRIPTS, 'parent-moving.cjs'));
 const { computeFront, formatFront } = require(path.join(SCRIPTS, 'front.cjs'));
 
 const roots = [];
@@ -138,15 +140,74 @@ test('a RED child is held too, because the guard tests the parent BEFORE the che
   assert.deepStrictEqual(f.actionable.fix, [], 'not fix work while the base is about to move');
 });
 
-test('a landed parent releases the child on both sides at once', () => {
-  // The control. Without it every assertion above would be satisfied by a rule
-  // that simply never releases anything.
+test('a landed parent releases the moving-parent hold, and both sides then see a LIMB', () => {
+  // The parent has merged, so the moving-parent hold is released on both sides —
+  // that half is the control for every assertion above, which would otherwise be
+  // satisfied by a rule that never releases anything.
+  //
+  // What the child is released INTO is the second fact, and it is not `merge`.
+  // Its `pr_base` still literally names `ticket/P`, whose ticket has merged: the
+  // branch survives the squash (`deleteBranchOnMerge=false`) while its content is
+  // in the epic, so landing here would strand this work on a limb — PR #52's
+  // shape, measured, with the epic missing files the board reported merged.
+  //
+  // The fixture is deliberately LEFT un-retargeted, because this is the only
+  // state in which the two readers can be caught disagreeing: `sentinel.cjs merge`
+  // has refused a limb base since ADR-006, and while the predicate lived in
+  // sentinel.cjs alone `computeFront` answered `actionable.merge: ['C']` for
+  // exactly the PR the gate declined — round after round. Re-pointing this
+  // fixture at the epic makes the file pass by removing the observation, which is
+  // silencing the alarm rather than answering it. The retargeted case is the test
+  // BELOW; here the assertion is that the two answers are the same one.
   const landed = { ...state, P: { ...state.P, status: 'merged' } };
+  const { summary, byId } = duty(project({ tickets, state: landed }));
+  const f = computeFront(tickets, landed, { autoMerge: true });
+
+  assert.deepStrictEqual(f.waiting.parent, [], 'a merged parent is not one anybody is driving');
+
+  // The invariant first, derived rather than restated: whatever the answer is,
+  // the guard's actionable set and the board's actionable buckets hold it alike.
+  const GUARD_ACTIONABLE = new Set(['ci-fix', 'review-fix', 'arch-review', 'undraft', 'merge']);
+  const guardActionable = summary.items.filter((i) => GUARD_ACTIONABLE.has(i.action)).map((i) => i.ticket).sort();
+  const boardActionable = Object.values(f.actionable).flat().sort();
+  assert.deepStrictEqual(guardActionable, boardActionable,
+    `guard actionable ${guardActionable} vs board actionable ${boardActionable}`);
+
+  // …and then the answer itself, on both sides.
+  assert.strictEqual(byId.C.action, 'human-merge', byId.C.why);
+  assert.strictEqual(bucketOf(f, 'C'), 'waiting.merge_human', `${bucketOf(f, 'C')}: ${f.why.C}`);
+  assert.deepStrictEqual(f.actionable.merge, [], 'the board must not offer the merge the gate refuses');
+  // One remedy, not two paraphrases: the operator must not have to guess which
+  // of the guard's and the board's sentences is the current one.
+  for (const why of [byId.C.why, f.why.C]) {
+    assert.ok(/already MERGED/.test(why), why);
+    assert.ok(/gh pr edit 2 .*--base epic\/24-x/.test(why), why);
+    assert.ok(/base-merge\.cjs C /.test(why), why);
+  }
+  // And the predicate itself, in isolation, at the base each reader measures.
+  assert.strictEqual(limbBaseOf('C', 'ticket/P', { tickets, state: landed }), 'P');
+  assert.strictEqual(limbBaseOf('C', 'epic/24-x', { tickets, state: landed }), null,
+    'the epic is never a limb');
+  assert.strictEqual(limbBaseOf('C', 'ticket/P', { tickets, state }), null,
+    'an OPEN parent branch is the stack, not a limb');
+});
+
+test('the retargeted child lands — on both sides, from the same fixture', () => {
+  // The other half of the control, and the reason the case above may assert a
+  // refusal without hiding a rule that refuses everything: apply the remedy the
+  // two readers print — retarget onto the epic — and the child becomes the run's
+  // merge, on both sides at once.
+  const landed = {
+    ...state,
+    P: { ...state.P, status: 'merged' },
+    C: { ...state.C, pr_base: 'epic/24-x' },
+  };
   const { byId } = duty(project({ tickets, state: landed }));
   const f = computeFront(tickets, landed, { autoMerge: true });
   assert.strictEqual(byId.C.action, 'merge', byId.C.why);
   assert.deepStrictEqual(f.actionable.merge, ['C'], f.why.C);
   assert.deepStrictEqual(f.waiting.parent, []);
+  assert.deepStrictEqual(f.waiting.merge_human, [], 'nothing is a human\'s here');
 });
 
 test('a PARKED parent is not a moving parent — for the guard and for the board', () => {

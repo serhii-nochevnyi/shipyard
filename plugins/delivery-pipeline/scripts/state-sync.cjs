@@ -600,12 +600,55 @@ for (const [id, t] of Object.entries(tickets)) {
         }
       }
     }
+    // THE BASE IS ONE FIELD WITH TWO JOBS (ADR-006 D3): it decides what the
+    // review diff shows AND where the squash LANDS. A parent's ticket branch is
+    // a legal base only while that parent's PR is still open — the post-merge
+    // retarget is what then gives both properties. Once the parent has merged,
+    // its branch is a limb: its content is in the epic, nothing will carry a
+    // child squashed onto it any further, and PR #52 proved that failure is
+    // invisible from every board the conveyor prints (the ticket read `merged`,
+    // the PR read merged, and the epic did not have the work).
+    //
+    // Resolution is THIS reader's because it is the only one holding the live
+    // parent status. Every arm carries its reason, because the one thing the
+    // incident's board could not say was WHY the base it printed was the base.
+    //
+    // A missing fact must not resolve to a branch. `pending` is not "the parent
+    // is early", it is "no branch was observed on the remote", and an
+    // unreachable repo makes every status in it a non-observation — both used to
+    // yield `tickets[pp].branch`, i.e. a base that may not exist at all. The
+    // epic always exists (Step 0 ensures it), so it is the safe fall-back in
+    // every unproven case, and `base-merge` keeps the diff a single slice.
+    //
     // A stale tickets.json (generated before repos were part of the graph) can
     // still carry a foreign primary parent; never emit a base that does not
     // exist in this ticket's repo — `gh pr create --base` would just fail.
     const pp = t.primary_parent && repoOf(tickets[t.primary_parent]) === repoOf(t) ? t.primary_parent : null;
-    if (!pp) s.base = t.epic;
-    else s.base = state[pp] && state[pp].status === 'merged' ? t.epic : (tickets[pp] ? tickets[pp].branch : t.epic);
+    const ppState = pp ? state[pp] : null;
+    const ppBranch = pp && tickets[pp] ? tickets[pp].branch : null;
+    const ppRepoOk = pp ? (repoData.get(repoOf(tickets[pp])) || {}).available === true : false;
+    if (!pp) {
+      s.base = t.epic;
+      s.base_reason = `no primary parent — a root ticket PRs into ${t.epic}`;
+    } else if (ppState && ppState.status === 'merged') {
+      s.base = t.epic;
+      s.base_reason = `${pp} is MERGED, so its branch is no longer where work lands — the base is ${t.epic} (base-merge it in first to keep the review diff one slice)`;
+    } else if (!ppState) {
+      s.base = t.epic;
+      s.base_reason = `${pp}'s status could not be read (no entry in delivery state) — falling back to ${t.epic} rather than resolving a missing fact to a branch`;
+    } else if (!ppRepoOk) {
+      s.base = t.epic;
+      s.base_reason = `${pp}'s status could not be read (repo ${repoOf(tickets[pp]) || 'this repo'} is not reachable through gh) — falling back to ${t.epic} rather than resolving a missing fact to a branch`;
+    } else if (!ppBranch) {
+      s.base = t.epic;
+      s.base_reason = `${pp} carries no branch in the graph — falling back to ${t.epic}`;
+    } else if (ppState.status === 'pending') {
+      s.base = t.epic;
+      s.base_reason = `${pp} has no branch on the remote yet (status pending) — ${ppBranch} is not a base that exists, so the base is ${t.epic}`;
+    } else {
+      s.base = ppBranch;
+      s.base_reason = `${pp} is ${ppState.status} — cascade off ${ppBranch}; the sentinel retargets this PR onto ${t.epic} when ${pp} lands`;
+    }
     s.epic = t.epic;
 
     // The sentinel's mandate boundary, computed rather than judged: `stacked`
@@ -633,9 +676,14 @@ for (const [id, t] of Object.entries(tickets)) {
     const unmergedDep = deps
       .filter((d) => state[d] && state[d].status !== 'merged' && tickets[d] && repoOf(tickets[d]) === repoOf(t))
       .sort((a, b) => (tickets[b].wave || 0) - (tickets[a].wave || 0))[0];
-    s.base = unmergedDep
-      ? tickets[unmergedDep].branch
-      : (repoData.get(repoOf(t)).defaultBranch || DEFAULT_BRANCH);
+    const integ = repoData.get(repoOf(t)).defaultBranch || DEFAULT_BRANCH;
+    s.base = unmergedDep ? tickets[unmergedDep].branch : integ;
+    // Same field, same obligation to say why it holds that value — direct-to-main
+    // waits for the MERGE, so an unmerged dependency is the only thing that can
+    // move the base off the integration branch here.
+    s.base_reason = unmergedDep
+      ? `direct-to-main: ${unmergedDep} is not merged yet — stacking on ${tickets[unmergedDep].branch}`
+      : `direct-to-main: no unmerged dependency in this repo — the base is ${integ}`;
   }
 
   if (UNDELIVERED.has(s.status)) {

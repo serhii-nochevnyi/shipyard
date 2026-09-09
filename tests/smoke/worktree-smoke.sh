@@ -473,6 +473,224 @@ else
     || bad "gc rejects an unknown flag with a usage line" "$out"
 fi
 
+# ── create cuts from the ref the BOARD named, not from a stale local one ─────
+# Measured four separate times in one session: `origin/epic/<phase>` two commits
+# ahead after the guard merged ticket PRs through the API, the local
+# `epic/<phase>` still at the pre-merge tip, and `create` reporting success while
+# cutting from the local one — so the executor never saw the predicates its plan
+# was written against. A bare name resolves refs/heads BEFORE refs/remotes, which
+# is what makes a stale local ref worse than a missing one: a missing one fails
+# loudly (the case above), a stale one succeeds and lies. Same lesson
+# graph-dir.cjs's resolveBaseRef records for the two worktree gates.
+git init -q --bare "$W/sorigin"
+git init -q "$W/sseed"
+( cd "$W/sseed"
+  echo one > s.txt
+  git add s.txt
+  git commit -qm 'init'
+  git remote add origin "$W/sorigin"
+  git push -q -u origin main
+  git checkout -q -b epic/09-stale
+  echo epic-tip-a >> s.txt
+  git add s.txt
+  git commit -qm 'epic tip A'
+  git push -q -u origin epic/09-stale )
+git clone -q "$W/sorigin" "$W/stale"
+git -C "$W/stale" branch --track epic/09-stale origin/epic/09-stale >/dev/null 2>&1
+stale_tip_a="$(git -C "$W/stale" rev-parse refs/heads/epic/09-stale)"
+# origin moves and the clone is never told — the state a session checkout is in
+# after the sentinel merges two PRs through the GitHub API.
+( cd "$W/sseed" && echo epic-tip-b >> s.txt && git add s.txt \
+  && git commit -qm 'epic tip B' && git push -q origin epic/09-stale ) >/dev/null 2>&1
+stale_tip_b="$(git -C "$W/sseed" rev-parse HEAD)"
+SWT="$W/stalewt"
+run_stale() { ( cd "$W/stale" && SHIPYARD_WORKTREE_ROOT="$SWT" \
+  bash "$SCRIPTS/ticket-worktree.sh" "$@" ); }
+if out="$(run_stale create T-09-01 ticket/T-09-01-x epic/09-stale 2>&1)"; then
+  cut="$(git -C "$SWT/T-09-01" rev-parse HEAD 2>/dev/null || echo none)"
+  [[ "$cut" == "$stale_tip_b" ]] \
+    && ok "create cuts from origin/<base>, not from a stale local ref of the same name" \
+    || bad "create cuts from origin/<base>, not from a stale local ref" \
+         "cut from ${cut:0:7} (the stale local tip is ${stale_tip_a:0:7}); expected the origin tip ${stale_tip_b:0:7}"
+else
+  bad "create cuts from origin/<base> when the local ref is stale" "$out"
+fi
+
+# ── …and a branch it REUSES is measured, not reused silently ─────────────────
+# Reuse is the normal resumed-run path: an existing worktree on the right branch,
+# or an existing local branch with no worktree. Both used to say only "reusing",
+# so a branch cut before three ticket merges landed under the epic looked exactly
+# like one cut a second ago. The distance is reported and NOT acted on — the
+# branch may hold committed work that exists nowhere else.
+( cd "$W/sseed" && echo epic-tip-c >> s.txt && git add s.txt \
+  && git commit -qm 'epic tip C' && git push -q origin epic/09-stale ) >/dev/null 2>&1
+out="$(run_stale create T-09-01 ticket/T-09-01-x epic/09-stale 2>&1 || true)"
+grep -qF '1 commit(s) behind origin/epic/09-stale' <<<"$out" \
+  && ok "create reports how far a REUSED worktree's branch is from origin/<base>" \
+  || bad "create reports the distance of the worktree it reuses" "$out"
+
+# the same for a branch whose worktree is gone but whose ref remains — and the
+# branch must be reused where it stands, never re-cut onto the base
+run_stale remove T-09-01 >/dev/null 2>&1
+( cd "$W/sseed" && echo epic-tip-d >> s.txt && git add s.txt \
+  && git commit -qm 'epic tip D' && git push -q origin epic/09-stale ) >/dev/null 2>&1
+out="$(run_stale create T-09-01 ticket/T-09-01-x epic/09-stale 2>&1 || true)"
+grep -qF '2 commit(s) behind origin/epic/09-stale' <<<"$out" \
+  && ok "create reports how far a REUSED local branch is from origin/<base>" \
+  || bad "create reports the distance of the branch it reuses" "$out"
+[[ "$(git -C "$SWT/T-09-01" rev-parse HEAD 2>/dev/null || echo none)" == "$stale_tip_b" ]] \
+  && ok "…and reuses that branch where it stands instead of re-cutting it" \
+  || bad "create reuses an existing branch as it stands" \
+       "branch moved to $(git -C "$SWT/T-09-01" rev-parse --short HEAD 2>/dev/null || echo none)"
+
+# ── epic-branch refresh: an epic learns what landed under its base ───────────
+# Nothing in delivery ever merged the base INTO an epic. Two epics were measured
+# 27 then 31 commits behind, each containing zero occurrences of the predicates
+# their next tickets were written against. `refresh` is that verb.
+git init -q --bare "$W/rorigin"
+git init -q "$W/rseed"
+( cd "$W/rseed"
+  echo base > f.txt
+  git add f.txt
+  git commit -qm 'init'
+  git remote add origin "$W/rorigin"
+  git push -q -u origin main
+  git checkout -q -b epic/07-refresh
+  echo epicwork > e.txt
+  git add e.txt
+  git commit -qm 'epic work'
+  git push -q -u origin epic/07-refresh
+  git checkout -q main )
+git clone -q "$W/rorigin" "$W/refresh"
+git -C "$W/refresh" branch --track epic/07-refresh origin/epic/07-refresh >/dev/null 2>&1
+epic_before="$(git -C "$W/refresh" rev-parse refs/heads/epic/07-refresh)"
+# the base moves on origin and this checkout is never told
+( cd "$W/rseed" && echo more >> f.txt && git add f.txt \
+  && git commit -qm 'base moved' && git push -q origin main ) >/dev/null 2>&1
+base_after="$(git -C "$W/rseed" rev-parse main)"
+run_refresh() { ( cd "$W/refresh" && bash "$SCRIPTS/epic-branch.sh" "$@" ); }
+
+if out="$(run_refresh refresh epic/07-refresh main 2>&1)"; then
+  ok "refresh merges a moved base into the epic and exits 0"
+else
+  bad "refresh merges a moved base into the epic" "$out"
+fi
+pushed="$(git -C "$W/rorigin" rev-parse epic/07-refresh)"
+[[ "$pushed" != "$epic_before" ]] \
+  && ok "…and pushes the merge to origin/<epic>" \
+  || bad "refresh pushes the merge" "origin/epic/07-refresh is still at ${epic_before:0:7}"
+git -C "$W/rorigin" merge-base --is-ancestor "$base_after" "$pushed" 2>/dev/null \
+  && ok "…so the pushed epic now contains what landed on the base" \
+  || bad "the pushed epic contains the base" "origin/main ${base_after:0:7} is not an ancestor of ${pushed:0:7}"
+
+# THE half that was broken four times. A refresh performed from a detached
+# worktree updates origin and leaves the local refs where they were; the next
+# `create` then cuts from the old tip and reports success.
+[[ "$(git -C "$W/refresh" rev-parse refs/heads/epic/07-refresh)" == "$pushed" ]] \
+  && ok "…and the LOCAL epic ref points at the pushed tip" \
+  || bad "refresh fast-forwards the local epic ref" \
+       "local epic at $(git -C "$W/refresh" rev-parse --short refs/heads/epic/07-refresh), pushed ${pushed:0:7}"
+[[ "$(git -C "$W/refresh" rev-parse refs/heads/main)" == "$base_after" ]] \
+  && ok "…and the LOCAL base ref points at the base tip" \
+  || bad "refresh fast-forwards the local base ref" \
+       "local main at $(git -C "$W/refresh" rev-parse --short refs/heads/main), origin ${base_after:0:7}"
+# `main` is CHECKED OUT in that clone, so moving its ref has to move the index
+# and the tree with it: an `update-ref` there leaves a phantom diff behind, in
+# the opposite direction, over files nobody edited.
+[[ -z "$(git -C "$W/refresh" status --porcelain)" ]] \
+  && ok "…and the checked-out base worktree is left clean, not phantom-dirty" \
+  || bad "refresh moves a checked-out ref with the tree" "$(git -C "$W/refresh" status --porcelain)"
+grep -q more "$W/refresh/f.txt" \
+  && ok "…and that working tree actually holds what landed" \
+  || bad "the checked-out base tree holds the base's content" "$(cat "$W/refresh/f.txt")"
+
+# ── refresh of an epic already containing its base: no push, local refs still move ──
+# This is the OTHER measured state, and the one a `behind == 0` early return
+# would do nothing for: origin/epic two commits ahead after the guard merged two
+# ticket PRs through the API, the base itself unmoved (so nothing to merge and
+# nothing to push), and the local epic still at the pre-merge tip.
+( cd "$W/rseed" && git fetch -q origin && git checkout -q epic/07-refresh \
+  && git reset -q --hard origin/epic/07-refresh \
+  && echo landed > g.txt && git add g.txt && git commit -qm 'a ticket landed under the epic' \
+  && git push -q origin epic/07-refresh && git checkout -q main ) >/dev/null 2>&1
+epic_landed="$(git -C "$W/rorigin" rev-parse epic/07-refresh)"
+if out="$(run_refresh refresh epic/07-refresh main 2>&1)"; then
+  ok "refresh of an epic that already contains its base exits 0"
+else
+  bad "refresh of a current epic exits 0" "$out"
+fi
+grep -q 'already up to date' <<<"$out" \
+  && ok "…and says so instead of reporting a merge it did not do" \
+  || bad "refresh of a current epic says so" "$out"
+[[ "$(git -C "$W/rorigin" rev-parse epic/07-refresh)" == "$epic_landed" ]] \
+  && ok "…and pushes nothing" \
+  || bad "refresh of a current epic pushes nothing" "origin/epic/07-refresh moved"
+[[ "$(git -C "$W/refresh" rev-parse refs/heads/epic/07-refresh)" == "$epic_landed" ]] \
+  && ok "…and still fast-forwards the stale local epic ref onto what landed under it" \
+  || bad "refresh moves a stale local epic ref with nothing to push" \
+       "local epic at $(git -C "$W/refresh" rev-parse --short refs/heads/epic/07-refresh), origin ${epic_landed:0:7}"
+
+# ── a conflicting refresh refuses, names the paths, and changes nothing ──────
+# A conflict here is a decision about somebody's work; this script has no
+# standing to make it in either direction.
+( cd "$W/rseed" && git fetch -q origin \
+  && git checkout -q -b epic/08-conflict origin/main \
+  && echo epicside > c.txt && git add c.txt && git commit -qm 'the epic writes c.txt' \
+  && git push -q -u origin epic/08-conflict \
+  && git checkout -q main && git reset -q --hard origin/main \
+  && echo baseside > c.txt && git add c.txt && git commit -qm 'the base writes c.txt' \
+  && git push -q origin main ) >/dev/null 2>&1
+git -C "$W/refresh" fetch -q origin >/dev/null 2>&1
+git -C "$W/refresh" branch --track epic/08-conflict origin/epic/08-conflict >/dev/null 2>&1
+conf_before="$(git -C "$W/refresh" rev-parse refs/heads/epic/08-conflict)"
+wt_before="$(git -C "$W/refresh" worktree list --porcelain | grep -c '^worktree ' || true)"
+if out="$(run_refresh refresh epic/08-conflict main 2>&1)"; then
+  bad "refresh refuses a conflicting merge instead of resolving it" "$out"
+else
+  ok "refresh refuses a conflicting merge instead of resolving it"
+fi
+grep -q 'c\.txt' <<<"$out" \
+  && ok "…and names the conflicting path" \
+  || bad "refresh names the conflicting paths" "$out"
+[[ "$(git -C "$W/refresh" rev-parse refs/heads/epic/08-conflict)" == "$conf_before" ]] \
+  && ok "…and leaves the local epic branch exactly where it was" \
+  || bad "a refused refresh leaves the epic alone" \
+       "epic/08-conflict moved to $(git -C "$W/refresh" rev-parse --short refs/heads/epic/08-conflict)"
+[[ "$(git -C "$W/rorigin" rev-parse epic/08-conflict)" == "$conf_before" ]] \
+  && ok "…and pushes nothing" \
+  || bad "a refused refresh pushes nothing" "origin/epic/08-conflict moved"
+wt_after="$(git -C "$W/refresh" worktree list --porcelain | grep -c '^worktree ' || true)"
+[[ "$wt_after" == "$wt_before" ]] \
+  && ok "…and gives back the worktree it merged in, on the failure path too" \
+  || bad "a refused refresh leaves no worktree behind" \
+       "$wt_before worktree(s) before, $wt_after after: $(git -C "$W/refresh" worktree list)"
+
+# ── an epic that is not on origin is NOTHING TO REFRESH, not a fault ────────
+# Step 0 refreshes every epic the GRAPH knows, so this fires on most cold starts:
+# a phase that has not started yet (Step 3.0 creates that branch later, with
+# `ensure`) and a phase that shipped and had its epic reaped. A per-epic non-zero
+# there is how a reader learns to ignore exit codes — and naming `ensure` as the
+# remedy is worse than noise, because an agent obeying it would recreate a dead
+# epic branch off the base and PUSH it for a phase that shipped weeks ago.
+if out="$(run_refresh refresh epic/99-never main 2>&1)"; then
+  grep -q 'nothing to refresh' <<<"$out" \
+    && ok "refresh of an epic that is not on origin exits 0 and says there is nothing to refresh" \
+    || bad "refresh of an absent epic says what is true" "$out"
+else
+  bad "refresh of an epic that is not on origin exits 0" "$out"
+fi
+if grep -q 'ensure' <<<"$out"; then
+  bad "refresh must not send the reader to recreate a reaped epic" "$out"
+else
+  ok "…and does not name a verb that would recreate a branch somebody reaped"
+fi
+if git -C "$W/rorigin" show-ref --verify --quiet refs/heads/epic/99-never \
+   || git -C "$W/refresh" show-ref --verify --quiet refs/heads/epic/99-never; then
+  bad "refresh creates no branch for an epic that is not on origin" "epic/99-never appeared"
+else
+  ok "…and creates no branch for it, on origin or locally"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]] || exit 1

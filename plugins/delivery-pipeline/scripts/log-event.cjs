@@ -10,7 +10,7 @@
 //   log-event.cjs attempt ticket=T-02-03 pr=445 n=2 role=ci-fix model=opus signature=9f2a outcome=pushed
 //   log-event.cjs fix_round ticket=T-02-05 pr=447 outcome=no-op pushed=false
 //   log-event.cjs reuse_scan ticket=T-02-03 hits=2 verdict=fresh
-//   log-event.cjs base_merge ticket=T-02-03 pr=445 base=epic/02-x head=9f2ab1c
+//   log-event.cjs base_merge ticket=T-02-03 pr=445 base=epic/02-x head=$(git rev-parse HEAD)
 //
 // `base_merge` is the guard's `base-merge` duty recording itself: a moved base
 // merged into a ticket branch. It went out under an ad-hoc slug for a while
@@ -24,6 +24,8 @@
 // Some events belong to a script and are refused here — see OWNED_BY_SCRIPTS
 // below, which says for each one what writing it by hand would break. The journal
 // is append-only; pipeline-stats.cjs reads it.
+//
+// Every sha it records is the FULL FORTY characters, on write — see SHA_FIELDS.
 
 const fs = require('fs');
 const path = require('path');
@@ -112,10 +114,18 @@ const duplicate = (e) =>
 
 // Not a duplicate: an incomplete act. The journal line is half of a park, and the
 // half that leaves no verdict behind.
+//
+// Two clauses are per-event and both DEFAULT to the park's wording, so the
+// escalation and plan-defect messages are byte-identical to what they have always
+// been: `otherHalf` names the half a hand-written line skips, and `lost` names
+// what the next session is then missing. `dispatch` is the third member and skips
+// a different half — the durable record the front reads — for the same reason and
+// with the same consequence in the last clause: the ticket is handed straight
+// back.
 const halfAct = (e) =>
   `refusing a half-recorded ${e.kind}.\n` +
-  '  Writing it here would record the fact without PARKING the ticket, so the next session\n' +
-  '  inherits a metric and no verdict — and the front hands the ticket straight back.\n' +
+  `  Writing it here would record the fact without ${e.otherHalf || 'PARKING the ticket'}, so the next session\n` +
+  `  inherits a metric and no ${e.lost || 'verdict'} — and the front hands the ticket straight back.\n` +
   `  \`${e.fix}\` does both in one act.`;
 
 // Not a duplicate and not half an act: the quarantine has NO store beside the
@@ -139,6 +149,21 @@ const OWNED_BY_SCRIPTS = {
   plan_defect: {
     by: 'escalation-record.cjs mark-plan-defect', kind: 'plan defect', why: halfAct,
     fix: 'escalation-record.cjs mark-plan-defect <ticket> <plan-path> <reason...>',
+  },
+  // `dispatch` is a half-act one store over, and it is the entry this repository
+  // asserted was already here: T-25-05's own plan said `log-event.cjs` refuses it
+  // ("it refuses the events other scripts own"), a reviewer ran the command, and
+  // the line landed in the journal. What a hand-written one costs is everything
+  // `dispatch-record.cjs mark` does BESIDE the journal line — the durable record
+  // `activeDispatches` reads, the front refresh that moves the ticket out of
+  // `execute`, and the validation of the role, the tier, the effort pair and the
+  // agent file. So the metric says an agent holds the ticket while the board
+  // offers it as work to start, which is the exact defect that store was built for.
+  dispatch: {
+    by: 'dispatch-record.cjs mark', kind: 'dispatch', why: halfAct,
+    otherHalf: 'MARKING the ticket as held',
+    lost: 'record',
+    fix: 'dispatch-record.cjs mark <ticket> <role> --model <alias> --effort <level>',
   },
   flake: {
     by: 'failure-signature.cjs rerun', why: forgedState,
@@ -182,6 +207,26 @@ function coerce(v) {
   return v;
 }
 
+// ── ONE SHA FORMAT: the full forty characters ────────────────────────────────
+//
+// Measured in this project's own journal before the rule existed: `head` appeared
+// at 40, 7 AND 6 characters, across `attempt`, `base_merge` and `arch_review`.
+// The direction of the loss is what settles the format — `gate_status` records the
+// full forty (gate-trailer.cjs's `normSha`), and its own comment says a reader
+// cannot lengthen an abbreviation, so a journal holding both formats cannot be
+// compared against a trailer or a `headRefOid` at all. ADR-002 D5 binds an
+// architecture verdict to the head it judged, so the first reader to make that
+// comparison gets a FALSE MISMATCH — a verdict that looks stale when it is not,
+// which is the failure that gate exists to prevent. Refused rather than padded,
+// because padding is the lengthening that is impossible.
+//
+// The set is keyed EXPLICITLY, never guessed from the key name or the value:
+// `signature` is failure-signature.cjs's four hex characters and appears on
+// nineteen journal lines, and a rule that matched hex-looking values would refuse
+// every one of them. Add a key here when a writer starts recording a second sha.
+const SHA_FIELDS = new Set(['head', 'head_sha']);
+const FULL_SHA = /^[0-9a-fA-F]{40}$/;
+
 const rec = { ts: new Date().toISOString(), event };
 for (const pair of pairs) {
   const eq = pair.indexOf('=');
@@ -194,7 +239,28 @@ for (const pair of pairs) {
     console.error(`log-event: bad key "${key}"`);
     process.exit(2);
   }
-  rec[key] = coerce(pair.slice(eq + 1));
+  const raw = pair.slice(eq + 1);
+  if (SHA_FIELDS.has(key) && raw !== '') {
+    // An EMPTY value is absence, not a bad sha — `DECLARED_FIELDS` below already
+    // says so for the event that declares the key, and refusing here would turn a
+    // missing field into a lost event.
+    if (!FULL_SHA.test(raw)) {
+      console.error(
+        `log-event: "${key}=${raw}" is ${raw.length} characters — the journal records a sha as the full 40.\n` +
+        '  `gate_status` records it that way and a reader holding only the journal cannot lengthen an\n' +
+        '  abbreviation, so the two formats never compare and a live verdict reads as stale.\n' +
+        `  Pass the full sha: ${key}=$(git rev-parse HEAD) (never --short), or origin's own 40-character oid.`
+      );
+      process.exit(1);
+    }
+    // Validated and written from the RAW text, lower-cased: two spellings of one
+    // sha do not compare either, and `coerce` would turn an all-decimal sha into
+    // a Number — a forty-digit one JSON-encodes as 1.1111111111111112e+39, which
+    // is the very loss this rule exists to prevent.
+    rec[key] = raw.toLowerCase();
+    continue;
+  }
+  rec[key] = coerce(raw);
 }
 
 // The fields a DECLARED event needs to be worth reading back. Warned about, not

@@ -193,10 +193,19 @@ The trailer, written by `arch-review` through one script — never by hand:
 
 ```bash
 node $SHIPYARD_ROOT/scripts/gate-trailer.cjs write <pr> --repo <owner/name> \
-     --arch-review conform \
+     --arch-review conform --base-tree <base_tree> \
      --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped>
 gh pr ready <pr> --repo <owner/name>
 ```
+
+`<base_tree>` is arch-review's own `base_tree:` output field, copied verbatim —
+all forty hex characters of the merge-base TREE that judge measured, reported
+beside its verdict (`references/arch-review.md`). Never a branch name and never
+an abbreviation: the writer refuses both, and nothing here computes a substitute,
+because a base_tree nobody measured is an assertion rather than a proof. It is
+optional to the script and mandatory in practice — a trailer written without it
+can never be carried, so every later base move that provably changes nothing buys
+the ~150k-token re-judgement again.
 
 Do not invent that trailer and do not assemble one yourself. It IS the merge gate
 — `sentinel.cjs merge` refuses without it — and the writer holds four rules that
@@ -257,7 +266,7 @@ git -C <worktree> rev-parse HEAD                     # must equal the pushed hea
 node $SHIPYARD_ROOT/scripts/reviewers.cjs reinit <pr> [--repo owner/name]
 node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> \
      role=<ci-fix|review-fix> model=<tier> outcome=<pushed|no-op|escalate|flake> \
-     signature=<sig> head=<sha> hypothesis="<one sentence: what you believed was wrong>" \
+     signature=<sig> head=<full 40-char sha> hypothesis="<one sentence: what you believed was wrong>" \
      --graph <project>/.planning/graph
 ```
 `signature` and `head` are what the next `verdict` compares — without them every
@@ -315,7 +324,7 @@ reinit is not optional.
   (`dispatch-record.cjs`), which is what stops the run being told those tickets
   are un-taken while you work. Run `dispatch-record.cjs clear <T>` as soon as a PR
   is merged, parked, or handed to a person, and
-  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --reason "<branch>"`
+  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>"`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as
@@ -323,10 +332,11 @@ reinit is not optional.
   own id (the task id the Workflow tool returns, or the agent id the Agent tool
   returns) belongs in your report — `mark` stores the ticket, the role, the time
   and what you dispatched it at, and no id.
-  **The pair is the one `pipeline-config.cjs model <role> --json …` just gave you**,
-  including the `rethink` deepening — re-deriving it here would record the ladder's
-  opinion instead of your dispatch, and recording nothing is why the journal cannot
-  today say what any fix round ran at. Add `--effort-applied <effort>` only when the
+  **The pair AND the route are the ones `pipeline-config.cjs model <role> --json …`
+  just gave you**, including the `rethink` deepening — re-deriving either here
+  would record the ladder's opinion instead of your dispatch, and recording
+  nothing is why the journal cannot today say what any fix round ran at. Add
+  `--effort-applied <effort>` only when the
   Workflow tool carried the fixer (its `agent()` takes an effort); an `Agent`-spawned
   fixer runs at the session's own depth, so the flag is OMITTED and its absence is
   the honest "unmeasured". On the Codex bundle add

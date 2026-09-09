@@ -2,8 +2,35 @@
 
 - **Status**: accepted
 - **Date**: 2026-09-07
-- **Supersedes**: nothing. Replaces the tier reasoning inside ADR-001's model
-  ladder and refines ADR-003 D3.
+- **Supersedes**: nothing wholesale. Replaces the tier reasoning inside
+  ADR-001's model ladder, and retires FOUR claims in ADR-003 — read out of
+  ADR-003 rather than inferred from the amendment dates, because this field said
+  "refines ADR-003 D3" while the amendments of 2026-09-08 had already retired
+  more than D3:
+  - **ADR-003 D3** — "`fable` stays the default for judgment on Claude". Retired
+    by **D1/D4** here and already struck through in ADR-003 itself. What survives
+    is its alias half: aliases remain the only thing shipyard emits.
+  - **ADR-003 D2**'s central clause — "the generator stops writing `model =`"
+    and "no model id is hardcoded anywhere in shipyard". Retired by **D6/D7/D8**:
+    the generator writes a `model` key again, from `pipeline.codex_models`, and
+    `capability.json` ships that palette — model ids and all — as its default.
+    What survives of D2 is the part that was never about the catalog: the effort
+    is still written per role, and a user's own GSD remap is still resolved
+    through GSD's resolver and still outranks ours.
+  - **ADR-003's Context** — "the user confirmed on 2026-09-07 that the CODE is
+    the decision: judgment roles stay on `fable`, because the 1M window is what
+    distinguishes their work". That is D3's premise, and **D1/D4/D10** retire it
+    on the measurement it never had (the largest input in the system is the phase
+    epic diff at ~52k tokens).
+  - **ADR-003's "Not decided here"** — "Whether Astra should be Codex's top tier
+    is GSD's catalog decision, not ours". **D6/D7/D9** decide it: Astra is the
+    palette's ceiling, the palette is OUR configuration rather than GSD's
+    catalog, and its floor is a CLI version this repo checks.
+
+  ADR-003 **D1** (the runtime pins) and **D4** (prose names the tools as they
+  are) are REFINED, not retired: D5 here sharpens D4's "Fable 5.1" to a consent
+  knob plus a version floor, and D9 adds a second floor beside D1's — neither
+  reverses anything either decision said.
 
 ## Context
 

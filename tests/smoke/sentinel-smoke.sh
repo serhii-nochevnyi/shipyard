@@ -83,7 +83,11 @@ JSON
   "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
   "api graphql"*)
     echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
-  "api repos/{owner}/{repo}/compare/ticket/T-01-02-child...ticket/T-01-01-root"*)
+  # Any base the child is measured against: the cascade parent's branch while
+  # that parent's PR is open, or the EPIC once it has landed and the child has
+  # been retargeted (ADR-006 D3 — a merged parent's branch is no longer a legal
+  # base, so the post-merge staleness case is measured against the epic).
+  "api repos/{owner}/{repo}/compare/ticket/T-01-02-child..."*)
     echo "${SENTINEL_SMOKE_BEHIND:-0}" ;;
   "api repos/{owner}/{repo}/compare"*) echo 0 ;;
   # Every row carries gh's own `bucket` beside its `state`. check-state.cjs reads
@@ -106,8 +110,11 @@ JSON
   # board synced by it): with nothing to compare, the verdict still stands, and
   # every merge-path assertion below therefore measures its own rule and not the
   # head binding.
+  # SENTINEL_SMOKE_BASE_102 is where the child's PR POINTS: the parent's branch
+  # while that PR is open (the default, the cascade as designed), or the epic once
+  # the parent has landed and the retarget has happened.
   "pr view 102 --json"*)
-    echo '{"number":102,"state":"OPEN","isDraft":false,"baseRefName":"ticket/T-01-01-root","headRefName":"ticket/T-01-02-child","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-01-02\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green"}' ;;
+    printf '{"number":102,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"ticket/T-01-02-child","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-01-02\\n\\ngate_status: arch-review=conform, drift-check=fresh, checks=green"}\n' "${SENTINEL_SMOKE_BASE_102:-ticket/T-01-01-root}" ;;
   # `reviewers.cjs unresolved` reads the review decision AND the merge state off
   # one PR view — which is how `duty` learns the base moved without a second call
   # per PR per round. SENTINEL_SMOKE_MERGE_STATE is the moved-base fixture.
@@ -520,7 +527,7 @@ fi
 # since it was written, and nothing checked it.
 mergeout="$W/behind.json"
 run_merge() {
-  ( cd "$cpproj" && env "$@" SENTINEL_SMOKE_GREEN_102=1 \
+  ( cd "$cpproj" && env "$@" SENTINEL_SMOKE_GREEN_102=1 SENTINEL_SMOKE_BASE_102=epic/01-demo \
       node "$SCRIPTS/sentinel.cjs" merge T-01-02 --json > "$mergeout" 2>/dev/null ) || true
 }
 blockers_match() { node -e '
@@ -528,7 +535,11 @@ const r = require(process.argv[1]).results[0];
 process.exit(r && r.merged === false && r.blockers.some((b) => new RegExp(process.argv[2]).test(b)) ? 0 : 1);
 ' "$mergeout" "$1" 2>/dev/null; }
 
-# The checkpoint parent would refuse first, so this case gives it a landed one.
+# The checkpoint parent would refuse first, so this case gives it a landed one —
+# and a landed parent's branch is no longer a legal base either (ADR-006 D3), so
+# the fixture moves to the world that follows a parent's merge: the child has been
+# retargeted onto the epic (SENTINEL_SMOKE_BASE_102 above), and THAT base is what
+# has moved under its green.
 node -e '
 const f = process.argv[1]; const s = JSON.parse(require("fs").readFileSync(f, "utf8"));
 s["T-01-01"].status = "merged"; require("fs").writeFileSync(f, JSON.stringify(s));
@@ -1577,6 +1588,298 @@ process.exit(0);
 else
   bad "merge must refuse on a corrupt config" "$(cat "$W/corrupt-merge.err"; cat "$cfgmerge")"
 fi
+
+
+# ── the base is chosen for where the merge LANDS (ADR-006 D3) ────────────────
+# PR #52: a child's PR was opened against its parent's ticket branch AFTER that
+# parent had merged, so `sentinel.cjs merge` squashed it onto a branch already
+# merged into `epic/26`. The epic never received the work, and the failure was
+# invisible from every board the conveyor prints — the ticket read `merged`, the
+# PR read merged, the front was empty. Three mechanisms, asserted here end to
+# end against a REAL git repository, because the invariant is about repository
+# CONTENT and a hand-written state file cannot lie about content it does not have:
+#
+#   1. state-sync resolves `base` against the parent's live status, with a reason;
+#   2. the merge gate refuses a base whose own ticket has already MERGED;
+#   3. after a merge, the ticket's declared files are asserted reachable from the
+#      epic — the detection for the class, since the stale-board window in (2)
+#      is exactly where a cached `merged` cannot help.
+#
+# The repository is built in its post-squash shape: the epic carries T-06-01's
+# work (same content, new sha, as a squash produces), the root branch carries the
+# same content, and the child branch adds a file of its own that reached NOTHING.
+rrepo="$W/reachrepo"
+mkdir -p "$rrepo/src"
+git init -q -b main "$rrepo"
+git -C "$rrepo" config user.email smoke@example.com
+git -C "$rrepo" config user.name "sentinel smoke"
+printf 'base\n' > "$rrepo/src/base.txt"
+git -C "$rrepo" add -A && git -C "$rrepo" commit -qm base
+git -C "$rrepo" branch epic/06-demo
+git -C "$rrepo" checkout -q epic/06-demo
+printf 'root work\n' > "$rrepo/src/root.txt"
+git -C "$rrepo" add -A && git -C "$rrepo" commit -qm "squash T-06-01 into the epic"
+git -C "$rrepo" checkout -q -b ticket/T-06-01-root main
+printf 'root work\n' > "$rrepo/src/root.txt"
+git -C "$rrepo" add -A && git -C "$rrepo" commit -qm T-06-01
+git -C "$rrepo" checkout -q -b ticket/T-06-02-child ticket/T-06-01-root
+printf 'child work\n' > "$rrepo/src/child.txt"
+git -C "$rrepo" add -A && git -C "$rrepo" commit -qm T-06-02
+ROOT_OID="$(git -C "$rrepo" rev-parse ticket/T-06-01-root)"
+CHILD_OID="$(git -C "$rrepo" rev-parse ticket/T-06-02-child)"
+
+# `git/trees/<ref>?recursive=1` answered from that repository, so the ONLY thing
+# this fixture asserts is what the trees really contain. `git ls-tree -r` prints
+# `<mode> <type> <sha>\t<path>`; the API shape is one object per blob.
+cat > "$W/tree2json.cjs" <<'JS'
+let s = '';
+process.stdin.on('data', (d) => { s += d; }).on('end', () => {
+  const tree = s.split('\n').filter((l) => l.trim()).map((line) => {
+    const [meta, p] = line.split('\t');
+    const parts = meta.split(/\s+/);
+    return { path: p, mode: parts[0], type: parts[1], sha: parts[2] };
+  });
+  process.stdout.write(JSON.stringify({ truncated: false, tree }) + '\n');
+});
+JS
+
+mkdir -p "$W/bin9"
+cat > "$W/bin9/gh" <<STUB
+#!/usr/bin/env bash
+argv="\$*"
+case "\$argv" in
+  "repo view --json defaultBranchRef"*) echo "main" ;;
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  # SMOKE_PARENT_MERGED is the ONE fact the two boards differ by: whether the
+  # parent's PR has landed. Everything else about the fixture is identical.
+  "pr list --state open"*)
+    if [ -n "\${SMOKE_PARENT_UNSTARTED:-}" ]; then
+      echo '[]'
+    elif [ -n "\${SMOKE_PARENT_MERGED:-}" ]; then
+      echo '[{"number":602,"reviewDecision":null,"mergeStateStatus":"CLEAN","body":"Ticket: T-06-02\n\ngate_status: arch-review=conform, checks=green, head=$CHILD_OID"}]'
+    else
+      echo '[{"number":601,"reviewDecision":null,"mergeStateStatus":"CLEAN","body":"Ticket: T-06-01\n\ngate_status: arch-review=conform, checks=green, head=$ROOT_OID"},
+ {"number":602,"reviewDecision":null,"mergeStateStatus":"CLEAN","body":"Ticket: T-06-02\n\ngate_status: arch-review=conform, checks=green, head=$CHILD_OID"}]'
+    fi ;;
+  "pr list --state all"*)
+    if [ -n "\${SMOKE_PARENT_UNSTARTED:-}" ]; then
+      echo '[]'
+    elif [ -n "\${SMOKE_PARENT_MERGED:-}" ]; then
+      echo '[{"number":601,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-06-01-root","headRefOid":"$ROOT_OID","baseRefName":"epic/06-demo","mergedAt":"2026-09-08T00:00:00Z","createdAt":"2026-09-08T00:00:00Z","url":"https://example/601","title":"T-06-01: root"},
+ {"number":602,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","baseRefName":"ticket/T-06-01-root","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/602","title":"T-06-02: child"}]'
+    else
+      echo '[{"number":601,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-01-root","headRefOid":"$ROOT_OID","baseRefName":"epic/06-demo","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/601","title":"T-06-01: root"},
+ {"number":602,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","baseRefName":"ticket/T-06-01-root","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/602","title":"T-06-02: child"}]'
+    fi ;;
+  # SMOKE_PARENT_UNSTARTED is the third fact the board can be in: nothing of this
+  # phase exists on the remote yet, so the parent's status is `pending` — which is
+  # NOT "the parent is early", it is "no branch was observed", and a base that
+  # does not exist is not a base.
+  "api repos/{owner}/{repo}/branches"*)
+    if [ -n "\${SMOKE_PARENT_UNSTARTED:-}" ]; then printf 'main\nepic/06-demo\n'
+    else printf 'main\nepic/06-demo\nticket/T-06-01-root\nticket/T-06-02-child\n'; fi ;;
+  "pr checks "*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
+  "pr view 601 --json"*)
+    echo '{"number":601,"state":"OPEN","isDraft":false,"baseRefName":"epic/06-demo","headRefName":"ticket/T-06-01-root","headRefOid":"$ROOT_OID","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-06-01\n\ngate_status: arch-review=conform, checks=green, head=$ROOT_OID"}' ;;
+  "pr view 602 --json"*)
+    echo '{"number":602,"state":"OPEN","isDraft":false,"baseRefName":"ticket/T-06-01-root","headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-06-02\n\ngate_status: arch-review=conform, checks=green, head=$CHILD_OID"}' ;;
+  "api graphql"*)
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  # The trees the assertion measures — straight out of the real repository.
+  "api "*"/git/trees/"*)
+    ref="\${argv#*/git/trees/}"; ref="\${ref%%\\?*}"
+    if git -C "$rrepo" rev-parse --verify -q "\$ref" >/dev/null; then
+      git -C "$rrepo" ls-tree -r "\$ref" | node "$W/tree2json.cjs"
+    else
+      echo "gh: HTTP 404: Not Found (\$ref)" >&2; exit 1
+    fi ;;
+  "api repos/"*"/compare/"*) echo 0 ;;
+  # THE STALE-BOARD WINDOW, as a stub that deliberately disagrees with the board:
+  # the snapshot on disk says the parent's PR is open, the LIVE query says that
+  # branch has no open PR any more. That is the only window in which a squash can
+  # still land on a limb, and the whole reason the assertion exists beside the
+  # gate's cached check.
+  "pr list --head "*) echo "[]" ;;
+  "pr merge "*) echo "squash-merged" ;;
+  "pr edit "*) echo "retargeted" ;;
+  *) echo "stub gh9: unhandled call: \$argv" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/bin9/gh"
+
+reach_tickets() { cat <<'JSON'
+{
+  "epics": { "6": { "branch": "epic/06-demo", "repos": [null] } },
+  "tickets": {
+    "T-06-01": { "phase": "6", "epic": "epic/06-demo", "branch": "ticket/T-06-01-root",
+                 "title": "root", "depends_on": [], "risk": "low", "files": ["src/root.txt"] },
+    "T-06-02": { "phase": "6", "epic": "epic/06-demo", "branch": "ticket/T-06-02-child",
+                 "title": "child", "depends_on": ["T-06-01"], "primary_parent": "T-06-01",
+                 "risk": "low", "files": ["src/child.txt"] }
+  }
+}
+JSON
+}
+
+# ── arm 1: the parent's PR is OPEN → the child cascades off its branch ───────
+rproj="$W/reachproj"
+mkdir -p "$rproj/.planning/graph"
+reach_tickets > "$rproj/.planning/graph/tickets.json"
+echo '{"pipeline":{}}' > "$rproj/.planning/config.json"
+( cd "$rproj" && PATH="$W/bin9:$PATH" node "$SCRIPTS/state-sync.cjs" > "$W/r-board.txt" 2>"$W/r-err.txt" ) \
+  || bad "state-sync runs against the reachability stub" "$(cat "$W/r-err.txt")"
+rstate="$rproj/.planning/graph/delivery-state.json"
+rq() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).reduce((o,k)=>o&&o[k],s);process.stdout.write(String(v))' "$rstate" "$@"; }
+
+[[ "$(rq T-06-02 base)" == "ticket/T-06-01-root" ]] \
+  && ok "a child of an OPEN parent bases on the parent's branch" \
+  || bad "a child of an OPEN parent bases on the parent's branch" "got: $(rq T-06-02 base)"
+case "$(rq T-06-02 base_reason)" in
+  *"cascade off"*"retargets"*) ok "…and the board says WHY that base holds, and what will move it" ;;
+  *) bad "the base carries its reason" "got: $(rq T-06-02 base_reason)" ;;
+esac
+
+# ── arm 2: the parent has MERGED → the base is the EPIC, and the guard refuses
+# to land on the limb ────────────────────────────────────────────────────────
+rproj2="$W/reachproj2"
+mkdir -p "$rproj2/.planning/graph"
+reach_tickets > "$rproj2/.planning/graph/tickets.json"
+echo '{"pipeline":{}}' > "$rproj2/.planning/config.json"
+( cd "$rproj2" && PATH="$W/bin9:$PATH" SMOKE_PARENT_MERGED=1 \
+    node "$SCRIPTS/state-sync.cjs" > "$W/r2-board.txt" 2>"$W/r2-err.txt" ) \
+  || bad "state-sync runs with the parent merged" "$(cat "$W/r2-err.txt")"
+r2state="$rproj2/.planning/graph/delivery-state.json"
+r2q() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).reduce((o,k)=>o&&o[k],s);process.stdout.write(String(v))' "$r2state" "$@"; }
+
+[[ "$(r2q T-06-01 status)" == "merged" ]] \
+  && ok "the fixture's parent really is merged in the second board" \
+  || bad "the parent is merged in the second board" "got: $(r2q T-06-01 status)"
+[[ "$(r2q T-06-02 base)" == "epic/06-demo" ]] \
+  && ok "a child of a MERGED parent bases on the EPIC, not on the surviving branch" \
+  || bad "a child of a MERGED parent bases on the epic" "got: $(r2q T-06-02 base)"
+case "$(r2q T-06-02 base_reason)" in
+  *MERGED*base-merge*) ok "…and the reason names the merge AND base-merge, which keeps the diff one slice" ;;
+  *) bad "the merged-parent reason names base-merge" "got: $(r2q T-06-02 base_reason)" ;;
+esac
+
+# The same PR, whose `pr_base` GitHub still reports as the parent branch, is now
+# refused by the guard: the board's `base` says where it SHOULD point, and the
+# gate says it will not squash where it currently does.
+( cd "$rproj2" && PATH="$W/bin9:$PATH" SMOKE_PARENT_MERGED=1 \
+    node "$SCRIPTS/sentinel.cjs" merge T-06-02 --json > "$W/r2-merge.json" 2>/dev/null ) || true
+if node -e '
+const r = (require(process.argv[1]).results || [])[0] || {};
+if (r.merged) { console.error("it MERGED onto the limb"); process.exit(1); }
+const why = (r.blockers || []).join("; ");
+for (const re of [/T-06-01/, /MERGED/, /gh pr edit 602 --base epic\/06-demo/, /base-merge\.cjs T-06-02/]) {
+  if (!re.test(why)) { console.error("missing " + re + " in: " + why); process.exit(1); }
+}
+process.exit(0);
+' "$W/r2-merge.json" 2>"$W/r2-merge.err"; then
+  ok "the gate refuses a base whose ticket has merged, and the refusal is a command"
+else
+  bad "the gate refuses a merged-parent base" "$(cat "$W/r2-merge.err")"
+fi
+
+# ── arm 2b: a MISSING FACT must not resolve to a branch ─────────────────────
+# The third state the parent can be in, and the one that used to resolve to a
+# branch that does not exist: `pending` means no branch was OBSERVED on the
+# remote, so `gh pr create --base ticket/T-06-01-root` would simply fail. The
+# epic always exists (Step 0 ensures it), so it is the safe answer, and the
+# reason says which observation is missing rather than leaving a reader to guess.
+rproj3="$W/reachproj3"
+mkdir -p "$rproj3/.planning/graph"
+reach_tickets > "$rproj3/.planning/graph/tickets.json"
+echo '{"pipeline":{}}' > "$rproj3/.planning/config.json"
+( cd "$rproj3" && PATH="$W/bin9:$PATH" SMOKE_PARENT_UNSTARTED=1 \
+    node "$SCRIPTS/state-sync.cjs" > "$W/r3-board.txt" 2>"$W/r3-err.txt" ) \
+  || bad "state-sync runs against a phase that has not started" "$(cat "$W/r3-err.txt")"
+r3state="$rproj3/.planning/graph/delivery-state.json"
+r3q() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).reduce((o,k)=>o&&o[k],s);process.stdout.write(String(v))' "$r3state" "$@"; }
+
+[[ "$(r3q T-06-01 status)" == "pending" ]] \
+  && ok "the fixture's parent really has no branch on the remote" \
+  || bad "the parent is pending in the third board" "got: $(r3q T-06-01 status)"
+[[ "$(r3q T-06-02 base)" == "epic/06-demo" ]] \
+  && ok "a parent with no branch on the remote does NOT become the base" \
+  || bad "a missing fact must not resolve to a branch" "got: $(r3q T-06-02 base)"
+case "$(r3q T-06-02 base_reason)" in
+  *"no branch on the remote"*) ok "…and the reason names the observation that is missing" ;;
+  *) bad "the reason names the missing observation" "got: $(r3q T-06-02 base_reason)" ;;
+esac
+# …and the base is moot anyway, which is the fact that makes this arm defensive
+# rather than a route the conveyor takes: nothing dispatches that child.
+if node -e '
+const s = require(process.argv[1]);
+const c = s["T-06-02"];
+if (c.ready !== false) { console.error("ready=" + JSON.stringify(c.ready)); process.exit(1); }
+if (!(c.blocked_by || []).includes("T-06-01")) { console.error("blocked_by=" + JSON.stringify(c.blocked_by)); process.exit(1); }
+process.exit(0);
+' "$r3state" 2>"$W/r3.err"; then
+  ok "…and that child is not ready either, blocked on the parent that has no branch"
+else
+  bad "the child is blocked while its parent has no branch" "$(cat "$W/r3.err")"
+fi
+
+# ── arm 3: after a merge, the epic must have RECEIVED the work ───────────────
+# The control first: the root's PR targets the epic, and the epic really does
+# carry `src/root.txt` with the same blob. This is the case that must stay quiet,
+# and it is measured, not assumed — the assertion runs and answers ok.
+( cd "$rproj" && PATH="$W/bin9:$PATH" node "$SCRIPTS/sentinel.cjs" merge T-06-01 --json > "$W/r-merge1.json" 2>/dev/null ) || true
+if node -e '
+const r = (require(process.argv[1]).results || [])[0] || {};
+if (!r.merged) { console.error("blockers=" + JSON.stringify(r.blockers)); process.exit(1); }
+const rc = r.reachability || {};
+if (rc.ok !== true) { console.error("reachability=" + JSON.stringify(rc)); process.exit(1); }
+if (!rc.checked) { console.error("nothing was actually compared: " + JSON.stringify(rc)); process.exit(1); }
+process.exit(0);
+' "$W/r-merge1.json" 2>"$W/r-merge1.err"; then
+  ok "a merge whose declared files ARE in the epic reports reachable, having compared them"
+else
+  bad "a reachable merge reports reachable" "$(cat "$W/r-merge1.err"; head -30 "$W/r-merge1.json")"
+fi
+
+# …and the PR #52 shape: a squash onto a branch whose content is already in the
+# epic and which has no open PR carrying anything onward. The work lands on a
+# limb, and the epic does not have `src/child.txt` at all.
+( cd "$rproj" && PATH="$W/bin9:$PATH" node "$SCRIPTS/sentinel.cjs" merge T-06-02 --json > "$W/r-merge2.json" 2>/dev/null ) || true
+if node -e '
+const r = (require(process.argv[1]).results || [])[0] || {};
+if (!r.merged) { console.error("the fixture must MERGE and then alarm: " + JSON.stringify(r.blockers)); process.exit(1); }
+const rc = r.reachability || {};
+if (rc.ok !== false) { console.error("reachability=" + JSON.stringify(rc)); process.exit(1); }
+if (!(r.epic_unreachable || []).includes("src/child.txt")) { console.error("paths=" + JSON.stringify(r.epic_unreachable)); process.exit(1); }
+if (!/epic\/06-demo/.test(rc.why || "")) { console.error("why=" + rc.why); process.exit(1); }
+process.exit(0);
+' "$W/r-merge2.json" 2>"$W/r-merge2.err"; then
+  ok "the PR #52 shape is a NAMED alarm on the merge result, naming the unreachable path"
+else
+  bad "the PR #52 shape alarms" "$(cat "$W/r-merge2.err"; head -40 "$W/r-merge2.json")"
+fi
+
+# The alarm has to outlive stdout: a run that ends before anyone reads the
+# terminal must still have recorded it, and it is written by the same writer that
+# owns the `merge` event beside it.
+if node -e '
+const fs = require("fs");
+const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+const alarm = lines.find((e) => e.event === "epic_unreachable" && e.ticket === "T-06-02");
+if (!alarm) { console.error("events=" + JSON.stringify(lines.map((e) => e.event))); process.exit(1); }
+if (!(alarm.paths || []).includes("src/child.txt")) { console.error("paths=" + JSON.stringify(alarm.paths)); process.exit(1); }
+if (alarm.epic !== "epic/06-demo" || alarm.base !== "ticket/T-06-01-root") { console.error(JSON.stringify(alarm)); process.exit(1); }
+if (!lines.some((e) => e.event === "merge" && e.ticket === "T-06-02")) { console.error("the merge itself must still be journalled"); process.exit(1); }
+process.exit(0);
+' "$rproj/.planning/graph/delivery-log.jsonl" 2>"$W/r-journal.err"; then
+  ok "…and the alarm is in the journal beside the merge event, with the paths"
+else
+  bad "the alarm reaches the journal" "$(cat "$W/r-journal.err")"
+fi
+
+# The human-readable line, because the operator reads the merge line and not the
+# JSON: the alarm is named there too, in the same breath as the merge.
+( cd "$rproj" && PATH="$W/bin9:$PATH" node "$SCRIPTS/sentinel.cjs" merge T-06-02 > "$W/r-merge2.txt" 2>/dev/null ) || true
+has "the merge line carries the ALARM and the path" "$W/r-merge2.txt" "ALARM"
+has "…and names the file that never reached the epic" "$W/r-merge2.txt" "src/child.txt"
 
 echo
 echo "$pass passed, $fail failed"

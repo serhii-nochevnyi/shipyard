@@ -65,6 +65,9 @@
 // simply "waiting on a human" and the run declared a fixpoint on top of it.
 
 const path = require('path');
+// Read at module level for the journal-tail reader below. (The CLI block at the
+// bottom re-requires it in its own scope; harmless, and left alone.)
+const fs = require('fs');
 // The lifting rule for a park comes from the store that OWNS the park, never
 // from here. Composing it at this render site is what let the board tell a
 // human that moving the PR lifts a plan defect, while escalation-record.cjs —
@@ -79,7 +82,14 @@ const { dispatchWhy, activeDispatches } = require(path.join(__dirname, 'dispatch
 // ticket's parent still being driven?". It lived in sentinel.cjs alone, which is
 // why the board offered tickets the guard was refusing. One home, one direction:
 // this module imports nothing back.
-const { movingParentOf, movingParentWhy } = require(path.join(__dirname, 'parent-moving.cjs'));
+// `limbBaseOf`/`limbRemedy` come from the same home for the same reason, and
+// they are the reason stated in the past tense: the merge gate learned to
+// refuse a limb base and this file did not, so the board answered
+// `actionable.merge` for exactly the PR `sentinel.cjs merge` declined, every
+// round, on a real phase.
+const {
+  movingParentOf, movingParentWhy, limbBaseOf, limbRemedy,
+} = require(path.join(__dirname, 'parent-moving.cjs'));
 // The trailer's classification comes from its own module — the board and the
 // guard (sentinel.cjs) must never disagree about whether a verdict counts.
 const { gateConform: trailerConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
@@ -436,6 +446,12 @@ function computeFront(tickets, state, opts = {}) {
   // either side means the two disagree the moment a human parks a parent.
   const parkedForParent = new Set([...parkedIds, ...Object.keys(drifted), ...Object.keys(escalated)]);
   const movingParent = (id) => movingParentOf(id, { tickets, state, parked: parkedForParent });
+  // The board's base is the one it holds; `sentinel.cjs mergeOne` asks the same
+  // predicate about `pr.baseRefName` from the live view. Same rule, two bases,
+  // deliberately — `dutyItems` resolves it exactly this way.
+  const limbBase = (id) => limbBaseOf(
+    id, ((state[id] || {}).pr_base || (state[id] || {}).base || null), { tickets, state }
+  );
 
   const actionable = { execute: [], publish: [], fix: [], finalize: [], merge: [] };
   const waiting = { ci: [], dispatched: [], parent: [], merge_human: [], human: [] };
@@ -650,6 +666,34 @@ function computeFront(tickets, state, opts = {}) {
         // it — the front must never offer what the guard declines.
         waiting.merge_human.push(id);
         why[id] = `PR #${s.pr}: ${NO_CI_WHY}`;
+      } else if (autoMerge && s.review_decision !== 'CHANGES_REQUESTED'
+                 && gateConform(s) && s.merge_scope === 'stacked' && limbBase(id)) {
+        // Ready in every other respect, and the base is a LIMB: a ticket branch
+        // whose own ticket has already merged, so its content is in the epic and
+        // the branch is only still there because nothing deleted it. A squash
+        // landing here strands the work — PR #52, measured, with the epic missing
+        // the very files the board reported merged.
+        //
+        // `sentinel.cjs merge` refuses this against LIVE GitHub and `dutyItems`
+        // answers `human-merge` for it; the board must not offer what the guard
+        // declines, or every round re-proposes the same impossible action. That
+        // is not a hypothetical here: this branch is the second half of a fix
+        // whose first half taught the gate a refusal the board never learned.
+        //
+        // `waiting.merge_human`, matching the NO-CI hold above and duty's own
+        // `human-merge` — the remedy is a retarget plus a base-merge, and until
+        // someone does it this run has no move. The remedy text is the guard's,
+        // character for character, because two paraphrases of one remedy make an
+        // operator guess which is current.
+        //
+        // CHANGES_REQUESTED is excluded, and that guard is not decoration: duty
+        // reaches `review-fix` BEFORE its own limb branch, so a limb PR carrying
+        // a verdict is still work — servicing the threads. Without this clause
+        // the board would answer `waiting.merge_human` where the guard answers
+        // `review-fix`, which is the disagreement this branch exists to remove,
+        // merely relocated.
+        waiting.merge_human.push(id);
+        why[id] = `PR #${s.pr}: green + conform, but its ${limbRemedy(id, s.pr_base || s.base || null, limbBase(id), { tickets, state })}`;
       } else if (autoMerge && s.review_decision !== 'CHANGES_REQUESTED' && gateConform(s) && s.merge_scope === 'stacked') {
         // The sentinel's merge: into the epic or a parent ticket branch only.
         // `merge_scope` is set by state-sync; an integration-branch target never
@@ -734,12 +778,14 @@ function computeFront(tickets, state, opts = {}) {
   // way phase 24 exists to prevent: a capped front reporting YES ends a run
   // mid-phase.
   //
-  // `in_flight` counts the live dispatch RECORDS, not the actionable buckets:
+  // `in_flight` counts AGENTS, not the actionable buckets and not the records:
   // the cost is the agent, whatever bucket its ticket landed in, so a
-  // pr-sentinel and a ci-fix count exactly as an executor does. `activeDispatches`
-  // has already dropped everything expired or landed, so nothing here decides
-  // how long a dispatch lives.
-  const inFlight = Object.keys(dispatched).length;
+  // pr-sentinel and a ci-fix count exactly as an executor does — but ONE guard
+  // holding four PRs is one agent, and the collapse that says so is
+  // `AGENT_CARDINALITY` beside `agentsInFlight` below (ADR-006 D1).
+  // `activeDispatches` has already dropped everything expired or landed, so
+  // nothing here decides how long a dispatch lives.
+  const inFlight = agentsInFlight(dispatched);
   const capacity = { max: capMax(), in_flight: inFlight, free: Math.max(0, capMax() - inFlight) };
   // SHALLOWEST FIRST within a stack — the THIRD sort key now; the full order is
   // stated at the comparator below. A ticket stacked on an open parent is
@@ -1060,8 +1106,214 @@ const BUCKET_ROLES = {
 const SENTINEL_ROLES = new Set(SENTINEL_BUCKETS.flatMap((k) => BUCKET_ROLES[k] || []));
 const roleOfDispatch = (rec) => (typeof rec === 'string' ? rec : ((rec && rec.role) || ''));
 
+// ── HOW MANY AGENTS A SET OF DISPATCH RECORDS *IS* (ADR-006 D1) ──────────────
+//
+// The capacity cap is a limit on AGENTS, and records are not agents. The one
+// place the two diverge is the guard: `deliver.md` marks a `pr-sentinel` record
+// for EVERY guarded ticket, while Step 4 spawns exactly ONE guard for the whole
+// round. Counting records therefore reported `in_flight: 4` for a single agent
+// holding four open PRs, which under the measured default of 4 left `free: 0`
+// and launched no executor until a PR merged — the ordinary mid-phase board, and
+// the number the default was measured on is an EXECUTOR wave.
+//
+// So each role declares its cardinality:
+//
+//   'round'   one agent for the whole round, however many tickets it holds
+//   'ticket'  one agent per record — the per-ticket roles, and the default
+//
+// The role vocabulary is `pipeline-config.cjs`'s `ROLES`, the same list
+// `dispatch-record.cjs mark` validates against and files its records under;
+// tests/unit/front.test.cjs iterates ROLES and fails if one has no entry here,
+// because a role that silently inherited the wrong cardinality would misreport
+// the budget rather than fail. `drift-check` is deliberately 'ticket':
+// `workflows/drift-gate.mjs` really does dispatch one judge per ticket, in
+// parallel.
+//
+// This is a COUNTING rule, not the per-role weighting T-26-12 put out of scope
+// (that needs a cost model the conveyor does not have): every agent still costs
+// exactly 1.
+const AGENT_CARDINALITY = {
+  executor: 'ticket',
+  'ci-fix': 'ticket',
+  'review-fix': 'ticket',
+  'arch-review': 'ticket',
+  'drift-check': 'ticket',
+  research: 'ticket',
+  integrator: 'ticket',
+  // The guard: one agent per round, posted beside the wave and holding every
+  // open PR on its duty list.
+  'pr-sentinel': 'round',
+};
+// A role the table does not know spends a WHOLE agent. Unknown must resolve
+// UPWARD here — the cap is a gate on dispatch, so its failure direction is to
+// dispatch less — and it is the opposite of the rule for a missing SIGNAL in the
+// model ladder, where every row is an upgrade and silence must resolve down.
+const DEFAULT_CARDINALITY = 'ticket';
+
+// The collapse. Every 'round' role contributes at most one agent no matter how
+// many tickets carry its record; everything else contributes one per record.
+function agentsInFlight(dispatched) {
+  const perRound = new Set();
+  let n = 0;
+  for (const id of Object.keys(dispatched || {})) {
+    const role = roleOfDispatch(dispatched[id]);
+    const how = Object.prototype.hasOwnProperty.call(AGENT_CARDINALITY, role)
+      ? AGENT_CARDINALITY[role]
+      : DEFAULT_CARDINALITY;
+    if (how === 'round') perRound.add(role);
+    else n += 1;
+  }
+  return n + perRound.size;
+}
+
+// ── IS THE BOARD ABOUT TO BE PRINTED BEHIND REALITY? (ADR-006 D6) ────────────
+//
+// This module recomputes the buckets from the CACHED `delivery-state.json`.
+// Only `state-sync.cjs` re-derives that state from GitHub — so any writer that
+// moved GitHub (a push, a merge, a thread resolve) obliges a resync before the
+// board is read again, and nothing said so. Found 2026-09-08: the push was
+// journalled with `log-event.cjs`, the front was read, "0 actionable" was
+// concluded — a verdict computed before the write, right only by accident.
+// `dispatch-record.cjs` is the exception, because it refreshes the overlay
+// itself; the journal writers are not.
+//
+// So the board says it on its own face. One line, and it never repeats the
+// stale board's contents as fact — those contents are precisely what is wrong.
+//
+// THE TAIL READER IS A TWIN OF `stop-gate.cjs`'s, DUPLICATED ON PURPOSE.
+// `install-shipyard-claude-hook.sh` installs that hook by COPYING the single
+// file into `~/.claude/hooks/`, where it has no siblings: a `require` of a
+// shared module would break the installed hook while every in-repo test stayed
+// green. So each file carries its own copy of ONE rule:
+//
+//   * read the TAIL only (64KB) — the newest events are at the end, which is
+//     the only end either caller needs, and a hook has a ~75ms budget;
+//   * COUNT what a resync would teach the board: `merge` (a PR is gone and its
+//     children were retargeted) and a pushed `attempt`/`fix_round` (a branch
+//     moved, so checks re-ran);
+//   * EXCLUDE `status_change` — `state-sync.cjs` writes it, so it is
+//     contemporaneous with the state by construction — and `dispatch`, which
+//     `dispatch-record.cjs` has already overlaid onto the board. Counting
+//     either re-creates the false block that fired five times across phases 20
+//     and 22, and a warning that fires on a contemporaneous event teaches its
+//     reader to skip it;
+//   * shift the first line ONLY when the read actually SEEKED. A seek lands
+//     mid-line, so line one is a fragment; dropping it unconditionally ate the
+//     only event in a short journal, which is every project that has not been
+//     running for weeks.
+//
+// TWO DELIBERATE DIVERGENCES from the twin, both because the callers differ:
+//   * `escalation` is NOT counted here. The hook cannot see a park; this
+//     module's CLI reads the escalation store LIVE on every run
+//     (`activeParks`), so an escalation is already in the board it is about to
+//     print. Pinned by a test, so the two are not "fixed" into agreement.
+//   * NO age bound. The hook bounds candidates by `RESYNC_MS` because it
+//     BLOCKS the end of a turn globally, and a merge stays in the journal
+//     forever. Here nothing is blocked — one line is printed on demand — and a
+//     state derived before a journalled merge is behind whatever its age.
+const JOURNAL_TAIL_BYTES = 64 * 1024;
+
+// The newest event proving the world moved after `generatedAt`, or null.
+function movedSince(graphDir, generatedAt) {
+  if (!Number.isFinite(generatedAt)) return null;
+  const file = path.join(graphDir, 'delivery-log.jsonl');
+  let text;
+  let seeked = false;
+  try {
+    const { size } = fs.statSync(file);
+    const start = Math.max(0, size - JOURNAL_TAIL_BYTES);
+    seeked = start > 0;
+    const fd = fs.openSync(file, 'r');
+    try {
+      const buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      text = buf.toString('utf8');
+    } finally { fs.closeSync(fd); }
+  } catch {
+    return null; // no journal is no evidence, and never a warning
+  }
+  const lines = text.split('\n');
+  if (seeked) lines.shift();
+
+  let newest = null;
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    let e;
+    try { e = JSON.parse(t); } catch { continue; }
+    if (!e || typeof e !== 'object') continue;
+    const at = Date.parse(e.ts || '');
+    if (Number.isNaN(at) || at <= generatedAt) continue;
+    const moved =
+      e.event === 'merge' ||
+      (e.event === 'attempt' && e.outcome === 'pushed') ||
+      (e.event === 'fix_round' && (e.pushed === true || e.pushed === 'true'));
+    if (!moved) continue;
+    if (!newest || at > newest.at) newest = { at, event: e };
+  }
+  return newest;
+}
+
+// WHEN the state this module is about to render was derived. Read from the stamp
+// `state-sync.cjs` wrote and from nothing else: `.planning/` is TRACKED in this
+// project, so a checkout rewrites every mtime — an mtime-based answer would
+// silently disarm the guard on one repo and invent a derivation time on another,
+// and a line printed off a guessed timestamp is a guess. No stamp, no warning.
+// `delivery-front.json` first because it is the field the twin reads and
+// `refreshFront` preserves it verbatim; `delivery-state-meta.json` is the same
+// moment, written last by the sync that published the trio.
+function stateDerivedAt(graphDir) {
+  for (const name of ['delivery-front.json', 'delivery-state-meta.json']) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(graphDir, name), 'utf8'));
+      const at = Date.parse((raw && raw.generated_at) || '');
+      if (Number.isFinite(at)) return at;
+    } catch { /* absent, corrupt, or a directory some accident left behind */ }
+  }
+  return null;
+}
+
+const MOVED_WHAT = {
+  merge: 'a merge',
+  attempt: 'a push (fix attempt)',
+  fix_round: 'a push (fix round)',
+};
+
+// The board's own warning about itself: what moved, when, and the ONE remedy.
+// It names no bucket and no count — repeating the stale board would be asserting
+// exactly what this line exists to deny.
+function behindWarning(graphDir, generatedAt = stateDerivedAt(graphDir)) {
+  const moved = movedSince(graphDir, generatedAt);
+  if (!moved) return null;
+  const e = moved.event;
+  const what = MOVED_WHAT[e.event] || e.event;
+  const who = e.ticket ? ` of ${e.ticket}` : '';
+  return {
+    event: e.event,
+    ticket: e.ticket || null,
+    ts: e.ts,
+    why:
+      `⚠ this board is BEHIND reality: ${what}${who} is journalled at ${e.ts}, after the state it renders ` +
+      `was derived (${new Date(generatedAt).toISOString()}). A merge retargets children and a push re-runs ` +
+      'checks, and this state knows neither — every line below was computed before that write. ' +
+      'Run `state-sync.cjs` and read the board IT prints, not this one.',
+  };
+}
+
 function formatFront(front) {
   const lines = [];
+  // FIRST of all, before even the staleness warning: the POLICY this board was
+  // computed under could not be read (ADR-004 D2). Every bucket below is the
+  // most restrictive reading rather than the project's own decision, and a
+  // reader who believes the buckets without knowing that is the person this line
+  // exists for. Set only by this file's CLI — `state-sync.cjs` degrades rather
+  // than refusing (T-26-02's deliberate choice), so the durable board is
+  // unchanged.
+  if (front.config_invalid) lines.push(front.config_invalid);
+  // THEN, before any bucket a reader might believe: this board is behind
+  // reality and the remedy is a resync (see behindWarning). Absent on a front
+  // computed by a caller that did not look — this file's CLI does.
+  if (front.behind && front.behind.why) lines.push(front.behind.why);
   const parts = ORDER.filter((k) => front.actionable[k].length)
     .map((k) => `${k}: ${front.actionable[k].join(', ')}`);
   lines.push(`front: ${front.actionable_count} actionable now${parts.length ? ` — ${parts.join(' | ')}` : ''}`);
@@ -1120,7 +1372,25 @@ function formatFront(front) {
         + `${front.actionable_count - cap.free} actionable item(s) wait for the next round`);
   }
 
-  if (front.fixpoint) {
+  // FIRST branch of the chain, ahead of the YES: a board computed under a policy
+  // nobody could read must never say `fixpoint: YES → Step 5`. Withholding the
+  // dispatches is what empties the actionable buckets, and an empty board then
+  // reads exactly like a finished one — so refusing the mutations and leaving
+  // this line alone would trade a paid `finalize` for an unearned "go integrate",
+  // which is a worse offer, not a safer one. `Step 5` is the integrator, and
+  // integrating under an unknown policy is precisely the mutation being withheld.
+  //
+  // Same shape as the `max: 0` sentence below and for the same reason: this is a
+  // not-a-fixpoint whose remedy is a PERSON's, so it must not order the loop to
+  // recompute — nothing will have changed.
+  if (front.config_invalid) {
+    lines.push(
+      'fixpoint: NO — and not a round to retry either. No policy is in effect, so every mutation refuses: '
+      + 'nothing above may be dispatched, auto-merged or integrated, and recomputing changes nothing — '
+      + 'a `waiting.merge_human` entry above is a human\'s option, not this refusal\'s. '
+      + 'A person fixes the config file; the buckets above are the most restrictive reading until then.'
+    );
+  } else if (front.fixpoint) {
     lines.push(
       front.counts.blocked || front.counts.merge_human || front.counts.human
         ? 'fixpoint: YES — nothing actionable and no checks running; only human actions and blockers remain → Step 5'
@@ -1214,6 +1484,14 @@ module.exports = {
   // board must never offer what the guard refuses, and two texts for one rule is
   // how they came to disagree in the first place.
   reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy,
+  // The cap's counting unit, exported so the test can hold it against
+  // `pipeline-config.cjs`'s ROLES: a role with no cardinality would be counted
+  // by the fallback and nothing would say so.
+  AGENT_CARDINALITY, agentsInFlight,
+  // The twin of stop-gate.cjs's journal-tail rule (see the section above for why
+  // it is a copy and not an import), exported so its exclusions are pinned by a
+  // test rather than by prose.
+  movedSince, stateDerivedAt, behindWarning, JOURNAL_TAIL_BYTES,
 };
 
 // ── CLI: read the state files this project already has and print the verdict ──
@@ -1238,11 +1516,33 @@ if (require.main === module) {
   // auto_merge decides whether an unmerged green PR is the sentinel's work or a
   // human's, so the standalone CLI has to read it too (state-sync passes it in).
   const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-  const { config, valid } = loadConfig(root);
-  const autoMerge = config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
+  const { config, valid, error } = loadConfig(root);
+  // A CONFIGURATION THAT DOES NOT PARSE PERMITS NO MUTATION (ADR-004 D2, audit
+  // F03), and this CLI is a reachable surface for it: `deliver.md` advertises it
+  // as re-runnable on its own. `loadConfig` keeps `config` populated so a board
+  // can still RENDER, which is exactly the trap — reading `.auto_merge` off it
+  // returned the DEFAULT `epic`, so an unreadable file produced the epic board
+  // and the CLI presented its own default as the project's decision. Measured by
+  // the reviewer of PR #60: corrupt and valid-`epic` gave the same buckets, the
+  // same `why` and the same `sentinel` block, and the answer included a paid
+  // `finalize` dispatch — a fixer that pushes — with nothing saying why.
+  //
+  // Defaults are for an ABSENT file (`valid: true, error: null`), and that case
+  // must keep working: an unconfigured project has decided nothing, and the
+  // shipped defaults are the right answer there. Unparseable means the policy is
+  // UNKNOWN, and an unknown policy authorizes nothing. Same posture as
+  // `sentinel.cjs`'s CONFIG_REFUSAL and `ci-wait.cjs`'s refusal: count the fact,
+  // withhold the mutation, carry the reason on the result. There is deliberately
+  // no `--allow-defaults`; the fix is the file.
+  const configRefusal = valid ? null
+    : `front: no policy is in effect — ${error.relative} ${error.message}. `
+      + 'Every board below is the most restrictive reading, not this project\'s decision: '
+      + 'nothing may be auto-merged and nothing may be dispatched until the file parses '
+      + '(a `waiting.merge_human` entry below is still a human\'s option).';
+  const autoMerge = valid && config.auto_merge === 'epic' && config.integration_mode === 'epic-stacked';
   // Passed explicitly here because this CLI has already paid for the config —
   // computeFront's own lazy fallback serves the callers that have not.
-  const mergeWithoutCi = config.merge_without_ci === true;
+  const mergeWithoutCi = valid && config.merge_without_ci === true;
   // The concurrency cap, same reasoning — but only when the file PARSES. An
   // invalid config authorizes no dispatch at all, and that answer is
   // computeFront's to give (it resolves the same 0); passing the populated
@@ -1270,6 +1570,26 @@ if (require.main === module) {
     // same graph differently.
     ci_estimates: ciEstimates(dir, tickets),
   });
+  // Does the journal prove this cached state is already behind reality? Computed
+  // HERE rather than in computeFront, which is a pure function of what it is
+  // handed and must stay one. `--json` carries the same finding as a field, so a
+  // machine reader cannot miss what a human is shown.
+  const behind = behindWarning(dir);
+  if (behind) front.behind = behind;
+  // Carried on EVERY result rather than only where it came due — ci-wait.cjs's
+  // template, and the reason it is a template: the caller that reads `--json` is
+  // not the caller that reads the text, and a refusal only one of them can see is
+  // a refusal the other acts against.
+  if (configRefusal) {
+    front.config_invalid = configRefusal;
+    // …and the VERDICT moves with it, on both faces. `computeFront` is pure and
+    // is handed no config, so it cannot know: it sees an empty board — which is
+    // what withholding the dispatches produces — and answers `fixpoint: true`.
+    // A machine reader taking that field would then be told the phase is
+    // finished. `state-sync.cjs`'s durable board is untouched: it degrades
+    // rather than refusing (T-26-02), so it never sets this field.
+    front.fixpoint = false;
+  }
   if (argv.includes('--json')) {
     process.stdout.write(JSON.stringify(front, null, 2) + '\n');
   } else {

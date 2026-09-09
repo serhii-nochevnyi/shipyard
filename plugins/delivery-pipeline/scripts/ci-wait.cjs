@@ -34,9 +34,20 @@
 //
 // The distinction has to be MECHANICAL, or the old defect walks back in the first
 // time someone runs this at the wrong moment. Hence: this script REFUSES to wait
-// whenever the board holds anything actionable, and says what to do instead.
+// whenever the board holds work THE RUN MAY TAKE, and says what to do instead.
 // Under `--json` a refusal is data (`waited: false` + `refusal`), because the
 // caller is a loop, not a person.
+//
+// "May take" is the board's own answer and not this script's guess: `capacity`
+// (front.cjs) says how many agents the run is allowed to hold and how many are
+// out. When `free` is 0 the actionable items are beyond the cap — there is no
+// free wake-up in taking them, because they cannot be taken — so naming them as
+// "work to do first" is advice to breach the very gate that computed them, and
+// the three mechanisms that read capacity would disagree about one board
+// (ADR-006 D1). A cap of 0 is the same fact for a different reason: no policy
+// could be read, so nothing may be dispatched at all. The wait mutates nothing,
+// and the escalation it may earn is withheld by the config rule below exactly as
+// before.
 //
 // ── WHAT THE FOREGROUND WAIT DOES *NOT* COVER ────────────────────────────────
 // "The turn never ends, so nothing has to wake it" is only true WHILE THIS SCRIPT
@@ -180,10 +191,34 @@ if (!front || !state) {
 
 // THE GUARD. Anything actionable and left-behind-adjusted means the run owes work
 // now, and waiting instead is the serialization defect this script exists not to
-// reintroduce.
+// reintroduce — UNLESS the cap says none of it may be dispatched this round.
 const actionableCount = Number(front.actionable_count || 0);
 const leftBehind = Number(front.left_behind_count || 0);
-if (actionableCount > 0 && leftBehind < actionableCount) {
+// The board's capacity, read defensively: a `delivery-front.json` written before
+// capacity existed outlives an upgrade, and an absent field must read as "no cap
+// is in force" (refuse as before), never as a full board.
+const capacity = (front.capacity && typeof front.capacity === 'object') ? front.capacity : null;
+// `front.cjs` only ever emits non-negative counts (`Math.max(0, …)` for `free`,
+// a length or a collapsed sum for `max`/`in_flight`), so a negative value here
+// is not a smaller cap — it is a corrupted or hand-edited front, and must read
+// as unreadable exactly like `null`/a string/an object would.
+const capNum = (k) => (capacity !== null && typeof capacity[k] === 'number'
+  && Number.isFinite(capacity[k]) && capacity[k] >= 0 ? capacity[k] : null);
+const capFree = capNum('free');
+// `max`/`in_flight` are read the same defensive way for the human message below —
+// they gate nothing here, but an old or partially-written front must not print
+// `undefined`/garbled numbers into an operator-facing line.
+const capMax = capNum('max');
+const capInFlight = capNum('in_flight');
+// Both fields must be readable, matching stop-gate.cjs's `capacityFull`: a
+// `free` of 0 or less means nothing while `max` is unreadable, because a
+// partially-written front (`free: 0`, `max` missing or garbled) is not
+// evidence the cap is spent — it is evidence the front cannot be trusted, and
+// the two readers must agree about which case that is. An unreadable `max`
+// falls back to the pre-cap refusal (no cap in force), exactly like an absent
+// `capacity` object does above.
+const capBinds = capMax !== null && capFree !== null && capFree <= 0;
+if (actionableCount > 0 && leftBehind < actionableCount && !capBinds) {
   const named = ['execute', 'publish', 'fix', 'finalize', 'merge']
     .filter((k) => (front.actionable?.[k] || []).length)
     .map((k) => `${k}: ${front.actionable[k].join(', ')}`)
@@ -481,9 +516,17 @@ if (TIMEOUT_S_EXPLICIT) {
 const startedAt = Date.now();
 const deadline = startedAt + TIMEOUT_S * 1000;
 const label = watch.map((w) => `${w.id}#${w.pr}${w.via.length ? ` (holding ${w.via.join(', ')})` : ''}`).join(', ');
+// WHY waiting is the move, in the board's own terms. "Nothing but pipelines" is
+// false on a capacity-bound board — there IS other work, and the cap is what
+// makes waiting correct anyway — and a line that misdescribes the board it just
+// read is how a reader learns to stop reading it.
+const offer = capBinds && actionableCount > 0
+  ? `every move on the board is beyond capacity (${capMax ?? '?'} agent(s) allowed, `
+    + `${capInFlight ?? '?'} in flight)`
+  : 'the board offers nothing but pipelines';
 if (!JSON_OUT) {
   process.stdout.write(
-    `ci-wait: the board offers nothing but pipelines — waiting on ${label}\n` +
+    `ci-wait: ${offer} — waiting on ${label}\n` +
     `  up to ${Math.round(TIMEOUT_S / 60)}m, polling every ${INTERVAL_S}s; returns the moment one settles\n` +
     `  window: ${Math.round(TIMEOUT_S)}s — ${windowSource}\n`
     + (CONFIG_REASON ? `  ⚠ ${CONFIG_REASON}\n` : ''));
