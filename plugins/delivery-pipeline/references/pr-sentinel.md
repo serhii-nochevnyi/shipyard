@@ -207,7 +207,7 @@ because two copies drifting apart is how this path came to read a
    ```
 
    This step is the ONLY writer of the fact step 1 reads. Skip it and step 2's
-   escalation is unreachable for ever: the guard asks the journal whether this
+   escalation is unreachable forever: the guard asks the journal whether this
    verdict was already contested, and the journal was never told. `head` is the
    full forty characters of the head the judge actually read — an abbreviation
    is refused, because a reader holding only the journal cannot lengthen one.
