@@ -427,8 +427,19 @@ CLI_BELOW_CEILING="$(node -e '
   const need = String((p[p.length - 1] || {}).min_cli || "");
   if (!need) { console.error("the palette ceiling declares no min_cli — nothing to shrink the palette with"); process.exit(1); }
   const parts = need.split(".").map(Number);
-  parts[parts.length - 1] -= 1;
-  if (!parts.every((n) => Number.isFinite(n) && n >= 0)) { console.error("cannot derive a version below " + need); process.exit(1); }
+  if (!parts.every((n) => Number.isFinite(n))) { console.error("cannot parse version " + need); process.exit(1); }
+  // Decrement the RIGHTMOST NON-ZERO component, not always the last one: a
+  // ceiling of x.y.0 has no valid "below" version at the last component alone
+  // (it would go negative), so borrow from the next component leftward — the
+  // same rule a version number carries every time a patch digit rolls under.
+  // Trailing components are then set high so the borrow cannot be erased by
+  // them: comparison here is numeric, component by component (gen-codex-
+  // shipyards own compareVersions), so 1.1.999 < 1.2.0 exactly as 1.2.0 < 1.2.1.
+  let i = parts.length - 1;
+  while (i >= 0 && parts[i] === 0) i -= 1;
+  if (i < 0) { console.error("cannot derive a version below " + need); process.exit(1); }
+  parts[i] -= 1;
+  for (let j = i + 1; j < parts.length; j++) parts[j] = 999;
   process.stdout.write(parts.join("."));
 ')"
 DEEP_AGENTS=(shipyard-ci-fix-deep shipyard-review-fix-deep shipyard-pr-sentinel-deep shipyard-arch-review-deep)

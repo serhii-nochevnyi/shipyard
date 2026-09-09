@@ -216,7 +216,26 @@ if (!prev || !Array.isArray(prev.agent_files)) {
 // happened. A run that dies in the middle leaves the older, wider claim in
 // place and the next run reclaims those files; a record written first would
 // have forgotten them.
-fs.copyFileSync(nextPath, prevPath);
+//
+// Symlink-safe and non-fatal. `copyFileSync(next, prev)` follows a symlink at
+// `prevPath` and would overwrite whatever it points to — this record lives at
+// a fixed, predictable name inside a directory the operator also writes into
+// — and it throws outright if `prevPath` is a directory or otherwise
+// unwritable, hard-failing the WHOLE installer over a bookkeeping step that
+// runs after the removals it licenses already happened. Write to a temp file
+// beside it and `rename()` over the target instead: rename replaces the
+// directory ENTRY, never the file a symlink points through, so a symlink at
+// `prevPath` is replaced rather than followed. A failure here is a warning,
+// not an abort — the reconciler is conservative by design, and the next run
+// simply reconciles against the older record.
+const tmpManifestPath = `${prevPath}.tmp-${process.pid}`;
+try {
+  fs.copyFileSync(nextPath, tmpManifestPath);
+  fs.renameSync(tmpManifestPath, prevPath);
+} catch (e) {
+  try { fs.unlinkSync(tmpManifestPath); } catch { /* never written, or already gone */ }
+  say(`could not update the ownership record (${manifestName}): ${e.message} — the next install reconciles against the older record instead`);
+}
 NODE
 fi
 
