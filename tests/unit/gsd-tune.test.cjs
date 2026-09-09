@@ -38,10 +38,18 @@ function project(config = {}) {
 // 0.147.0, so an unrelated assertion started failing on a real blocker. So every
 // invocation gets an EMPTY CODEX_HOME and a PATH with no CLIs on it, and the
 // tests that want a version stub one in deliberately.
+// The same rule now covers the ENVIRONMENT, because the fable-pin blocker reads
+// `ANTHROPIC_DEFAULT_FABLE_MODEL` from it — and this developer host exports
+// `claude-fable-5`, so an inherited value would decide four fixtures below by
+// what happens to be in the shell. Unset unless a case supplies one deliberately.
 const EMPTY_CODEX = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-nocodex-'));
-const hermetic = (extra = {}) => ({
-  ...process.env, CODEX_HOME: EMPTY_CODEX, PATH: path.join(EMPTY_CODEX, 'bin'), ...extra,
-});
+const hermetic = (extra = {}) => {
+  const env = {
+    ...process.env, CODEX_HOME: EMPTY_CODEX, PATH: path.join(EMPTY_CODEX, 'bin'), ...extra,
+  };
+  if (!('ANTHROPIC_DEFAULT_FABLE_MODEL' in extra)) delete env.ANTHROPIC_DEFAULT_FABLE_MODEL;
+  return env;
+};
 // `process.execPath` and not 'node': the hermetic PATH has no interpreter on it
 // either, so a spawn by name would fail to start at all.
 const run = (dir, args = [], env = {}) =>
@@ -657,5 +665,280 @@ test('PROJECT mode is untouched: the same file is still a hard fail, not a soft 
   assert.ok(/not valid JSON/.test(r.stderr), r.stderr);
 });
 
+suite('gsd-tune — the codex floor reads what is REGISTERED (ADR-007 D4)');
+
+// The check was never missing: every palette `min_cli` was already measured
+// against the host. It was ATTACHED TO THE WRONG FILE. A normal install writes
+//   [agents.shipyard-integrator]
+//   config_file = "…/.codex/agents/shipyard-integrator.toml"
+// and the MODEL lives in that second file, so `codexToml.includes(entry.model)`
+// is false on every normally-installed host and the blocker never fires. Measured
+// on this machine: seven registrations, every model in a file of its own.
+//
+// The fixture therefore cannot be flattened into one file — the two-file shape IS
+// the subject.
+function codexHomeRegistering(agents, configExtra = '') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexreg-'));
+  fs.mkdirSync(path.join(dir, 'agents'), { recursive: true });
+  let toml = '';
+  for (const [name, spec] of Object.entries(agents)) {
+    const file = path.join(dir, 'agents', `${name}.toml`);
+    if (spec.model !== undefined) {
+      fs.writeFileSync(file, `name = "${name}"\nmodel = "${spec.model}"\nmodel_reasoning_effort = "high"\n`);
+    }
+    toml += `[agents.${name}]\ndescription = "${name}"\nconfig_file = "${spec.registerAs || file}"\n\n`;
+  }
+  fs.writeFileSync(path.join(dir, 'config.toml'), toml + configExtra);
+  return dir;
+}
+const OLD_CODEX = 'codex-cli 0.147.0';
+
+test('a model that lives ONLY in a registered agent file is measured', () => {
+  // On base this exits with no blocker at all: the floor is real, the host is
+  // below it, and the run says nothing. That green is the defect.
+  const codexHome = codexHomeRegistering({ 'shipyard-integrator': { model: CEILING.model } });
+  const dir = project({ runtime: 'codex' });
+  const env = { CODEX_HOME: codexHome, PATH: stubCli({ codex: OLD_CODEX }) };
+  const b = blockersOf(dir, [], env);
+  assert.equal(b.length, 1, JSON.stringify(b));
+  assert.equal(b[0].what, 'codex-model-floor');
+  assert.equal(b[0].model, CEILING.model);
+  assert.equal(b[0].have, '0.147.0');
+  assert.equal(b[0].need, CEILING.min_cli);
+  const r = run(dir, [], env);
+  assert.equal(r.status, 1, r.stdout);
+  assert.ok(r.stdout.includes(CEILING.min_cli), `the version must be named: ${r.stdout}`);
+  assert.ok(r.stdout.includes(path.join('agents', 'shipyard-integrator.toml')),
+    `the file that configures it must be named, not the one that registers it: ${r.stdout}`);
+  // Above the floor the same host is silent — the finding is the version, not the
+  // registration.
+  assert.deepEqual(blockersOf(dir, [], { ...env, PATH: stubCli({ codex: 'codex-cli 0.153.4' }) }), []);
+});
+
+test('a registration whose file cannot be read is REPORTED, never silently skipped', () => {
+  // An agent whose file does not read runs an unknown model, so every floor is
+  // measured against an incomplete set — silence there is the same false green
+  // one layer along. Regenerating the bundle is the operator's act; this reports.
+  const codexHome = codexHomeRegistering({
+    'shipyard-integrator': { registerAs: path.join(os.tmpdir(), 'shipyard-no-such-agent.toml') },
+  });
+  const dir = project({ runtime: 'codex' });
+  const b = blockersOf(dir, [], { CODEX_HOME: codexHome, PATH: stubCli({ codex: OLD_CODEX }) });
+  assert.equal(b.length, 1, JSON.stringify(b));
+  assert.equal(b[0].what, 'codex-agent-unreadable');
+  assert.ok(b[0].file.endsWith('shipyard-no-such-agent.toml'), b[0].file);
+  const r = run(dir, [], { CODEX_HOME: codexHome, PATH: stubCli({ codex: OLD_CODEX }) });
+  assert.equal(r.status, 1, r.stdout);
+  assert.ok(r.stdout.includes('shipyard-no-such-agent.toml'), r.stdout);
+});
+
+test('an unreadable registration is independent of the CLI version', () => {
+  // Nothing about a missing file is a version fact, so it must not need one to be
+  // measurable: with no `codex` on PATH at all the report still names the file.
+  const codexHome = codexHomeRegistering({
+    'shipyard-ci-fix': { registerAs: path.join(os.tmpdir(), 'shipyard-absent-agent.toml') },
+  });
+  const b = blockersOf(project({ runtime: 'codex' }), [], { CODEX_HOME: codexHome });
+  assert.equal(b.length, 1, JSON.stringify(b));
+  assert.equal(b[0].what, 'codex-agent-unreadable');
+});
+
+test('config.toml itself unreadable (not merely absent) is a blocker, not silence', () => {
+  // ENOENT (no config.toml yet) is honest silence. Anything else — permissions,
+  // EISDIR, whatever — means the file exists and names something this run
+  // cannot see, so every floor and registration below is unmeasurable and would
+  // otherwise report nothing: the same false-green class this ticket removes
+  // one layer along. A directory in the file's place forces a non-ENOENT read
+  // error (EISDIR) without touching permissions, which keeps the test portable.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexunreadable-'));
+  fs.mkdirSync(path.join(dir, 'config.toml'));
+  const b = blockersOf(project({ runtime: 'codex' }), [], { CODEX_HOME: dir });
+  assert.equal(b.length, 1, JSON.stringify(b));
+  assert.equal(b[0].what, 'codex-config-unreadable');
+  assert.ok(b[0].file.endsWith('config.toml'), b[0].file);
+  const r = run(project({ runtime: 'codex' }), [], { CODEX_HOME: dir });
+  assert.equal(r.status, 1, r.stdout);
+  assert.ok(r.stdout.includes('config.toml'), r.stdout);
+});
+
+test('config.toml genuinely absent (ENOENT) is silence, not a blocker', () => {
+  // The distinction this ticket draws: absence is a fact about install state
+  // ("no Codex config yet"), not about whether this run can see what is there.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexabsent-'));
+  const b = blockersOf(project({ runtime: 'codex' }), [], { CODEX_HOME: dir });
+  assert.deepEqual(b, []);
+});
+
+test('config.toml\'s own inline model still counts, and is not double-reported', () => {
+  // A hand-written host legitimately puts a model in config.toml — this machine
+  // does, on line 1 — so reading the registrations must ADD to that, not replace
+  // it. One palette entry is one finding however many files name it.
+  const codexHome = codexHomeRegistering(
+    { 'shipyard-integrator': { model: CEILING.model } },
+    `\nmodel = "${CEILING.model}"\n`,
+  );
+  const b = blockersOf(project({ runtime: 'codex' }), [],
+    { CODEX_HOME: codexHome, PATH: stubCli({ codex: OLD_CODEX }) });
+  assert.equal(b.length, 1, JSON.stringify(b));
+  assert.equal(b[0].model, CEILING.model);
+});
+
+test('a config_file OUTSIDE an [agents.*] table is not an agent registration', () => {
+  // The unsafe direction for this ticket: a false blocker at Step 0 of every
+  // Codex delivery. A same-named key in an unrelated table is not a registration,
+  // and a missing file there is none of our business.
+  const codexHome = codexHomeRegistering(
+    { 'shipyard-integrator': { model: pc.DEFAULT_CODEX_MODELS[0].model } },
+    `[history]\nconfig_file = "${path.join(os.tmpdir(), 'not-an-agent-at-all.toml')}"\n`,
+  );
+  assert.deepEqual(
+    blockersOf(project({ runtime: 'codex' }), [], { CODEX_HOME: codexHome, PATH: stubCli({ codex: OLD_CODEX }) }),
+    []);
+});
+
+test('a relative config_file resolves against the Codex home', () => {
+  const codexHome = codexHomeRegistering({
+    'shipyard-integrator': { model: CEILING.model, registerAs: 'agents/shipyard-integrator.toml' },
+  });
+  const b = blockersOf(project({ runtime: 'codex' }), [],
+    { CODEX_HOME: codexHome, PATH: stubCli({ codex: OLD_CODEX }) });
+  assert.equal(b.length, 1, JSON.stringify(b));
+  assert.equal(b[0].what, 'codex-model-floor');
+});
+
+test('a `[agents.*]`-shaped LITERAL inside a multi-line string is not a header (Copilot, PR #73)', () => {
+  // The same class of bug merge-codex-config.cjs's scanner exists to prevent
+  // (ADR-004 D6): a table header is TOML grammar, not a line shape. Here a
+  // multi-line string value contains text that LOOKS like a header and a
+  // config_file assignment — on base this is misread as a real registration
+  // pointing at a file that does not exist, producing a false
+  // `codex-agent-unreadable` blocker on an otherwise-valid config.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codexmlstring-'));
+  const realFile = path.join(dir, 'agents', 'shipyard-integrator.toml');
+  fs.mkdirSync(path.join(dir, 'agents'), { recursive: true });
+  fs.writeFileSync(realFile, `name = "shipyard-integrator"\nmodel = "${CEILING.model}"\n`);
+  fs.writeFileSync(path.join(dir, 'config.toml'), [
+    '[agents.shipyard-integrator]',
+    'description = "real"',
+    `config_file = "${realFile}"`,
+    '',
+    '[mcp_servers.example]',
+    'notes = """',
+    '[agents.decoy]',
+    'config_file = "/no/such/file.toml"',
+    '"""',
+  ].join('\n'));
+  const b = blockersOf(project({ runtime: 'codex' }), [],
+    { CODEX_HOME: dir, PATH: stubCli({ codex: OLD_CODEX }) });
+  assert.equal(b.length, 1, `only the real registration's floor, not a decoy blocker: ${JSON.stringify(b)}`);
+  assert.equal(b[0].what, 'codex-model-floor');
+});
+
+test('a Claude project still sees none of it', () => {
+  // Unchanged gating, asserted again on the new read path: a dual-runtime host
+  // has these files whatever this project delivers on.
+  const codexHome = codexHomeRegistering({ 'shipyard-integrator': { model: CEILING.model } });
+  assert.deepEqual(
+    blockersOf(project({ runtime: 'claude' }), [], { CODEX_HOME: codexHome, PATH: stubCli({ codex: OLD_CODEX }) }),
+    []);
+});
+
+test('nothing under the Codex home is written — this is a read', () => {
+  const snapshot = (dir) => {
+    const out = [];
+    const walk = (d, rel) => {
+      for (const ent of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const p = path.join(d, ent.name);
+        const r = path.join(rel, ent.name);
+        if (ent.isDirectory()) walk(p, r);
+        else out.push(`${r}:${fs.readFileSync(p, 'utf8')}`);
+      }
+    };
+    walk(dir, '');
+    return out;
+  };
+  const codexHome = codexHomeRegistering({ 'shipyard-integrator': { model: CEILING.model } });
+  const before = snapshot(codexHome);
+  const dir = project({ runtime: 'codex' });
+  run(dir, ['--apply'], { CODEX_HOME: codexHome, PATH: stubCli({ codex: OLD_CODEX }) });
+  assert.deepEqual(snapshot(codexHome), before,
+    'even --apply writes only the GSD config it was pointed at');
+});
+
+suite('gsd-tune — the fable pin is READ, not merely named (ADR-007 D4)');
+
+// `ANTHROPIC_DEFAULT_FABLE_MODEL` bypasses the built-in alias mapping and passes
+// the id straight to the API, which makes it the STRONGER of the two guarantees —
+// and it appeared in this script twice, both times as comment or remedy prose,
+// while the blocker measured only the CLI version. Measured: pipeline.fable
+// "auto", CLI 2.1.263 and ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5 gave exit
+// 0 and no blockers while the environment pinned the model ADR-005 ruled out.
+const PIN = 'ANTHROPIC_DEFAULT_FABLE_MODEL';
+const WRONG_PIN = 'claude-fable-5';
+const RIGHT_PIN = 'claude-fable-5-1';
+const CURRENT_CLAUDE = { PATH: stubCli({ claude: '2.1.263 (Claude Code)' }) };
+
+test('a pin naming another model is a blocker even on a current CLI', () => {
+  const dir = project({ runtime: 'claude', pipeline: { fable: 'auto' } });
+  const env = { ...CURRENT_CLAUDE, [PIN]: WRONG_PIN };
+  const b = blockersOf(dir, [], env);
+  assert.equal(b.length, 1, JSON.stringify(b));
+  assert.equal(b[0].what, 'fable-pin');
+  assert.equal(b[0].have, WRONG_PIN);
+  assert.equal(b[0].need, RIGHT_PIN);
+  const r = run(dir, [], env);
+  assert.equal(r.status, 1, r.stdout);
+  assert.ok(r.stdout.includes(WRONG_PIN), `the report must name what is pinned: ${r.stdout}`);
+  assert.ok(r.stdout.includes(RIGHT_PIN), `and the model that was consented to: ${r.stdout}`);
+  assert.ok(r.stdout.includes(PIN), `and the variable to change: ${r.stdout}`);
+});
+
+test('the correct pin, and an unset one, produce nothing from this rule', () => {
+  const dir = project({ runtime: 'claude', pipeline: { fable: 'auto' } });
+  assert.deepEqual(blockersOf(dir, [], { ...CURRENT_CLAUDE, [PIN]: RIGHT_PIN }), []);
+  assert.deepEqual(blockersOf(dir, [], CURRENT_CLAUDE), [],
+    'unset means the built-in mapping applies, which the CLI floor already governs');
+  assert.deepEqual(blockersOf(dir, [], { ...CURRENT_CLAUDE, [PIN]: '  ' }), [],
+    'a blank value names no model');
+});
+
+test('it is independent of the CLI version, in both directions', () => {
+  const dir = project({ runtime: 'claude', pipeline: { fable: 'auto' } });
+  // No claude on PATH at all: the version is unmeasurable and the pin is still a
+  // fact about this environment. An unreadable CLI excuses nothing here — the pin
+  // WINS over the mapping the version decides.
+  const none = blockersOf(dir, [], { [PIN]: WRONG_PIN });
+  assert.equal(none.length, 1, JSON.stringify(none));
+  assert.equal(none[0].what, 'fable-pin');
+  // Below the CLI floor with a wrong pin: BOTH ways to miss the floor are open,
+  // and the report names both rather than one standing in for the other.
+  const both = blockersOf(dir, [], { PATH: stubCli({ claude: '2.1.240 (Claude Code)' }), [PIN]: WRONG_PIN });
+  assert.deepEqual(both.map((x) => x.what).sort(), ['fable-floor', 'fable-pin'], JSON.stringify(both));
+});
+
+test('a project that never consented is silent whatever the environment says', () => {
+  // Same rule the rest of the blockers obey: measured only where this project
+  // actually reaches for the model. A report nobody in the session can act on is
+  // how a report teaches its reader to skip it.
+  const dir = project({ runtime: 'claude' });
+  assert.deepEqual(blockersOf(dir, [], { ...CURRENT_CLAUDE, [PIN]: WRONG_PIN }), []);
+  const codex = project({ runtime: 'codex', pipeline: { fable: 'auto' } });
+  assert.deepEqual(blockersOf(codex, [], { ...CURRENT_CLAUDE, [PIN]: WRONG_PIN }), [],
+    'the alias does not exist off Claude');
+});
+
+test('the pin is REPORTED and never rewritten', () => {
+  // Modifying a user's environment is not this script's business, and --apply has
+  // no key to write for it — which is what makes it a blocker rather than drift.
+  const dir = project({ runtime: 'claude', pipeline: { fable: 'auto' } });
+  const env = { ...CURRENT_CLAUDE, [PIN]: WRONG_PIN };
+  const r = run(dir, ['--apply'], env);
+  assert.equal(r.status, 1, 'nothing here can write an environment variable');
+  assert.equal(readCfg(dir).git.branching_strategy, 'none', 'and the writable half still landed');
+  const d = keyed(driftOf(dir, ['--runtime', 'claude']));
+  for (const k of Object.keys(d)) {
+    assert.ok(!/FABLE|fable/.test(k), `${k}: the pin must never become a config key`);
+  }
+});
 
 done();

@@ -221,6 +221,23 @@ const MARK_FIELD = {
 // invented one under-counts (a spend), and only the second is unsafe.
 const AGENT_ID_MAX = 200;
 
+// ONE rule for "is this string safe to hold as an agent identity", read by both
+// the write path (mark, below) and the read path (`agentIdOf`, near the bottom).
+// Two copies of this check would be free to disagree about a hand-edited or
+// pre-validation record, and `front.cjs`'s Set key relies on the invariant this
+// enforces — no whitespace or control character in either half of the joined
+// `role\u0000identity` key — holding for every record it ever reads, not only
+// ones this script itself wrote.
+function agentIdSafetyIssue(id) {
+  if (typeof id !== 'string') return 'it is not a string';
+  if (id.trim() === '') return 'it is blank';
+  if (/[\s\u0000-\u001f\u007f]/.test(id)) {
+    return 'it contains whitespace or a control character, so two spellings of one id would count as two agents';
+  }
+  if (id.length > AGENT_ID_MAX) return `it is longer than ${AGENT_ID_MAX} characters, which no launch id is`;
+  return null;
+}
+
 // ── the Codex half: which FILE was invoked ───────────────────────────────────
 //
 // An agent on Codex is a static `.toml`, so the dispatch's real decision is the
@@ -352,16 +369,17 @@ function parseMarkFlags(argv, role) {
   // absurd length. Everything else is stored exactly as passed.
   const agentId = given.get('agent-id');
   if (agentId !== undefined) {
-    const why = agentId.trim() === ''
-      ? 'it is blank'
-      : /[\s\u0000-\u001f\u007f]/.test(agentId)
-        ? 'it contains whitespace or a control character, so two spellings of one id would count as two agents'
-        : agentId.length > AGENT_ID_MAX
-          ? `it is longer than ${AGENT_ID_MAX} characters, which no launch id is`
-          : null;
+    // The SAME predicate `agentIdOf` reads back with, so a value accepted here
+    // can never later fail that check -- and a hand-edited or pre-validation
+    // record that would NOT pass this check is exactly the one `agentIdOf`
+    // must refuse to trust when reading it back.
+    const why = agentIdSafetyIssue(agentId);
     if (why !== null) {
+      // Echoed via JSON.stringify, never raw interpolation: an id refused
+      // BECAUSE it holds a newline or control character must not then inject
+      // that same newline or control character into this stderr message.
       fail(
-        `--agent-id "${agentId}" cannot identify an agent: ${why}.\n` +
+        `--agent-id ${JSON.stringify(agentId)} cannot identify an agent: ${why}.\n` +
         '  Pass the id the LAUNCH returned, verbatim — the Workflow tool returns a task id, the Agent tool an\n' +
         '  agent id — and never a label you compose: two guards recorded under one hand-typed name count as\n' +
         '  ONE agent, and the cap then authorises a spend past itself.\n' +
@@ -568,10 +586,20 @@ const roleOf = (rec) => (typeof rec === 'string' ? rec : ((rec && rec.role) || '
  * authorises one more agent than it means to. A bare role string (the flattened
  * shape) and a record from before the field existed both answer `null`, which
  * `agentsInFlight` spends a whole agent on.
+ *
+ * Runs the SAME `agentIdSafetyIssue` the write path enforces, not only the
+ * `trim() !== ''` half of it: `front.cjs` joins `role agent` into a Set
+ * key on the promise that neither half holds whitespace or a control
+ * character, but that promise is only as good as what THIS function lets
+ * through — a hand-edited store, or a record written before the write-side
+ * check existed, is not bound by it. An id this function would refuse to
+ * WRITE is exactly the one it must refuse to trust on READ; both answer
+ * `null`, which is the same safe direction as no identity at all — an extra
+ * agent counted, never one silently discounted through a collision.
  */
 const agentIdOf = (rec) => {
   const id = rec && typeof rec === 'object' ? rec.agent_id : undefined;
-  return typeof id === 'string' && id.trim() !== '' ? id : null;
+  return typeof id === 'string' && agentIdSafetyIssue(id) === null ? id : null;
 };
 
 function ageMinutes(rec) {
