@@ -508,7 +508,7 @@ suite('dispatch-record — a dispatch records WHAT it dispatched, or says it doe
 const journal = (graph) => fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8')
   .trim().split('\n').map(JSON.parse);
 const lastDispatch = (graph) => journal(graph).filter((e) => e.event === 'dispatch').pop();
-const DECIDED_KEYS = ['model', 'effort', 'effort_applied', 'reason', 'agent_file'];
+const DECIDED_KEYS = ['model', 'effort', 'effort_applied', 'reason', 'agent_file', 'agent_id'];
 // What `pipeline-config.cjs model executor --json` returns for a signal-less
 // dispatch, in its own `route` field. Taken from the resolver rather than typed
 // here — a fixture that drifts from the grammar would make every test below
@@ -691,6 +691,7 @@ test('the front does not gain a field — the overlay is byte-identical', () => 
   assert.equal(run([
     'mark', 'T-01-01', 'ci-fix', '--model', 'opus', '--effort', 'high',
     '--effort-applied', 'high', '--route', ROUTE, '--agent-file', 'shipyard-ci-fix-deep',
+    '--agent-id', 'agent_01FIXER',
   ], rich.project).status, 0);
 
   const richRaw = fs.readFileSync(path.join(rich.graph, 'delivery-front.json'), 'utf8');
@@ -878,6 +879,79 @@ test('every role accepts its OWN files, and a role with none says so instead', (
     'every agent file the generator produces is claimed by exactly one role');
 });
 
+suite('dispatch-record — WHICH agent holds it (ADR-007 D1)');
+
+// The record named the ROLE and nothing about the agent, so `front.cjs` collapsed
+// a guard's N records into one agent by adding that role string to a Set — and two
+// live guards are legitimate (`deliver.md`: re-post one for PRs opened after the
+// first started). Reported board: four agents genuinely out, `max=4, in_flight=3,
+// free=1`. The cap authorised a fifth, which is not a cap.
+//
+// The identity is the id the LAUNCH returned, passed verbatim, and it is optional:
+// its absence must keep costing a whole agent, because a record nobody can name is
+// still an agent that was paid for.
+
+test('--agent-id round-trips into the store, the journal and the reader', () => {
+  const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
+  const r = run(['mark', 'T-01-02', 'pr-sentinel', '--agent-id', 'agent_01ABCdef-9'], project);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  assert.equal(store(graph)['T-01-02'].agent_id, 'agent_01ABCdef-9', 'verbatim in the store');
+  assert.equal(lastDispatch(graph).agent_id, 'agent_01ABCdef-9', 'and in the journal');
+  assert.equal(activeDispatches(project)['T-01-02'].agent_id, 'agent_01ABCdef-9',
+    'and the reader the front counts from hands it over');
+});
+
+test('a mark without it reports NO identity — never a blank one', () => {
+  // `agentsInFlight` spends a whole agent on a record with no identity, so the
+  // reader must say "none" in the one way that counter recognises. A `''` or a
+  // `null` smuggled in as an identity is the shape that would collapse two
+  // anonymous guards back into one.
+  const { project } = scratch({ 'T-01-02': { ...OPEN_PR } });
+  assert.equal(run(['mark', 'T-01-02', 'pr-sentinel'], project).status, 0);
+  const rec = activeDispatches(project)['T-01-02'];
+  assert.ok(!('agent_id' in rec), `no key at all, got ${JSON.stringify(rec)}`);
+  const { agentIdOf } = require(DISPATCH);
+  assert.strictEqual(agentIdOf(rec), null, 'and the shared reader answers null');
+  // The flattened shape and a hand-edited blank answer the same way.
+  assert.strictEqual(agentIdOf('pr-sentinel'), null);
+  assert.strictEqual(agentIdOf({ role: 'pr-sentinel', agent_id: '   ' }), null);
+});
+
+test('an identity nothing can compare is refused, and the refusal says to OMIT the flag', () => {
+  // No allowlist: a launch id has no vocabulary, and inventing one is the mistake
+  // this repo refused for Codex model ids. Only what cannot be compared or
+  // journalled is rejected — and the message must send a caller with no id to the
+  // SAFE direction (no flag, one agent counted) rather than to an invented label,
+  // which is the one way this field can make the count too small.
+  for (const bad of ['', '   ', 'guard one', 'agent\n01', 'x'.repeat(201)]) {
+    const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
+    const r = run(['mark', 'T-01-02', 'pr-sentinel', '--agent-id', bad], project);
+    assert.equal(r.status, 1, `${JSON.stringify(bad)} must refuse (${r.stdout}${r.stderr})`);
+    assert.ok(/OMIT the flag/.test(r.stderr), `and names the safe direction: ${r.stderr}`);
+    assert.ok(/verbatim/.test(r.stderr), `and where the value comes from: ${r.stderr}`);
+    assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
+  }
+});
+
+test('two guards recorded through the real CLI come out as TWO agents, end to end', () => {
+  // The whole chain, measured rather than reasoned: mark → activeDispatches →
+  // computeFront. Guard A holds two PRs, guard B holds one. Before the field
+  // existed this board reported `in_flight: 1` however many guards were out.
+  const ids = ['T-01-02', 'T-01-03', 'T-01-04'];
+  const { project } = scratch(Object.fromEntries(ids.map((id, i) => [id, { ...OPEN_PR, pr: 7 + i }])));
+  for (const [id, agent] of [[ids[0], 'agent_A'], [ids[1], 'agent_A'], [ids[2], 'agent_B']]) {
+    assert.equal(run(['mark', id, 'pr-sentinel', '--agent-id', agent], project).status, 0);
+  }
+  const { computeFront } = require(path.join(SCRIPTS, 'front.cjs'));
+  const f = computeFront(
+    Object.fromEntries(ids.map((id) => [id, {}])),
+    readState(path.join(project, '.planning', 'graph')),
+    { maxConcurrentAgents: 4, dispatched: activeDispatches(project) }
+  );
+  assert.strictEqual(f.capacity.in_flight, 2, 'two guards, two agents');
+  assert.strictEqual(f.capacity.free, 2);
+});
+
 suite('dispatch-record — the docs pass what the record needs, and the query reads it back');
 
 const DOC_MARKS = [
@@ -915,6 +989,27 @@ test('every documented mark invocation passes the resolved pair', () => {
       assert.ok(!/--reason\b/.test(l),
         `${rel}: a mark invocation still spells the refused --reason flag: ${l.trim()}`);
     }
+  }
+});
+
+test('every mark deliver.md documents passes the agent identity too', () => {
+  // Scoped to deliver.md — DOC_MARKS[0] — on purpose. `references/pr-sentinel.md`
+  // carries one mark of its own for a FIXER, whose cardinality is 'ticket' (one
+  // agent per record either way, so the identity changes no count there), and that
+  // file belongs to another ticket in this phase; adding the assertion over it
+  // would fail on a file this change may not touch. Named here rather than left
+  // implicit: a deferral addressed to nobody is how the defect above shipped.
+  //
+  // Presence only, with no "and nowhere else" half: the identity has to be
+  // EXPLAINED in prose beside the invocations, and the prose spells it without
+  // dashes (`agent id`, `agent_id`) precisely so it stays out of this grep.
+  const [file] = DOC_MARKS[0];
+  const marks = fs.readFileSync(file, 'utf8').split('\n')
+    .filter((l) => /dispatch-record\.cjs mark <T>/.test(l));
+  assert.ok(marks.length >= 3, `expected the documented invocations, found ${marks.length}`);
+  for (const l of marks) {
+    assert.ok(/--agent-id /.test(l),
+      `a documented mark that records no holder: ${l.trim()}`);
   }
 });
 

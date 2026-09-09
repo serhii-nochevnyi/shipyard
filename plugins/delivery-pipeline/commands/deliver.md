@@ -101,7 +101,7 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role> --model <alias> --effort <level>` — an agent
+- `dispatch-record.cjs mark <T> <role> --model <alias> --effort <level> --agent-id <launch id>` — an agent
   is working on it RIGHT NOW. The one fact here that is motion rather than a
   verdict, and the one the board could not see at all: nothing is pushed yet, so
   the live state still reads `execute`/`fix` and the stop gate refuses turns over
@@ -130,6 +130,14 @@ instead, and the front reads it back by itself:
   at the session's own effort whatever the ladder chose. Omitting the flag is the
   honest record of that: absence means UNMEASURED, and the recorder will not fill
   it in. Never pass the resolved value as the applied one.
+  **Pass the agent id the launch returned, verbatim** — the Workflow tool returns a
+  task id, the Agent tool an agent id, and whichever you hold is what identifies the
+  holder. This is `--route`'s provenance rule over a different subject: **never a
+  label you compose.** The cap counts DISTINCT agents, so two guards recorded under
+  one hand-typed name (`guard`, `sentinel`) count as ONE agent and the budget then
+  authorises a spend past itself — the one way this field can make the count too
+  small, and nothing can validate it away. Holding no id at all, omit the flag: an
+  unidentified record counts as its own agent, which is the safe direction.
   On the Codex bundle add `--agent-file shipyard-<role>[-deep]` — the file you
   actually dispatched, which is where that runtime's model choice lives. That
   pattern is not 1:1 for every role, so check `dispatch-record.cjs`'s own mapping
@@ -1120,7 +1128,7 @@ may be dispatched at all: fix the file.
     above returns immediately with an id (the Workflow tool a task id, the Agent
     tool an agent id); once you hold that id the agent exists, and only then, for
     every ticket you just handed out:
-    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --route "<route>"`
+    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --route "<route>" --agent-id <launch id>`
     (add `--effort-applied <effort>` when you took the Workflow path — it carries an
     effort into the spawn and the Agent fallback cannot, so on the fallback the flag
     is OMITTED, never guessed; add `--graph <project>/.planning/graph` when you are
@@ -1129,9 +1137,13 @@ may be dispatched at all: fix the file.
     returned — nothing is re-derived and nothing is paraphrased here, or the record
     would hold your reading of the ladder instead of the ladder's own answer. The
     recorder checks the route against the pair, so a route copied from the previous
-    round is refused rather than filed. Keep the launch id in your own turn — the record stores
-    the ticket, the role, the time and the resolved pair, and no id — because the id
-    is what you collect and clear against.
+    round is refused rather than filed. The launch id is now RECORDED as well as kept:
+    the record stores the ticket, the role, the time, the resolved pair and the agent
+    id, because the cap counts DISTINCT agents and the id is the only thing that tells
+    two of them apart. On the Workflow path one task id covers the whole batch, and
+    that is correct — an executor is one agent per ticket whatever the id says, so
+    there the id is provenance and not a count. Keep it in your turn too: it is still
+    what you collect and clear against.
     **Marking first is how the board comes to describe an agent that does not
     exist**: a launch that fails (the tool refused, Workflow is absent on this
     runtime and the Agent fallback was not taken) leaves a 90-minute dispatch the
@@ -1241,9 +1253,11 @@ spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose'
 
 Record that hand-over the same way the executors' was, and in the same order —
 the `Agent` call returns an agent id, and THEN
-`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>"`
-for every ticket on the guarded list, taking all three fields from the
-`model pr-sentinel` call above — the route included, verbatim. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
+`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>" --agent-id <the id that Agent call returned>`
+for every ticket on the guarded list, taking all three resolver fields from the
+`model pr-sentinel` call above — the route included, verbatim — and the agent id
+from the spawn you just made. **Every ticket this guard holds carries THAT SAME
+id**, which is what makes one guard over four PRs one agent instead of four. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
 which carries no effort, so the applied depth is genuinely unmeasured and the
 record says so by leaving the key out;
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
@@ -1252,7 +1266,11 @@ by itself when the PR merges or its base moves. This half is not an
 optimisation: posting the guard and NOT waiting for it is the documented protocol,
 so `fix`/`finalize`/`merge` are dispatched BY DESIGN, and without the record the
 board mis-reports the guard's buckets on every healthy run. New PRs handed to the
-running guard later get a `mark` of their own.
+running guard later get a `mark` of their own — **with the running guard's own agent
+id**, because no second agent exists: the time of the mark moves and the holder does
+not, and the counter reads the identity rather than the time. A guard you post
+fresh with a new `Agent` call has its own id, and then two guards genuinely are two
+agents against the cap.
 
 Then **return to Step 3 immediately.** Do not wait for the guard, do not watch
 CI, do not re-read the PR yourself. New PRs opened later either go to a fresh
