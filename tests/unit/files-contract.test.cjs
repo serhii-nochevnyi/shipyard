@@ -29,7 +29,7 @@ const run = (script, cwd, args) => spawnSync(process.execPath, [script, ...args]
 // A repo shaped like the cascade: parent branch, child branched off it, and an
 // epic that has the parent's work as a SQUASH — a different SHA with the same
 // content, which is exactly why the child then conflicts.
-function cascade({ files, childTouchesShared = true, squashDiffers = false }) {
+function cascade({ files, childTouchesShared = true, squashDiffers = false, baseAdds = null }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-files-'));
   const proj = path.join(dir, 'proj');
   const repo = path.join(dir, 'repo');
@@ -69,6 +69,11 @@ function cascade({ files, childTouchesShared = true, squashDiffers = false }) {
   // the parent's PR after the child branched. This is what makes an UNDECLARED
   // file genuinely conflict rather than merge silently.
   if (squashDiffers) w('src/parent.ts', 'parent-work+review\n');
+  // A path the BASE adds and the child branch has never heard of. With the
+  // dirtiness pre-check narrowed to tracked content, an untracked file sitting
+  // at that path is the one case the pre-check stops covering — and `git merge`
+  // is what has to refuse it.
+  if (baseAdds) w(baseAdds, 'the base edition of a brand-new file\n');
   git(repo, ['add', '.']); git(repo, ['commit', '-qm', 'squash: parent']);
   git(repo, ['checkout', '-q', 'child']);
 
@@ -149,6 +154,123 @@ test('refuses to start on a dirty worktree rather than merging over local work',
   const r = run(BASE_MERGE, proj, ['T-01-02', '--worktree', repo, '--base', 'epic', '--no-fetch']);
   assert.strictEqual(r.status, 2, r.stdout + r.stderr);
   assert.ok(/uncommitted/i.test(r.stderr), r.stderr);
+});
+
+// ── the dirtiness question is about TRACKED content ─────────────────────────
+//
+// This script is named as THE remedy for a moved base in deliver.md,
+// references/ci-fix.md, references/review-fix.md and references/pr-sentinel.md
+// — three of them read by dispatched agents — and it refused in the one state
+// the conveyor creates for EVERY executed ticket, because T-26-14 has each
+// executor write `.shipyard-pr-body.md` and `.shipyard-evidence.md` into its
+// worktree as untracked scratch. `--porcelain` prints `?? path` for those.
+// Reproduced on base: exit 2 with both files present, `merged cleanly` with
+// them moved aside and nothing else changed.
+//
+// The FIRST case is the third file, and it comes first on purpose: it is the one
+// a two-filename allowlist fails and everything else passes. The next scratch
+// file the conveyor learns to write must be covered by construction, not by
+// somebody remembering to extend a list.
+
+test('an untracked file NO allowlist knows about does not read as uncommitted work', () => {
+  const { proj, repo } = cascade({
+    files: ['src/child.ts'], childTouchesShared: false, squashDiffers: true,
+  });
+  fs.writeFileSync(path.join(repo, '.shipyard-a-scratch-file-invented-tomorrow.md'), 'notes\n');
+  const r = run(BASE_MERGE, proj, ['T-01-02', '--worktree', repo, '--base', 'epic', '--no-fetch']);
+  assert.strictEqual(r.status, 0, 'a name nobody listed must be treated like every other untracked file:\n' + r.stdout + r.stderr);
+  assert.ok(
+    fs.existsSync(path.join(repo, '.shipyard-a-scratch-file-invented-tomorrow.md')),
+    'and the merge must not have eaten it'
+  );
+});
+
+test('a worktree holding only the executor scratch files merges', () => {
+  const { proj, repo } = cascade({
+    files: ['src/child.ts'], childTouchesShared: false, squashDiffers: true,
+  });
+  fs.writeFileSync(path.join(repo, '.shipyard-pr-body.md'), 'Ticket: T-01-02\n');
+  fs.writeFileSync(path.join(repo, '.shipyard-evidence.md'), 'evidence\n');
+  const r = run(BASE_MERGE, proj, ['T-01-02', '--worktree', repo, '--base', 'epic', '--no-fetch']);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.strictEqual(
+    git(repo, ['status', '--porcelain', '--untracked-files=no']).stdout.trim(), '',
+    'the merge is committed'
+  );
+  assert.strictEqual(
+    fs.readFileSync(path.join(repo, '.shipyard-pr-body.md'), 'utf8'), 'Ticket: T-01-02\n',
+    'the scratch the PR body will be read from is untouched'
+  );
+});
+
+test('a real tracked modification STILL refuses, with the same message', () => {
+  // The relaxation must not have changed what the check is for. `shared/tools.ts`
+  // is tracked and undeclared here, so nothing but the tracked-content question
+  // stands between this edit and being merged over.
+  const { proj, repo } = cascade({ files: ['src/child.ts'] });
+  fs.writeFileSync(path.join(repo, 'shared/tools.ts'), 'local work nobody committed\n');
+  const r = run(BASE_MERGE, proj, ['T-01-02', '--worktree', repo, '--base', 'epic', '--no-fetch']);
+  assert.strictEqual(r.status, 2, r.stdout + r.stderr);
+  assert.ok(/uncommitted/i.test(r.stderr), r.stderr);
+  assert.strictEqual(
+    fs.readFileSync(path.join(repo, 'shared/tools.ts'), 'utf8'), 'local work nobody committed\n',
+    'nothing was merged over it'
+  );
+});
+
+test('a git status that FAILS is never read as a clean tree', () => {
+  // The precheck's `tolerate: true` call swallows a non-zero exit and looks only
+  // at stdout — so a `git status` that cannot run (a broken worktree, an
+  // unreadable gitdir, IO error) prints nothing and used to read exactly like a
+  // clean tree, letting the merge proceed with no cleanliness ever established.
+  // ticket-worktree.sh's own GC checks went fail-closed for the identical
+  // failure; this precheck must refuse rather than silently treat the silence
+  // as "no changes".
+  const { proj, repo } = cascade({ files: ['src/child.ts'] });
+  const realGit = spawnSync(
+    process.platform === 'win32' ? 'where' : 'command',
+    process.platform === 'win32' ? ['git'] : ['-v', 'git'],
+    { shell: process.platform !== 'win32', encoding: 'utf8' }
+  ).stdout.trim().split(/\r?\n/)[0];
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-fake-git-'));
+  const shimPath = path.join(shimDir, 'git');
+  fs.writeFileSync(
+    shimPath,
+    // base-merge invokes git as \`git -C <worktree> status …\`, so the
+    // subcommand is not always $1 — match it anywhere in the argument list.
+    `#!/bin/sh\nfor a in "$@"; do\n  if [ "$a" = "status" ]; then\n    echo "fatal: fake git status failure" >&2\n    exit 128\n  fi\ndone\nexec "${realGit}" "$@"\n`
+  );
+  fs.chmodSync(shimPath, 0o755);
+  const r = spawnSync(process.execPath, [BASE_MERGE, 'T-01-02', '--worktree', repo, '--base', 'epic', '--no-fetch'], {
+    cwd: proj, encoding: 'utf8', env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}` },
+  });
+  assert.strictEqual(r.status, 2, 'a failed status check must refuse, not proceed:\n' + r.stdout + r.stderr);
+  assert.ok(/git status failed/i.test(r.stderr), r.stderr);
+});
+
+test('an untracked path the incoming base ADDS refuses, and git names the path', () => {
+  // The case the relaxed pre-check stops covering. `git merge` itself is the
+  // guard here, so the assertion is on git's own refusal — and deliberately not
+  // on its wording, which is locale-dependent: the path is named, the file's
+  // bytes are unchanged, and no merge is left half-done.
+  const { proj, repo } = cascade({
+    files: ['src/child.ts'], childTouchesShared: false, squashDiffers: true,
+    baseAdds: 'docs/new-from-base.md',
+  });
+  const local = 'a DIFFERENT local edition git must not overwrite\n';
+  fs.mkdirSync(path.join(repo, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'docs/new-from-base.md'), local);
+  const r = run(BASE_MERGE, proj, ['T-01-02', '--worktree', repo, '--base', 'epic', '--no-fetch']);
+  assert.notStrictEqual(r.status, 0, 'the merge must refuse:\n' + r.stdout + r.stderr);
+  assert.ok(/docs\/new-from-base\.md/.test(r.stderr), 'the refusal must name the path:\n' + r.stderr);
+  assert.strictEqual(
+    fs.readFileSync(path.join(repo, 'docs/new-from-base.md'), 'utf8'), local,
+    'the untracked file must survive byte-identical'
+  );
+  assert.ok(
+    !fs.existsSync(path.join(repo, '.git', 'MERGE_HEAD')),
+    'and nothing may be left half-merged — the refusal is before any state changed'
+  );
 });
 
 // ── the verdict a base-merge that changed nothing does not have to buy again ──

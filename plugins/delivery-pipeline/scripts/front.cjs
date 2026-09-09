@@ -77,7 +77,7 @@ const { escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'))
 // Same rule, second store: a dispatch's lifting sentence is written by the file
 // that decides when it lifts. (dispatch-record.cjs requires front.cjs back, but
 // only lazily and only from its CLI, so there is no half-built module here.)
-const { dispatchWhy, activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
+const { dispatchWhy, activeDispatches, agentIdOf } = require(path.join(__dirname, 'dispatch-record.cjs'));
 // The OTHER predicate the guard and the board must not spell twice — "is this
 // ticket's parent still being driven?". It lived in sentinel.cjs alone, which is
 // why the board offered tickets the guard was refusing. One home, one direction:
@@ -284,6 +284,27 @@ function baseMergeWhy(moved, base) {
 const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
 const SENTINEL_BUCKETS = ['fix', 'finalize', 'merge'];
 
+// ── `--parked` HERE parks nothing, and now says so (ADR-007 D6) ─────────────
+//
+// The same flag exists on `state-sync.cjs`, and there it writes
+// `delivery-front.json` — the board the stop gate reads and enforces on. Here it
+// is an argument to a pure function whose result is printed and dropped. Both
+// commands print the SAME answer, which is precisely why the difference was
+// invisible: measured when the stop gate correctly refused a stop whose board
+// still listed an item the orchestrator believed it had parked, because the park
+// had been passed to this CLI.
+//
+// Closed by SAYING SO rather than by writing. Feeding it would be worse: the
+// durable board has exactly one writer, which is why `state-sync` takes state,
+// yaml and front in a single locked section — a second command writing the same
+// file from a `--parked` list is a lost update by design, and it would also let
+// a render-time flag silently outrank the last real sync. So this flag keeps
+// doing the one honest thing it can do, and names the command that does the
+// other.
+const PARKED_RENDER_ONLY = '--parked applies to THIS RENDER ONLY — nothing was written. '
+  + 'The durable board the stop gate enforces on is written by `state-sync.cjs --parked <ids>`; '
+  + 'pass the same ids there, or the next round re-offers these tickets.';
+
 // Facts GitHub cannot know. `parked` is the session-scoped channel — a judgement
 // made mid-run that has no home on disk yet; a front that keeps re-offering an
 // escalated PR is an infinite babysit loop, so the caller passes those ids in.
@@ -318,7 +339,7 @@ function computeFront(tickets, state, opts = {}) {
   // nobody has touched — nothing is pushed yet, so state-sync still classifies it
   // `execute` — and the stop gate refuses turns over work already in flight (five
   // times in one session, on both owners' buckets). The caller supplies the
-  // records `activeDispatches` returns — {ticket: {role, at}} — and that reader
+  // records `activeDispatches` returns — {ticket: {role, at, agent_id?}} — and that reader
   // has already dropped everything expired, so nothing here decides how long a
   // dispatch lives. A bare role string is accepted as the flattened shape.
   const dispatched = opts.dispatched || {};
@@ -1150,17 +1171,53 @@ const AGENT_CARDINALITY = {
 // model ladder, where every row is an upgrade and silence must resolve down.
 const DEFAULT_CARDINALITY = 'ticket';
 
-// The collapse. Every 'round' role contributes at most one agent no matter how
-// many tickets carry its record; everything else contributes one per record.
+// ── AND THE COLLAPSE IS PER AGENT, NEVER PER ROLE (ADR-007 D1) ──────────────
+//
+// The first cut of the rule above added the ROLE STRING to the Set, which makes
+// every `pr-sentinel` record in the store the same agent. `deliver.md` sanctions
+// two live guards in as many words — "Re-post a guard for PRs opened after it
+// started (or hand them to the running one with `SendMessage`)" — so the second
+// guard cost nothing: reported reproduction, four agents genuinely out and
+// `max=4, in_flight=3, free=1`, an authorisation to dispatch a fifth.
+//
+// That inverted the ERROR DIRECTION, which is the whole reason this counter is
+// allowed to be clever at all. Counting records over-counted: a stall, annoying
+// and harmless, and `phase-26-followups.md` justified it on exactly that ground.
+// Counting roles under-counts, and an under-count spends past the cap — which is
+// not a cap. So the collapse is keyed on the identity of the AGENT that holds
+// the record (`dispatch-record.cjs mark --agent-id`, the id the launch returned),
+// and:
+//
+//   * a record with NO identity is its own agent. An older board must still
+//     read, and unknown resolves UPWARD here for the same reason
+//     `DEFAULT_CARDINALITY` is 'ticket' — the failure direction of a spend gate
+//     is to dispatch less;
+//   * TIME IS NOT AN IDENTITY. New PRs are legitimately handed to the guard
+//     already running, so `at` moves without a second agent existing; the key
+//     never reads it.
+//
+// The key is the role AND the identity, so one label reused across two roles
+// cannot become a discount either. `agentIdOf` is imported from the store that
+// WRITES the field rather than re-derived here: two readings of "what counts as
+// an identity" would be free to disagree, and the disagreement would surface as
+// a cap authorising one more agent than it means to.
+
+// The collapse. A 'round' role contributes one agent per distinct identity no
+// matter how many tickets carry its record; everything else — and every record
+// that names no agent — contributes one per record.
 function agentsInFlight(dispatched) {
   const perRound = new Set();
   let n = 0;
   for (const id of Object.keys(dispatched || {})) {
-    const role = roleOfDispatch(dispatched[id]);
+    const rec = dispatched[id];
+    const role = roleOfDispatch(rec);
     const how = Object.prototype.hasOwnProperty.call(AGENT_CARDINALITY, role)
       ? AGENT_CARDINALITY[role]
       : DEFAULT_CARDINALITY;
-    if (how === 'round') perRound.add(role);
+    const agent = agentIdOf(rec);
+    // `\u0000` cannot occur in either half, so no pair of (role, identity)
+    // values can collide with another through the joined key.
+    if (how === 'round' && agent !== null) perRound.add(`${role}\u0000${agent}`);
     else n += 1;
   }
   return n + perRound.size;
@@ -1483,7 +1540,7 @@ module.exports = {
   // Shared with sentinel.cjs for the same reason as everything above it: the
   // board must never offer what the guard refuses, and two texts for one rule is
   // how they came to disagree in the first place.
-  reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy,
+  reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy, PARKED_RENDER_ONLY,
   // The cap's counting unit, exported so the test can hold it against
   // `pipeline-config.cjs`'s ROLES: a role with no cardinality would be counted
   // by the fallback and nothing would say so.
@@ -1590,9 +1647,19 @@ if (require.main === module) {
     // rather than refusing (T-26-02), so it never sets this field.
     front.fixpoint = false;
   }
+  // The caveat rides BOTH faces, for `ci-wait.cjs`'s reason: the caller reading
+  // `--json` is not the caller reading the text, and a caveat only one of them can
+  // see is a caveat the other acts against. Keyed on the FLAG being present, not
+  // on the list being non-empty — `--parked` with nothing after it is still an
+  // operator who believes something was parked.
+  if (pIdx !== -1) front.parked_render_only = PARKED_RENDER_ONLY;
   if (argv.includes('--json')) {
     process.stdout.write(JSON.stringify(front, null, 2) + '\n');
   } else {
+    // BEFORE the board, never after: deliver.md tells the loop to quote the last
+    // two lines (`front:` and `fixpoint:`) as the verdict it is acting on, so a
+    // line appended past them displaces the one thing a reader is told to read.
+    if (front.parked_render_only) console.log(`front: ${front.parked_render_only}`);
     for (const line of formatFront(front)) console.log(line);
   }
   process.exit(0);

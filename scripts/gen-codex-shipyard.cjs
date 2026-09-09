@@ -253,7 +253,14 @@ function codexModelPolicy(pluginDir, codexHome, opts = {}) {
 
   const cliVersion = detectCodexCliVersion(env);
   const palette = [];
+  // Every floor the palette DECLARES, kept by model id — including the entries
+  // the filter below drops, which is the whole point: a remap names a MODEL, not
+  // a palette entry, so a dropped entry is the only place that model's floor is
+  // still written down. Built here, before the filter, because a lookup over the
+  // survivors alone finds nothing and refuses nothing.
+  const declaredFloor = new Map();
   for (const entry of Array.isArray(cfg.codex_models) ? cfg.codex_models : []) {
+    if (entry && entry.model && entry.min_cli) declaredFloor.set(entry.model, entry.min_cli);
     if (entry.min_cli && (!cliVersion || compareVersions(cliVersion, entry.min_cli) < 0)) {
       log(
         `gen-codex-shipyard: not writing "${entry.model}" — configuring it needs Codex CLI ${entry.min_cli}, ` +
@@ -283,6 +290,44 @@ function codexModelPolicy(pluginDir, codexHome, opts = {}) {
     return ia <= ib ? a : b;
   };
 
+  // THE FLOOR IS MEASURED AGAINST WHAT IS EFFECTIVE (ADR-007 D4).
+  //
+  // The filter above answers for palette entries. A remap arrives AFTER it and
+  // names a model directly, so the same CLI floor has to be measured once more or
+  // a version refusal is undone by a key the same run reads a few lines later:
+  // measured at CLI 0.147.0, the ceiling entry is correctly dropped and
+  // `model_profile_overrides.codex.sonnet.model` puts that model back at `high`,
+  // with the "not writing" line printed in the same run.
+  //
+  // ONLY a floor the palette itself declares. An operator's own model has none,
+  // and inventing one would make this an allowlist — which ADR-005 D8 rejected
+  // outright, because GSD's catalog does not carry every model an operator has,
+  // so an unknown id cannot be told from a new one. This reports a KNOWN
+  // incompatibility; it does not invent one.
+  //
+  // The remap still outranks the palette — that precedence is deliberate and
+  // untouched. What it does not outrank is the CLI, and refusing here is the same
+  // refusal that entry would have got had the operator not renamed the route to
+  // it.
+  const remapFloorWarned = new Set();
+  const remapBelowFloor = (model, role) => {
+    const need = declaredFloor.get(model);
+    if (!need) return false;
+    if (cliVersion && compareVersions(cliVersion, need) >= 0) return false;
+    // ONE line per refused model rather than one per role: forRole runs eleven
+    // times and eleven copies of the same sentence is how an installer's real
+    // output gets scrolled past.
+    if (!remapFloorWarned.has(model)) {
+      remapFloorWarned.add(model);
+      log(
+        `gen-codex-shipyard: not writing the remapped "${model}" (asked for by a GSD model remap, ` +
+        `first seen for ${role}) — configuring it needs Codex CLI ${need}, this host reports ` +
+        `${cliVersion || 'no version'}. Every role gets its palette entry instead.\n`
+      );
+    }
+    return true;
+  };
+
   const forRole = (role, { deep = false } = {}) => {
     try {
       const ladderRole = LADDER_ROLE[role] || role;
@@ -291,8 +336,10 @@ function codexModelPolicy(pluginDir, codexHome, opts = {}) {
       const remapped = remapFor(tier);
       // A remapped tier is one model for every role that resolves to it, so the
       // palette's floor/ceiling distinction does not apply — and the entry's
-      // declared effort belongs to the entry's model, not to this one.
-      if (remapped) return { model: remapped, effort };
+      // declared effort belongs to the entry's model, not to this one. The CLI
+      // floor is the one thing that still applies, so it is measured on the way
+      // out rather than skipped by the early return this used to be.
+      if (remapped && !remapBelowFloor(remapped, role)) return { model: remapped, effort };
       const entry = deep || role === 'integrator' ? ceiling : floor;
       if (!entry) return { model: null, effort };
       return { model: entry.model, effort: lowerEffort(effort, entry.effort) };
@@ -537,12 +584,30 @@ function main() {
   }
 
   // ── manifest (for the installer + smoke test) ──────────────────────────────
+  //
+  // Also the OWNERSHIP RECORD the installer reconciles against (ADR-007 D5).
+  // The bundle payload is replaced wholesale, so it cannot go stale by
+  // omission; `$CODEX_HOME/agents/` cannot be treated that way, because the
+  // operator writes into that directory too. So this run states what it wrote,
+  // the installer keeps the copy beside the agents, and the NEXT run takes back
+  // exactly what the previous one claimed and no longer emits.
+  //
+  // The count legitimately varies — a `-deep` variant is written only when it
+  // would DIFFER from the ordinary agent (ADR-005 D8), so a one-entry palette
+  // and a tier-wide remap both produce seven agents rather than eleven. That is
+  // precisely why removal cannot be inferred from "eleven expected", and why the
+  // files and registrations are listed EXPLICITLY here rather than left for the
+  // installer to rebuild from `agents` by string concatenation: ownership is
+  // decided in one place, and a delete driven by a reconstruction is a delete
+  // driven by a guess.
   const manifest = {
     phase,
     codexHome,
     scriptsRoot,
     skills: emittedSkills,
     agents: emittedAgents.map((a) => a.agentName),
+    agent_files: emittedAgents.map((a) => `${a.agentName}.toml`),
+    registrations: emittedAgents.map((a) => `agents.${a.agentName}`),
     gsdLib,
     // Conditional, never a `null` key: a reader should see the field only when
     // the refusal actually fired, and an always-present field reads as a state

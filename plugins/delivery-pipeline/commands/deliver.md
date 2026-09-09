@@ -101,7 +101,7 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role> --model <alias> --effort <level>` — an agent
+- `dispatch-record.cjs mark <T> <role> --model <alias> --effort <level> --agent-id <launch id>` — an agent
   is working on it RIGHT NOW. The one fact here that is motion rather than a
   verdict, and the one the board could not see at all: nothing is pushed yet, so
   the live state still reads `execute`/`fix` and the stop gate refuses turns over
@@ -130,6 +130,14 @@ instead, and the front reads it back by itself:
   at the session's own effort whatever the ladder chose. Omitting the flag is the
   honest record of that: absence means UNMEASURED, and the recorder will not fill
   it in. Never pass the resolved value as the applied one.
+  **Pass the agent id the launch returned, verbatim** — the Workflow tool returns a
+  task id, the Agent tool an agent id, and whichever you hold is what identifies the
+  holder. This is `--route`'s provenance rule over a different subject: **never a
+  label you compose.** The cap counts DISTINCT agents, so two guards recorded under
+  one hand-typed name (`guard`, `sentinel`) count as ONE agent and the budget then
+  authorises a spend past itself — the one way this field can make the count too
+  small, and nothing can validate it away. Holding no id at all, omit the flag: an
+  unidentified record counts as its own agent, which is the safe direction.
   On the Codex bundle add `--agent-file shipyard-<role>[-deep]` — the file you
   actually dispatched, which is where that runtime's model choice lives. That
   pattern is not 1:1 for every role, so check `dispatch-record.cjs`'s own mapping
@@ -637,7 +645,10 @@ session:
 ```text
 attempt    — each babysit round on a PR:
              log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<ci-fix|review-fix> model=<tier> \
+               effort_applied=<level|unknown> \
                outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha> hypothesis="<the fixer's own>"
+base_merge — a mechanical base merge that landed in a round (NOT an attempt):
+             log-event.cjs base_merge ticket=<T> pr=<N> base=<base ref> head=<full 40-char sha>
 fix_round  — for EACH item from a fix-round Workflow result:
              log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false>
 escalation — any escalation to a human — NOT through log-event:
@@ -952,10 +963,35 @@ The `⚠` lines from state-sync — you MUST show them to the human as a separat
 
 ## Step 2 — Drift-gate the chosen tickets
 
-For each ticket in scope whose plan is older than the last merge into **the
-configured base** — `git.base_branch` when set, the repo default otherwise, the
-same ref the epic is cut from — or if more than 2 days have passed since
-generation, run drift-check IN PARALLEL.
+**Who gets a judge is COMPUTED, not decided — ask the script, per ticket:**
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-needed.cjs <T> --json   # → {needed, reason, ...}
+```
+
+Run it for every ticket in scope, before the path split below, and dispatch a
+drift-check judge for the `needed: true` ones only. It exits 0 with a verdict —
+the answer is the payload, not the exit code — for every ticket it can evaluate,
+and it answers `needed` for anything it cannot measure (no base, a missing plan,
+a cross-repo ticket with no local checkout), so an unknown is never mistaken for
+clean. A non-zero exit (1 unknown ticket or bad usage, 2 no ticket graph) is a
+failure to ANSWER, not an answer — the script's own header states the same split.
+Carry its `reason` into your progress note for the tickets it skips: a scan not
+run has to be a stated verdict, or it reads as a step forgotten.
+
+**This SUPERSEDES the old prose condition, and the script's own header says so.**
+That condition — *"older than the last merge into the configured base, or more
+than 2 days old"* — names the wrong ref for `epic-stacked` delivery. What moves
+under a plan there is the ticket's OWN base: the epic for a root ticket, its
+primary parent's branch for a cascade child, moving once per sibling that lands.
+The integration branch may not move for weeks, so a test anchored to it reads as
+never-fires. Measured over one session, three phases: **17 drift scans, 17
+verdicts of `fresh`, zero `drifted`** — 1.24M subagent tokens, 21% of that
+session's entire agent spend, ~73k per scan; thirteen produced no reuse candidate
+at all, and **all sixteen candidates came from the four scans run against the
+EPIC**, which is the ref the written condition does not name. The script measures
+the base `state-sync.cjs` already computed, and fetches first (nothing in Steps
+0–2 does, and `origin/<base>` is only as current as the last fetch).
 
 **Compare against the base, never against `main` by name.** A project that
 integrates into a long-lived branch merges nothing into `main` for months, so a
@@ -963,8 +999,9 @@ staleness test anchored there is a gate that never opens: every plan looks fresh
 because the ref it is measured against never moves. That is not hypothetical —
 it is how a whole phase came to be executed, ticket after ticket, against a
 module layout that had been reorganized underneath it, costing 19 babysit
-attempts and landing nothing. When in doubt, RUN the check: it is a cheap
-read-only judge, and the failure it prevents is the most expensive one there is.
+attempts and landing nothing. When the script cannot measure, it says `needed`
+for exactly this reason: the failure it prevents is the most expensive one there
+is.
 
 - **Workflow path** (available and `use_workflow ≠ false`): `Workflow({scriptPath:
   <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, baseRef, model, effort}],
@@ -1120,7 +1157,7 @@ may be dispatched at all: fix the file.
     above returns immediately with an id (the Workflow tool a task id, the Agent
     tool an agent id); once you hold that id the agent exists, and only then, for
     every ticket you just handed out:
-    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --route "<route>"`
+    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --route "<route>" --agent-id <launch id>`
     (add `--effort-applied <effort>` when you took the Workflow path — it carries an
     effort into the spawn and the Agent fallback cannot, so on the fallback the flag
     is OMITTED, never guessed; add `--graph <project>/.planning/graph` when you are
@@ -1129,9 +1166,13 @@ may be dispatched at all: fix the file.
     returned — nothing is re-derived and nothing is paraphrased here, or the record
     would hold your reading of the ladder instead of the ladder's own answer. The
     recorder checks the route against the pair, so a route copied from the previous
-    round is refused rather than filed. Keep the launch id in your own turn — the record stores
-    the ticket, the role, the time and the resolved pair, and no id — because the id
-    is what you collect and clear against.
+    round is refused rather than filed. The launch id is now RECORDED as well as kept:
+    the record stores the ticket, the role, the time, the resolved pair and the agent
+    id, because the cap counts DISTINCT agents and the id is the only thing that tells
+    two of them apart. On the Workflow path one task id covers the whole batch, and
+    that is correct — an executor is one agent per ticket whatever the id says, so
+    there the id is provenance and not a count. Keep it in your turn too: it is still
+    what you collect and clear against.
     **Marking first is how the board comes to describe an agent that does not
     exist**: a launch that fails (the tool refused, Workflow is absent on this
     runtime and the Agent fallback was not taken) leaves a 90-minute dispatch the
@@ -1241,9 +1282,11 @@ spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose'
 
 Record that hand-over the same way the executors' was, and in the same order —
 the `Agent` call returns an agent id, and THEN
-`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>"`
-for every ticket on the guarded list, taking all three fields from the
-`model pr-sentinel` call above — the route included, verbatim. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
+`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>" --agent-id <the id that Agent call returned>`
+for every ticket on the guarded list, taking all three resolver fields from the
+`model pr-sentinel` call above — the route included, verbatim — and the agent id
+from the spawn you just made. **Every ticket this guard holds carries THAT SAME
+id**, which is what makes one guard over four PRs one agent instead of four. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
 which carries no effort, so the applied depth is genuinely unmeasured and the
 record says so by leaving the key out;
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
@@ -1252,7 +1295,11 @@ by itself when the PR merges or its base moves. This half is not an
 optimisation: posting the guard and NOT waiting for it is the documented protocol,
 so `fix`/`finalize`/`merge` are dispatched BY DESIGN, and without the record the
 board mis-reports the guard's buckets on every healthy run. New PRs handed to the
-running guard later get a `mark` of their own.
+running guard later get a `mark` of their own — **with the running guard's own agent
+id**, because no second agent exists: the time of the mark moves and the holder does
+not, and the counter reads the identity rather than the time. A guard you post
+fresh with a new `Agent` call has its own id, and then two guards genuinely are two
+agents against the cap.
 
 Then **return to Step 3 immediately.** Do not wait for the guard, do not watch
 CI, do not re-read the PR yourself. New PRs opened later either go to a fresh
@@ -1370,17 +1417,24 @@ loop:
        the agent either fixes (push → step d), or replies to invalid ones
        (no push → mark the threads processed, b again)
 
-  c. arch-review agent — judgment, never cheapened. Resolve it, do not assume it:
-     `pipeline-config.cjs model arch-review --json --input-tokens <n>
-      [--contested]` → `opus`/`xhigh` ordinarily, and the ceiling when the input
-     it is about has actually grown. MEASURE `<n>` yourself — bytes ÷ 4 over
-     `gh pr diff` plus the ADR corpus it re-reads — because an absent measurement
-     cannot fire that route, by design. Pass `--contested` when the journal
-     already holds an `arch_review … verdict=violation` for this ticket
-     (`grep '"event":"arch_review"' .planning/graph/delivery-log.jsonl`): a second
-     reading at the same depth is what produced the contested verdict.
-     (prompt ${CLAUDE_PLUGIN_ROOT}/references/arch-review.md + gh pr diff +
-      .planning/architecture/)
+  c. arch-review agent — judgment, never cheapened, and ONE procedure on both
+     paths: MEASURE → RESOLVE → DISPATCH → RECORD. It is stated once, in
+     ${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md under the `arch-review`
+     duty, and run from here verbatim — its commands are written with
+     `$SHIPYARD_ROOT`, which names the same directory `${CLAUDE_PLUGIN_ROOT}`
+     does on this path: substitute one for the other and every
+     `/scripts/<name>.cjs` invocation there resolves unchanged.
+     MEASURE the judged input (the diff size
+     the window route needs, and whether the journal already holds a contested
+     verdict for this ticket), RESOLVE model and effort from the ladder as that
+     entry invokes it, DISPATCH the judge (prompt
+     ${CLAUDE_PLUGIN_ROOT}/references/arch-review.md + gh pr diff +
+     .planning/architecture/), then RECORD the verdict in the journal whatever
+     it is. Do NOT restate those four steps here. Two copies is how the two
+     paths diverged: the background path spent a whole phase escalating on a
+     contested verdict that nothing on it was ever told to write, and it worked
+     only because a human patched the missing steps into every guard brief by
+     hand.
      the same step runs the degenerate-green detector over the diff it judged —
        `degenerate-green.cjs <T> --base <base> --worktree <wt> --json
         --graph <project>/.planning/graph`
@@ -1392,10 +1446,6 @@ loop:
        never a reason to hold a merge. `sentinel.cjs merge` reads `arch-review`
        and the `head` that verdict is bound to, and nothing else, pinned by
        tests/unit/trailer.test.cjs.
-     record the verdict in the journal either way, because it is what a later
-       `--contested` reads: `log-event.cjs arch_review ticket=<T> pr=<N>
-       verdict=<conform|violation|adr-outdated> head=<full 40-char sha>
-       --graph <project>/.planning/graph`
      violation    → fix in the worktree → push → step d
      adr-outdated → `escalation-record.cjs mark <T> "adr-outdated: …"` (changing the ADR is a human's call), continue the front
      conform      → check the green criteria:
@@ -1455,12 +1505,39 @@ loop:
        `attempt-history.cjs <T> --json` → `next_n`
      log the round with the keys the NEXT round reads back:
        `log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<role> model=<tier>
+        effort_applied=<the level the spawn actually carried, or "unknown">
         outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha>
         hypothesis="<the fixer's own one sentence, verbatim>"`
        `signature`+`head` are what the next `verdict` compares; `hypothesis` is
        what `attempt-history.cjs` hands the next fixer so it cannot re-propose what
        this one already ruled out. Never invent a hypothesis the fixer did not
        report — an invented one enters the record as something tried and excluded.
+       **`effort_applied` is what the SPAWN carried, never what the resolver
+       decided.** On the Workflow path that is the `effort` you put in
+       `args.prs[].effort` — the script passes it into `agent()`, so it is a fact
+       about the dispatch. On the Agent path there is no effort parameter at all, so
+       the honest record is `effort_applied=unknown`: the role ran at the session's
+       own depth whatever the ladder chose. Never copy the resolved value across —
+       that turns a check into a synonym, which is the entire reason the two fields
+       are separate. This is not bookkeeping: `failure-signature.cjs` will only
+       claim `repeat_exhausted` — the rung that opens the ceiling model and then
+       spends a person's attention — off a prior round whose row NAMES a real level,
+       so an unrecorded depth reads as not-yet-spent and the loop rethinks once more
+       instead of escalating early. Levels: the resolver's own vocabulary
+       (`low|medium|high|xhigh|max`), or `unknown`; `log-event.cjs` WARNS on anything
+       else and still logs the row as written — an unrecognised level is read
+       exactly like absence by the rethink rule above, so nothing downstream is
+       silently misled, but nothing refuses the write either.
+     **A base merge in that round is journalled SEPARATELY, and it is not an
+       attempt.** For each PR you passed `needsBaseMerge: true` whose push you just
+       confirmed: `log-event.cjs base_merge ticket=<T> pr=<N> base=<the base ref you
+       passed> head=<full 40-char sha>`. Nothing else writes this event — the duty
+       is mechanical (`base-merge.cjs` does the merge, no ladder role) and the script
+       does not journal itself, whatever the comment beside its duty says — so with
+       no caller here the event is a contract with no writer, and the journal cannot
+       answer which base moved into what, or when. Two lines and not one field on the
+       attempt: charging a mechanical merge to the ticket's repair record would spend
+       its attempt budget on work no hypothesis was ever wrong about.
      `attempts` (same `attempt-history.cjs <T> --json`) > MAX → `escalation-record.cjs mark <T> "<what the N attempts tried and why each failed>"`, continue the front
        THE ATTEMPT BACKSTOP STAYS, even though the ladder no longer reads the
        counter. A signature that oscillates between two values is never the same
@@ -1511,11 +1588,23 @@ itself. The round order:
    this phase exists to prevent. What remains goes to
    `Workflow({scriptPath: <workflows/fix-round.mjs>,
    args: {prs: [{id, pr, branch, worktreePath, planPath, needsCiFix,
-   needsReviewFix, attemptHistory: <the output of `attempt-history.cjs <T>`>,
+   needsReviewFix, needsBaseMerge, base,
+   attemptHistory: <the output of `attempt-history.cjs <T>`>,
    model, effort: <from `pipeline-config.cjs model ci-fix --json --risk <r>
    --signature-state <verdict>` / `model review-fix --json [--signature-state
    <verdict>]`, per PR>}],
    ciFixRefPath, reviewFixRefPath, reinitScript, artifactLanguage}})`.
+   **`needsBaseMerge` is a MEASUREMENT off the board, not a judgement**: it is true
+   when `state[T].merge_state` is `BEHIND` or `DIRTY`, or `state[T].behind_by > 0` —
+   the same pair `front.cjs baseMoved` reads, which is why the board already filed
+   that PR under `fix` with a reason naming `base-merge.cjs`. Pass `base` with it:
+   the bare base name from `state[T].pr_base` (the script resolves `origin/<base>`
+   itself). Until it is passed the base merge is not step 0 of the fixer's prompt
+   and every later step of that round measures the branch against a merge base that
+   no longer exists — the test reproduces against the wrong code, the thread is
+   answered about the wrong diff, and the push may not even fast-forward. Omit both
+   when the base has not moved: `false`/absent builds exactly the prompt it always
+   did.
    `attemptHistory` is a PRE-RENDERED string and producing it is YOURS: that path
    builds each prompt deterministically from `args` and does not shell out, so a
    record you do not pass does not exist for the agents. Omit it on a first

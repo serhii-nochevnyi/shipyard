@@ -131,6 +131,22 @@ and stops on a conflict in a DECLARED one, which is real work: serve that half a
 rebase** — see the hard rule below; the PR is pushed, so a rebase is a
 force-push.
 
+**Journal the merge, and not as an attempt.** Once that push has landed:
+
+```bash
+node $SHIPYARD_ROOT/scripts/log-event.cjs base_merge ticket=<T> pr=<N> \
+     base=<the base ref you passed> head=<full 40-char sha> \
+     --graph <project>/.planning/graph
+```
+
+Nothing else writes this event: the duty is mechanical, so no agent reports it
+back, and the script does not journal itself whatever the comment beside its
+duty says. With no caller here the event is a contract with no writer and the
+journal cannot answer which base moved into what, or when. Two lines and not one
+field on the `attempt` row — charging a mechanical merge to the ticket's repair
+record would spend its attempt budget on work no hypothesis was ever wrong
+about.
+
 **`review-fix`** — reviewer feedback. Read ALL of it in one call:
 `node $SHIPYARD_ROOT/scripts/reviewers.cjs feedback <pr> [--repo owner/name]`.
 That returns unresolved threads AND the bots' PR-level comments (CodeRabbit's
@@ -146,24 +162,74 @@ verdict — `pipeline-config.cjs model review-fix --json [--no-code-change]
 [--signature-state <verdict>]` — it is a repair role, so a `repeat` deepens the
 effort at the same tier.
 
-**`arch-review`** — green, but no verdict is recorded. Run the architecture judge
-(`references/arch-review.md`, judgment work — do not cheapen it) and append the
-trailer as the LAST line of the PR body (it survives a squash merge). Threads are
-NOT part of this action any more: they are serviced by `review-fix` as soon as
-they appear, ahead of a still-running CI, so by the time a PR reaches here the
-thread count is already zero. A `violation` or `adr-outdated` verdict ends the
-action — do not undraft a PR the judge just faulted; that is fix work or a human's
-call, and bundling the two used to make both outcomes look alike.
+**`arch-review`** — green, but no verdict is recorded. **Judgment is ONE
+procedure, and this is where it is stated: measure → resolve → dispatch →
+record.** All four, in that order, on whichever path reached this PR — the
+inline cycle in `commands/deliver.md` points HERE instead of restating them,
+because two copies drifting apart is how this path came to read a
+`verdict=violation` that nothing on it ever wrote.
 
-  A RE-judgement of a PR whose journal already holds an `arch_review …
-  verdict=violation` is the judge's own escalation: on the Codex bundle dispatch
-  `$shipyard-arch-review-deep` (the same contract at the palette's ceiling
-  model), because a second reading at the same depth is what produced the
-  contested verdict in the first place. There is no `$shipyard-integrator-deep`
-  — the integrator runs at the ceiling on every call.
+1. **MEASURE the judged input.** Two facts, and an absent measurement cannot
+   fire the route that needs it, by design. The SIZE of what the judge reads —
+   bytes ÷ 4 over `gh pr diff <pr> --repo <owner/name>` plus the ADR corpus it
+   re-reads — is the `<n>` of step 2. Whether this is a CONTESTED re-judgement
+   is a fact about the journal and not an impression:
 
-Run the degenerate-green detector over the same diff you just judged, and record
-what it found beside the architecture verdict:
+   ```bash
+   grep '"event":"arch_review"' <project>/.planning/graph/delivery-log.jsonl \
+     | grep '"ticket":"<T>"' | grep '"verdict":"violation"'
+   ```
+
+   All three greps, not the first alone: `"event":"arch_review"` matches every
+   ticket's line, so the bare probe would read another ticket's `violation` — or
+   this ticket's own `conform` — as a contest. A prior line for THIS ticket
+   carrying `verdict=violation` is what `--contested` reports.
+
+2. **RESOLVE model and effort from the ladder** — never assumed, and never
+   inherited from whatever this guard itself is running at:
+
+   ```bash
+   node $SHIPYARD_ROOT/scripts/pipeline-config.cjs model arch-review --json \
+        --input-tokens <n> [--contested]
+   ```
+
+   `opus`/`xhigh` ordinarily, and the ceiling only where the input it is about
+   has actually grown. Where the harness passes the resolved pair into every
+   call, that answer IS the escalation and there is no second agent to name. On
+   the Codex bundle a `.toml` carries one model and nothing is passed per
+   dispatch, so a contested re-judgement is a different AGENT instead:
+   `$shipyard-arch-review-deep`, the same contract at the palette's ceiling
+   model — a second reading at the same depth is what produced the contested
+   verdict in the first place. There is no `$shipyard-integrator-deep`; the
+   integrator runs at the ceiling on every call, and an agent the generator did
+   not write does not exist, so check before naming one.
+
+3. **DISPATCH the judge**, judgment work — do not cheapen it. Its prompt is
+   `references/arch-review.md`, plus the diff it is about and
+   `.planning/architecture/`; then append the trailer as the LAST line of the PR
+   body (it survives a squash merge). Threads are NOT part of this action any
+   more: they are serviced by `review-fix` as soon as they appear, ahead of a
+   still-running CI, so by the time a PR reaches here the thread count is
+   already zero. A `violation` or `adr-outdated` verdict ends the action — do
+   not undraft a PR the judge just faulted; that is fix work or a human's call,
+   and bundling the two used to make both outcomes look alike.
+
+4. **RECORD the verdict — every verdict, before you leave this PR:**
+
+   ```bash
+   node $SHIPYARD_ROOT/scripts/log-event.cjs arch_review ticket=<T> pr=<N> \
+        verdict=<conform|violation|adr-outdated> head=<full 40-char sha> \
+        --graph <project>/.planning/graph
+   ```
+
+   This step is the ONLY writer of the fact step 1 reads. Skip it and step 2's
+   escalation is unreachable forever: the guard asks the journal whether this
+   verdict was already contested, and the journal was never told. `head` is the
+   full forty characters of the head the judge actually read — an abbreviation
+   is refused, because a reader holding only the journal cannot lengthen one.
+
+Alongside step 3, run the degenerate-green detector over the same diff the judge
+read, and record what it found beside the architecture verdict:
 
 ```bash
 node $SHIPYARD_ROOT/scripts/degenerate-green.cjs <T> --base <base> \
@@ -265,7 +331,9 @@ branch). Record it in the report and move on.
 git -C <worktree> rev-parse HEAD                     # must equal the pushed head
 node $SHIPYARD_ROOT/scripts/reviewers.cjs reinit <pr> [--repo owner/name]
 node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> \
-     role=<ci-fix|review-fix> model=<tier> outcome=<pushed|no-op|escalate|flake> \
+     role=<ci-fix|review-fix> model=<tier> \
+     effort_applied=<level|unknown> \
+     outcome=<pushed|no-op|escalate|flake> \
      signature=<sig> head=<full 40-char sha> hypothesis="<one sentence: what you believed was wrong>" \
      --graph <project>/.planning/graph
 ```
@@ -275,6 +343,24 @@ round looks like progress and the loop never notices it is repeating itself — 
 re-propose what this one already ruled out. Write the fixer's own sentence, never
 an invented one: an invented hypothesis enters the record as something tried and
 excluded. `outcome=flake` is logged at an UNCHANGED `n`.
+
+**`effort_applied` is the depth the SPAWN carried, and it belongs on THIS row.**
+`failure-signature.cjs` reads the `attempt` row and nothing else, and it will
+only claim `repeat_exhausted` — the rung that opens the ceiling model and then
+spends a person's attention — off a prior round whose row NAMES a real level. So
+an unrecorded depth reads as not-yet-spent and the loop rethinks once more
+instead of escalating early. `dispatch-record.cjs --effort-applied` records the
+same fact about the DISPATCH, on a `dispatch` event, and is NOT a substitute for
+this key: the escalation rule never reads that event, so a guard that recorded
+only the flag has left the rung unreachable and every one of its rounds reads as
+not-yet-spent. Write what the spawn carried, never what the resolver decided —
+the two fields are separate exactly so the check cannot become a synonym. A
+fixer the Workflow tool carried has an effort to name (the one you passed it); a
+fixer the Agent tool spawned, or a fix you made in-process, has none, and the
+honest value is then the literal `unknown`, written rather than omitted. Levels
+are the resolver's own vocabulary (`low|medium|high|xhigh|max`), or `unknown`;
+anything else is WARNED about and still logged as written, and reads downstream
+exactly like absence.
 
 The attempt number is READ, never kept: `attempt-history.cjs <T> --json --graph
 <project>/.planning/graph` gives `next_n` (the `n=` this round logs) and

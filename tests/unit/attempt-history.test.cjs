@@ -304,4 +304,36 @@ test('a nonsense --limit reports usage rather than silently showing everything',
   assert.ok(/usage:|--limit/.test(r.stderr), r.stderr);
 });
 
+suite('attempt-history — the depth a round applied reads beside its model');
+
+// ADR-007 D2. The next fixer's question is not only "what was tried" but "how
+// hard was it tried" — `repeat_exhausted` rests on exactly that, and it is read
+// off these rows. An unknown key already rendered, but at the TAIL, after the
+// quoted hypothesis sentence, which is where a field goes to be missed. `effort`
+// and `effort_applied` are one thought with `model`, so they render there.
+
+const DEPTH_JOURNAL = [
+  { ts: '2026-09-01T10:00:00Z', event: 'attempt', ticket: 'T-28-02', pr: 7, n: 1, role: 'ci-fix', model: 'opus', signature: 'aaaa', outcome: 'pushed' },
+  { ts: '2026-09-01T11:00:00Z', event: 'attempt', ticket: 'T-28-02', pr: 7, n: 2, role: 'ci-fix', model: 'opus', effort: 'max', effort_applied: 'max', signature: 'aaaa', outcome: 'pushed', hypothesis: 'the fixture seeds the row it asks about' },
+];
+
+test('effort and effort_applied render right after the model, before the PR', () => {
+  const { project } = scratch({ journal: DEPTH_JOURNAL, malformed: false });
+  const r = run(project, ['T-28-02']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const line = eventLines(r.stdout).find((l) => /n=2\b/.test(l));
+  assert.ok(line, `the second round vanished:\n${r.stdout}`);
+  assert.ok(
+    /model=opus effort=max effort_applied=max pr=7/.test(line),
+    `the depth belongs beside the model, not past the hypothesis: ${line}`
+  );
+});
+
+test('a round that recorded no depth renders none — absence is the honest row', () => {
+  const { project } = scratch({ journal: DEPTH_JOURNAL, malformed: false });
+  const line = eventLines(run(project, ['T-28-02']).stdout).find((l) => /n=1\b/.test(l));
+  assert.ok(line, 'the first round vanished');
+  assert.ok(!/effort/.test(line), `nothing measured means nothing rendered: ${line}`);
+});
+
 done();
