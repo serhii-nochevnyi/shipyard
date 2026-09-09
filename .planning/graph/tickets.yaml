@@ -995,7 +995,7 @@ tickets:
     repo: null
     wave: 1
     depends_on: []
-    files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/dispatch-record.test.cjs, tests/unit/front.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/dispatch-record.test.cjs, tests/unit/front.test.cjs, tests/unit/stop-gate.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false
