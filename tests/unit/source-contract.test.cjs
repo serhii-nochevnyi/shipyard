@@ -3,7 +3,7 @@
 // Assertions about the SHAPE of our own source — the facts a behavioural test
 // cannot reach because they are properties of the file rather than of a run.
 //
-// Both of the ones here were measured as unasserted. The first is a single
+// Each of the ones here was measured as unasserted. The first is a single
 // argument that carries a whole mechanism: `state-sync.cjs` passes its
 // `epicInfo` into `computeFront` as `epics`, and without it `leftBehind()` sees
 // no epic records and answers 0 for every ticket. Deleting that one line left
@@ -33,8 +33,27 @@
 // remembered at every future one, by everyone; refusing the byte fixes the
 // class, and a printable composite-key separator keeps every collision
 // guarantee a NUL had.
+//
+// The third is a shape git cannot see. Two branches of one cascade added a
+// byte-identical `cleanup()` + `trap cleanup EXIT INT TERM` block to
+// `epic-branch.sh` independently; the conveyor lands every ticket PR with
+// `--squash`, so the two copies share no SHA and no ancestor commit carries
+// the hunk. A 3-way merge compares against the merge BASE, and when the same
+// hunk arrives on both sides after that base the only safe answer git has is
+// "keep both". So the merge exited 0 with two definitions in the file, and in
+// shell the second definition silently wins while the second trap replaces the
+// first. `bash -n` accepts it — both copies are valid — which is why the smoke
+// suite stayed green, and the ownership rule in `base-merge.cjs` could not
+// help, because there was no conflict to own. A clean exit was used to answer
+// "did this merge produce a coherent file", which it does not answer. It
+// recurred on the very next base-merge of the same round, so the check is a
+// SWEEP over every tracked shell script and not a list of the functions that
+// happened to collide: a list is the shape T-27-07 replaced. Its two arms are
+// asserted SEPARATELY below, because a one-armed implementation passes half
+// the cases and looks exactly as green.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
@@ -135,6 +154,175 @@ test('no script in the deterministic layer contains a NUL byte', () => {
     binary.length, 0,
     `these scripts are binary to grep, so every grep contract over them degrades silently — no lines printed, and a \`grep -q\` answer that depends on the grep:\n  ${binary.join('\n  ')}`
   );
+});
+
+// ── The duplicate-definition sweep ───────────────────────────────────────────
+//
+// Two arms, and they are independent: a duplicated function name, and more than
+// one top-level `trap` line. Column 0 on purpose for both. A shell function is
+// defined at the left margin in every script we ship, while an INDENTED `trap`
+// inside a function or a subshell is a legitimate pattern that may sit beside a
+// top-level one — anchoring at the margin keeps that from reading as a defect.
+const duplicateDefinitions = (src) => {
+  const fnLines = new Map();
+  const trapLines = [];
+  src.split('\n').forEach((line, i) => {
+    const m = /^(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)/.exec(line);
+    if (m) {
+      if (!fnLines.has(m[1])) fnLines.set(m[1], []);
+      fnLines.get(m[1]).push(i + 1);
+    }
+    if (/^trap /.test(line)) trapLines.push(i + 1);
+  });
+  return {
+    functions: [...fnLines.entries()]
+      .filter(([, at]) => at.length > 1)
+      .map(([name, at]) => ({ name, lines: at })),
+    traps: trapLines.length > 1 ? trapLines : [],
+  };
+};
+
+// One finding per arm, phrased so the reader can open the file at the line. The
+// function arm NAMES THE FUNCTION: "epic-branch.sh has a duplicate" sends the
+// reader hunting through 400 lines, which is how a finding gets ignored.
+const findingsIn = (rel, src) => {
+  const dup = duplicateDefinitions(src);
+  return [
+    ...dup.functions.map(
+      (f) => `${rel}: ${f.name}() is defined ${f.lines.length} times (lines ${f.lines.join(', ')}) — in shell the last definition silently wins`
+    ),
+    ...(dup.traps.length
+      ? [`${rel}: ${dup.traps.length} top-level \`trap\` lines (${dup.traps.join(', ')}) — the last one replaces the others, so the earlier handlers never run`]
+      : []),
+  ];
+};
+
+// The same code path over the live tree and over the fixtures below: a detector
+// exercised only on fixtures guards nothing, and one exercised only on the live
+// tree states no subject of its own.
+const sweep = (root, rels) =>
+  rels.flatMap((rel) => findingsIn(rel, fs.readFileSync(path.join(root, rel), 'utf8')));
+
+// The same file set `tests/unit/run.sh` runs `bash -n` over. That is the
+// justification for the set rather than a taste: this sweep is the check
+// `bash -n` cannot make — both copies of a duplicated block parse — over exactly
+// the files `bash -n` already sees.
+const trackedShell = () =>
+  tracked(
+    'plugins/delivery-pipeline/scripts',
+    'capabilities/delivery-pipeline/checks',
+    'scripts',
+    'tests/smoke',
+    'tests/unit'
+  ).filter((rel) => rel.endsWith('.sh'));
+
+const fixture = (name, body) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-srccontract-'));
+  fs.writeFileSync(path.join(dir, name), body);
+  return dir;
+};
+
+// The real block, verbatim in shape: a `cleanup()` that releases the git lock
+// plus its trap. Duplicating exactly this is what a base-merge produced twice in
+// one guard round.
+const CLEANUP_BLOCK = [
+  'cleanup() {',
+  '  local st=$?',
+  '  set +e',
+  '  $lock_held && rm -rf "$git_lock"',
+  '  return $st',
+  '}',
+  'trap cleanup EXIT INT TERM',
+].join('\n');
+
+test('no tracked shell script defines a function twice or sets a second top-level trap', () => {
+  const files = trackedShell();
+  // The anchor is the file the real duplication landed in — a broken sweep
+  // (wrong cwd, wrong paths, `git ls-files` returning nothing) sweeps zero files
+  // and reports zero findings, which is indistinguishable from a clean tree.
+  assert.ok(
+    files.includes('plugins/delivery-pipeline/scripts/epic-branch.sh'),
+    `expected the shell sweep to include plugins/delivery-pipeline/scripts/epic-branch.sh, git listed ${files.length} shell files: ${files.join(', ')}`
+  );
+  const findings = sweep(REPO, files);
+  assert.strictEqual(
+    findings.length, 0,
+    `a squash-merged cascade can add the same block twice with no conflict, and neither git nor \`bash -n\` says a word:\n  ${findings.join('\n  ')}`
+  );
+});
+
+test('two definitions of one function are a finding, named by file and by function', () => {
+  const dir = fixture('dup-fn.sh', [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    'cleanup() {',
+    '  rm -rf "$tmp"',
+    '}',
+    'work() { :; }',
+    'cleanup() {',
+    '  rm -rf "$tmp"',
+    '}',
+    'work',
+    '',
+  ].join('\n'));
+  const file = path.join(dir, 'dup-fn.sh');
+  // Half of the defect: the file is VALID shell. `bash -n` passing is not a
+  // second opinion here, it is the reason this test has to exist.
+  execFileSync('bash', ['-n', file]);
+  const findings = sweep(dir, ['dup-fn.sh']);
+  assert.strictEqual(findings.length, 1, `expected exactly the duplicated cleanup(), got:\n  ${findings.join('\n  ')}`);
+  assert.ok(/dup-fn\.sh/.test(findings[0]), `the finding must name the file: ${findings[0]}`);
+  assert.ok(/cleanup\(\)/.test(findings[0]), `the finding must name the function: ${findings[0]}`);
+  assert.ok(/\b3\b/.test(findings[0]) && /\b7\b/.test(findings[0]), `the finding must name both lines: ${findings[0]}`);
+  // `work()` is defined once and must not be dragged in.
+  assert.ok(!/work/.test(findings[0]), `only the duplicated function is a finding: ${findings[0]}`);
+});
+
+test('a second top-level trap is a finding on its own, with no function duplicated', () => {
+  const dir = fixture('dup-trap.sh', [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    'trap "rm -rf $tmp" EXIT',
+    'inner() {',
+    '  trap - INT',   // indented: legitimate, and must not count
+    '}',
+    'trap "echo bye" EXIT',
+    '',
+  ].join('\n'));
+  execFileSync('bash', ['-n', path.join(dir, 'dup-trap.sh')]);
+  const findings = sweep(dir, ['dup-trap.sh']);
+  // Asserted SEPARATELY from the function arm: the mutation that deletes this
+  // arm leaves the function case green, so a single combined assertion over a
+  // fixture carrying both would report a passing sweep with one arm missing.
+  assert.strictEqual(findings.length, 1, `expected exactly the second trap, got:\n  ${findings.join('\n  ')}`);
+  assert.ok(/trap/.test(findings[0]), `the finding must say which arm fired: ${findings[0]}`);
+  assert.ok(/\b3\b/.test(findings[0]) && /\b7\b/.test(findings[0]), `the finding must name both trap lines (3 and 7), not the indented one: ${findings[0]}`);
+  assert.ok(!/\b5\b/.test(findings[0]), `an indented trap inside a function is not a top-level handler: ${findings[0]}`);
+  assert.strictEqual(
+    duplicateDefinitions(fs.readFileSync(path.join(dir, 'dup-trap.sh'), 'utf8')).functions.length, 0,
+    'the trap arm must fire with no function duplicated — otherwise this fixture is testing the other arm'
+  );
+});
+
+test('the epic/27 duplication reproduces as a fixture and is caught on both arms', () => {
+  const dir = fixture('epic-branch.sh', [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    'lock_held=false',
+    'git_lock=/tmp/lock',
+    CLEANUP_BLOCK,
+    // What the base-merge kept: the same block again, byte for byte, with no
+    // conflict, because a squash merge left git no evidence the two hunks are
+    // one change.
+    CLEANUP_BLOCK,
+    'echo work',
+    '',
+  ].join('\n'));
+  execFileSync('bash', ['-n', path.join(dir, 'epic-branch.sh')]);
+  const findings = sweep(dir, ['epic-branch.sh']);
+  assert.strictEqual(findings.length, 2, `both arms fire on the real case, got:\n  ${findings.join('\n  ')}`);
+  assert.ok(findings.some((f) => /cleanup\(\)/.test(f)), `the duplicated function must be named:\n  ${findings.join('\n  ')}`);
+  assert.ok(findings.some((f) => /trap/.test(f)), `the duplicated trap must be named:\n  ${findings.join('\n  ')}`);
 });
 
 done();
