@@ -1,3 +1,12 @@
+> **CLOSED 2026-09-09 — shipped.** `.github/workflows/test.yml` exists and runs
+> on every PR: measured today across ten phase-27 PRs (#63-#72), each of which
+> waited on a `test-fast` check, and four of which were driven red→green by it.
+> Verified again at close: `gh run list` shows `test` on `main`, one in progress
+> and two prior successes. Kept rather than deleted because the note's argument —
+> that a conveyor whose own repo has no CI cannot exercise its own drive-to-green
+> loop — is why the workflow was added, and a reader who finds the workflow
+> should be able to find the reason.
+
 # The conveyor's own repo has no CI, so it cannot dogfood drive-to-green
 
 **RESOLVED — released in v0.40.0.** Closed by commit `6ae1414`

@@ -1,3 +1,14 @@
+> **CLOSED 2026-09-09 — shipped as `ci-wait.cjs`, and exercised.** The hole this
+> note describes (the babysit loop wakes on agent completions, so a board holding
+> nothing but CI has nothing left to wake it) is closed by waiting in the
+> FOREGROUND: the turn never ends, so nothing has to wake it. Measured on live
+> use this session, twice — `settled after 1s — 1/1 green` and `settled after
+> 126s — 1/1 green`, both on boards where it was the only move — and the journal
+> carries six of its rows. It refuses whenever the board has an actionable item
+> or a ticket with an agent, so it cannot become the `gh pr checks --watch`
+> serialization this repository banned; T-27-01 added the one exception that was
+> missing, a board whose actionable items the CAP forbids taking.
+
 # Nothing wakes a run whose only remaining state is "waiting"
 
 **Found:** 2026-08-30, phase 21 of the pdffiller proving ground.

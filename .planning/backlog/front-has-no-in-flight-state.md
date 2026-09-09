@@ -1,3 +1,12 @@
+> **CLOSED 2026-09-09 — shipped as the dispatch overlay.** `dispatch-record.cjs
+> mark/clear` plus `waiting.dispatched` give the board the third state this note
+> asked for: not actionable, because handing work out twice is duplicate work;
+> not parked, because nobody gave up; not a fixpoint, because the result still
+> has to be collected. Verified at close in the live board —
+> `waiting.dispatched` is an array and `capacity` reports `{max, in_flight,
+> free}`. Used on every dispatch of phase 27, and the record's self-expiry is
+> what let this session hand work out, die between turns, and lose nothing.
+
 # The front cannot see "dispatched to an executor"
 
 **Found:** 2026-08-25, minutes into the first `/shipyard:deliver` run on this
