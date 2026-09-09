@@ -189,7 +189,17 @@ if (!prev || !Array.isArray(prev.agent_files)) {
     let st = null;
     try { st = fs.lstatSync(target); } catch { continue; } // already gone: nothing owed
     if (!st.isFile()) { refused.push(`${entry} (not a regular file)`); continue; }
-    fs.unlinkSync(target);
+    // A failed unlink (permissions, a read-only filesystem) must land as the
+    // same conservative refusal as every other case here — this script runs
+    // under the installer's `set -euo pipefail`, so an uncaught throw would
+    // abort the WHOLE install over one orphan the reconciler could not remove,
+    // which is a far worse outcome than leaving that one file in place.
+    try {
+      fs.unlinkSync(target);
+    } catch (e) {
+      refused.push(`${entry} (could not remove it: ${e.message})`);
+      continue;
+    }
     removed.push(entry);
   }
   // `registrations` is the other half of the previous run's claim, and this is
