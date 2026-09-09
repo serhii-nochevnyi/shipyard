@@ -2237,7 +2237,7 @@
       "risk": "high",
       "type": "implementation",
       "human_checkpoint": true,
-      "preauthorized": false,
+      "preauthorized": true,
       "branch": "ticket/T-29-06-the-acting-half-resolve-by-target-status",
       "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
       "primary_parent": "T-29-05",
