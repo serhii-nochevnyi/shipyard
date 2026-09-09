@@ -187,6 +187,25 @@ script — not in a prompt.** Every requirement below is an instance of it.
   duplicated a definition is caught, and a metric never credits one actor's act
   to another.
 
+- **REQ-62** — The tracker projection is driven off the OWNED journal, not off
+  live state, and a watermark makes each status change reach the tracker exactly
+  once and only ever forwards.
+- **REQ-63** — The status map names the tracker's TARGET STATUS, never a
+  transition name, and it is a declared knob whose empty default means the
+  projection is off.
+- **REQ-64** — Deciding what to project is a pure function of three local files:
+  no network, no credential, no stub.
+- **REQ-65** — A transition is performed by ID, and a target the workflow cannot
+  reach from the current status is a report naming what WAS offered — never an
+  error and never a block.
+- **REQ-66** — The watermark advances only on evidence: a record that cannot
+  name the transition id it used is refused, and the journal event is owned.
+- **REQ-67** — The projection is outside the tick rate and invisible to the stop
+  gate: a pending one is neither actionable nor a reason to block.
+- **REQ-68** — A mechanism this repository cannot exercise says so: CI proves the
+  planner, the refusal, the wiring and the negative pin, and the witnessed
+  mutation is owed by the proving ground.
+
 ## Phases
 
 ### Phase 20: Autonomy of the drive-to-green loop
@@ -343,3 +362,27 @@ it, T-28-02 second because it governs how this phase's own repair rounds
 escalate; T-28-04 and T-28-05 are one family and gate the bundle regeneration
 that follows the phase. Five run as roots — the contested-path rule forces only
 two short chains, not phase 27's spine.
+
+### Phase 29: The tracker is a projection, and a projection is driven
+**Requirements**: REQ-62, REQ-63, REQ-64, REQ-65, REQ-66, REQ-67, REQ-68
+
+Decomposed from ADR-008, which turns `delivery-rules` §11 from a rule about
+DIRECTION into a rule about MAINTENANCE. §11 settled who wins in a disagreement
+between Jira and the plans; it never said whether the projection is kept
+current, and measured rather than recalled, it is not: zero tracker calls exist
+anywhere in `scripts/` or `workflows/`, and the tracker is touched at exactly
+one moment — decompose's Step 5 — after which the conveyor never speaks to it
+again. So this phase does not fix an oversight; it REVERSES a default that two
+files state deliberately, which is why the empty map that means "off" is the
+default and why nothing here may block a merge. Everything hard is already
+solved: `state-sync` has journalled an owned, append-only `status_change` with
+`from`/`to`/`ts` since long before anyone wanted a consumer, and this project
+alone holds 205 of them. What is missing is a consumer, a map, and one honest
+account of who is allowed to fail. Seven tickets: T-29-01..03 are the whole
+deterministic half and must exist before anything reaches the network, T-29-04
+and T-29-05 land together because a performing half with no recorder is the
+un-evidenced write the ADR refuses, and T-29-07 is last because it asserts what
+the others built. The uncomfortable fact is stated in the ADR rather than
+discovered later: `pipeline.jira.enabled: false` here and all 69 tickets carry a
+null key, so this repository ships a mechanism it cannot run, and the witnessed
+mutation is owed by the proving ground.
