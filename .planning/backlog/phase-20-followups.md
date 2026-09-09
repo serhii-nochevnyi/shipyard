@@ -123,8 +123,18 @@ a test that cannot fail is worse than a missing one, because it reports safety.
 
 ## 6. CodeRabbit did not engage on any of the six PRs — OPERATIONAL, STILL LIVE
 
-**STILL LIVE — now four phases, and the count is measured rather than
-remembered.** Re-measured 2026-08-26 over every pull request this repository has
+**STILL LIVE — now EIGHT phases, re-measured 2026-09-09.** Phase 27 delivered
+ten PRs (#63-#72) and `reviewers.cjs feedback` reported
+`coderabbit.engaged: false, last_activity: null` on every one of them, every
+round; `reinit` said "the previous one is still unanswered (CodeRabbit has never
+responded on this PR — is it installed?)" and skipped re-requesting. So the
+count is now #1-#72 with zero CodeRabbit reviews and zero comments, across
+phases 20-27. Copilot engaged on nearly every phase-27 PR and found four real
+defects that shipped fixes, which is the measure of what the missing leg would
+have been worth. Still the one entry here that no amount of reading the code can
+settle.
+
+**STILL LIVE — was four phases when this paragraph was written.** Re-measured 2026-08-26 over every pull request this repository has
 ever had (`gh pr list --state all`, #1-#19, covering phases 20, 21 and 22, plus
 each PR's comment and review authors): the only bot among them is
 `copilot-pull-request-reviewer`. CodeRabbit has posted zero reviews and zero

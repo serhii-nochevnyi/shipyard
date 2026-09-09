@@ -1,3 +1,56 @@
+> **TRIAGED 2026-09-09, after phase 27.** Every verdict measured against the
+> current code, `grep -a` throughout because `state-sync.cjs` carries a
+> deliberate NUL byte at `epicKey`'s separator and plain `grep` skips the file
+> silently (the hazard this note's own last paragraph warns about).
+>
+> **CLOSED — the human-merge causes.** `references/pr-sentinel.md:259-261` now
+> names three: a `human_checkpoint` ticket, "a certified draft in a repo where
+> nothing ran", and a PR targeting the integration branch. The third cause was
+> added.
+>
+> **CLOSED BY DECISION — `unresolved_count`.** It is still written by nobody,
+> and that is now the deliberate answer rather than the omission: `front.cjs`
+> :612-622 explains that an unresolved-thread count is a per-PR GraphQL query,
+> the class of field that made a monorepo sync cost 41s instead of 7s, so it
+> never enters the sync window — "the branch fires for a caller that already
+> HOLDS the count, and for nobody else: on a board rebuilt from GitHub it is
+> unreachable BY DESIGN, and the integrator reading it as dead was right." A
+> reader-with-no-writer that says so in its own comment is a decision, not drift.
+>
+> **PARTIALLY CLOSED — `merge_state` yes, `behind_by` no.** T-26-15 shipped
+> `entry.merge_state = pr.mergeStateStatus || null` (`state-sync.cjs:421`), one
+> scalar on a call already being made. `behind_by` appears in that file only in
+> comments — there is no `entry.behind_by =` anywhere. So the pair the board was
+> given is half fed, and CLAUDE.md's own reason for needing both stands:
+> `mergeStateStatus: BEHIND` appears ONLY where branch protection requires
+> up-to-date branches, while `behindBy()` works everywhere. **STILL LIVE.**
+>
+> **STILL LIVE — `computeFront` is called pure and is not.** `front.cjs:436-437`
+> still reads "computeFront is a pure function over its inputs and reads no
+> file", and `loadConfig` is reachable from it (:357-360). Worth noting what
+> phase 27 did NOT break: T-27-06 added two `delivery-log.jsonl` reads to this
+> file and put both in their own named functions (`ciEstimates` :1008,
+> `movedSince` :1217) rather than inside `computeFront`, so the journal half of
+> that sentence is still true. The config half is the false one, and the purity
+> test remains a source regex over `computeFront.toString()` that cannot see an
+> indirect read.
+>
+> **STILL LIVE — F3, and still load-bearing as a PAIR.** `front.cjs:523` and
+> `ci-wait.cjs:277` both still name T-24-09 for the stop gate's
+> `waiting.parent` half. Fix both or delete both: this note's own warning is
+> that fixing one alone changes behaviour nobody asked to change.
+>
+> **STILL LIVE — F4/F5, a reader with no caller.** `needsBaseMerge` occurs ZERO
+> times in `deliver.md`, so the argument `fix-round.mjs` documents in its own
+> args contract is passed by nothing the docs describe. (This session's
+> orchestrator passed it from the script's header, not from `deliver.md` — which
+> is the gap, not a refutation of it.) The `base_merge` journal event's
+> writer contract and docs-smoke exemption still have no caller either.
+>
+> **DONE — the release owings.** `make test-codex-shipyard` ran green before
+> v0.49.0 (HOME isolated, verified before running). The container targets remain
+> declined by the operator and recorded in ADR-003's D1 verification note.
+
 # Phase 24 follow-ups
 
 ## front.cjs still calls computeFront "pure" after the lazy config read (T-24-05, #44)

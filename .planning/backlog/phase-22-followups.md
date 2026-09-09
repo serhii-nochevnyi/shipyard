@@ -1,7 +1,22 @@
 # Phase 22 follow-ups
 
-**Status: all four entries are STILL LIVE.** None was closed by phase 22's or
-phase 23's merges. Two have an owner — §1 is T-23-03's and §3 is T-23-01's, both
+> **TRIAGED 2026-09-09, after phase 27 — three of four are now CLOSED.** Each
+> verdict below was measured against the current code, not carried from the last
+> re-reading. §1 CLOSED: the stale parenthetical is gone from
+> `tests/unit/failure-signature.test.cjs` (T-23-03 did it) — `grep` for "this
+> harness's" returns nothing. §3 CLOSED: the dispatch overlay shipped;
+> `delivery-front.json` carries `waiting.dispatched` as an array and `capacity`
+> as `{max, in_flight, free}`, and the whole of phase 27 was delivered through
+> it. §4 CLOSED: `front.cjs` no longer has `phaseNum` at all — `leftBehind` is a
+> function judging by STATE (the epic's own `landed` compare and its PR reading
+> MERGED), which is T-26-10, "left behind is evidence not arithmetic", and its
+> comment explains the conservative direction it chose. **§2 is the one that
+> remains, and it has no owner**: `delivery-rules/SKILL.md` still contains zero
+> mentions of the backlog, so nothing tells an executor that routing around a
+> defect outside its scope means recording it.
+
+**Status when written: all four entries were STILL LIVE.** None was closed by
+phase 22's or phase 23's merges. Two have an owner — §1 is T-23-03's and §3 is T-23-01's, both
 in phase 23 — and §2 and §4 have none. Each was re-measured against the shipped
 code by T-23-02 on 2026-08-26; silence is not how a reader should have to infer
 any of this.
