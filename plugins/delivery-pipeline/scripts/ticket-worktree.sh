@@ -367,7 +367,22 @@ case "$cmd" in
       verdict=""; reason=""; porcelain=""
       if [[ ! -d "$wt_path" ]]; then
         verdict="gone"; reason="registered but the directory is missing"
-      elif ! porcelain="$(git -C "$wt_path" status --porcelain 2>/dev/null)"; then
+      elif ! porcelain="$(git -C "$wt_path" status --porcelain --untracked-files=no 2>/dev/null)"; then
+        # `--untracked-files=no`: the question `dirty` answers is "is there
+        # unsaved WORK here", and that means TRACKED content. Every executor
+        # worktree carries `.shipyard-pr-body.md` and `.shipyard-evidence.md` as
+        # untracked scratch (T-26-14), so the bare `--porcelain` reported EVERY
+        # delivered ticket's worktree as `dirty` — the one class gc NEVER prunes,
+        # deliberately. Measured: all five phase-27 worktrees `dirty`, two of
+        # them with merged PRs, gc's own verdict `0 removable`; at cold start 32
+        # worktrees with the E2BIG warning printed and still `0 removable`. The
+        # count only ever came down because the reaper works from `reapable`.
+        # NOT fixed by exempting the two known filenames — the next scratch file
+        # added would silently re-open it. `dirty` keeps its meaning for real
+        # uncommitted work; only the question changed. The under-lock re-check
+        # below asks the SAME question, because a classification that says
+        # `landed` and a re-check that then says `dirty` prunes nothing at all.
+        #
         # A `git status` that FAILS prints nothing, and the old
         # `[[ -n "$(git … status --porcelain)" ]]` read that silence as a clean
         # tree: a broken worktree, an unreadable gitdir link, an IO error or a
@@ -473,7 +488,11 @@ case "$cmd" in
       # real fault is a permission, an IO error or a broken worktree.
       if [[ -d "$wt_path" ]]; then
         skip_reason=""
-        if porcelain="$(git -C "$wt_path" status --porcelain 2>/dev/null)"; then
+        # `--untracked-files=no` for the same reason as the classification pass:
+        # both layers must ask ONE question. A classification that reads
+        # untracked scratch as clean and a re-check that reads it as dirty would
+        # report every delivered worktree `landed` and then remove none of them.
+        if porcelain="$(git -C "$wt_path" status --porcelain --untracked-files=no 2>/dev/null)"; then
           [[ -z "$porcelain" ]] \
             || skip_reason="became dirty after it was classified landed"
         else
