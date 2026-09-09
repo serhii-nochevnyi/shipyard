@@ -109,14 +109,34 @@ const PR_FIELDS = 'number,state,isDraft,headRefName,headRefOid,baseRefName,merge
 // expensive fields, so it is paid where the answer is read and nowhere else;
 // never add it to the bulk window above.
 //
-// `behind_by` — the mirror signal, and the reason neither alone suffices
-// (GitHub reports BEHIND only where branch protection requires up-to-date
-// branches) — is deliberately NOT here: no `gh pr list` field carries it, so it
-// would cost one `gh api compare` PER PR PER ROUND, and state-sync's wall time is
-// the conveyor's tick rate. The guard pays that compare on the duty/merge path
-// only (`sentinel.cjs baseCheck`), where the answer is about to be acted on. A
-// board with no `behind_by` therefore says "GitHub did not report BEHIND", which
-// is exactly what `baseMoved` treats it as.
+// `behind_by` — the mirror signal, and the reason neither alone suffices — IS now
+// written, and this paragraph used to argue the opposite (ADR-007 D6). The
+// reversal is measured, not reasoned:
+//
+//   * The refusal was a COST argument: one `gh api compare` per PR per round,
+//     against a tick rate the conveyor is paid by. But this sync ALREADY makes
+//     one call per open PR — `ghChecks(pr.number, repo)`, a `gh pr checks` inside
+//     this same OPEN branch, unavoidable because CI state has no bulk field. So
+//     the compare is one more call of a class the round already pays, not a new
+//     class: it doubles the per-open-PR calls and changes nothing about the shape
+//     of the round.
+//   * The 41s-versus-7s measurement, which is the rule that still stands, is
+//     about the BULK window — `reviewDecision` across 1000 rows of a monorepo,
+//     open and closed alike. Nothing here touches that window, and nothing may.
+//   * What the refusal cost instead: `front.cjs baseMoved` was reachable ONLY
+//     where branch protection requires up-to-date branches. Everywhere else a
+//     stale-but-conflict-free branch reports `CLEAN`, so the board offered
+//     exactly the merges `sentinel.cjs merge` refuses — a green measured against
+//     a merge base that no longer exists, once per parent that squashes into the
+//     epic.
+//
+// It cannot ride the open-only `pr list` pass, and the wording matters because
+// the plan for this ticket said it would: no `gh pr list` field carries a behind
+// count. It is a separate call made in the same OPEN branch, beside
+// `entry.merge_state`, and it is SKIPPED where GitHub has already answered
+// (BEHIND/DIRTY) — the same order `sentinel.cjs baseCheck` uses, for the same
+// reason: a second opinion buys nothing once there is a verdict.
+// `SHIPYARD_TIME=1` prints the per-call timings if this ever regresses.
 const REVIEW_FIELDS = 'number,reviewDecision,body,mergeStateStatus';
 
 function fail(msg) {
@@ -419,6 +439,30 @@ for (const [id, t] of Object.entries(tickets)) {
       // returns while it computes mergeability — is neither, and falls through to
       // the work, because "we could not tell" must never park a PR.
       entry.merge_state = pr.mergeStateStatus || null;
+      // The MIRROR of that verdict, and the only witness where the repo has not
+      // been hardened (see REVIEW_FIELDS above for the cost measurement). The
+      // orientation is `sentinel.cjs behindBy`'s and `epic-branch.sh`'s
+      // `ahead_by`: `compare/<head>...<base>` counts what the BASE has that this
+      // branch does not, which is how far behind the branch is.
+      //
+      // Skipped where GitHub has already said BEHIND or DIRTY: `baseMoved` fires
+      // on those alone, so the call would buy nothing. UNKNOWN, BLOCKED, UNSTABLE
+      // and CLEAN all get measured — CLEAN is the case this exists for.
+      //
+      // Strict on the answer, for the reason the epic compare below states: a
+      // rate-limit message, an HTML error page and jq's `null` all survive
+      // `parseInt` as NaN, and a zero nobody measured is worse than no field. An
+      // unreadable compare therefore leaves the key ABSENT, which every reader
+      // already treats as "GitHub did not report BEHIND" — the safe direction,
+      // because the merge gate pays its own compare and refuses there.
+      // A measured ZERO is written: positive evidence that the branch is current
+      // beats the silence that means "nobody looked".
+      if (entry.merge_state !== 'BEHIND' && entry.merge_state !== 'DIRTY') {
+        const cmp = gh(['api', `${apiBase(repo)}/compare/${pr.headRefName}...${pr.baseRefName}`,
+          '--jq', '.ahead_by'], { tolerate: true });
+        const behind = typeof cmp === 'string' && /^\d+$/.test(cmp.trim()) ? parseInt(cmp.trim(), 10) : null;
+        if (behind !== null) entry.behind_by = behind;
+      }
       const gate = parseGate(pr.body);
       if (gate) entry.gate = gate;
       const { rows, note } = ghChecks(pr.number, repo);
