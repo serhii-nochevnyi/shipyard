@@ -242,16 +242,22 @@ const WIRED = [
 function section(spec) {
   const label = path.basename(spec.doc);
   const text = fs.readFileSync(spec.doc, 'utf8');
-  const from = text.search(spec.start);
-  assert.ok(from >= 0, `${label}: section anchor ${spec.start} not found — the document was restructured, so this contract is asserting nothing`);
-  const rest = text.slice(from + 1);
+  const startMatch = text.match(spec.start);
+  assert.ok(startMatch, `${label}: section anchor ${spec.start} not found — the document was restructured, so this contract is asserting nothing`);
+  // Skip past the FULL matched anchor, not one character of it — a slice of
+  // `from + 1` drops the first character of the section (the heading's own
+  // leading `*`, `#`, or whatever the anchor pattern matched), which is fine
+  // for a marker deep in the section and wrong the moment one is required at
+  // the very start of it.
+  const rest = text.slice(startMatch.index + startMatch[0].length);
   const to = rest.search(spec.end);
   assert.ok(to >= 0, `${label}: closing anchor ${spec.end} not found after ${spec.start} — the slice would run to end-of-file and match other duties`);
   return { label, text: rest.slice(0, to) };
 }
 
 // A neighbourhood around the pointer, in the shape `trailer.test.cjs` uses for
-// its own doc pin: the lines from the pointer forward, not the whole file.
+// its own doc pin: `span` lines on EACH side of the pointer, not the whole
+// file — a step named just above the pointer line must count too.
 function pointerWindow(sectionText, pointer, span) {
   const lines = sectionText.split('\n');
   const at = lines.findIndex((l) => pointer.test(l));
@@ -262,7 +268,7 @@ function pointerWindow(sectionText, pointer, span) {
 for (const subject of SUBJECTS) {
   suite(`${subject.mechanism} — the sections this contract reads actually exist`);
 
-  test('both entry points expose a bounded arch-review section', () => {
+  test(`both entry points expose a bounded ${subject.mechanism} section`, () => {
     const c = section(subject.canonical);
     const r = section(subject.referencing);
     assert.ok(c.text.trim().length > 0, `${c.label}: the canonical section is empty`);

@@ -195,7 +195,11 @@ git -C "$GCWT/T-05-01" push -q -u origin ticket/T-05-01-live >/dev/null 2>&1
 # of every ticket between Phase B and Phase C. Clean tree, no origin/<branch>.
 ( cd "$GCWT/T-05-02" && echo unpushed > work.txt && git add work.txt \
   && git commit -qm 'T-05-02: committed, never pushed' ) >/dev/null 2>&1
-echo 'uncommitted' > "$GCWT/T-05-04/scratch.txt"
+# T-05-04 is the `dirty` case, and the edit has to be to a TRACKED file: `dirty`
+# means unsaved WORK, and gc asks `--untracked-files=no` precisely because every
+# executor worktree carries untracked `.shipyard-*.md` scratch. An untracked
+# scratch.txt here would pin the old conflation instead of the rule.
+echo 'uncommitted' > "$GCWT/T-05-04/file.txt"
 mkdir -p "$W/gcrepo/.planning/graph"
 echo '{"tickets":{"T-05-02":{},"T-05-04":{},"T-05-05":{}}}' \
   > "$W/gcrepo/.planning/graph/tickets.json"
@@ -314,7 +318,9 @@ while [[ ! -s "$W/race.json" ]] && (( waited < 150 )); do sleep 0.2; waited=$((w
 if (( waited >= 150 )); then
   bad "gc --prune classifies before it takes the git lock" "no report after 30s"
 fi
-echo 'a colleague was mid-edit' > "$GCWT/T-05-05/late.txt"
+# A TRACKED modification, for the same reason as T-05-04 above: the re-check
+# asks `--untracked-files=no`, so an untracked late.txt would prove nothing.
+echo 'a colleague was mid-edit' > "$GCWT/T-05-05/file.txt"
 rm -rf "$gc_lock"
 wait "$racer" || true
 if [[ -d "$GCWT/T-05-05" ]]; then
@@ -325,7 +331,7 @@ fi
 grep -q 'became dirty' "$W/race.err" \
   && ok "…and reports the skip with a reason" \
   || bad "gc reports what it skipped" "$(cat "$W/race.err")"
-rm -f "$GCWT/T-05-05/late.txt"
+git -C "$GCWT/T-05-05" checkout -q -- file.txt
 
 # ── a status check that FAILS is a different skip from a dirty tree ─────────
 # Same lock trick, different injection: the worktree's gitdir link is pointed at
@@ -472,6 +478,63 @@ else
     && ok "gc rejects an unknown flag with a usage line" \
     || bad "gc rejects an unknown flag with a usage line" "$out"
 fi
+
+# ── untracked scratch is not uncommitted WORK ───────────────────────────────
+# `dirty` is the one class gc NEVER prunes, deliberately — and every executor
+# worktree carries `.shipyard-pr-body.md` and `.shipyard-evidence.md` as
+# untracked scratch (T-26-14), so the bare `git status --porcelain` put EVERY
+# delivered ticket in it. Measured: all five phase-27 worktrees `dirty`, two of
+# them with merged PRs, `0 removable`; at cold start 32 worktrees, the E2BIG
+# warning printed, gc's own verdict still `0 removable`. The count only ever
+# came down because the reaper works from `reapable`.
+#
+# The third file is the point of this block. Narrowing the fix to the two known
+# filenames would pass both cases above it and fail this one, which is what a
+# list of names always eventually does.
+#
+# Self-contained fixtures: the graph and the state are rewritten for this block
+# so it does not depend on the sequence above it.
+run_gc create T-05-08 ticket/T-05-08-scratch main >/dev/null 2>&1
+: > "$GCWT/T-05-08/.shipyard-pr-body.md"
+: > "$GCWT/T-05-08/.shipyard-evidence.md"
+: > "$GCWT/T-05-08/.shipyard-a-scratch-file-invented-tomorrow.md"
+echo '{"tickets":{"T-05-08":{}}}' > "$W/gcrepo/.planning/graph/tickets.json"
+cat > "$W/gcrepo/.planning/graph/delivery-state.json" <<'STATE'
+{
+  "T-05-08": { "branch": "ticket/T-05-08-scratch", "status": "merged", "reapable": true }
+}
+STATE
+scratch_report="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
+[[ "$(verdict_of "$scratch_report" T-05-08)" == "landed" ]] \
+  && ok "gc: a merged worktree holding only untracked scratch is landed, not dirty" \
+  || bad "gc: untracked scratch must not read as uncommitted work" "$scratch_report"
+scratch_human="$(run_gc gc 2>&1 || true)"
+grep -qE '[1-9][0-9]* landed' <<<"$scratch_human" \
+  && ok "…and gc's own report counts it as removable" \
+  || bad "gc counts a scratch-only landed worktree as removable" "$scratch_human"
+run_gc gc --prune >/dev/null 2>&1 || true
+[[ ! -d "$GCWT/T-05-08" ]] \
+  && ok "…and --prune removes it (the under-lock re-check asks the same question)" \
+  || bad "gc --prune removes a scratch-only landed worktree" "T-05-08 survived --prune"
+
+# …and `dirty` keeps its meaning: only the QUESTION changed, not the class. A
+# tracked modification is never removed, however merged the ticket is.
+run_gc create T-05-09 ticket/T-05-09-real main >/dev/null 2>&1
+echo 'real uncommitted work' > "$GCWT/T-05-09/file.txt"
+echo '{"tickets":{"T-05-09":{}}}' > "$W/gcrepo/.planning/graph/tickets.json"
+cat > "$W/gcrepo/.planning/graph/delivery-state.json" <<'STATE'
+{
+  "T-05-09": { "branch": "ticket/T-05-09-real", "status": "merged", "reapable": true }
+}
+STATE
+real_report="$(run_gc gc --json 2>/dev/null || echo '{"worktrees":[]}')"
+[[ "$(verdict_of "$real_report" T-05-09)" == "dirty" ]] \
+  && ok "gc: a tracked modification is dirty even when delivery-state says merged" \
+  || bad "gc: dirty keeps its meaning for real uncommitted work" "$real_report"
+run_gc gc --prune >/dev/null 2>&1 || true
+[[ -d "$GCWT/T-05-09" ]] \
+  && ok "…and --prune still never removes it" \
+  || bad "gc --prune leaves a dirty worktree alone" "T-05-09 was removed with uncommitted work in it"
 
 # ── create cuts from the ref the BOARD named, not from a stale local one ─────
 # Measured four separate times in one session: `origin/epic/<phase>` two commits

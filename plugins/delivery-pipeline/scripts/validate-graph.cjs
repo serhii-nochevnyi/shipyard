@@ -208,6 +208,16 @@ for (const file of planFiles.sort()) {
   if (tickets[id].files.length === 0) {
     errors.push(`${id}: files_modified is empty — Gate 2's file-overlap guarantee and the executor scope both depend on it (delivery-rules §4); list every path the plan touches`);
   } else {
+    // Wildcard-free entries that name nothing on disk. Collected in the same
+    // pass that already resolves paths for `unreachable_paths`, and surfaced the
+    // same way: a WARNING plus a flag, never a gate failure — a plan may
+    // legitimately declare a file it is about to CREATE, which is most of what
+    // an implementation ticket does. A hard error here would reject exactly
+    // those plans. What it catches is the other shape: T-27-08 was dispatched
+    // against `plugins/delivery-pipeline/scripts/gen-codex-shipyard.cjs`, which
+    // is not where that script lives, so the executor was handed a contract no
+    // edit could fulfil and Gate 2 had nothing to say about it.
+    const missingPaths = [];
     for (const f of tickets[id].files) {
       // A declaration the matcher cannot answer EXACTLY is an error, not a
       // warning. The same entry decides overlap here, what the scope gate lets
@@ -240,6 +250,34 @@ for (const file of planFiles.sort()) {
         errors.push(`${id}: files_modified entry "${f}" contains "#" — a YAML trailing comment leaked into the value; move the comment onto its own line`);
       }
       if (escapesRepo(f)) tickets[id].unreachable_paths = true;
+      // Only a wildcard-FREE entry can be checked: a glob that matches nothing
+      // today is the normal shape of a declaration for files a ticket is about
+      // to add, and warning on it would fire on every glob in the graph. The
+      // character class is `literalPrefix`'s own, so `dir/**` and `src/*.ts`
+      // are excluded here by exactly the rule that excludes them there. A
+      // cross-repo ticket is skipped entirely: its paths are relative to
+      // ANOTHER repo's root, so this repo's file system says nothing about
+      // them (the same boundary state-sync and the overlap check draw).
+      if (!tickets[id].repo && !escapesRepo(f) && !/[*?[\]{}]/.test(f)
+          && !fs.existsSync(path.join(ROOT, f))) {
+        missingPaths.push(f);
+      }
+    }
+    if (missingPaths.length) {
+      // Written here, read by nobody yet — and that is a decision, not drift.
+      // state-sync PARKS an `unreachable_paths` ticket because such a ticket can
+      // never be delivered; a missing declared path is the opposite, since
+      // creating the file is usually the work. So there is nothing to park on
+      // and no gate to fail: the flag exists so a reader that wants this fact
+      // has one place to look, next to the flag it is modelled on.
+      tickets[id].missing_paths = true;
+      warnings.push(
+        `${id}: ${missingPaths.length} wildcard-free files_modified entr${missingPaths.length === 1 ? 'y does' : 'ies do'} ` +
+        `not exist in this repo: ${missingPaths.map((f) => `"${f}"`).join(', ')} — fine if the ticket CREATES ` +
+        'them, and the signature of a typo or a moved file if it does not (a wrong path is a contract no edit can ' +
+        'fulfil: the executor edits nothing the scope gate expects and the ticket cannot pass). Check the spelling ' +
+        'against the tree before dispatching.'
+      );
     }
     if (tickets[id].unreachable_paths) {
       const outside = tickets[id].files.filter(escapesRepo);
@@ -537,6 +575,7 @@ for (const id of order) {
     cross_phase_deps: t.cross_phase_deps,
     cross_repo_deps: t.cross_repo_deps,
     unreachable_paths: t.unreachable_paths === true,
+    missing_paths: t.missing_paths === true,
     files: t.files,
     risk: t.risk,
     type: t.type,

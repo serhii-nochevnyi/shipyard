@@ -160,11 +160,14 @@ because two copies drifting apart is how this path came to read a
    is a fact about the journal and not an impression:
 
    ```bash
-   grep '"event":"arch_review"' <project>/.planning/graph/delivery-log.jsonl
+   grep '"event":"arch_review"' <project>/.planning/graph/delivery-log.jsonl \
+     | grep '"ticket":"<T>"' | grep '"verdict":"violation"'
    ```
 
-   A prior line for THIS ticket carrying `verdict=violation` is what
-   `--contested` reports.
+   All three greps, not the first alone: `"event":"arch_review"` matches every
+   ticket's line, so the bare probe would read another ticket's `violation` — or
+   this ticket's own `conform` — as a contest. A prior line for THIS ticket
+   carrying `verdict=violation` is what `--contested` reports.
 
 2. **RESOLVE model and effort from the ladder** — never assumed, and never
    inherited from whatever this guard itself is running at:
@@ -204,7 +207,7 @@ because two copies drifting apart is how this path came to read a
    ```
 
    This step is the ONLY writer of the fact step 1 reads. Skip it and step 2's
-   escalation is unreachable for ever: the guard asks the journal whether this
+   escalation is unreachable forever: the guard asks the journal whether this
    verdict was already contested, and the journal was never told. `head` is the
    full forty characters of the head the judge actually read — an abbreviation
    is refused, because a reader holding only the journal cannot lengthen one.
