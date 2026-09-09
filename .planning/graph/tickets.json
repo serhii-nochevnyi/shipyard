@@ -1984,6 +1984,30 @@
       "primary_parent": null,
       "pr_base": "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism",
       "jira": null
+    },
+    "T-28-09": {
+      "title": "The wired-mechanism pin must fail when the caller goes, and the guard's row must carry the depth",
+      "plan": ".planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-09-PLAN.md",
+      "phase": "28",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "files": [
+        "tests/unit/judgment-contract.test.cjs",
+        "plugins/delivery-pipeline/references/pr-sentinel.md"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-28-09-the-wired-mechanism-pin-must-fail-when-t",
+      "epic": "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism",
+      "primary_parent": null,
+      "pr_base": "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism",
+      "jira": null
     }
   }
 }
