@@ -16,12 +16,18 @@
 // last merge into the configured base — `git.base_branch` when set, the repo
 // default otherwise, the same ref the epic is cut from — or if more than 2 days
 // have passed"*. A reader who greps `deliver.md`, finds that sentence and acts
-// on it is reading the OLD rule. Until the wiring lands, the loop calls this
-// script by hand and this script's answer wins.
+// on it is reading the OLD rule. **The wiring landed in phase 28 (T-28-06):**
+// `deliver.md`'s Step 2 now calls this script per ticket, and the prose
+// condition it superseded is gone from that file — measured at the merge, zero
+// occurrences. So this paragraph describes how the mechanism arrived, not how it
+// is reached: nobody calls it by hand any more.
 //
-// The prose is still there because `deliver.md` is not in this ticket's
-// `files_modified`: in phase 26 that file is owned by **T-26-12** (wave 14,
-// blocked behind T-26-02), and no ticket is yet cut for the wiring itself.
+// The prose WAS still there because `deliver.md` was not in this ticket's
+// `files_modified`: in phase 26 that file was owned by **T-26-12** (wave 14,
+// blocked behind T-26-02), and no ticket was yet cut for the wiring itself.
+// T-28-06 cut it, under ADR-007 D6 — "every reader has a writer, or a recorded
+// decision" — and this script's caller-less state was one of the four that
+// decision was written about.
 // Waiting for one would have put this mechanism fifteen waves out, and the
 // saving is wanted in the session that measured it. So: mechanism now, prose
 // later, and the disagreement stated here rather than left for someone to find.
