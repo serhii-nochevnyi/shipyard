@@ -7,7 +7,7 @@
 //
 // Examples (what /shipyard:deliver logs — session-only facts GitHub can't
 // reconstruct later):
-//   log-event.cjs attempt ticket=T-02-03 pr=445 n=2 role=ci-fix model=opus signature=9f2a outcome=pushed
+//   log-event.cjs attempt ticket=T-02-03 pr=445 n=2 role=ci-fix model=opus signature=9f2a outcome=pushed effort_applied=max
 //   log-event.cjs fix_round ticket=T-02-05 pr=447 outcome=no-op pushed=false
 //   log-event.cjs reuse_scan ticket=T-02-03 hits=2 verdict=fresh
 //   log-event.cjs base_merge ticket=T-02-03 pr=445 base=epic/02-x head=$(git rev-parse HEAD)
@@ -282,6 +282,53 @@ if (declared) {
       `Full form: log-event.cjs ${event} ${declared.map((k) => `${k}=…`).join(' ')}`
     );
   }
+}
+
+// ── the depth an escalation rests on (ADR-007 D2) ────────────────────────────
+//
+// `repeat_exhausted` claims the deeper effort has already been spent on one
+// failure signature, and `failure-signature.cjs verdict` proves that claim off
+// THIS row: a prior `attempt` carrying the signature whose `effort_applied` names
+// a real level. So the field belongs to this writer's vocabulary, and it is the
+// same vocabulary `dispatch-record.cjs` checks `--effort-applied` against — one
+// list, two writers, or the rows cannot be read together (ADR-006 D5).
+//
+// WARNED, never refused, and the direction matters both ways. A refusal would lose
+// the whole `attempt` row, and that row is what CHARGES the attempt:
+// `attempt-history.cjs` derives `next_n` from it, so a lost row freezes the
+// counter the oscillation backstop reads — the one thing that stops a signature
+// that alternates. The reader's own rule then treats a level it does not
+// recognise exactly as it treats absence: no evidence, therefore rethink again
+// rather than escalate early. So the cost of a typo is one more paid round, and
+// the cost of refusing is an unbounded loop.
+//
+// `unknown` is a VALUE, not a mistake: the Agent tool has no effort parameter, so
+// an Agent-dispatched fixer runs at the session's own depth whatever the ladder
+// chose, and that row's honest content is "nobody measured this". An EMPTY value
+// is absence, the same rule the sha fields use. Neither is warned about, and
+// neither is declared — a DECLARED_FIELDS entry would fire on every honest row.
+const EFFORT_FIELDS = new Set(['effort_applied']);
+const UNMEASURED_EFFORT = 'unknown';
+for (const key of EFFORT_FIELDS) {
+  // An empty value is absence — but a KEY holding `""` is still present, and a
+  // reader that checks presence (`"effort_applied" in e`, deliver.md's ladder
+  // query) would read that as CONFIRMED with a blank level rather than
+  // UNCONFIRMED. So "empty" and "omitted" must produce the same record, not
+  // merely the same silence: delete the key rather than leave it holding ''.
+  if (rec[key] === '') { delete rec[key]; continue; }
+  const level = rec[key];
+  if (level === undefined || level === UNMEASURED_EFFORT) continue;
+  try {
+    const { EFFORTS } = require(path.join(__dirname, 'pipeline-config.cjs'));
+    if (!EFFORTS.includes(level)) {
+      console.error(
+        `log-event: WARNING ${key}="${level}" is not an effort level, so nothing reads it as one: ` +
+        `\`failure-signature.cjs verdict\` treats an unrecognised level exactly as it treats an absent ` +
+        `field, which withholds \`repeat_exhausted\` and rethinks again instead. Logging it as written. ` +
+        `Levels: ${EFFORTS.join(', ')}, or "${UNMEASURED_EFFORT}" where the spawn could carry no effort.`
+      );
+    }
+  } catch { /* resolver unavailable — never block telemetry on it */ }
 }
 
 // An invented role is not a labelling nit: `pipeline-config.cjs model <role>`

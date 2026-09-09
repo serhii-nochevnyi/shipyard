@@ -14,8 +14,8 @@
 // them compactly enough to paste into the next fixer's prompt.
 //
 //   attempts=2 next_n=3
-//   attempt n=2 role=ci-fix model=opus signature=ab12cd34 outcome=pushed \
-//     hypothesis="off-by-one in the pagination cursor"
+//   attempt n=2 role=ci-fix model=opus effort_applied=max signature=ab12cd34 \
+//     outcome=pushed hypothesis="off-by-one in the pagination cursor"
 //
 // The first line is the COUNT, and it is why this reader gained a number at all
 // (ADR-002 D8). The attempt counter lived only in the babysit session, so
@@ -188,7 +188,14 @@ if (!shown.length) {
 // `ts`, `event` and `ticket` are the line itself or its subject, and `by` is
 // provenance the fixer cannot act on.
 const HIDDEN = new Set(['ts', 'event', 'ticket', 'by']);
-const ORDER = ['n', 'role', 'model', 'pr', 'signature', 'head', 'outcome', 'pushed', 'verdict', 'reason', 'hypothesis'];
+// `effort`/`effort_applied` sit with `model` because they are one thought with it
+// — WHAT ran and HOW HARD — and because of what reads them: `repeat_exhausted`
+// rests on `effort_applied` (ADR-007 D2), so the next fixer's "how hard was this
+// tried already" is answered off this line. An unknown key already rendered, but
+// at the TAIL, past the quoted hypothesis sentence, which is where a field goes to
+// be missed. Absence still renders nothing: a round that measured no depth says so
+// by staying silent, and a placeholder would read as a measured value.
+const ORDER = ['n', 'role', 'model', 'effort', 'effort_applied', 'pr', 'signature', 'head', 'outcome', 'pushed', 'verdict', 'reason', 'hypothesis'];
 
 // A hypothesis is a sentence. Quoted, it stays ONE field instead of shredding
 // the line it lives on into unreadable fragments.
