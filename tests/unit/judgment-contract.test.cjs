@@ -43,6 +43,43 @@
 // SEAM. `SUBJECTS` is a table, and `arch-review` is one row. A second row —
 // another mechanism whose two entry points must agree — needs no new machinery
 // here: declare its two documents, their section anchors and its steps.
+//
+// ── AND THE SECOND TABLE: EVERY READER HAS A WRITER, OR A RECORDED DECISION ──
+//
+// `SUBJECTS` above asks whether TWO entry points agree about one procedure.
+// `WIRED` below asks a smaller question about many more mechanisms: does the one
+// document or script that is supposed to REACH this mechanism actually name it?
+// Both are the same claim — a document must name its caller — so they share one
+// home rather than starting a third doc-contract file.
+//
+// ADR-007 Family B is the measurement: `needsBaseMerge` occurred ZERO times in
+// `deliver.md` while `fix-round.mjs` documented it in its own args contract;
+// `behind_by` was read by `front.cjs` and written by nobody; `drift-needed.cjs`
+// was implemented and tested and called from no production command; the
+// `base_merge` journal event had a writer contract, a docs-smoke exemption
+// claiming the script "journals itself", and no caller. Each was correct code
+// that nothing reached — and every one of them passed every test in the suite,
+// because a mechanism nobody connected still compiles. This is the guard
+// `trailer.test.cjs` WAS, one row short, when phase 27's D2 shipped inert.
+//
+// TWO KINDS OF ROW, and the second one is the point. `kind: 'wired'` says the
+// caller must be there. `kind: 'decided'` says the opposite — this reader has no
+// writer ON PURPOSE, the reason is written where a reader of the code looks, and
+// a writer appearing later is itself the finding. `unresolved_count` is that
+// row: a per-PR GraphQL query is the class of field that made a monorepo sync
+// cost 41s instead of 7s, so on a board rebuilt from GitHub the predicate is
+// unreachable BY DESIGN. A reader with no writer that SAYS SO is a decision, not
+// drift, and the difference between the two is exactly what this table records.
+//
+// HOW THESE ROWS ERR. Weaker than `SUBJECTS`, and deliberately so: a row matches
+// its home FILE, not a line or a section, because the caller of a mechanism is
+// not always inside one bounded section (the fix-round args contract, step d's
+// journal line and the Step 2 gate live in three different parts of
+// `deliver.md`). So a row proves the document NAMES its caller and not that the
+// naming sits in the right paragraph. That is the whole claim these rows make,
+// and it is the claim that was false for all five of them. The mutation check in
+// the ticket's acceptance criteria is what keeps it honest: remove the caller,
+// watch the named row fail.
 
 const fs = require('fs');
 const path = require('path');
@@ -53,6 +90,8 @@ const PLUGIN = path.join(ROOT, 'plugins', 'delivery-pipeline');
 
 const PR_SENTINEL = path.join(PLUGIN, 'references', 'pr-sentinel.md');
 const DELIVER = path.join(PLUGIN, 'commands', 'deliver.md');
+const STATE_SYNC = path.join(PLUGIN, 'scripts', 'state-sync.cjs');
+const FRONT = path.join(PLUGIN, 'scripts', 'front.cjs');
 
 // One subject = one mechanism with two entry points. `canonical` is the
 // document that STATES the procedure; `referencing` is the one that must point
@@ -109,6 +148,91 @@ const SUBJECTS = [
     // Deliberately NOT `gate-trailer.cjs write`, which both documents show on
     // purpose and `trailer.test.cjs` requires in both.
     statedOnce: [/pipeline-config\.cjs model arch-review/, /log-event\.cjs arch_review/],
+  },
+];
+
+// ── the wired-mechanism table (ADR-007 D6) ──────────────────────────────────
+//
+// One row = one mechanism, its READER (who acts on it, quoted so a failure says
+// what breaks) and the ONE home that must reach it. `caller` is the invocation
+// or assignment an agent or a script actually types — never the English words,
+// which occur all over both documents.
+const WIRED = [
+  {
+    kind: 'wired',
+    mechanism: 'behind_by',
+    reader: '`front.cjs baseMoved` — a green measured against a base that has MOVED is not a green',
+    home: STATE_SYNC,
+    caller: [/entry\.behind_by\s*=/],
+    why: 'GitHub reports `mergeStateStatus: BEHIND` only where branch protection requires up-to-date '
+      + 'branches, so on an ordinary repo the compare count is the ONLY witness. With nothing writing it, '
+      + 'the board offered exactly the merges `sentinel.cjs merge` refuses',
+  },
+  {
+    kind: 'wired',
+    mechanism: 'needsBaseMerge',
+    reader: '`workflows/fix-round.mjs` — it makes the base merge step 0 of the fixer prompt',
+    home: DELIVER,
+    caller: [/needsBaseMerge/],
+    why: 'until the fix round passes it, every fixer on the Workflow path measures the branch against a '
+      + 'merge base that no longer exists: the test reproduces against the wrong code and the push may '
+      + 'not even fast-forward',
+  },
+  {
+    kind: 'wired',
+    mechanism: 'the `base_merge` journal event',
+    reader: '`pipeline-stats.cjs` and any reader of the journal asking which base moved in, and when',
+    home: DELIVER,
+    caller: [/log-event\.cjs base_merge/],
+    why: '`log-event.cjs` declares the event with four required fields and `sentinel.cjs` says the duty '
+      + '"journals itself" — the script does no such thing, so the caller has to be named where the loop '
+      + 'reads, or the event is a contract with no writer',
+  },
+  {
+    kind: 'wired',
+    mechanism: 'drift-needed.cjs',
+    reader: 'Step 2 — which tickets get a drift judge at all',
+    home: DELIVER,
+    caller: [/drift-needed\.cjs/],
+    why: 'the script SUPERSEDES Step 2\'s prose condition and its own header says so; measured over one '
+      + 'session it would have cut 17 scans (1.24M subagent tokens, 21% of the session\'s agent spend) to '
+      + 'the four that produced every reuse candidate',
+  },
+  {
+    kind: 'wired',
+    mechanism: '`effort_applied` on the attempt event',
+    reader: '`failure-signature.cjs` — `repeat_exhausted` may only be claimed off a prior round that '
+      + 'RECORDS the depth it spent',
+    home: DELIVER,
+    caller: [/log-event\.cjs attempt/, /effort_applied=/],
+    why: 'T-28-02 made the ceiling rung depend on this field and nothing on the attempt path wrote it, so '
+      + '`repeat_exhausted` was unreachable — the safe direction (absent proof reads as not-yet-spent) '
+      + 'and still the exact defect this phase exists to remove',
+  },
+  {
+    kind: 'wired',
+    mechanism: '`front.cjs --parked` says what it did',
+    reader: 'the operator who passed the flag and believes the park is now durable',
+    home: FRONT,
+    caller: [/PARKED_RENDER_ONLY/],
+    why: 'the same flag on `state-sync.cjs` writes the board the stop gate enforces on, while here it '
+      + 'renders and persists nothing — measured when the gate correctly refused a stop whose board still '
+      + 'listed an item the orchestrator believed it had parked (the behaviour is pinned in front.test.cjs)',
+  },
+  {
+    kind: 'decided',
+    mechanism: 'unresolved_count',
+    reader: '`front.cjs reviewStandsAlone` — a review verdict with no thread behind it to service',
+    home: FRONT,
+    // Matched by CONTENT and not by line number: this phase moved the code around
+    // it, and a citation that drifts is a citation that stops asserting.
+    decision: [/`unresolved_count` is NOT a field state-sync writes/],
+    // The other half, and the half that makes this a guard: a writer appearing
+    // later is the finding, not a fix.
+    absent: { home: STATE_SYNC, writer: /entry\.unresolved_count\s*=/ },
+    why: 'an unresolved-thread count is a per-PR GraphQL query — the class of field that made a monorepo '
+      + 'sync cost 41s instead of 7s — so the predicate fires for a caller that already HOLDS the count '
+      + '(the guard, off the `reviewers.cjs unresolved` call it already makes) and for nobody else',
   },
 ];
 
@@ -204,6 +328,56 @@ for (const subject of SUBJECTS) {
         `${canon.label} is the canonical statement for ${subject.mechanism} but does not invoke ${inv}`
       );
     }
+  });
+}
+
+suite('every reader has a writer, or a recorded decision (ADR-007 D6)');
+
+// The table itself must be readable before any row can assert anything — a home
+// that moved makes every row below a no-op that passes.
+for (const row of WIRED) {
+  test(`the home declared for ${row.mechanism} exists`, () => {
+    assert.ok(fs.existsSync(row.home), `${row.home} does not exist — this row is asserting nothing`);
+  });
+}
+
+for (const row of WIRED.filter((r) => r.kind === 'wired')) {
+  const label = path.basename(row.home);
+  test(`${label} names the caller for ${row.mechanism}`, () => {
+    const text = fs.readFileSync(row.home, 'utf8');
+    for (const c of row.caller) {
+      assert.ok(
+        c.test(text),
+        `${row.mechanism} is read by ${row.reader}, and ${label} — the one place that must reach it — `
+        + `contains no match for ${c}. WHY IT MATTERS: ${row.why}. A mechanism nobody connected is not a mechanism.`
+      );
+    }
+  });
+}
+
+for (const row of WIRED.filter((r) => r.kind === 'decided')) {
+  const label = path.basename(row.home);
+  test(`${label} carries the recorded decision for ${row.mechanism}`, () => {
+    const text = fs.readFileSync(row.home, 'utf8');
+    for (const d of row.decision) {
+      assert.ok(
+        d.test(text),
+        `${row.mechanism} is read by ${row.reader} and written by nobody. That is allowed ONLY while the `
+        + `reason is written where a reader of the code looks, and ${label} no longer matches ${d} — `
+        + `so what was a decision has become drift. WHY: ${row.why}`
+      );
+    }
+  });
+
+  test(`and nothing has quietly started writing ${row.mechanism}`, () => {
+    const wLabel = path.basename(row.absent.home);
+    const text = fs.readFileSync(row.absent.home, 'utf8');
+    assert.ok(
+      !row.absent.writer.test(text),
+      `${wLabel} now matches ${row.absent.writer}, so ${row.mechanism} HAS a writer — and the decision `
+      + `recorded in ${label} says why it must not. Either the cost measurement changed (then move this `
+      + `row to \`kind: 'wired'\` and rewrite that comment) or the write is the defect. WHY: ${row.why}`
+    );
   });
 }
 

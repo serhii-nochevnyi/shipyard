@@ -645,7 +645,10 @@ session:
 ```text
 attempt    — each babysit round on a PR:
              log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<ci-fix|review-fix> model=<tier> \
+               effort_applied=<level|unknown> \
                outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha> hypothesis="<the fixer's own>"
+base_merge — a mechanical base merge that landed in a round (NOT an attempt):
+             log-event.cjs base_merge ticket=<T> pr=<N> base=<base ref> head=<full 40-char sha>
 fix_round  — for EACH item from a fix-round Workflow result:
              log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false>
 escalation — any escalation to a human — NOT through log-event:
@@ -960,10 +963,35 @@ The `⚠` lines from state-sync — you MUST show them to the human as a separat
 
 ## Step 2 — Drift-gate the chosen tickets
 
-For each ticket in scope whose plan is older than the last merge into **the
-configured base** — `git.base_branch` when set, the repo default otherwise, the
-same ref the epic is cut from — or if more than 2 days have passed since
-generation, run drift-check IN PARALLEL.
+**Who gets a judge is COMPUTED, not decided — ask the script, per ticket:**
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-needed.cjs <T> --json   # → {needed, reason, ...}
+```
+
+Run it for every ticket in scope, before the path split below, and dispatch a
+drift-check judge for the `needed: true` ones only. It exits 0 with a verdict —
+the answer is the payload, not the exit code — for every ticket it can evaluate,
+and it answers `needed` for anything it cannot measure (no base, a missing plan,
+a cross-repo ticket with no local checkout), so an unknown is never mistaken for
+clean. A non-zero exit (1 unknown ticket or bad usage, 2 no ticket graph) is a
+failure to ANSWER, not an answer — the script's own header states the same split.
+Carry its `reason` into your progress note for the tickets it skips: a scan not
+run has to be a stated verdict, or it reads as a step forgotten.
+
+**This SUPERSEDES the old prose condition, and the script's own header says so.**
+That condition — *"older than the last merge into the configured base, or more
+than 2 days old"* — names the wrong ref for `epic-stacked` delivery. What moves
+under a plan there is the ticket's OWN base: the epic for a root ticket, its
+primary parent's branch for a cascade child, moving once per sibling that lands.
+The integration branch may not move for weeks, so a test anchored to it reads as
+never-fires. Measured over one session, three phases: **17 drift scans, 17
+verdicts of `fresh`, zero `drifted`** — 1.24M subagent tokens, 21% of that
+session's entire agent spend, ~73k per scan; thirteen produced no reuse candidate
+at all, and **all sixteen candidates came from the four scans run against the
+EPIC**, which is the ref the written condition does not name. The script measures
+the base `state-sync.cjs` already computed, and fetches first (nothing in Steps
+0–2 does, and `origin/<base>` is only as current as the last fetch).
 
 **Compare against the base, never against `main` by name.** A project that
 integrates into a long-lived branch merges nothing into `main` for months, so a
@@ -971,8 +999,9 @@ staleness test anchored there is a gate that never opens: every plan looks fresh
 because the ref it is measured against never moves. That is not hypothetical —
 it is how a whole phase came to be executed, ticket after ticket, against a
 module layout that had been reorganized underneath it, costing 19 babysit
-attempts and landing nothing. When in doubt, RUN the check: it is a cheap
-read-only judge, and the failure it prevents is the most expensive one there is.
+attempts and landing nothing. When the script cannot measure, it says `needed`
+for exactly this reason: the failure it prevents is the most expensive one there
+is.
 
 - **Workflow path** (available and `use_workflow ≠ false`): `Workflow({scriptPath:
   <workflows/drift-gate.mjs>, args: {tickets: [{id, planPath, baseRef, model, effort}],
@@ -1476,12 +1505,39 @@ loop:
        `attempt-history.cjs <T> --json` → `next_n`
      log the round with the keys the NEXT round reads back:
        `log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<role> model=<tier>
+        effort_applied=<the level the spawn actually carried, or "unknown">
         outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha>
         hypothesis="<the fixer's own one sentence, verbatim>"`
        `signature`+`head` are what the next `verdict` compares; `hypothesis` is
        what `attempt-history.cjs` hands the next fixer so it cannot re-propose what
        this one already ruled out. Never invent a hypothesis the fixer did not
        report — an invented one enters the record as something tried and excluded.
+       **`effort_applied` is what the SPAWN carried, never what the resolver
+       decided.** On the Workflow path that is the `effort` you put in
+       `args.prs[].effort` — the script passes it into `agent()`, so it is a fact
+       about the dispatch. On the Agent path there is no effort parameter at all, so
+       the honest record is `effort_applied=unknown`: the role ran at the session's
+       own depth whatever the ladder chose. Never copy the resolved value across —
+       that turns a check into a synonym, which is the entire reason the two fields
+       are separate. This is not bookkeeping: `failure-signature.cjs` will only
+       claim `repeat_exhausted` — the rung that opens the ceiling model and then
+       spends a person's attention — off a prior round whose row NAMES a real level,
+       so an unrecorded depth reads as not-yet-spent and the loop rethinks once more
+       instead of escalating early. Levels: the resolver's own vocabulary
+       (`low|medium|high|xhigh|max`), or `unknown`; `log-event.cjs` WARNS on anything
+       else and still logs the row as written — an unrecognised level is read
+       exactly like absence by the rethink rule above, so nothing downstream is
+       silently misled, but nothing refuses the write either.
+     **A base merge in that round is journalled SEPARATELY, and it is not an
+       attempt.** For each PR you passed `needsBaseMerge: true` whose push you just
+       confirmed: `log-event.cjs base_merge ticket=<T> pr=<N> base=<the base ref you
+       passed> head=<full 40-char sha>`. Nothing else writes this event — the duty
+       is mechanical (`base-merge.cjs` does the merge, no ladder role) and the script
+       does not journal itself, whatever the comment beside its duty says — so with
+       no caller here the event is a contract with no writer, and the journal cannot
+       answer which base moved into what, or when. Two lines and not one field on the
+       attempt: charging a mechanical merge to the ticket's repair record would spend
+       its attempt budget on work no hypothesis was ever wrong about.
      `attempts` (same `attempt-history.cjs <T> --json`) > MAX → `escalation-record.cjs mark <T> "<what the N attempts tried and why each failed>"`, continue the front
        THE ATTEMPT BACKSTOP STAYS, even though the ladder no longer reads the
        counter. A signature that oscillates between two values is never the same
@@ -1532,11 +1588,23 @@ itself. The round order:
    this phase exists to prevent. What remains goes to
    `Workflow({scriptPath: <workflows/fix-round.mjs>,
    args: {prs: [{id, pr, branch, worktreePath, planPath, needsCiFix,
-   needsReviewFix, attemptHistory: <the output of `attempt-history.cjs <T>`>,
+   needsReviewFix, needsBaseMerge, base,
+   attemptHistory: <the output of `attempt-history.cjs <T>`>,
    model, effort: <from `pipeline-config.cjs model ci-fix --json --risk <r>
    --signature-state <verdict>` / `model review-fix --json [--signature-state
    <verdict>]`, per PR>}],
    ciFixRefPath, reviewFixRefPath, reinitScript, artifactLanguage}})`.
+   **`needsBaseMerge` is a MEASUREMENT off the board, not a judgement**: it is true
+   when `state[T].merge_state` is `BEHIND` or `DIRTY`, or `state[T].behind_by > 0` —
+   the same pair `front.cjs baseMoved` reads, which is why the board already filed
+   that PR under `fix` with a reason naming `base-merge.cjs`. Pass `base` with it:
+   the bare base name from `state[T].pr_base` (the script resolves `origin/<base>`
+   itself). Until it is passed the base merge is not step 0 of the fixer's prompt
+   and every later step of that round measures the branch against a merge base that
+   no longer exists — the test reproduces against the wrong code, the thread is
+   answered about the wrong diff, and the push may not even fast-forward. Omit both
+   when the base has not moved: `false`/absent builds exactly the prompt it always
+   did.
    `attemptHistory` is a PRE-RENDERED string and producing it is YOURS: that path
    builds each prompt deterministically from `args` and does not shell out, so a
    record you do not pass does not exist for the agents. Omit it on a first

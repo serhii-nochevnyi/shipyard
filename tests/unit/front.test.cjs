@@ -643,6 +643,76 @@ test('the CLI honours a recorded drift verdict', () => {
   assert.ok(/the reviewer must decide/.test(parked.why['T-01-01']), 'and reports its reason');
 });
 
+suite('front — `--parked` says what it did, because it does less than it looks like');
+
+// ADR-007 Family B. The SAME flag exists on `state-sync.cjs`, where it writes the
+// durable board the stop gate enforces on; here it changes one render and
+// persists nothing. Both print the same answer, so the operator who passed it
+// here has no way to tell that nothing was parked — measured when the stop gate
+// correctly refused a stop whose board still listed an item the orchestrator
+// believed it had parked. The mechanism is not a write (that would be a second
+// writer of the board, which is the collision `withLock` exists for); it is
+// saying so.
+test('the flag prints the render-only line, on both faces of the answer', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const { spawnSync } = require('child_process');
+  const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-parked-'));
+  const graph = path.join(dir, '.planning', 'graph');
+  fs.mkdirSync(graph, { recursive: true });
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': {}, 'T-01-02': {} } }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({
+    'T-01-01': { status: 'pending', ready: true, branch: 'ticket/T-01-01-x' },
+    'T-01-02': { status: 'pending', ready: true, branch: 'ticket/T-01-02-y' },
+  }));
+  const cli = (args = []) => spawnSync('node', [path.join(SCRIPTS, 'front.cjs'), ...args], { cwd: dir, encoding: 'utf8' });
+
+  const { PARKED_RENDER_ONLY } = require(path.join(SCRIPTS, 'front.cjs'));
+  assert.ok(/state-sync\.cjs --parked/.test(PARKED_RENDER_ONLY),
+    `the line must name the flag that DOES persist: ${PARKED_RENDER_ONLY}`);
+
+  const parked = cli(['--parked', 'T-01-01']);
+  assert.equal(parked.status, 0, parked.stderr);
+  assert.ok(parked.stdout.includes(PARKED_RENDER_ONLY),
+    `the text board must carry the line:\n${parked.stdout}`);
+
+  // Both faces, for `ci-wait.cjs`'s reason: the caller reading `--json` is not the
+  // caller reading the text, and a caveat only one of them can see is a caveat
+  // the other acts against. The JSON carries the FIELD; the prose stays out of it.
+  const asJson = JSON.parse(cli(['--parked', 'T-01-01', '--json']).stdout);
+  assert.equal(asJson.parked_render_only, PARKED_RENDER_ONLY);
+  assert.ok(asJson.parked.blocked.includes('T-01-01'), 'and the park still renders');
+});
+
+test('without the flag it prints nothing new — the line is about the flag, not about parks', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const { spawnSync } = require('child_process');
+  const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
+  const { PARKED_RENDER_ONLY } = require(path.join(SCRIPTS, 'front.cjs'));
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-parked-off-'));
+  const graph = path.join(dir, '.planning', 'graph');
+  fs.mkdirSync(graph, { recursive: true });
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': {} } }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'),
+    JSON.stringify({ 'T-01-01': { status: 'pending', ready: true, branch: 'ticket/T-01-01-x' } }));
+  const cli = (args = []) => spawnSync('node', [path.join(SCRIPTS, 'front.cjs'), ...args], { cwd: dir, encoding: 'utf8' });
+
+  // Asserted BEFORE the negative, or this test passes vacuously: `includes` on an
+  // undefined export stringifies to "undefined", which no board prints either.
+  assert.ok(typeof PARKED_RENDER_ONLY === 'string' && PARKED_RENDER_ONLY.length > 0,
+    'front.cjs must export the line for this test to be about anything');
+
+  const plain = cli([]);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.ok(!plain.stdout.includes(PARKED_RENDER_ONLY), `no flag, no line:\n${plain.stdout}`);
+  const asJson = JSON.parse(cli(['--json']).stdout);
+  assert.ok(!('parked_render_only' in asJson), 'and no field either');
+});
+
 suite('front — D4: the actionable order is by unblocking power');
 
 // Unattended, the ORDER decides how much of the graph is still open by morning:
@@ -1867,10 +1937,20 @@ test('GitHub\'s own BEHIND verdict is fix work whose reason names base-merge.cjs
 
 test('a commit count alone is enough — a stale-but-clean branch reports CLEAN', () => {
   // mergeStateStatus only says BEHIND where branch protection requires
-  // up-to-date branches; elsewhere the compare is the only witness.
+  // up-to-date branches; elsewhere the compare is the only witness — which is
+  // why `state-sync.cjs` now writes the count (ADR-007 D6). With the field
+  // absent this PR reads CLEAN and green and lands under `merge`: the board
+  // offering exactly what `sentinel.cjs merge` refuses.
   const f = computeFront({ T: {} }, { T: { ...landed, merge_state: 'CLEAN', behind_by: 3 } }, { autoMerge: true });
   assert.deepStrictEqual(f.actionable.fix, ['T']);
+  assert.deepStrictEqual(f.actionable.merge, [], 'and it is NOT offered for merge — the guard would refuse it');
   assert.ok(/3 commit/.test(f.why.T), f.why.T);
+
+  // The same PR with the field missing, which is what every un-hardened repo
+  // looked like before the write: this is the disagreement, stated as a pair.
+  const unmeasured = computeFront({ T: {} }, { T: { ...landed, merge_state: 'CLEAN' } }, { autoMerge: true });
+  assert.deepStrictEqual(unmeasured.actionable.merge, ['T'],
+    'without the count the board offers the merge — the defect the writer closes');
 });
 
 test('DIRTY is the same duty with a different word — conflicts, not staleness', () => {

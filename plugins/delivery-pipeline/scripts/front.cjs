@@ -284,6 +284,27 @@ function baseMergeWhy(moved, base) {
 const ORDER = ['execute', 'publish', 'fix', 'finalize', 'merge'];
 const SENTINEL_BUCKETS = ['fix', 'finalize', 'merge'];
 
+// ── `--parked` HERE parks nothing, and now says so (ADR-007 D6) ─────────────
+//
+// The same flag exists on `state-sync.cjs`, and there it writes
+// `delivery-front.json` — the board the stop gate reads and enforces on. Here it
+// is an argument to a pure function whose result is printed and dropped. Both
+// commands print the SAME answer, which is precisely why the difference was
+// invisible: measured when the stop gate correctly refused a stop whose board
+// still listed an item the orchestrator believed it had parked, because the park
+// had been passed to this CLI.
+//
+// Closed by SAYING SO rather than by writing. Feeding it would be worse: the
+// durable board has exactly one writer, which is why `state-sync` takes state,
+// yaml and front in a single locked section — a second command writing the same
+// file from a `--parked` list is a lost update by design, and it would also let
+// a render-time flag silently outrank the last real sync. So this flag keeps
+// doing the one honest thing it can do, and names the command that does the
+// other.
+const PARKED_RENDER_ONLY = '--parked applies to THIS RENDER ONLY — nothing was written. '
+  + 'The durable board the stop gate enforces on is written by `state-sync.cjs --parked <ids>`; '
+  + 'pass the same ids there, or the next round re-offers these tickets.';
+
 // Facts GitHub cannot know. `parked` is the session-scoped channel — a judgement
 // made mid-run that has no home on disk yet; a front that keeps re-offering an
 // escalated PR is an infinite babysit loop, so the caller passes those ids in.
@@ -1519,7 +1540,7 @@ module.exports = {
   // Shared with sentinel.cjs for the same reason as everything above it: the
   // board must never offer what the guard refuses, and two texts for one rule is
   // how they came to disagree in the first place.
-  reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy,
+  reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy, PARKED_RENDER_ONLY,
   // The cap's counting unit, exported so the test can hold it against
   // `pipeline-config.cjs`'s ROLES: a role with no cardinality would be counted
   // by the fallback and nothing would say so.
@@ -1626,9 +1647,19 @@ if (require.main === module) {
     // rather than refusing (T-26-02), so it never sets this field.
     front.fixpoint = false;
   }
+  // The caveat rides BOTH faces, for `ci-wait.cjs`'s reason: the caller reading
+  // `--json` is not the caller reading the text, and a caveat only one of them can
+  // see is a caveat the other acts against. Keyed on the FLAG being present, not
+  // on the list being non-empty — `--parked` with nothing after it is still an
+  // operator who believes something was parked.
+  if (pIdx !== -1) front.parked_render_only = PARKED_RENDER_ONLY;
   if (argv.includes('--json')) {
     process.stdout.write(JSON.stringify(front, null, 2) + '\n');
   } else {
+    // BEFORE the board, never after: deliver.md tells the loop to quote the last
+    // two lines (`front:` and `fixpoint:`) as the verdict it is acting on, so a
+    // line appended past them displaces the one thing a reader is told to read.
+    if (front.parked_render_only) console.log(`front: ${front.parked_render_only}`);
     for (const line of formatFront(front)) console.log(line);
   }
   process.exit(0);
