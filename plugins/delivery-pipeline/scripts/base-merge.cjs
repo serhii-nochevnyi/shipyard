@@ -138,8 +138,31 @@ const git = (args, { tolerate = false } = {}) => {
   return { status: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 };
 
-if (git(['status', '--porcelain'], { tolerate: true }).out) {
-  fail('the worktree has uncommitted changes — commit or stash before merging the base in');
+// THE QUESTION IS ABOUT UNSAVED WORK, AND THAT MEANS TRACKED CONTENT.
+// `--porcelain` alone prints `?? path` for untracked files, and the executor
+// contract writes `.shipyard-pr-body.md` and `.shipyard-evidence.md` into EVERY
+// executor worktree as untracked scratch (T-26-14, on the reasoning that the
+// scope gate reads `git diff` and never sees them — right about the scope gate,
+// wrong about every other reader of `git status`). So this script refused in the
+// one state the conveyor creates for every executed ticket. Reproduced: exit 2
+// with both files present, `merged cleanly` with them moved aside and nothing
+// else changed. Not cosmetic — this script is named as THE remedy for a moved
+// base in deliver.md, references/ci-fix.md, references/review-fix.md and
+// references/pr-sentinel.md, three of them read by dispatched agents, none of
+// which is told what to do about the refusal.
+//
+// Deliberately NOT fixed by exempting the two known filenames: a list of names
+// is the same shape as the pin's list of homes that T-27-07 replaced with a
+// sweep, and the next scratch file added would silently re-open it.
+//
+// What the relaxed check stops covering is an untracked path the incoming BASE
+// ADDS at the same path — and that is still refused, by `git merge` itself,
+// with git's own message naming the path (it lands in the "reported no
+// conflicted paths" fail below, which prints git's stderr verbatim). Nothing is
+// matched against that text here: a locale-dependent string match on git output
+// would be a new fragility, and git's own wording is the better message.
+if (git(['status', '--porcelain', '--untracked-files=no'], { tolerate: true }).out) {
+  fail('the worktree has uncommitted changes to tracked files — commit or stash before merging the base in');
 }
 
 if (!noFetch) git(['fetch', 'origin', '--prune'], { tolerate: true });
