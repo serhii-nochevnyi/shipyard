@@ -310,8 +310,14 @@ if (declared) {
 const EFFORT_FIELDS = new Set(['effort_applied']);
 const UNMEASURED_EFFORT = 'unknown';
 for (const key of EFFORT_FIELDS) {
+  // An empty value is absence — but a KEY holding `""` is still present, and a
+  // reader that checks presence (`"effort_applied" in e`, deliver.md's ladder
+  // query) would read that as CONFIRMED with a blank level rather than
+  // UNCONFIRMED. So "empty" and "omitted" must produce the same record, not
+  // merely the same silence: delete the key rather than leave it holding ''.
+  if (rec[key] === '') { delete rec[key]; continue; }
   const level = rec[key];
-  if (level === undefined || level === '' || level === UNMEASURED_EFFORT) continue;
+  if (level === undefined || level === UNMEASURED_EFFORT) continue;
   try {
     const { EFFORTS } = require(path.join(__dirname, 'pipeline-config.cjs'));
     if (!EFFORTS.includes(level)) {

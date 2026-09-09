@@ -334,11 +334,17 @@ test('omitting it writes no key and says nothing', () => {
 });
 
 test('an empty value is absence too, not a bad level', () => {
+  // Presence, not merely silence, is what a reader checks: `"effort_applied" in
+  // e` (deliver.md's ladder query) must not read a `""` key as CONFIRMED. So
+  // "empty" and "omitted" have to produce the identical record.
   const { project, graph } = scratch();
   const r = run(project, ['attempt', 'ticket=T-28-02', 'n=1', 'effort_applied=']);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.ok(!/WARNING/.test(r.stderr), r.stderr);
   assert.strictEqual(lines(graph).length, 1);
+  const rec = JSON.parse(lines(graph)[0]);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(rec, 'effort_applied'), false,
+    'an empty value must be omitted, not stored as ""');
 });
 
 done();

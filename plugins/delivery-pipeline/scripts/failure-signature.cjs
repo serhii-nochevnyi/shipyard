@@ -21,7 +21,9 @@
 // So a failure is identified by a normalized SIGNATURE — error class + test/job
 // id + file, hashed — and the policy reads that signature's HISTORY:
 //
-//   not seen before      → progress; hold the tier, continue
+//   nothing on record     → first; the opening attempt, strategy `fix`
+//   a DIFFERENT signature
+//   already on record     → progress; hold the tier, continue
 //   seen again, moved head→ repeat; change STRATEGY, not tier (T-20-02) — WHATEVER
 //                          appeared in between (ADR-007 D2)
 //   a THIRD time, and a
