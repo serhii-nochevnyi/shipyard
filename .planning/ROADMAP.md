@@ -378,11 +378,17 @@ default and why nothing here may block a merge. Everything hard is already
 solved: `state-sync` has journalled an owned, append-only `status_change` with
 `from`/`to`/`ts` since long before anyone wanted a consumer, and this project
 alone holds 205 of them. What is missing is a consumer, a map, and one honest
-account of who is allowed to fail. Seven tickets: T-29-01..03 are the whole
-deterministic half and must exist before anything reaches the network, T-29-04
-and T-29-05 land together because a performing half with no recorder is the
-un-evidenced write the ADR refuses, and T-29-07 is last because it asserts what
-the others built. The uncomfortable fact is stated in the ADR rather than
-discovered later: `pipeline.jira.enabled: false` here and all 69 tickets carry a
-null key, so this repository ships a mechanism it cannot run, and the witnessed
-mutation is owed by the proving ground.
+account of who is allowed to fail. Seven tickets, two roots, depth six. The
+spine is forced by data rather than by preference — the planner needs both the
+map and the store, and a diamond child would get only its primary parent's work,
+which is the gap ADR-006 parks. The two roots are the ones that genuinely owe
+nothing: T-29-01, the negative pin, deliberately FIRST so it is already red for
+whoever writes the acting half, and T-29-02, the config knob. Then
+T-29-03..T-29-05 build one script in three passes (store, planner, recorder),
+sharing a file and therefore ordered; T-29-06 is the only checkpoint in the
+phase, because it is the first instruction in this repository that tells an
+agent to write to an external system; T-29-07 is last because it pins what the
+others built. The uncomfortable fact is stated in the ADR rather than discovered
+later: `pipeline.jira.enabled: false` here and all 69 tickets carry a null key,
+so this repository ships a mechanism it cannot run, and the witnessed mutation
+is owed by the proving ground.

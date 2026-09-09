@@ -144,10 +144,13 @@ exists before anything reaches the network.
   standing requirement — lands in the proving ground, and the ADR says so
   instead of letting a green CI imply a live run. What CI proves on its own:
   the planner over a fixture journal, the recorder's refusal of an unevidenced
-  record, a wiring assertion that `deliver.md` actually calls the planner (the
-  WIRED-pin pattern, already used seven times), and a NEGATIVE pin that
-  `transitionName` appears in no script and no prompt — the shape of the
-  model-id sweep, aimed at the one mistake this ADR exists to prevent.
+  record, a wiring assertion that `deliver.md` actually calls the planner — a
+  new row in `tests/unit/judgment-contract.test.cjs`'s `WIRED` table, which
+  holds seven today (six `kind: 'wired'`, one `decided`) — and a NEGATIVE pin
+  that `transitionName` appears in no script and no prompt, which belongs in
+  `tests/unit/source-contract.test.cjs` beside the other assertions about the
+  shape of our own source, and is the model-id sweep's shape aimed at the one
+  mistake this ADR exists to prevent.
 
 ## Considered and NOT chosen
 

@@ -27,6 +27,9 @@ epics:
   '28':
     branch: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
     repos: [null]
+  '29':
+    branch: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
+    repos: [null]
 tickets:
   T-20-01:
     title: 'Failure signature: normalize, history verdict, flake quarantine'
@@ -1131,4 +1134,116 @@ tickets:
     epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
     primary_parent: null
     pr_base: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
+    jira: null
+  T-29-01:
+    title: 'The negative pin: a transition NAME is never a target status'
+    plan: '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-01-PLAN.md'
+    phase: '29'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [tests/unit/source-contract.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-29-01-the-negative-pin-a-transition-name-is-ne
+    epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
+    primary_parent: null
+    pr_base: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
+    jira: null
+  T-29-02:
+    title: 'The status map is a declared knob, and its empty default means off'
+    plan: '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-02-PLAN.md'
+    phase: '29'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, capabilities/delivery-pipeline/capability.json, tests/unit/pipeline-config.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-29-02-the-status-map-is-a-declared-knob-and-it
+    epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
+    primary_parent: null
+    pr_base: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
+    jira: null
+  T-29-03:
+    title: 'The watermark store: exactly once, and only ever forwards'
+    plan: '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-03-PLAN.md'
+    phase: '29'
+    repo: null
+    wave: 2
+    depends_on: [T-29-02]
+    files: [plugins/delivery-pipeline/scripts/jira-project.cjs, tests/unit/record-stores.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-29-03-the-watermark-store-exactly-once-and-onl
+    epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
+    primary_parent: T-29-02
+    pr_base: ticket/T-29-02-the-status-map-is-a-declared-knob-and-it
+    jira: null
+  T-29-04:
+    title: 'The planner: three local files in, a work list out, no network'
+    plan: '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-04-PLAN.md'
+    phase: '29'
+    repo: null
+    wave: 3
+    depends_on: [T-29-03]
+    files: [plugins/delivery-pipeline/scripts/jira-project.cjs, tests/unit/jira-project.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-29-04-the-planner-three-local-files-in-a-work
+    epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
+    primary_parent: T-29-03
+    pr_base: ticket/T-29-03-the-watermark-store-exactly-once-and-onl
+    jira: null
+  T-29-05:
+    title: 'The recorder refuses a bare done, and the journal owns the event'
+    plan: '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-05-PLAN.md'
+    phase: '29'
+    repo: null
+    wave: 4
+    depends_on: [T-29-04]
+    files: [plugins/delivery-pipeline/scripts/jira-project.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/jira-project.test.cjs, tests/unit/log-event.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-29-05-the-recorder-refuses-a-bare-done-and-the
+    epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
+    primary_parent: T-29-04
+    pr_base: ticket/T-29-04-the-planner-three-local-files-in-a-work
+    jira: null
+  T-29-06:
+    title: 'The acting half: resolve by target status, transition by id, never block'
+    plan: '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-06-PLAN.md'
+    phase: '29'
+    repo: null
+    wave: 5
+    depends_on: [T-29-05]
+    files: [plugins/delivery-pipeline/commands/deliver.md]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-29-06-the-acting-half-resolve-by-target-status
+    epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
+    primary_parent: T-29-05
+    pr_base: ticket/T-29-05-the-recorder-refuses-a-bare-done-and-the
+    jira: null
+  T-29-07:
+    title: 'Wire it, pin the wiring, and keep it out of the tick rate'
+    plan: '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-07-PLAN.md'
+    phase: '29'
+    repo: null
+    wave: 6
+    depends_on: [T-29-06]
+    files: [plugins/delivery-pipeline/commands/deliver.md, README.md, tests/unit/judgment-contract.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-29-07-wire-it-pin-the-wiring-and-keep-it-out-o
+    epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
+    primary_parent: T-29-06
+    pr_base: ticket/T-29-06-the-acting-half-resolve-by-target-status
     jira: null

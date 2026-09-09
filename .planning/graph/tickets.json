@@ -63,6 +63,13 @@
       "repos": [
         null
       ]
+    },
+    "29": {
+      "branch": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "base": null,
+      "repos": [
+        null
+      ]
     }
   },
   "tickets": {
@@ -76,6 +83,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/failure-signature.cjs",
         "tests/unit/failure-signature.test.cjs"
@@ -102,6 +110,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "tests/unit/pipeline-config.test.cjs"
@@ -128,6 +137,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/escalation-record.cjs",
         "plugins/delivery-pipeline/scripts/log-event.cjs",
@@ -154,6 +164,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/front.cjs",
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
@@ -179,6 +190,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/attempt-history.cjs",
         "tests/unit/attempt-history.test.cjs",
@@ -211,6 +223,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/deliver.md",
         "plugins/delivery-pipeline/references/pr-sentinel.md",
@@ -237,6 +250,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/validate-graph.cjs",
         "tests/smoke/graph-validator-smoke.sh"
@@ -263,6 +277,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/sentinel.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -291,6 +306,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/decompose.md"
       ],
@@ -314,6 +330,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/degenerate-green.cjs",
         "tests/unit/degenerate-green.test.cjs"
@@ -340,6 +357,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/deliver.md",
         "plugins/delivery-pipeline/references/pr-sentinel.md",
@@ -367,6 +385,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/escalation-record.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -396,6 +415,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/escalation-record.cjs",
         "tests/unit/escalation-record.test.cjs"
@@ -420,6 +440,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/drift-record.cjs",
         "plugins/delivery-pipeline/scripts/log-event.cjs",
@@ -445,6 +466,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/lock.cjs",
         "tests/unit/lock.test.cjs"
@@ -471,6 +493,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "tests/unit/assert-harness.cjs",
         "tests/unit/harness.test.cjs"
@@ -495,6 +518,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -525,6 +549,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         ".planning/backlog/no-ci-in-the-conveyors-own-repo.md",
         ".planning/backlog/phase-20-followups.md",
@@ -551,6 +576,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "tests/unit/failure-signature.test.cjs",
         "tests/unit/degenerate-green.test.cjs"
@@ -575,6 +601,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/failure-signature.cjs",
         "plugins/delivery-pipeline/scripts/attempt-history.cjs",
@@ -604,6 +631,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/check-state.cjs",
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
@@ -637,6 +665,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/parent-moving.cjs",
         "plugins/delivery-pipeline/scripts/sentinel.cjs",
@@ -670,6 +699,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/gate-trailer.cjs",
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
@@ -704,6 +734,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/sentinel.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -736,6 +767,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/sentinel.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -773,6 +805,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/deliver.md",
         "plugins/delivery-pipeline/references/pr-sentinel.md",
@@ -803,6 +836,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/escalation-record.cjs",
         "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
@@ -830,6 +864,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/stop-gate.cjs",
         "tests/unit/stop-gate.test.cjs",
@@ -857,6 +892,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/ci-wait.cjs",
         "tests/unit/ci-wait.test.cjs"
@@ -883,6 +919,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
         "tests/smoke/sentinel-smoke.sh"
@@ -907,6 +944,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "Dockerfile.base",
         "Dockerfile",
@@ -939,6 +977,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "scripts/gen-codex-shipyard.cjs",
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
@@ -976,6 +1015,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "CLAUDE.md",
         "README.md",
@@ -1007,6 +1047,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         ".env.example",
         "docker-compose.yml",
@@ -1044,6 +1085,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
         "plugins/delivery-pipeline/commands/deliver.md",
@@ -1070,6 +1112,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "docs/gsd_multilevel_delivery_pipeline.md",
         "plugins/delivery-pipeline/commands/investigate.md",
@@ -1097,6 +1140,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": true,
       "files": [
         "plugins/delivery-pipeline/scripts/path-owner.cjs",
         "plugins/delivery-pipeline/scripts/validate-graph.cjs",
@@ -1127,6 +1171,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/ticket-worktree.sh",
         "tests/smoke/worktree-smoke.sh"
@@ -1151,6 +1196,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "scripts/merge-codex-config.cjs",
         "tests/unit/merge-codex-config.test.cjs"
@@ -1175,6 +1221,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/gsd-tune.cjs",
         "tests/unit/gsd-tune.test.cjs"
@@ -1199,6 +1246,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/decompose.md"
       ],
@@ -1222,6 +1270,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/workflows/executors.mjs",
         "plugins/delivery-pipeline/workflows/drift-gate.mjs",
@@ -1247,6 +1296,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/drift-needed.cjs",
         "tests/unit/drift-needed.test.cjs"
@@ -1271,6 +1321,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/workflows/executors.mjs",
         "tests/unit/workflows-args.test.cjs"
@@ -1299,6 +1350,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -1329,6 +1381,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -1357,6 +1410,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/lock.cjs",
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
@@ -1385,6 +1439,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/front.cjs",
         "plugins/delivery-pipeline/scripts/stop-gate.cjs",
@@ -1416,6 +1471,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/check-state.cjs",
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
@@ -1451,6 +1507,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "plugins/delivery-pipeline/scripts/sentinel.cjs",
@@ -1483,6 +1540,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -1511,6 +1569,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/front.cjs",
         "plugins/delivery-pipeline/scripts/ci-wait.cjs",
@@ -1542,6 +1601,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/gate-trailer.cjs",
         "plugins/delivery-pipeline/scripts/base-merge.cjs",
@@ -1571,6 +1631,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
         "plugins/delivery-pipeline/scripts/sentinel.cjs",
@@ -1604,6 +1665,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/epic-branch.sh",
         "plugins/delivery-pipeline/scripts/ticket-worktree.sh",
@@ -1632,6 +1694,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/log-event.cjs",
         "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
@@ -1664,6 +1727,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/front.cjs",
         "plugins/delivery-pipeline/commands/deliver.md",
@@ -1691,6 +1755,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "tests/smoke/docs-smoke.sh",
         "scripts/install-shipyard-capability.sh",
@@ -1718,6 +1783,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/front.cjs",
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
@@ -1752,6 +1818,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/deliver.md",
         "plugins/delivery-pipeline/references/pr-sentinel.md",
@@ -1777,6 +1844,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -1805,6 +1873,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/failure-signature.cjs",
         "plugins/delivery-pipeline/scripts/log-event.cjs",
@@ -1835,6 +1904,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/references/pr-sentinel.md",
         "plugins/delivery-pipeline/commands/deliver.md",
@@ -1860,6 +1930,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "scripts/gen-codex-shipyard.cjs",
         "plugins/delivery-pipeline/scripts/gsd-tune.cjs",
@@ -1888,6 +1959,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "scripts/install-shipyard-codex.sh",
         "scripts/gen-codex-shipyard.cjs",
@@ -1915,6 +1987,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -1942,6 +2015,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/base-merge.cjs",
         "plugins/delivery-pipeline/scripts/ticket-worktree.sh",
@@ -1970,6 +2044,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/pipeline-stats.cjs",
         "tests/unit/source-contract.test.cjs",
@@ -1995,6 +2070,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
+      "missing_paths": false,
       "files": [
         "tests/unit/judgment-contract.test.cjs",
         "plugins/delivery-pipeline/references/pr-sentinel.md"
@@ -2007,6 +2083,193 @@
       "epic": "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism",
       "primary_parent": null,
       "pr_base": "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism",
+      "jira": null
+    },
+    "T-29-01": {
+      "title": "The negative pin: a transition NAME is never a target status",
+      "plan": ".planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-01-PLAN.md",
+      "phase": "29",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "tests/unit/source-contract.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-29-01-the-negative-pin-a-transition-name-is-ne",
+      "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "primary_parent": null,
+      "pr_base": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "jira": null
+    },
+    "T-29-02": {
+      "title": "The status map is a declared knob, and its empty default means off",
+      "plan": ".planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-02-PLAN.md",
+      "phase": "29",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "capabilities/delivery-pipeline/capability.json",
+        "tests/unit/pipeline-config.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-29-02-the-status-map-is-a-declared-knob-and-it",
+      "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "primary_parent": null,
+      "pr_base": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "jira": null
+    },
+    "T-29-03": {
+      "title": "The watermark store: exactly once, and only ever forwards",
+      "plan": ".planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-03-PLAN.md",
+      "phase": "29",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-29-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/jira-project.cjs",
+        "tests/unit/record-stores.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-29-03-the-watermark-store-exactly-once-and-onl",
+      "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "primary_parent": "T-29-02",
+      "pr_base": "ticket/T-29-02-the-status-map-is-a-declared-knob-and-it",
+      "jira": null
+    },
+    "T-29-04": {
+      "title": "The planner: three local files in, a work list out, no network",
+      "plan": ".planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-04-PLAN.md",
+      "phase": "29",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-29-03"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/jira-project.cjs",
+        "tests/unit/jira-project.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-29-04-the-planner-three-local-files-in-a-work",
+      "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "primary_parent": "T-29-03",
+      "pr_base": "ticket/T-29-03-the-watermark-store-exactly-once-and-onl",
+      "jira": null
+    },
+    "T-29-05": {
+      "title": "The recorder refuses a bare done, and the journal owns the event",
+      "plan": ".planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-05-PLAN.md",
+      "phase": "29",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-29-04"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/jira-project.cjs",
+        "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "tests/unit/jira-project.test.cjs",
+        "tests/unit/log-event.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-29-05-the-recorder-refuses-a-bare-done-and-the",
+      "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "primary_parent": "T-29-04",
+      "pr_base": "ticket/T-29-04-the-planner-three-local-files-in-a-work",
+      "jira": null
+    },
+    "T-29-06": {
+      "title": "The acting half: resolve by target status, transition by id, never block",
+      "plan": ".planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-06-PLAN.md",
+      "phase": "29",
+      "repo": null,
+      "wave": 5,
+      "depends_on": [
+        "T-29-05"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/commands/deliver.md"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-29-06-the-acting-half-resolve-by-target-status",
+      "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "primary_parent": "T-29-05",
+      "pr_base": "ticket/T-29-05-the-recorder-refuses-a-bare-done-and-the",
+      "jira": null
+    },
+    "T-29-07": {
+      "title": "Wire it, pin the wiring, and keep it out of the tick rate",
+      "plan": ".planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-07-PLAN.md",
+      "phase": "29",
+      "repo": null,
+      "wave": 6,
+      "depends_on": [
+        "T-29-06"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "README.md",
+        "tests/unit/judgment-contract.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-29-07-wire-it-pin-the-wiring-and-keep-it-out-o",
+      "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "primary_parent": "T-29-06",
+      "pr_base": "ticket/T-29-06-the-acting-half-resolve-by-target-status",
       "jira": null
     }
   }
