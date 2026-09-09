@@ -132,7 +132,8 @@ function section(spec) {
 }
 
 // A neighbourhood around the pointer, in the shape `trailer.test.cjs` uses for
-// its own doc pin: the lines from the pointer forward, not the whole file.
+// its own doc pin: `span` lines on EACH side of the pointer, not the whole
+// file — a step named just above the pointer line must count too.
 function pointerWindow(sectionText, pointer, span) {
   const lines = sectionText.split('\n');
   const at = lines.findIndex((l) => pointer.test(l));
@@ -143,7 +144,7 @@ function pointerWindow(sectionText, pointer, span) {
 for (const subject of SUBJECTS) {
   suite(`${subject.mechanism} — the sections this contract reads actually exist`);
 
-  test('both entry points expose a bounded arch-review section', () => {
+  test(`both entry points expose a bounded ${subject.mechanism} section`, () => {
     const c = section(subject.canonical);
     const r = section(subject.referencing);
     assert.ok(c.text.trim().length > 0, `${c.label}: the canonical section is empty`);
