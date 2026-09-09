@@ -1388,17 +1388,22 @@ loop:
        the agent either fixes (push → step d), or replies to invalid ones
        (no push → mark the threads processed, b again)
 
-  c. arch-review agent — judgment, never cheapened. Resolve it, do not assume it:
-     `pipeline-config.cjs model arch-review --json --input-tokens <n>
-      [--contested]` → `opus`/`xhigh` ordinarily, and the ceiling when the input
-     it is about has actually grown. MEASURE `<n>` yourself — bytes ÷ 4 over
-     `gh pr diff` plus the ADR corpus it re-reads — because an absent measurement
-     cannot fire that route, by design. Pass `--contested` when the journal
-     already holds an `arch_review … verdict=violation` for this ticket
-     (`grep '"event":"arch_review"' .planning/graph/delivery-log.jsonl`): a second
-     reading at the same depth is what produced the contested verdict.
-     (prompt ${CLAUDE_PLUGIN_ROOT}/references/arch-review.md + gh pr diff +
-      .planning/architecture/)
+  c. arch-review agent — judgment, never cheapened, and ONE procedure on both
+     paths: MEASURE → RESOLVE → DISPATCH → RECORD. It is stated once, in
+     ${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md under the `arch-review`
+     duty, and run from here verbatim — its commands spell the plugin root
+     `$SHIPYARD_ROOT/scripts`, which on this path is
+     `${CLAUDE_PLUGIN_ROOT}/scripts`: MEASURE the judged input (the diff size
+     the window route needs, and whether the journal already holds a contested
+     verdict for this ticket), RESOLVE model and effort from the ladder as that
+     entry invokes it, DISPATCH the judge (prompt
+     ${CLAUDE_PLUGIN_ROOT}/references/arch-review.md + gh pr diff +
+     .planning/architecture/), then RECORD the verdict in the journal whatever
+     it is. Do NOT restate those four steps here. Two copies is how the two
+     paths diverged: the background path spent a whole phase escalating on a
+     contested verdict that nothing on it was ever told to write, and it worked
+     only because a human patched the missing steps into every guard brief by
+     hand.
      the same step runs the degenerate-green detector over the diff it judged —
        `degenerate-green.cjs <T> --base <base> --worktree <wt> --json
         --graph <project>/.planning/graph`
@@ -1410,10 +1415,6 @@ loop:
        never a reason to hold a merge. `sentinel.cjs merge` reads `arch-review`
        and the `head` that verdict is bound to, and nothing else, pinned by
        tests/unit/trailer.test.cjs.
-     record the verdict in the journal either way, because it is what a later
-       `--contested` reads: `log-event.cjs arch_review ticket=<T> pr=<N>
-       verdict=<conform|violation|adr-outdated> head=<full 40-char sha>
-       --graph <project>/.planning/graph`
      violation    → fix in the worktree → push → step d
      adr-outdated → `escalation-record.cjs mark <T> "adr-outdated: …"` (changing the ADR is a human's call), continue the front
      conform      → check the green criteria:
