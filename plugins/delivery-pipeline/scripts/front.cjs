@@ -77,7 +77,7 @@ const { escalationWhy } = require(path.join(__dirname, 'escalation-record.cjs'))
 // Same rule, second store: a dispatch's lifting sentence is written by the file
 // that decides when it lifts. (dispatch-record.cjs requires front.cjs back, but
 // only lazily and only from its CLI, so there is no half-built module here.)
-const { dispatchWhy, activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
+const { dispatchWhy, activeDispatches, agentIdOf } = require(path.join(__dirname, 'dispatch-record.cjs'));
 // The OTHER predicate the guard and the board must not spell twice — "is this
 // ticket's parent still being driven?". It lived in sentinel.cjs alone, which is
 // why the board offered tickets the guard was refusing. One home, one direction:
@@ -318,7 +318,7 @@ function computeFront(tickets, state, opts = {}) {
   // nobody has touched — nothing is pushed yet, so state-sync still classifies it
   // `execute` — and the stop gate refuses turns over work already in flight (five
   // times in one session, on both owners' buckets). The caller supplies the
-  // records `activeDispatches` returns — {ticket: {role, at}} — and that reader
+  // records `activeDispatches` returns — {ticket: {role, at, agent_id?}} — and that reader
   // has already dropped everything expired, so nothing here decides how long a
   // dispatch lives. A bare role string is accepted as the flattened shape.
   const dispatched = opts.dispatched || {};
@@ -1150,17 +1150,53 @@ const AGENT_CARDINALITY = {
 // model ladder, where every row is an upgrade and silence must resolve down.
 const DEFAULT_CARDINALITY = 'ticket';
 
-// The collapse. Every 'round' role contributes at most one agent no matter how
-// many tickets carry its record; everything else contributes one per record.
+// ── AND THE COLLAPSE IS PER AGENT, NEVER PER ROLE (ADR-007 D1) ──────────────
+//
+// The first cut of the rule above added the ROLE STRING to the Set, which makes
+// every `pr-sentinel` record in the store the same agent. `deliver.md` sanctions
+// two live guards in as many words — "Re-post a guard for PRs opened after it
+// started (or hand them to the running one with `SendMessage`)" — so the second
+// guard cost nothing: reported reproduction, four agents genuinely out and
+// `max=4, in_flight=3, free=1`, an authorisation to dispatch a fifth.
+//
+// That inverted the ERROR DIRECTION, which is the whole reason this counter is
+// allowed to be clever at all. Counting records over-counted: a stall, annoying
+// and harmless, and `phase-26-followups.md` justified it on exactly that ground.
+// Counting roles under-counts, and an under-count spends past the cap — which is
+// not a cap. So the collapse is keyed on the identity of the AGENT that holds
+// the record (`dispatch-record.cjs mark --agent-id`, the id the launch returned),
+// and:
+//
+//   * a record with NO identity is its own agent. An older board must still
+//     read, and unknown resolves UPWARD here for the same reason
+//     `DEFAULT_CARDINALITY` is 'ticket' — the failure direction of a spend gate
+//     is to dispatch less;
+//   * TIME IS NOT AN IDENTITY. New PRs are legitimately handed to the guard
+//     already running, so `at` moves without a second agent existing; the key
+//     never reads it.
+//
+// The key is the role AND the identity, so one label reused across two roles
+// cannot become a discount either. `agentIdOf` is imported from the store that
+// WRITES the field rather than re-derived here: two readings of "what counts as
+// an identity" would be free to disagree, and the disagreement would surface as
+// a cap authorising one more agent than it means to.
+
+// The collapse. A 'round' role contributes one agent per distinct identity no
+// matter how many tickets carry its record; everything else — and every record
+// that names no agent — contributes one per record.
 function agentsInFlight(dispatched) {
   const perRound = new Set();
   let n = 0;
   for (const id of Object.keys(dispatched || {})) {
-    const role = roleOfDispatch(dispatched[id]);
+    const rec = dispatched[id];
+    const role = roleOfDispatch(rec);
     const how = Object.prototype.hasOwnProperty.call(AGENT_CARDINALITY, role)
       ? AGENT_CARDINALITY[role]
       : DEFAULT_CARDINALITY;
-    if (how === 'round') perRound.add(role);
+    const agent = agentIdOf(rec);
+    // `\u0000` cannot occur in either half, so no pair of (role, identity)
+    // values can collide with another through the joined key.
+    if (how === 'round' && agent !== null) perRound.add(`${role}\u0000${agent}`);
     else n += 1;
   }
   return n + perRound.size;
