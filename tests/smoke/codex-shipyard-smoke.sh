@@ -32,6 +32,23 @@ npx --yes "@opengsd/gsd-core@${GSD_CORE_VERSION}" --codex --global </dev/null >/
   || { echo "gsd-core --codex install failed (network?)"; exit 1; }
 [[ -f "$CODEX_HOME/gsd-core/bin/gsd-tools.cjs" ]] || { echo "gsd-core not installed for codex"; exit 1; }
 
+# ── an agent the operator wrote by hand, seeded before the first install ─────
+# The reconciliation at the end of this file removes agent files a previous
+# install claimed and this one no longer emits. The tempting implementation is a
+# glob over the `shipyard-` prefix: it satisfies every orphan assertion below and
+# deletes work that was never ours. So the discriminating case is seeded FIRST
+# and asserted after every install — no shipyard manifest ever claims this file,
+# and nothing in the installer may take it.
+FOREIGN_AGENT="$CODEX_HOME/agents/shipyard-operators-own.toml"
+mkdir -p "$CODEX_HOME/agents"
+cat > "$FOREIGN_AGENT" <<'EOF'
+# Hand-written by the operator. No shipyard manifest has ever claimed this file;
+# it carries our prefix only because the operator liked the naming.
+name = "shipyard-operators-own"
+description = "an agent the operator wrote by hand"
+sandbox_mode = "read-only"
+EOF
+
 # Snapshot what gsd-core owns BEFORE we touch the config. Asserting a literal
 # agent count here pinned us to one gsd-core release: 1.7.0 registered ~34
 # `[agents.gsd-*]` tables, 1.9.1 registers none at all (its
@@ -238,6 +255,14 @@ npx --yes "@opengsd/gsd-core@${GSD_CORE_VERSION}" --codex --global </dev/null >/
 SURVIVED="$(grep -c '^\[agents\.shipyard-' "$CODEX_HOME/config.toml" || true)"
 [[ "$SURVIVED" -eq "$EXPECTED_AGENTS" ]] \
   || { echo "a gsd-core reinstall wiped shipyard agents ($SURVIVED left, expected $EXPECTED_AGENTS)"; exit 1; }
+# The ownership record has to survive it too. Every real install runs
+# `gsd-core --codex` immediately before reconciling (this file opts out with
+# SHIPYARD_GSD_AUTO_INSTALL=0 so it can assert against a pinned converter), so if
+# that step removed the record, every production install would report "no
+# manifest from a previous install", reconcile nothing, and pass the two-stage
+# test below forever.
+[[ -f "$CODEX_HOME/agents/.shipyard-manifest.json" ]] \
+  || { echo "a gsd-core reinstall deleted the ownership record — a real install runs one first, so reconciliation would never fire"; exit 1; }
 
 # idempotent merge: re-running registers each agent once, never a duplicate.
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
@@ -384,6 +409,129 @@ bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
   || { echo "re-install left a file the plugin no longer ships"; exit 1; }
 [[ -e "$CODEX_HOME/shipyard/scripts/state-sync.cjs" ]] \
   || { echo "re-install lost the real payload"; exit 1; }
+
+# ── an installer owns what it wrote (ADR-007 D5) ──────────────────────────────
+# The palette's ceiling entry declares the Codex CLI version that can first
+# CONFIGURE it, and below that version every role takes the floor — which leaves
+# the four escalation variants nothing to BE (ADR-005 D8: a `-deep` file is
+# written only when it would differ), so the same generator emits seven agents
+# rather than eleven. Legitimate output, and exactly why removal cannot be
+# inferred from "eleven expected": the copy-over install left the four `-deep`
+# files behind, still registered, with "the file exists" certifying nothing.
+#
+# Derived from the palette, so this file still carries no version literal of its
+# own — and it refuses loudly rather than silently testing nothing if the
+# ceiling ever stops declaring a floor.
+CLI_BELOW_CEILING="$(node -e '
+  const p = require("./plugins/delivery-pipeline/scripts/pipeline-config.cjs").DEFAULT_CODEX_MODELS;
+  const need = String((p[p.length - 1] || {}).min_cli || "");
+  if (!need) { console.error("the palette ceiling declares no min_cli — nothing to shrink the palette with"); process.exit(1); }
+  const parts = need.split(".").map(Number);
+  parts[parts.length - 1] -= 1;
+  if (!parts.every((n) => Number.isFinite(n) && n >= 0)) { console.error("cannot derive a version below " + need); process.exit(1); }
+  process.stdout.write(parts.join("."));
+')"
+DEEP_AGENTS=(shipyard-ci-fix-deep shipyard-review-fix-deep shipyard-pr-sentinel-deep shipyard-arch-review-deep)
+PLAIN_AGENTS=(shipyard-arch-review shipyard-ci-fix shipyard-drift-check shipyard-integrator
+              shipyard-inv-research shipyard-pr-sentinel shipyard-review-fix)
+AGENT_MANIFEST="$CODEX_HOME/agents/.shipyard-manifest.json"
+manifest_claims() {
+  node -e '
+    const fs = require("fs");
+    let m = {};
+    try { m = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { process.stdout.write("unreadable"); process.exit(0); }
+    const list = Array.isArray(m[process.argv[2]]) ? m[process.argv[2]] : [];
+    process.stdout.write(list.includes(process.argv[3]) ? "yes" : "no");
+  ' "$AGENT_MANIFEST" "$1" "$2"
+}
+
+# stage 1: the whole palette. Eleven agents, and a record of them.
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+for a in "${DEEP_AGENTS[@]}"; do
+  [[ -f "$CODEX_HOME/agents/$a.toml" ]] \
+    || { echo "stage 1 emitted no $a.toml — the two-stage reconciliation test has nothing to reconcile"; exit 1; }
+done
+
+# stage 2: the same install with the ceiling out of the CLI's reach.
+SHIPYARD_CODEX_CLI_VERSION="$CLI_BELOW_CEILING" \
+  bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/shrunk.log" 2>&1 \
+  || { echo "the shrunk-palette install failed:"; cat "$WORK/shrunk.log"; exit 1; }
+for a in "${DEEP_AGENTS[@]}"; do
+  [[ ! -e "$CODEX_HOME/agents/$a.toml" ]] \
+    || { echo "orphan agent file survived a shrunk palette: $a.toml"; exit 1; }
+  # Both halves, because either alone is a broken host: a registration whose
+  # file is gone cannot start, and a file whose registration is gone is inert.
+  grep -q "^\[agents\.$a\]" "$CODEX_HOME/config.toml" \
+    && { echo "orphan registration survived a shrunk palette: [agents.$a]"; exit 1; } || true
+  grep -q "$a.toml" "$WORK/shrunk.log" \
+    || { echo "the installer removed $a.toml without saying so"; exit 1; }
+  # …and it names the registration that went with it, from the record's own
+  # `registrations` list — a field the generator writes and nobody reads is a
+  # mechanism nobody connected.
+  grep -q "their registrations went with the fragment above:.*agents\.$a" "$WORK/shrunk.log" \
+    || { echo "the installer never named the registration removed with $a.toml"; exit 1; }
+done
+# …and the shrink was real, not a generator that quietly emitted nothing: the
+# manifest is the record of what this install claims, and it is what the NEXT
+# one reconciles against.
+[[ -f "$AGENT_MANIFEST" ]] || { echo "the installer wrote no ownership manifest ($AGENT_MANIFEST)"; exit 1; }
+for a in "${DEEP_AGENTS[@]}"; do
+  [[ "$(manifest_claims agent_files "$a.toml")" == no ]] \
+    || { echo "the shrunk install still claims $a.toml — the palette never shrank, so nothing was under test"; exit 1; }
+done
+for a in "${PLAIN_AGENTS[@]}"; do
+  [[ -f "$CODEX_HOME/agents/$a.toml" ]] \
+    || { echo "the reconciliation removed an agent this install DOES emit: $a.toml"; exit 1; }
+  grep -q "^\[agents\.$a\]" "$CODEX_HOME/config.toml" \
+    || { echo "the shrunk install left $a unregistered"; exit 1; }
+  [[ "$(manifest_claims agent_files "$a.toml")" == yes ]] \
+    || { echo "the manifest does not claim $a.toml, so the next install cannot take it back"; exit 1; }
+  [[ "$(manifest_claims registrations "agents.$a")" == yes ]] \
+    || { echo "the manifest does not claim the registration agents.$a"; exit 1; }
+done
+# OWNERSHIP IS THE MANIFEST'S, NOT THE PREFIX'S. This is the assertion a glob
+# implementation fails and every other one here passes.
+[[ -f "$FOREIGN_AGENT" ]] \
+  || { echo "the reconciliation deleted $FOREIGN_AGENT — an agent file no manifest ever claimed"; exit 1; }
+
+# NO PREVIOUS MANIFEST IS NOT LICENCE TO SWEEP. A first install, or an install
+# over a hand-made ~/.codex, removes nothing — the alternative deletes an
+# operator's own agents — and says which files it is leaving alone, because
+# silence here reads as "there was nothing there".
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+rm -f "$AGENT_MANIFEST"
+SHIPYARD_CODEX_CLI_VERSION="$CLI_BELOW_CEILING" \
+  bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/nomanifest.log" 2>&1 \
+  || { echo "the install over a manifest-less agents dir failed:"; cat "$WORK/nomanifest.log"; exit 1; }
+for a in "${DEEP_AGENTS[@]}"; do
+  [[ -f "$CODEX_HOME/agents/$a.toml" ]] \
+    || { echo "with no previous manifest the installer removed $a.toml anyway"; exit 1; }
+done
+[[ -f "$FOREIGN_AGENT" ]] || { echo "an install with no previous manifest deleted $FOREIGN_AGENT"; exit 1; }
+grep -q 'no manifest from a previous install' "$WORK/nomanifest.log" \
+  || { echo "the installer removed nothing and never said why"; exit 1; }
+for f in shipyard-ci-fix-deep.toml "$(basename "$FOREIGN_AGENT")"; do
+  grep -q "Leaving alone:.*$f" "$WORK/nomanifest.log" \
+    || { echo "the installer left $f in place without naming it"; exit 1; }
+done
+
+# A record that cannot be READ is not a record. `copyFileSync` is not atomic, so
+# an install killed mid-write leaves a truncated manifest on a real host — and a
+# half-parsed claim must land in the same place as no claim at all rather than in
+# a list of files to delete.
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+printf '{ "agent_files": [ "shipyard-ci-f' > "$AGENT_MANIFEST"
+SHIPYARD_CODEX_CLI_VERSION="$CLI_BELOW_CEILING" \
+  bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/corrupt.log" 2>&1 \
+  || { echo "an install over a truncated manifest failed:"; cat "$WORK/corrupt.log"; exit 1; }
+for a in "${DEEP_AGENTS[@]}"; do
+  [[ -f "$CODEX_HOME/agents/$a.toml" ]] \
+    || { echo "a truncated manifest was read as licence to remove $a.toml"; exit 1; }
+done
+[[ -f "$FOREIGN_AGENT" ]] || { echo "an install over a truncated manifest deleted $FOREIGN_AGENT"; exit 1; }
+# …and it heals: the record is rewritten, so the NEXT install reconciles again.
+[[ "$(manifest_claims agent_files "shipyard-drift-check.toml")" == yes ]] \
+  || { echo "the installer left the truncated manifest in place — the next install would reconcile against nothing"; exit 1; }
 
 # The installer refreshes gsd-core by default — a superstructure that pins its
 # base rots against it. But the opt-out must WORK, because the image relies on it

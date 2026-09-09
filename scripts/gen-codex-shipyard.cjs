@@ -584,12 +584,30 @@ function main() {
   }
 
   // ── manifest (for the installer + smoke test) ──────────────────────────────
+  //
+  // Also the OWNERSHIP RECORD the installer reconciles against (ADR-007 D5).
+  // The bundle payload is replaced wholesale, so it cannot go stale by
+  // omission; `$CODEX_HOME/agents/` cannot be treated that way, because the
+  // operator writes into that directory too. So this run states what it wrote,
+  // the installer keeps the copy beside the agents, and the NEXT run takes back
+  // exactly what the previous one claimed and no longer emits.
+  //
+  // The count legitimately varies — a `-deep` variant is written only when it
+  // would DIFFER from the ordinary agent (ADR-005 D8), so a one-entry palette
+  // and a tier-wide remap both produce seven agents rather than eleven. That is
+  // precisely why removal cannot be inferred from "eleven expected", and why the
+  // files and registrations are listed EXPLICITLY here rather than left for the
+  // installer to rebuild from `agents` by string concatenation: ownership is
+  // decided in one place, and a delete driven by a reconstruction is a delete
+  // driven by a guess.
   const manifest = {
     phase,
     codexHome,
     scriptsRoot,
     skills: emittedSkills,
     agents: emittedAgents.map((a) => a.agentName),
+    agent_files: emittedAgents.map((a) => `${a.agentName}.toml`),
+    registrations: emittedAgents.map((a) => `agents.${a.agentName}`),
     gsdLib,
     // Conditional, never a `null` key: a reader should see the field only when
     // the refusal actually fired, and an always-present field reads as a state

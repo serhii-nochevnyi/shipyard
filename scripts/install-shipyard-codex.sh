@@ -94,6 +94,22 @@ cp -R "$OUT"/bundle/. "$BUNDLE_ROOT/"
 find "$BUNDLE_ROOT" -name '*.sh' -exec chmod +x {} +
 
 # ── agents + non-destructive config.toml merge ───────────────────────────────
+#
+# AN INSTALLER OWNS WHAT IT WROTE (ADR-007 D5).
+#
+# The bundle above is replaced wholesale, so it cannot go stale by omission.
+# `$CODEX_HOME/agents/` cannot be treated that way — the operator writes into
+# that directory too — so the copy stays a copy and the PREVIOUS run's own
+# manifest says what to take back. Without that, a shrunk palette or a dropped
+# `-deep` variant leaves an agent file behind forever and "the file exists"
+# certifies nothing: measured by running the real generator twice, at two Codex
+# CLI versions, then applying this copy-over — four `-deep` files the second
+# generation does not contain survived it.
+#
+# Ownership is the MANIFEST's, never the `shipyard-` prefix's. A glob over that
+# name passes every other assertion this reconciliation has and deletes an agent
+# the operator wrote by hand, which is the one outcome worth being slow about.
+AGENT_MANIFEST_NAME=".shipyard-manifest.json"
 if compgen -G "$OUT/agents/*.toml" >/dev/null; then
   echo "→ installing agents → $CODEX_HOME/agents"
   mkdir -p "$CODEX_HOME/agents"
@@ -101,6 +117,107 @@ if compgen -G "$OUT/agents/*.toml" >/dev/null; then
   echo "→ merging agent registrations → $CODEX_HOME/config.toml"
   node "$REPO_ROOT/scripts/merge-codex-config.cjs" \
     --config "$CODEX_HOME/config.toml" --fragment "$OUT/config.fragment.toml"
+  # AFTER the merge, deliberately. The merge strips every `[agents.shipyard-*]`
+  # table and the whole fenced fragment before writing the fresh one, so an
+  # orphan's registration is already gone by the time its file is removed — and
+  # if the merge refuses (a duplicate table, a config that will not parse), it
+  # exits non-zero here and BOTH halves stay as they were. The other order
+  # produces the one broken state worth ruling out: a registration whose file is
+  # gone. A file whose registration is gone is merely inert.
+  echo "→ reconciling agent files this installer previously wrote"
+  SHIPYARD_AGENTS_DIR="$CODEX_HOME/agents" \
+  SHIPYARD_NEW_MANIFEST="$OUT/manifest.json" \
+  SHIPYARD_MANIFEST_NAME="$AGENT_MANIFEST_NAME" \
+  node - <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const dir = process.env.SHIPYARD_AGENTS_DIR;
+const manifestName = process.env.SHIPYARD_MANIFEST_NAME;
+const nextPath = process.env.SHIPYARD_NEW_MANIFEST;
+const prevPath = path.join(dir, manifestName);
+const say = (m) => process.stdout.write(`  ${m}\n`);
+
+const read = (p) => {
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+};
+
+// THIS run's claim first, and nothing happens without it. An unreadable new
+// manifest would otherwise mean "this install claims nothing", which turns
+// every file the previous run wrote into an orphan — a mass delete produced by
+// a failed read. There is no state in which that is the right answer.
+const next = read(nextPath);
+if (!next || !Array.isArray(next.agent_files)) {
+  say(`this run produced no readable manifest (${nextPath}) — removing nothing`);
+  process.exit(0);
+}
+const claimed = new Set(next.agent_files);
+
+// A name this installer may act on at all: one path segment, our own prefix,
+// one extension. A manifest is a file on disk like any other, so an entry that
+// is not a plain basename is refused rather than resolved — `path.join` would
+// walk `../` out of this directory without complaint.
+const OURS = /^shipyard-[A-Za-z0-9._-]*\.toml$/;
+const actionable = (e) => typeof e === 'string' && path.basename(e) === e && OURS.test(e);
+
+const prev = read(prevPath);
+// An older shipyard wrote a manifest with no `agent_files` key. It is a record
+// that claims nothing, which is the same standing as no record at all: it is
+// not evidence that a file is ours.
+if (!prev || !Array.isArray(prev.agent_files)) {
+  // NO PREVIOUS MANIFEST IS NOT LICENCE TO SWEEP. A first install, or an
+  // install over a hand-made ~/.codex, removes nothing — the alternative
+  // deletes an operator's own agents — and names what it is leaving alone,
+  // because silence here reads as "there was nothing there".
+  let unclaimed = [];
+  try {
+    unclaimed = fs.readdirSync(dir).filter((f) => f.endsWith('.toml') && !claimed.has(f)).sort();
+  } catch { /* the directory was created a moment ago */ }
+  say(
+    unclaimed.length
+      ? `no manifest from a previous install (${manifestName}) — removing nothing. `
+        + `Leaving alone: ${unclaimed.join(', ')}`
+      : `no manifest from a previous install (${manifestName}) — nothing to reconcile`,
+  );
+} else {
+  const removed = [];
+  const refused = [];
+  for (const entry of prev.agent_files) {
+    if (claimed.has(entry)) continue;
+    if (!actionable(entry)) { refused.push(`${entry} (not a plain shipyard-*.toml name)`); continue; }
+    const target = path.join(dir, entry);
+    let st = null;
+    try { st = fs.lstatSync(target); } catch { continue; } // already gone: nothing owed
+    if (!st.isFile()) { refused.push(`${entry} (not a regular file)`); continue; }
+    fs.unlinkSync(target);
+    removed.push(entry);
+  }
+  // `registrations` is the other half of the previous run's claim, and this is
+  // its reader: a field the generator writes and nobody reads is the shape
+  // ADR-007 D6 calls a finding. A record written before the field existed falls
+  // back to the derived form rather than reporting nothing.
+  const prevRegs = Array.isArray(prev.registrations) ? prev.registrations : [];
+  const registrationFor = (f) => {
+    const derived = `agents.${f.replace(/\.toml$/, '')}`;
+    if (!prevRegs.length) return derived;
+    return prevRegs.includes(derived) ? derived : null;
+  };
+  if (removed.length) {
+    const regs = removed.map(registrationFor).filter(Boolean);
+    say(`removed ${removed.length} agent file(s) this install no longer emits: ${removed.join(', ')}`);
+    if (regs.length) say(`their registrations went with the fragment above: ${regs.join(', ')}`);
+  } else {
+    say('nothing the previous install wrote is orphaned');
+  }
+  for (const r of refused) say(`left in place, the manifest claim is not one this installer may act on: ${r}`);
+}
+
+// LAST, so the record only advances once the removals it licenses have actually
+// happened. A run that dies in the middle leaves the older, wider claim in
+// place and the next run reclaims those files; a record written first would
+// have forgotten them.
+fs.copyFileSync(nextPath, prevPath);
+NODE
 fi
 
 # ── GSD capability (Gate 2 / UAT gates) ──────────────────────────────────────
