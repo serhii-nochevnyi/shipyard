@@ -142,23 +142,31 @@ const read = (p) => {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
 };
 
-// THIS run's claim first, and nothing happens without it. An unreadable new
-// manifest would otherwise mean "this install claims nothing", which turns
-// every file the previous run wrote into an orphan — a mass delete produced by
-// a failed read. There is no state in which that is the right answer.
-const next = read(nextPath);
-if (!next || !Array.isArray(next.agent_files)) {
-  say(`this run produced no readable manifest (${nextPath}) — removing nothing`);
-  process.exit(0);
-}
-const claimed = new Set(next.agent_files);
-
 // A name this installer may act on at all: one path segment, our own prefix,
 // one extension. A manifest is a file on disk like any other, so an entry that
 // is not a plain basename is refused rather than resolved — `path.join` would
 // walk `../` out of this directory without complaint.
 const OURS = /^shipyard-[A-Za-z0-9._-]*\.toml$/;
 const actionable = (e) => typeof e === 'string' && path.basename(e) === e && OURS.test(e);
+
+// THIS run's claim first, and nothing happens without it. An unreadable new
+// manifest would otherwise mean "this install claims nothing", which turns
+// every file the previous run wrote into an orphan — a mass delete produced by
+// a failed read. There is no state in which that is the right answer.
+//
+// The SHAPE of the claim is checked here too, not only the previous run's
+// entries: `claimed` licenses every removal below by set membership, so an
+// entry in THIS manifest that is not a plain `shipyard-*.toml` basename could
+// never protect the real file it was meant to name — a typo'd or truncated
+// `agent_files` array would silently widen what counts as an orphan. Reading
+// that as "no manifest" is the same conservative floor as an unreadable file.
+const next = read(nextPath);
+const nextOk = next && Array.isArray(next.agent_files) && next.agent_files.every(actionable);
+if (!nextOk) {
+  say(`this run produced no trustworthy manifest (${nextPath}) — removing nothing`);
+  process.exit(0);
+}
+const claimed = new Set(next.agent_files);
 
 const prev = read(prevPath);
 // An older shipyard wrote a manifest with no `agent_files` key. It is a record
