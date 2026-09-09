@@ -710,9 +710,16 @@ function dutyItems() {
 // only judgement left is a conflict inside the ticket's own declared files, so a
 // fixer dispatched for it runs at the `ci-fix` tier (that IS the role to pass to
 // `model <role>` and to record on an attempt — `base-merge` is an action, never a
-// role). It journals itself as `base_merge`, which is deliberately not an
+// role). The duty is journalled as `base_merge`, which is deliberately not an
 // `attempt`: charging a mechanical merge to a ticket's repair record would spend
 // its attempt budget on work no hypothesis was ever wrong about.
+//
+// It does NOT journal itself, and this comment said it did. `base-merge.cjs`
+// contains zero `log-event` calls; `log-event.cjs`'s own header describes the
+// event as "the guard's `base-merge` duty recording itself", so the CALLER is
+// the writer and the script never was. Corrected 2026-09-09 —
+// `.planning/backlog/` carries the gap on the guard's path, whose reference file
+// still names no caller.
 const ACTIONABLE = new Set(['ci-fix', 'review-fix', 'arch-review', 'undraft', 'merge', 'base-merge']);
 
 // The one line an invalid configuration is allowed to produce, and the reason it

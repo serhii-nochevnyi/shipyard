@@ -189,8 +189,11 @@ if (!actionable) fail('cannot find the sentinel ACTIONABLE set');
 // remedy ci-fix.md and review-fix.md name for a moved base. That last one is
 // mechanical for the same reason the other two are — the script does the merge,
 // so there is no hypothesis to form and nothing for the ladder to route — and it
-// journals itself as `base_merge`, which log-event.cjs accepts as its own event
-// rather than as an attempt.
+// is journalled as `base_merge`, which log-event.cjs accepts as its own event
+// rather than as an attempt. NOT by the script itself, which this comment used
+// to claim: `base-merge.cjs` makes zero `log-event` calls, and log-event.cjs's
+// header names the event "the guard's `base-merge` duty recording itself" — the
+// CALLER writes it. Corrected 2026-09-09.
 const MECHANICAL = new Set(['undraft', 'merge', 'base-merge']);
 
 // The conflict remedy must not contradict the force-push ban sitting beside it.
