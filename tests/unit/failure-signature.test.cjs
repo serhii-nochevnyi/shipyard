@@ -96,6 +96,32 @@ const seed = (graph, events) =>
     events.map((e) => JSON.stringify(e)).join('\n') + '\n'
   );
 
+// The sequence tests below are driven ROW BY ROW rather than from a hand-written
+// store, because the defect ADR-007 D2 names is a SEQUENCE property: `A → B → A`
+// read `progress` while every single-row fixture of it looked correct. Appending
+// one round at a time is also the real order of operations — sign the failure,
+// ask for the verdict, dispatch, push, and only THEN journal the round — so a
+// test that seeds the row it is asking about is asking a question the conveyor
+// never asks.
+const appendEvent = (graph, e) =>
+  fs.appendFileSync(path.join(graph, 'delivery-log.jsonl'), JSON.stringify(e) + '\n');
+
+// Forty-character heads, as ADR-007 D2's own reproduction used. `verdict` does
+// not validate the length, but "the tree moved" is only meaningful between shas
+// of the shape the journal actually carries.
+const HEAD = (n) => String(n).repeat(40).slice(0, 40);
+
+// One round of the loop: ask for the verdict BEFORE the round it is about exists
+// in the journal (deliver.md a2 runs before step d), then record the round that
+// verdict caused. `extra` is what THAT round's own row carries — `effort_applied`
+// above all, which is the difference between a rethink that was dispatched at the
+// deeper effort and one that only ever got as far as being decided on.
+const round = (project, graph, sig, head, extra = {}) => {
+  const got = verdict(project, ['--signature', sig, '--head', head, '--k', '3']);
+  appendEvent(graph, attempt(sig, head, extra));
+  return got;
+};
+
 const journalLines = (graph) => {
   const p = path.join(graph, 'delivery-log.jsonl');
   if (!fs.existsSync(p)) return [];
@@ -295,10 +321,15 @@ test('the same signature a THIRD time is `repeat_exhausted` — the second is st
   seed(graph, [attempt('aaaa', 'h1')]);
   assert.equal(verdict(project, ['--signature', 'aaaa', '--head', 'h2']).verdict, 'repeat',
     'the second occurrence is a rethink, not an exhaustion');
-  seed(graph, [attempt('aaaa', 'h1'), attempt('aaaa', 'h2')]);
+  // ADR-007 D2: the third occurrence exhausts only with PROOF that the deeper
+  // effort was actually spent, not merely decided. The `h2` round is the one the
+  // `repeat` verdict above dispatched, so it is the row that records the depth it
+  // carried — the assertion below without it is the very next test.
+  seed(graph, [attempt('aaaa', 'h1'), attempt('aaaa', 'h2', { effort_applied: 'max' })]);
   const third = verdict(project, ['--signature', 'aaaa', '--head', 'h3']);
   assert.equal(third.verdict, 'repeat_exhausted');
   assert.equal(third.seen, 2, 'two priors + the failure in hand = the same failure a third time');
+  assert.equal(third.depth_spent, true, 'and the record says the rethink was applied');
 });
 
 test('a green resets it: the count is the WINDOW, not the whole journal', () => {
@@ -428,7 +459,7 @@ test('an unreadable failure still walks the repeat ladder when it keeps happenin
   const { project, graph } = scratch();
   seed(graph, [attempt('unknown', 'h1')]);
   assert.equal(verdict(project, ['--signature', 'unknown', '--head', 'h2', '--k', '3']).verdict, 'repeat');
-  seed(graph, [attempt('unknown', 'h1'), attempt('unknown', 'h2')]);
+  seed(graph, [attempt('unknown', 'h1'), attempt('unknown', 'h2', { effort_applied: 'max' })]);
   const got = verdict(project, ['--signature', 'unknown', '--head', 'h3', '--k', '3']);
   assert.equal(got.verdict, 'repeat_exhausted', 'the third one is exhausted, illegible or not');
   assert.equal(got.seen, 2, 'seen still counts THIS signature');
@@ -581,11 +612,15 @@ test('--json carries the numbers the policy reads', () => {
   const { project, graph } = scratch();
   seed(graph, [attempt('aaaa', 'h1'), attempt('aaaa', 'h2'), attempt('bbbb', 'h3')]);
   const got = verdict(project, ['--signature', 'aaaa', '--head', 'h4']);
-  assert.deepEqual(Object.keys(got).sort(), ['distinct', 'head', 'k', 'seen', 'signature', 'verdict']);
+  assert.deepEqual(Object.keys(got).sort(),
+    ['depth_spent', 'distinct', 'head', 'k', 'seen', 'signature', 'verdict']);
   assert.equal(got.signature, 'aaaa');
   assert.equal(got.head, 'h4');
   assert.equal(got.seen, 2, 'seen = how many prior attempts carried THIS signature');
   assert.equal(got.distinct, 2);
+  assert.equal(got.depth_spent, false,
+    'depth_spent = whether a rethink round on THIS signature recorded the depth it applied');
+  assert.equal(got.verdict, 'repeat', 'two priors, and nothing on record spent the deeper effort');
 });
 
 test('the bare form prints the verdict word alone', () => {
@@ -607,6 +642,187 @@ test('the enum is exactly the seven pinned words', () => {
   const words = m[1].split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter(Boolean);
   assert.deepEqual(words,
     ['first', 'progress', 'repeat', 'repeat_exhausted', 'flake_candidate', 'flake', 'plan_defect']);
+});
+
+suite('failure signature — a history is a SET with adjacency, not a count (ADR-007 D2)');
+
+test('`A → B → A` at a moved head is `repeat` — whatever appeared between', () => {
+  // ADR-007 D2's reproduction, driven the way the loop drives it. `seen` was
+  // already a count of the signature's occurrences in the window; the test that
+  // chose the verdict read only the LAST pair, so one intervening failure made a
+  // signature the ticket had already attempted read as novel. `repeat` is the
+  // only verdict whose strategy is `rethink` — the one step that means "a
+  // different hypothesis at the same tier" — so skipping it means the ladder
+  // never re-thinks at all: `progress` straight to the state that opens the
+  // ceiling model and then hands the ticket to a person.
+  const { project, graph } = scratch();
+  assert.equal(round(project, graph, 'aaaa', HEAD(1)).verdict, 'first');
+  assert.equal(round(project, graph, 'bbbb', HEAD(2)).verdict, 'progress');
+  const third = round(project, graph, 'aaaa', HEAD(3));
+  assert.equal(third.verdict, 'repeat',
+    'the question the verdict answers is "has this exact failure already been attempted"');
+  assert.equal(third.seen, 1, 'one prior attempt carried this signature');
+  assert.equal(third.distinct, 2, 'and the k-rule still sees two distinct failures');
+});
+
+test('the k-rule still outranks recurrence — three distinct failures are a plan defect', () => {
+  // Rule ORDER is the design, and recurrence must not pre-empt it: `plan_defect`
+  // is decided before the repeat rungs, so a ticket whose third distinct failure
+  // happens to be one it has seen before is still a plan defect and still goes to
+  // a person in the morning rather than to another fixer now.
+  const { project, graph } = scratch();
+  round(project, graph, 'aaaa', HEAD(1));
+  round(project, graph, 'bbbb', HEAD(2));
+  round(project, graph, 'cccc', HEAD(3));
+  const got = verdict(project, ['--signature', 'aaaa', '--head', HEAD(4), '--k', '3']);
+  assert.equal(got.verdict, 'plan_defect');
+  assert.equal(got.seen, 1, 'it HAS recurred — the k-rule simply answers first');
+});
+
+test('`A → B → A → A` does not exhaust while no round records the depth it applied', () => {
+  // `repeat_exhausted` claims the deeper effort has ALREADY been spent on this
+  // exact failure, and it is the rung that opens the ceiling model and then hands
+  // the ticket over. On the Agent path a spawn carries no effort at all, so that
+  // claim is unprovable there — and absent proof reads as NOT-YET-SPENT, which
+  // keeps the failure direction on "rethink once more" rather than "escalate
+  // early". The count is not the evidence; the record is.
+  const { project, graph } = scratch();
+  round(project, graph, 'aaaa', HEAD(1));
+  round(project, graph, 'bbbb', HEAD(2));
+  assert.equal(round(project, graph, 'aaaa', HEAD(3)).verdict, 'repeat');
+  const fourth = verdict(project, ['--signature', 'aaaa', '--head', HEAD(4), '--k', '3']);
+  assert.equal(fourth.verdict, 'repeat', 'two priors, and nothing says the rethink was ever applied');
+  assert.equal(fourth.seen, 2, 'the count is unchanged — it is the EVIDENCE that is missing');
+  assert.equal(fourth.depth_spent, false);
+});
+
+test('… and does exhaust once the rethink round records what it applied', () => {
+  // The other half of the same rule: with the depth on record the claim is true,
+  // so the rung is returned. `agent()` takes an effort, which is why the Workflow
+  // path can say this and the Agent tool cannot.
+  const { project, graph } = scratch();
+  round(project, graph, 'aaaa', HEAD(1));
+  round(project, graph, 'bbbb', HEAD(2));
+  assert.equal(round(project, graph, 'aaaa', HEAD(3), { effort_applied: 'max' }).verdict, 'repeat');
+  const fourth = verdict(project, ['--signature', 'aaaa', '--head', HEAD(4), '--k', '3']);
+  assert.equal(fourth.verdict, 'repeat_exhausted');
+  assert.equal(fourth.depth_spent, true);
+});
+
+test('`effort_applied: unknown` is not evidence — it is the record saying nobody measured', () => {
+  // The honest value for a spawn that could not carry an effort. It must read as
+  // absence and not as a depth, or the one field built to admit "unmeasured"
+  // becomes the proof the escalation rests on.
+  const { project, graph } = scratch();
+  round(project, graph, 'aaaa', HEAD(1));
+  round(project, graph, 'bbbb', HEAD(2));
+  round(project, graph, 'aaaa', HEAD(3), { effort_applied: 'unknown' });
+  const got = verdict(project, ['--signature', 'aaaa', '--head', HEAD(4), '--k', '3']);
+  assert.equal(got.verdict, 'repeat');
+  assert.equal(got.depth_spent, false);
+});
+
+test("the FIRST round's own effort is not evidence of a rethink", () => {
+  // The first occurrence of a signature is dispatched under `first`/`progress`,
+  // whose strategy is `fix`. Its recorded depth proves that a round ran, never
+  // that the deeper rung was spent — and reading it as evidence would exhaust a
+  // signature the conveyor had thought about exactly once.
+  const { project, graph } = scratch();
+  round(project, graph, 'aaaa', HEAD(1), { effort_applied: 'high' });
+  round(project, graph, 'bbbb', HEAD(2));
+  round(project, graph, 'aaaa', HEAD(3));
+  const got = verdict(project, ['--signature', 'aaaa', '--head', HEAD(4), '--k', '3']);
+  assert.equal(got.verdict, 'repeat');
+  assert.equal(got.depth_spent, false);
+});
+
+test('a green resets the evidence along with the window', () => {
+  // `depth_spent` is measured over the WINDOW, exactly like `seen` and
+  // `distinct`: a rethink spent on a failure that was then FIXED says nothing
+  // about the failure that came back after the green.
+  const { project, graph } = scratch();
+  round(project, graph, 'aaaa', HEAD(1));
+  round(project, graph, 'aaaa', HEAD(2), { effort_applied: 'max' });
+  appendEvent(graph, greenAttempt());
+  round(project, graph, 'aaaa', HEAD(3));
+  const got = verdict(project, ['--signature', 'aaaa', '--head', HEAD(4), '--k', '3']);
+  assert.equal(got.seen, 1, 'one occurrence since the green');
+  assert.equal(got.verdict, 'repeat');
+  assert.equal(got.depth_spent, false,
+    'the depth spent before the green was spent on a failure that got fixed');
+});
+
+test('the oscillation still dodges every rule but the attempt backstop', () => {
+  // deliver.md's attempt backstop exists for `A → B → A → B → …`, and the reason
+  // stated there has two halves. This change closes ONE of them: an oscillating
+  // signature now does read `repeat`, because it genuinely has been attempted
+  // before. The half that stops the sequence still holds — it never reaches K
+  // distinct, so `plan_defect` never fires; nothing on record claims the deeper
+  // effort was spent, so `repeat_exhausted` never fires either; and `repeat`
+  // DISPATCHES a round, it does not end anything. So no verdict in this sequence
+  // ever stops the loop and the attempt counter is still the only thing that
+  // does. This is not dead code and this ticket does not replace it.
+  const { project, graph } = scratch();
+  const rounds = [];
+  for (let i = 1; i <= 8; i++) {
+    rounds.push(round(project, graph, i % 2 ? 'aaaa' : 'bbbb', HEAD(i)));
+  }
+  const words = rounds.map((r) => r.verdict);
+  assert.deepEqual(words,
+    ['first', 'progress', 'repeat', 'repeat', 'repeat', 'repeat', 'repeat', 'repeat'],
+    words.join(','));
+  assert.ok(rounds.every((r) => r.distinct <= 2), 'two signatures never reach K=3');
+  assert.ok(rounds.every((r) => r.verdict !== 'plan_defect'), words.join(','));
+  assert.ok(rounds.every((r) => r.verdict !== 'repeat_exhausted'), words.join(','));
+});
+
+test('an oscillation whose rethinks ARE recorded does exhaust — the rule, not an accident', () => {
+  // Pinned as a DECISION. The acceptance criterion says the oscillation "still
+  // reaches no repeat_exhausted"; the gating clause beside it says
+  // `repeat_exhausted` means the depth was applied. Those agree only while
+  // nothing records a depth, and the wording is resolved in favour of the gate:
+  // when the record shows a rethink dispatched at the deeper effort on THIS
+  // signature, the claim `repeat_exhausted` makes is simply true. Nothing about
+  // the backstop changes in kind — `repeat_exhausted` is still a dispatch, one
+  // more round with the model raised, and what ends the loop is still the attempt
+  // counter or a person.
+  const { project, graph } = scratch();
+  round(project, graph, 'aaaa', HEAD(1));
+  round(project, graph, 'bbbb', HEAD(2));
+  round(project, graph, 'aaaa', HEAD(3), { effort_applied: 'max' });
+  round(project, graph, 'bbbb', HEAD(4), { effort_applied: 'max' });
+  assert.equal(
+    verdict(project, ['--signature', 'aaaa', '--head', HEAD(5), '--k', '3']).verdict,
+    'repeat_exhausted'
+  );
+});
+
+test('it says WHY it read `repeat` with the count already at the threshold', () => {
+  // Without this line the ceiling silently never opens and an operator cannot
+  // tell an unspent depth from a broken ladder — which is how a guard that reports
+  // nothing teaches its reader to stop looking.
+  const { project, graph } = scratch();
+  seed(graph, [attempt('aaaa', HEAD(1)), attempt('aaaa', HEAD(2))]);
+  const r = run(
+    ['verdict', 'T-20-01', '--signature', 'aaaa', '--head', HEAD(3), '--json'],
+    { cwd: project, encoding: 'utf8' }
+  );
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).verdict, 'repeat');
+  assert.ok(/effort_applied/.test(r.stderr), `the reason must name the missing field: ${r.stderr}`);
+  assert.ok(/repeat_exhausted/.test(r.stderr), r.stderr);
+});
+
+test('and stays quiet when the depth IS on record', () => {
+  const { project, graph } = scratch();
+  seed(graph, [attempt('aaaa', HEAD(1)), attempt('aaaa', HEAD(2), { effort_applied: 'max' })]);
+  const r = run(
+    ['verdict', 'T-20-01', '--signature', 'aaaa', '--head', HEAD(3), '--json'],
+    { cwd: project, encoding: 'utf8' }
+  );
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).verdict, 'repeat_exhausted');
+  assert.equal(r.stderr.trim(), '', `nothing to report: ${r.stderr}`);
 });
 
 suite('failure signature — the journal is the record, and it lands in the project');
