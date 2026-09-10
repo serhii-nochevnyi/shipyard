@@ -42,6 +42,7 @@ test('no config file → defaults, no warnings', () => {
   const { config, warnings } = withConfig(undefined);
   assert.strictEqual(config.integration_mode, 'epic-stacked');
   assert.strictEqual(config.model_policy, 'balanced');
+  assert.strictEqual(config.gsd_sync, true);
   assert.strictEqual(config.max_attempts, 5);
   assert.deepStrictEqual(warnings, []);
 });
@@ -201,6 +202,12 @@ test('the cap is DECLARED in capability.json, so GSD tooling can set it', () => 
 test('the declared namespace wins for the cap, as it does for every other knob', () => {
   const { config } = withRaw({ pipeline: { max_concurrent_agents: 9 }, delivery_pipeline: { max_concurrent_agents: 3 } });
   assert.strictEqual(config.max_concurrent_agents, 3);
+});
+
+test('the native GSD synchronization key is understood by the runtime config reader', () => {
+  const { config, warnings } = withRaw({ delivery_pipeline: { gsd_sync: false } });
+  assert.strictEqual(config.gsd_sync, false);
+  assert.ok(!warnings.some((warning) => /gsd_sync/.test(warning)), warnings.join('; '));
 });
 
 // ── absent is not the same fact as unparseable (ADR-004 D2, audit F03) ──────

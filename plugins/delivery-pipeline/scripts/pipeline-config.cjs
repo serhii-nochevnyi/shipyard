@@ -387,6 +387,7 @@ const DEFAULTS = {
   stale_draft_hours: 24,
   worktree_root: null,                // null → <repo>/../.wt-<repo-name>
   graph_gate: true,                   // mirrors the capability's declared key
+  gsd_sync: true,                     // mirrors the capability's declared key
   models: {},                         // per-role override → tier alias
   effort: {},                         // per-role override → effort level
   // The CEILING, and the consent that unlocks it (ADR-005 D5). `off` is the
