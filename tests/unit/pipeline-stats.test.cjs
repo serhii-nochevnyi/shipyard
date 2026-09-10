@@ -251,7 +251,7 @@ test('dispatch routing fields are grouped without turning missing observations i
     model: 'sonnet', effort: 'high', effort_applied: 'high',
     reason: 'tier=level:routine(sonnet) effort=row(high)', task_level: 'routine',
     runtime: 'claude', backend: 'workflow', observed_model: 'claude-sonnet-5',
-    observed_effort: 'high',
+    observed_effort: 'high', dispatch_id: 'dispatch-complete',
   };
   const recentPartial = {
     ts: recently, event: 'dispatch', ticket: 'T-01-02', role: 'arch-review',
@@ -279,9 +279,11 @@ test('dispatch routing fields are grouped without turning missing observations i
   assert.deepStrictEqual(json.ladder.by_effort_applied, { high: 1 });
   assert.deepStrictEqual(json.ladder.by_observed_model, { 'claude-sonnet-5': 1 });
   assert.deepStrictEqual(json.ladder.by_observed_effort, { high: 1 });
+  assert.deepStrictEqual(json.ladder.by_dispatch_id, { 'dispatch-complete': 1 });
   assert.strictEqual(json.ladder.requested_comparable, 1, 'only the fully attributed row is routing-comparable');
   assert.strictEqual(json.ladder.applied_comparable, 1, 'applied coverage is a separate level');
   assert.strictEqual(json.ladder.observed_comparable, 1, 'observed coverage is a separate level');
+  assert.strictEqual(json.ladder.usage_join_comparable, 1, 'usage joins require a dispatch correlation id');
   assert.deepStrictEqual(json.ladder.by_attribution_status, {
     incomplete: 1,
     observed_complete: 1,
@@ -297,6 +299,8 @@ test('dispatch routing fields are grouped without turning missing observations i
   assert.strictEqual(json.ladder.missing_agent_file, 0, 'runtime is unknown, so Codex file coverage is unknown too');
   assert.strictEqual(json.ladder.missing_observed_model, 1);
   assert.strictEqual(json.ladder.missing_observed_effort, 1);
+  assert.strictEqual(json.ladder.missing_dispatch_id, 1);
+  assert.strictEqual(json.ladder.missing_attribution.dispatch_id, 1);
 });
 
 test('an invalid policy is visible in the ladder report', () => {
@@ -314,7 +318,7 @@ test('Codex agent-file coverage is required only when the runtime is known', () 
   const complete = {
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'arch-review',
     model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
-    task_level: 'complex', runtime: 'codex', backend: 'codex-agent',
+    task_level: 'complex', runtime: 'codex', backend: 'codex-agent', dispatch_id: 'dispatch-codex',
     agent_file: 'shipyard-arch-review-critical', observed_model: 'gpt-6-astra',
   };
   const partial = {
@@ -328,6 +332,8 @@ test('Codex agent-file coverage is required only when the runtime is known', () 
   assert.strictEqual(json.ladder.requested_comparable, 1, 'static Codex rows need their selected agent file');
   assert.strictEqual(json.ladder.applied_comparable, 0);
   assert.strictEqual(json.ladder.observed_comparable, 0, 'observed effort is absent and must stay unknown');
+  assert.strictEqual(json.ladder.usage_join_comparable, 0, 'observed model without observed effort is not join-ready');
+  assert.strictEqual(json.ladder.missing_dispatch_id, 1);
   assert.deepStrictEqual(json.ladder.by_attribution_status, { incomplete: 1, requested_complete: 1 });
 });
 
