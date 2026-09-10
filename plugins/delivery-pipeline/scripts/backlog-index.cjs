@@ -44,6 +44,13 @@ function inventory(root, manifest=null, query='') {
     if(fs.lstatSync(phases).isSymbolicLink())throw new Error('symlink phases refused');
     for(const name of fs.readdirSync(phases).sort())if(/^999(?:[.-]|$)/.test(name))walk(path.join(phases,name),'gsd999');
   }
+  const roadmap=path.join(planning,'ROADMAP.md');
+  if(fs.existsSync(roadmap)) {
+    if(fs.lstatSync(roadmap).isSymbolicLink())throw new Error('symlink roadmap refused');
+    const text=fs.readFileSync(roadmap,'utf8');
+    const parked=sections(text,'ROADMAP').filter(s=>/\b999\.\d+\b/.test(s.title));
+    if(parked.length)files.push({file:roadmap,kind:'gsd999',selected:parked});
+  }
   const records=new Map();
   if(manifest!==null) {
     if(manifest.schema_version!==1||!Array.isArray(manifest.items))throw new Error('manifest schema_version 1 and items array required');
@@ -60,10 +67,10 @@ function inventory(root, manifest=null, query='') {
     }
   }
   const items=[],seen=new Set();
-  for(const {file,kind} of files) {
+  for(const {file,kind,selected} of files) {
     const text=fs.readFileSync(file,'utf8'),source=`${kind}:${path.relative(real,file).split(path.sep).join('/')}`;
     const sourceHash=hash(text),counts=new Map();
-    for(const section of sections(text,path.basename(file,'.md'))) {
+    for(const section of selected || sections(text,path.basename(file,'.md'))) {
       const signature=hash(section.title).slice(0,16),n=(counts.get(signature)||0)+1;counts.set(signature,n);
       const id=`${source}#${signature}:${n}`,rec=records.get(id);seen.add(id);
       const stale=Boolean(rec?.source_hash && rec.source_hash!==sourceHash);

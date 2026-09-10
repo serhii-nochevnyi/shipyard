@@ -44,3 +44,9 @@ test('CLI queries bounded results without changing sources',()=>fixture(r=>{
  assert.equal(fs.readFileSync(path.join(r,'.planning/backlog/one.md'),'utf8'),before);
  assert.equal(spawnSync(process.execPath,[cli,'--root',r,'--limit','-1'],{encoding:'utf8'}).status,2);
 }));
+
+test('GSD backlog entries in the roadmap are discoverable without a phase directory',()=>fixture(r=>{
+ fs.writeFileSync(path.join(r,'.planning/ROADMAP.md'),'# Roadmap\n## Phase 32: Active\nIgnore\n## Phase 999.1: Later\nKeep');
+ const out=inventory(r);assert.equal(out.sources,1);assert.equal(out.items.length,1);
+ assert.equal(out.items[0].title,'Phase 999.1: Later');
+}));

@@ -7,8 +7,8 @@ Use `--query advisor` to select relevant sections, `--limit 100` to change the
 Output states total/matched counts and truncation explicitly.
 
 The CLI inventories `.planning/backlog/**/*.md` and phase directories starting
-with `999.`, `999-` or exactly `999` under `.planning/phases`. Missing optional
-directories are empty. Source symlinks are refused. Local notes and GSD phases
+with `999.`, `999-` or exactly `999` under `.planning/phases`. 999.x headings in `.planning/ROADMAP.md` are also indexed, even without a
+phase directory. Missing optional directories are empty. Source symlinks are refused. Local notes and GSD phases
 have separate source-qualified IDs. Markdown headings outside code fences become
 individual sections, with a heading hash and occurrence number distinguishing
 repeated headings. Renaming a source or its heading requires an explicit manifest
