@@ -5,6 +5,8 @@
 //
 //   jira-project.cjs read [--json] [--graph <dir>]
 //   jira-project.cjs plan [--json] [--graph <dir>]
+//   jira-project.cjs record <ticket> <key> --transition-id <id> [--status <name>]
+//   jira-project.cjs record --unreachable <ticket> <key> --to <status> [--offered "<names>"]
 //
 // The fifth durable store. `jira-projection.json` records, per ticket, the last
 // `status_change` that was actually projected onto the tracker, so a re-run, a
@@ -40,10 +42,11 @@
 // is a defect this repo has already paid for: a verdict written into a worktree
 // where nothing reads it, and six concurrent marks producing five records.
 //
-// `plan` (T-29-04) is now here too — the read-only half that computes the work
-// from three LOCAL files and emits it. `record` (T-29-05) is not, and nothing in
-// this file speaks to a tracker: no socket, no client, no credential. The acting
-// half is an agent's, by ADR-008 D4.
+// `plan` (T-29-04) is here too — the read-only half that computes the work from
+// three LOCAL files and emits it — and `record` (T-29-05), which writes down
+// what an agent reports having done and refuses a report carrying no evidence.
+// Nothing in this file speaks to a tracker: no socket, no client, no credential.
+// The acting half is an agent's, by ADR-008 D4.
 
 const fs = require('fs');
 const path = require('path');
@@ -179,14 +182,28 @@ function hasProjected(ticket, to, store = load()) {
 // that opens this file mid-write must see the old snapshot rather than half of
 // the new one; a torn read parses as an empty store, which reads as "nothing has
 // been projected" and re-projects everything.
-function mutate(fn, dir = GRAPH_DIR) {
+//
+// `journalOf` makes the watermark and its journal line ONE ACT, in one locked
+// section — escalation-record.cjs's shape, taken for the reason its own comment
+// records: the proving ground held six journalled escalations with no park and a
+// seventh parked with no journal entry, because parking and journalling were two
+// acts and only one of them got done.
+//
+// THE ORDER IS THE STORE FIRST AND THE ROLLBACK IS NOT OPTIONAL. The two halves
+// fail in opposite directions and they are not equally bad: a journal line with
+// no watermark makes the next round re-project the same change and transition
+// somebody's issue twice, while a watermark with no journal line loses a metric.
+// So the store is written first and, if the append then fails, it is put back
+// exactly as it was and the whole act is refused. Half a commit here is the one
+// outcome nobody can read.
+function mutate(fn, dir = GRAPH_DIR, journalOf = null) {
   // The guard that makes a missing `--graph` LOUD. Same shape as the siblings',
   // including the `GRAPH_EXPLICIT` exemption: an explicit answer always wins,
   // because a cross-repo caller legitimately names a graph dir this process
   // cannot otherwise reach. Unlike them it lives on the WRITE path rather than
-  // in the CLI dispatch, since every writer here is a library call — the verbs
-  // that write (T-29-04/05) are not in this ticket, and a guard behind
-  // `require.main` would therefore never fire.
+  // in the CLI dispatch, since every writer here is a library call — `record`
+  // reaches it through `recordProjection`, so a guard behind `require.main`
+  // would never fire for a caller that used the module.
   if (!GRAPH_EXPLICIT && dir === GRAPH_DIR && !fs.existsSync(path.join(dir, 'tickets.json'))) {
     throw new Error(
       `no ticket graph at ${dir} — refusing to record a projection nothing will read.\n` +
@@ -199,8 +216,34 @@ function mutate(fn, dir = GRAPH_DIR) {
   fs.mkdirSync(dir, { recursive: true });
   return withLock(lockDirFor(lockRootFor(dir)), 'jira-project', () => {
     const store = load(dir);
+    // A refusal throws HERE, before anything is written: the store file is not
+    // touched at all, which is what makes "refused" and "unchanged" the same
+    // fact rather than two things a reader has to check separately.
     const result = fn(store);
+    // The bytes as they stand, so the rollback below restores the file and not
+    // a re-serialisation of it. `null` is "there was no file", which is the
+    // normal first state and must roll back to absence, not to an empty store.
+    let before = null;
+    try { before = fs.readFileSync(storeFile(dir)); } catch { before = null; }
     writeAtomic(storeFile(dir), JSON.stringify(store, null, 2) + '\n');
+    const event = journalOf ? journalOf(result) : null;
+    if (event) {
+      try {
+        fs.appendFileSync(path.join(dir, JOURNAL_NAME), JSON.stringify(event) + '\n');
+      } catch (e) {
+        if (before === null) {
+          try { fs.unlinkSync(storeFile(dir)); } catch { /* already absent */ }
+        } else {
+          writeAtomic(storeFile(dir), before);
+        }
+        throw new Error(
+          `the journal at ${path.join(dir, JOURNAL_NAME)} could not be appended to (${e.message}).\n` +
+          '  The watermark was rolled back, so nothing was recorded: a watermark with no journal line\n' +
+          '  is half of this act, and the half that leaves the projection unauditable. Fix the journal\n' +
+          '  (a held file, a read-only graph, a path some accident left as a directory) and run it again.'
+        );
+      }
+    }
     return result;
   }, { label: 'jira-project' });
 }
@@ -533,10 +576,166 @@ function planItems(dir = GRAPH_DIR) {
   return out;
 }
 
+// ── the recorder ────────────────────────────────────────────────────────────
+//
+// (ADR-008 D5.) The one thing that advances the watermark, and it refuses a bare
+// "done". An agent that says it transitioned an issue and cannot name the
+// transition id it used has not produced evidence, and ADR-004's rule — positive
+// evidence before a mutation — governs the conveyor's own records exactly as it
+// governs code. The precedent is ADR-006 D5's `--agent-file` cross-check: the id
+// is the one witness a script can demand of an act it cannot perform itself.
+//
+// Nothing here reaches the tracker either. The recorder is told what happened
+// and writes it down; the acting half is the agent's, by ADR-008 D4.
+
+/**
+ * The pending item for one ticket, straight out of the planner — the SAME work
+ * list the agent was handed, so a record can only ever be about work that was
+ * actually offered.
+ *
+ * Called from INSIDE the lock, which is the only place it is safe: the planner
+ * re-reads the store, and reading it outside would be the lost-update race the
+ * lock exists for — two records for one ticket both seeing "pending".
+ */
+function pendingItemFor(ticket, dir) {
+  const out = planItems(dir);
+  return { item: out.items.find((i) => i.ticket === ticket) || null, plan: out };
+}
+
+/** Why there is nothing to record, in the words the caller can act on. */
+function notPending(ticket, plan) {
+  return (
+    `${ticket} has no pending projection — refusing to record one nobody asked for.\n` +
+    `  \`jira-project.cjs plan\` is the work list, and only what it offers may be recorded:\n` +
+    '  a record for anything else is state invented outside the planner, which the next\n' +
+    '  round reads back as a projection that happened.\n' +
+    `  ${plan && plan.reason ? `plan says: ${plan.reason}` : 'It is already projected, not a subject, or its `to` is unmapped.'}`
+  );
+}
+
+/** The record and the item must be about the same issue, or one of them is wrong. */
+function requireSameKey(item, key, ticket) {
+  if (item.key !== key) {
+    throw new Error(
+      `${ticket} is pending against ${item.key}, not ${key} — refusing to record a projection\n` +
+      '  onto a different issue. One of the two is a typo, and the watermark would say the\n' +
+      '  wrong board had been told.'
+    );
+  }
+}
+
+/**
+ * Advance the watermark for a transition that HAPPENED, and journal it — one
+ * act, under one lock.
+ *
+ * Refuses, non-zero and touching nothing, when: the transition id is missing or
+ * empty (the whole point of the verb), the ticket has no pending item, or the
+ * key names a different issue. Returns `{written, record, item, event}`.
+ */
+function recordProjection(opts = {}, dir = GRAPH_DIR) {
+  const ticket = opts.ticket;
+  const key = opts.key;
+  const transitionId = String(opts.transition_id === undefined || opts.transition_id === null
+    ? '' : opts.transition_id).trim();
+  if (!ticket || !key) {
+    throw new Error('record needs a ticket and a tracker key: record <ticket> <key> --transition-id <id> [--status <name>]');
+  }
+  // THE REFUSAL. One check, in one place, on the path both the CLI and any
+  // library caller take — delete it and a bare "done" advances the watermark,
+  // which is the mutation this ticket is witnessed by.
+  if (!transitionId) {
+    throw new Error(
+      `--transition-id is missing for ${ticket} — refusing to advance the watermark on an unevidenced transition.\n` +
+      '  "I transitioned it" is not evidence; the id of the transition that was performed is.\n' +
+      '  The acting half reads the offered transitions and moves by id, so it HAS the id —\n' +
+      '  and a record written without it is a claim nobody can check against the tracker.\n' +
+      `  Full form: jira-project.cjs record ${ticket} <key> --transition-id <id> --status <name>`
+    );
+  }
+
+  return mutate((store) => {
+    const { item, plan } = pendingItemFor(ticket, dir);
+    if (!item) throw new Error(notPending(ticket, plan));
+    requireSameKey(item, key, ticket);
+    const status = opts.status || item.target_status;
+    const at = new Date().toISOString();
+    const record = {
+      projected_to: item.to,
+      ts: at,
+      key,
+      status,
+      transition_id: transitionId,
+    };
+    store.tickets[ticket] = record;
+    // A report about a target that has since been reached is answered, so it
+    // does not sit in the store outliving the question it was about.
+    const reports = store[UNREACHABLE_KEY];
+    if (reports && Object.prototype.hasOwnProperty.call(reports, ticket)) delete reports[ticket];
+    const event = {
+      ts: at,
+      event: 'jira_transition',
+      ticket,
+      key,
+      from: item.from,
+      to: item.to,
+      status,
+      transition_id: transitionId,
+      by: 'jira-project',
+    };
+    return { written: true, record, item, event };
+  }, dir, (r) => r.event);
+}
+
+/**
+ * Record that the target status is NOT REACHABLE from where the issue stands.
+ *
+ * An ordinary outcome, never a failure (ADR-008 D4): Jira workflows forbid
+ * arbitrary jumps. It does NOT advance the watermark — the transition did not
+ * happen, and a watermark is a claim that it did — and it does not journal a
+ * `jira_transition`, because nothing was transitioned.
+ *
+ * It MUST record the `to` it failed at. Without that field the planner re-emits
+ * the same item next round and the pair is a retry loop wearing a report's hat:
+ * one tracker call per stuck ticket per round, forever, which is exactly the
+ * "never retry hard" of ADR-008 D4. The report is anchored on the ITEM's `ts`,
+ * not on the filing time — the same argument as the planner's seek anchor, since
+ * a filing time is only an upper bound on the event it is about.
+ */
+function recordUnreachable(opts = {}, dir = GRAPH_DIR) {
+  const { ticket, key, to } = opts;
+  if (!ticket || !key) {
+    throw new Error('record --unreachable needs a ticket and a tracker key: record --unreachable <ticket> <key> --to <status> --offered "<names>"');
+  }
+  if (!to) {
+    throw new Error(
+      `--to is missing for ${ticket} — refusing to file a report that names no target.\n` +
+      '  The `to` IS the report: the planner suppresses the item until the board moves past\n' +
+      '  that status, so a report without one suppresses nothing and the next round asks the\n' +
+      '  tracker again — one call per stuck ticket per round, forever.'
+    );
+  }
+  return mutate((store) => {
+    const { item, plan } = pendingItemFor(ticket, dir);
+    if (!item) throw new Error(notPending(ticket, plan));
+    requireSameKey(item, key, ticket);
+    if (item.to !== to) {
+      throw new Error(
+        `${ticket} is pending at "${item.to}", not "${to}" — refusing to file a report about a\n` +
+        '  target the planner never offered. A report at the wrong `to` suppresses nothing.'
+      );
+    }
+    const record = unreachableRecord({ to, ts: item.ts, key, offered: opts.offered || null });
+    if (!store[UNREACHABLE_KEY] || typeof store[UNREACHABLE_KEY] !== 'object') store[UNREACHABLE_KEY] = {};
+    store[UNREACHABLE_KEY][ticket] = record;
+    return { written: true, record, item };
+  }, dir);
+}
+
 module.exports = {
   compareStatus, statusRank, hasProjected, markProjected, projectionOf, load,
   planItems, readTransitions, statusChangesIn,
   unreachableFor, unreachableRecord, unreachableSuppressed,
+  recordProjection, recordUnreachable, pendingItemFor,
   TICKET_STATUSES, STORE_NAME, UNREACHABLE_KEY, GRAPH_DIR, ARGV,
   SEEK_STEP_BYTES, JOURNAL_NAME, TICKETS_NAME,
 };
@@ -578,8 +777,65 @@ if (require.main === module) {
         }
       }
     }
+  } else if (cmd === 'record') {
+    // Enumerated rather than inferred from `--key value`, for the reason
+    // escalation-record.cjs gives: a misspelt flag must be a refusal, not a
+    // positional silently swallowed into the ticket id.
+    const VALUED = ['--transition-id', '--status', '--to', '--offered'];
+    const BOOLEAN = ['--unreachable', '--json'];
+    const flags = {};
+    const pos = [];
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i];
+      if (BOOLEAN.includes(a)) { flags[a] = true; continue; }
+      if (VALUED.includes(a)) {
+        const v = rest[i + 1];
+        // The same parser guard as `--graph`'s: a flag-shaped token is not a
+        // value, and an id read as "--status" is the unevidenced record this
+        // verb exists to refuse, wearing an id's clothes.
+        if (v === undefined || v.startsWith('--')) {
+          fail(`${a} needs a value (got ${v === undefined ? 'nothing' : `the flag "${v}"`})`);
+        }
+        flags[a] = v; i++; continue;
+      }
+      if (a.startsWith('--')) fail(`unknown flag "${a}" — record takes ${[...VALUED, ...BOOLEAN].join(', ')}, --graph`);
+      pos.push(a);
+    }
+    const [ticket, key] = pos;
+    try {
+      if (flags['--unreachable']) {
+        const r = recordUnreachable(
+          { ticket, key, to: flags['--to'], offered: flags['--offered'] }, GRAPH_DIR
+        );
+        if (flags['--json']) {
+          console.log(JSON.stringify(r.record, null, 2));
+        } else {
+          console.log(
+            `${ticket} ${key}: "${r.record.to}" is not reachable — reported, watermark UNMOVED.\n` +
+            `  ${r.record.offered ? `offered: ${r.record.offered}\n  ` : ''}` +
+            'The item is withheld until a newer status_change for this ticket arrives; nothing retries.'
+          );
+        }
+      } else {
+        const r = recordProjection(
+          { ticket, key, transition_id: flags['--transition-id'], status: flags['--status'] }, GRAPH_DIR
+        );
+        if (flags['--json']) {
+          console.log(JSON.stringify(r.record, null, 2));
+        } else {
+          console.log(
+            `${ticket} ${key}: projected to "${r.record.projected_to}" ` +
+            `(status ${JSON.stringify(r.record.status)}, transition ${r.record.transition_id}) — ` +
+            'watermark advanced and journalled.'
+          );
+        }
+      }
+    } catch (e) {
+      fail(e.message);
+    }
   } else {
-    fail('usage: jira-project.cjs read|plan [--json] [--graph <dir>]\n' +
-      '  `record` is not in this build.');
+    fail('usage: jira-project.cjs read|plan|record [--json] [--graph <dir>]\n' +
+      '  record <ticket> <key> --transition-id <id> [--status <name>]\n' +
+      '  record --unreachable <ticket> <key> --to <status> [--offered "<names>"]');
   }
 }

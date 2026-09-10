@@ -534,6 +534,201 @@ test('a projection that DID land clears the block, because the watermark answers
   assert.deepEqual(plan(p).items, [], 'skipped as already projected, which is the same empty answer');
 });
 
+// ── the recorder ────────────────────────────────────────────────────────────
+
+suite('the recorder refuses a bare done, and the journal owns the event');
+
+const STORE = 'jira-projection.json';
+const JOURNAL = 'delivery-log.jsonl';
+
+// The BYTES, so "unchanged" is a comparison of content and not of existence. A
+// refusal that rewrites the store with the same fields would pass an `exists`
+// check and still be a write nobody asked for.
+const raw = (g, name) => {
+  const f = path.join(g, name);
+  return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null;
+};
+const storeOf = (g) => { const s = raw(g, STORE); return s ? JSON.parse(s) : null; };
+const events = (g, name) => (raw(g, JOURNAL) || '').split('\n').filter(Boolean)
+  .map((l) => JSON.parse(l)).filter((e) => !name || e.event === name);
+
+// One pending item — `T-24-05 SHIP-5: pr-open -> merged` — which is what every
+// case below is about.
+const pending = (extra = {}) => project({
+  tickets: { 'T-24-05': 'SHIP-5' },
+  journal: [sc('T-24-05', 'pr-open', 'merged', '2026-09-07T19:35:52.586Z', 44)],
+  ...extra,
+});
+
+test('a record with no --transition-id is refused, and the store AND the journal are unchanged', () => {
+  // WITNESSED MUTATION (a): delete the `--transition-id` check in
+  // `recordProjection` and this record succeeds — the watermark advances on an
+  // agent's word, which is the whole thing ADR-008 D5 forbids.
+  const p = pending();
+  const g = graphOf(p);
+  const before = { store: raw(g, STORE), journal: raw(g, JOURNAL) };
+  assert.equal(before.store, null, 'nothing projected yet is the normal first state');
+  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--status', 'Done']);
+  assert.notEqual(r.status, 0, `must be refused, got ${r.status}: ${r.stdout}`);
+  assert.match(r.stderr, /--transition-id/, 'the refusal names the missing flag');
+  assert.equal(raw(g, STORE), before.store, 'the watermark store must be untouched');
+  assert.equal(raw(g, JOURNAL), before.journal, 'and the journal too — BOTH, not one');
+});
+
+test('an EMPTY --transition-id is the same refusal — "" is not evidence either', () => {
+  const p = pending();
+  const g = graphOf(p);
+  const before = raw(g, JOURNAL);
+  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '']);
+  assert.notEqual(r.status, 0, 'an empty id must be refused');
+  assert.match(r.stderr, /--transition-id/);
+  assert.equal(raw(g, STORE), null, 'no watermark');
+  assert.equal(raw(g, JOURNAL), before, 'no journal line');
+});
+
+test('a record for a ticket with no pending item is refused', () => {
+  // Recording a projection nobody asked for is state invented outside the
+  // planner, which the next round reads back as a projection that happened.
+  const p = project({ tickets: { 'T-24-05': 'SHIP-5' }, journal: [] });
+  const g = graphOf(p);
+  const before = raw(g, JOURNAL);
+  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '31']);
+  assert.notEqual(r.status, 0, 'must be refused');
+  assert.match(r.stderr, /no pending projection/);
+  assert.equal(raw(g, STORE), null, 'the store stays absent');
+  assert.equal(raw(g, JOURNAL), before);
+});
+
+test('a record naming a DIFFERENT issue than the pending item is refused', () => {
+  const p = pending();
+  const g = graphOf(p);
+  const r = run(g, ['record', 'T-24-05', 'SHIP-9', '--transition-id', '31']);
+  assert.notEqual(r.status, 0, 'must be refused');
+  assert.match(r.stderr, /SHIP-5/, 'and it names the issue the item is actually about');
+  assert.equal(raw(g, STORE), null);
+});
+
+test('a successful record advances the watermark and appends exactly one jira_transition', () => {
+  const p = pending();
+  const g = graphOf(p);
+  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '31', '--status', 'Done']);
+  assert.equal(r.status, 0, r.stderr);
+
+  const rec = storeOf(g).tickets['T-24-05'];
+  assert.equal(rec.projected_to, 'merged', 'the watermark is the ITEM\'s `to`');
+  assert.equal(rec.transition_id, '31', 'and it records the evidence it demanded');
+  assert.equal(rec.key, 'SHIP-5');
+  assert.equal(rec.status, 'Done');
+
+  const ev = events(g, 'jira_transition');
+  assert.equal(ev.length, 1, `exactly one journal line, got ${ev.length}`);
+  assert.deepEqual(
+    { ticket: ev[0].ticket, key: ev[0].key, to: ev[0].to, transition_id: ev[0].transition_id, by: ev[0].by },
+    { ticket: 'T-24-05', key: 'SHIP-5', to: 'merged', transition_id: '31', by: 'jira-project' }
+  );
+
+  // Exactly once: the same record again has nothing pending to be about.
+  const again = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '31', '--status', 'Done']);
+  assert.notEqual(again.status, 0, 'the second identical record must be refused');
+  assert.match(again.stderr, /no pending projection/);
+  assert.equal(events(g, 'jira_transition').length, 1, 'and it appends nothing');
+});
+
+test('--status defaults to the item\'s target_status, so the two cannot drift apart', () => {
+  const p = pending();
+  const g = graphOf(p);
+  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '41']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(storeOf(g).tickets['T-24-05'].status, 'Done');
+});
+
+test('record --unreachable leaves the watermark UNMOVED and still writes the failed `to`', () => {
+  // BOTH halves in one case, deliberately: storing neither and storing both look
+  // identical from the outside until the next round, when one of them is a retry
+  // loop making a tracker call per stuck ticket forever.
+  const p = pending();
+  const g = graphOf(p);
+  const r = run(g, ['record', '--unreachable', 'T-24-05', 'SHIP-5',
+    '--to', 'merged', '--offered', 'Start Progress, Close']);
+  assert.equal(r.status, 0, r.stderr);
+
+  const store = storeOf(g);
+  assert.equal(store.tickets['T-24-05'], undefined, 'the transition did not happen: no watermark');
+  assert.deepEqual(store.unreachable['T-24-05'], {
+    to: 'merged',
+    // THE ITEM's timestamp, never the filing time — a filing time is only an
+    // upper bound on the event it is about, so a newer sync would be suppressed.
+    ts: '2026-09-07T19:35:52.586Z',
+    key: 'SHIP-5',
+    offered: 'Start Progress, Close',
+  });
+  assert.equal(events(g, 'jira_transition').length, 0, 'nothing was transitioned, so nothing is journalled');
+
+  // And the report actually suppresses: this is the retry loop closing.
+  assert.deepEqual(plan(p).items, [], 'the item is withheld until the board moves');
+});
+
+test('record --unreachable with no --to is refused — a report naming no target suppresses nothing', () => {
+  const p = pending();
+  const g = graphOf(p);
+  const r = run(g, ['record', '--unreachable', 'T-24-05', 'SHIP-5', '--offered', 'Close']);
+  assert.notEqual(r.status, 0, 'must be refused');
+  assert.match(r.stderr, /--to/);
+  assert.equal(raw(g, STORE), null, 'and it writes nothing');
+});
+
+test('an unknown flag is refused rather than read as the ticket id', () => {
+  const p = pending();
+  const r = run(graphOf(p), ['record', 'T-24-05', 'SHIP-5', '--transition_id', '31']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /unknown flag/);
+});
+
+test('the pair does not half-commit: a failed journal append rolls the watermark back', () => {
+  // WITNESSED ATOMICITY MUTATION: remove the rollback branch in `mutate` and the
+  // store below keeps T-24-05 while the journal has no line for it — the next
+  // round then believes the issue was moved when nothing recorded that it was.
+  //
+  // The append is failed for real (the writer throws), not simulated with a flag
+  // in the production path: `ci-wait.cjs` has the same invariant about itself,
+  // and the case it was written for was a store some accident had left as a
+  // directory.
+  const p = project({
+    tickets: { 'T-24-05': 'SHIP-5', 'T-21-02': 'SHIP-2' },
+    journal: [
+      sc('T-24-05', 'pr-open', 'merged', '2026-09-07T19:35:52.586Z', 44),
+      sc('T-21-02', 'pending', 'pr-open', '2026-08-26T14:29:20.564Z', 17),
+    ],
+    // A store with someone else's watermark already in it, so the rollback has to
+    // RESTORE bytes rather than merely delete a file it created.
+    store: { tickets: { 'T-21-02': { projected_to: 'pr-open', ts: '2026-08-26T14:30:00.000Z', key: 'SHIP-2' } } },
+  });
+  const g = graphOf(p);
+  const before = { store: raw(g, STORE), journal: raw(g, JOURNAL) };
+  assert.ok(before.store.includes('T-21-02'), 'the fixture must start with a real store');
+
+  const realAppend = fs.appendFileSync;
+  fs.appendFileSync = () => { throw new Error('EACCES: permission denied, open \'delivery-log.jsonl\''); };
+  let thrown = null;
+  try {
+    mod.recordProjection({ ticket: 'T-24-05', key: 'SHIP-5', transition_id: '31' }, g);
+  } catch (e) {
+    thrown = e;
+  } finally {
+    fs.appendFileSync = realAppend;
+  }
+
+  assert.ok(thrown, 'the act must fail rather than report a success it only half performed');
+  assert.match(thrown.message, /rolled back/, 'and say so');
+  assert.equal(raw(g, STORE), before.store,
+    'the watermark must be exactly as it was — a watermark with no journal line is the half-commit');
+  assert.equal(raw(g, JOURNAL), before.journal, 'and the journal is untouched');
+  // The proof that the rollback restored rather than emptied: the unrelated
+  // watermark still stands, and the ticket is still pending work.
+  assert.equal(storeOf(g).tickets['T-21-02'].projected_to, 'pr-open');
+  assert.deepEqual(ids(plan(p)), ['T-24-05'], 'the item is still offered, which is the honest state');
+});
+
 // ── degenerate inputs ───────────────────────────────────────────────────────
 
 suite('nothing to do is the common case, and it is quiet');
