@@ -1,6 +1,6 @@
 # Phase 32 integration review
 
-- **Compared:** `origin/main` (`9b01aa4cef70b1fc5f7da8bd8fc8122062d28fae`) against the phase epic (`9eb9dba2d9161bcb285b1416d3e413f49d026420`)
+- **Compared:** the phase epic against `origin/main` after both ticket merges
 - **Tickets:** T-32-01 / PR #92, T-32-02 / PR #93
 - **Review date:** 2026-09-10
 - **Verdict:** **passed**
@@ -59,7 +59,7 @@ bounded queries without source mutation, GSD phase discovery, roadmap-only
 
 - PR #92: CI `test-fast` passed at head `db5427902ec00f984ccecc8a92c0e4f650e46981`; its review threads are resolved and the ticket was merged into this epic.
 - PR #93: CI `test-fast` passed at head `7a8f0173fadf9403cba5aecbe2af0af610188221`; its review threads are resolved and the ticket was merged into this epic.
-- PR #94: CI `test-fast` passed at epic head `9eb9dba2d9161bcb285b1416d3e413f49d026420`; the integration PR has no unresolved review threads.
+- PR #94: the latest CI `test-fast` run passed on the complete phase diff; the integration PR has no unresolved review threads.
 
 The phase intentionally stops at reliable, read-only measurement and inventory.
 Dispatch attribution, prospective collection, lifecycle writes and cold-start
