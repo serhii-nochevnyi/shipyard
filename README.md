@@ -287,7 +287,7 @@ the floor is not a preference), `models`, `effort`, `fable` (`off` | `auto`),
 `fable_window_tokens`, `max_attempts`, `pr_fetch_limit`,
 `integration_mode`, `use_workflow`, `graph_gate`, `jira`, `jira_transitions`
 (the tracker projection's status map — empty by default, which is the
-projection switched off), `repos`.
+projection switched off), `gsd_sync`, `repos`.
 
 The conveyor also **obeys GSD's own settings** rather than second-guessing them:
 `git.base_branch` decides where epics are cut from and where the integration PR
