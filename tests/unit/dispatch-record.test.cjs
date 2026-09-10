@@ -491,6 +491,55 @@ test('every dispatch reaches the journal exactly once', () => {
   assert.equal(new Set(log.map((e) => e.ticket)).size, 3, 'no ticket logged twice');
 });
 
+test('mark-many validates and journals one wave under one mutation', () => {
+  const state = {};
+  for (let i = 1; i <= 3; i++) state[`T-01-0${i}`] = { ...READY };
+  const { project, graph } = scratch(state);
+  const payload = [
+    {
+      ticket: 'T-01-01', role: 'executor', model: 'opus', effort: 'high',
+      route: 'tier=floor(opus) effort=row(high)', task_level: 'routine',
+      runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-1',
+    },
+    {
+      ticket: 'T-01-02', role: 'executor', model: 'opus', effort: 'high',
+      route: 'tier=floor(opus) effort=row(high)', task_level: 'routine',
+      runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-2',
+    },
+    {
+      ticket: 'T-01-03', role: 'executor', model: 'opus', effort: 'high',
+      route: 'tier=floor(opus) effort=row(high)', task_level: 'routine',
+      runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-3',
+    },
+  ];
+  const r = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
+    cwd: project, input: JSON.stringify(payload), encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, `batch must succeed (${r.stderr})`);
+  assert.match(r.stdout, /dispatch recorded for 3 ticket\(s\)/);
+  assert.deepStrictEqual(Object.keys(store(graph)).sort(), ['T-01-01', 'T-01-02', 'T-01-03']);
+  const log = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(log.length, 3, 'one journal line per payload item');
+  assert.deepStrictEqual(log.map((e) => e.ticket).sort(), ['T-01-01', 'T-01-02', 'T-01-03']);
+  assert.ok(log.every((e) => e.event === 'dispatch' && e.backend === 'workflow' && e.effort_applied === 'high'));
+});
+
+test('mark-many rejects the whole batch before writing when one item is invalid', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
+    cwd: project,
+    input: JSON.stringify([
+      { ticket: 'T-01-01', role: 'executor', model: 'opus' },
+      { ticket: 'T-01-01', role: 'executor', model: 'opus' },
+    ]),
+    encoding: 'utf8',
+  });
+  assert.equal(r.status, 1, 'duplicate ticket must refuse the batch');
+  assert.match(r.stderr, /duplicate ticket/);
+  assert.deepStrictEqual(store(graph), {}, 'a failed batch must not write the valid prefix');
+  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'a failed batch must not append journal lines');
+});
+
 suite('dispatch-record — a dispatch records WHAT it dispatched, or says it does not know');
 
 // The whole value of these fields is that a later ladder review reads the journal
