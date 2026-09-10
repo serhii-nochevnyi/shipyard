@@ -328,6 +328,26 @@ function report(sources, options = {}) {
     });
   }
 
+  function codexCumulative(current) {
+    // A resumed file can replay a partial update at the same timestamp. Merge
+    // those snapshots before checking monotonicity or taking the final total.
+    const byTime = new Map();
+    for (const { at, values } of current.entries) {
+      const key = Date.parse(at), merged = byTime.get(key) || {};
+      for (const [f, v] of Object.entries(values)) merged[f] = Math.max(merged[f] ?? 0, v);
+      byTime.set(key, merged);
+    }
+    let prior = {}, invalid = false;
+    for (const [, values] of [...byTime].sort((a, b) => a[0] - b[0])) {
+      for (const [f, v] of Object.entries(values)) {
+        if (number(prior[f]) && v < prior[f]) invalid = true;
+        prior[f] = v;
+      }
+    }
+    const ordered = [...byTime].sort((a, b) => a[0] - b[0]);
+    return { latest: ordered.at(-1)?.[1] || {}, invalid };
+  }
+
   for (const q of requests.values()) {
     if (q.iterations.length) {
       const iterations = q.iterations.filter(Boolean);
@@ -355,12 +375,34 @@ function report(sources, options = {}) {
   }
 
   for (const [sessionId, current] of sessions.entries()) {
+    const cumulative = codexCumulative(current);
     // The current Codex schema gives each response its own usage and the
     // turn_context row names the concrete model and effort. Summing those
-    // response usages is safe: the final thread snapshot is exactly their
-    // cumulative total. This keeps a session that moved from a reserve model to
-    // Luna split by the model that actually consumed the tokens.
-    if (current.format === 'current' && current.responses.size && current.responseUsageComplete) {
+    // response usages is safe only after it matches the final thread snapshot.
+    // This keeps a session that moved from a reserve model to Luna split by the
+    // model that actually consumed the tokens without hiding a partial log.
+    const responseTotals = {};
+    const normalizedResponses = new Map();
+    let responseFieldsComplete = true;
+    for (const response of current.responses.values()) {
+      const values = { ...response.values };
+      // Codex may omit a zero-valued component from a response while the
+      // cumulative thread record makes that zero explicit. It is safe to fill
+      // only that shape: nonnegative response components cannot sum to zero
+      // unless every omitted component is zero.
+      for (const field of CODEX_FIELDS) {
+        if (values[field] === undefined && cumulative.latest[field] === 0) values[field] = 0;
+      }
+      normalizedResponses.set(response.response_id, values);
+      for (const field of CODEX_FIELDS) {
+        if (!number(values[field])) responseFieldsComplete = false;
+        else responseTotals[field] = (responseTotals[field] || 0) + values[field];
+      }
+    }
+    const responsesReconcile = CODEX_FIELDS.every((field) =>
+      number(cumulative.latest[field]) && responseTotals[field] === cumulative.latest[field]);
+    if (current.format === 'current' && current.responses.size && current.responseUsageComplete
+        && responseFieldsComplete && !cumulative.invalid && responsesReconcile) {
       for (const response of [...current.responses.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
         const turn = response.turn_id ? codexTurnMetadata.get(response.turn_id) : null;
         addObservation({
@@ -368,29 +410,23 @@ function report(sources, options = {}) {
           session_id: sessionId,
           request_ids: response.turn_id ? [response.turn_id] : [],
           message_ids: [response.response_id],
-        }, response.values, turn?.model || null, turn?.effort || null, 'model_pass', false, 'unknown',
-        codexTotals(response.values));
+        }, normalizedResponses.get(response.response_id) || response.values,
+        turn?.model || null, turn?.effort || null, 'model_pass', false, 'unknown',
+        codexTotals(normalizedResponses.get(response.response_id) || response.values));
       }
       continue;
     }
 
     if (current.format === 'current') {
-      warn('Codex current response usage is incomplete; using the cumulative session total');
+      const reason = !current.responseUsageComplete || !responseFieldsComplete
+        ? 'incomplete response usage'
+        : cumulative.invalid
+          ? 'decreased cumulative counters'
+          : 'response usage did not reconcile with cumulative thread usage';
+      warn(`Codex current ${reason}; using the cumulative session total`);
     }
-    // A resumed file can replay a partial update at the same timestamp.
-    const byTime = new Map();
-    for (const { at, values } of current.entries) {
-      const key = Date.parse(at), merged = byTime.get(key) || {};
-      for (const [f, v] of Object.entries(values)) merged[f] = Math.max(merged[f] ?? 0, v);
-      byTime.set(key, merged);
-    }
-    let prior = {}, invalid = false;
-    for (const [, values] of [...byTime].sort((a, b) => a[0] - b[0])) {
-      for (const [f, v] of Object.entries(values)) {
-        if (number(prior[f]) && v < prior[f]) invalid = true;
-        prior[f] = v;
-      }
-    }
+    const prior = cumulative.latest;
+    let invalid = cumulative.invalid;
     if (invalid) warn('Codex cumulative counters decreased; session totals are unknown');
     const read = prior.cached_input_tokens, write = prior.cache_write_input_tokens;
     const input = prior.input_tokens;

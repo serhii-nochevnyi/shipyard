@@ -121,7 +121,7 @@ const codexCurrent = {
   type: 'token_usage_record', timestamp: '2026-09-10T12:02:00.000Z',
   payload: {
     session_id: 'codex-current-session', response_id: 'response-1', turn_id: 'turn-1',
-    usage: { input_tokens: 12, cached_input_tokens: 4, output_tokens: 2 },
+    usage: { input_tokens: 12, cached_input_tokens: 4, output_tokens: 2, reasoning_output_tokens: 1 },
     thread_token_usage: {
       input_tokens: 120, cached_input_tokens: 40, cache_write_input_tokens: 0,
       output_tokens: 8, reasoning_output_tokens: 3, total_tokens: 128,

@@ -56,6 +56,13 @@ test('current Codex thread snapshots win over duplicate legacy snapshots',()=>{
  assert.equal(r.groups[0].input_tokens,300);assert.equal(r.groups[0].cache_read_input_tokens,150);
  assert.equal(r.groups[0].output_tokens,30);assert.equal(r.comparable,true);
 });
+test('current Codex response usage must reconcile with the thread total',()=>{
+ const mismatched={...codexCurrent2,payload:{...codexCurrent2.payload,usage:{...codexCurrent2.payload.usage,input_tokens:1}}};
+ const r=report([{source:'current',rows:[meta,codexCurrent,mismatched]}]);
+ assert.equal(r.observations.length,1);assert.equal(r.observations[0].unit,'session_cumulative');
+ assert.equal(r.groups[0].input_tokens,300);assert.equal(r.comparable,false);
+ assert.ok(r.warnings.some(w=>w.includes('did not reconcile')));
+});
 test('a cumulative reset reports a discontinuity and does not invent a delta',()=>{
  const r=report(files(meta,codex(100),codex(20,'2026-09-10T00:01:00Z')));
  assert.equal(r.comparable,false);assert.ok(r.warnings.some(w=>w.includes('decreased')));
