@@ -1,0 +1,114 @@
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+const { suite, test, done, assert } = require('./assert-harness.cjs');
+
+const ROOT = path.join(__dirname, '..', '..');
+const SCRIPT = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'gsd-sync.cjs');
+const sync = require(SCRIPT);
+
+function write(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
+
+function project({ integration = 'Verdict: passed', merged = true, conflict = false } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-sync-'));
+  const graph = path.join(root, '.planning', 'graph');
+  const phase = path.join(root, '.planning', 'phases', '01-foundation');
+  write(path.join(root, '.planning', 'PROJECT.md'), '# shipyard\n\n## Core Value\nOne truthful workflow\n');
+  write(path.join(root, '.planning', 'ROADMAP.md'), [
+    '# Roadmap: shipyard', '', '## Requirements', '',
+    '- **SYNC-01** — Native GSD state matches the delivery graph.', '',
+    '## Phases', '', '### Phase 1: Foundation',
+    '**Requirements**: SYNC-01', '',
+  ].join('\n'));
+  write(path.join(phase, '01-01-PLAN.md'), [
+    '---', 'phase: 1', 'plan: 1', 'title: "Projection"',
+    'files_modified: [src/example.js]', 'requirements: [SYNC-01]',
+    'delivery:', '  ticket: T-01-01', '  risk: low', '---', '',
+    '## Goal', '', 'Create the projection.',
+  ].join('\n'));
+  write(path.join(phase, 'INTEGRATION.md'), `# Integration\n\n${integration}\n`);
+  write(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: {
+    'T-01-01': { phase: '1', title: 'Projection', files: ['src/example.js'] },
+  } }));
+  write(path.join(graph, 'delivery-state.json'), JSON.stringify({
+    'T-01-01': merged ? { status: 'merged', pr: 7, since: '2026-09-10T10:00:00Z' } : { status: 'pr-open', pr: 7 },
+  }));
+  if (conflict) write(path.join(root, '.planning', 'STATE.md'), '# human-owned state\n');
+  return root;
+}
+
+function run(root, args = []) {
+  return spawnSync(process.execPath, [SCRIPT, '--json', ...args], { cwd: root, encoding: 'utf8' });
+}
+
+suite('gsd-sync — evidence projection');
+
+test('canonicalizes ticket identities and rejects malformed CLI flags', () => {
+  assert.equal(sync.canonicalTicket('t-1-2'), 'T-01-02');
+  assert.equal(sync.canonicalTicket('2', 1), 'T-01-02');
+  assert.equal(sync.integrationStatus('Round 1 was needs-fix\n## Verdict — `passed`').status, 'passed');
+  const r = spawnSync(process.execPath, [SCRIPT, '--phase'], { cwd: ROOT, encoding: 'utf8' });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--phase requires/);
+});
+
+test('writes a complete native projection and is idempotent', () => {
+  const root = project();
+  const first = run(root);
+  assert.equal(first.status, 0, first.stderr);
+  const result = JSON.parse(first.stdout);
+  assert.equal(result.ok, true);
+  assert.equal(result.counts.plans, 1);
+  assert.ok(fs.existsSync(path.join(root, '.planning', 'STATE.md')));
+  assert.ok(fs.existsSync(path.join(root, '.planning', 'REQUIREMENTS.md')));
+  assert.ok(fs.existsSync(path.join(root, '.planning', 'phases', '01-foundation', '01-01-SUMMARY.md')));
+  const state = fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8');
+  assert.match(state, /completed_plans: 1/);
+  const before = fs.readFileSync(path.join(root, '.planning', 'ROADMAP.md'), 'utf8');
+  const second = run(root);
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(fs.readFileSync(path.join(root, '.planning', 'ROADMAP.md'), 'utf8'), before);
+  const check = run(root, ['--check', '--phase', '1']);
+  assert.equal(check.status, 0, check.stderr);
+});
+
+test('check mode detects source drift without rewriting the projection', () => {
+  const root = project();
+  assert.equal(run(root).status, 0);
+  const requirements = path.join(root, '.planning', 'REQUIREMENTS.md');
+  const before = fs.readFileSync(requirements, 'utf8');
+  const plan = path.join(root, '.planning', 'phases', '01-foundation', '01-01-PLAN.md');
+  fs.appendFileSync(plan, '\nchanged source\n');
+  const check = run(root, ['--check']);
+  assert.equal(check.status, 1);
+  assert.match(check.stdout, /stale|missing/);
+  assert.equal(fs.readFileSync(requirements, 'utf8'), before);
+});
+
+test('does not convert needs-fix integration into a green phase', () => {
+  const root = project({ integration: 'Verdict: needs-fix' });
+  assert.equal(run(root).status, 0);
+  const dir = path.join(root, '.planning', 'phases', '01-foundation');
+  const uat = fs.readFileSync(path.join(dir, '01-foundation-UAT.md'), 'utf8');
+  const verification = fs.readFileSync(path.join(dir, '01-foundation-VERIFICATION.md'), 'utf8');
+  assert.match(uat, /status: failed/);
+  assert.match(uat, /result: failed/);
+  assert.match(verification, /status: gaps_found/);
+  assert.match(verification, /needs-fix|finding/i);
+});
+
+test('refuses to overwrite an unowned generated artifact', () => {
+  const root = project({ conflict: true });
+  const r = run(root);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /not owned/);
+  assert.equal(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), '# human-owned state\n');
+});
+
+done();
