@@ -189,3 +189,78 @@ assertion nobody has seen fail is not a guard**: the mutation check is now
 required in the acceptance criteria of every ticket that ships one, because this
 phase caught two guards that passed for the wrong reason and one test of the
 orchestrator's own that did not reproduce the defect it was written for.
+
+## Amendment — 2026-09-10: the first of those two gets a mechanism
+
+**Status of the amendment**: accepted. It adds no decision to D1–D8; it makes
+the FIRST habit above enforceable, because stating it in a Consequences section
+is exactly the shape this repository has measured as insufficient.
+
+*A claim about a mechanism must be checked against the mechanism* has been
+accepted since this ADR shipped, and has been violated repeatedly since —
+including by the orchestrator writing the phases that were meant to enforce it.
+Four instances from a single session, each caught only because something
+happened to check:
+
+- `tickets.json` carries `files`, not `files_modified`. Reading the assumed name
+  returned `0` for every ticket. The counts passed to the resolver happened to
+  be right because they had been read from the plans instead — a signal that was
+  wrong by construction and correct by luck.
+- "the WIRED-pin pattern, used seven times" was a count of `grep` OUTPUT LINES,
+  not of table rows. The number was right and the reason was not, which is the
+  same defect wearing a correct answer.
+- ADR-008 D1 anchored a journal scan on the watermark's timestamp. That is
+  RECORD time, and an event landing between the read and the write falls outside
+  the window forever. Reasoned, not measured; corrected by the executor who
+  opened the file.
+- A sentence was asserted to be in ADR-007 when it was in a plan. The commit came
+  back empty and the assertion was disproved by the `assert` that had been
+  written to confirm it.
+
+Against those, three defects that did NOT ship, each because a schema or a
+command was read instead of recalled: `transitionName` is a transition's own
+name and not a target status; `expand: changelog` cannot be paged and reports a
+truncated history as complete; `gh`'s configured protocol and this project's
+origin disagree on this very host.
+
+**The decision.** The rule is stated once, verbatim, and carried into every
+place an agent reads:
+
+> Where a claim can be checked — a file's contents, a schema's fields, a
+> command's output, a count — check it and name what you ran. A hypothesis is
+> for what cannot be measured yet; it is never a substitute for a measurement
+> that was available.
+
+The second sentence is load-bearing and is not padding: without it the rule
+degrades into "never reason", which would forbid exactly the judgement the
+conveyor pays its top tier for. The boundary is AVAILABILITY, not certainty.
+
+**And the three mechanisms that keep it from being one more skipped paragraph:**
+
+- **A home per audience.** `delivery-rules/SKILL.md` carries it as rule ZERO on
+  both lists — it is a precondition to every other rule rather than an item
+  beside them — and each `references/*.md` carries it at the top, because a rule
+  for a dispatched agent belongs in the file that agent reads.
+- **Into the WORKFLOW scripts, not only into the prose — and the three of them
+  need three different edits, which was itself checked rather than assumed.**
+  The Workflow path builds prompts deterministically and bypasses every skill
+  document, so the rule reaches a Workflow agent only when the orchestrator
+  remembers to type it — the exact failure being fixed. `executors.mjs:167` has
+  a `rulesHint` default and that default gains the sentence. **`fix-round.mjs`
+  and `drift-gate.mjs` have no such field at all** (measured: the only defaults
+  they carry are `artifactLanguage`, `model` and `effort`), so there the
+  sentence is added to prompt construction itself. The first draft of this
+  amendment said "and its siblings", implying a default that does not exist —
+  caught by grepping the three files while writing the rule that requires it.
+- **A sweep, not a list** (D7's own rule, applied to itself): one
+  `source-contract.test.cjs` case asserting the sentinel sentence appears in
+  every `references/*.md`, in `delivery-rules/SKILL.md`, and in each workflow
+  default. Dropping it from one file must name that file, not go quiet.
+- **And a judge that can refuse.** `arch-review` gains one criterion: a PR body
+  or evidence file asserting a fact about an existing mechanism WITHOUT naming
+  the command that established it is a `violation`, not `conform`. That is the
+  half no sweep can cover, because it is about what an agent wrote rather than
+  about what a file contains.
+
+Delivered as the first ticket of the next phase rather than by hand — a rule
+about verification that arrived unverified would be its own counter-example.

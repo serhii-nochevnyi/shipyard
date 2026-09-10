@@ -240,6 +240,11 @@ script — not in a prompt.** Every requirement below is an instance of it.
   path whose origin does not match is a refusal, never an overwrite.
 - **REQ-83** — A resolved checkout is written back to config so nobody is asked
   twice, and any failure parks the ticket without stopping the board.
+- **REQ-84** — *Cross-cutting, and it belongs to ADR-006's 2026-09-10 amendment
+  rather than to ADR-010:* where a claim can be checked, it is checked and the
+  command is named — carried into every file an agent reads, into the Workflow
+  prompt builders that bypass those files, asserted by a sweep, and refusable by
+  arch-review.
 
 ## Phases
 
@@ -429,7 +434,7 @@ so this repository ships a mechanism it cannot run, and the witnessed mutation
 is owed by the proving ground.
 
 ### Phase 30: A ticket you cannot reach is not deliverable
-**Requirements**: REQ-76, REQ-77, REQ-78, REQ-79, REQ-80, REQ-81, REQ-82, REQ-83
+**Requirements**: REQ-76, REQ-77, REQ-78, REQ-79, REQ-80, REQ-81, REQ-82, REQ-83, REQ-84
 
 Decomposed from ADR-010. Today a ticket whose files live in a sibling
 repository with no configured checkout is a dead end with a good error message:
@@ -450,8 +455,21 @@ through `refs/remotes/origin/<base>` and falls back to the bare name silently �
 the false success this repository has already been bitten by. The destination
 obeys the nesting rule `pipeline-config.cjs:575-585` already enforces, checked
 against the resolved path, because a checkout inside the project takes GSD's
-project resolution with it. Eight tickets; it cannot start until phase 29's
-epic lands, and it contests less than phase 31 does.
+project resolution with it. Eight tickets, plus one that rides at the HEAD of the
+phase and belongs to none of ADR-010's decisions: T-30-01 delivers ADR-006's
+2026-09-10 amendment — *where a claim can be checked, check it and name what you
+ran; a hypothesis is for what cannot be measured yet* — into
+`delivery-rules/SKILL.md` as rule zero on both lists, into all seven
+`references/*.md`, into the three Workflow prompt builders (which bypass every
+skill document, and which need three DIFFERENT edits because only
+`executors.mjs` has a `rulesHint` default at all), behind a `source-contract`
+sweep so dropping it from one file names that file, and as one new arch-review
+criterion: a claim about an existing mechanism with no command named is a
+`violation`. It rides here because it is cross-cutting and blocks nothing, and
+it is delivered by the conveyor rather than hand-edited because a rule about
+verification that arrived unverified would be its own counter-example. Nine
+tickets in all; the phase cannot start until phase 29's epic lands, and it
+contests less than phase 31 does.
 
 ### Phase 31: Not every ticket is available work
 **Requirements**: REQ-69, REQ-70, REQ-71, REQ-72, REQ-73, REQ-74, REQ-75
