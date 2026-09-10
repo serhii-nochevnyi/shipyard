@@ -1340,7 +1340,7 @@ tickets:
     repo: null
     wave: 3
     depends_on: [T-35-02]
-    files: ['.planning/PROJECT.md', '.planning/ROADMAP.md', '.planning/config.json', '.planning/REQUIREMENTS.md', '.planning/STATE.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/architecture/**', '.planning/investigations/**', '.planning/phases/**', docs/gsd_multilevel_delivery_pipeline.md]
+    files: ['.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-PLAN.md', '.planning/PROJECT.md', '.planning/ROADMAP.md', '.planning/config.json', '.planning/REQUIREMENTS.md', '.planning/STATE.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/architecture/**', '.planning/investigations/**', '.planning/phases/**', docs/gsd_multilevel_delivery_pipeline.md]
     risk: medium
     human_checkpoint: false
     preauthorized: false

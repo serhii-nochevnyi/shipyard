@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3cd62328e7ad203b16358d5301b339c92a0ac46ea71ecb9a2d1c2a566b434e9d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
 phase: 21-verdicts-a-human-would-have-made-anyway
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 3cd62328e7ad203b16358d5301b339c92a0ac46ea71ecb9a2d1c2a566b434e9d
+shipyard_source_fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
 ---
 
 # Phase 21: The degenerate-green verdict rides the trailer and changes no outcome — Delivery Projection

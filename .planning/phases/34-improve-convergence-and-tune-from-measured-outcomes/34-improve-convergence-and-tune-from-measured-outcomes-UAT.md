@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3cd62328e7ad203b16358d5301b339c92a0ac46ea71ecb9a2d1c2a566b434e9d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
 phase: 34
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 3cd62328e7ad203b16358d5301b339c92a0ac46ea71ecb9a2d1c2a566b434e9d
+shipyard_source_fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
 ---
 
 # Phase 34: Improve convergence and tune from measured outcomes — UAT Projection

@@ -2436,8 +2436,9 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
+        ".planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-PLAN.md",
         ".planning/PROJECT.md",
         ".planning/ROADMAP.md",
         ".planning/config.json",

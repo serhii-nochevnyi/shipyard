@@ -1,9 +1,9 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3cd62328e7ad203b16358d5301b339c92a0ac46ea71ecb9a2d1c2a566b434e9d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
 phase: 27
 verified: 2026-09-10T09:03:52.068Z
 status: gaps_found
-shipyard_source_fingerprint: 3cd62328e7ad203b16358d5301b339c92a0ac46ea71ecb9a2d1c2a566b434e9d
+shipyard_source_fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
 ---
 
 # Phase 27: The conveyor measures its own state — Verification Projection
