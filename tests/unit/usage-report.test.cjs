@@ -51,8 +51,9 @@ test('a cumulative reset reports a discontinuity and does not invent a delta',()
  assert.equal(r.groups[0].input_tokens,null);
 });
 test('missing identity and invalid counters are reported',()=>{
- const r=report(files({type:'assistant',message:{usage:{input_tokens:-1}}},codex(100)));
- assert.equal(r.comparable,false);assert.ok(r.warnings.length>=2);
+ const r=report(files({type:'assistant',message:{id:'invalid',usage:{input_tokens:-1}}},codex(100)));
+ assert.equal(r.comparable,false);assert.ok(r.warnings.some(w=>w.includes('invalid input_tokens')));
+ assert.ok(r.warnings.some(w=>w.includes('session identity')));
 });
 test('CLI replays explicit paths once, excludes content, and diagnoses malformed input',()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'usage-cli-'));
@@ -77,4 +78,14 @@ test('nonzero Codex cache writes do not invent an uncached partition',()=>{
  const row=codex(100);row.payload.info.total_token_usage.cache_write_input_tokens=10;
  const g=report(files(meta,row)).groups[0];assert.equal(g.input_tokens,100);
  assert.equal(g.cache_creation_input_tokens,10);assert.equal(g.uncached_input_tokens,null);
+});
+
+test('request metadata arriving later does not create a second message',()=>{
+ const a=claude({input_tokens:5,cache_creation_input_tokens:0,cache_read_input_tokens:0,output_tokens:1});
+ delete a.requestId;const b=claude({input_tokens:5,cache_creation_input_tokens:0,cache_read_input_tokens:0,output_tokens:3},{stop_reason:'end_turn'});
+ const r=report(files(a,b));assert.equal(r.groups[0].observations,1);assert.equal(r.groups[0].output_tokens,3);
+});
+test('malformed usage containers are warned about without aborting the report',()=>{
+ const r=report(files(claude('bad'),claude([]),claude(5)));
+ assert.equal(r.comparable,false);assert.ok(r.warnings.some(w=>w.includes('usage object')));
 });

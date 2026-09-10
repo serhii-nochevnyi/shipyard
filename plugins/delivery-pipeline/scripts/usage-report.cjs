@@ -24,9 +24,10 @@ function report(sources) {
       if (!row || typeof row !== 'object') continue;
       if (row.type === 'session_meta') session = row.payload?.id || null;
       const msg = row.message;
-      if (row.type === 'assistant' && msg?.usage && msg.model !== '<synthetic>') {
+      if (row.type === 'assistant' && msg?.usage != null && msg.model !== '<synthetic>') {
         usageRows++;
-        const key = msg.id ? JSON.stringify([row.requestId || null, msg.id]) : row.uuid;
+        if (typeof msg.usage !== 'object' || Array.isArray(msg.usage)) { warn('Claude usage object is malformed'); continue; }
+        const key = msg.id ? JSON.stringify(['message', msg.id]) : row.uuid ? JSON.stringify(['uuid', row.uuid]) : null;
         if (!key) { warn('Claude usage without stable identity was skipped'); continue; }
         let q = requests.get(key);
         if (!q) {
@@ -50,6 +51,7 @@ function report(sources) {
         const u = row.payload.info?.total_token_usage;
         if (!u) continue;
         usageRows++;
+        if (typeof u !== 'object' || Array.isArray(u)) { warn('Codex usage object is malformed'); continue; }
         if (!session) { warn('Codex cumulative usage without session identity was skipped'); continue; }
         if (!row.timestamp || !Number.isFinite(Date.parse(row.timestamp))) {
           warn('Codex cumulative usage without valid timestamp was skipped'); continue;

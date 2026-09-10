@@ -7,8 +7,8 @@ supported command reference. Exit 0 means recognized data without parse/identity
 errors, 1 means a report with coverage warnings, and 2 means invalid arguments or
 an unreadable file. Zero warnings is not proof of complete billing data.
 
-Claude streaming rows are deduplicated by request/message identity, with UUID
-fallback; counters retain their component maxima across partial updates.
+Claude streaming rows are deduplicated by stable message identity, with UUID
+fallback (late request metadata does not change that key); counters retain their component maxima across partial updates.
 Iterations replace the aggregate rather than being added to it. Advisor passes
 remain separate. Without iterations the observation is a response aggregate,
 not an assumed single context pass. Missing counters remain null; `missing`
