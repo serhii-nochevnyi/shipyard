@@ -1,7 +1,9 @@
 # Dispatch recording
 
 `dispatch-record.cjs mark` records one ticket. When a launch hands out several
-tickets, record them as one validated mutation:
+tickets, record them as one validated mutation. The same batching rule applies
+when a wave completes: `clear-many --stdin` removes all returned ticket ids in
+one lock and one front refresh.
 
 ```bash
 cat <<'JSON' | node plugins/delivery-pipeline/scripts/dispatch-record.cjs mark-many --stdin
@@ -22,6 +24,11 @@ cat <<'JSON' | node plugins/delivery-pipeline/scripts/dispatch-record.cjs mark-m
 JSON
 ```
 
+```bash
+printf '%s\n' '["T-01-01", "T-01-02"]' \
+  | node plugins/delivery-pipeline/scripts/dispatch-record.cjs clear-many --stdin
+```
+
 The input is a JSON array of objects with `ticket`, `role` and the same fields as
 `mark`: `model`, `effort`, `effort_applied`, `route`, `task_level`, `runtime`,
 `backend`, `observed_model`, `observed_effort`, `agent_file` and `agent_id`.
@@ -29,11 +36,13 @@ Values are strings; omit an unmeasured field. `route` is the resolver's returned
 route, not a hand-written reason. The current state supplies each ticket's PR
 and fingerprint.
 
-All items are validated before the store or journal is changed. The batch takes
-one lock, appends one dispatch event per item and refreshes the front once. A
-duplicate or unknown ticket rejects the whole batch; an empty array is an
-explicit no-op. Add `--graph <project>/.planning/graph` when running outside
-the project checkout.
+All mark items are validated before the store or journal is changed. The mark
+batch takes one lock, appends one dispatch event per item and refreshes the
+front once. A duplicate or unknown ticket rejects the whole mark batch; an
+empty array is an explicit no-op. Clear batches validate ids and are idempotent:
+an id whose record already lifted is reported as absent rather than failing the
+whole result. Add `--graph <project>/.planning/graph` when running outside the
+project checkout.
 
 This command only records attribution. It does not select a model, launch an
 agent, infer applied effort or make quota/savings claims.

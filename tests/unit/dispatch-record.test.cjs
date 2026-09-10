@@ -540,6 +540,54 @@ test('mark-many rejects the whole batch before writing when one item is invalid'
   assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'a failed batch must not append journal lines');
 });
 
+test('clear-many removes a completed wave with one refresh and is idempotent', () => {
+  const state = {};
+  for (let i = 1; i <= 3; i++) state[`T-01-0${i}`] = { ...READY };
+  const { project, graph } = scratch(state);
+  const mark = [DISPATCH, 'mark'];
+  for (let i = 1; i <= 3; i++) {
+    execFileSync('node', [...mark, `T-01-0${i}`, 'executor'], { cwd: project });
+  }
+  const before = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8');
+  const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
+    cwd: project,
+    input: JSON.stringify(['T-01-01', 'T-01-02', 'T-01-03']),
+    encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, `batch clear must succeed (${r.stderr})`);
+  assert.match(r.stdout, /dispatch cleared for 3 of 3 ticket\(s\)/);
+  assert.deepStrictEqual(store(graph), {}, 'all completed records are removed');
+  assert.equal(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8'), before,
+    'clearing is not a second dispatch event');
+
+  // A result can arrive after a record has already lifted on its owner output;
+  // the batch remains safe to replay and reports the missing records honestly.
+  const again = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
+    cwd: project,
+    input: JSON.stringify(['T-01-01', 'T-01-02', 'T-01-03']),
+    encoding: 'utf8',
+  });
+  assert.equal(again.status, 0, `replaying clear-many must be harmless (${again.stderr})`);
+  assert.match(again.stdout, /dispatch cleared for 0 of 3 ticket\(s\)/);
+});
+
+test('clear-many rejects duplicate or malformed ids before mutating the store', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const before = store(graph);
+  for (const input of [
+    ['T-01-01', 'T-01-01'],
+    ['T-01-01', 7],
+    {},
+  ]) {
+    const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
+      cwd: project, input: JSON.stringify(input), encoding: 'utf8',
+    });
+    assert.equal(r.status, 1, `invalid clear-many payload must refuse: ${JSON.stringify(input)}`);
+    assert.deepStrictEqual(store(graph), before, 'a rejected clear batch leaves existing records intact');
+  }
+});
+
 suite('dispatch-record — a dispatch records WHAT it dispatched, or says it does not know');
 
 // The whole value of these fields is that a later ladder review reads the journal
@@ -1120,6 +1168,19 @@ test('every mark deliver.md documents passes the agent identity too', () => {
     assert.ok(/--agent-id /.test(l),
       `a documented mark that records no holder: ${l.trim()}`);
   }
+});
+
+test('delivery docs prefer one mark/clear batch per fan-out', () => {
+  const sentinel = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 'utf8');
+  assert.match(sentinel, /dispatch-record\.cjs mark-many --stdin/,
+    'the background guard must use the same batch launch path');
+  assert.match(sentinel, /dispatch-record\.cjs clear-many --stdin/,
+    'the background guard must use the same batch cleanup path');
+  const docs = fs.readFileSync(path.join(__dirname, '..', '..', 'docs', 'dispatch-record.md'), 'utf8');
+  assert.match(docs, /dispatch-record\.cjs mark-many --stdin/,
+    'the operator reference must expose the one-call launch recording path');
+  assert.match(docs, /dispatch-record\.cjs clear-many --stdin/,
+    'the operator reference must expose the one-call completion cleanup path');
 });
 
 test('deliver.md\'s ladder query runs, and UNCONFIRMED is a bucket rather than a hole', () => {
