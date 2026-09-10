@@ -224,6 +224,22 @@ script — not in a prompt.** Every requirement below is an instance of it.
   fired.
 - **REQ-75** — The read cache is its own store with its own expiry, never merged
   with the projection watermark that expires by a different rule.
+- **REQ-76** — A repository is RESOLVED in order: configured, then discovered,
+  then asked for — cloning is the last resort, never the first move.
+- **REQ-77** — Discovery matches on the remote origin, never on a directory
+  name, over declared roots only, and reports ambiguity instead of picking.
+- **REQ-78** — A clone happens only when a person answers; an unattended run
+  parks the repo rather than writing into somebody's filesystem.
+- **REQ-79** — The clone destination obeys the same nesting rule the config
+  validator already enforces, checked against the resolved path.
+- **REQ-80** — The clone protocol mirrors the PROJECT's origin, not the `gh`
+  CLI's configured preference.
+- **REQ-81** — The clone is full: no depth, no single-branch, because base
+  resolution needs `refs/remotes/origin/<base>` and falls back silently.
+- **REQ-82** — Resolution is idempotent and refuses rather than clobbers: a
+  path whose origin does not match is a refusal, never an overwrite.
+- **REQ-83** — A resolved checkout is written back to config so nobody is asked
+  twice, and any failure parks the ticket without stopping the board.
 
 ## Phases
 
@@ -412,7 +428,32 @@ later: `pipeline.jira.enabled: false` here and all 69 tickets carry a null key,
 so this repository ships a mechanism it cannot run, and the witnessed mutation
 is owed by the proving ground.
 
-### Phase 30: Not every ticket is available work
+### Phase 30: A ticket you cannot reach is not deliverable
+**Requirements**: REQ-76, REQ-77, REQ-78, REQ-79, REQ-80, REQ-81, REQ-82, REQ-83
+
+Decomposed from ADR-010. Today a ticket whose files live in a sibling
+repository with no configured checkout is a dead end with a good error message:
+`state-sync.cjs:1034` says exactly what is missing and the tickets stay
+visible, blocked and nobody's. This makes the checkout something the conveyor
+RESOLVES rather than a precondition the operator satisfies by hand — but
+cloning is the LAST step, not the first. A repository the operator already has
+is one with its own branches and stashes; a second copy beside it is two
+checkouts that diverge with the work in only one. So the order is configured →
+discovered by ORIGIN (never by directory name, over declared roots only) →
+asked, with an unattended run taking the parked branch because silence is not
+consent to write into somebody's filesystem. Two decisions come from
+measurements taken while writing the ADR: the clone protocol follows the
+PROJECT's origin rather than the `gh` CLI's preference, because on this very
+host they disagree (gh says https, origin is ssh); and the clone is FULL, no
+depth and no single-branch, because `graph-dir.cjs:104` resolves every base
+through `refs/remotes/origin/<base>` and falls back to the bare name silently —
+the false success this repository has already been bitten by. The destination
+obeys the nesting rule `pipeline-config.cjs:575-585` already enforces, checked
+against the resolved path, because a checkout inside the project takes GSD's
+project resolution with it. Eight tickets; it cannot start until phase 29's
+epic lands, and it contests less than phase 31 does.
+
+### Phase 31: Not every ticket is available work
 **Requirements**: REQ-69, REQ-70, REQ-71, REQ-72, REQ-73, REQ-74, REQ-75
 
 Decomposed from ADR-009, which answers two operator rules that are one subject
@@ -434,4 +475,7 @@ depends on nothing. The gate's failure direction is deliberately the OPPOSITE
 of ADR-008's: a tracker error must never block a merge, but it must block a
 start, because an unanswered question is not a yes. The phase cannot begin
 until phase 29's epic lands — it edits `pipeline-config.cjs`, `front.cjs` and
-`deliver.md`, all of which phase 29 tickets own.
+`deliver.md`, all of which phase 29 tickets own. It also runs AFTER phase 30
+rather than before it, and the reason is an argument rather than a preference:
+a ticket that passes this eligibility gate but has no local checkout is parked
+either way, so the gate cannot be exercised until reachability is solved.
