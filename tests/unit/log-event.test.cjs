@@ -160,6 +160,24 @@ test('the dispatch event is refused — marking and journalling are ONE act', ()
   assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
 });
 
+test('the jira_transition event is refused — the watermark and the line are ONE act', () => {
+  // A hand-written line records that somebody's issue was moved and leaves
+  // `jira-projection.json` untouched, so the planner offers the identical item
+  // next round and the agent transitions the issue a SECOND time — on a board
+  // outside this repository, where nothing here can undo it. It is also the one
+  // line that would carry a `transition_id` nobody checked, which is the evidence
+  // ADR-008 D5 exists to demand.
+  const { project, graph } = scratch();
+  const r = run(project, ['jira_transition', 'ticket=T-29-05', 'key=SHIP-5', 'to=merged', 'transition_id=31']);
+  assert.notStrictEqual(r.status, 0, 'jira_transition must be refused');
+  assert.ok(/half-recorded/.test(r.stderr), r.stderr);
+  assert.ok(!/duplicate/.test(r.stderr), 'an incomplete act, not a duplicate');
+  assert.ok(/jira-project\.cjs record/.test(r.stderr), 'it must name the command that does both');
+  assert.ok(/--transition-id/.test(r.stderr), 'and the flag that carries the evidence');
+  assert.ok(/watermark/i.test(r.stderr), 'and the half a hand-written line skips');
+  assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
+});
+
 suite('log-event — one sha format: the full forty characters');
 
 // `gate_status` records a head as the full forty and a reader that only has the
