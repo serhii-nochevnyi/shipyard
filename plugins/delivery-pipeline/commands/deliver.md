@@ -721,8 +721,8 @@ grow a dependency on a tracker's availability. Ask the planner for the work
 list, and SAY WHICH graph: the planner resolves the project — and therefore the
 configuration — from the graph directory it is given, while a bare invocation
 resolves `<cwd>/.planning/graph`, which from a ticket worktree is someone else's
-or nothing at all. So pass `--graph <project>/.planning/graph`, or run it from
-the project directory with no flag, exactly as state-sync is run:
+or nothing at all. Pass the explicit project graph in the invocation below,
+including when running from a ticket worktree:
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-project.cjs plan --json --graph <project>/.planning/graph
