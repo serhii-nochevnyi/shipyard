@@ -157,9 +157,29 @@ test('an INVALID config projects nothing and DOES say why (ADR-004 D2)', () => {
   assert.deepEqual(out.items, []);
   assert.equal(out.warnings.length, 1, 'exactly one line, naming the file');
   assert.match(out.warnings[0], /invalid/i);
+  assert.match(out.warnings[0], /config\.json/, 'names WHICH file — actionable with several projects/graphs involved');
   const cli = run(graphOf(p), ['plan']);
   assert.equal(cli.status, 0, 'still exit 0 — this never blocks a round (ADR-008 D6)');
   assert.match(cli.stderr, /invalid/i);
+});
+
+test('a config that PARSES but carries a non-fatal warning does not project it as a silent off-switch', () => {
+  // Copilot's own example: an invalid `pipeline.jira_transitions` entry that
+  // gets skipped must not read as "the projection is quietly off" — the
+  // diagnostic loadConfig already computed has to reach `plan`'s own output.
+  const p = project({
+    tickets: { 'T-24-05': 'SHIP-5' },
+    journal: [sc('T-24-05', 'pr-open', 'merged', '2026-09-07T19:35:52.586Z', 44)],
+    config: { some_unknown_key: 1, jira_transitions: { merged: 'Done' } },
+  });
+  const out = plan(p);
+  assert.deepEqual(ids(out), ['T-24-05'], 'the valid half of the config still projects');
+  assert.equal(out.enabled, true);
+  assert.equal(
+    out.warnings.some((w) => /unknown pipeline config key "some_unknown_key"/.test(w)),
+    true,
+    "loadConfig's own warning must be carried through, not discarded"
+  );
 });
 
 // ── who is a subject ────────────────────────────────────────────────────────
