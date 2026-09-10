@@ -725,7 +725,7 @@ function recordProjection(opts = {}, dir = GRAPH_DIR) {
 function recordUnreachable(opts = {}, dir = GRAPH_DIR) {
   const { ticket, key, to } = opts;
   if (!ticket || !key) {
-    throw new Error('record --unreachable needs a ticket and a tracker key: record --unreachable <ticket> <key> --to <item-to> --offered "<names>"');
+    throw new Error('record --unreachable needs a ticket and a tracker key: record --unreachable <ticket> <key> --to <item-to> [--offered "<names>"]');
   }
   if (!to) {
     throw new Error(
