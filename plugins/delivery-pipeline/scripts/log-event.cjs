@@ -165,6 +165,20 @@ const OWNED_BY_SCRIPTS = {
     lost: 'record',
     fix: 'dispatch-record.cjs mark <ticket> <role> --model <alias> --effort <level>',
   },
+  // `jira_transition` is the same half-act, one store further out, and the half
+  // it skips is the one that makes the projection exactly-once. A hand-written
+  // line records that somebody's issue was moved and leaves `jira-projection.json`
+  // untouched — so the planner offers the identical item on the next round and the
+  // agent transitions the issue a second time, on somebody else's board. It is
+  // also the line that would carry no `transition_id` anybody checked: the whole
+  // point of the verb is that an agent which cannot name the id it used has not
+  // produced evidence (ADR-008 D5).
+  jira_transition: {
+    by: 'jira-project.cjs record', kind: 'tracker projection', why: halfAct,
+    otherHalf: 'ADVANCING the watermark',
+    lost: 'record',
+    fix: 'jira-project.cjs record <ticket> <key> --to <item-to> --transition-id <id> --status <name>',
+  },
   flake: {
     by: 'failure-signature.cjs rerun', why: forgedState,
     fix: 'failure-signature.cjs rerun <ticket> --signature <sig> --head <sha> --outcome green',

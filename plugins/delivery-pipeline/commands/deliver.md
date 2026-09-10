@@ -464,7 +464,8 @@ switches off the depth rung a repeated failure earns, and the reader says so),
 `fable_window_tokens` (250000), `max_attempts` (5), `plan_defect_signatures` (3),
 `pr_fetch_limit`, `stale_merge_hours`, `stale_draft_hours`,
 `integration_mode`, `use_workflow`, `sentinel` (`auto` | `off`), `auto_merge`
-(`epic` | `off`), `graph_gate`, `jira`, `repos`
+(`epic` | `off`), `graph_gate`, `jira`, `jira_transitions` (the tracker
+projection's map, EMPTY by default, which is the projection off), `repos`
 (`{"owner/name": "/abs/path/to/checkout"}` — see the multi-repo section).
 
 **GSD's own settings the conveyor obeys** (read, never written):
@@ -701,6 +702,124 @@ It lifts itself once the PR moves (a push, a review answer, undrafting), or with
 
 A missed event is lost forever (GitHub won't recover it), so the log call goes IN
 THE SAME step where the fact occurred, not "at the end."
+
+## Tracker projection — the acting half (ADR-008 D4)
+
+The tracker is a PROJECTION of the journal above, and a projection is driven:
+the `status_change` events the conveyor already owns are replayed onto the issue
+each ticket's `delivery.jira` key names. The deterministic half of that is
+`jira-project.cjs` — the `plan` verb computes the work list from three LOCAL
+files (the journal, `tickets.json`, the configured map) and its watermark makes
+every transition exactly-once and forward-only. That script opens no socket and
+holds no credential. **The acting half below is yours**, because the only
+tracker client the conveyor has is the MCP the session connected.
+
+**Where it runs, and why nothing waits on it.** The projection is a SEPARATE act
+AFTER a `state-sync.cjs`, never a step inside one: state-sync runs on every
+babysit round and its wall time IS this conveyor's tick rate, so it must not
+grow a dependency on a tracker's availability. Ask the planner for the work
+list, and SAY WHICH graph: the planner resolves the project — and therefore the
+configuration — from the graph directory it is given, while a bare invocation
+resolves `<cwd>/.planning/graph`, which from a ticket worktree is someone else's
+or nothing at all. Pass the explicit project graph in the invocation below,
+including when running from a ticket worktree:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-project.cjs plan --json --graph <project>/.planning/graph
+```
+
+`enabled: false`, or an empty `items` — the ordinary outcome, once a round — is
+ONE line and nothing else. Otherwise perform each emitted item below, then move
+on; the front does not wait for you here.
+
+**A pending projection is not actionable, and it is not a reason to block.**
+That is a deliberate asymmetry with every other unreached mechanism this
+pipeline has fixed, where the remedy was to put the work on the board and let
+the stop gate enforce it. The justification here is specific rather than
+general: the watermark makes catch-up FREE, so a round that skips the projection
+costs one round of tracker lag and the next round closes it. Nothing — not the
+graph, not the front, not a merge — waits on a transition, so there is no
+equivalent here of the silent hours a skipped CI wait cost. It stays out of
+`delivery-front.json` and out of the stop gate for that reason, and only for
+that reason.
+
+**It cannot fire unconfigured.** `jira_transitions` (declared as
+`delivery_pipeline.jira_transitions`; the `pipeline.*` spelling is read too) maps
+OUR status to THEIR target status NAME — `pr-open:In Progress, merged:Done` —
+and it is EMPTY by default. Empty is the feature switched off, the planner then
+emits nothing, and nothing here runs: silence is not consent to write into
+someone's tracker.
+
+Each emitted item carries `{ticket, key, from, to, target_status, ts}`, and its
+two status fields are two different vocabularies. Confusing them is the defect
+this section exists to prevent:
+
+- `to` is OUR status — one of `pending`, `branched`, `pr-open`, `merged`.
+- `target_status` is THEIR status NAME, straight off the map (`Done`).
+- `ts` is the driving `status_change`'s own timestamp, copied through — it is
+  what `record --unreachable` anchors suppression to, not the wall clock.
+
+For EACH item:
+
+1. **Ask the connected tracker MCP for the issue's available transitions** —
+   whatever operation it exposes for that (e.g. `getTransitionsForJiraIssue`).
+   Do not hand-roll REST calls, exactly as the export half does not.
+2. **Match on the TARGET STATUS, never on the transition's own name.** The one
+   you want is the offered transition whose TARGET status name equals the item's
+   `target_status`. The MCP's own schema refuses the shortcut in as many words:
+   *"Name of the transition itself, not the target status — the two often
+   differ, so 'Done' does not match a transition named 'Review->Done'."* A
+   projection keyed on the transitions' own names works against the one workflow
+   it was written for and silently does nothing on the next one.
+3. **Transition by that ID.** Two connected MCP variants take different
+   arguments here — one requires `transition: {id}` and accepts no name at all,
+   the other accepts an id or a name — so the ID is the only argument BOTH of
+   them take. Resolving it in step 1 is not an optimisation; it is the only
+   portable call.
+4. **Record it, with the id as the evidence:**
+
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-project.cjs record <T> <KEY> \
+     --to <the performed item's "to"> --transition-id <id> --status "<the target status name>"
+   ```
+
+   Pass the `to` from the item actually performed. If the journal advanced while
+   the tracker call ran, recording that older item refuses and the next planner
+   call retains the newer work; never substitute the newer item's `to`.
+
+   This is the ONLY thing that advances the watermark, and it journals the
+   `jira_transition` event for you. It REFUSES a report that names no id — "I
+   transitioned it" is not evidence, the id of the transition performed is — and
+   a transition you do not record is one the next round projects all over again.
+5. **Target not reachable → report it, and do not retry.** Workflows forbid
+   arbitrary jumps, so a target status the issue's current status does not offer
+   is an ORDINARY outcome, not a failure:
+
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-project.cjs record --unreachable <T> <KEY> \
+     --to <the item's own "to"> --offered "<the transitions that WERE offered>"
+   ```
+
+   `--to` takes OUR status off the item (`merged`), NOT the target name; the
+   recorder refuses a report filed at a `to` the planner never offered. The
+   report does not advance the watermark — nothing was transitioned — and it
+   withholds that item until a NEWER `status_change` for the ticket arrives, so
+   nothing retries. Without it the pair is a retry loop wearing a report's hat:
+   one tracker call per stuck ticket per round, forever.
+6. **Never pass a comment through the transition.** The schema says a comment
+   sent with the transition's `update` may be dropped WITHOUT error while the
+   transition still reports success — a silent lie in the audit trail. Comments,
+   worklogs and the phase Epic issue are all out of scope here.
+7. **No tracker MCP connected, or the map empty → skip with ONE line.** Never an
+   error, never a retry loop, and never a reason to hold a merge.
+
+**A tracker error never blocks a merge.** It does not fail a round, hold a
+ticket, or change a fixpoint either — report it in one line and carry on with
+the front. This is the export half's standing rule (*"a Jira error never blocks
+or fails decomposition"*) extended to delivery unchanged, and it is the whole
+reason this half is allowed to write at all: the conveyor's own records are the
+source of truth and the tracker is the copy, so a copy that failed to update is
+a stale board, never a stopped pipeline.
 
 ## Burst parallelism via Workflow (optional, with fallback)
 
@@ -1646,7 +1765,11 @@ is a fixer with no memory. Until each PR is green or park-blocked — and do NOT
 stop at that: move on to the recomputation of the front below.
 
 **Loop-back to the fixpoint (after each round/merge — mandatory).**
-1. `state-sync.cjs` — fresh state and board.
+1. `state-sync.cjs` — fresh state and board. Then, as a SEPARATE act and from
+   the project directory, the tracker projection (see "Tracker projection — the
+   acting half"): it is bookkeeping, so it is neither actionable nor a reason to
+   block — the watermark makes catch-up free, and a round that skips it costs
+   one round of tracker lag that the next round closes.
 2. Recompute the actionable front (the Principle at the top): new `ready` (unblocked
    children, cascade dependents) + `branched-needs-pr` + open non-green PRs.
 3. Front NOT empty → add the new ready ones to scope, return to Step 2/3 for them;

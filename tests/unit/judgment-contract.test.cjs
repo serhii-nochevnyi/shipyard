@@ -215,6 +215,18 @@ const SENTINEL_BASE_MERGE = {
   end: /^\*\*`review-fix`\*\*/m,
 };
 
+// The tracker projection is ONE call, and the section around it names the
+// script in prose three times over (the planner, the `plan` verb, the recorder
+// the acting half invokes per item). So the slice is the paragraph that says
+// WHERE the projection runs plus the fenced block under it — ending at the
+// asymmetry paragraph, which is the next `**bold**` lead — and the pattern is
+// the `scripts/<name>.cjs <verb>` path form that only an invocation writes.
+const TRACKER_PROJECTION_CALL = {
+  name: 'deliver.md § tracker projection — where it runs',
+  start: /^\*\*Where it runs, and why nothing waits on it\.\*\*/m,
+  end: /^\*\*A pending projection is not actionable/m,
+};
+
 // The invocation template a log line writes and a sentence about the field does
 // not: `effort_applied=<level|unknown>` in the command, versus "the honest
 // record is `effort_applied=unknown`" in the paragraph beside it — which is
@@ -292,6 +304,20 @@ const WIRED = [
     why: 'the same flag on `state-sync.cjs` writes the board the stop gate enforces on, while here it '
       + 'renders and persists nothing — measured when the gate correctly refused a stop whose board still '
       + 'listed an item the orchestrator believed it had parked (the behaviour is pinned in front.test.cjs)',
+  },
+  {
+    kind: 'wired',
+    mechanism: '`jira-project.cjs plan` — the tracker projection\'s work list',
+    reader: 'the acting half in deliver.md — the agent that asks the connected tracker for an issue\'s '
+      + 'transitions and performs each emitted item',
+    // ADR-008 D6 puts the call in the main loop AFTER a state-sync and
+    // deliberately NOT inside it: state-sync's wall time is the tick rate. So
+    // the one home is the paragraph in deliver.md that says where it runs.
+    homes: [{ doc: DELIVER, slice: TRACKER_PROJECTION_CALL, caller: [/scripts\/jira-project\.cjs plan/] }],
+    why: 'the planner is a read-only function of three LOCAL files and opens no socket — with no caller '
+      + 'it computes nothing, the watermark never moves, and the whole acting half under it is a '
+      + 'procedure nobody is ever told to begin. A tested, complete, inert mechanism is ADR-007\'s '
+      + 'entire subject and the exact defect phase 28 shipped a fix for',
   },
   {
     kind: 'decided',
