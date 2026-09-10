@@ -1330,3 +1330,19 @@ tickets:
     primary_parent: T-32-06
     pr_base: ticket/T-32-06-deliver-the-accepted-task-level-model-la
     jira: null
+  T-32-04:
+    title: Batch dispatch attribution atomically
+    plan: '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-PLAN.md'
+    phase: '32'
+    repo: null
+    wave: 10
+    depends_on: [T-32-03]
+    files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-PLAN.md', plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, docs/dispatch-record.md]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-32-04-batch-dispatch-attribution-atomically
+    epic: epic/32-measure-usage-and-make-the-backlog-actionable
+    primary_parent: T-32-03
+    pr_base: ticket/T-32-03-expose-routing-attribution-eligibility-i
+    jira: null

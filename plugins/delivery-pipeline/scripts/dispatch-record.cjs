@@ -12,6 +12,8 @@
 //                             [--observed-effort <level>] [--agent-file <name>]
 //                             [--agent-id <launch id>]
 //                             [--graph <dir>]
+//   dispatch-record.cjs mark-many --stdin [--graph <dir>]
+//                             # JSON array of {ticket, role, ...mark fields}
 //   dispatch-record.cjs clear <ticket>        [--graph <dir>]
 //   dispatch-record.cjs list  [--json]        [--graph <dir>]
 //
@@ -570,6 +572,70 @@ function parseMarkFlags(argv, role) {
   return decided;
 }
 
+// A wave is launched as one action, but the old CLI needed one process, lock and
+// front refresh per ticket. `mark-many` accepts the same facts as `mark` in a
+// JSON array and turns the whole batch into one validated mutation. The payload
+// uses JSON field names rather than shell flags so a route containing spaces is
+// not re-quoted by every caller. It deliberately does not accept `reason` or
+// `pr`: the former is the refused hand-composed route spelling, and the latter
+// is read from the state the record is bound to.
+const BATCH_FIELDS = new Map([
+  ['model', 'model'],
+  ['effort', 'effort'],
+  ['effort_applied', 'effort-applied'],
+  ['route', 'route'],
+  ['task_level', 'task-level'],
+  ['runtime', 'runtime'],
+  ['backend', 'backend'],
+  ['observed_model', 'observed-model'],
+  ['observed_effort', 'observed-effort'],
+  ['agent_file', 'agent-file'],
+  ['agent_id', 'agent-id'],
+]);
+
+function parseBatchEntries(raw) {
+  if (!Array.isArray(raw)) {
+    throw new Error('mark-many input must be a JSON array of dispatch objects');
+  }
+  const seen = new Set();
+  return raw.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`mark-many item ${index + 1} must be an object`);
+    }
+    if (typeof item.ticket !== 'string' || !item.ticket) {
+      throw new Error(`mark-many item ${index + 1} needs a non-empty ticket`);
+    }
+    if (typeof item.role !== 'string' || !item.role) {
+      throw new Error(`mark-many item ${index + 1} needs a non-empty role`);
+    }
+    if (!ROLES.includes(item.role)) {
+      throw new Error(`"${item.role}" is not a pipeline role — the board would name a holder nothing can identify.\n  roles: ${ROLES.join(', ')}`);
+    }
+    if (seen.has(item.ticket)) {
+      throw new Error(`mark-many contains duplicate ticket ${item.ticket} — one ticket can have only one active dispatch`);
+    }
+    seen.add(item.ticket);
+
+    const flags = [];
+    for (const [key, value] of Object.entries(item)) {
+      if (key === 'ticket' || key === 'role') continue;
+      const flag = BATCH_FIELDS.get(key);
+      if (!flag) {
+        throw new Error(`mark-many item ${index + 1} has unsupported field "${key}" — use ticket, role and the mark fields`);
+      }
+      if (typeof value !== 'string') {
+        throw new Error(`mark-many item ${index + 1} field "${key}" must be a string; omit it when it is unmeasured`);
+      }
+      flags.push(`--${flag}`, value);
+    }
+    return {
+      ticket: item.ticket,
+      role: item.role,
+      decided: parseMarkFlags(flags, item.role),
+    };
+  });
+}
+
 // `draft` is normalized so `undefined` and `false` are one state; everything else
 // is compared as it stands, with an absent field as null.
 function fieldValue(s, field) {
@@ -633,6 +699,9 @@ function readState(cwd) {
   }
 }
 
+const hasStateTicket = (state, id) =>
+  Object.prototype.hasOwnProperty.call(state || {}, id);
+
 function load(cwd = process.cwd()) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(graphDir(cwd), STORE_NAME), 'utf8'));
@@ -654,7 +723,15 @@ function mutate(cwd, fn) {
     const store = load(cwd);
     const extra = fn(store);
     writeAtomic(path.join(graphDir(cwd), STORE_NAME), JSON.stringify(store, null, 2) + '\n');
-    if (extra) fs.appendFileSync(path.join(graphDir(cwd), 'delivery-log.jsonl'), JSON.stringify(extra) + '\n');
+    if (extra) {
+      const events = Array.isArray(extra) ? extra : [extra];
+      if (events.length) {
+        fs.appendFileSync(
+          path.join(graphDir(cwd), 'delivery-log.jsonl'),
+          events.map((event) => JSON.stringify(event)).join('\n') + '\n'
+        );
+      }
+    }
   }, { label: 'dispatch-record' });
 }
 
@@ -856,7 +933,7 @@ if (require.main === module) {
   // their own, and a store written beside no ticket graph is unreadable rather
   // than merely misplaced — the front reads the PROJECT's. `list`/`clear` stay
   // permissive: they read or they remove, they never hide a ticket nowhere.
-  if (cmd === 'mark' && !GRAPH_EXPLICIT && !fs.existsSync(path.join(GRAPH_DIR, 'tickets.json'))) {
+  if (['mark', 'mark-many'].includes(cmd) && !GRAPH_EXPLICIT && !fs.existsSync(path.join(GRAPH_DIR, 'tickets.json'))) {
     fail(
       `no ticket graph at ${GRAPH_DIR} — refusing to record a dispatch nothing will read.\n` +
       '  The front reads the PROJECT\'s graph; one written in a worktree is invisible to it,\n' +
@@ -884,8 +961,9 @@ if (require.main === module) {
     // written: a usage error must cost no lock and must never leave half a
     // record behind.
     const decided = parseMarkFlags(rest.slice(2), role);
-    const s = readState(cwd)[ticket];
-    if (!s) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+    const state = readState(cwd);
+    if (!hasStateTicket(state, ticket)) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+    const s = state[ticket];
     const at = new Date().toISOString();
     mutate(cwd, (store) => {
       // A re-dispatch restarts the clock: the previous agent is not the one
@@ -923,6 +1001,76 @@ if (require.main === module) {
         : 'no board was refreshed just now (none exists yet, or a sync holds the lock); the record is durable and the next state-sync or refresh will apply it. ') +
       `It lifts when ${subjectOf(role).lifts}, or after ${Math.round(DISPATCH_TTL_MS / 60000)}m.`
     );
+  } else if (cmd === 'mark-many') {
+    if (rest.length !== 1 || rest[0] !== '--stdin') {
+      fail(
+        'usage: dispatch-record.cjs mark-many --stdin [--graph <dir>]\n' +
+        '  stdin must contain a JSON array of {ticket, role, ...mark fields}; an empty array is a no-op'
+      );
+    }
+    let raw;
+    try {
+      raw = JSON.parse(fs.readFileSync(0, 'utf8'));
+    } catch (e) {
+      fail(`mark-many stdin is not valid JSON — ${e && e.message ? e.message : e}`);
+    }
+    let entries;
+    try {
+      entries = parseBatchEntries(raw);
+    } catch (e) {
+      fail(e && e.message ? e.message : e);
+    }
+    if (!entries.length) {
+      console.log('no dispatches recorded — the batch was explicitly empty');
+    } else {
+      // Check every ticket before taking the lock. The callback repeats this
+      // check against the state read while the lock is held, so a concurrent
+      // state-sync cannot turn a valid batch into a record with a stale
+      // fingerprint or leave only the first item filed.
+      const state = readState(cwd);
+      const missing = entries.find((entry) => !hasStateTicket(state, entry.ticket));
+      if (missing) fail(`no ${missing.ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+      const at = new Date().toISOString();
+      try {
+        mutate(cwd, (store) => {
+          const current = readState(cwd);
+          const absent = entries.find((entry) => !hasStateTicket(current, entry.ticket));
+          if (absent) throw new Error(`no ${absent.ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+          const events = [];
+          for (const entry of entries) {
+            const s = current[entry.ticket];
+            store.tickets[entry.ticket] = {
+              role: entry.role,
+              at,
+              ...entry.decided,
+              fingerprint: dispatchFingerprint(entry.role, s),
+              fingerprint_kind: 'role',
+              pr: s.pr || null,
+            };
+            events.push({
+              ts: at,
+              event: 'dispatch',
+              ticket: entry.ticket,
+              role: entry.role,
+              pr: s.pr || null,
+              ...entry.decided,
+              by: 'dispatch-record',
+            });
+          }
+          return events;
+        });
+      } catch (e) {
+        fail(e && e.message ? e.message : e);
+      }
+      const refreshed = refreshFront(cwd) !== null;
+      console.log(
+        `dispatch recorded for ${entries.length} ticket(s) — ` +
+        (refreshed
+          ? 'the front reports them as waiting, not as work to start. '
+          : 'no board was refreshed just now (none exists yet, or a sync holds the lock); the records are durable and the next state-sync or refresh will apply them. ') +
+        `They lift by their role output or after ${Math.round(DISPATCH_TTL_MS / 60000)}m.`
+      );
+    }
   } else if (cmd === 'clear') {
     const [ticket] = rest;
     if (!ticket) fail('usage: dispatch-record.cjs clear <ticket> [--graph <dir>]');
@@ -945,6 +1093,6 @@ if (require.main === module) {
       }
     }
   } else {
-    fail('usage: dispatch-record.cjs <mark|clear|list> …');
+    fail('usage: dispatch-record.cjs <mark|mark-many|clear|list> …');
   }
 }
