@@ -720,12 +720,14 @@ and it is EMPTY by default. Empty is the feature switched off, the planner then
 emits nothing, and nothing here runs: silence is not consent to write into
 someone's tracker.
 
-Each emitted item carries `{ticket, key, from, to, target_status}`, and its two
-status fields are two different vocabularies. Confusing them is the defect this
-section exists to prevent:
+Each emitted item carries `{ticket, key, from, to, target_status, ts}`, and its
+two status fields are two different vocabularies. Confusing them is the defect
+this section exists to prevent:
 
 - `to` is OUR status — one of `pending`, `branched`, `pr-open`, `merged`.
 - `target_status` is THEIR status NAME, straight off the map (`Done`).
+- `ts` is the driving `status_change`'s own timestamp, copied through — it is
+  what `record --unreachable` anchors suppression to, not the wall clock.
 
 For EACH item:
 
