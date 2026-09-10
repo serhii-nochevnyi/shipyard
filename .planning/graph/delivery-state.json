@@ -833,8 +833,9 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/90",
     "pr_base": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
     "pr_created_at": "2026-09-10T08:37:13Z",
-    "head_sha": "1281acb924fe7081d0f87f7c5a9098abde3e1c82",
-    "merge_state": "DIRTY",
+    "head_sha": "d7d1f63867cdd980d125c2bbae6afacd4444a9c7",
+    "merge_state": "CLEAN",
+    "behind_by": 0,
     "gate": {
       "arch-review": "conform",
       "drift-check": "skipped",

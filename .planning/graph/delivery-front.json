@@ -1,22 +1,22 @@
 {
-  "generated_at": "2026-09-10T09:03:52.068Z",
-  "observed_at": "2026-09-10T09:03:52.068Z",
-  "generation": 185,
+  "generated_at": "2026-09-10T09:13:10.596Z",
+  "observed_at": "2026-09-10T09:13:10.596Z",
+  "generation": 189,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-10T09:03:52.068Z",
+  "dispatches_applied_at": "2026-09-10T09:13:10.596Z",
   "actionable": {
     "execute": [],
     "publish": [],
-    "fix": [
-      "T-29-07"
-    ],
+    "fix": [],
     "finalize": [],
     "merge": []
   },
   "waiting": {
     "ci": [],
-    "dispatched": [],
+    "dispatched": [
+      "T-29-07"
+    ],
     "parent": [],
     "merge_human": [],
     "human": []
@@ -102,16 +102,16 @@
     ]
   },
   "why": {
-    "T-29-07": "PR #90: merge conflicts with `epic/29-the-tracker-is-a-projection-and-a-projection-is-driven` — the base moved and the two editions disagree. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads."
+    "T-29-07": "dispatched to pr-sentinel 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (the PR merges, or its base moves) or after 90m; `dispatch-record.cjs clear T-29-07` returns it now."
   },
   "counts": {
     "execute": 0,
     "publish": 0,
-    "fix": 1,
+    "fix": 0,
     "finalize": 0,
     "merge": 0,
     "ci": 0,
-    "dispatched": 0,
+    "dispatched": 1,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
@@ -119,21 +119,21 @@
     "done": 75
   },
   "parent_of": {},
-  "actionable_count": 1,
+  "actionable_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
   "capacity": {
     "max": 4,
-    "in_flight": 0,
-    "free": 4
+    "in_flight": 1,
+    "free": 3
   },
   "sentinel": {
-    "duty": [
-      "T-29-07"
-    ],
+    "duty": [],
     "waiting_ci": [],
     "waiting_parent": [],
-    "dispatched": [],
+    "dispatched": [
+      "T-29-07"
+    ],
     "clear": false
   },
   "roles": {

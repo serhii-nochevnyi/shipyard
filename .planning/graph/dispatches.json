@@ -2,12 +2,12 @@
   "tickets": {
     "T-29-07": {
       "role": "pr-sentinel",
-      "at": "2026-09-10T08:51:16.387Z",
+      "at": "2026-09-10T09:13:08.374Z",
       "model": "sonnet",
       "effort": "high",
-      "agent_id": "a9804015851f4b535",
+      "agent_id": "afd99fee9af56c4ea",
       "reason": "tier=floor:exempt(sonnet) effort=row(high)",
-      "fingerprint": "d45094262e90e7c6",
+      "fingerprint": "93a2b624108dd7c5",
       "fingerprint_kind": "role",
       "pr": 90
     }
