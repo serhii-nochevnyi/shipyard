@@ -10,7 +10,7 @@
 //                             [--task-level <level>] [--runtime <runtime>]
 //                             [--backend <backend>] [--observed-model <id>]
 //                             [--observed-effort <level>] [--agent-file <name>]
-//                             [--agent-id <launch id>]
+//                             [--agent-id <launch id>] [--dispatch-id <id>]
 //                             [--graph <dir>]
 //   dispatch-record.cjs mark-many --stdin [--graph <dir>]
 //                             # JSON array of {ticket, role, ...mark fields}
@@ -172,7 +172,7 @@ const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
 // this", and the recorder must not helpfully fill it in from the other flag.
 const MARK_FLAGS = [
   'model', 'effort', 'effort-applied', 'route', 'task-level', 'runtime', 'backend',
-  'observed-model', 'observed-effort', 'agent-file', 'agent-id',
+  'observed-model', 'observed-effort', 'agent-file', 'agent-id', 'dispatch-id',
 ];
 
 // ── `reason` is the RESOLVER's route, never the caller's sentence ────────────
@@ -212,6 +212,7 @@ const MARK_FIELD = {
   'observed-effort': 'observed_effort',
   'agent-file': 'agent_file',
   'agent-id': 'agent_id',
+  'dispatch-id': 'dispatch_id',
 };
 
 // ── WHO holds it, not just WHAT it is (ADR-007 D1) ───────────────────────────
@@ -470,6 +471,17 @@ function parseMarkFlags(argv, role) {
     }
     decided.agent_id = agentId;
   }
+  // This id is generated when the record is written, so callers do not have to
+  // invent a correlation key before a launch exists. Accept an explicit value
+  // for orchestrators that already have one, but keep it opaque and safe for the
+  // JSONL journal. The id is separate from agent_id: one agent can own several
+  // ticket dispatches in a wave, while every dispatch needs its own usage join.
+  const dispatchId = given.get('dispatch-id');
+  if (dispatchId !== undefined) {
+    const why = opaqueDispatchValueIssue(dispatchId);
+    if (why !== null) fail(`--dispatch-id ${JSON.stringify(dispatchId)} cannot be recorded: ${why}`);
+    decided.dispatch_id = dispatchId;
+  }
   // The RESOLVER's route, checked against the resolver's own grammar and then
   // against the pair recorded beside it. The grammar check is what stops a
   // sentence being posted through the new flag; the pair check is what stops a
@@ -593,6 +605,7 @@ const BATCH_FIELDS = new Map([
   ['observed_effort', 'observed-effort'],
   ['agent_file', 'agent-file'],
   ['agent_id', 'agent-id'],
+  ['dispatch_id', 'dispatch-id'],
 ]);
 
 function parseBatchEntries(raw) {
@@ -737,6 +750,31 @@ function load(cwd = process.cwd()) {
   } catch {
     return { tickets: {} };
   }
+}
+
+// A dispatch id is the join key between the delivery journal and a later
+// provider transcript. It is generated at write time rather than in the prompt
+// builder, because a retry must get a new id and a caller that never reaches the
+// recorder must not leave a phantom correlation key behind.
+function newDispatchId() {
+  const random = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
+  return `dispatch-${Date.now().toString(36)}-${random}`;
+}
+
+function dispatchIdInUse(store, id, ticket) {
+  return Object.entries(store.tickets || {}).some(([otherTicket, record]) =>
+    otherTicket !== ticket && record && record.dispatch_id === id
+  );
+}
+
+function withDispatchId(decided, store, ticket) {
+  const id = decided.dispatch_id || newDispatchId();
+  if (dispatchIdInUse(store, id, ticket)) {
+    throw new Error(`dispatch id "${id}" is already active for another ticket`);
+  }
+  return { ...decided, dispatch_id: id };
 }
 
 // Read-modify-write plus the journal line, under ONE lock and written atomically —
@@ -949,7 +987,7 @@ module.exports = {
   activeDispatches, dispatchWhy, dispatchFingerprint, agentIdOf, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
   MARK_FLAGS, MARK_FIELD, REFUSED_FLAGS, codexAgentFiles, agentFilesFor, agentRoleName,
   CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
-  CODEX_AGENT_PREFIX, DISPATCH_RUNTIMES, DISPATCH_BACKENDS,
+  CODEX_AGENT_PREFIX, DISPATCH_RUNTIMES, DISPATCH_BACKENDS, newDispatchId,
 };
 
 if (require.main === module) {
@@ -993,15 +1031,18 @@ if (require.main === module) {
     if (!hasStateTicket(state, ticket)) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
     const s = state[ticket];
     const at = new Date().toISOString();
+    let dispatchId;
     mutate(cwd, (store) => {
       // A re-dispatch restarts the clock: the previous agent is not the one
       // holding it now.
+      const recorded = withDispatchId(decided, store, ticket);
+      dispatchId = recorded.dispatch_id;
       store.tickets[ticket] = {
         role,
         at,
         // Spread, never enumerated: a flag the caller did not pass contributes no
         // key, so the record distinguishes "ran at high" from "nobody measured".
-        ...decided,
+        ...recorded,
         fingerprint: dispatchFingerprint(role, s),
         // Which hash the line above is, so a reader upgrading over an existing
         // store compares each record with the rule it was written under.
@@ -1014,7 +1055,7 @@ if (require.main === module) {
       // of the fields; the next one of each can be measured. The ticket's next
       // `status_change` closes the interval, so a `clear` needs no event of its
       // own.
-      return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...decided, by: 'dispatch-record' };
+      return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...recorded, by: 'dispatch-record' };
     });
     // The record is durable the instant `mutate` above returns — that alone is
     // what `activeDispatches` reads. `refreshFront` only decides whether the
@@ -1023,7 +1064,7 @@ if (require.main === module) {
     // (no board yet, or a state-sync held the lock).
     const refreshed = refreshFront(cwd) !== null;
     console.log(
-      `dispatch recorded for ${ticket} (${role}) — ` +
+      `dispatch recorded for ${ticket} (${role}), dispatch_id=${dispatchId} — ` +
       (refreshed
         ? 'the front reports it as waiting, not as work to start. '
         : 'no board was refreshed just now (none exists yet, or a sync holds the lock); the record is durable and the next state-sync or refresh will apply it. ') +
@@ -1059,6 +1100,7 @@ if (require.main === module) {
       const missing = entries.find((entry) => !hasStateTicket(state, entry.ticket));
       if (missing) fail(`no ${missing.ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
       const at = new Date().toISOString();
+      const dispatchIds = new Map();
       try {
         mutate(cwd, (store) => {
           const current = readState(cwd);
@@ -1067,10 +1109,15 @@ if (require.main === module) {
           const events = [];
           for (const entry of entries) {
             const s = current[entry.ticket];
+            const recorded = withDispatchId(entry.decided, store, entry.ticket);
+            if ([...dispatchIds.values()].includes(recorded.dispatch_id)) {
+              throw new Error(`mark-many contains duplicate dispatch id "${recorded.dispatch_id}"`);
+            }
+            dispatchIds.set(entry.ticket, recorded.dispatch_id);
             store.tickets[entry.ticket] = {
               role: entry.role,
               at,
-              ...entry.decided,
+              ...recorded,
               fingerprint: dispatchFingerprint(entry.role, s),
               fingerprint_kind: 'role',
               pr: s.pr || null,
@@ -1081,7 +1128,7 @@ if (require.main === module) {
               ticket: entry.ticket,
               role: entry.role,
               pr: s.pr || null,
-              ...entry.decided,
+              ...recorded,
               by: 'dispatch-record',
             });
           }
@@ -1092,7 +1139,8 @@ if (require.main === module) {
       }
       const refreshed = refreshFront(cwd) !== null;
       console.log(
-        `dispatch recorded for ${entries.length} ticket(s) — ` +
+        `dispatch recorded for ${entries.length} ticket(s) ` +
+        `(dispatch_ids=${[...dispatchIds.values()].join(',')}) — ` +
         (refreshed
           ? 'the front reports them as waiting, not as work to start. '
           : 'no board was refreshed just now (none exists yet, or a sync holds the lock); the records are durable and the next state-sync or refresh will apply them. ') +
