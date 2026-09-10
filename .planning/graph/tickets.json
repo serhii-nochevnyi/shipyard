@@ -2489,6 +2489,38 @@
       "primary_parent": "T-32-03",
       "pr_base": "ticket/T-32-03-expose-routing-attribution-eligibility-i",
       "jira": null
+    },
+    "T-32-05": {
+      "title": "Wire batched dispatch lifecycle into the delivery loop",
+      "plan": ".planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-PLAN.md",
+      "phase": "32",
+      "repo": null,
+      "wave": 11,
+      "depends_on": [
+        "T-32-04"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        ".planning/graph/tickets.json",
+        ".planning/graph/tickets.yaml",
+        ".planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-PLAN.md",
+        "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
+        "tests/unit/dispatch-record.test.cjs",
+        "docs/dispatch-record.md",
+        "plugins/delivery-pipeline/references/pr-sentinel.md"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the",
+      "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
+      "primary_parent": "T-32-04",
+      "pr_base": "ticket/T-32-04-batch-dispatch-attribution-atomically",
+      "jira": null
     }
   }
 }

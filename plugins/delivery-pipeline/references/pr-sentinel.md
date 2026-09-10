@@ -417,8 +417,13 @@ reinit is not optional.
 - **Hand a ticket back to the board the moment you stop holding it.** The
   orchestrator recorded a dispatch for every PR it gave you
   (`dispatch-record.cjs`), which is what stops the run being told those tickets
-  are un-taken while you work. Run `dispatch-record.cjs clear <T>` as soon as a PR
-  is merged, parked, or handed to a person, and
+  are un-taken while you work. When one guard or fixer owns several PRs, use one
+  JSON array with `dispatch-record.cjs mark-many --stdin --graph
+  <project>/.planning/graph` after the launch returns; repeat the guard's one
+  launch id for every PR and keep each resolver pair/route. Use the single
+  `mark` form only for one PR. Run `dispatch-record.cjs clear-many --stdin` as
+  soon as a group of PRs is merged, parked, or handed to a person; `clear <T>`
+  remains the one-ticket form, and
   `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend>`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
