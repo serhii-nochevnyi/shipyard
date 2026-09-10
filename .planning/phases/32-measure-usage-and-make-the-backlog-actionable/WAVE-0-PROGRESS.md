@@ -28,7 +28,10 @@ There is no matched treatment cohort, prospective ticket attribution or
 subscription-window history in this slice. Token reduction, autonomous completion
 rate and quota savings are therefore unknown, not zero and not an improvement.
 Use ADR-011-EVALUATION-TEMPLATE.md after the collection and reconciliation owners
-are integrated. Do not enable model-policy changes from these smoke results.
+are integrated. The repository also contains the separate accepted ADR-012
+task-level ladder amendment; its adaptive setting is a canary for routing and
+telemetry, not a result from these smoke tests and not permission for automatic
+online policy changes.
 
 ## Required continuation
 

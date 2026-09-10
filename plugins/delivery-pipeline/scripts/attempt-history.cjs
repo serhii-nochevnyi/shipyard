@@ -191,11 +191,18 @@ const HIDDEN = new Set(['ts', 'event', 'ticket', 'by']);
 // `effort`/`effort_applied` sit with `model` because they are one thought with it
 // — WHAT ran and HOW HARD — and because of what reads them: `repeat_exhausted`
 // rests on `effort_applied` (ADR-007 D2), so the next fixer's "how hard was this
-// tried already" is answered off this line. An unknown key already rendered, but
-// at the TAIL, past the quoted hypothesis sentence, which is where a field goes to
-// be missed. Absence still renders nothing: a round that measured no depth says so
-// by staying silent, and a placeholder would read as a measured value.
-const ORDER = ['n', 'role', 'model', 'effort', 'effort_applied', 'pr', 'signature', 'head', 'outcome', 'pushed', 'verdict', 'reason', 'hypothesis'];
+// tried already" is answered off this line. The dispatch attribution fields sit
+// immediately after them: a repair round must carry its task level, runtime,
+// backend and (for Codex) selected file into the next round's prompt, otherwise
+// the fixer can see that a hypothesis failed but not which execution lane
+// produced the evidence. Unknown keys still render at the tail, but these known
+// fields belong before the outcome and hypothesis where they can be acted on.
+// Absence still renders nothing: an unmeasured field stays unmeasured.
+const ORDER = [
+  'n', 'role', 'model', 'effort', 'effort_applied', 'task_level', 'runtime',
+  'backend', 'agent_file', 'observed_model', 'observed_effort', 'pr', 'signature',
+  'head', 'outcome', 'pushed', 'verdict', 'reason', 'hypothesis',
+];
 
 // A hypothesis is a sentence. Quoted, it stays ONE field instead of shredding
 // the line it lives on into unreadable fragments.

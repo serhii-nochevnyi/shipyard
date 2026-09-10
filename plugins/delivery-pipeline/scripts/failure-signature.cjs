@@ -87,7 +87,7 @@
 //     It says the deeper effort has already been spent on this exact failure, so
 //     it must be read off the record rather than off the count: a prior round
 //     carrying this signature, and not the first one (that round ran under `fix`),
-//     whose `effort_applied` names a real level. `unknown` and an absent field are
+//     whose `effort_applied` names a real level. `unknown`, `unsupported` and an absent field are
 //     both NOT evidence — absent proof reads as not-yet-spent, which keeps the
 //     failure direction on rethinking once more rather than escalating early.
 //     The level itself is not compared against a ladder here: the runtimes
@@ -138,9 +138,12 @@ const EXHAUSTED_PRIOR_REPEATS = 2;
 // What proves that a `rethink` was DISPATCHED at the deeper effort, and not only
 // decided on. `effort` is what the resolver returned; `effort_applied` is what the
 // spawn could actually carry, and only the Workflow path can carry one — so the
-// honest Agent-path row says `unknown` or says nothing, and neither is proof.
+// honest Agent-path row says `unsupported`, `unknown` or says nothing, and none
+// of those is proof.
 const UNMEASURED_EFFORT = 'unknown';
-const isAppliedEffort = (level) => typeof level === 'string' && EFFORTS.includes(level);
+const UNMEASURED_EFFORTS = new Set(['unknown', 'unsupported']);
+const isAppliedEffort = (level) => typeof level === 'string'
+  && !UNMEASURED_EFFORTS.has(level) && EFFORTS.includes(level);
 
 // A failure nobody could read SAYS SO IN ITS SIGNATURE. The k-rule reads nothing
 // but signature strings back out of the journal — no `error_class` is recorded
@@ -583,7 +586,7 @@ if (require.main === module) {
         `  records an \`effort_applied\` level, so \`repeat_exhausted\` would be an unproven claim — reading \`repeat\`\n` +
         '  and rethinking again rather than opening the ceiling and then escalating.\n' +
         `  Record the depth on the round that carries it: \`log-event.cjs attempt … effort_applied=<${EFFORTS.join('|')}>\`\n` +
-        `  on the Workflow path, or \`effort_applied=${UNMEASURED_EFFORT}\` where the spawn could carry none.\n`
+        '  on the Workflow path, or `effort_applied=unknown|unsupported` where the spawn could carry no usable effort.\n'
       );
     }
     console.log(flags.json ? JSON.stringify(got) : got.verdict);
@@ -634,5 +637,5 @@ if (require.main === module) {
 module.exports = {
   computeSignature, computeVerdict, normalize, relativize,
   isUnknownSignature, UNKNOWN_PREFIX, VERDICTS, DEFAULT_K,
-  EXHAUSTED_PRIOR_REPEATS, UNMEASURED_EFFORT,
+  EXHAUSTED_PRIOR_REPEATS, UNMEASURED_EFFORT, UNMEASURED_EFFORTS,
 };

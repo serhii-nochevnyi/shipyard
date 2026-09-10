@@ -304,13 +304,16 @@ test('a nonsense --limit reports usage rather than silently showing everything',
   assert.ok(/usage:|--limit/.test(r.stderr), r.stderr);
 });
 
-suite('attempt-history — the depth a round applied reads beside its model');
+suite('attempt-history — dispatch attribution reads beside its model');
 
 // ADR-007 D2. The next fixer's question is not only "what was tried" but "how
 // hard was it tried" — `repeat_exhausted` rests on exactly that, and it is read
 // off these rows. An unknown key already rendered, but at the TAIL, after the
 // quoted hypothesis sentence, which is where a field goes to be missed. `effort`
-// and `effort_applied` are one thought with `model`, so they render there.
+// and `effort_applied` are one thought with `model`, so they render there. The
+// task-level/runtime/backend/file fields are checked in the same position: a
+// future fixer needs the lane that produced the evidence, not only the fact that
+// an attempt happened.
 
 const DEPTH_JOURNAL = [
   { ts: '2026-09-01T10:00:00Z', event: 'attempt', ticket: 'T-28-02', pr: 7, n: 1, role: 'ci-fix', model: 'opus', signature: 'aaaa', outcome: 'pushed' },
@@ -334,6 +337,27 @@ test('a round that recorded no depth renders none — absence is the honest row'
   const line = eventLines(run(project, ['T-28-02']).stdout).find((l) => /n=1\b/.test(l));
   assert.ok(line, 'the first round vanished');
   assert.ok(!/effort/.test(line), `nothing measured means nothing rendered: ${line}`);
+});
+
+test('dispatch attribution renders before the outcome and hypothesis', () => {
+  const { project } = scratch({
+    journal: [{
+      ts: '2026-09-10T11:00:00Z', event: 'attempt', ticket: 'T-28-03', n: 1,
+      role: 'ci-fix', model: 'sonnet', effort: 'high', effort_applied: 'unsupported',
+      task_level: 'complex', runtime: 'codex', backend: 'codex-agent',
+      agent_file: 'shipyard-ci-fix', observed_model: 'gpt-5.6-terra',
+      observed_effort: 'unknown', pr: 9, signature: 'abcd', outcome: 'pushed',
+      hypothesis: 'the generated file omitted the route',
+    }],
+    malformed: false,
+  });
+  const line = eventLines(run(project, ['T-28-03']).stdout)[0];
+  assert.ok(line, 'the attributed attempt vanished');
+  assert.ok(
+    /model=sonnet effort=high effort_applied=unsupported task_level=complex runtime=codex backend=codex-agent agent_file=shipyard-ci-fix observed_model=gpt-5\.6-terra observed_effort=unknown pr=9/.test(line),
+    `dispatch evidence must stay beside the model and before the outcome: ${line}`,
+  );
+  assert.ok(line.indexOf('outcome=pushed') < line.indexOf('hypothesis='), line);
 });
 
 done();

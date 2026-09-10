@@ -322,6 +322,23 @@ test('the -deep agents are registered, so a dispatch can name them', () => {
   assert.strictEqual(manifest.agents.length, 11);
 });
 
+test('adaptive mode adds distinct critical files while keeping the integrator at the ceiling', () => {
+  const g = generate({ project: { delivery_pipeline: { model_ladder: 'adaptive' } } });
+  assert.strictEqual(g.run.status, 0, g.stderr);
+  assert.strictEqual(g.agents['shipyard-integrator'].model, CEILING.model);
+  for (const role of ['inv-research', 'arch-review', 'ci-fix', 'review-fix']) {
+    const a = g.agents[`shipyard-${role}-critical`];
+    assert.ok(a, `missing critical variant for ${role}`);
+    assert.strictEqual(a.model, CEILING.model, `${role}-critical model`);
+    assert.strictEqual(a.effort, CEILING.effort, `${role}-critical effort`);
+    assert.ok(/Critical task variant/.test(a.text), `${role}-critical says why it exists`);
+  }
+  assert.ok(!g.agents['shipyard-pr-sentinel-critical'], 'mechanical sentinel has no premium variant');
+  assert.ok(!g.agents['shipyard-drift-check-critical'], 'mechanical drift check has no premium variant');
+  assert.ok(!g.agents['shipyard-integrator-critical'], 'integrator is already at the ceiling');
+  assert.strictEqual(Object.keys(g.agents).length, 15, Object.keys(g.agents).join(', '));
+});
+
 test('no generated file asks for a retired effort', () => {
   // ADR-005 D6: on this runtime the axis is two values wide. `xhigh`/`max` cost
   // more for no better result, and `ultra` is not in the vocabulary at all.
