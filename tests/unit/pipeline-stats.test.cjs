@@ -92,12 +92,18 @@ function stubGh(dir, prs) {
 }
 
 // tickets → journal lines → PR rows, in one temp project.
-function project({ tickets, journal, prs }) {
+function project({ tickets, journal, prs, config, configRaw }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-stats-'));
   const g = path.join(dir, '.planning', 'graph');
   fs.mkdirSync(g, { recursive: true });
   fs.writeFileSync(path.join(g, 'tickets.json'), JSON.stringify({ tickets }));
   fs.writeFileSync(path.join(g, 'delivery-log.jsonl'), journal.map((l) => `${l}\n`).join(''));
+  if (config !== undefined || configRaw !== undefined) {
+    fs.writeFileSync(
+      path.join(dir, '.planning', 'config.json'),
+      configRaw !== undefined ? configRaw : JSON.stringify(config, null, 2),
+    );
+  }
   const bin = stubGh(dir, prs);
   return { dir, bin };
 }
@@ -235,6 +241,78 @@ test('a hand-written merge event with no `by` is still a human merge', () => {
   const human = one(out, /merged by a person/, 'human-merge');
   assert.ok(human.includes('T-27-09'), `an event with no actor attributes nothing to the guard: ${human}`);
   assert.strictEqual(lineWith(out, /^⚠.*pre-authoriz/).length, 0, `and it is not the warning case:\n${out}`);
+});
+
+suite('pipeline-stats — ladder coverage is windowed and explicit');
+
+test('dispatch routing fields are grouped without turning missing observations into zeroes', () => {
+  const recentComplete = {
+    ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor',
+    model: 'sonnet', effort: 'high', effort_applied: 'high',
+    reason: 'tier=level:routine(sonnet) effort=row(high)', task_level: 'routine',
+    runtime: 'claude', backend: 'workflow', observed_model: 'claude-sonnet-5',
+    observed_effort: 'high',
+  };
+  const recentPartial = {
+    ts: recently, event: 'dispatch', ticket: 'T-01-02', role: 'arch-review',
+    model: 'opus', effort: 'xhigh', reason: 'tier=floor(opus) effort=row(xhigh)',
+  };
+  const old = {
+    ts: iso(Date.now() - 30 * DAY), event: 'dispatch', ticket: 'T-01-03', role: 'executor',
+    model: 'opus', effort: 'high', reason: 'tier=floor(opus) effort=row(high)',
+    task_level: 'complex', runtime: 'claude', backend: 'workflow', observed_model: 'claude-opus-5',
+  };
+  const { code, json } = asJson({
+    tickets: {}, journal: [JSON.stringify(recentComplete), JSON.stringify(recentPartial), JSON.stringify(old)], prs: [],
+    config: { delivery_pipeline: { model_ladder: 'adaptive' } },
+  });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.ladder.mode, 'adaptive');
+  assert.strictEqual(json.ladder.policy_valid, true);
+  assert.strictEqual(json.ladder.dispatches, 2, 'default window excludes the old dispatch');
+  assert.deepStrictEqual(json.ladder.by_role, { executor: 1, 'arch-review': 1 });
+  assert.deepStrictEqual(json.ladder.by_task_level, { routine: 1 });
+  assert.deepStrictEqual(json.ladder.by_runtime, { claude: 1 });
+  assert.deepStrictEqual(json.ladder.by_backend, { workflow: 1 });
+  assert.deepStrictEqual(json.ladder.by_agent_file, {});
+  assert.deepStrictEqual(json.ladder.by_effort, { high: 1, xhigh: 1 });
+  assert.deepStrictEqual(json.ladder.by_effort_applied, { high: 1 });
+  assert.deepStrictEqual(json.ladder.by_observed_model, { 'claude-sonnet-5': 1 });
+  assert.deepStrictEqual(json.ladder.by_observed_effort, { high: 1 });
+  assert.strictEqual(json.ladder.missing_model, 0);
+  assert.strictEqual(json.ladder.missing_task_level, 1);
+  assert.strictEqual(json.ladder.missing_runtime, 1);
+  assert.strictEqual(json.ladder.missing_backend, 1);
+  assert.strictEqual(json.ladder.missing_agent_file, 0, 'runtime is unknown, so Codex file coverage is unknown too');
+  assert.strictEqual(json.ladder.missing_observed_model, 1);
+  assert.strictEqual(json.ladder.missing_observed_effort, 1);
+});
+
+test('an invalid policy is visible in the ladder report', () => {
+  const { code, json } = asJson({
+    tickets: {}, journal: [JSON.stringify({ ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor' })],
+    prs: [], configRaw: '{"delivery_pipeline":{"model_ladder":"adaptive"',
+  });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.ladder.policy_valid, false);
+  assert.ok(json.ladder.policy_error && json.ladder.policy_error.file);
+  assert.strictEqual(json.ladder.mode, 'conservative', 'invalid policy cannot enable a treatment');
+});
+
+test('Codex agent-file coverage is required only when the runtime is known', () => {
+  const complete = {
+    ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'arch-review',
+    model: 'sonnet', effort: 'high', runtime: 'codex', backend: 'codex-agent',
+    agent_file: 'shipyard-arch-review-critical', observed_model: 'gpt-6-astra',
+  };
+  const partial = {
+    ts: recently, event: 'dispatch', ticket: 'T-01-02', role: 'arch-review',
+    model: 'sonnet', effort: 'high', runtime: 'codex', backend: 'codex-agent',
+  };
+  const { code, json } = asJson({ tickets: {}, journal: [JSON.stringify(complete), JSON.stringify(partial)], prs: [] });
+  assert.strictEqual(code, 0);
+  assert.deepStrictEqual(json.ladder.by_agent_file, { 'shipyard-arch-review-critical': 1 });
+  assert.strictEqual(json.ladder.missing_agent_file, 1);
 });
 
 done();

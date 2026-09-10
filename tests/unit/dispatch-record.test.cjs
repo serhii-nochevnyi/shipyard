@@ -508,7 +508,10 @@ suite('dispatch-record — a dispatch records WHAT it dispatched, or says it doe
 const journal = (graph) => fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8')
   .trim().split('\n').map(JSON.parse);
 const lastDispatch = (graph) => journal(graph).filter((e) => e.event === 'dispatch').pop();
-const DECIDED_KEYS = ['model', 'effort', 'effort_applied', 'reason', 'agent_file', 'agent_id'];
+const DECIDED_KEYS = [
+  'model', 'effort', 'effort_applied', 'reason', 'task_level', 'runtime', 'backend',
+  'observed_model', 'observed_effort', 'agent_file', 'agent_id',
+];
 // What `pipeline-config.cjs model executor --json` returns for a signal-less
 // dispatch, in its own `route` field. Taken from the resolver rather than typed
 // here — a fixture that drifts from the grammar would make every test below
@@ -569,6 +572,57 @@ test('the full round trip reaches the store AND the journal', () => {
   for (const [k, v] of Object.entries(expect)) assert.equal(ev[k], v, `journal.${k}`);
   assert.equal(ev.role, 'executor', 'and the fields the event already had are untouched');
   assert.equal(ev.by, 'dispatch-record');
+});
+
+test('requested, applied and observed routing facts round-trip separately', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run([
+    'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
+    '--effort-applied', 'high', '--route', ROUTE, '--task-level', 'complex',
+    '--runtime', 'claude', '--backend', 'workflow', '--observed-model', 'claude-opus-5',
+    '--observed-effort', 'xhigh',
+  ], project);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  const rec = store(graph)['T-01-01'];
+  assert.equal(rec.task_level, 'complex');
+  assert.equal(rec.runtime, 'claude');
+  assert.equal(rec.backend, 'workflow');
+  assert.equal(rec.effort, 'high', 'requested resolver effort');
+  assert.equal(rec.effort_applied, 'high', 'spawn effort');
+  assert.equal(rec.observed_model, 'claude-opus-5');
+  assert.equal(rec.observed_effort, 'xhigh', 'runtime observation is allowed to differ');
+  const ev = lastDispatch(graph);
+  for (const key of ['task_level', 'runtime', 'backend', 'effort', 'effort_applied', 'observed_model', 'observed_effort']) {
+    assert.equal(ev[key], rec[key], `journal carries ${key}`);
+  }
+});
+
+test('a known runtime cannot create an unmeasured model dispatch', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor', '--runtime', 'codex'], project);
+  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+  assert.ok(/must carry.*model.*route/.test(r.stderr), r.stderr);
+  assert.deepStrictEqual(store(graph), {});
+});
+
+test('observed model ids reject whitespace and controls but keep opaque ids flexible', () => {
+  for (const bad of ['claude opus', 'claude\topus', 'claude\nopus']) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const r = run([
+      'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--observed-model', bad,
+    ], project);
+    assert.equal(r.status, 1, `${JSON.stringify(bad)} must refuse (${r.stderr})`);
+    assert.ok(/whitespace or a control character/.test(r.stderr), r.stderr);
+    assert.deepStrictEqual(store(graph), {});
+  }
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const ok = run([
+    'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--route', ROUTE,
+    '--observed-model', 'claude-opus-5.1-preview', '--observed-effort', 'unknown',
+  ], project);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(store(graph)['T-01-01'].observed_model, 'claude-opus-5.1-preview');
+  assert.equal(store(graph)['T-01-01'].observed_effort, 'unknown');
 });
 
 test('the flags survive --graph in any position, from a foreign cwd', () => {
@@ -648,10 +702,16 @@ test('the accepted agent files ARE the ones the generator emits', () => {
   // is the test that stops the copy drifting, the same way DISPATCH_SUBJECT is
   // checked against ROLES rather than against a second list.
   const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
-  const { codexAgentFiles, CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX } = require(DISPATCH);
+  const {
+    codexAgentFiles, CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX,
+    CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
+  } = require(DISPATCH);
   assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), [...gen.DEEP_ROLES].sort(),
     'the deep-eligible roles must be the generator\'s own');
   assert.equal(CODEX_DEEP_SUFFIX, gen.DEEP_SUFFIX);
+  assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), [...gen.CRITICAL_ROLES].sort(),
+    'the critical-eligible roles must be the generator\'s own');
+  assert.equal(CODEX_CRITICAL_SUFFIX, gen.CRITICAL_SUFFIX);
 
   // And the ordinary names are one per shipped reference — the generator's own
   // filter — so a reference added there is accepted here without an edit.
@@ -659,7 +719,7 @@ test('the accepted agent files ARE the ones the generator emits', () => {
     .filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
   const files = codexAgentFiles();
   for (const role of refs) assert.ok(files.has(`shipyard-${role}`), `shipyard-${role} must be accepted`);
-  assert.equal(files.size, refs.length + gen.DEEP_ROLES.size, 'and nothing else is');
+  assert.equal(files.size, refs.length + gen.DEEP_ROLES.size + gen.CRITICAL_ROLES.size, 'and nothing else is');
 });
 
 test('the front does not gain a field — the overlay is byte-identical', () => {

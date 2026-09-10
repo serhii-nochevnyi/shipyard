@@ -82,13 +82,20 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   the ticket without any flag from you. Moving the PR does NOT lift this park;
   re-decomposing the plan file does.
 - **`first` / `progress` / `repeat`** — fix it. Resolve model, effort and strategy
-  with `pipeline-config.cjs model ci-fix --json --risk <r> --signature-state
+  with `pipeline-config.cjs model ci-fix --json --explain --risk <r> --signature-state
   <verdict>`; on `repeat` the strategy is `rethink` — the SAME tier at a deeper
   effort and a DIFFERENT hypothesis, because a bigger model on the hypothesis that
   just failed is the failure mode, not the remedy. Read the prior-attempt record
   before you settle on an explanation (`attempt-history.cjs <T> --graph
   <project>/.planning/graph`): a hypothesis already in it was tried and did not
   hold, so it is EXCLUDED, not a candidate to refine.
+
+  **`critical` — the resolver classified the dispatch from high risk or a
+  checkpoint.** On Codex, select the matching `-critical` agent file with
+  `codex-agent.cjs select arch-review --json --checkpoint [--project-dir <project>]`
+  and record that file alongside the resolver's model, effort and route. Run
+  it from the conveyor project, or pass `--project-dir <project>` from a ticket
+  worktree so the selector reads the project's adaptive policy.
 
   **`repeat_exhausted` — the signature came back AFTER a `rethink`.** The deeper
   effort has already been spent on this failure, so repeating it buys nothing.
@@ -158,7 +165,7 @@ unanswered comment is not "resolved" either. Read the prior-attempt record here
 too (`attempt-history.cjs <T> --graph <project>/.planning/graph`): the same
 exclusion rule applies, and a thread serviced with a fix that already failed comes
 straight back. When this PR also carries a signed failure history, pass its
-verdict — `pipeline-config.cjs model review-fix --json [--no-code-change]
+verdict — `pipeline-config.cjs model review-fix --json --explain [--no-code-change]
 [--signature-state <verdict>]` — it is a repair role, so a `repeat` deepens the
 effort at the same tier.
 
@@ -189,16 +196,18 @@ because two copies drifting apart is how this path came to read a
    inherited from whatever this guard itself is running at:
 
    ```bash
-   node $SHIPYARD_ROOT/scripts/pipeline-config.cjs model arch-review --json \
-        --input-tokens <n> [--contested]
+   node $SHIPYARD_ROOT/scripts/pipeline-config.cjs model arch-review --json --explain \
+        --input-tokens <n> [--risk <r>] [--checkpoint] [--contested]
    ```
 
-   `opus`/`xhigh` ordinarily, and the ceiling only where the input it is about
+   `opus`/`xhigh` ordinarily, and the critical lane when the ticket is high-risk
+   or checkpointed; the ceiling only where the input it is about
    has actually grown. Where the harness passes the resolved pair into every
    call, that answer IS the escalation and there is no second agent to name. On
    the Codex bundle a `.toml` carries one model and nothing is passed per
    dispatch, so a contested re-judgement is a different AGENT instead:
-   `$shipyard-arch-review-deep`, the same contract at the palette's ceiling
+   `$shipyard-arch-review-critical` for a first-attempt critical task, or
+   `$shipyard-arch-review-deep` after a contested judgement, the same contract at the palette's ceiling
    model — a second reading at the same depth is what produced the contested
    verdict in the first place. There is no `$shipyard-integrator-deep`; the
    integrator runs at the ceiling on every call, and an agent the generator did
@@ -332,7 +341,7 @@ git -C <worktree> rev-parse HEAD                     # must equal the pushed hea
 node $SHIPYARD_ROOT/scripts/reviewers.cjs reinit <pr> [--repo owner/name]
 node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> \
      role=<ci-fix|review-fix> model=<tier> \
-     effort_applied=<level|unknown> \
+     effort_applied=<level|unsupported|unknown> \
      outcome=<pushed|no-op|escalate|flake> \
      signature=<sig> head=<full 40-char sha> hypothesis="<one sentence: what you believed was wrong>" \
      --graph <project>/.planning/graph
@@ -410,7 +419,7 @@ reinit is not optional.
   (`dispatch-record.cjs`), which is what stops the run being told those tickets
   are un-taken while you work. Run `dispatch-record.cjs clear <T>` as soon as a PR
   is merged, parked, or handed to a person, and
-  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>"`
+  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend>`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as
@@ -424,11 +433,13 @@ reinit is not optional.
   nothing is why the journal cannot today say what any fix round ran at. Add
   `--effort-applied <effort>` only when the
   Workflow tool carried the fixer (its `agent()` takes an effort); an `Agent`-spawned
-  fixer runs at the session's own depth, so the flag is OMITTED and its absence is
-  the honest "unmeasured". On the Codex bundle add
-  `--agent-file shipyard-<role>[-deep]`, which is where that runtime's model choice
-  lives — the `-deep` file is a different model, so a dispatch that does not name
-  the file does not record the escalation. Neither call is a cleanup you can forget
+  fixer has no such parameter, so pass `unsupported` when that is known, `unknown`
+  when the host did not expose what ran, or omit the flag when no observation is
+  available. On the Codex bundle add
+  `--agent-file shipyard-<role>[-critical|-deep]`, which is where that runtime's
+  model choice lives — `codex-agent.cjs select <role> --json [--project-dir <project>]`
+  gives the exact file. A dispatch that does not name the selected file does not record the
+  escalation. Neither call is a cleanup you can forget
   safely-but-late: the record lifts on the OWNER'S OUTPUT — your own dispatch
   when the PR merges or its base moves, a fixer's when the PR's head moves — and
   it times out regardless, so the cost of forgetting is a stale line on the

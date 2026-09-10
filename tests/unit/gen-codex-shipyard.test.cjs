@@ -139,7 +139,8 @@ function generate(opts = {}) {
   const r = spawnSync(process.execPath, [
     GEN, '--plugin', PLUGIN, '--out', out, '--codex-home', f.codexHome,
     '--phase', String(opts.phase === undefined ? 2 : opts.phase),
-  ], { cwd: f.proj, encoding: 'utf8', env });
+    '--project-dir', f.proj,
+  ], { cwd: os.tmpdir(), encoding: 'utf8', env });
   const agentsDir = path.join(out, 'agents');
   const agents = {};
   if (fs.existsSync(agentsDir)) {
@@ -156,6 +157,25 @@ function generate(opts = {}) {
   }
   return { ...f, out, run: r, agents, stderr: r.stderr || '' };
 }
+
+test('a foreign caller cwd cannot hide the explicitly selected project policy', () => {
+  const f = fixture({ project: { delivery_pipeline: { model_ladder: 'adaptive' } } });
+  const out = path.join(f.dir, 'foreign-out');
+  const env = {
+    ...process.env,
+    HOME: f.home,
+    GSD_HOME: f.home,
+    CODEX_HOME: f.codexHome,
+    SHIPYARD_CODEX_CLI_VERSION: CEILING_FLOOR_CLI,
+  };
+  const r = spawnSync(process.execPath, [
+    GEN, '--plugin', PLUGIN, '--out', out, '--codex-home', f.codexHome,
+    '--project-dir', f.proj,
+  ], { cwd: os.tmpdir(), encoding: 'utf8', env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(fs.existsSync(path.join(out, 'agents', 'shipyard-arch-review-critical.toml')),
+    'the selected project policy must reach generation from another cwd');
+});
 
 // A minimal line-level TOML shape check — no full parser, but enough to catch
 // the class of bug a regex-only assertion cannot: every non-blank line must
@@ -320,6 +340,23 @@ test('the -deep agents are registered, so a dispatch can name them', () => {
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(g.out, 'manifest.json'), 'utf8'));
   assert.strictEqual(manifest.agents.length, 11);
+});
+
+test('adaptive mode adds distinct critical files while keeping the integrator at the ceiling', () => {
+  const g = generate({ project: { delivery_pipeline: { model_ladder: 'adaptive' } } });
+  assert.strictEqual(g.run.status, 0, g.stderr);
+  assert.strictEqual(g.agents['shipyard-integrator'].model, CEILING.model);
+  for (const role of ['inv-research', 'arch-review', 'ci-fix', 'review-fix']) {
+    const a = g.agents[`shipyard-${role}-critical`];
+    assert.ok(a, `missing critical variant for ${role}`);
+    assert.strictEqual(a.model, CEILING.model, `${role}-critical model`);
+    assert.strictEqual(a.effort, CEILING.effort, `${role}-critical effort`);
+    assert.ok(/Critical task variant/.test(a.text), `${role}-critical says why it exists`);
+  }
+  assert.ok(!g.agents['shipyard-pr-sentinel-critical'], 'mechanical sentinel has no premium variant');
+  assert.ok(!g.agents['shipyard-drift-check-critical'], 'mechanical drift check has no premium variant');
+  assert.ok(!g.agents['shipyard-integrator-critical'], 'integrator is already at the ceiling');
+  assert.strictEqual(Object.keys(g.agents).length, 15, Object.keys(g.agents).join(', '));
 });
 
 test('no generated file asks for a retired effort', () => {

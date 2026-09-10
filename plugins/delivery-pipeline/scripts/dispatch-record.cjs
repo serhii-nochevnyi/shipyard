@@ -5,8 +5,12 @@
 // now".
 //
 //   dispatch-record.cjs mark  <ticket> <role> [--model <alias>] [--effort <level>]
-//                             [--effort-applied <level>] [--route <resolver route>]
-//                             [--agent-file <name>] [--agent-id <launch id>]
+//                             [--effort-applied <level|unsupported|unknown>]
+//                             [--route <resolver route>]
+//                             [--task-level <level>] [--runtime <runtime>]
+//                             [--backend <backend>] [--observed-model <id>]
+//                             [--observed-effort <level>] [--agent-file <name>]
+//                             [--agent-id <launch id>]
 //                             [--graph <dir>]
 //   dispatch-record.cjs clear <ticket>        [--graph <dir>]
 //   dispatch-record.cjs list  [--json]        [--graph <dir>]
@@ -70,7 +74,9 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 // `parseRoute` for the same reason again: the route the journal records is the
 // RESOLVER's, so it is validated against the resolver's own grammar rather than a
 // regex copied over here — the drift `CODEX_DEEP_ROLES` already paid for.
-const { ROLES, TIERS, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const {
+  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute,
+} = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -160,7 +166,10 @@ const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
 //     would compare rows that were never in force against rows that were.
 // So the Agent path omits `--effort-applied`, its absence means "nobody measured
 // this", and the recorder must not helpfully fill it in from the other flag.
-const MARK_FLAGS = ['model', 'effort', 'effort-applied', 'route', 'agent-file', 'agent-id'];
+const MARK_FLAGS = [
+  'model', 'effort', 'effort-applied', 'route', 'task-level', 'runtime', 'backend',
+  'observed-model', 'observed-effort', 'agent-file', 'agent-id',
+];
 
 // ── `reason` is the RESOLVER's route, never the caller's sentence ────────────
 //
@@ -192,6 +201,11 @@ const MARK_FIELD = {
   // ladder query reads it by that name. What changed is where the value comes
   // from, not what a reader greps for.
   route: 'reason',
+  'task-level': 'task_level',
+  runtime: 'runtime',
+  backend: 'backend',
+  'observed-model': 'observed_model',
+  'observed-effort': 'observed_effort',
   'agent-file': 'agent_file',
   'agent-id': 'agent_id',
 };
@@ -238,6 +252,21 @@ function agentIdSafetyIssue(id) {
   return null;
 }
 
+// Requested/applied/observed reconciliation is useful only when the extra
+// fields have stable vocabularies. Model ids are intentionally opaque because
+// Codex can expose a new concrete id before GSD's catalog knows it; the safety
+// check only protects the JSONL line and keeps whitespace from creating two
+// spellings of one value.
+const DISPATCH_RUNTIMES = new Set(['claude', 'codex']);
+const DISPATCH_BACKENDS = new Set(['agent', 'workflow', 'inline', 'codex-agent']);
+function opaqueDispatchValueIssue(value) {
+  if (typeof value !== 'string') return 'it is not a string';
+  if (value.trim() === '') return 'it is blank';
+  if (/[\s\u0000-\u001f\u007f]/.test(value)) return 'it contains whitespace or a control character';
+  if (value.length > AGENT_ID_MAX) return `it is longer than ${AGENT_ID_MAX} characters`;
+  return null;
+}
+
 // ── the Codex half: which FILE was invoked ───────────────────────────────────
 //
 // An agent on Codex is a static `.toml`, so the dispatch's real decision is the
@@ -256,6 +285,10 @@ function agentIdSafetyIssue(id) {
 // the copy cannot drift.
 const CODEX_DEEP_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel', 'arch-review']);
 const CODEX_DEEP_SUFFIX = '-deep';
+// Critical variants are first-attempt premium files. They are also a local copy
+// of the generator's set; the unit test keeps both surfaces in lockstep.
+const CODEX_CRITICAL_ROLES = new Set(['inv-research', 'arch-review', 'ci-fix', 'review-fix']);
+const CODEX_CRITICAL_SUFFIX = '-critical';
 const CODEX_AGENT_PREFIX = 'shipyard-';
 
 // The ladder's roles and the generator's agent files are NOT one-to-one, and the
@@ -280,6 +313,7 @@ function agentFilesFor(role, known) {
   const name = agentRoleName(role);
   const candidates = [`${CODEX_AGENT_PREFIX}${name}`];
   if (CODEX_DEEP_ROLES.has(name)) candidates.push(`${CODEX_AGENT_PREFIX}${name}${CODEX_DEEP_SUFFIX}`);
+  if (CODEX_CRITICAL_ROLES.has(name)) candidates.push(`${CODEX_AGENT_PREFIX}${name}${CODEX_CRITICAL_SUFFIX}`);
   return new Set(candidates.filter((f) => known.has(f)));
 }
 
@@ -292,6 +326,7 @@ function codexAgentFiles(dir = path.join(__dirname, '..', 'references')) {
     const role = f.slice(0, -3);
     out.add(`${CODEX_AGENT_PREFIX}${role}`);
     if (CODEX_DEEP_ROLES.has(role)) out.add(`${CODEX_AGENT_PREFIX}${role}${CODEX_DEEP_SUFFIX}`);
+    if (CODEX_CRITICAL_ROLES.has(role)) out.add(`${CODEX_AGENT_PREFIX}${role}${CODEX_CRITICAL_SUFFIX}`);
   }
   return out;
 }
@@ -352,13 +387,55 @@ function parseMarkFlags(argv, role) {
   for (const flag of ['effort', 'effort-applied']) {
     const level = given.get(flag);
     if (level === undefined) continue; // absent stays absent — never filled in from its twin
-    if (!EFFORTS.includes(level)) {
+    const evidenceState = flag === 'effort-applied' && ['unknown', 'unsupported'].includes(level);
+    if (!EFFORTS.includes(level) && !evidenceState) {
       fail(
-        `"${level}" is not an effort level — --${flag} would record a depth nothing ran at.\n` +
-        `  efforts: ${EFFORTS.join(', ')}`
+        `"${level}" is not an effort level or applied-effort state — --${flag} would record a depth ` +
+        'nothing ran at.\n' +
+        `  efforts: ${EFFORTS.join(', ')}; applied states: unsupported, unknown`
       );
     }
     decided[MARK_FIELD[flag]] = level;
+  }
+  const taskLevel = given.get('task-level');
+  if (taskLevel !== undefined) {
+    if (!TASK_LEVELS.includes(taskLevel)) {
+      fail(
+        `"${taskLevel}" is not a task level — --task-level would make the dispatch impossible to compare.\n` +
+        `  task levels: ${TASK_LEVELS.join(', ')}`
+      );
+    }
+    decided.task_level = taskLevel;
+  }
+  const runtime = given.get('runtime');
+  if (runtime !== undefined) {
+    if (!DISPATCH_RUNTIMES.has(runtime)) {
+      fail(`"${runtime}" is not a supported dispatch runtime — runtimes: ${[...DISPATCH_RUNTIMES].join(', ')}`);
+    }
+    decided.runtime = runtime;
+  }
+  const backend = given.get('backend');
+  if (backend !== undefined) {
+    if (!DISPATCH_BACKENDS.has(backend)) {
+      fail(`"${backend}" is not a dispatch backend — backends: ${[...DISPATCH_BACKENDS].join(', ')}`);
+    }
+    decided.backend = backend;
+  }
+  for (const flag of ['observed-model']) {
+    const observed = given.get(flag);
+    if (observed === undefined) continue;
+    const why = opaqueDispatchValueIssue(observed);
+    if (why !== null) fail(`--${flag} ${JSON.stringify(observed)} cannot be recorded: ${why}`);
+    decided[MARK_FIELD[flag]] = observed;
+  }
+  const observedEffort = given.get('observed-effort');
+  if (observedEffort !== undefined) {
+    if (!['unknown', 'unsupported'].includes(observedEffort) && !EFFORTS.includes(observedEffort)) {
+      fail(
+        `"${observedEffort}" is not an observed effort level — observed values: unknown, unsupported, ${EFFORTS.join(', ')}`
+      );
+    }
+    decided.observed_effort = observedEffort;
   }
   // The agent's identity. Opaque by nature — a launch id has no vocabulary to
   // check against, and inventing an allowlist for one is the mistake this repo
@@ -438,6 +515,12 @@ function parseMarkFlags(argv, role) {
     if (decided.model === undefined) decided.model = parsed.tier.model;
     if (decided.effort === undefined) decided.effort = parsed.effort.effort;
     decided.reason = route;
+  }
+  if (runtime !== undefined && decided.model === undefined) {
+    fail(
+      `a ${runtime} dispatch must carry the resolver's --model or --route — otherwise its model lane is unknown.\n` +
+      '  Resolve with `pipeline-config.cjs model <role> --json [signals]` and pass the returned pair and route.'
+    );
   }
   const agentFile = given.get('agent-file');
   if (agentFile !== undefined) {
@@ -760,7 +843,8 @@ function refreshFront(cwd) {
 module.exports = {
   activeDispatches, dispatchWhy, dispatchFingerprint, agentIdOf, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
   MARK_FLAGS, MARK_FIELD, REFUSED_FLAGS, codexAgentFiles, agentFilesFor, agentRoleName,
-  CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_AGENT_PREFIX,
+  CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
+  CODEX_AGENT_PREFIX, DISPATCH_RUNTIMES, DISPATCH_BACKENDS,
 };
 
 if (require.main === module) {
