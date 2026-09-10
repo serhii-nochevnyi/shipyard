@@ -302,7 +302,22 @@ the floor is not a preference), `models`, `effort`, `fable` (`off` | `auto`),
 `fable_window_tokens`, `max_attempts`, `pr_fetch_limit`,
 `integration_mode`, `use_workflow`, `graph_gate`, `jira`, `jira_transitions`
 (the tracker projection's status map — empty by default, which is the
-projection switched off), `repos`.
+projection switched off), `gsd_sync`, `repos`.
+
+The native GSD projection is part of the closed loop and is enabled by
+`delivery_pipeline.gsd_sync` (default `true`). It derives `STATE.md`,
+`REQUIREMENTS.md`, plan summaries, phase UAT/verification, and the marked
+roadmap status block from the Shipyard graph and integration evidence:
+
+```bash
+node plugins/delivery-pipeline/scripts/gsd-sync.cjs
+node plugins/delivery-pipeline/scripts/gsd-sync.cjs --check --json
+```
+
+The first command is the repair path; the second is the no-write ship check.
+Missing or failed evidence remains non-green. A targeted `--phase N` run is
+available for local repair, but a full projection check is required before
+shipping.
 
 The conveyor also **obeys GSD's own settings** rather than second-guessing them:
 `git.base_branch` decides where epics are cut from and where the integration PR
@@ -492,8 +507,10 @@ for Codex as part of its own run.
 
 The `plan:post` gate is installed at global scope but is applicability-scoped: it
 stays inert in projects that carry no `delivery:` blocks, and fails closed for
-real conveyor projects. Opt a project out entirely with
-`.planning/config.json` → `pipeline.graph_gate: false`.
+real conveyor projects. `delivery_pipeline.gsd_sync: false` opts out only from
+the native projection; Gate 2 and UAT remain independently controlled by their
+own settings. To disable Gate 2 itself, use `.planning/config.json` →
+`delivery_pipeline.graph_gate: false`.
 
 Set `SHIPYARD_CODEX_PHASE=1` to install `investigate`+`decompose` only and leave
 `deliver` out. Skills land in `~/.agents/skills`; nothing outside shipyard's own

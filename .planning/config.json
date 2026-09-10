@@ -99,17 +99,16 @@
     }
   },
   "runtime": "codex",
-  "pipeline": {
-    "jira": {
-      "enabled": false
-    }
-  },
   "model_overrides": {
     "gsd-planner": "opus",
     "gsd-code-reviewer": "opus"
   },
   "delivery_pipeline": {
     "max_concurrent_agents": 4,
-    "model_ladder": "adaptive"
+    "model_ladder": "adaptive",
+    "jira": {
+      "enabled": false
+    },
+    "gsd_sync": true
   }
 }
