@@ -51,6 +51,21 @@
 // happened to collide: a list is the shape T-27-07 replaced. Its two arms are
 // asserted SEPARATELY below, because a one-armed implementation passes half
 // the cases and looks exactly as green.
+//
+// The fourth is an identifier that must never appear at all: `transitionName`.
+// Jira's MCP schema refuses it in a sentence — "Name of the transition itself,
+// not the target status — the two often differ, so 'Done' does not match a
+// transition named 'Review->Done'." — so a projector keyed on transition names
+// works against the workflow it was written for and silently does nothing on
+// the next one. It is a NEGATIVE pin, landed before the projector it guards,
+// and "outside a comment" is defined PER FILE TYPE because getting that wrong
+// is how a sweep goes quietly inert: `.cjs`/`.mjs`/`.sh` may name what they
+// forbid on a comment line, while `.md` gets NO exemption — the command docs
+// and `references/` files are the prompts an agent reads, and the Codex
+// generator ships them verbatim, so a prompt that spells the identifier is
+// exactly the defect. `.planning/` is outside the sweep, the same exclusion
+// ADR-006 D7 gave the gsd-core pin and for the same reason: plans and ADRs
+// must be able to name what they forbid.
 
 const fs = require('fs');
 const os = require('os');
@@ -323,6 +338,121 @@ test('the epic/27 duplication reproduces as a fixture and is caught on both arms
   assert.strictEqual(findings.length, 2, `both arms fire on the real case, got:\n  ${findings.join('\n  ')}`);
   assert.ok(findings.some((f) => /cleanup\(\)/.test(f)), `the duplicated function must be named:\n  ${findings.join('\n  ')}`);
   assert.ok(findings.some((f) => /trap/.test(f)), `the duplicated trap must be named:\n  ${findings.join('\n  ')}`);
+});
+
+// ── The negative pin: a transition NAME is never a target status ─────────────
+//
+// See the fourth header paragraph for WHY. The rule this code implements, said
+// once here so a reader never has to infer it from the regexes:
+//
+//   .cjs / .mjs — exempt on a line whose first non-space is `//` or `/*`
+//   .sh         — exempt on a line whose first non-space is `#`
+//   everything else (.md, .json, and any extension added later) — NO exemption
+//
+// Fail-closed on the default is the whole point: markdown has no comment form
+// an agent does not read, and a new file type must be reasoned about here
+// rather than exempted by silence. Note this deliberately does NOT reuse the
+// model-id sweep's single COMMENT regex — that one treats `#` and `>` as
+// comments in every file type, which would exempt a markdown heading and a
+// blockquote and hand the md arm back its exemption.
+//
+// A bare `*` is NOT a comment opener here, even though it continues a JSDoc
+// block: `workflows/*.mjs` build agent prompts as template literals, so a
+// markdown bullet inside one (`  * transition it with …`) starts with `*` and
+// would be exempted — a prompt spelling the identifier, which is exactly the
+// defect the md arm exists to catch, arriving through the second prompt
+// channel. An inner line of a `/* … */` block loses its exemption as a result,
+// which is the fail-closed direction and costs nothing: no swept file names
+// the identifier at all.
+const COMMENT_FORMS = {
+  '.cjs': /^\s*(?:\/\/|\/\*)/,
+  '.mjs': /^\s*(?:\/\/|\/\*)/,
+  '.sh': /^\s*#/,
+};
+
+// One constant, so pointing the sweep at something that does not exist — the
+// mutation that proves the non-empty assertion still bites — is a one-token
+// edit rather than a rewrite of the test.
+const SWEPT_DIRS = ['plugins/delivery-pipeline', 'scripts'];
+
+// The identifier itself, and only it. `transition.id` / `transitionId` are the
+// CORRECT arguments — the id is the only one both connected MCP variants take —
+// so they are not matched here.
+const TRANSITION_NAME = /transitionName/;
+
+// The MCP's own words, carried into the failure message: a match without the
+// reason sends the reader to a rename, and a rename is not the fix.
+const SCHEMA_SENTENCE =
+  "the MCP schema says \"Name of the transition itself, not the target status — the two often differ, so 'Done' does not match a transition named 'Review->Done'\", so a projector keyed on transition names works against the workflow it was written for and silently does nothing on the next one";
+
+// Tracked-file paths in, findings out — the same code path over the live tree
+// and over the fixture below, for the reason the shell sweep states above.
+const transitionNameOffenders = (root, rels) => {
+  const offenders = [];
+  for (const rel of rels) {
+    const exempt = COMMENT_FORMS[path.extname(rel)];
+    fs.readFileSync(path.join(root, rel), 'utf8').split('\n').forEach((line, i) => {
+      if (!TRANSITION_NAME.test(line)) return;
+      if (exempt && exempt.test(line)) return;
+      offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+    });
+  }
+  return offenders;
+};
+
+test('`transitionName` appears in no script and no prompt we ship', () => {
+  const files = tracked(...SWEPT_DIRS);
+  // TWO anchors, one per swept dir. `git ls-files -- a b` with one pathspec
+  // pointing at nothing still returns the other's files, so a single anchor
+  // cannot tell a half-resolved sweep from a whole one. The markdown anchor is
+  // the deliberate half: the md arm is what goes inert if someone ever narrows
+  // this sweep to code files, and the prompts are where the defect would ship.
+  for (const anchor of [
+    'plugins/delivery-pipeline/commands/deliver.md',
+    'scripts/gen-codex-shipyard.cjs',
+  ]) {
+    assert.ok(
+      files.includes(anchor),
+      `expected the transitionName sweep to include ${anchor}; git listed ${files.length} files under ${SWEPT_DIRS.join(', ')} — a sweep that certifies whatever it is pointed at is worse than no sweep`
+    );
+  }
+  const offenders = transitionNameOffenders(REPO, files);
+  assert.strictEqual(
+    offenders.length, 0,
+    `a transition NAME is never a target status — ${SCHEMA_SENTENCE}. Resolve the id through getTransitionsForJiraIssue instead:\n  ${offenders.join('\n  ')}`
+  );
+});
+
+test('the comment exemption is per file type — and markdown gets none', () => {
+  const dir = fixture('code.cjs', [
+    "// transitionName is what this file must never call — naming it is fine",
+    "const ok = { transition: { id } };",
+    "callIt({ transitionName: 'Done' });",
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(dir, 'hook.sh'), [
+    '#!/usr/bin/env bash',
+    '# transitionName is banned; a comment may say so',
+    'echo "$transitionName"',
+    '',
+  ].join('\n'));
+  // Markdown's nearest thing to a comment, and the whole reason the md arm has
+  // no exemption: an agent reads an HTML comment in a prompt exactly like prose.
+  fs.writeFileSync(path.join(dir, 'prompt.md'), [
+    '# Deliver',
+    '<!-- transitionName -->',
+    '',
+  ].join('\n'));
+  const offenders = transitionNameOffenders(dir, ['code.cjs', 'hook.sh', 'prompt.md']);
+  assert.deepStrictEqual(
+    offenders.sort(),
+    [
+      "code.cjs:3: callIt({ transitionName: 'Done' });",
+      'hook.sh:3: echo "$transitionName"',
+      'prompt.md:2: <!-- transitionName -->',
+    ].sort(),
+    'exactly the three uncommented occurrences are findings — the two comment lines are not'
+  );
 });
 
 done();
