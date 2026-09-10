@@ -5,8 +5,8 @@
 //
 //   jira-project.cjs read [--json] [--graph <dir>]
 //   jira-project.cjs plan [--json] [--graph <dir>]
-//   jira-project.cjs record <ticket> <key> --to <status> --transition-id <id> [--status <name>]
-//   jira-project.cjs record --unreachable <ticket> <key> --to <status> [--offered "<names>"]
+//   jira-project.cjs record <ticket> <key> --to <item-to> --transition-id <id> [--status <name>]
+//   jira-project.cjs record --unreachable <ticket> <key> --to <item-to> [--offered "<names>"]
 //
 // The fifth durable store. `jira-projection.json` records, per ticket, the last
 // `status_change` that was actually projected onto the tracker, so a re-run, a
@@ -648,7 +648,7 @@ function recordProjection(opts = {}, dir = GRAPH_DIR) {
   const transitionId = String(opts.transition_id === undefined || opts.transition_id === null
     ? '' : opts.transition_id).trim();
   if (!ticket || !key) {
-    throw new Error('record needs a ticket and a tracker key: record <ticket> <key> --to <status> --transition-id <id> [--status <name>]');
+    throw new Error('record needs a ticket and a tracker key: record <ticket> <key> --to <item-to> --transition-id <id> [--status <name>]');
   }
   // THE REFUSAL. One check, in one place, on the path both the CLI and any
   // library caller take — delete it and a bare "done" advances the watermark,
@@ -659,7 +659,7 @@ function recordProjection(opts = {}, dir = GRAPH_DIR) {
       '  "I transitioned it" is not evidence; the id of the transition that was performed is.\n' +
       '  The acting half reads the offered transitions and moves by id, so it HAS the id —\n' +
       '  and a record written without it is a claim nobody can check against the tracker.\n' +
-      `  Full form: jira-project.cjs record ${ticket} <key> --to <status> --transition-id <id> --status <name>`
+      `  Full form: jira-project.cjs record ${ticket} <key> --to <item-to> --transition-id <id> --status <name>`
     );
   }
 
@@ -725,7 +725,7 @@ function recordProjection(opts = {}, dir = GRAPH_DIR) {
 function recordUnreachable(opts = {}, dir = GRAPH_DIR) {
   const { ticket, key, to } = opts;
   if (!ticket || !key) {
-    throw new Error('record --unreachable needs a ticket and a tracker key: record --unreachable <ticket> <key> --to <status> --offered "<names>"');
+    throw new Error('record --unreachable needs a ticket and a tracker key: record --unreachable <ticket> <key> --to <item-to> --offered "<names>"');
   }
   if (!to) {
     throw new Error(
@@ -856,7 +856,7 @@ if (require.main === module) {
     }
   } else {
     fail('usage: jira-project.cjs read|plan|record [--json] [--graph <dir>]\n' +
-      '  record <ticket> <key> --to <status> --transition-id <id> [--status <name>]\n' +
-      '  record --unreachable <ticket> <key> --to <status> [--offered "<names>"]');
+      '  record <ticket> <key> --to <item-to> --transition-id <id> [--status <name>]\n' +
+      '  record --unreachable <ticket> <key> --to <item-to> [--offered "<names>"]');
   }
 }
