@@ -67,21 +67,25 @@ The JSON contains:
   concrete model, observed effort, requested policy, role, task level, backend
   and observation unit;
 - `observations`: redacted per-response or per-Codex-session rows with
-  `dispatch_id`, ticket and completion status when known;
+  `dispatch_id`, ticket, concrete model/effort and completion status when known;
 - `coverage`: model, effort, dispatch, ticket, finalized-output and attribution
   rates. `unknown`, `unsupported`, ambiguous and missing values remain visible;
-- `efficiency.rows`: ticket/dispatch usage rows ready to join with verified
-  delivery outcomes. `input_per_verified_completion` stays `null` until that
-  outcome join is supplied;
+- `efficiency.rows`: ticket/dispatch usage rows with an `eligible` flag. Only
+  rows with unambiguous attribution, a concrete model and effort, and complete
+  input counters are eligible for comparison. `exclusion_reasons` explains
+  every excluded row. `input_per_verified_completion` stays `null` until a
+  verified delivery outcome join is supplied;
 - `subscription_usage: null`: local transcripts do not prove a subscription
   allowance or credit delta.
 
 `exact` and `session` attribution can be used for a model comparison. An
 `ambiguous`, `mismatch` or `unattributed` row is excluded from the ready counts.
-Codex `token_count` totals are cumulative per session, so the collector merges
-snapshots and resumed files rather than summing them as requests. Claude
-streaming updates are deduplicated by stable message identity, and late updates
-replace incomplete maxima.
+Older Codex `token_count` and current `token_usage_record` totals are cumulative
+per session. For the current format, the collector sums each response's usage
+after deduplication and splits it by the model/effort from `turn_context`; it
+does not mix the duplicate legacy snapshots into that total. Claude streaming
+updates are deduplicated by stable message identity, and late updates replace
+incomplete maxima.
 
 The report remains read-only and rescans the supplied files. A malformed
 transcript or attribution line produces a warning and a non-comparable report;

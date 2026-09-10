@@ -39,11 +39,22 @@ test('iterations replace ordinary aggregate and separate advisor', () => {
 });
 const codex=(n,ts='2026-09-10T00:00:00Z')=>({type:'event_msg',timestamp:ts,payload:{type:'token_count',info:{total_token_usage:{input_tokens:n,cached_input_tokens:n/2,cache_write_input_tokens:0,output_tokens:10,reasoning_output_tokens:3,total_tokens:n+10}}}});
 const meta={type:'session_meta',payload:{id:'codex-session'}};
+const codexCurrent={type:'token_usage_record',timestamp:'2026-09-10T00:02:00Z',payload:{session_id:'codex-session',response_id:'resp-1',turn_id:'turn-1',
+ usage:{input_tokens:20,cached_input_tokens:10,output_tokens:2,reasoning_output_tokens:1},
+ thread_token_usage:{input_tokens:300,cached_input_tokens:150,cache_write_input_tokens:0,output_tokens:30,reasoning_output_tokens:9,total_tokens:330}}};
+const codexCurrent2={type:'token_usage_record',timestamp:'2026-09-10T00:03:00Z',payload:{session_id:'codex-session',response_id:'resp-2',turn_id:'turn-1',
+ usage:{input_tokens:280,cached_input_tokens:140,output_tokens:28,reasoning_output_tokens:8},
+ thread_token_usage:{input_tokens:300,cached_input_tokens:150,cache_write_input_tokens:0,output_tokens:30,reasoning_output_tokens:9,total_tokens:330}}};
 test('Codex cumulative snapshots, repeats and resumed files are not summed',()=>{
  const r=report([{source:'a',rows:[meta,codex(100),codex(200,'2026-09-10T00:01:00Z')]},
   {source:'b',rows:[meta,codex(200,'2026-09-10T00:01:00Z')]}]);
  assert.equal(r.groups[0].input_tokens,200);assert.equal(r.groups[0].cache_read_input_tokens,100);
  assert.equal(r.groups[0].output_tokens,10);assert.equal(r.groups[0].reasoning_output_tokens,3);
+});
+test('current Codex thread snapshots win over duplicate legacy snapshots',()=>{
+ const r=report([{source:'current',rows:[meta,codex(250,'2026-09-10T00:01:59Z'),codexCurrent,codexCurrent2]}]);
+ assert.equal(r.groups[0].input_tokens,300);assert.equal(r.groups[0].cache_read_input_tokens,150);
+ assert.equal(r.groups[0].output_tokens,30);assert.equal(r.comparable,true);
 });
 test('a cumulative reset reports a discontinuity and does not invent a delta',()=>{
  const r=report(files(meta,codex(100),codex(20,'2026-09-10T00:01:00Z')));

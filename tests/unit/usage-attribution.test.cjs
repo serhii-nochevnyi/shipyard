@@ -117,6 +117,28 @@ const codex = {
     output_tokens: 8, reasoning_output_tokens: 3, total_tokens: 108,
   } } },
 };
+const codexCurrent = {
+  type: 'token_usage_record', timestamp: '2026-09-10T12:02:00.000Z',
+  payload: {
+    session_id: 'codex-current-session', response_id: 'response-1', turn_id: 'turn-1',
+    usage: { input_tokens: 12, cached_input_tokens: 4, output_tokens: 2 },
+    thread_token_usage: {
+      input_tokens: 120, cached_input_tokens: 40, cache_write_input_tokens: 0,
+      output_tokens: 8, reasoning_output_tokens: 3, total_tokens: 128,
+    },
+  },
+};
+const codexCurrent2 = {
+  type: 'token_usage_record', timestamp: '2026-09-10T12:03:00.000Z',
+  payload: {
+    session_id: 'codex-current-session', response_id: 'response-2', turn_id: 'turn-1',
+    usage: { input_tokens: 108, cached_input_tokens: 36, output_tokens: 6, reasoning_output_tokens: 2 },
+    thread_token_usage: {
+      input_tokens: 120, cached_input_tokens: 40, cache_write_input_tokens: 0,
+      output_tokens: 8, reasoning_output_tokens: 3, total_tokens: 128,
+    },
+  },
+};
 
 test('usage report joins both providers and keeps model/effort in the efficiency rows', () => {
   const result = report([
@@ -155,4 +177,42 @@ test('ambiguous session attribution is visible and excluded from efficiency comp
   assert.equal(result.coverage.ambiguous_observations, 1);
   assert.equal(result.efficiency.eligible_model_effort_observations, 0);
   assert.equal(result.observations[0].model, null);
+});
+
+test('current Codex token_usage_record uses cumulative thread usage', () => {
+  const result = report([
+    { source: 'codex-current.jsonl', rows: [
+      { type: 'turn_context', payload: { turn_id: 'turn-1', model: 'gpt-5.6-luna', effort: 'max' } },
+      codexCurrent,
+      codexCurrent2,
+    ] },
+  ], { attributions: [base({
+    observation_id: 'codex-current-link', runtime: 'codex', provider: 'openai',
+    session_id: 'codex-current-session', source: 'codex-current.jsonl',
+    dispatch_id: 'dispatch-current', ticket: 'T-01-03', role: 'executor',
+    model: 'sonnet', observed_model: 'gpt-5.6-luna', observed_effort: 'max',
+  })] });
+  assert.equal(result.coverage.codex_sessions, 1);
+  assert.equal(result.coverage.attributed_observations, 2);
+  assert.equal(result.observations[0].model, 'gpt-5.6-luna');
+  assert.equal(result.observations[0].observed_effort, 'max');
+  assert.equal(result.groups[0].input_tokens, 120);
+  assert.equal(result.groups[0].cache_read_input_tokens, 40);
+  assert.equal(result.groups[0].output_tokens, 8);
+  assert.equal(result.efficiency.rows[0].eligible, true);
+});
+
+test('unknown observed effort stays visible but is excluded from eligible rows', () => {
+  const result = report([
+    { source: 'claude.jsonl', rows: [claude] },
+  ], { attributions: [base({
+    observation_id: 'unknown-effort', message_id: 'claude-message',
+    session_id: 'claude-session', source: 'claude.jsonl', observed_effort: 'unknown',
+  })] });
+  assert.equal(result.coverage.effort_observed, 0);
+  assert.equal(result.efficiency.eligible_model_effort_observations, 0);
+  assert.equal(result.efficiency.eligible_rows, 0);
+  assert.equal(result.efficiency.ineligible_rows, 1);
+  assert.equal(result.efficiency.rows[0].eligible, false);
+  assert.deepEqual(result.efficiency.rows[0].exclusion_reasons, ['missing_or_nonconcrete_effort']);
 });

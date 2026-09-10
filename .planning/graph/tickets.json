@@ -2547,6 +2547,8 @@
         "docs/usage-report.md",
         "docs/dispatch-record.md",
         "docs/pipeline-stats.md",
+        "plugins/delivery-pipeline/scripts/pipeline-stats.cjs",
+        "tests/unit/pipeline-stats.test.cjs",
         "plugins/delivery-pipeline/commands/deliver.md",
         "plugins/delivery-pipeline/references/pr-sentinel.md",
         "tests/smoke/codex-shipyard-smoke.sh",
