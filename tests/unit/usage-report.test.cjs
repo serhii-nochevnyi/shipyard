@@ -85,6 +85,12 @@ test('request metadata arriving later does not create a second message',()=>{
  delete a.requestId;const b=claude({input_tokens:5,cache_creation_input_tokens:0,cache_read_input_tokens:0,output_tokens:3},{stop_reason:'end_turn'});
  const r=report(files(a,b));assert.equal(r.groups[0].observations,1);assert.equal(r.groups[0].output_tokens,3);
 });
+test('late Claude model metadata fills an earlier snapshot gap',()=>{
+ const a=claude({input_tokens:5,cache_creation_input_tokens:0,cache_read_input_tokens:0,output_tokens:1});
+ a.message.model=undefined;
+ const b=claude({input_tokens:5,cache_creation_input_tokens:0,cache_read_input_tokens:0,output_tokens:3},{stop_reason:'end_turn'});
+ const r=report(files(a,b));assert.equal(r.groups[0].model,'example-model');
+});
 test('malformed usage containers are warned about without aborting the report',()=>{
  const r=report(files(claude('bad'),claude([]),claude(5)));
  assert.equal(r.comparable,false);assert.ok(r.warnings.some(w=>w.includes('usage object')));

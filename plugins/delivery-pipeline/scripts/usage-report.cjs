@@ -34,6 +34,7 @@ function report(sources) {
           q = { model: msg.model || null, usage: {}, iterations: [], complete: false };
           requests.set(key, q);
         }
+        if (!q.model && msg.model) q.model = msg.model;
         if (q.model && msg.model && q.model !== msg.model) warn('Claude response changed model identity');
         mergeUsage(q.usage, msg.usage, FIELDS, 'Claude');
         q.complete ||= Boolean(msg.stop_reason);
