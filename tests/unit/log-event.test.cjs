@@ -174,6 +174,7 @@ test('the jira_transition event is refused — the watermark and the line are ON
   assert.ok(!/duplicate/.test(r.stderr), 'an incomplete act, not a duplicate');
   assert.ok(/jira-project\.cjs record/.test(r.stderr), 'it must name the command that does both');
   assert.ok(/--transition-id/.test(r.stderr), 'and the flag that carries the evidence');
+  assert.ok(/--to <status>/.test(r.stderr), 'and the status of the item actually performed');
   assert.ok(/watermark/i.test(r.stderr), 'and the half a hand-written line skips');
   assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
 });
