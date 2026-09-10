@@ -464,7 +464,8 @@ switches off the depth rung a repeated failure earns, and the reader says so),
 `fable_window_tokens` (250000), `max_attempts` (5), `plan_defect_signatures` (3),
 `pr_fetch_limit`, `stale_merge_hours`, `stale_draft_hours`,
 `integration_mode`, `use_workflow`, `sentinel` (`auto` | `off`), `auto_merge`
-(`epic` | `off`), `graph_gate`, `jira`, `repos`
+(`epic` | `off`), `graph_gate`, `jira`, `jira_transitions` (the tracker
+projection's map, EMPTY by default, which is the projection off), `repos`
 (`{"owner/name": "/abs/path/to/checkout"}` — see the multi-repo section).
 
 **GSD's own settings the conveyor obeys** (read, never written):
@@ -712,6 +713,35 @@ files (the journal, `tickets.json`, the configured map) and its watermark makes
 every transition exactly-once and forward-only. That script opens no socket and
 holds no credential. **The acting half below is yours**, because the only
 tracker client the conveyor has is the MCP the session connected.
+
+**Where it runs, and why nothing waits on it.** The projection is a SEPARATE act
+AFTER a `state-sync.cjs`, never a step inside one: state-sync runs on every
+babysit round and its wall time IS this conveyor's tick rate, so it must not
+grow a dependency on a tracker's availability. Ask the planner for the work
+list, and SAY WHICH graph: the planner resolves the project — and therefore the
+configuration — from the graph directory it is given, while a bare invocation
+resolves `<cwd>/.planning/graph`, which from a ticket worktree is someone else's
+or nothing at all. So pass `--graph <project>/.planning/graph`, or run it from
+the project directory with no flag, exactly as state-sync is run:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-project.cjs plan --json --graph <project>/.planning/graph
+```
+
+`enabled: false`, or an empty `items` — the ordinary outcome, once a round — is
+ONE line and nothing else. Otherwise perform each emitted item below, then move
+on; the front does not wait for you here.
+
+**A pending projection is not actionable, and it is not a reason to block.**
+That is a deliberate asymmetry with every other unreached mechanism this
+pipeline has fixed, where the remedy was to put the work on the board and let
+the stop gate enforce it. The justification here is specific rather than
+general: the watermark makes catch-up FREE, so a round that skips the projection
+costs one round of tracker lag and the next round closes it. Nothing — not the
+graph, not the front, not a merge — waits on a transition, so there is no
+equivalent here of the silent hours a skipped CI wait cost. It stays out of
+`delivery-front.json` and out of the stop gate for that reason, and only for
+that reason.
 
 **It cannot fire unconfigured.** `jira_transitions` (declared as
 `delivery_pipeline.jira_transitions`; the `pipeline.*` spelling is read too) maps
@@ -1729,7 +1759,11 @@ is a fixer with no memory. Until each PR is green or park-blocked — and do NOT
 stop at that: move on to the recomputation of the front below.
 
 **Loop-back to the fixpoint (after each round/merge — mandatory).**
-1. `state-sync.cjs` — fresh state and board.
+1. `state-sync.cjs` — fresh state and board. Then, as a SEPARATE act and from
+   the project directory, the tracker projection (see "Tracker projection — the
+   acting half"): it is bookkeeping, so it is neither actionable nor a reason to
+   block — the watermark makes catch-up free, and a round that skips it costs
+   one round of tracker lag that the next round closes.
 2. Recompute the actionable front (the Principle at the top): new `ready` (unblocked
    children, cascade dependents) + `branched-needs-pr` + open non-green PRs.
 3. Front NOT empty → add the new ready ones to scope, return to Step 2/3 for them;
