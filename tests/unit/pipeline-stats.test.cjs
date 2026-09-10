@@ -279,6 +279,17 @@ test('dispatch routing fields are grouped without turning missing observations i
   assert.deepStrictEqual(json.ladder.by_effort_applied, { high: 1 });
   assert.deepStrictEqual(json.ladder.by_observed_model, { 'claude-sonnet-5': 1 });
   assert.deepStrictEqual(json.ladder.by_observed_effort, { high: 1 });
+  assert.strictEqual(json.ladder.requested_comparable, 1, 'only the fully attributed row is routing-comparable');
+  assert.strictEqual(json.ladder.applied_comparable, 1, 'applied coverage is a separate level');
+  assert.strictEqual(json.ladder.observed_comparable, 1, 'observed coverage is a separate level');
+  assert.deepStrictEqual(json.ladder.by_attribution_status, {
+    incomplete: 1,
+    observed_complete: 1,
+  });
+  assert.strictEqual(json.ladder.missing_attribution.task_level, 1);
+  assert.strictEqual(json.ladder.missing_attribution.runtime, 1);
+  assert.strictEqual(json.ladder.missing_attribution.backend, 1);
+  assert.strictEqual(json.ladder.missing_attribution.observed_effort, 1, 'absence is not inferred from observed model');
   assert.strictEqual(json.ladder.missing_model, 0);
   assert.strictEqual(json.ladder.missing_task_level, 1);
   assert.strictEqual(json.ladder.missing_runtime, 1);
@@ -302,7 +313,8 @@ test('an invalid policy is visible in the ladder report', () => {
 test('Codex agent-file coverage is required only when the runtime is known', () => {
   const complete = {
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'arch-review',
-    model: 'sonnet', effort: 'high', runtime: 'codex', backend: 'codex-agent',
+    model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
+    task_level: 'complex', runtime: 'codex', backend: 'codex-agent',
     agent_file: 'shipyard-arch-review-critical', observed_model: 'gpt-6-astra',
   };
   const partial = {
@@ -313,6 +325,10 @@ test('Codex agent-file coverage is required only when the runtime is known', () 
   assert.strictEqual(code, 0);
   assert.deepStrictEqual(json.ladder.by_agent_file, { 'shipyard-arch-review-critical': 1 });
   assert.strictEqual(json.ladder.missing_agent_file, 1);
+  assert.strictEqual(json.ladder.requested_comparable, 1, 'static Codex rows need their selected agent file');
+  assert.strictEqual(json.ladder.applied_comparable, 0);
+  assert.strictEqual(json.ladder.observed_comparable, 0, 'observed effort is absent and must stay unknown');
+  assert.deepStrictEqual(json.ladder.by_attribution_status, { incomplete: 1, requested_complete: 1 });
 });
 
 done();
