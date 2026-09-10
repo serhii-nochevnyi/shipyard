@@ -125,8 +125,9 @@ function report(sources) {
     }
   }
   if (!usageRows || !observations.length) warn('No attributable supported usage observations');
+  if ([...groups.values()].some(g => g.input_tokens === null)) warn('Input coverage is incomplete; totals are not comparable');
   return { schema_version:1, units:'tokens processed; not subscription quota', subscription_usage:null,
-    usage_rows:usageRows, comparable:warnings.length === 0, warnings:[...new Set(warnings)],
+    usage_rows:usageRows, comparison_scope:'raw input only; not finalized cost or subscription', comparable:warnings.length === 0, warnings:[...new Set(warnings)],
     groups:[...groups.values()], coverage:{claude_responses:requests.size,codex_sessions:sessions.size},
     limitations:['Missing counters are unknown; finalized Claude output requires a stop marker.',
       'Codex totals are cumulative session observations, not request counts; model attribution is unavailable.',

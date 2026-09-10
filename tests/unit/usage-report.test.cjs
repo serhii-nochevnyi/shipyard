@@ -25,6 +25,7 @@ test('partial output and omitted cache counters remain unknown', () => {
   assert.equal(r.groups[0].input_tokens,null);
   assert.equal(r.groups[0].uncached_input_tokens,5);
   assert.equal(r.groups[0].finalized,0);
+  assert.equal(r.comparable,false);
 });
 test('iterations replace ordinary aggregate and separate advisor', () => {
   const u={input_tokens:12,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:9,
