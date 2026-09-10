@@ -311,8 +311,10 @@ const TICKETS_NAME = 'tickets.json';
 // The project a graph belongs to: `<project>/.planning/graph` → `<project>`.
 // The same walk `lockRootFor` does, and for the same reason — everything read
 // here besides the journal lives at the PROJECT root, never at cwd, and the
-// documented caller of this verb stands wherever the main loop left it.
-const projectRootFor = (dir) => path.resolve(dir, '..', '..');
+// documented caller of this verb stands wherever the main loop left it. Reuses
+// `lockRootFor` rather than re-declaring an identical body, so the two callers
+// cannot drift apart.
+const projectRootFor = lockRootFor;
 
 // How much of the journal ONE backward step adds. It is a STEP SIZE and never a
 // bound, which is the whole distinction this script draws against
@@ -476,25 +478,33 @@ function unreachableSuppressed(item, store) {
  * `{ticket, key, from, to, target_status, ts}` — `ts` is the driving event's,
  * and it is in the item because T-29-05's unreachable report is anchored on it.
  *
- * Every off-switch answers with an EMPTY LIST and exit 0, never a warning: this
- * runs once per round, the common case is zero work, and a mechanism that
- * complains on every round of every unconfigured project teaches its reader to
- * skip the output.
+ * Every off-switch answers with an EMPTY LIST and exit 0, never a warning OF
+ * ITS OWN: this runs once per round, the common case is zero work, and a
+ * mechanism that complains on every round of every unconfigured project
+ * teaches its reader to skip the output. `loadConfig`'s own diagnostics
+ * (unknown keys, a malformed entry it skipped) are a different fact — a real
+ * misconfiguration, not the quiet common case — and are carried through
+ * regardless of whether the projection ends up on or off.
  */
 function planItems(dir = GRAPH_DIR) {
   const out = { graph: dir, enabled: true, reason: null, items: [], warnings: [] };
   const root = projectRootFor(dir);
-  const { config, valid, error } = loadConfig(root);
+  const { config, valid, error, warnings: configWarnings } = loadConfig(root);
 
   // ADR-004 D2: a corrupt configuration permits no mutation, and transitioning
   // somebody's board is a mutation. One line, because this one IS worth saying —
   // it is not the quiet common case, it is a broken file.
   if (!valid) {
     out.enabled = false;
-    out.reason = `config is invalid (${error && error.message}) — no policy is in effect, so nothing is projected`;
+    out.reason = `${error && error.relative} is invalid (${error && error.message}) — no policy is in effect, so nothing is projected`;
     out.warnings.push(out.reason);
     return out;
   }
+  // The config parsed: carry loadConfig's own warnings (unknown keys, a
+  // non-alias tier, …) through rather than discarding them — a misconfiguration
+  // that isn't fatal must not look like a silent off-switch with no diagnostic
+  // context.
+  out.warnings.push(...(configWarnings || []));
   if (config.jira.enabled === false) {
     out.enabled = false;
     out.reason = 'pipeline.jira.enabled is false';
