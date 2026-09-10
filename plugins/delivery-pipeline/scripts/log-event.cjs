@@ -177,7 +177,7 @@ const OWNED_BY_SCRIPTS = {
     by: 'jira-project.cjs record', kind: 'tracker projection', why: halfAct,
     otherHalf: 'ADVANCING the watermark',
     lost: 'record',
-    fix: 'jira-project.cjs record <ticket> <key> --transition-id <id> --status <name>',
+    fix: 'jira-project.cjs record <ticket> <key> --to <item-to> --transition-id <id> --status <name>',
   },
   flake: {
     by: 'failure-signature.cjs rerun', why: forgedState,

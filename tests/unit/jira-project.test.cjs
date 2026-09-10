@@ -599,7 +599,7 @@ test('an EMPTY --transition-id is the same refusal — "" is not evidence either
   const p = pending();
   const g = graphOf(p);
   const before = raw(g, JOURNAL);
-  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '']);
+  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--to', 'merged', '--transition-id', '']);
   assert.notEqual(r.status, 0, 'an empty id must be refused');
   assert.match(r.stderr, /--transition-id/);
   assert.equal(raw(g, STORE), null, 'no watermark');
@@ -612,7 +612,7 @@ test('a record for a ticket with no pending item is refused', () => {
   const p = project({ tickets: { 'T-24-05': 'SHIP-5' }, journal: [] });
   const g = graphOf(p);
   const before = raw(g, JOURNAL);
-  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '31']);
+  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--to', 'merged', '--transition-id', '31']);
   assert.notEqual(r.status, 0, 'must be refused');
   assert.match(r.stderr, /no pending projection/);
   assert.equal(raw(g, STORE), null, 'the store stays absent');
@@ -622,7 +622,7 @@ test('a record for a ticket with no pending item is refused', () => {
 test('a record naming a DIFFERENT issue than the pending item is refused', () => {
   const p = pending();
   const g = graphOf(p);
-  const r = run(g, ['record', 'T-24-05', 'SHIP-9', '--transition-id', '31']);
+  const r = run(g, ['record', 'T-24-05', 'SHIP-9', '--to', 'merged', '--transition-id', '31']);
   assert.notEqual(r.status, 0, 'must be refused');
   assert.match(r.stderr, /SHIP-5/, 'and it names the issue the item is actually about');
   assert.equal(raw(g, STORE), null);
@@ -631,7 +631,7 @@ test('a record naming a DIFFERENT issue than the pending item is refused', () =>
 test('a successful record advances the watermark and appends exactly one jira_transition', () => {
   const p = pending();
   const g = graphOf(p);
-  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '31', '--status', 'Done']);
+  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--to', 'merged', '--transition-id', '31', '--status', 'Done']);
   assert.equal(r.status, 0, r.stderr);
 
   const rec = storeOf(g).tickets['T-24-05'];
@@ -648,7 +648,7 @@ test('a successful record advances the watermark and appends exactly one jira_tr
   );
 
   // Exactly once: the same record again has nothing pending to be about.
-  const again = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '31', '--status', 'Done']);
+  const again = run(g, ['record', 'T-24-05', 'SHIP-5', '--to', 'merged', '--transition-id', '31', '--status', 'Done']);
   assert.notEqual(again.status, 0, 'the second identical record must be refused');
   assert.match(again.stderr, /no pending projection/);
   assert.equal(events(g, 'jira_transition').length, 1, 'and it appends nothing');
@@ -657,7 +657,7 @@ test('a successful record advances the watermark and appends exactly one jira_tr
 test('--status defaults to the item\'s target_status, so the two cannot drift apart', () => {
   const p = pending();
   const g = graphOf(p);
-  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '41']);
+  const r = run(g, ['record', 'T-24-05', 'SHIP-5', '--to', 'merged', '--transition-id', '41']);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(storeOf(g).tickets['T-24-05'].status, 'Done');
 });
@@ -731,7 +731,7 @@ test('the pair does not half-commit: a failed journal append rolls the watermark
   fs.appendFileSync = () => { throw new Error('EACCES: permission denied, open \'delivery-log.jsonl\''); };
   let thrown = null;
   try {
-    mod.recordProjection({ ticket: 'T-24-05', key: 'SHIP-5', transition_id: '31' }, g);
+    mod.recordProjection({ ticket: 'T-24-05', key: 'SHIP-5', to: 'merged', transition_id: '31' }, g);
   } catch (e) {
     thrown = e;
   } finally {
@@ -848,6 +848,47 @@ test('the module exports the pieces T-29-05 has to reuse rather than re-spell', 
     'compareStatus', 'hasProjected', 'markProjected', 'UNREACHABLE_KEY']) {
     assert.ok(mod[name] !== undefined, `${name} must be exported`);
   }
+});
+
+suite('projection evidence is bound to the performed item (T-29-08)');
+
+test('a newer journal state cannot be credited to an older tracker action', () => {
+  const g = graphOf(project({ tickets: { 'T-24-05': 'SHIP-5' }, journal: [
+    sc('T-24-05', 'pending', 'pr-open', '2026-09-10T10:00:00Z'),
+  ] }));
+  const offered = mod.planItems(g).items[0];
+  fs.appendFileSync(path.join(g, JOURNAL), sc('T-24-05', 'pr-open', 'merged', '2026-09-10T10:00:01Z') + '\n');
+  const before = raw(g, JOURNAL);
+  assert.throws(() => mod.recordProjection({ ticket: offered.ticket, key: offered.key,
+    to: offered.to, status: offered.target_status, transition_id: '21' }, g), /stale|pending/);
+  assert.equal(raw(g, STORE), null);
+  assert.equal(raw(g, JOURNAL), before);
+  assert.equal(mod.planItems(g).items[0].to, 'merged');
+});
+
+test('successful record requires a known performed to on the CLI and library paths', () => {
+  const g = graphOf(pending());
+  const before = raw(g, JOURNAL);
+  for (const to of [undefined, '', 'invented']) {
+    assert.throws(() => mod.recordProjection({ ticket: 'T-24-05', key: 'SHIP-5',
+      to, transition_id: '31' }, g), /--to/);
+  }
+  const result = run(g, ['record', 'T-24-05', 'SHIP-5', '--transition-id', '31']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--to/);
+  assert.equal(raw(g, STORE), null);
+  assert.equal(raw(g, JOURNAL), before);
+});
+
+test('reported target status must agree with the performed pending item', () => {
+  const g = graphOf(pending());
+  const before = raw(g, JOURNAL);
+  const result = run(g, ['record', 'T-24-05', 'SHIP-5', '--to', 'merged',
+    '--transition-id', '31', '--status', 'In Progress']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /target status/);
+  assert.equal(raw(g, STORE), null);
+  assert.equal(raw(g, JOURNAL), before);
 });
 
 done();

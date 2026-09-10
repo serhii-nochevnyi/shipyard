@@ -5,8 +5,8 @@
 //
 //   jira-project.cjs read [--json] [--graph <dir>]
 //   jira-project.cjs plan [--json] [--graph <dir>]
-//   jira-project.cjs record <ticket> <key> --transition-id <id> [--status <name>]
-//   jira-project.cjs record --unreachable <ticket> <key> --to <status> [--offered "<names>"]
+//   jira-project.cjs record <ticket> <key> --to <item-to> --transition-id <id> [--status <name>]
+//   jira-project.cjs record --unreachable <ticket> <key> --to <item-to> [--offered "<names>"]
 //
 // The fifth durable store. `jira-projection.json` records, per ticket, the last
 // `status_change` that was actually projected onto the tracker, so a re-run, a
@@ -648,7 +648,7 @@ function recordProjection(opts = {}, dir = GRAPH_DIR) {
   const transitionId = String(opts.transition_id === undefined || opts.transition_id === null
     ? '' : opts.transition_id).trim();
   if (!ticket || !key) {
-    throw new Error('record needs a ticket and a tracker key: record <ticket> <key> --transition-id <id> [--status <name>]');
+    throw new Error('record needs a ticket and a tracker key: record <ticket> <key> --to <item-to> --transition-id <id> [--status <name>]');
   }
   // THE REFUSAL. One check, in one place, on the path both the CLI and any
   // library caller take — delete it and a bare "done" advances the watermark,
@@ -659,15 +659,26 @@ function recordProjection(opts = {}, dir = GRAPH_DIR) {
       '  "I transitioned it" is not evidence; the id of the transition that was performed is.\n' +
       '  The acting half reads the offered transitions and moves by id, so it HAS the id —\n' +
       '  and a record written without it is a claim nobody can check against the tracker.\n' +
-      `  Full form: jira-project.cjs record ${ticket} <key> --transition-id <id> --status <name>`
+      `  Full form: jira-project.cjs record ${ticket} <key> --to <item-to> --transition-id <id> --status <name>`
     );
   }
 
+  if (typeof opts.to !== 'string' || !TICKET_STATUSES.includes(opts.to)) {
+    throw new Error('--to must name the performed item status — refusing to infer evidence from a newer journal state');
+  }
   return mutate((store) => {
     const { item, plan } = pendingItemFor(ticket, dir);
     if (!item) throw new Error(notPending(ticket, plan));
     requireSameKey(item, key, ticket);
-    const status = opts.status || item.target_status;
+    // The journal can advance while the agent is performing the tracker call.
+    // Recomputing the pending item must not credit that newer work as completed.
+    if (item.to !== opts.to) {
+      throw new Error(`${ticket}: stale projection evidence for ${opts.to}; pending item is ${item.to} — re-plan before recording`);
+    }
+    if (opts.status !== undefined && opts.status !== item.target_status) {
+      throw new Error(`${ticket}: reported target status does not match ${item.target_status} — refusing to record a different transition`);
+    }
+    const status = item.target_status;
     const at = new Date().toISOString();
     const record = {
       projected_to: item.to,
@@ -714,7 +725,7 @@ function recordProjection(opts = {}, dir = GRAPH_DIR) {
 function recordUnreachable(opts = {}, dir = GRAPH_DIR) {
   const { ticket, key, to } = opts;
   if (!ticket || !key) {
-    throw new Error('record --unreachable needs a ticket and a tracker key: record --unreachable <ticket> <key> --to <status> --offered "<names>"');
+    throw new Error('record --unreachable needs a ticket and a tracker key: record --unreachable <ticket> <key> --to <item-to> [--offered "<names>"]');
   }
   if (!to) {
     throw new Error(
@@ -828,7 +839,7 @@ if (require.main === module) {
         }
       } else {
         const r = recordProjection(
-          { ticket, key, transition_id: flags['--transition-id'], status: flags['--status'] }, GRAPH_DIR
+          { ticket, key, to: flags['--to'], transition_id: flags['--transition-id'], status: flags['--status'] }, GRAPH_DIR
         );
         if (flags['--json']) {
           console.log(JSON.stringify(r.record, null, 2));
@@ -845,7 +856,7 @@ if (require.main === module) {
     }
   } else {
     fail('usage: jira-project.cjs read|plan|record [--json] [--graph <dir>]\n' +
-      '  record <ticket> <key> --transition-id <id> [--status <name>]\n' +
-      '  record --unreachable <ticket> <key> --to <status> [--offered "<names>"]');
+      '  record <ticket> <key> --to <item-to> --transition-id <id> [--status <name>]\n' +
+      '  record --unreachable <ticket> <key> --to <item-to> [--offered "<names>"]');
   }
 }
