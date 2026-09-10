@@ -89,6 +89,20 @@ exists before anything reaches the network.
   a re-sync, a reopened PR or a replayed journal can never walk someone's board
   backwards. A ticket with no `delivery.jira` key is not an error — it is not a
   subject.
+
+  **Corrected during delivery (T-29-04), because this decision named the wrong
+  anchor.** The plan derived from D1 said the planner reads *"from the oldest
+  per-ticket watermark forward"*, meaning the watermark's timestamp. That is
+  RECORD time — when we wrote the record — which is an upper bound on the
+  event's time and not the event's time. A `status_change` landing between the
+  planner's read and the recorder's write is OLDER than the record and was never
+  projected, so a scan stopping at the record's timestamp leaves it outside the
+  window entirely, where `hasProjected` can never rescue it. That is the same
+  "loses transitions without saying so" defect this decision rejected the 64 KB
+  tail for, one round-trip narrower. **The anchor is OBJECT IDENTITY:** the scan
+  steps backwards until the window holds, for every watermarked subject, a
+  `status_change` whose `to` is that ticket's recorded `projected_to` — and
+  otherwise walks to byte 0. 64 KB survives only as a STEP SIZE, never a bound.
 - **D2 — The map is our status → THEIR TARGET STATUS NAME, and it is a declared
   knob.** Never a transition name; the schema sentence above is the whole
   argument. `delivery_pipeline.jira_transitions` is declared in
