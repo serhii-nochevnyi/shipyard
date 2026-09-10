@@ -242,3 +242,14 @@ carry a correct, tested, wired mechanism whose first contact with a real
 workflow happens somewhere else. D7 is what keeps that honest, and the thing to
 watch for is the shape ADR-006 named: an assertion nobody has seen fail is not
 a guard, and a fixture journal is not a Jira workflow.
+
+
+### 2026-09-10 integration amendment to D5
+
+Successful recording must carry `--to <the performed item status>` as well as
+`--transition-id`. T-29-08 reproduced a journal advance during a tracker action:
+recomputing the pending item without comparing it to the performed item falsely
+credited `merged` to an `In Progress` transition. Stale evidence now refuses;
+the next planner call retains the newer work. A reported target status must also
+match. Earlier T-29-05/06 examples describe the pre-amendment signature; their
+current continuation is the T-29-08 contract and updated acting-half invocation.
