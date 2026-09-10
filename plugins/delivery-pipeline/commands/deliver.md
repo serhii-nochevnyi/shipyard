@@ -780,8 +780,12 @@ For EACH item:
 
    ```bash
    node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-project.cjs record <T> <KEY> \
-     --transition-id <id> --status "<the target status name>"
+     --to <the performed item's "to"> --transition-id <id> --status "<the target status name>"
    ```
+
+   Pass the `to` from the item actually performed. If the journal advanced while
+   the tracker call ran, recording that older item refuses and the next planner
+   call retains the newer work; never substitute the newer item's `to`.
 
    This is the ONLY thing that advances the watermark, and it journals the
    `jira_transition` event for you. It REFUSES a report that names no id — "I
