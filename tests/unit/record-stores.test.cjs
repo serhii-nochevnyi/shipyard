@@ -243,5 +243,177 @@ for (const p of PARSERS) {
   });
 }
 
+suite('record stores — the projection watermark: exactly once, and only forwards');
+
+// The fifth store (ADR-008 D1). It is the same discipline as the four above —
+// `--graph` in any position, a refusal when the resolved dir has no ticket
+// graph, one lock around the whole read-modify-write, an atomic replace — plus
+// the rule that is only ITS: a projection never moves backwards, because a
+// reopened PR produces a real `merged` → `pr-open` change and honouring it would
+// drag somebody's board back onto a status the conveyor does not treat as a
+// regression.
+//
+// Every write below goes through a HELPER script rather than a CLI verb: this
+// ticket ships the store half only, so `markProjected` is a library call and the
+// verbs an agent runs (`plan`, `record`) do not exist yet. The helper is the
+// smallest possible caller — it reads the module's own stripped ARGV, so the
+// real `--graph` parser is what these cases exercise.
+const JIRA = path.join(SCRIPTS, 'jira-project.cjs');
+const jiraStore = (graph) => store(graph, 'jira-projection.json');
+
+// Written into the temp ROOT, beside the project and the worktree: a helper
+// inside either one would be a stray file in exactly the checkout the
+// "nothing was written here" assertions inspect.
+function marker(project) {
+  const file = path.join(path.dirname(project), 'mark.cjs');
+  fs.writeFileSync(file, [
+    `const P = require(${JSON.stringify(JIRA)});`,
+    'const [ticket, to, key, status, tid] = P.ARGV;',
+    'try {',
+    '  const r = P.markProjected(ticket, to, { key, status, transition_id: tid });',
+    '  if (!r.written) { process.stderr.write(`refused: ${r.reason}\\n`); process.exit(3); }',
+    '  process.stdout.write(`projected ${ticket} -> ${to}\\n`);',
+    '} catch (e) { process.stderr.write(`${e && e.message}\\n`); process.exit(1); }',
+    '',
+  ].join('\n'));
+  return file;
+}
+
+test('jira-project honours --graph from a foreign cwd', () => {
+  const { project, worktree, graph } = scratch();
+  const r = run(marker(project), ['T-01', 'pr-open', 'MYD-1', 'In Progress', '31', '--graph', graph], worktree);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  const rec = jiraStore(graph)['T-01'];
+  assert.ok(rec, 'the watermark is in the PROJECT store');
+  assert.equal(rec.projected_to, 'pr-open');
+  assert.equal(rec.key, 'MYD-1', 'the flag must not be swallowed into a field');
+  assert.equal(rec.transition_id, '31', 'the id the agent actually used is recorded');
+  assert.ok(!fs.existsSync(path.join(worktree, '.planning')),
+    'and no stray .planning appears in the borrowed checkout');
+});
+
+test('jira-project takes --graph before the positional arguments too', () => {
+  const { project, worktree, graph } = scratch();
+  const r = run(marker(project), ['--graph', graph, 'T-02', 'merged'], worktree);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  assert.equal(jiraStore(graph)['T-02'].projected_to, 'merged');
+});
+
+test('jira-project refuses a cwd with no ticket graph instead of writing into the void', () => {
+  // A watermark written in a worktree is invisible to the next round, which then
+  // re-projects the same change: the tracker is transitioned twice, which is the
+  // one thing this store exists to prevent.
+  const { project, worktree } = scratch();
+  const r = run(marker(project), ['T-01', 'pr-open'], worktree);
+  assert.equal(r.status, 1, 'must refuse');
+  assert.ok(/--graph/.test(r.stderr), 'and name the flag that fixes it');
+  assert.ok(!fs.existsSync(path.join(worktree, '.planning')), 'nothing is written');
+});
+
+test('jira-project from a plain project cwd works with no flag at all', () => {
+  // The `-1` trap again: `i !== flagAt + 1` with no flag present reads as
+  // `i !== 0` and eats the first positional — here, the ticket id.
+  const { project, graph } = scratch();
+  const r = run(marker(project), ['T-03', 'branched'], project);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  assert.equal(jiraStore(graph)['T-03'].projected_to, 'branched', 'the first positional survived');
+});
+
+// TWELVE, where the four sibling stores use six — and the number was measured,
+// not chosen. With the lock removed, six concurrent marks lost a record in 3 of
+// 5 standalone rounds (5/6, the same signature drift-record recorded) but never
+// once from inside THIS file: the other cases here spawn children of their own,
+// which staggers six starts far enough apart to miss each other. Twelve collide
+// through that stagger — 9/12 and 11/12 on the first two mutated runs. An
+// assertion nobody has seen fail is not a guard, so the guard is sized to the
+// place it actually runs.
+const CONCURRENT_MARKS = 12;
+
+test(`${CONCURRENT_MARKS} concurrent projections recorded at once all survive`, async () => {
+  const { project, graph } = scratch();
+  const mark = marker(project);
+  const ids = Array.from({ length: CONCURRENT_MARKS }, (_, k) => `T-${String(k + 1).padStart(2, '0')}`);
+  await Promise.all(ids.map((id) => new Promise((resolve) => {
+    const child = require('child_process').spawn('node', [mark, id, 'pr-open'],
+      { cwd: project, stdio: 'ignore', env: { ...process.env, SHIPYARD_GRAPH_DIR: '' } });
+    child.on('close', resolve);
+  })));
+  const kept = Object.keys(jiraStore(graph));
+  assert.equal(kept.length, CONCURRENT_MARKS,
+    `all ${CONCURRENT_MARKS} must survive, kept ${kept.length}: ${kept.join(', ')}`);
+});
+
+test('a half-written watermark store can never be observed', () => {
+  const { project, graph } = scratch();
+  const mark = marker(project);
+  execFileSync('node', [mark, 'T-01', 'pr-open'], { cwd: project });
+  assert.doesNotThrow(() => JSON.parse(fs.readFileSync(path.join(graph, 'jira-projection.json'), 'utf8')),
+    'the store on disk is always complete JSON');
+  execFileSync('node', [mark, 'T-02', 'merged'], { cwd: project });
+  assert.doesNotThrow(() => JSON.parse(fs.readFileSync(path.join(graph, 'jira-projection.json'), 'utf8')));
+});
+
+test('a projection at merged is never walked back to pr-open', () => {
+  // The reopened-PR case, end to end through the store: `merged` is recorded,
+  // the replayed `pr-open` is REFUSED (an ordinary outcome, exit 3, not an
+  // error), and the watermark is left where it was.
+  const { project, graph } = scratch();
+  const mark = marker(project);
+  const fwd = run(mark, ['T-01', 'merged', 'MYD-1', 'Done', '41'], project);
+  assert.equal(fwd.status, 0, `the forward move lands (${fwd.stderr})`);
+
+  const back = run(mark, ['T-01', 'pr-open', 'MYD-1', 'In Progress', '31'], project);
+  assert.equal(back.status, 3, `the backwards move is refused (stdout: ${back.stdout})`);
+  assert.ok(/already projected/.test(back.stderr), `and says why (stderr: ${back.stderr})`);
+  assert.equal(jiraStore(graph)['T-01'].projected_to, 'merged', 'the watermark did not move');
+  assert.equal(jiraStore(graph)['T-01'].transition_id, '41', 'nor was the record overwritten');
+
+  // The same status twice — a replayed journal — is the same skip.
+  const again = run(mark, ['T-01', 'merged'], project);
+  assert.equal(again.status, 3, 'projecting the same change twice is refused');
+});
+
+test('the order is total, and one exported comparator spells it', () => {
+  const P = require(JIRA);
+  const ORDER = ['pending', 'branched', 'pr-open', 'merged'];
+  assert.deepEqual(P.TICKET_STATUSES, ORDER, 'the order is state-sync\'s four statuses');
+  for (let i = 0; i < ORDER.length; i++) {
+    for (let j = 0; j < ORDER.length; j++) {
+      const c = P.compareStatus(ORDER[i], ORDER[j]);
+      assert.equal(Math.sign(c), Math.sign(i - j), `${ORDER[i]} vs ${ORDER[j]}`);
+    }
+  }
+  // hasProjected reads that comparator and nothing else: at-or-past is a skip.
+  const at = (s) => ({ tickets: { 'T-01': { projected_to: s } } });
+  assert.equal(P.hasProjected('T-01', 'pr-open', at('merged')), true, 'past → skip');
+  assert.equal(P.hasProjected('T-01', 'merged', at('merged')), true, 'at → skip');
+  assert.equal(P.hasProjected('T-01', 'merged', at('pr-open')), false, 'behind → project');
+  assert.equal(P.hasProjected('T-01', 'pending', { tickets: {} }), false, 'unrecorded → project');
+});
+
+test('an unrecognised status on either side is skipped, never guessed', () => {
+  // A value outside the four can only come from a hand-edited store or a caller
+  // that invented a status. Neither is evidence that the move is forwards, and
+  // an unproven write into someone else\'s tracker is the thing this store
+  // refuses. The safe direction is SKIP.
+  const P = require(JIRA);
+  assert.equal(P.statusRank('finalize'), -1, 'a front BUCKET is not a status');
+  assert.equal(P.hasProjected('T-01', 'merged', { tickets: { 'T-01': { projected_to: 'whatever' } } }), true);
+  assert.equal(P.hasProjected('T-01', 'finalize', { tickets: { 'T-01': { projected_to: 'pending' } } }), true);
+});
+
+test('an unorderable status is refused on the way IN, not only on the way out', () => {
+  // The asymmetry that makes the read-side rule insufficient on its own: an
+  // UNRECORDED ticket has nothing to compare against, so `hasProjected` answers
+  // false and the unorderable value would land — after which every real status
+  // for that ticket reads as "already projected" and is skipped forever. A
+  // poisoned record that never lifts is worse than the refusal.
+  const { project, graph } = scratch();
+  const r = run(marker(project), ['T-99', 'finalize'], project);
+  assert.equal(r.status, 1, `must refuse (stdout: ${r.stdout})`);
+  assert.ok(/not a ticket status/.test(r.stderr), `and say why (stderr: ${r.stderr})`);
+  assert.equal(jiraStore(graph)['T-99'], undefined, 'nothing is recorded');
+});
+
 
 done();
