@@ -2378,7 +2378,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/gsd-sync.cjs",
         "tests/unit/gsd-sync.test.cjs"
@@ -2405,7 +2405,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs",
         "capabilities/delivery-pipeline/capability.json",
