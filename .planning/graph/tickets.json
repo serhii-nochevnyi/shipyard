@@ -2154,7 +2154,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/jira-project.cjs",
         "tests/unit/record-stores.test.cjs"
@@ -2181,7 +2181,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/jira-project.cjs",
         "tests/unit/jira-project.test.cjs"
@@ -2208,7 +2208,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/jira-project.cjs",
         "plugins/delivery-pipeline/scripts/log-event.cjs",
@@ -2291,7 +2291,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/jira-project.cjs",
         "plugins/delivery-pipeline/commands/deliver.md",
@@ -2319,7 +2319,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/usage-report.cjs",
         "tests/unit/usage-report.test.cjs",
@@ -2345,7 +2345,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/backlog-index.cjs",
         "tests/unit/backlog-index.test.cjs",
@@ -2359,6 +2359,34 @@
       "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
       "primary_parent": null,
       "pr_base": "epic/32-measure-usage-and-make-the-backlog-actionable",
+      "jira": null
+    },
+    "T-32-03": {
+      "title": "Expose routing attribution eligibility in delivery stats",
+      "plan": ".planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-PLAN.md",
+      "phase": "32",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-32-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pipeline-stats.cjs",
+        "tests/unit/pipeline-stats.test.cjs",
+        "docs/pipeline-stats.md"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-32-03-expose-routing-attribution-eligibility-i",
+      "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
+      "primary_parent": "T-32-01",
+      "pr_base": "ticket/T-32-01-collect-deduplicated-usage-from-explicit",
       "jira": null
     }
   }

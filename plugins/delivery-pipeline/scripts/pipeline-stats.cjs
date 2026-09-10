@@ -280,6 +280,39 @@ const countField = (field) => Object.fromEntries(
     .sort()
     .map((value) => [value, ladderEvents.filter((e) => e[field] === value).length])
 );
+// Coverage is three separate claims, not one boolean. A dispatch can carry the
+// resolver's requested policy while the spawn did not expose applied effort,
+// and it can carry both while the runtime still hid the concrete model. Folding
+// these into one "has telemetry" count would make an incomplete treatment look
+// comparable. The required fields mirror `dispatch-record.cjs`; a static Codex
+// role also needs the generated file because that file is where its concrete
+// model lives. The dynamic executor is resolved at launch and has no file.
+const present = (event, field) =>
+  event[field] !== undefined && event[field] !== null && event[field] !== '';
+const staticCodexNeedsFile = (event) =>
+  event.runtime === 'codex' && event.role !== 'executor' && !present(event, 'agent_file');
+const requestedMissing = (event) => [
+  'model', 'effort', 'reason', 'task_level', 'runtime', 'backend',
+].filter((field) => !present(event, field));
+const requestedComparable = (event) =>
+  requestedMissing(event).length === 0 && !staticCodexNeedsFile(event);
+const appliedComparable = (event) =>
+  requestedComparable(event) && present(event, 'effort_applied');
+const observedComparable = (event) =>
+  requestedComparable(event) && present(event, 'observed_model') && present(event, 'observed_effort');
+const attributionStatus = (event) => {
+  if (observedComparable(event)) return 'observed_complete';
+  if (appliedComparable(event)) return 'applied_complete';
+  if (requestedComparable(event)) return 'requested_complete';
+  return 'incomplete';
+};
+const missingAttribution = Object.fromEntries([
+  'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'agent_file',
+  'effort_applied', 'observed_model', 'observed_effort',
+].map((field) => [field, ladderEvents.filter((e) => {
+  if (field === 'agent_file') return staticCodexNeedsFile(e);
+  return !present(e, field);
+}).length]));
 const ladder = {
   mode: cfg.model_ladder,
   policy_valid: loadedConfig.valid,
@@ -296,6 +329,10 @@ const ladder = {
   missing_observed_model: ladderEvents.filter((e) => !e.observed_model).length,
   missing_observed_effort: ladderEvents.filter((e) => !e.observed_effort).length,
   missing_agent_file: ladderEvents.filter((e) => e.runtime === 'codex' && e.role !== 'executor' && !e.agent_file).length,
+  requested_comparable: ladderEvents.filter(requestedComparable).length,
+  applied_comparable: ladderEvents.filter(appliedComparable).length,
+  observed_comparable: ladderEvents.filter(observedComparable).length,
+  missing_attribution: missingAttribution,
   by_role: countField('role'),
   by_task_level: countField('task_level'),
   by_model: countField('model'),
@@ -307,6 +344,14 @@ const ladder = {
   by_observed_model: countField('observed_model'),
   by_observed_effort: countField('observed_effort'),
 };
+// Keep the status grouping derived from the same predicates above. It is added
+// after the generic field counters so the journal rows themselves are never
+// mutated and the existing `by_*` vocabulary remains stable.
+ladder.by_attribution_status = Object.fromEntries(
+  [...new Set(ladderEvents.map(attributionStatus))]
+    .sort()
+    .map((value) => [value, ladderEvents.filter((e) => attributionStatus(e) === value).length])
+);
 
 // Tickets the board keeps offering that no run ever takes. A run scopes itself
 // to the phase it is working, so a ticket from an older phase can sit under
@@ -353,7 +398,10 @@ if (ladder.dispatches) {
     `${ladder.dispatches - ladder.missing_model}/${ladder.dispatches} with model, ` +
     `${ladder.dispatches - ladder.missing_task_level}/${ladder.dispatches} with task level, ` +
     `${ladder.dispatches - ladder.missing_effort_applied}/${ladder.dispatches} with applied effort, ` +
-    `${ladder.dispatches - ladder.missing_observed_model}/${ladder.dispatches} with observed model`
+    `${ladder.dispatches - ladder.missing_observed_model}/${ladder.dispatches} with observed model; ` +
+    `${ladder.requested_comparable}/${ladder.dispatches} routing-comparable, ` +
+    `${ladder.applied_comparable}/${ladder.dispatches} applied-comparable, ` +
+    `${ladder.observed_comparable}/${ladder.dispatches} observed-comparable`
   );
   const gaps = [];
   if (ladder.missing_model) gaps.push(`${ladder.missing_model} missing model`);
