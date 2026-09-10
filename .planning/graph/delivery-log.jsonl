@@ -804,3 +804,89 @@
 {"ts":"2026-09-09T14:23:55.090Z","event":"degenerate_green","ticket":"T-28-09","pr":82,"findings":0,"modes":"none"}
 {"ts":"2026-09-09T14:24:52.581Z","event":"merge","ticket":"T-28-09","pr":82,"base":"epic/28-a-mechanism-nobody-connected-is-not-a-mechanism","repo":null,"by":"sentinel"}
 {"ts":"2026-09-09T14:25:15.660Z","event":"status_change","ticket":"T-28-09","from":"pr-open","to":"merged","pr":82}
+{"ts":"2026-09-10T06:54:14.983Z","event":"status_change","ticket":"T-29-01","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-10T06:54:14.983Z","event":"status_change","ticket":"T-29-02","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-10T06:54:14.983Z","event":"status_change","ticket":"T-29-03","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-10T06:54:14.983Z","event":"status_change","ticket":"T-29-04","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-10T06:54:14.983Z","event":"status_change","ticket":"T-29-05","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-10T06:54:14.983Z","event":"status_change","ticket":"T-29-06","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-10T06:54:14.983Z","event":"status_change","ticket":"T-29-07","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-10T06:56:18.876Z","event":"dispatch","ticket":"T-29-01","role":"executor","pr":null,"model":"opus","effort":"high","effort_applied":"high","agent_id":"wmrul2qrq","reason":"tier=floor(opus) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T06:56:18.921Z","event":"dispatch","ticket":"T-29-02","role":"executor","pr":null,"model":"opus","effort":"high","effort_applied":"high","agent_id":"wmrul2qrq","reason":"tier=floor(opus) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:06:35.922Z","event":"status_change","ticket":"T-29-01","from":"pending","to":"pr-open","pr":83}
+{"ts":"2026-09-10T07:06:35.922Z","event":"status_change","ticket":"T-29-02","from":"pending","to":"pr-open","pr":84}
+{"ts":"2026-09-10T07:07:52.509Z","event":"dispatch","ticket":"T-29-01","role":"pr-sentinel","pr":83,"model":"sonnet","effort":"high","agent_id":"a1e92d220f9a74ca0","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:07:52.550Z","event":"dispatch","ticket":"T-29-02","role":"pr-sentinel","pr":84,"model":"sonnet","effort":"high","agent_id":"a1e92d220f9a74ca0","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:07:52.592Z","event":"dispatch","ticket":"T-29-03","role":"executor","pr":null,"model":"opus","effort":"high","effort_applied":"high","agent_id":"w46nizghl","reason":"tier=floor(opus) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:09:21.482Z","event":"dispatch","ticket":"T-29-02","role":"arch-review","pr":84,"model":"opus","effort":"xhigh","reason":"tier=floor(opus) effort=row(xhigh)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:09:27.728Z","event":"degenerate_green","ticket":"T-29-02","pr":84,"findings":0,"modes":"clean"}
+{"ts":"2026-09-10T07:10:30.432Z","event":"dispatch","ticket":"T-29-01","role":"arch-review","pr":83,"model":"opus","effort":"xhigh","reason":"tier=floor(opus) effort=row(xhigh)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:10:33.958Z","event":"degenerate_green","ticket":"T-29-01","pr":83,"findings":0,"modes":"clean"}
+{"ts":"2026-09-10T07:13:52.051Z","event":"arch_review","ticket":"T-29-02","pr":84,"verdict":"conform","head":"d7cdc28252e7ef2a8da7493499e45bb9c31d69b2"}
+{"ts":"2026-09-10T07:14:06.022Z","event":"arch_review","ticket":"T-29-01","pr":83,"verdict":"conform","head":"5b1dfa47b13d4044c2b918656e104368bb2f1cb2"}
+{"ts":"2026-09-10T07:14:59.857Z","event":"merge","ticket":"T-29-01","pr":83,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","repo":null,"by":"sentinel"}
+{"ts":"2026-09-10T07:15:04.981Z","event":"status_change","ticket":"T-29-01","from":"pr-open","to":"merged","pr":83}
+{"ts":"2026-09-10T07:15:44.080Z","event":"base_merge","ticket":"T-29-02","pr":84,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","head":"64e71326ffd647b9aa9e3e483e10465a1cc96171"}
+{"ts":"2026-09-10T07:17:46.087Z","event":"dispatch","ticket":"T-29-02","role":"pr-sentinel","pr":84,"model":"sonnet","effort":"high","agent_id":"a2f96e56f8b2c5e48","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:23:33.356Z","event":"base_merge","ticket":"T-29-03","pr":86,"base":"ticket/T-29-02-the-status-map-is-a-declared-knob-and-it","head":"23c08c09c60c4b9b136f40c3722297007e54f33f"}
+{"ts":"2026-09-10T07:23:40.756Z","event":"status_change","ticket":"T-29-03","from":"pending","to":"pr-open","pr":86}
+{"ts":"2026-09-10T07:24:18.735Z","event":"dispatch","ticket":"T-29-04","role":"executor","pr":null,"model":"opus","effort":"high","effort_applied":"high","agent_id":"wov6i4qfa","reason":"tier=floor(opus) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:25:58.795Z","event":"arch_review","ticket":"T-29-02","pr":84,"verdict":"conform","head":"64e71326ffd647b9aa9e3e483e10465a1cc96171"}
+{"ts":"2026-09-10T07:25:58.826Z","event":"degenerate_green","ticket":"T-29-02","pr":84,"findings":0,"modes":"none"}
+{"ts":"2026-09-10T07:26:42.742Z","event":"merge","ticket":"T-29-02","pr":84,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","repo":null,"by":"sentinel"}
+{"ts":"2026-09-10T07:26:51.736Z","event":"status_change","ticket":"T-29-02","from":"pr-open","to":"merged","pr":84}
+{"ts":"2026-09-10T07:29:41.327Z","event":"dispatch","ticket":"T-29-03","role":"pr-sentinel","pr":86,"model":"sonnet","effort":"high","agent_id":"a3b862bd584bfdb31","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:31:33.463Z","event":"base_merge","ticket":"T-29-03","pr":86,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","head":"e881a1b06ffc4562d18340784087f191b7a720ce"}
+{"ts":"2026-09-10T07:46:37.406Z","event":"base_merge","ticket":"T-29-04","pr":87,"base":"ticket/T-29-03-the-watermark-store-exactly-once-and-onl","head":"b51855c5771263671703bb32986a51c363bdddc9"}
+{"ts":"2026-09-10T07:47:05.237Z","event":"status_change","ticket":"T-29-04","from":"pending","to":"pr-open","pr":87}
+{"ts":"2026-09-10T07:48:17.450Z","event":"dispatch","ticket":"T-29-03","role":"pr-sentinel","pr":86,"model":"sonnet","effort":"high","agent_id":"a7eb3b867b21055ad","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:48:17.489Z","event":"dispatch","ticket":"T-29-04","role":"pr-sentinel","pr":87,"model":"sonnet","effort":"high","agent_id":"a7eb3b867b21055ad","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:48:17.528Z","event":"dispatch","ticket":"T-29-05","role":"executor","pr":null,"model":"opus","effort":"high","effort_applied":"high","agent_id":"wwt92jw13","reason":"tier=floor(opus) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:49:54.537Z","event":"dispatch","ticket":"T-29-03","role":"arch-review","pr":86,"model":"opus","effort":"xhigh","reason":"tier=floor(opus) effort=row(xhigh)","by":"dispatch-record"}
+{"ts":"2026-09-10T07:51:43.310Z","event":"degenerate_green","ticket":"T-29-03","pr":86,"findings":0,"modes":"none"}
+{"ts":"2026-09-10T07:54:49.529Z","event":"arch_review","ticket":"T-29-03","pr":86,"verdict":"conform","head":"e881a1b06ffc4562d18340784087f191b7a720ce"}
+{"ts":"2026-09-10T07:55:10.262Z","event":"merge","ticket":"T-29-03","pr":86,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","repo":null,"by":"sentinel"}
+{"ts":"2026-09-10T07:55:19.666Z","event":"status_change","ticket":"T-29-03","from":"pr-open","to":"merged","pr":86}
+{"ts":"2026-09-10T07:57:28.239Z","event":"base_merge","ticket":"T-29-04","pr":87,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","head":"9b4e167188d498074f28b3a0dc548c37a49eb040"}
+{"ts":"2026-09-10T07:57:35.897Z","event":"attempt","ticket":"T-29-04","pr":87,"n":1,"role":"ci-fix","model":"opus","effort_applied":"unknown","outcome":"pushed","signature":"merge-conflict-jira-project-both-added","head":"9b4e167188d498074f28b3a0dc548c37a49eb040","hypothesis":"T-29-04 branched off T-29-03's pre-squash ticket branch, so both sides show jira-project.cjs as newly-added; T-29-04's HEAD edition is a strict superset of the landed store code (verified byte-for-byte identical in the shared sections via git diff of both blob stages) plus its own additive plan verb, so resolved by taking HEAD's edition entirely and re-running both test suites green"}
+{"ts":"2026-09-10T08:02:23.903Z","event":"base_merge","ticket":"T-29-05","pr":88,"base":"ticket/T-29-04-the-planner-three-local-files-in-a-work","head":"72c8fde4f734b8ddf75bfd504780ae37e0363d80"}
+{"ts":"2026-09-10T08:02:29.355Z","event":"status_change","ticket":"T-29-05","from":"pending","to":"pr-open","pr":88}
+{"ts":"2026-09-10T08:03:44.906Z","event":"dispatch","ticket":"T-29-04","role":"pr-sentinel","pr":87,"model":"sonnet","effort":"high","agent_id":"aac7dade0b4833368","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:03:44.945Z","event":"dispatch","ticket":"T-29-05","role":"pr-sentinel","pr":88,"model":"sonnet","effort":"high","agent_id":"aac7dade0b4833368","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:03:44.985Z","event":"dispatch","ticket":"T-29-06","role":"executor","pr":null,"model":"opus","effort":"xhigh","effort_applied":"xhigh","agent_id":"wabjmj2l1","reason":"tier=floor(opus) effort=row(xhigh)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:05:28.723Z","event":"dispatch","ticket":"T-29-04","role":"review-fix","pr":87,"model":"opus","effort":"high","reason":"tier=floor(opus) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:13:55.873Z","event":"attempt","ticket":"T-29-04","pr":87,"n":2,"role":"review-fix","model":"sonnet","effort_applied":"unknown","outcome":"pushed","signature":"copilot-review-round1","head":"1fa6916655794adfd12d3503f84eeee7a5a88235","hypothesis":"All three Copilot findings were valid narrow defects in planItems/helper layer (dropped loadConfig warnings, a duplicated helper body, and a reason string missing the failing file's path); no prior hypothesis applied since the one prior attempt was an unrelated merge-conflict resolution"}
+{"ts":"2026-09-10T08:15:50.339Z","event":"status_change","ticket":"T-29-06","from":"pending","to":"pr-open","pr":89}
+{"ts":"2026-09-10T08:16:37.415Z","event":"dispatch","ticket":"T-29-07","role":"executor","pr":null,"model":"opus","effort":"high","effort_applied":"high","agent_id":"w3dnquina","reason":"tier=floor(opus) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:16:53.996Z","event":"dispatch","ticket":"T-29-04","role":"pr-sentinel","pr":87,"model":"sonnet","effort":"high","agent_id":"aac7dade0b4833368","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:16:54.070Z","event":"dispatch","ticket":"T-29-05","role":"pr-sentinel","pr":88,"model":"sonnet","effort":"high","agent_id":"aac7dade0b4833368","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:16:54.145Z","event":"dispatch","ticket":"T-29-06","role":"pr-sentinel","pr":89,"model":"sonnet","effort":"high","agent_id":"aac7dade0b4833368","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:17:42.938Z","event":"degenerate_green","ticket":"T-29-04","pr":87,"findings":0,"modes":"none"}
+{"ts":"2026-09-10T08:17:47.184Z","event":"dispatch","ticket":"T-29-04","role":"arch-review","pr":87,"model":"opus","effort":"xhigh","reason":"tier=floor(opus) effort=row(xhigh)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:18:16.744Z","event":"dispatch","ticket":"T-29-04","role":"arch-review","pr":87,"model":"opus","effort":"xhigh","reason":"tier=floor(opus) effort=row(xhigh)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:22:53.729Z","event":"arch_review","ticket":"T-29-04","pr":87,"verdict":"conform","head":"1fa6916655794adfd12d3503f84eeee7a5a88235"}
+{"ts":"2026-09-10T08:23:11.802Z","event":"merge","ticket":"T-29-04","pr":87,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","repo":null,"by":"sentinel"}
+{"ts":"2026-09-10T08:23:19.846Z","event":"status_change","ticket":"T-29-04","from":"pr-open","to":"merged","pr":87}
+{"ts":"2026-09-10T08:24:52.483Z","event":"dispatch","ticket":"T-29-05","role":"ci-fix","pr":88,"model":"opus","effort":"high","reason":"tier=floor(opus) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:30:09.714Z","event":"base_merge","ticket":"T-29-05","pr":88,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","head":"4930fda325c5183541e0f0d83bde01a0b3316742"}
+{"ts":"2026-09-10T08:30:09.748Z","event":"attempt","ticket":"T-29-05","pr":88,"n":1,"role":"ci-fix","model":"opus","effort_applied":"unknown","outcome":"pushed","signature":"merge-conflict-jira-project-post-parent-squash","head":"4930fda325c5183541e0f0d83bde01a0b3316742","hypothesis":"T-29-05 branched off T-29-04's PRE-review-fix planner, so merging the retargeted epic in conflicted at exactly the three review-fix hunks (stale text on our side) plus T-29-05's own recorder additions (absent on the epic side); resolved by taking the epic's edition at the three fixes and T-29-05's edition everywhere else, keeping both sides' tests"}
+{"ts":"2026-09-10T08:31:04.474Z","event":"degenerate_green","ticket":"T-29-05","pr":88,"findings":0,"modes":"none"}
+{"ts":"2026-09-10T08:31:29.885Z","event":"dispatch","ticket":"T-29-05","role":"arch-review","pr":88,"model":"opus","effort":"xhigh","reason":"tier=floor(opus) effort=row(xhigh)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:37:17.489Z","event":"status_change","ticket":"T-29-07","from":"pending","to":"pr-open","pr":90}
+{"ts":"2026-09-10T08:38:28.875Z","event":"arch_review","ticket":"T-29-05","pr":88,"verdict":"conform","head":"4930fda325c5183541e0f0d83bde01a0b3316742"}
+{"ts":"2026-09-10T08:38:47.283Z","event":"merge","ticket":"T-29-05","pr":88,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","repo":null,"by":"sentinel"}
+{"ts":"2026-09-10T08:38:56.836Z","event":"status_change","ticket":"T-29-05","from":"pr-open","to":"merged","pr":88}
+{"ts":"2026-09-10T08:42:22.909Z","event":"base_merge","ticket":"T-29-06","pr":89,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","head":"c556d82c28aab7dc2285c77e0d2ab9746808f73b"}
+{"ts":"2026-09-10T08:42:43.580Z","event":"dispatch","ticket":"T-29-06","role":"pr-sentinel","pr":89,"model":"sonnet","effort":"high","agent_id":"af346794fa0f6e963","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:42:43.622Z","event":"dispatch","ticket":"T-29-07","role":"pr-sentinel","pr":90,"model":"sonnet","effort":"high","agent_id":"af346794fa0f6e963","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:43:11.402Z","event":"base_merge","ticket":"T-29-07","pr":90,"base":"ticket/T-29-06-the-acting-half-resolve-by-target-status","head":"c964453f34a9e209e42bb0ee589a2823a7b4cdff"}
+{"ts":"2026-09-10T08:46:16.255Z","event":"attempt","ticket":"T-29-06","pr":89,"n":1,"role":"review-fix","model":"opus","effort_applied":"unknown","outcome":"pushed","signature":"copilot-review-ts-field","head":"e0097e85c7e22956165e9fb86c77c84db2595e18","hypothesis":"the projection planner's emitted item shape doc omitted ts, which the code emits and record --unreachable anchors suppression on"}
+{"ts":"2026-09-10T08:47:11.736Z","event":"base_merge","ticket":"T-29-07","pr":90,"base":"ticket/T-29-06-the-acting-half-resolve-by-target-status","head":"1281acb924fe7081d0f87f7c5a9098abde3e1c82"}
+{"ts":"2026-09-10T08:51:16.337Z","event":"dispatch","ticket":"T-29-06","role":"pr-sentinel","pr":89,"model":"sonnet","effort":"high","agent_id":"a9804015851f4b535","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T08:51:16.387Z","event":"dispatch","ticket":"T-29-07","role":"pr-sentinel","pr":90,"model":"sonnet","effort":"high","agent_id":"a9804015851f4b535","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-10T09:02:30.120Z","event":"arch_review","ticket":"T-29-07","pr":90,"verdict":"conform","head":"1281acb924fe7081d0f87f7c5a9098abde3e1c82"}
+{"ts":"2026-09-10T09:02:30.147Z","event":"degenerate_green","ticket":"T-29-07","pr":90,"findings":0,"modes":"none"}
+{"ts":"2026-09-10T09:02:37.904Z","event":"arch_review","ticket":"T-29-06","pr":89,"verdict":"conform","head":"e0097e85c7e22956165e9fb86c77c84db2595e18"}
+{"ts":"2026-09-10T09:02:37.931Z","event":"degenerate_green","ticket":"T-29-06","pr":89,"findings":0,"modes":"none"}
+{"ts":"2026-09-10T09:03:42.072Z","event":"merge","ticket":"T-29-06","pr":89,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","repo":null,"by":"sentinel","preauthorized":true}
+{"ts":"2026-09-10T09:03:52.068Z","event":"status_change","ticket":"T-29-06","from":"pr-open","to":"merged","pr":89}

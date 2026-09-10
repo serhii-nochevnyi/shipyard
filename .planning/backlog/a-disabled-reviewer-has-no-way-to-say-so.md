@@ -59,3 +59,45 @@ and adding it would be the quiet widening that ADR's own Consequences warns
 about — the same rule that kept the stranded-child retarget out of phase 27.
 
 Related: [[phase-20-followups]] §6, where the question lived for eight phases.
+
+## 2026-09-10 — the gap cost real reviews, and this note already held the answer
+
+Phase 29 is the first measurement of what the missing knob costs, and it is not
+theoretical.
+
+The orchestrator was told once, by the operator, that **CodeRabbit** is
+disabled. It generalised that to "CodeRabbit and Copilot are DELIBERATELY
+DISABLED here" and wrote that sentence into **five consecutive sentinel briefs**,
+each one instructing the guard NOT to run `reviewers.cjs reinit`. Measured
+across all seven PRs of the phase once the error surfaced:
+
+```
+#83  CodeRabbit NEVER, Copilot NEVER
+#84  CodeRabbit NEVER, Copilot NEVER
+#86  CodeRabbit NEVER, Copilot NEVER
+#87  CodeRabbit NEVER, Copilot ENGAGED   → 3 findings, all real, all fixed
+#88  CodeRabbit NEVER, Copilot NEVER
+#89  CodeRabbit NEVER, Copilot ENGAGED   → 1 finding, real, fixed
+#90  CodeRabbit NEVER, Copilot NEVER
+```
+
+Copilot's three findings on #87 were dropped `loadConfig()` warnings, a
+duplicated `projectRootFor`/`lockRootFor` helper, and a missing `error.relative`
+in an error string. On #89 it caught a `deliver.md` line describing the
+planner's emitted item without its `ts` field — the field that anchors
+`record --unreachable`'s suppression. Six of seven PRs went without a reinit
+because of the briefs; both engagements happened on PRs where a guard ran it
+anyway or was corrected mid-watch.
+
+**The sharpest part is that this file already knew.** The paragraph above says
+Copilot found four real defects in phase 27 and five in phase 28's first wave.
+The fact was written down, in the note about exactly this gap, and the
+orchestrator asserted its opposite anyway — which is ADR-006's amended rule
+(*where a claim can be checked, check it*) violated against this repository's
+own record rather than against a file it had never read. One
+`reviewers.cjs status <pr>` would have answered it in a second.
+
+That raises the priority of the `delivery_pipeline.reviewers` knob from
+ergonomics to correctness: while "which reviewers does this repo have" lives
+only in conversation, it is re-derived — wrongly — by every session that
+inherits the question.

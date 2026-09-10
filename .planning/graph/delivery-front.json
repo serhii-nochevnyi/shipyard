@@ -1,14 +1,16 @@
 {
-  "generated_at": "2026-09-09T14:27:00.775Z",
-  "observed_at": "2026-09-09T14:27:00.775Z",
-  "generation": 144,
+  "generated_at": "2026-09-10T09:03:52.068Z",
+  "observed_at": "2026-09-10T09:03:52.068Z",
+  "generation": 185,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-09T14:27:00.775Z",
+  "dispatches_applied_at": "2026-09-10T09:03:52.068Z",
   "actionable": {
     "execute": [],
     "publish": [],
-    "fix": [],
+    "fix": [
+      "T-29-07"
+    ],
     "finalize": [],
     "merge": []
   },
@@ -90,14 +92,22 @@
       "T-28-06",
       "T-28-07",
       "T-28-08",
-      "T-28-09"
+      "T-28-09",
+      "T-29-01",
+      "T-29-02",
+      "T-29-03",
+      "T-29-04",
+      "T-29-05",
+      "T-29-06"
     ]
   },
-  "why": {},
+  "why": {
+    "T-29-07": "PR #90: merge conflicts with `epic/29-the-tracker-is-a-projection-and-a-projection-is-driven` — the base moved and the two editions disagree. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads."
+  },
   "counts": {
     "execute": 0,
     "publish": 0,
-    "fix": 0,
+    "fix": 1,
     "finalize": 0,
     "merge": 0,
     "ci": 0,
@@ -106,23 +116,25 @@
     "merge_human": 0,
     "human": 0,
     "blocked": 0,
-    "done": 69
+    "done": 75
   },
   "parent_of": {},
-  "actionable_count": 0,
+  "actionable_count": 1,
   "left_behind_count": 0,
-  "fixpoint": true,
+  "fixpoint": false,
   "capacity": {
     "max": 4,
     "in_flight": 0,
     "free": 4
   },
   "sentinel": {
-    "duty": [],
+    "duty": [
+      "T-29-07"
+    ],
     "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
-    "clear": true
+    "clear": false
   },
   "roles": {
     "execute": [
