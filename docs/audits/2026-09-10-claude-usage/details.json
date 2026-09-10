@@ -1,0 +1,316 @@
+{
+  "context_passes": {
+    "passes": 1993,
+    "mean": 161905,
+    "p50": 123675,
+    "p95": 440982,
+    "max": 803778,
+    "over200k": 362,
+    "over500k": 59
+  },
+  "main_context": {
+    "passes": 436,
+    "mean": 323141,
+    "p50": 303640,
+    "p95": 555657,
+    "max": 803778,
+    "over200k": 344,
+    "over500k": 59
+  },
+  "subagent_context": {
+    "passes": 1557,
+    "mean": 116754,
+    "p50": 111979,
+    "p95": 180065,
+    "max": 218242,
+    "over200k": 18,
+    "over500k": 0
+  },
+  "iteration_aggregate_mismatches": [],
+  "advisors_today": [
+    {
+      "ts": "2026-09-10T10:11:37.198000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 341171,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 1865
+    },
+    {
+      "ts": "2026-09-10T10:50:21.673000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 417442,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 1597
+    },
+    {
+      "ts": "2026-09-10T11:24:40.342000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 468776,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 1335
+    },
+    {
+      "ts": "2026-09-10T10:29:58.178000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c/subagents/agent-a3b862bd584bfdb31.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 94104,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 5447
+    },
+    {
+      "ts": "2026-09-10T12:10:06.362000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c/subagents/agent-a9804015851f4b535.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 179949,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 1010
+    },
+    {
+      "ts": "2026-09-10T11:59:07.555000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c/subagents/agent-a73f46cd866a37a74.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 103050,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 6526
+    },
+    {
+      "ts": "2026-09-10T10:27:41.457000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c/subagents/agent-a2f96e56f8b2c5e48.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 128940,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 3097
+    },
+    {
+      "ts": "2026-09-10T11:18:19.499000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c/subagents/agent-aac7dade0b4833368.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 157769,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 6679
+    },
+    {
+      "ts": "2026-09-10T11:24:54.662000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c/subagents/agent-aac7dade0b4833368.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 178141,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 4928
+    },
+    {
+      "ts": "2026-09-10T11:31:32.083000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c/subagents/agent-aac7dade0b4833368.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 193786,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 989
+    },
+    {
+      "ts": "2026-09-10T10:01:55.903000+03:00",
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c/subagents/workflows/wf_f4117dc3-7ce/agent-a2bb58b5bfd524a16.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 105304,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 5855
+    },
+    {
+      "ts": "2026-09-10T10:05:22.831000+03:00",
+      "file": "-Volumes-KINGSTON-PycharmProjects-pdffiller-ai-assistant/2f3707a7-60ed-478c-bf35-61d14d290838.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 804714,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 1804
+    },
+    {
+      "ts": "2026-09-10T10:30:49.929000+03:00",
+      "file": "-Volumes-KINGSTON-PycharmProjects-pdffiller-ai-assistant/2f3707a7-60ed-478c-bf35-61d14d290838.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 171209,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 9089
+    },
+    {
+      "ts": "2026-09-10T10:57:22.625000+03:00",
+      "file": "-Volumes-KINGSTON-PycharmProjects-pdffiller-ai-assistant/2f3707a7-60ed-478c-bf35-61d14d290838.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 241854,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 6095
+    },
+    {
+      "ts": "2026-09-10T12:02:52.018000+03:00",
+      "file": "-Volumes-KINGSTON-PhpstormProjects-jsfiller/c21dee7c-61f1-4d06-a488-f9d85a54952d/subagents/workflows/wf_9d84a8b6-bf8/agent-a2a868b16751b326a.jsonl",
+      "model": "claude-fable-5-1",
+      "input_tokens": 123959,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 5778
+    }
+  ],
+  "advisors_by_day": {
+    "2026-09-07": {
+      "calls": 28,
+      "input_tokens": 5185373,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 203327
+    },
+    "2026-09-08": {
+      "calls": 39,
+      "input_tokens": 6649595,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 299188
+    },
+    "2026-09-09": {
+      "calls": 49,
+      "input_tokens": 7587182,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 325411
+    },
+    "2026-09-10": {
+      "calls": 15,
+      "input_tokens": 3710168,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 62094
+    }
+  },
+  "main_sessions": [
+    {
+      "file": "-Volumes-KINGSTON-claude-shipyard/89d38e47-8750-4279-a287-61bd806bab4c.jsonl",
+      "requests": 183,
+      "context_total": 82178751,
+      "cache_creation_input_tokens": 558387,
+      "output_tokens": 174776,
+      "first": "2026-09-10T09:53:42.199000+03:00",
+      "last": "2026-09-10T12:14:19.923000+03:00",
+      "tools": {
+        "Bash": 127,
+        "Skill": 1,
+        "Workflow": 6,
+        "Agent": 8,
+        "ToolSearch": 2,
+        "Write": 11,
+        "Edit": 4,
+        "ListAgents": 3,
+        "SendMessage": 1
+      },
+      "context": {
+        "passes": 186,
+        "mean": 441821,
+        "p50": 445496,
+        "p95": 563877,
+        "max": 579641,
+        "over200k": 186,
+        "over500k": 55
+      }
+    },
+    {
+      "file": "-Volumes-KINGSTON-PycharmProjects-pdffiller-ai-assistant/2f3707a7-60ed-478c-bf35-61d14d290838.jsonl",
+      "requests": 194,
+      "context_total": 43045933,
+      "cache_creation_input_tokens": 1075406,
+      "output_tokens": 148204,
+      "first": "2026-09-10T10:03:46.195000+03:00",
+      "last": "2026-09-10T11:54:13.448000+03:00",
+      "tools": {
+        "Bash": 172,
+        "ToolSearch": 1,
+        "TaskStop": 1,
+        "Agent": 2,
+        "Write": 1,
+        "Read": 4
+      },
+      "context": {
+        "passes": 197,
+        "mean": 218507,
+        "p50": 206586,
+        "p95": 316769,
+        "max": 803778,
+        "over200k": 105,
+        "over500k": 4
+      }
+    },
+    {
+      "file": "-Volumes-KINGSTON-PhpstormProjects-jsfiller/c21dee7c-61f1-4d06-a488-f9d85a54952d.jsonl",
+      "requests": 53,
+      "context_total": 15664592,
+      "cache_creation_input_tokens": 604927,
+      "output_tokens": 49528,
+      "first": "2026-09-10T10:03:14.029000+03:00",
+      "last": "2026-09-10T12:15:17.985000+03:00",
+      "tools": {
+        "Bash": 49,
+        "Workflow": 1,
+        "TaskOutput": 1,
+        "TaskStop": 1
+      },
+      "context": {
+        "passes": 53,
+        "mean": 295558,
+        "p50": 293315,
+        "p95": 341614,
+        "max": 343058,
+        "over200k": 53,
+        "over500k": 0
+      }
+    }
+  ],
+  "subagent_start_context": {
+    "passes": 49,
+    "mean": 58675,
+    "p50": 61929,
+    "p95": 68272,
+    "max": 68649,
+    "over200k": 0,
+    "over500k": 0
+  },
+  "active_agent_streams_per_5min": {},
+  "spawns_model": {
+    "sonnet": 10,
+    "opus": 10,
+    "OMITTED": 1
+  },
+  "peak_active_streams_5min": 12,
+  "peak_stream_buckets": [
+    [
+      "2026-09-10T11:20",
+      12
+    ],
+    [
+      "2026-09-10T10:45",
+      11
+    ],
+    [
+      "2026-09-10T11:25",
+      10
+    ],
+    [
+      "2026-09-10T11:55",
+      10
+    ],
+    [
+      "2026-09-10T10:40",
+      9
+    ]
+  ]
+}

@@ -246,6 +246,37 @@ script — not in a prompt.** Every requirement below is an instance of it.
   prompt builders that bypass those files, asserted by a sweep, and refusable by
   arch-review.
 
+- **REQ-85** — Usage is deduplicated by provider, attributed with coverage, and
+  separated from observed subscription windows; missing counters are unknown.
+- **REQ-86** — Backlog items are discoverable across local notes and GSD 999.x,
+  with stable identities and evidence-backed lifecycle transitions.
+- **REQ-87** — All eight roles reconcile requested routing with launch and runtime
+  evidence, distinguishing unsupported capability from missing proof.
+- **REQ-88** — Expected reviewers are explicit; disabling one does not disable
+  another or turn unavailable review into completed review.
+- **REQ-89** — Advisor usage and effective policy are visible separately, and a
+  trial cannot silently alter global host settings.
+- **REQ-90** — Unchanged observations do not require repeated model turns;
+  deterministic waiting remains bounded, recoverable and subordinate to live gates.
+- **REQ-91** — Role boundaries return bounded summaries and complete referenced
+  evidence; selected backlog and required policy remain available.
+- **REQ-92** — Context rotation transfers durable state with one acknowledged
+  owner, only at a safe boundary and on a supported runtime.
+- **REQ-93** — Review progress has evidence and signatures; resource budgets do
+  not replace the retry backstop or fabricate a plan defect.
+- **REQ-94** — Model-axis escalation requires verified capability and a completed
+  attempt; unknown effort never becomes applied depth, and role floors persist.
+- **REQ-95** — A manual-merge verdict carry proves ancestry, head tree, base tree
+  and current PR identity; missing proof requires fresh review.
+- **REQ-96** — Participating projects count distinct nested agents through owned
+  leases, report coverage, and never interpret store failure as unlimited capacity.
+- **REQ-97** — Each optimization has a versioned baseline, quality and recovery
+  gates, rollback, and a report that feeds evidence into the next backlog decision.
+
+*ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
+initial isolated tooling slice; subsequent packages remain subject to decomposition
+and rollout gates. Existing model floors remain unchanged.*
+
 ## Phases
 
 ### Phase 20: Autonomy of the drive-to-green loop
@@ -497,3 +528,38 @@ until phase 29's epic lands — it edits `pipeline-config.cjs`, `front.cjs` and
 rather than before it, and the reason is an argument rather than a preference:
 a ticket that passes this eligibility gate but has no local checkout is parked
 either way, so the gate cannot be exercised until reachability is solved.
+
+
+### Phase 32: Measure usage and make the backlog actionable
+**Status**: initial tooling slice in progress (ADR-011)
+**Requirements**: REQ-85, REQ-86, REQ-87, REQ-88, REQ-89
+
+Waves 0–1 of [ADR-011-ROLLOUT](architecture/ADR-011-ROLLOUT.md): establish a
+prospective baseline and current-source backlog inventory, then reconcile actual
+routing and make reviewer/advisor policy observable. Preserve existing model
+floors. Read-only baseline collection may precede phase 31; shared source edits
+follow existing phase ownership and landing. OPT-01–05 are decomposition inputs,
+not executable tickets. The phase exits with coverage and unknowns reported,
+not with an invented subscription-savings percentage.
+
+### Phase 33: Reduce orchestration context and transfer sessions safely
+**Status**: planned (ADR-011)
+**Requirements**: REQ-90, REQ-91, REQ-92
+
+Waves 2–3 of [ADR-011-ROLLOUT](architecture/ADR-011-ROLLOUT.md), after phase 32:
+OPT-06–08 move unchanged observations into deterministic waiting, extend bounded
+artifact outputs and implement recoverable context handoff. Checkpoint/manual
+resume precedes automatic rotation. Each treatment is evaluated separately;
+Workflow and mandatory quality gates remain. Unsupported automatic transfer
+stays in recommendation mode rather than interrupting a live session.
+
+### Phase 34: Improve convergence and tune from measured outcomes
+**Status**: planned (ADR-011)
+**Requirements**: REQ-93, REQ-94, REQ-95, REQ-96, REQ-97
+
+Waves 4–5 of [ADR-011-ROLLOUT](architecture/ADR-011-ROLLOUT.md), after phase 33:
+OPT-09–13 add review-aware progress, evidenced model-axis escalation, verified
+manual-merge carry, shared participating-agent admission and experiment reports.
+Apply one behavioral treatment at a time and retain failed/interrupted runs in
+accounting. Quality regressions roll back the affected treatment and create a
+linked backlog item. Model-floor changes require a separate ADR amendment.
