@@ -386,9 +386,10 @@ P1_DEEP="$(find "$WORK/p1/agents" -name '*-deep.toml' | wc -l | tr -d ' ')"
 # reach, so a custom remap changed nothing. It is now resolved through GSD's OWN
 # resolver — which is exactly why this belongs in the smoke and not only in the
 # unit test: the unit test stubs that resolver, so only this asserts against the
-# gsd-core actually installed. Note the cwd rule while you are here: GSD reads
-# the config of the directory it is RUN in, so a remap must live where the
-# installer runs, and a project config outranks ~/.gsd/defaults.json entirely.
+# gsd-core actually installed. The project root is passed explicitly below, so
+# generation can run from a worktree or another caller directory without
+# silently selecting that directory's (possibly absent) policy; a project
+# config still outranks ~/.gsd/defaults.json entirely.
 mkdir -p "$WORK/remapproj/.planning"
 cat > "$WORK/remapproj/.planning/config.json" <<'EOF'
 {
@@ -396,9 +397,9 @@ cat > "$WORK/remapproj/.planning/config.json" <<'EOF'
   "model_policy": { "runtime_tiers": { "codex": { "sonnet": "x-model" } } }
 }
 EOF
-( cd "$WORK/remapproj" && node "$ROOT/scripts/gen-codex-shipyard.cjs" \
+( cd "$WORK" && node "$ROOT/scripts/gen-codex-shipyard.cjs" \
     --plugin "$ROOT/plugins/delivery-pipeline" --out "$WORK/remap" \
-    --codex-home "$CODEX_HOME" --phase 2 >/dev/null )
+    --codex-home "$CODEX_HOME" --phase 2 --project-dir "$WORK/remapproj" >/dev/null )
 REMAP_AGENTS="$(find "$WORK/remap/agents" -name 'shipyard-*.toml' | wc -l | tr -d ' ')"
 [[ "$REMAP_AGENTS" -gt 0 ]] || { echo "the remap run generated no agents at all"; exit 1; }
 for f in "$WORK/remap/agents"/shipyard-*.toml; do

@@ -20,7 +20,10 @@
 //   bundle/{scripts,references,templates} → $CODEX_HOME/shipyard/ (CLAUDE_PLUGIN_ROOT payload)
 //
 // The install script (install-shipyard-codex.sh) places these; this script only
-// stages them and never writes outside --out.
+// stages them and never writes outside --out. `--project-dir` identifies the
+// checkout whose `.planning/config.json` supplies the model policy; it is
+// independent from the output/Codex home paths and is required when generating
+// from a worktree or another caller directory.
 
 const fs = require('fs');
 const path = require('path');
@@ -458,6 +461,12 @@ function deriveDescription(body, roleName) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const repoRoot = path.resolve(__dirname, '..');
+  // The generator belongs to this checkout, so its safe default is the source
+  // repository rather than the caller's shell cwd. An installer invoked from a
+  // ticket worktree otherwise reads that worktree's absent config and silently
+  // bakes the conservative defaults. `--project-dir` makes the policy root
+  // explicit for callers that generate a plugin from elsewhere.
+  const projectDir = path.resolve(expandHome(args['project-dir']) || repoRoot);
   const pluginDir = expandHome(args.plugin) || path.join(repoRoot, 'plugins', 'delivery-pipeline');
   const outDir = expandHome(args.out) || path.join(repoRoot, '.build', 'codex-shipyard');
   const codexHome = expandHome(args['codex-home']) || process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex');
@@ -517,7 +526,7 @@ function main() {
     'integrator': { sandbox: 'workspace-write', phase: 2 },
   };
   const emittedAgents = [];
-  const policy = codexModelPolicy(pluginDir, codexHome);
+  const policy = codexModelPolicy(pluginDir, codexHome, { cwd: projectDir });
   // The reason rides every RESULT, not stderr alone: an installer's log scrolls
   // past, while the `.toml` is what the next reader opens when an agent turns
   // out to carry no model. A `#` comment is valid TOML and adds no key, so the

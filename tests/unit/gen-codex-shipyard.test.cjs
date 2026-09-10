@@ -139,7 +139,8 @@ function generate(opts = {}) {
   const r = spawnSync(process.execPath, [
     GEN, '--plugin', PLUGIN, '--out', out, '--codex-home', f.codexHome,
     '--phase', String(opts.phase === undefined ? 2 : opts.phase),
-  ], { cwd: f.proj, encoding: 'utf8', env });
+    '--project-dir', f.proj,
+  ], { cwd: os.tmpdir(), encoding: 'utf8', env });
   const agentsDir = path.join(out, 'agents');
   const agents = {};
   if (fs.existsSync(agentsDir)) {
@@ -156,6 +157,25 @@ function generate(opts = {}) {
   }
   return { ...f, out, run: r, agents, stderr: r.stderr || '' };
 }
+
+test('a foreign caller cwd cannot hide the explicitly selected project policy', () => {
+  const f = fixture({ project: { delivery_pipeline: { model_ladder: 'adaptive' } } });
+  const out = path.join(f.dir, 'foreign-out');
+  const env = {
+    ...process.env,
+    HOME: f.home,
+    GSD_HOME: f.home,
+    CODEX_HOME: f.codexHome,
+    SHIPYARD_CODEX_CLI_VERSION: CEILING_FLOOR_CLI,
+  };
+  const r = spawnSync(process.execPath, [
+    GEN, '--plugin', PLUGIN, '--out', out, '--codex-home', f.codexHome,
+    '--project-dir', f.proj,
+  ], { cwd: os.tmpdir(), encoding: 'utf8', env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(fs.existsSync(path.join(out, 'agents', 'shipyard-arch-review-critical.toml')),
+    'the selected project policy must reach generation from another cwd');
+});
 
 // A minimal line-level TOML shape check — no full parser, but enough to catch
 // the class of bug a regex-only assertion cannot: every non-blank line must

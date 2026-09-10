@@ -69,7 +69,8 @@ OUT="$STAGE/bundle-out"
 echo "→ generating Codex bundle (phase $PHASE)…"
 node "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" \
   --plugin "$PLUGIN_DIR" --out "$OUT" \
-  --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE"
+  --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE" \
+  --project-dir "$REPO_ROOT"
 
 # ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
 echo "→ installing skills → $AGENTS_SKILLS"
