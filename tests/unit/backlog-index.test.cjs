@@ -50,3 +50,10 @@ test('GSD backlog entries in the roadmap are discoverable without a phase direct
  const out=inventory(r);assert.equal(out.sources,1);assert.equal(out.items.length,1);
  assert.equal(out.items[0].title,'Phase 999.1: Later');
 }));
+
+test('flag-like backlog query terms remain searchable',()=>fixture(r=>{
+ note(r,'flags.md','# Flags\nUse --apply carefully');
+ const cli=path.resolve(__dirname,'../../plugins/delivery-pipeline/scripts/backlog-index.cjs');
+ const x=spawnSync(process.execPath,[cli,'--root',r,'--query','--apply'],{encoding:'utf8'});
+ assert.equal(x.status,0,x.stderr);assert.equal(JSON.parse(x.stdout).items.length,1);
+}));

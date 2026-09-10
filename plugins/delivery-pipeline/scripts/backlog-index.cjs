@@ -92,7 +92,7 @@ function main(args) {
   const opts={};
   for(let i=0;i<args.length;i+=2) {
     const key=args[i],v=args[i+1];
-    if(!['--root','--manifest','--query','--limit'].includes(key)||v===undefined||v.startsWith('--')||key in opts)
+    if(!['--root','--manifest','--query','--limit'].includes(key)||v===undefined||(key!=='--query'&&v.startsWith('--'))||key in opts)
       throw new Error('invalid, duplicate or missing argument; see --help');
     opts[key]=v;
   }
