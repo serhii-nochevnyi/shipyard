@@ -65,3 +65,9 @@ test('CLI replays explicit paths once, excludes content, and diagnoses malformed
   r=spawnSync(process.execPath,[cli,path.join(dir,'missing')],{encoding:'utf8'});assert.equal(r.status,2);
  } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test('message identity still deduplicates snapshots when requestId is absent',()=>{
+ const a=claude({input_tokens:1,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:1});
+ delete a.requestId;a.uuid='row-a';const b={...a,uuid:'row-b'};
+ assert.equal(report(files(a,b)).groups[0].observations,1);
+});

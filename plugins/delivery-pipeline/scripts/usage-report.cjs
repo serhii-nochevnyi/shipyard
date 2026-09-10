@@ -26,7 +26,7 @@ function report(sources) {
       const msg = row.message;
       if (row.type === 'assistant' && msg?.usage && msg.model !== '<synthetic>') {
         usageRows++;
-        const key = row.requestId && msg.id ? JSON.stringify([row.requestId, msg.id]) : row.uuid;
+        const key = msg.id ? JSON.stringify([row.requestId || null, msg.id]) : row.uuid;
         if (!key) { warn('Claude usage without stable identity was skipped'); continue; }
         let q = requests.get(key);
         if (!q) {
