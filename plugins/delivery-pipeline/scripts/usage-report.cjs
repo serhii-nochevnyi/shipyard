@@ -74,8 +74,18 @@ function report(sources) {
   }
   for (const q of requests.values()) {
     if (q.iterations.length) {
-      for (const it of q.iterations.filter(Boolean))
-        claudeObservation(q, it.usage, it.type === 'advisor_message' ? 'advisor' : 'ordinary', it.type === 'advisor_message' ? it.model : (it.model || q.model));
+      const iterations = q.iterations.filter(Boolean);
+      const ordinary = iterations.filter(it => it.type === 'message');
+      const reconciled = ordinary.length > 0 && FIELDS.every(f =>
+        !number(q.usage[f]) || sum(ordinary.map(it => it.usage[f])) === q.usage[f]);
+      if (!reconciled) {
+        warn('Claude ordinary iterations do not reconcile; retaining response aggregate with unknown pass attribution');
+        claudeObservation(q, q.usage, 'ordinary', q.model, 'response_aggregate');
+      }
+      for (const it of iterations) {
+        if (it.type === 'advisor_message') claudeObservation(q, it.usage, 'advisor', it.model);
+        else if (reconciled) claudeObservation(q, it.usage, 'ordinary', it.model || q.model);
+      }
     } else claudeObservation(q, q.usage, 'ordinary', q.model, 'response_aggregate');
   }
   for (const entries of sessions.values()) {

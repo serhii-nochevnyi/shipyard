@@ -9,7 +9,9 @@ an unreadable file. Zero warnings is not proof of complete billing data.
 
 Claude streaming rows are deduplicated by stable message identity, with UUID
 fallback (late request metadata does not change that key); counters retain their component maxima across partial updates.
-Iterations replace the aggregate rather than being added to it. Advisor passes
+Reconciled iterations replace the aggregate rather than being added to it.
+If ordinary iteration counters disagree with the response aggregate, the report
+retains that aggregate, warns and leaves pass attribution unproven. Advisor passes
 remain separate. Without iterations the observation is a response aggregate,
 not an assumed single context pass. Missing counters remain null; `missing`
 counts show the affected observations. `finalized` records Claude stop markers.

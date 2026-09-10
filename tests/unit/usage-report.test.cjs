@@ -89,3 +89,10 @@ test('malformed usage containers are warned about without aborting the report',(
  const r=report(files(claude('bad'),claude([]),claude(5)));
  assert.equal(r.comparable,false);assert.ok(r.warnings.some(w=>w.includes('usage object')));
 });
+
+test('incomplete iteration evidence cannot discard ordinary aggregate usage',()=>{
+ const usage={input_tokens:12,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:9,
+  iterations:[{type:'message',input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:4}]};
+ const r=report(files(claude(usage)));assert.equal(r.groups[0].input_tokens,12);
+ assert.equal(r.groups[0].unit,'response_aggregate');assert.equal(r.comparable,false);
+});
