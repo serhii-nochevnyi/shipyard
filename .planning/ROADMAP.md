@@ -205,6 +205,25 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-68** — A mechanism this repository cannot exercise says so: CI proves the
   planner, the refusal, the wiring and the negative pin, and the witnessed
   mutation is owed by the proving ground.
+- **REQ-69** — Only the `execute` transition is gated, so "worked on" means by
+  someone outside this conveyor and a resumed run can always continue its own
+  ticket.
+- **REQ-70** — An externally prepared ticket is not deliverable: it enters
+  through investigate from a cold start, and the import shortcut that
+  manufactured a plan from a tracker description is gone.
+- **REQ-71** — "To Do" is a declared knob whose empty default means the gate is
+  off, matched on the tracker's own status name.
+- **REQ-72** — "Not worked on" is status plus assignee from the default
+  response, never the changelog, which cannot be paged and reports a truncated
+  history as complete.
+- **REQ-73** — The selection gate fails CLOSED: an unreadable tracker parks the
+  ticket rather than authorising it, and the park carries the tracker's own
+  words.
+- **REQ-74** — A direct instruction is the ticket NAMED, never a set, and the
+  bypass is journalled so an overridden rule can be told from one that never
+  fired.
+- **REQ-75** — The read cache is its own store with its own expiry, never merged
+  with the projection watermark that expires by a different rule.
 
 ## Phases
 
@@ -392,3 +411,27 @@ others built. The uncomfortable fact is stated in the ADR rather than discovered
 later: `pipeline.jira.enabled: false` here and all 69 tickets carry a null key,
 so this repository ships a mechanism it cannot run, and the witnessed mutation
 is owed by the proving ground.
+
+### Phase 30: Not every ticket is available work
+**Requirements**: REQ-69, REQ-70, REQ-71, REQ-72, REQ-73, REQ-74, REQ-75
+
+Decomposed from ADR-009, which answers two operator rules that are one subject
+from two sides — what evidence entitles a ticket to be taken into work. One is
+about who HOLDS it (only To Do and unassigned; anything else by direct
+instruction), the other about who DESIGNED it (an externally prepared ticket
+goes through investigate from a cold start). Most of the machinery already
+exists and was found rather than invented: `front.cjs:761` is the single line
+where a ticket is taken into work, the four durable stores are one debugged
+park pattern, `status` and `assignee` both arrive free in `getJiraIssue`'s
+default field set, and provenance needs no tracker call at all — a ticket is
+ours iff a Gate-2-accepted plan stands behind it. So the second rule is not a
+missing feature but a shortcut to delete: `deliver.md:810-816` offers to
+manufacture a PLAN.md out of a Jira description, deriving `files_modified` and
+`depends_on` "from the content" — the two fields every parallel-safety
+guarantee in this system is computed from, and the one path by which unexamined
+work reaches a worktree. T-30-01 goes FIRST because it closes that hole and
+depends on nothing. The gate's failure direction is deliberately the OPPOSITE
+of ADR-008's: a tracker error must never block a merge, but it must block a
+start, because an unanswered question is not a yes. The phase cannot begin
+until phase 29's epic lands — it edits `pipeline-config.cjs`, `front.cjs` and
+`deliver.md`, all of which phase 29 tickets own.
