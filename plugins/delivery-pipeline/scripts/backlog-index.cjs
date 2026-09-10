@@ -88,7 +88,7 @@ function inventory(root, manifest=null, query='') {
     read_only:true};
 }
 function main(args) {
-  if(args.length===1&&args[0]==='--help'){console.log('usage: node backlog-index.cjs --root <project> [--manifest <json>] [--query <text>] [--limit <positive integer>]\nRead-only JSON; default limit 20. No source or installed GSD writes.');return;}
+  if(args.length===1&&args[0]==='--help'){console.log('usage: node backlog-index.cjs --root <project> [--manifest <manifest.json>] [--query <text>] [--limit <positive integer>]\nRead-only JSON; default limit 20. No source or installed GSD writes.');return;}
   const opts={};
   for(let i=0;i<args.length;i+=2) {
     const key=args[i],v=args[i+1];

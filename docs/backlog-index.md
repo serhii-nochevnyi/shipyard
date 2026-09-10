@@ -2,7 +2,7 @@
 
 Run `node plugins/delivery-pipeline/scripts/backlog-index.cjs --root <project>`.
 Use `--query advisor` to select relevant sections, `--limit 100` to change the
-20-item output limit, and `--manifest <json>` to read existing lifecycle evidence.
+20-item output limit, and `--manifest <manifest.json>` to read existing lifecycle evidence.
 `--help` describes the CLI. Exit 2 reports invalid input or a filesystem failure.
 Output states total/matched counts and truncation explicitly.
 
