@@ -58,6 +58,11 @@
       "default": "gpt-5.6-terra:high, gpt-6-astra:high@0.153.1",
       "description": "The Codex model palette, in preference order: 'model[:effort][@min_cli]' per entry, comma separated. The effort is the one to USE for that model, never the deepest it accepts; min_cli is the Codex CLI version that can first configure it, below which the generator writes the previous entry instead. First entry is the workhorse floor every agent gets; last is the ceiling, taken statically by the integrator and reachable elsewhere through the '-deep' escalation agents. An empty value writes no model at all, leaving every agent on the CLI default. 'gpt-5.6-sol' is a valid entry no built-in path selects: with the deeper efforts retired on this runtime, advertising 'ultra' was its only distinguishing property."
     },
+    "delivery_pipeline.jira_transitions": {
+      "type": "string",
+      "default": "",
+      "description": "The status projection: our ticket status mapped to the TARGET STATUS NAME in the tracker, '<our status>:<their status>' per entry, comma separated - for example 'pr-open:In Progress, merged:Done'. The right-hand side is a status name, never the name of a transition: a workflow's transition names are not a stable schema and its status names are, so the performing half looks up whichever offered transition lands on that status. The left-hand side is one of the four statuses the delivery board actually writes - pending, branched, pr-open, merged - and anything else (the front's bucket names, for instance) is warned about and skipped. EMPTY IS OFF, and empty is the default: silence is not consent to write into someone's tracker. Declared as a string for the same reason codex_models is - GSD's capability config vocabulary is boolean|string|number|enum - and kept flat rather than nested under 'jira' because delivery_pipeline is merged over pipeline shallowly, so an object-valued key in one namespace replaces the other's wholesale."
+    },
     "delivery_pipeline.fable": {
       "type": "string",
       "default": "off",

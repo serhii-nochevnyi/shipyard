@@ -15,7 +15,7 @@ const mod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'sc
 const {
   loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
   TIERS, EFFORTS, DEFAULTS, ROLES, SIGNATURE_STATES, DEFAULT_CODEX_MODELS, SONNET_ROLES,
-  NUMERIC_KNOBS,
+  NUMERIC_KNOBS, TICKET_STATUSES,
 } = require(mod);
 const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
@@ -730,6 +730,117 @@ test('an unknown entry field is dropped rather than carried into the agent file'
   const { config, warnings } = withConfig({ codex_models: [{ model: 'm', reasoning: 'deep' }] });
   assert.deepStrictEqual(config.codex_models, [{ model: 'm' }]);
   assert.ok(warnings.some((w) => /reasoning/.test(w)), warnings.join('; '));
+});
+
+suite('jira_transitions — the status map, whose empty default means OFF');
+
+test('no config → an empty map and NO warning: the projection is off', () => {
+  const { config, warnings } = withConfig(undefined);
+  assert.deepStrictEqual(config.jira_transitions, {});
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('the capability default "" is silent — a warning on every load teaches the reader to skip warnings', () => {
+  // `''.split(',')` is `['']`, so an empty segment must be SKIPPED SILENTLY.
+  // This is the one place the map deliberately differs from `codex_models`:
+  // the declared default of this knob IS the empty string, so a project that
+  // GSD has materialised its defaults into would otherwise warn every load.
+  const { config, warnings } = withConfig({ jira_transitions: '' });
+  assert.deepStrictEqual(config.jira_transitions, {});
+  assert.deepStrictEqual(warnings, []);
+  // and a trailing comma is the same case
+  const trailing = withConfig({ jira_transitions: 'merged:Done,' });
+  assert.deepStrictEqual(trailing.config.jira_transitions, { merged: 'Done' });
+  assert.deepStrictEqual(trailing.warnings, []);
+});
+
+test('the string form (the one GSD can set) parses to two entries', () => {
+  const { config, warnings } = withConfig({ jira_transitions: 'pr-open:In Progress, merged:Done' });
+  assert.deepStrictEqual(config.jira_transitions, { 'pr-open': 'In Progress', merged: 'Done' });
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('the object form (a hand-edited config) yields the same map', () => {
+  const { config, warnings } = withConfig({ jira_transitions: { 'pr-open': 'In Progress', merged: 'Done' } });
+  assert.deepStrictEqual(config.jira_transitions, { 'pr-open': 'In Progress', merged: 'Done' });
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('a FRONT BUCKET name on the left is one warning naming the four real statuses, and no entry', () => {
+  // `fix`, `finalize`, `merge` and `ci` are computed by front.cjs per round and
+  // never appear in the `status_change` stream this map is consumed against, so
+  // they are the tempting wrong values — the warning has to name the right ones.
+  const { config, warnings } = withConfig({ jira_transitions: 'fix:In Progress' });
+  assert.deepStrictEqual(config.jira_transitions, {});
+  const own = warnings.filter((w) => /jira_transitions/.test(w));
+  assert.strictEqual(own.length, 1, warnings.join('; '));
+  for (const status of ['pending', 'branched', 'pr-open', 'merged']) {
+    assert.ok(own[0].includes(status), `warning must name "${status}": ${own[0]}`);
+  }
+  assert.ok(own[0].includes('fix'), own[0]);
+});
+
+test('the four statuses are the ones state-sync writes, in our own order', () => {
+  assert.deepStrictEqual(TICKET_STATUSES, ['pending', 'branched', 'pr-open', 'merged']);
+});
+
+test('an empty target status is skipped with a warning — half a mapping is not a mapping', () => {
+  const { config, warnings } = withConfig({ jira_transitions: 'merged:   , pr-open:In Progress' });
+  assert.deepStrictEqual(config.jira_transitions, { 'pr-open': 'In Progress' });
+  assert.strictEqual(warnings.filter((w) => /jira_transitions/.test(w)).length, 1, warnings.join('; '));
+});
+
+test('an entry with no colon at all is skipped with a warning', () => {
+  const { config, warnings } = withConfig({ jira_transitions: 'merged' });
+  assert.deepStrictEqual(config.jira_transitions, {});
+  assert.ok(warnings.some((w) => /jira_transitions/.test(w)), warnings.join('; '));
+});
+
+test('only the FIRST colon splits — a target status may carry one of its own', () => {
+  const { config, warnings } = withConfig({ jira_transitions: 'merged:Done: verified' });
+  assert.deepStrictEqual(config.jira_transitions, { merged: 'Done: verified' });
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('a value that is not a map at all keeps the empty map: the projection stays OFF', () => {
+  const { config, warnings } = withConfig({ jira_transitions: 7 });
+  assert.deepStrictEqual(config.jira_transitions, {});
+  assert.ok(warnings.some((w) => /jira_transitions/.test(w)), warnings.join('; '));
+});
+
+test('the map a caller mutates does not become the next caller\'s default', () => {
+  // Copied from the `codex_models` case above, which exists: every container
+  // value is copied rather than shared with DEFAULTS, or a caller that edits
+  // the returned map in place changes what the next loadConfig() returns.
+  const first = withConfig(undefined).config;
+  first.jira_transitions.merged = 'Done';
+  assert.deepStrictEqual(withConfig(undefined).config.jira_transitions, {});
+  assert.deepStrictEqual(DEFAULTS.jira_transitions, {});
+});
+
+test('it is FLAT, so it survives beside a `jira` object set in the other namespace', () => {
+  // The whole argument for a top-level key: `delivery_pipeline` is merged over
+  // `pipeline` SHALLOWLY, so an object-valued `jira` in one namespace replaces
+  // the other's wholesale. A nested `jira.transitions` would vanish here.
+  const { config } = withRaw({
+    pipeline: { jira: { project: 'SHIP' } },
+    delivery_pipeline: { jira_transitions: 'merged:Done' },
+  });
+  assert.strictEqual(config.jira.project, 'SHIP');
+  assert.deepStrictEqual(config.jira_transitions, { merged: 'Done' });
+});
+
+test('the map is DECLARED in capability.json, so GSD tooling can set it', () => {
+  const cap = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'capabilities', 'delivery-pipeline', 'capability.json'), 'utf8'
+  ));
+  const declared = (cap.config || {})['delivery_pipeline.jira_transitions'];
+  assert.ok(declared, 'capability.json must declare delivery_pipeline.jira_transitions');
+  assert.strictEqual(declared.type, 'string');
+  assert.strictEqual(declared.default, '');
+  // the declared default must parse to the default the reader ships
+  assert.deepStrictEqual(withConfig({ jira_transitions: declared.default }).config.jira_transitions,
+    DEFAULTS.jira_transitions);
 });
 
 suite('repos — sibling checkouts a multi-repo phase is driven in');

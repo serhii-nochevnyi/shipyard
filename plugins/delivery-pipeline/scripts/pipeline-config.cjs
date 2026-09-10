@@ -263,6 +263,77 @@ function strategyFor(state) {
 const NUMERIC_KNOBS = ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours',
   'plan_defect_signatures', 'fable_window_tokens', 'max_concurrent_agents'];
 
+// ── the four statuses a ticket actually moves through ───────────────────────
+//
+// In OUR order (`pending` < `branched` < `pr-open` < `merged`), which is the
+// order the projection's forward-only rule is measured in. These are the only
+// values `state-sync.cjs` ever writes into a ticket's `status`, and therefore
+// the only left-hand sides `jira_transitions` can be keyed by. The tempting
+// wrong values are the FRONT's bucket names (`fix`, `finalize`, `merge`, `ci`):
+// those are computed by `front.cjs` per round and never appear in the
+// `status_change` stream this map is consumed against.
+const TICKET_STATUSES = ['pending', 'branched', 'pr-open', 'merged'];
+
+// One map out of either accepted spelling: an object, or one comma-separated
+// `our-status:Their Target Status` string — the same two shapes `codex_models`
+// takes, and for the same reason (GSD's capability config vocabulary is
+// boolean|string|number|enum, so an object-typed knob would not be settable at
+// all). The right-hand side is the tracker's TARGET STATUS NAME, never the name
+// of a transition: the performing half looks up the offered transition whose
+// target status matches, because a workflow's transition names are not a stable
+// schema and its status names are.
+//
+// Malformed entries are SKIPPED with a warning, never half-honoured; a wholly
+// unusable value keeps the empty map, which means the projection is off.
+function normalizeJiraTransitions(value, warnings) {
+  const items = typeof value === 'string'
+    ? value.split(',')
+    : (value && typeof value === 'object' && !Array.isArray(value))
+      ? Object.entries(value).map(([k, v]) => `${k}:${v}`)
+      : null;
+  if (items === null) {
+    warnings.push(
+      'pipeline.jira_transitions must be a map of our status to the tracker\'s target status name '
+      + '(or a "pr-open:In Progress, merged:Done" string) — ignored'
+    );
+    return null;
+  }
+  const out = {};
+  for (const item of items) {
+    const raw = String(item).trim();
+    // A blank segment is SILENT: the capability's declared default is the empty
+    // string, and `''.split(',')` is `['']`, so warning here would put a warning
+    // on every load of an unconfigured project — which is how a reader learns to
+    // ignore warnings. A trailing comma is the same case.
+    if (!raw) continue;
+    // The first colon only: a Jira status name may contain anything but is
+    // conventionally spaced words, and splitting on every colon would silently
+    // truncate one that carries a colon of its own.
+    const colon = raw.indexOf(':');
+    if (colon === -1) {
+      warnings.push(
+        `pipeline.jira_transitions entry "${raw}" is not "<our status>:<their target status>" — skipped`
+      );
+      continue;
+    }
+    const from = raw.slice(0, colon).trim();
+    const target = raw.slice(colon + 1).trim();
+    if (!TICKET_STATUSES.includes(from)) {
+      warnings.push(
+        `pipeline.jira_transitions."${from}" is not a ticket status — skipped `
+        + `(statuses: ${TICKET_STATUSES.join(', ')}; the front's bucket names are not statuses)`
+      );
+      continue;
+    }
+    if (!target) {
+      warnings.push(`pipeline.jira_transitions."${from}" has no target status name — skipped`);
+      continue;
+    }
+    out[from] = target;
+  }
+  return out;
+}
+
 const DEFAULTS = {
   integration_mode: 'epic-stacked',   // | direct-to-main
   model_policy: 'balanced',           // economy | balanced | premium
@@ -340,6 +411,14 @@ const DEFAULTS = {
   // commits and pushes are local git operations.
   repos: {},
   jira: { enabled: true, project: null, issue_type: 'Task', epic_issue_type: 'Epic' },
+  // Our ticket status → the tracker's TARGET STATUS NAME, for the projection
+  // (ADR-008 D2). TOP-LEVEL and flat, deliberately NOT a member of `jira`:
+  // `delivery_pipeline` is merged over `pipeline` SHALLOWLY, so an object-valued
+  // `jira` in one namespace replaces the other's wholesale and a nested knob
+  // would vanish the moment a user set one key in the other place.
+  // EMPTY IS OFF, and empty is the default — the same posture as `fable: off`:
+  // silence is not consent to write into someone's tracker.
+  jira_transitions: {},
 };
 
 const KNOWN_KEYS = new Set(Object.keys(DEFAULTS));
@@ -523,6 +602,7 @@ function loadConfig(root) {
     effort: {},
     repos: {},
     codex_models: DEFAULT_CODEX_MODELS.map((e) => ({ ...e })),
+    jira_transitions: {},
   };
   for (const [key, value] of Object.entries(merged)) {
     if (!KNOWN_KEYS.has(key)) {
@@ -593,6 +673,13 @@ function loadConfig(root) {
       // A wholly unusable value keeps the shipped palette; an explicitly EMPTY
       // one is honoured, because "write no model" is a legitimate choice.
       if (palette !== null) cfg.codex_models = palette;
+      continue;
+    }
+    if (key === 'jira_transitions') {
+      const map = normalizeJiraTransitions(value, warnings);
+      // A wholly unusable value keeps the empty map, which is the projection
+      // switched off — the safe direction for anything that writes to a tracker.
+      if (map !== null) cfg.jira_transitions = map;
       continue;
     }
     if (key === 'effort') {
@@ -1136,6 +1223,7 @@ module.exports = {
   loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
   routeOf, parseRoute, ROUTE_RE, runtimeToken,
   parseCodexModelEntry, normalizeCodexModels,
+  normalizeJiraTransitions, TICKET_STATUSES,
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
   DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS, NUMERIC_KNOBS,
 };
