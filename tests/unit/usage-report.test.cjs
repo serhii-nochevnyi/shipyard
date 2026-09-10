@@ -71,3 +71,9 @@ test('message identity still deduplicates snapshots when requestId is absent',()
  delete a.requestId;a.uuid='row-a';const b={...a,uuid:'row-b'};
  assert.equal(report(files(a,b)).groups[0].observations,1);
 });
+
+test('nonzero Codex cache writes do not invent an uncached partition',()=>{
+ const row=codex(100);row.payload.info.total_token_usage.cache_write_input_tokens=10;
+ const g=report(files(meta,row)).groups[0];assert.equal(g.input_tokens,100);
+ assert.equal(g.cache_creation_input_tokens,10);assert.equal(g.uncached_input_tokens,null);
+});

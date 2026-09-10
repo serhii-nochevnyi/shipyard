@@ -95,8 +95,10 @@ function report(sources) {
     const read = prior.cached_input_tokens, write = prior.cache_write_input_tokens;
     const input = prior.input_tokens;
     if (number(input) && number(read) && read > input) { invalid = true; warn('Codex cached input exceeds input'); }
-    const uncached = number(input) && number(read) && number(write) && read + write <= input
-      ? input - read - write : null;
+    // Preserve cache writes without assuming they partition this schema's input.
+    // The observed zero-write shape permits an uncached-input derivation.
+    const uncached = number(input) && number(read) && write === 0 && read <= input
+      ? input - read : null;
     observations.push({ provider: 'codex', kind: 'ordinary', model: null, unit: 'session_cumulative',
       finalized: false, input_tokens: invalid ? null : input ?? null,
       uncached_input_tokens: invalid ? null : uncached,

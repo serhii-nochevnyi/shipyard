@@ -17,7 +17,8 @@ counts show the affected observations. `finalized` records Claude stop markers.
 Codex token_count totals are cumulative per session, so snapshots and resumed
 files are not summed. A decrease is an explicit discontinuity and makes totals
 unknown. Cache input is a subset of input; reasoning is a subset of output and
-is never added a second time. Model attribution for cumulative Codex usage is
+is never added a second time. Nonzero or unavailable cache-write counters
+leave derived uncached input unknown; raw counters remain available. Model attribution for cumulative Codex usage is
 unknown. Different provider and observation units stay in different groups.
 
 This initial slice rescans complete files to incorporate late updates. It has
@@ -27,3 +28,8 @@ text and tool payloads are never included in the report. Files from live session
 can end in a partial JSON line; it is reported and a later rescan can recover it.
 The later ADR-011 reconciliation package owns the dispatch join and reporting
 integration; this CLI alone does not complete REQ-85 or the prospective baseline.
+
+The field vocabulary was checked against the official Codex
+[TokenUsageBreakdown source](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/thread.rs)
+and observed local rollout records. Other JSONL formats such as SDK turn events
+are not implicitly treated as rollout token_count records.
