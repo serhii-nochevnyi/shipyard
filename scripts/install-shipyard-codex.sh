@@ -177,7 +177,15 @@ replace_dir() {
   return "$status"
 }
 runtime_backup_key() {
-  node -e "const crypto=require('crypto');process.stdout.write(crypto.createHash('sha256').update(process.argv[1]).digest('hex'))" "$1"
+  local target="$1" cached
+  cached="${RUNTIME_BACKUP_KEYS[$target]:-}"
+  if [[ -n "$cached" ]]; then
+    printf '%s' "$cached"
+    return 0
+  fi
+  cached="$(node -e "const crypto=require('crypto');process.stdout.write(crypto.createHash('sha256').update(process.argv[1]).digest('hex'))" "$target")"
+  RUNTIME_BACKUP_KEYS["$target"]="$cached"
+  printf '%s' "$cached"
 }
 snapshot_runtime_path() {
   local kind="$1" name="$2" target="$3"
@@ -205,6 +213,7 @@ OUT="$STAGE/bundle-out"
 RUNTIME_BACKUP="$STAGE/runtime-before"
 RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
 declare -A RUNTIME_BACKUP_SEEN=()
+declare -A RUNTIME_BACKUP_KEYS=()
 mkdir -p "$RUNTIME_BACKUP"
 : > "$RUNTIME_BACKUP_INDEX"
 
