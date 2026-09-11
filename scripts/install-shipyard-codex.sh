@@ -66,18 +66,14 @@ ROLLBACK_ACTIVE=0
 cleanup() {
   local status="${1:-0}"
   if [[ "$status" -ne 0 && "$ROLLBACK_ACTIVE" == 1 ]]; then
-    echo "error: install failed after mutating shipyard artifacts; restoring the previous set" >&2
+    echo "error: install failed after mutating agent/config state; restoring the previous set" >&2
     restore_config 2>/dev/null || echo "warning: config rollback was incomplete; inspect ${CONFIG_TARGET:-$CODEX_HOME/config.toml}" >&2
     restore_agents 2>/dev/null || echo "warning: agent rollback was incomplete; inspect ${AGENTS_DIR:-$CODEX_HOME/agents}" >&2
-    restore_bundle 2>/dev/null || echo "warning: bundle rollback was incomplete; inspect $BUNDLE_ROOT" >&2
-    restore_skills 2>/dev/null || echo "warning: skills rollback was incomplete; inspect $AGENTS_SKILLS" >&2
   fi
   rm -rf "$STAGE"
   trap - EXIT
   exit "$status"
 }
-restore_skills() { return 0; }
-restore_bundle() { return 0; }
 restore_agents() {
   local index="${AGENT_BACKUP_INDEX:-}"
   local backup="${AGENT_BACKUP:-}"
