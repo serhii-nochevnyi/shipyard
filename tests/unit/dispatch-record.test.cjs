@@ -550,9 +550,12 @@ test('clear-many removes a completed wave with one refresh and is idempotent', (
     execFileSync('node', [...mark, `T-01-0${i}`, 'executor'], { cwd: project });
   }
   const before = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8');
+  const completed = Object.entries(store(graph)).map(([ticket, record]) => ({
+    ticket, dispatch_id: record.dispatch_id,
+  }));
   const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
     cwd: project,
-    input: JSON.stringify(['T-01-01', 'T-01-02', 'T-01-03']),
+    input: JSON.stringify(completed),
     encoding: 'utf8',
   });
   assert.equal(r.status, 0, `batch clear must succeed (${r.stderr})`);
@@ -565,7 +568,7 @@ test('clear-many removes a completed wave with one refresh and is idempotent', (
   // the batch remains safe to replay and reports the missing records honestly.
   const again = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
     cwd: project,
-    input: JSON.stringify(['T-01-01', 'T-01-02', 'T-01-03']),
+    input: JSON.stringify(completed),
     encoding: 'utf8',
   });
   assert.equal(again.status, 0, `replaying clear-many must be harmless (${again.stderr})`);
@@ -577,8 +580,8 @@ test('clear-many rejects duplicate or malformed ids before mutating the store', 
   execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
   const before = store(graph);
   for (const input of [
-    ['T-01-01', 'T-01-01'],
-    ['T-01-01', 7],
+    [{ ticket: 'T-01-01', dispatch_id: 'd' }, { ticket: 'T-01-01', dispatch_id: 'e' }],
+    [{ ticket: 'T-01-01', dispatch_id: 7 }],
     {},
   ]) {
     const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
@@ -587,6 +590,23 @@ test('clear-many rejects duplicate or malformed ids before mutating the store', 
     assert.equal(r.status, 1, `invalid clear-many payload must refuse: ${JSON.stringify(input)}`);
     assert.deepStrictEqual(store(graph), before, 'a rejected clear batch leaves existing records intact');
   }
+});
+
+test('clear-many does not erase a newer dispatch when an older completion arrives', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const oldId = store(graph)['T-01-01'].dispatch_id;
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const currentId = store(graph)['T-01-01'].dispatch_id;
+  assert.notEqual(oldId, currentId);
+  const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
+    cwd: project,
+    input: JSON.stringify([{ ticket: 'T-01-01', dispatch_id: oldId }]),
+    encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /dispatch cleared for 0 of 1 ticket\(s\)/);
+  assert.equal(store(graph)['T-01-01'].dispatch_id, currentId);
 });
 
 suite('dispatch-record — a dispatch records WHAT it dispatched, or says it does not know');
@@ -805,6 +825,15 @@ test('--agent-file records the Codex file that ran, and refuses one nothing prod
   assert.equal(ok.status, 0, `must succeed (${ok.stderr})`);
   assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-deep', 'verbatim');
   assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-deep');
+
+  const claude = scratch({ 'T-01-02': { ...OPEN_PR } });
+  const impossible = run([
+    'mark', 'T-01-02', 'arch-review', '--runtime', 'claude',
+    '--agent-file', 'shipyard-arch-review', '--route', ROUTE,
+  ], claude.project);
+  assert.equal(impossible.status, 1, impossible.stderr);
+  assert.match(impossible.stderr, /Codex-only/);
+  assert.deepStrictEqual(store(claude.graph), {});
 
   for (const bad of ['shipyard-nope', 'arch-review', 'shipyard-integrator-deep']) {
     const s = scratch({ 'T-01-02': { ...OPEN_PR } });

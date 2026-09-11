@@ -16,7 +16,7 @@
 //                             # JSON array of {ticket, role, ...mark fields}
 //   dispatch-record.cjs clear <ticket>        [--graph <dir>]
 //   dispatch-record.cjs clear-many --stdin [--graph <dir>]
-//                             # JSON array of ticket ids
+//                             # JSON array of {ticket, dispatch_id}
 //   dispatch-record.cjs list  [--json]        [--graph <dir>]
 //
 // Why this exists. The front's vocabulary had no state for DISPATCHED AND
@@ -540,6 +540,9 @@ function parseMarkFlags(argv, role) {
   }
   const agentFile = given.get('agent-file');
   if (agentFile !== undefined) {
+    if (runtime !== undefined && runtime !== 'codex') {
+      fail('--agent-file is a Codex-only field — omit it for a Claude dispatch');
+    }
     const known = codexAgentFiles();
     if (!known) {
       fail(
@@ -655,25 +658,30 @@ function parseBatchEntries(raw) {
 // operation owns several ticket records. Clearing them one process at a time
 // re-takes the lock and refreshes the derived front for every ticket, so a
 // short Workflow round can cost more orchestration turns than the work itself.
-// Keep this input deliberately smaller than mark-many: a clear carries no
-// attribution and therefore needs only a ticket id. Missing records are
-// accepted, matching the single-ticket clear's idempotent behaviour — a
-// dispatch may already have lifted on its owner's output by the time the
-// result is collected.
+// A completion must carry the dispatch id it is completing. Ticket ids are
+// reusable, so deleting by ticket alone lets a delayed result erase a newer
+// dispatch and its capacity/stop-gate protection. Missing or already-lifted
+// records remain idempotent, but a mismatched id is deliberately left alone.
 function parseClearBatch(raw) {
   if (!Array.isArray(raw)) {
-    throw new Error('clear-many input must be a JSON array of ticket ids');
+    throw new Error('clear-many input must be a JSON array of {ticket, dispatch_id} objects');
   }
   const seen = new Set();
-  return raw.map((ticket, index) => {
-    if (typeof ticket !== 'string' || ticket.trim() === '') {
-      throw new Error(`clear-many item ${index + 1} must be a non-empty ticket id`);
+  return raw.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`clear-many item ${index + 1} must be an object with ticket and dispatch_id`);
     }
+    const { ticket, dispatch_id: dispatchId } = item;
+    if (typeof ticket !== 'string' || ticket.trim() === '') {
+      throw new Error(`clear-many item ${index + 1} must carry a non-empty ticket id`);
+    }
+    const why = opaqueDispatchValueIssue(dispatchId);
+    if (why !== null) throw new Error(`clear-many item ${index + 1} dispatch_id cannot be recorded: ${why}`);
     if (seen.has(ticket)) {
       throw new Error(`clear-many contains duplicate ticket ${ticket} — pass each id once`);
     }
     seen.add(ticket);
-    return ticket;
+    return { ticket, dispatch_id: dispatchId };
   });
 }
 
@@ -999,9 +1007,11 @@ if (require.main === module) {
   // their own, and a store written beside no ticket graph is unreadable rather
   // than merely misplaced — the front reads the PROJECT's. `list`/`clear` stay
   // permissive: they read or they remove, they never hide a ticket nowhere.
-  if (['mark', 'mark-many'].includes(cmd) && !GRAPH_EXPLICIT && !fs.existsSync(path.join(GRAPH_DIR, 'tickets.json'))) {
+  if (['mark', 'mark-many'].includes(cmd) && !fs.existsSync(path.join(GRAPH_DIR, 'tickets.json'))) {
     fail(
-      `no ticket graph at ${GRAPH_DIR} — refusing to record a dispatch nothing will read.\n` +
+      `no ticket graph at ${GRAPH_DIR} — refusing to record a dispatch nothing will read` +
+      (GRAPH_EXPLICIT ? ' (the explicitly selected graph is invalid).' : '.\n') +
+      (GRAPH_EXPLICIT ? '\n' : '') +
       '  The front reads the PROJECT\'s graph; one written in a worktree is invisible to it,\n' +
       '  so the ticket keeps being offered as work an agent already holds.\n' +
       '  Run this from the conveyor project, or pass --graph <project>/.planning/graph.'
@@ -1027,12 +1037,16 @@ if (require.main === module) {
     // written: a usage error must cost no lock and must never leave half a
     // record behind.
     const decided = parseMarkFlags(rest.slice(2), role);
-    const state = readState(cwd);
-    if (!hasStateTicket(state, ticket)) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
-    const s = state[ticket];
     const at = new Date().toISOString();
     let dispatchId;
     mutate(cwd, (store) => {
+      // Read the ticket state while the dispatch mutation is locked. A
+      // concurrent state-sync may move the PR between the preflight read and
+      // this callback; using the older fingerprint would make a fresh dispatch
+      // look expired on the next front evaluation.
+      const state = readState(cwd);
+      if (!hasStateTicket(state, ticket)) throw new Error(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+      const s = state[ticket];
       // A re-dispatch restarts the clock: the previous agent is not the one
       // holding it now.
       const recorded = withDispatchId(decided, store, ticket);
@@ -1160,7 +1174,7 @@ if (require.main === module) {
     if (rest.length !== 1 || rest[0] !== '--stdin') {
       fail(
         'usage: dispatch-record.cjs clear-many --stdin [--graph <dir>]\n' +
-        '  stdin must contain a JSON array of ticket ids; an empty array is a no-op'
+        '  stdin must contain a JSON array of {ticket, dispatch_id} objects; an empty array is a no-op'
       );
     }
     let raw;
@@ -1178,16 +1192,20 @@ if (require.main === module) {
     if (!ticketsToClear.length) {
       console.log('no dispatches cleared — the batch was explicitly empty');
     } else {
-      const current = load(cwd).tickets || {};
-      const present = ticketsToClear.filter((ticket) => Object.prototype.hasOwnProperty.call(current, ticket));
-      if (present.length) {
-        mutate(cwd, (store) => {
-          for (const ticket of present) delete store.tickets[ticket];
-        });
+      let cleared = 0;
+      mutate(cwd, (store) => {
+        for (const { ticket, dispatch_id: dispatchId } of ticketsToClear) {
+          const current = store.tickets[ticket];
+          if (!current || current.dispatch_id !== dispatchId) continue;
+          delete store.tickets[ticket];
+          cleared++;
+        }
+      });
+      if (cleared) {
         refreshFront(cwd);
       }
       console.log(
-        `dispatch cleared for ${present.length} of ${ticketsToClear.length} ticket(s) — ` +
+        `dispatch cleared for ${cleared} of ${ticketsToClear.length} ticket(s) — ` +
         'the board can offer them again'
       );
     }

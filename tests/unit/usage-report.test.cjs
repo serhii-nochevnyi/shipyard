@@ -15,6 +15,7 @@ test('Claude streaming updates and file replay count a response once', () => {
   const b=claude({input_tokens:5,cache_creation_input_tokens:0,cache_read_input_tokens:100,output_tokens:12},{stop_reason:'end_turn'});
   const r=report([...files(a,b),...files(a,b)]);
   assert.equal(r.groups[0].input_tokens,105);
+  assert.equal(r.groups[0].provider, 'anthropic');
   assert.equal(r.groups[0].output_tokens,12);
   assert.equal(r.groups[0].observations,1);
   assert.equal(r.groups[0].finalized,1);
@@ -119,4 +120,31 @@ test('incomplete iteration evidence cannot discard ordinary aggregate usage',()=
   iterations:[{type:'message',input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:4}]};
  const r=report(files(claude(usage)));assert.equal(r.groups[0].input_tokens,12);
  assert.equal(r.groups[0].unit,'response_aggregate');assert.equal(r.comparable,false);
+});
+
+test('invalid attribution enums are skipped instead of making a row eligible', () => {
+ const r=report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2},{stop_reason:'end_turn'})), {attributions:[{
+   observation_id:'bad-effort', dispatch_id:'dispatch-1', runtime:'claude', provider:'anthropic', kind:'ordinary',
+   source:'fixture', session_id:'s1', request_id:'r1', message_id:'m1', ticket:'T-01-01', role:'executor',
+   task_level:'routine', backend:'workflow', model:'opus', effort:'high', observed_model:'claude-opus-5', observed_effort:'bogus',
+ }]});
+ assert.ok(r.warnings.some((w)=>w.includes('invalid observed_effort')));
+ assert.equal(r.observations[0].attribution_status,'unattributed');
+ assert.equal(r.efficiency.eligible_rows,0);
+});
+
+test('Codex turn metadata is scoped by session, not only by turn_id', () => {
+ const current=(session,response,input,model,effort)=>({source:`${session}.jsonl`,rows:[
+   {type:'session_meta',payload:{id:session}},
+   {type:'turn_context',payload:{turn_id:'turn-1',model,effort}},
+   {type:'token_usage_record',timestamp:'2026-09-10T00:02:00Z',payload:{
+     session_id:session,response_id:response,turn_id:'turn-1',
+     usage:{input_tokens:input,cached_input_tokens:0,output_tokens:1,reasoning_output_tokens:0},
+     thread_token_usage:{input_tokens:input,cached_input_tokens:0,cache_write_input_tokens:0,output_tokens:1,reasoning_output_tokens:0,total_tokens:input+1},
+   }},
+ ]});
+ const r=report([current('session-a','response-a',10,'gpt-5.6-luna','high'),current('session-b','response-b',20,'gpt-6-astra','xhigh')]);
+ assert.deepEqual(r.observations.map((o)=>[o.session_id,o.model,o.observed_effort]).sort(),[
+   ['session-a','gpt-5.6-luna','high'],['session-b','gpt-6-astra','xhigh'],
+ ]);
 });

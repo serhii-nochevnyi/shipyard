@@ -421,9 +421,12 @@ reinit is not optional.
   JSON array with `dispatch-record.cjs mark-many --stdin --graph
   <project>/.planning/graph` after the launch returns; repeat the guard's one
   launch id for every PR and keep each resolver pair/route. Use the single
-  `mark` form only for one PR. Run `dispatch-record.cjs clear-many --stdin` as
-  soon as a group of PRs is merged, parked, or handed to a person; `clear <T>`
-  remains the one-ticket form, and
+  `mark` form only for one PR. Run
+  `dispatch-record.cjs clear-many --stdin --graph <project>/.planning/graph` as
+  soon as a group of PRs is merged, parked, or handed to a person; stdin must
+  carry the returned `{ticket, dispatch_id}` pair for each completion so a
+  delayed result cannot clear a newer dispatch. `clear <T>` remains the
+  one-ticket form, and
   `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend>`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the

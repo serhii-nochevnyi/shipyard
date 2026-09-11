@@ -70,9 +70,11 @@ function graphFromArgs(argv) {
 }
 
 function graphGuard(dir, explicit) {
-  if (!explicit && !fs.existsSync(path.join(dir, 'tickets.json'))) {
+  if (!fs.existsSync(path.join(dir, 'tickets.json'))) {
     fail(
-      `no ticket graph at ${dir} — refusing to write an attribution ledger nobody will read.\n` +
+      `no ticket graph at ${dir} — refusing to write an attribution ledger nobody will read` +
+      (explicit ? ' (the explicitly selected graph is invalid).' : '.\n') +
+      (explicit ? '\n' : '') +
       '  Run this from the conveyor project, or pass --graph <project>/.planning/graph.'
     );
   }
@@ -298,6 +300,10 @@ function main(argv) {
 module.exports = {
   LEDGER_NAME,
   RUNTIME_PROVIDER,
+  BACKENDS,
+  KINDS,
+  COMPLETION_STATES,
+  EFFORT_STATES,
   normalizeRecord,
   parseLedger,
   readLedger,

@@ -6,6 +6,8 @@
 // provenance without guessing when a runtime hides it.
 const fs = require('node:fs');
 const path = require('node:path');
+const pipeline = require('./pipeline-config.cjs');
+const attributionRules = require('./usage-attribution.cjs');
 
 const FIELDS = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens'];
 const CODEX_FIELDS = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens',
@@ -46,7 +48,32 @@ function attributionShape(record, index) {
     return { error: `attribution ${index} provider does not match runtime ${runtime}` };
   }
   const kind = record.kind || 'ordinary';
-  if (!['ordinary', 'advisor'].includes(kind)) return { error: `attribution ${index} has an unknown kind` };
+  if (!attributionRules.KINDS.has(kind)) return { error: `attribution ${index} has an unknown kind` };
+  if (!record.dispatch_id) return { error: `attribution ${index} has no dispatch_id` };
+  if (!record.session_id && !record.request_id && !record.message_id) {
+    return { error: `attribution ${index} has no transcript identity` };
+  }
+  if (record.backend !== undefined && !attributionRules.BACKENDS.has(record.backend)) {
+    return { error: `attribution ${index} has an unknown backend` };
+  }
+  if (record.role !== undefined && !pipeline.ROLES.includes(record.role)) {
+    return { error: `attribution ${index} has an unknown role` };
+  }
+  if (record.task_level !== undefined && !pipeline.TASK_LEVELS.includes(record.task_level)) {
+    return { error: `attribution ${index} has an unknown task level` };
+  }
+  if (record.model !== undefined && !pipeline.TIERS.includes(record.model)) {
+    return { error: `attribution ${index} has an unknown requested model` };
+  }
+  for (const field of ['effort', 'effort_applied', 'observed_effort']) {
+    if (record[field] !== undefined && !attributionRules.EFFORT_STATES.has(record[field])) {
+      return { error: `attribution ${index} has an invalid ${field}` };
+    }
+  }
+  if (record.completion_status !== undefined
+      && !attributionRules.COMPLETION_STATES.has(record.completion_status)) {
+    return { error: `attribution ${index} has an invalid completion_status` };
+  }
   return { ...record, runtime, kind };
 }
 
@@ -57,6 +84,12 @@ function attributionSignature(record) {
     record.observed_model || null, record.observed_effort || null,
     record.backend || null, record.task_level || null,
   ]);
+}
+
+function codexTurnKey(sessionId, source, turnId) {
+  return JSON.stringify(sessionId
+    ? ['session', sessionId, turnId]
+    : ['source', source || null, turnId]);
 }
 
 function attributionIndex(records, warn) {
@@ -188,10 +221,14 @@ function report(sources, options = {}) {
       if (!row || typeof row !== 'object') continue;
       if (row.type === 'session_meta') session = row.payload?.id || row.payload?.session_id || null;
       if (row.type === 'turn_context' && row.payload?.turn_id) {
-        codexTurnMetadata.set(row.payload.turn_id, {
+        const turnId = row.payload.turn_id;
+        const metadata = {
           model: row.payload.model || null,
           effort: row.payload.effort || null,
-        });
+        };
+        const turnSession = row.payload.session_id || session;
+        if (turnSession) codexTurnMetadata.set(codexTurnKey(turnSession, sourceName, turnId), metadata);
+        if (sourceName) codexTurnMetadata.set(codexTurnKey(null, sourceName, turnId), metadata);
       }
       const msg = row.message;
       if (row.type === 'assistant' && msg?.usage != null && msg.model !== '<synthetic>') {
@@ -270,10 +307,12 @@ function report(sources, options = {}) {
             }
           } else {
             const response = current.responses.get(responseId) || {
-              at: row.timestamp, response_id: responseId, turn_id: payload.turn_id || null, values: {},
+              at: row.timestamp, response_id: responseId, turn_id: payload.turn_id || null,
+              source: sourceName, values: {},
             };
             response.at = response.at && Date.parse(response.at) >= Date.parse(row.timestamp) ? response.at : row.timestamp;
             response.turn_id ||= payload.turn_id || null;
+            response.source ||= sourceName;
             mergeUsage(response.values, responseUsage, CODEX_FIELDS, 'Codex response');
             current.responses.set(responseId, response);
           }
@@ -313,7 +352,7 @@ function report(sources, options = {}) {
     const match = findAttribution(context, attributionRecords, warn);
     const metadata = metadataFor(context, rawModel, rawEffort, match, warn);
     observations.push({
-      provider: context.runtime,
+      provider: RUNTIME_PROVIDER[context.runtime],
       kind: context.kind,
       unit,
       finalized,
@@ -404,7 +443,10 @@ function report(sources, options = {}) {
     if (current.format === 'current' && current.responses.size && current.responseUsageComplete
         && responseFieldsComplete && !cumulative.invalid && responsesReconcile) {
       for (const response of [...current.responses.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
-        const turn = response.turn_id ? codexTurnMetadata.get(response.turn_id) : null;
+        const turn = response.turn_id
+          ? codexTurnMetadata.get(codexTurnKey(sessionId, response.source, response.turn_id))
+            || codexTurnMetadata.get(codexTurnKey(null, response.source, response.turn_id))
+          : null;
         addObservation({
           runtime: 'codex', kind: 'ordinary', sources: [...current.sources],
           session_id: sessionId,

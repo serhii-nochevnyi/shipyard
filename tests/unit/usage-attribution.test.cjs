@@ -102,6 +102,21 @@ test('the CLI records a batch and can list the latest revisions', () => {
   }
 });
 
+test('an explicit graph path must contain the project marker before writing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-uattr-missing-'));
+  const missing = path.join(dir, 'not-a-graph');
+  try {
+    const result = spawnSync(process.execPath, [CLI, 'record', '--stdin', '--graph', missing], {
+      cwd: dir, input: JSON.stringify(base()), encoding: 'utf8',
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /explicitly selected graph is invalid/);
+    assert.equal(fs.existsSync(missing), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 const claude = {
   type: 'assistant', sessionId: 'claude-session', requestId: 'claude-request',
   message: {
