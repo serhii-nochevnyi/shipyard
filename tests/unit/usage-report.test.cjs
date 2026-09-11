@@ -154,12 +154,19 @@ test('CLI replays explicit paths once, excludes content, and diagnoses malformed
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'usage-cli-'));
  try {
   const p=path.join(dir,'a.jsonl');fs.writeFileSync(p,JSON.stringify(claude({input_tokens:1,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2},{content:'SECRET-PROMPT',stop_reason:'end_turn'}))+'\n');
+  const unreadable=path.join(dir,'dir.jsonl');fs.mkdirSync(unreadable);
   const cli=path.resolve(__dirname,'../../plugins/delivery-pipeline/scripts/usage-report.cjs');
   let r=spawnSync(process.execPath,[cli,p,p],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);
   assert.equal(JSON.parse(r.stdout).groups[0].input_tokens,1);assert.ok(!r.stdout.includes('SECRET-PROMPT'));
   fs.appendFileSync(p,'broken\n');r=spawnSync(process.execPath,[cli,p],{encoding:'utf8'});
   assert.equal(r.status,1);assert.equal(JSON.parse(r.stdout).comparable,false);
-  r=spawnSync(process.execPath,[cli,path.join(dir,'missing')],{encoding:'utf8'});assert.equal(r.status,2);
+  r=spawnSync(process.execPath,[cli,unreadable],{encoding:'utf8'});assert.equal(r.status,1,r.stderr);
+  let out=JSON.parse(r.stdout);assert.equal(out.comparable,false);
+  assert.ok(out.warnings.some((w)=>w.includes('unreadable transcript path')));
+  r=spawnSync(process.execPath,[cli,p,'--attribution',path.join(dir,'missing-attribution.jsonl')],{encoding:'utf8'});
+  assert.equal(r.status,1,r.stderr);out=JSON.parse(r.stdout);
+  assert.equal(out.groups[0].input_tokens,1);
+  assert.ok(out.warnings.some((w)=>w.includes('unreadable attribution path')));
  } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
 

@@ -216,9 +216,11 @@ Set `delivery_pipeline.model_ladder` to `adaptive` to route by task level:
 | recovery | `repeat_exhausted` or contested judgement | ceiling route | `-deep` ceiling agent |
 
 The resolver guards missing evidence into the complex lane and records the
-classification in `route`/dispatch telemetry. The integrator remains on its
-ceiling in both modes. The default remains `conservative`; the current project
-enables `adaptive` in `.planning/config.json`.
+classification in `route`/dispatch telemetry. On Claude, the integrator reaches
+the ceiling only when an earned ceiling route fires; on Codex, the generated
+integrator file stays on the palette ceiling. The default remains
+`conservative`; the current project enables `adaptive` in
+`.planning/config.json`.
 
 The floor is `opus` for every role that writes code or renders a judgement: the
 conveyor's failure mode is a wrong green reaching an epic, and every mechanical

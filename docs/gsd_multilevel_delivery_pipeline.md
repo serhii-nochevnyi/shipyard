@@ -735,7 +735,8 @@ judgement for roles whose route supports that escalation. Claude
 uses `sonnet` for the routine lane and `opus` for the quality lanes. Codex uses
 the first palette entry for routine/complex work and selects generated
 `-critical`/`-deep` files at the ceiling where a role has a distinct variant;
-the integrator remains at the ceiling in both modes. Missing evidence stays in
+the generated Codex integrator file remains at the ceiling, while Claude
+reaches that ceiling only when an earned route fires. Missing evidence stays in
 the complex lane and is reported in dispatch telemetry. This is a canary
 configuration with no savings claim; evaluate it through the ADR-011 baseline
 and quality gates before changing the policy further.

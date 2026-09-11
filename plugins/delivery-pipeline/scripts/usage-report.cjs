@@ -725,6 +725,28 @@ function readJsonl(file, malformed, label) {
   });
 }
 
+function loadJsonlInputs(files, malformed, label, warnings, asSource) {
+  const loaded = [];
+  const seen = new Set();
+  for (const file of files) {
+    let resolved = null;
+    try { resolved = fs.realpathSync(file); }
+    catch (error) {
+      warnings.push(`${file}: unreadable ${label} path (${error.message})`);
+      continue;
+    }
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    try {
+      const rows = readJsonl(resolved, malformed, label);
+      loaded.push(asSource ? { source: resolved, rows } : rows);
+    } catch (error) {
+      warnings.push(`${resolved}: unreadable ${label} path (${error.message})`);
+    }
+  }
+  return loaded;
+}
+
 function main(args) {
   if (args.length === 1 && args[0] === '--help') {
     console.log('usage: node usage-report.cjs <transcript.jsonl> [more.jsonl ...] [--attribution ledger.jsonl]');
@@ -734,17 +756,16 @@ function main(args) {
   const parsed = parseCli(args);
   if (!parsed.transcripts.length) throw new Error('Expected at least one explicit transcript JSONL path; see --help');
   const malformed = [];
-  const sources = [...new Set(parsed.transcripts.map((file) => fs.realpathSync(file)))].map((file) => ({
-    source: file,
-    rows: readJsonl(file, malformed, 'transcript'),
-  }));
+  const pathWarnings = [];
+  const sources = loadJsonlInputs(parsed.transcripts, malformed, 'transcript', pathWarnings, true);
   const attributions = parsed.attribution.length
-    ? [...new Set(parsed.attribution.map((file) => fs.realpathSync(file)))].flatMap((file) => readJsonl(file, malformed, 'attribution'))
+    ? loadJsonlInputs(parsed.attribution, malformed, 'attribution', pathWarnings, false).flat()
     : undefined;
   const result = report(sources, { ...(attributions === undefined ? {} : { attributions }) });
+  result.warnings.push(...pathWarnings);
   result.warnings.push(...malformed);
   result.warnings = [...new Set(result.warnings)];
-  if (malformed.length) result.comparable = false;
+  if (pathWarnings.length || malformed.length) result.comparable = false;
   console.log(JSON.stringify(result, null, 2));
   if (!result.comparable) process.exitCode = 1;
 }

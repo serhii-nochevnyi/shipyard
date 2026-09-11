@@ -90,8 +90,8 @@ does not mix duplicate legacy snapshots into the total. Claude streaming updates
 are deduplicated by stable message identity, and late updates replace incomplete
 maxima.
 
-The report remains read-only and rescans the supplied files. A malformed
-transcript or attribution line produces a warning and a non-comparable report;
-it never becomes zero usage. Historical transcripts without a dispatch ledger
-are still useful for raw model counts, but they cannot establish ticket-level
-efficiency.
+The report remains read-only and rescans the supplied files. A malformed or
+unreadable transcript or attribution input produces a warning and a
+non-comparable report; it never becomes zero usage. Historical transcripts
+without a dispatch ledger are still useful for raw model counts, but they
+cannot establish ticket-level efficiency.

@@ -413,9 +413,10 @@ On the Workflow path, routine work resolves to `sonnet`, complex work keeps
 routine/complex work uses the first palette entry and critical/recovery work uses
 the generated
 `-critical`/`-deep` file at the last palette entry for roles that have those
-variants. The integrator remains on the ceiling in both modes and has no
-variant. Missing facts keep a task in the complex lane and produce a warning;
-they never silently buy a cheaper lane.
+variants. The Codex integrator file stays on the palette ceiling and has no
+variant; Claude reaches that ceiling only through its earned ceiling route.
+Missing facts keep a task in the complex lane and produce a warning; they never
+silently buy a cheaper lane.
 
 **The Agent tool takes no `effort` parameter at all** (verified against the live
 schema, CLI 2.1.263): only Workflow's `agent()` carries it. So effort is ENFORCED
@@ -594,10 +595,11 @@ from the journal, never guessed:
   the conform gate has already refused this PR once, so the re-judgement goes to
   `$shipyard-arch-review-deep`.
 
-The integrator's ordinary file stays at the ceiling in both modes and has no
-critical or deep variant. Where the palette has no second entry (or the host's
-CLI is too old to configure it) other variants are not generated — check that
-the selected file exists and use the selector's `fallback` field.
+The Codex integrator file stays at the ceiling and has no critical or deep
+variant. On Claude, the same role reaches the ceiling only through an earned
+route. Where the palette has no second entry (or the host's CLI is too old to
+configure it) other variants are not generated — check that the selected file
+exists and use the selector's `fallback` field.
 
 Scripts (the deterministic layer — do NOT improvise git/gh by hand where a script
 exists):
