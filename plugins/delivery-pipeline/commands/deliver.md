@@ -1413,7 +1413,7 @@ may be dispatched at all: fix the file.
 
 4c. The executor has returned, so the ticket is yours again. Clear the exact
    dispatch returned by the launch, before the gates below:
-   `dispatch-record.cjs clear <T> <dispatch_id>`. Do this BEFORE the gates below — their verdict
+   `dispatch-record.cjs clear <T> <dispatch_id> --graph <project>/.planning/graph`. Do this BEFORE the gates below — their verdict
    (including `blocked`) is a fact about a ticket nobody is working on, and a
    record left standing over an escalation would hide it from the next run for as
    long as it takes to time out.

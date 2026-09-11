@@ -17,6 +17,8 @@ const sum = (values) => values.every(number) ? values.reduce((a, b) => a + b, 0)
 const RUNTIME_PROVIDER = { claude: 'anthropic', codex: 'openai' };
 const concreteEffort = (value) => Array.isArray(pipeline.EFFORTS) && pipeline.EFFORTS.includes(value);
 const validModel = (value) => typeof value === 'string' && value.trim().length > 0;
+const isCurrentCodexUsage = (row) => row?.type === 'token_usage_record'
+  && Boolean(row.payload?.thread_token_usage || row.payload?.total_token_usage);
 
 function valuesOf(context, key) {
   const plural = `${key}s`;
@@ -246,7 +248,7 @@ function report(sources, options = {}) {
     // visited. Codex files can place a token_usage_record before metadata.
     codexSourceSessions.set(source, metaSession);
     for (const row of rows) {
-      if (row?.type !== 'token_usage_record' || !row.payload?.thread_token_usage) continue;
+      if (!isCurrentCodexUsage(row)) continue;
       const id = row.payload.session_id || metaSession;
       if (id) currentCodexSessions.add(id);
     }
@@ -264,10 +266,9 @@ function report(sources, options = {}) {
     // Recent Codex transcripts contain both the legacy event_msg snapshot and
     // the newer token_usage_record for the same response. They expose related
     // but different cumulative views, so combining them makes counters appear
-    // to go backwards. Prefer the thread-level records for that source and
+    // to go backwards. Prefer current cumulative records for that source and
     // retain the legacy adapter for older files that have no current records.
-    const hasCurrentCodexUsage = rows.some((row) =>
-      row?.type === 'token_usage_record' && row.payload?.thread_token_usage);
+    const hasCurrentCodexUsage = rows.some(isCurrentCodexUsage);
     const sourceName = source.source || null;
     for (const row of rows) {
       if (!row || typeof row !== 'object') continue;
@@ -354,26 +355,32 @@ function report(sources, options = {}) {
           entries: [], sources: new Set(), format: 'legacy', responses: new Map(), responseUsageComplete: true,
         };
         if (sourceName) current.sources.add(sourceName);
-        if (row.type === 'token_usage_record' && payload.thread_token_usage) {
+        if (isCurrentCodexUsage(row)) {
           current.format = 'current';
-          const responseId = payload.response_id;
-          const responseUsage = payload.usage;
-          if (!responseId || typeof responseUsage !== 'object' || Array.isArray(responseUsage)) {
-            current.responseUsageComplete = false;
-            if (!responseId) warn('Codex current usage record has no response identity');
-            if (responseUsage !== undefined && (typeof responseUsage !== 'object' || Array.isArray(responseUsage))) {
-              warn('Codex response usage object is malformed');
+          // `total_token_usage` is a supported cumulative-only shape. It has no
+          // per-response evidence to reconcile, so do not turn its absence into
+          // a malformed-response warning. The richer thread shape still gets
+          // split by response when its evidence is present.
+          if (payload.thread_token_usage) {
+            const responseId = payload.response_id;
+            const responseUsage = payload.usage;
+            if (!responseId || typeof responseUsage !== 'object' || Array.isArray(responseUsage)) {
+              current.responseUsageComplete = false;
+              if (!responseId) warn('Codex current usage record has no response identity');
+              if (responseUsage !== undefined && (typeof responseUsage !== 'object' || Array.isArray(responseUsage))) {
+                warn('Codex response usage object is malformed');
+              }
+            } else {
+              const response = current.responses.get(responseId) || {
+                at: row.timestamp, response_id: responseId, turn_id: payload.turn_id || null,
+                source: sourceName, values: {},
+              };
+              response.at = response.at && Date.parse(response.at) >= Date.parse(row.timestamp) ? response.at : row.timestamp;
+              response.turn_id ||= payload.turn_id || null;
+              response.source ||= sourceName;
+              mergeUsage(response.values, responseUsage, CODEX_FIELDS, 'Codex response');
+              current.responses.set(responseId, response);
             }
-          } else {
-            const response = current.responses.get(responseId) || {
-              at: row.timestamp, response_id: responseId, turn_id: payload.turn_id || null,
-              source: sourceName, values: {},
-            };
-            response.at = response.at && Date.parse(response.at) >= Date.parse(row.timestamp) ? response.at : row.timestamp;
-            response.turn_id ||= payload.turn_id || null;
-            response.source ||= sourceName;
-            mergeUsage(response.values, responseUsage, CODEX_FIELDS, 'Codex response');
-            current.responses.set(responseId, response);
           }
         }
         current.entries.push({ at: row.timestamp, values });
@@ -523,12 +530,13 @@ function report(sources, options = {}) {
       continue;
     }
 
-    if (current.format === 'current') {
+    if (current.format === 'current'
+        && (current.responses.size || !current.responseUsageComplete || cumulative.invalid)) {
       const reason = !current.responseUsageComplete || !responseFieldsComplete
         ? 'incomplete response usage'
         : cumulative.invalid
           ? 'decreased cumulative counters'
-          : 'response usage did not reconcile with cumulative thread usage';
+          : 'response usage did not reconcile with cumulative usage';
       warn(`Codex current ${reason}; using the cumulative session total`);
     }
     const prior = cumulative.latest;

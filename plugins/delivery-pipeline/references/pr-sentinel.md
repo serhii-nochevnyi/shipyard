@@ -90,12 +90,15 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   <project>/.planning/graph`): a hypothesis already in it was tried and did not
   hold, so it is EXCLUDED, not a candidate to refine.
 
-  **`critical` — the resolver classified the dispatch from high risk or a
-  checkpoint.** On Codex, select the matching `-critical` agent file with
+  **`critical` — the resolver classified this `ci-fix` dispatch from high risk
+  or a checkpoint.** On Codex, select the matching `-critical` agent file with
   `codex-agent.cjs select ci-fix --json --checkpoint [--project-dir <project>]`
   and record that file alongside the resolver's model, effort and route. Run
   it from the conveyor project, or pass `--project-dir <project>` from a ticket
-  worktree so the selector reads the project's adaptive policy.
+  worktree so the selector reads the project's adaptive policy. The
+  `pr-sentinel` guard is mechanical and has no first-attempt `-critical` file:
+  checkpointed sentinel work stays on `shipyard-pr-sentinel`, while
+  `shipyard-pr-sentinel-deep` is reserved for `repeat_exhausted`.
 
   **`repeat_exhausted` — the signature came back AFTER a `rethink`.** The deeper
   effort has already been spent on this failure, so repeating it buys nothing.
@@ -427,7 +430,7 @@ reinit is not optional.
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
   delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
-  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend>`
+  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend> --graph <project>/.planning/graph`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as

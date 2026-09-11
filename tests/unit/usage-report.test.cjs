@@ -76,6 +76,17 @@ test('current Codex usage record supplies session identity without session_meta'
  assert.equal(r.observations[0].unit, 'session_cumulative');
  assert.ok(!r.warnings.some((w) => w.includes('without session identity')));
 });
+test('total_token_usage records take the current path and suppress legacy duplicates', () => {
+ const total = { ...codexCurrent, payload: { ...codexCurrent.payload } };
+ delete total.payload.thread_token_usage;
+ total.payload.total_token_usage = { ...codexCurrent.payload.thread_token_usage };
+ const r = report([{ source: 'mixed-current.jsonl', rows: [codex(250), total, meta] }]);
+ assert.equal(r.observations.length, 1);
+ assert.equal(r.observations[0].session_id, 'codex-session');
+ assert.equal(r.observations[0].unit, 'session_cumulative');
+ assert.equal(r.groups[0].input_tokens, 300);
+ assert.ok(!r.warnings.some((warning) => warning.includes('current response usage')));
+});
 test('Codex token usage before session metadata still uses the pre-scanned session', () => {
  const early = { ...codexCurrent, payload: { ...codexCurrent.payload } };
  delete early.payload.session_id;

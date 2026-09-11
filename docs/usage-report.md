@@ -82,8 +82,8 @@ The JSON contains:
 `ambiguous`, `mismatch` or `unattributed` row is excluded from the ready counts.
 Older Codex `token_count` and current `token_usage_record` totals are cumulative
 per session. For the current format, the final deduplicated
-`thread_token_usage` snapshot is the source of the session total. The collector
-uses per-response usage only when those responses reconcile exactly with that
+`thread_token_usage` or `total_token_usage` snapshot is the source of the session
+total. The collector uses per-response usage only when those responses reconcile exactly with that
 snapshot, then splits the reconciled total by the model/effort from
 `turn_context`; otherwise it retains the cumulative session row and warns. It
 does not mix duplicate legacy snapshots into the total. Claude streaming updates
