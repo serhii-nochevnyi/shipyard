@@ -220,6 +220,46 @@ test('zero discovery candidates are distinct from an ambiguous result', () => {
   assert.strictEqual(ambiguous.executable, false);
   assert.strictEqual(ambiguous.candidates.length, 2);
   assert.match(ambiguous.reason, /multiple checkouts/);
+  assert.deepStrictEqual(
+    ambiguous.candidates.map((candidate) => candidate.origin),
+    ['acme/service', 'acme/service'],
+    'candidate output must expose only the normalized origin identity'
+  );
+});
+
+test('discovery ignores symlinks that escape the searched root and directories inside a parent repository', () => {
+  const parent = tempDir();
+  const root = path.join(parent, 'root');
+  const projectDir = path.join(root, 'project');
+  const outside = path.join(parent, 'outside');
+  fs.mkdirSync(root);
+  fs.mkdirSync(projectDir);
+  const escaped = repoAt(outside, 'git@github.com:acme/service.git');
+  fs.symlinkSync(escaped, path.join(root, 'linked-checkout'), 'dir');
+
+  const parentRepo = repoAt(path.join(parent, 'parent-repo'), 'git@github.com:acme/service.git');
+  fs.mkdirSync(path.join(parentRepo, 'nested-directory'));
+  const result = mod.discoverRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: root },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.resolution, 'undiscovered');
+  assert.deepStrictEqual(result.candidates, []);
+
+  const nestedResult = mod.discoverRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: path.dirname(parentRepo) },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(nestedResult.resolution, 'ambiguous');
+  assert.deepStrictEqual(
+    nestedResult.candidates.map((candidate) => candidate.path),
+    [escaped, parentRepo].sort(),
+    'only real direct child checkouts may be candidates'
+  );
 });
 
 test('resolveRepository keeps a valid configured checkout ahead of discovery', () => {
@@ -243,6 +283,28 @@ test('the CLI rejects an unknown slug instead of treating it as a checkout reque
   const result = run(['configured', 'not-a-slug', '--json']);
   assert.strictEqual(result.status, 2);
   assert.match(result.stderr, /owner\/name/);
+});
+
+test('the CLI rejects option-like values for value-taking flags', () => {
+  for (const flags of [
+    ['--ticket', '--json'],
+    ['--project-dir', '--json'],
+  ]) {
+    const result = run(['resolve', 'acme/service', ...flags]);
+    assert.strictEqual(result.status, 2, `${flags[0]} must not consume ${flags[1]} as its value`);
+    assert.match(result.stderr, new RegExp(`${flags[0]} requires a value`));
+    assert.match(result.stderr, /the flag "--json"/);
+  }
+});
+
+test('human-readable discovery output names the selected resolution', () => {
+  const parent = tempDir();
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(projectDir);
+  repoAt(path.join(parent, 'checkout-with-an-unrelated-name'), 'git@github.com:acme/service.git');
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir]);
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.match(result.stdout, /acme\/service: discovered checkout /);
 });
 
 test('state-sync and deliver name the configured resolver caller', () => {

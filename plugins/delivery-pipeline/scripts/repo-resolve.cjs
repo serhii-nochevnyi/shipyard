@@ -156,6 +156,15 @@ function immediateDirectories(root) {
     .sort();
 }
 
+function isDirectChild(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative !== ''
+    && !relative.startsWith(`..${path.sep}`)
+    && relative !== '..'
+    && !path.isAbsolute(relative)
+    && !relative.includes(path.sep);
+}
+
 function discovered(ticket, repo, candidate, candidates, searchedRoots) {
   return resolved(ticket, repo, null, candidate.path, {
     resolution: 'discovered',
@@ -182,6 +191,13 @@ function discoverRepository(input) {
   const candidates = [];
   const seen = new Set();
   for (const root of searchedRoots) {
+    let canonicalRoot;
+    try {
+      canonicalRoot = fs.realpathSync(root);
+      if (!fs.statSync(canonicalRoot).isDirectory()) continue;
+    } catch {
+      continue;
+    }
     for (const directory of immediateDirectories(root)) {
       let candidatePath;
       try {
@@ -190,13 +206,22 @@ function discoverRepository(input) {
       } catch {
         continue;
       }
+      // A root may contain symlinks, but discovery must remain bounded by the
+      // root's real path and its one-level boundary. A link to a checkout
+      // elsewhere is not an implicit declaration of that location.
+      if (!isDirectChild(canonicalRoot, candidatePath)) continue;
       if (seen.has(candidatePath)) continue;
       seen.add(candidatePath);
       const repositoryRoot = gitRepositoryRoot(candidatePath);
-      if (!repositoryRoot) continue;
+      // `git -C` walks upward. A plain directory inside a larger repository is
+      // not a checkout discovered at this scan depth.
+      if (!repositoryRoot || path.resolve(repositoryRoot) !== candidatePath) continue;
       const origin = gitRemoteOrigin(repositoryRoot);
-      if (normalizeOrigin(origin) !== repo.toLowerCase()) continue;
-      candidates.push({ path: repositoryRoot, origin });
+      const normalized = normalizeOrigin(origin);
+      if (normalized !== repo.toLowerCase()) continue;
+      // Keep only the identity used for matching. The raw remote may contain
+      // credentials in an HTTPS URL and must never cross this output boundary.
+      candidates.push({ path: repositoryRoot, origin: normalized });
     }
   }
   candidates.sort((a, b) => a.path.localeCompare(b.path));
@@ -298,16 +323,20 @@ function cliError(message) {
 
 function parseCli(argv) {
   const options = { command: argv.shift() || null, repo: null, ticket: null, projectDir: process.cwd(), json: false };
+  const valueFor = (flag, value) => {
+    if (value === undefined || value.startsWith('--')) {
+      invalidArgument(`${flag} requires a value (got ${value === undefined ? 'nothing' : `the flag "${value}"`})`);
+    }
+    return value;
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') {
       options.json = true;
     } else if (arg === '--ticket') {
-      options.ticket = argv[++i];
-      if (options.ticket === undefined) invalidArgument('--ticket requires a value');
+      options.ticket = valueFor('--ticket', argv[++i]);
     } else if (arg === '--project-dir') {
-      options.projectDir = argv[++i];
-      if (options.projectDir === undefined) invalidArgument('--project-dir requires a value');
+      options.projectDir = valueFor('--project-dir', argv[++i]);
     } else if (arg.startsWith('--')) {
       invalidArgument(`unknown option ${arg}`);
     } else if (options.repo === null) {
@@ -319,7 +348,7 @@ function parseCli(argv) {
   if (!['configured', 'discover', 'resolve'].includes(options.command)) {
     invalidArgument('usage: repo-resolve.cjs <configured|discover|resolve> <owner/name> [--ticket <T-id>] [--project-dir <path>] [--json]');
   }
-  if (options.repo === null) invalidArgument('configured requires an owner/name repository slug');
+  if (options.repo === null) invalidArgument('an owner/name repository slug is required');
   return options;
 }
 
@@ -342,7 +371,7 @@ if (require.main === module) {
     if (options.json) {
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     } else if (result.executable) {
-      process.stdout.write(`${result.repo}: configured checkout ${result.repository_root}\n`);
+      process.stdout.write(`${result.repo}: ${result.resolution} checkout ${result.repository_root}\n`);
     } else {
       process.stdout.write(`${result.repo}: track-only — ${result.reason}\n`);
     }
