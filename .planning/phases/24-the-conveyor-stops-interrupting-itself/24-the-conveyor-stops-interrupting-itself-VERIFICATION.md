@@ -1,9 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 16440c72f52e6fe4b10995d69e9f3446f1f6c51ce3ff27d7af9d1a0bdf17ebf8
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
 phase: 24
-verified: 2026-09-07T20:21:49.178Z
 status: gaps_found
-shipyard_source_fingerprint: 16440c72f52e6fe4b10995d69e9f3446f1f6c51ce3ff27d7af9d1a0bdf17ebf8
+shipyard_source_fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
 ---
 
 # Phase 24: The conveyor stops interrupting itself — Verification Projection
@@ -16,7 +15,7 @@ shipyard_source_fingerprint: 16440c72f52e6fe4b10995d69e9f3446f1f6c51ce3ff27d7af9
 |---|---|---|
 | Every phase plan is accounted for | 11/11 delivery records are merged | ✓ VERIFIED |
 | Integration is coherent | integration evidence records a finding or failed verdict | ✗ FAILED |
-| Verification evidence is present | integration evidence includes repository-local verification facts | ✓ VERIFIED |
+| Verification evidence is present | integration evidence records a finding or failed verdict | ✗ FAILED |
 
 ## Plan Evidence
 

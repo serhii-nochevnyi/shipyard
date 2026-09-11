@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 16440c72f52e6fe4b10995d69e9f3446f1f6c51ce3ff27d7af9d1a0bdf17ebf8
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
 phase: 33
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 16440c72f52e6fe4b10995d69e9f3446f1f6c51ce3ff27d7af9d1a0bdf17ebf8
+shipyard_source_fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
 ---
 
 # Phase 33: Reduce orchestration context and transfer sessions safely — UAT Projection
@@ -24,4 +24,4 @@ actual: pending — INTEGRATION.md is missing
 ### 3. Phase verification is evidence-backed
 result: pending
 expected: the phase verification projection is not green without evidence
-actual: pending; pending — INTEGRATION.md is missing verification evidence
+actual: pending

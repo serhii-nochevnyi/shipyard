@@ -888,20 +888,20 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/98",
     "pr_base": "epic/35-gsd-and-shipyard-workflow-loop",
     "pr_created_at": "2026-09-10T18:53:33Z",
-    "head_sha": "2814f5ec2b4465ae5faab308cfc45d72783ccc18",
-    "merge_state": "CLEAN",
+    "head_sha": "13e858da2876b306270b1c8b8dff7f9d572b3a95",
+    "merge_state": "UNSTABLE",
     "behind_by": 0,
     "gate": {
       "arch-review": "conform",
       "drift-check": "fresh",
       "degenerate-green": "skipped",
       "checks": "green",
-      "head": "dd28ffb2ec9e3549d42d1f198fc6b732fcaa0e14"
+      "head": "e947caa0b5a6abe9e2b942c30d91b713afe47aba"
     },
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
@@ -921,9 +921,9 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/101",
     "pr_base": "ticket/T-35-02-wire-synchronization-into-both-gsd-runti",
     "pr_created_at": "2026-09-10T18:58:20Z",
-    "head_sha": "a0fd33f5df17fae4efac4b3cfe45aee6d2f06533",
-    "merge_state": "UNSTABLE",
-    "behind_by": 0,
+    "head_sha": "6a5c74c750e7f7b24e9f09a0b2710b390dba1837",
+    "merge_state": "UNKNOWN",
+    "behind_by": 6,
     "gate": {
       "arch-review": "conform",
       "drift-check": "fresh",
@@ -932,11 +932,12 @@
       "head": "9b1e810a7758a2067ce6c228495d5210bf4846ee"
     },
     "checks": {
-      "total": 1,
+      "total": 0,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
-      "unavailable": false
+      "unavailable": true,
+      "note": "no checks reported on the 'ticket/T-35-03-document-normalize-and-bootstrap-the-syn' branch"
     },
     "base": "ticket/T-35-02-wire-synchronization-into-both-gsd-runti",
     "base_reason": "T-35-02 is pr-open — cascade off ticket/T-35-02-wire-synchronization-into-both-gsd-runti; the sentinel retargets this PR onto epic/35-gsd-and-shipyard-workflow-loop when T-35-02 lands",

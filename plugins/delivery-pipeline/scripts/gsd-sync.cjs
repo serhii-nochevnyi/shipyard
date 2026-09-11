@@ -342,7 +342,7 @@ function integrationStatus(text) {
   // the body of a final passed review. Use the last explicit Verdict line as
   // the authority and only inspect the document preamble when no such line
   // exists; never downgrade a final pass because of retrospective prose.
-  const verdictLines = String(text).split(/\r?\n/).filter((line) => /verdict/i.test(line));
+  const verdictLines = String(text).split(/\r?\n/).filter((line) => /\bverdict\b/i.test(line));
   const explicit = verdictLines.length ? verdictLines[verdictLines.length - 1].toLowerCase() : '';
   if (/needs[- ]fix|gaps_found|failed/.test(explicit)) {
     return {
@@ -509,11 +509,11 @@ function projectRequirements(roadmapInfo, phases, evidenceByPhase, fingerprint, 
   return lines.join('\n');
 }
 
-function latestActivity(planRecords) {
+function latestActivity(planRecords, fallback = '2000-01-01T00:00:00.000Z') {
   const dates = planRecords.map((plan) => plan.merged_at || plan.delivery.since)
     .map((value) => Date.parse(value || ''))
     .filter(Number.isFinite);
-  return dates.length ? new Date(Math.max(...dates)).toISOString() : '2000-01-01T00:00:00.000Z';
+  return dates.length ? new Date(Math.max(...dates)).toISOString() : fallback;
 }
 
 function projectionBlockers(phases, planRecords, evidenceByPhase) {
@@ -717,7 +717,7 @@ function renderUat(phase, evidence, fingerprint) {
     '### 3. Phase verification is evidence-backed',
     `result: ${verificationResult}`,
     `expected: the phase verification projection is ${phaseStatus === 'passed' ? 'passed' : 'not green without evidence'}`,
-    `actual: ${phaseStatus}`,
+    `actual: ${phaseStatus}; ${evidence.verification.status} — ${evidence.verification.reason}`,
     '',
   ].join('\n');
 }

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 16440c72f52e6fe4b10995d69e9f3446f1f6c51ce3ff27d7af9d1a0bdf17ebf8
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
 gsd_state_version: '1.0'
 status: planning
 progress:
@@ -68,18 +68,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
+- T-35-02: delivery status is pr-open
+- T-35-03: delivery status is pr-open
 - Phase 20: INTEGRATION.md is missing
 - Phase 21: INTEGRATION.md is missing
 - Phase 22: INTEGRATION.md is missing
 - Phase 23: INTEGRATION.md is missing
 - Phase 24: integration evidence records a finding or failed verdict
 - Phase 25: integration evidence records a finding or failed verdict
-- Phase 27: integration evidence records a finding or failed verdict
-- Phase 28: integration evidence records a finding or failed verdict
-- Phase 30: phase has no PLAN files yet
-- Phase 31: phase has no PLAN files yet
-- Phase 33: phase has no PLAN files yet
-- Phase 34: phase has no PLAN files yet
 
 ## Deferred Items
 

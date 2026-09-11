@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 16440c72f52e6fe4b10995d69e9f3446f1f6c51ce3ff27d7af9d1a0bdf17ebf8
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
 phase: 32
 status: passed
 result: passed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 16440c72f52e6fe4b10995d69e9f3446f1f6c51ce3ff27d7af9d1a0bdf17ebf8
+shipyard_source_fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
 ---
 
 # Phase 32: Measure usage and make the backlog actionable — UAT Projection
@@ -24,4 +24,4 @@ actual: passed — integration evidence records passed
 ### 3. Phase verification is evidence-backed
 result: passed
 expected: the phase verification projection is passed
-actual: passed; passed — integration evidence includes repository-local verification facts
+actual: passed
