@@ -151,17 +151,17 @@
 | REQ-26 | Phase 25 | Complete |
 | REQ-27 | Phase 25 | Complete |
 | REQ-28 | Phase 25 | Complete |
-| REQ-29 | Phase 26 | In Progress |
-| REQ-30 | Phase 26 | In Progress |
-| REQ-31 | Phase 26 | In Progress |
-| REQ-32 | Phase 26 | In Progress |
-| REQ-33 | Phase 26 | In Progress |
-| REQ-34 | Phase 26 | In Progress |
-| REQ-35 | Phase 26 | In Progress |
-| REQ-36 | Phase 26 | In Progress |
-| REQ-37 | Phase 26 | In Progress |
-| REQ-38 | Phase 26 | In Progress |
-| REQ-39 | Phase 26 | In Progress |
+| REQ-29 | Phase 26 | Blocked |
+| REQ-30 | Phase 26 | Blocked |
+| REQ-31 | Phase 26 | Blocked |
+| REQ-32 | Phase 26 | Blocked |
+| REQ-33 | Phase 26 | Blocked |
+| REQ-34 | Phase 26 | Blocked |
+| REQ-35 | Phase 26 | Blocked |
+| REQ-36 | Phase 26 | Blocked |
+| REQ-37 | Phase 26 | Blocked |
+| REQ-38 | Phase 26 | Blocked |
+| REQ-39 | Phase 26 | Blocked |
 | REQ-40 | Phase 25 | Complete |
 | REQ-41 | Phase 25 | Complete |
 | REQ-45 | Phase 25 | Complete |

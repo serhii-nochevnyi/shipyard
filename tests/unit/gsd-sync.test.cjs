@@ -115,6 +115,19 @@ test('does not treat the uat-passed command name as a verification result', () =
   assert.match(verification, /no positive repository-local verification result/i);
 });
 
+test('surfaces failed verification evidence as a phase gap', () => {
+  const root = project({
+    integration: 'Verdict: passed\n\n## Verification evidence\n- test-fast: failed',
+  });
+  assert.equal(run(root).status, 0);
+  const dir = path.join(root, '.planning', 'phases', '01-foundation');
+  const uat = fs.readFileSync(path.join(dir, '01-foundation-UAT.md'), 'utf8');
+  const verification = fs.readFileSync(path.join(dir, '01-foundation-VERIFICATION.md'), 'utf8');
+  assert.match(uat, /^status: failed$/m);
+  assert.match(verification, /^status: gaps_found$/m);
+  assert.match(verification, /verification evidence records a failed check/i);
+});
+
 test('preserves wrapped roadmap requirement descriptions', () => {
   const root = project();
   write(path.join(root, '.planning', 'ROADMAP.md'), [

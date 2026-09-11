@@ -44,7 +44,7 @@ Progress: [██████████] 100%
 | 23 | 3 | 3 | pending |
 | 24 | 11 | 11 | gaps_found |
 | 25 | 6 | 6 | passed |
-| 26 | 15 | 15 | pending |
+| 26 | 15 | 15 | gaps_found |
 | 27 | 9 | 9 | gaps_found |
 | 28 | 9 | 9 | gaps_found |
 | 29 | 8 | 8 | passed |

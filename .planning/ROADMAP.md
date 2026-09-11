@@ -607,7 +607,7 @@ findings or turn a merged ticket count into a false phase pass.
 | 23 — The board tells the truth about itself | 3 | 3 | pending |
 | 24 — The conveyor stops interrupting itself | 11 | 11 | gaps_found |
 | 25 — The conveyor follows the models it runs on | 6 | 6 | passed |
-| 26 — Positive evidence before a mutation | 15 | 15 | pending |
+| 26 — Positive evidence before a mutation | 15 | 15 | gaps_found |
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |

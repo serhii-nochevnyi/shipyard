@@ -401,6 +401,9 @@ function phaseEvidence(phase, planRecords, integration) {
   if (integration.status === 'needs-fix') {
     status = 'gaps_found';
     reason = integration.reason;
+  } else if (verification.status === 'failed') {
+    status = 'gaps_found';
+    reason = verification.reason;
   } else if (incomplete.length) {
     reason = `${incomplete.length} plan(s) are not merged`;
   } else if (allMerged && integration.status === 'passed' && verification.status === 'passed') {
