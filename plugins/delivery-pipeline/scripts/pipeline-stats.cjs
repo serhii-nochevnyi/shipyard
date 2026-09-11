@@ -69,7 +69,8 @@ const journal = fs.existsSync(JOURNAL)
     })
   : [];
 
-const { config: cfg } = loadConfig(process.cwd());
+const loadedConfig = loadConfig(process.cwd());
+const { config: cfg } = loadedConfig;
 
 // One PR window PER REPO the graph touches. `state-sync` learned this the hard
 // way — watching the wrong repository made a ticket whose PR was merged next
@@ -268,6 +269,45 @@ const unknownRoles = [...new Set(
     .map((e) => e.role)
 )];
 
+// Model-ladder coverage is kept separate from ticket outcomes because a
+// dispatch can be recorded before its ticket changes state. The windowed view
+// makes this report useful for the current rollout while the ticket rows remain
+// lifetime facts. Missing fields are intentional findings: an old or inline
+// path that omits the resolver result cannot be used to tune the ladder.
+const ladderEvents = journal.filter((e) => e.event === 'dispatch' && withinWindow(e.ts));
+const countField = (field) => Object.fromEntries(
+  [...new Set(ladderEvents.map((e) => e[field]).filter((v) => v !== undefined && v !== null && v !== ''))]
+    .sort()
+    .map((value) => [value, ladderEvents.filter((e) => e[field] === value).length])
+);
+const ladder = {
+  mode: cfg.model_ladder,
+  policy_valid: loadedConfig.valid,
+  ...(loadedConfig.valid ? {} : { policy_error: loadedConfig.error }),
+  window: windowLabel,
+  dispatches: ladderEvents.length,
+  missing_model: ladderEvents.filter((e) => !e.model).length,
+  missing_effort: ladderEvents.filter((e) => !e.effort).length,
+  missing_effort_applied: ladderEvents.filter((e) => !e.effort_applied).length,
+  missing_route: ladderEvents.filter((e) => !e.reason).length,
+  missing_task_level: ladderEvents.filter((e) => !e.task_level).length,
+  missing_runtime: ladderEvents.filter((e) => !e.runtime).length,
+  missing_backend: ladderEvents.filter((e) => !e.backend).length,
+  missing_observed_model: ladderEvents.filter((e) => !e.observed_model).length,
+  missing_observed_effort: ladderEvents.filter((e) => !e.observed_effort).length,
+  missing_agent_file: ladderEvents.filter((e) => e.runtime === 'codex' && e.role !== 'executor' && !e.agent_file).length,
+  by_role: countField('role'),
+  by_task_level: countField('task_level'),
+  by_model: countField('model'),
+  by_effort: countField('effort'),
+  by_effort_applied: countField('effort_applied'),
+  by_runtime: countField('runtime'),
+  by_backend: countField('backend'),
+  by_agent_file: countField('agent_file'),
+  by_observed_model: countField('observed_model'),
+  by_observed_effort: countField('observed_effort'),
+};
+
 // Tickets the board keeps offering that no run ever takes. A run scopes itself
 // to the phase it is working, so a ticket from an older phase can sit under
 // `execute` indefinitely: never selected, therefore never drift-gated, therefore
@@ -297,6 +337,7 @@ if (asJson) {
     reuse_hits: reuseHits,
     journal_events: journal.length,
     prs_truncated: prsTruncated,
+    ladder,
   }, null, 2));
   process.exit(0);
 }
@@ -305,6 +346,29 @@ if (prsTruncated) {
 }
 if (unreachableRepos.length) {
   console.log(`⚠ could not list PRs for ${unreachableRepos.join(', ')} — every ticket in ${unreachableRepos.length > 1 ? 'those repos' : 'that repo'} reads as pending here regardless of what actually shipped`);
+}
+if (ladder.dispatches) {
+  console.log(
+    `ladder [${windowLabel}]: ${ladder.mode}, ${ladder.dispatches} dispatches; ` +
+    `${ladder.dispatches - ladder.missing_model}/${ladder.dispatches} with model, ` +
+    `${ladder.dispatches - ladder.missing_task_level}/${ladder.dispatches} with task level, ` +
+    `${ladder.dispatches - ladder.missing_effort_applied}/${ladder.dispatches} with applied effort, ` +
+    `${ladder.dispatches - ladder.missing_observed_model}/${ladder.dispatches} with observed model`
+  );
+  const gaps = [];
+  if (ladder.missing_model) gaps.push(`${ladder.missing_model} missing model`);
+  if (ladder.missing_effort) gaps.push(`${ladder.missing_effort} missing requested effort`);
+  if (ladder.missing_effort_applied) gaps.push(`${ladder.missing_effort_applied} missing applied effort`);
+  if (ladder.missing_route) gaps.push(`${ladder.missing_route} missing route`);
+  if (ladder.missing_task_level) gaps.push(`${ladder.missing_task_level} missing task level`);
+  if (ladder.missing_runtime) gaps.push(`${ladder.missing_runtime} missing runtime`);
+  if (ladder.missing_backend) gaps.push(`${ladder.missing_backend} missing backend`);
+  if (ladder.missing_agent_file) gaps.push(`${ladder.missing_agent_file} Codex dispatches missing agent file`);
+  if (ladder.missing_observed_model) gaps.push(`${ladder.missing_observed_model} missing observed model`);
+  if (ladder.missing_observed_effort) gaps.push(`${ladder.missing_observed_effort} missing observed effort`);
+  if (gaps.length) {
+    console.log(`⚠ [${windowLabel}] ladder telemetry gaps: ${gaps.join(', ')} — those dispatches cannot be compared for cost or quality`);
+  }
 }
 
 const pad = (v, w) => String(v ?? '—').padEnd(w);

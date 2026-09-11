@@ -101,7 +101,7 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role> --model <alias> --effort <level> --agent-id <launch id>` — an agent
+- `dispatch-record.cjs mark <T> <role> --model <alias> --effort <level> --task-level <level> --runtime <runtime> --backend <backend> --agent-id <launch id>` — an agent
   is working on it RIGHT NOW. The one fact here that is motion rather than a
   verdict, and the one the board could not see at all: nothing is pushed yet, so
   the live state still reads `execute`/`fix` and the stop gate refuses turns over
@@ -127,9 +127,15 @@ instead, and the front reads it back by itself:
   formats never compare and a live architecture verdict reads as stale.
   Add `--effort-applied <level>` **on the Workflow path only** — `agent()` carries
   an effort, the Agent tool has no such parameter, so an Agent-dispatched role runs
-  at the session's own effort whatever the ladder chose. Omitting the flag is the
-  honest record of that: absence means UNMEASURED, and the recorder will not fill
-  it in. Never pass the resolved value as the applied one.
+  at the session's own effort whatever the ladder chose. If the backend is known
+  not to support the parameter, pass `--effort-applied unsupported`; if it ran but
+  the host did not expose what was applied, pass `unknown`. Omitting the flag is
+  UNMEASURED, and the recorder will not fill it in. Never pass the resolved value
+  as the applied one.
+  When the runtime reports the concrete execution, add `--observed-model <id>`
+  and `--observed-effort <level|unsupported|unknown>`. These fields let the ladder report
+  compare requested, applied and observed values; omit them when the host gives
+  no reliable observation rather than guessing.
   **Pass the agent id the launch returned, verbatim** — the Workflow tool returns a
   task id, the Agent tool an agent id, and whichever you hold is what identifies the
   holder. This is `--route`'s provenance rule over a different subject: **never a
@@ -138,14 +144,30 @@ instead, and the front reads it back by itself:
   authorises a spend past itself — the one way this field can make the count too
   small, and nothing can validate it away. Holding no id at all, omit the flag: an
   unidentified record counts as its own agent, which is the safe direction.
-  On the Codex bundle add `--agent-file shipyard-<role>[-deep]` — the file you
+  On the Codex bundle add `--agent-file shipyard-<role>[-critical|-deep]` — the file you
   actually dispatched, which is where that runtime's model choice lives. That
   pattern is not 1:1 for every role, so check `dispatch-record.cjs`'s own mapping
   rather than assuming it: `research` dispatches ship as `shipyard-inv-research`
   (the investigation loop's own name for it, not `shipyard-research`), and
   `executor` has no agent file at all — an executor is dispatched by the main
   loop, not a `.toml`, so its `mark` omits `--agent-file` rather than naming a
-  file nothing ships. Naming a file the role does not claim is refused.
+  file nothing ships. Naming a file the role does not claim is refused. For
+  static Codex roles select the file from the same signals with
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json
+  [--project-dir <project>] [--risk …] [--files …] [--checkpoint]
+  [--signature-state …]`; pass its `agent_file` and `route` fields unchanged.
+  Run it from the conveyor project, or pass `--project-dir <project>` when the
+  caller is in a ticket worktree; generated agent files and project policy do
+  not have to live in the same directory. For `executor`, run the same
+  selector and pass its concrete `model` and `effort` to `spawn_agent` (or
+  `codex exec`) when that host surface advertises those overrides; its JSON
+  intentionally has `agent_file: null` and uses the project palette directly.
+  The selector's `model` is the concrete id: record it as
+  `--observed-model <model>`, while `route` supplies the shared tier alias and
+  requested effort. Do not pass the concrete id to `dispatch-record.cjs
+  --model`; that flag accepts the resolver tier alias.
+  `-critical` is the first-attempt lane for risky/checkpointed work; `-deep` is
+  recovery after `repeat_exhausted` or a contested judgement.
 Reserve `--parked` for what genuinely holds only for this session.
 
 **The ladder review, as one query.** Run it from the project (not a worktree) when
@@ -169,6 +191,14 @@ a ladder revision needs. The `UNCONFIRMED` bucket is not a defect in the data: i
 is the Agent path telling the truth about itself, and its SIZE is how much of the
 ladder is currently unverifiable. If it ever reads zero for `arch-review` or
 `pr-sentinel`, somebody has started filling the field in.
+
+For a machine-readable windowed report, use
+`node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs --json`. Its `ladder` object
+contains slices by role, task level, requested effort, applied effort, runtime,
+backend, observed model and (when runtime is Codex) the concrete `agent_file`.
+`effort_applied=unsupported` means the backend has no effort parameter;
+`unknown` means the host did not expose what ran. Those states remain visible but
+do not count as proof that a deeper repair rung was spent.
 
 `branched-needs-pr`/`publish` is a real bucket, not a curiosity: a branch that was
 pushed before its PR was opened (an executor died between the two) is unfinished
@@ -310,13 +340,15 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs model <role> [--json] [fl
          --contested          this judgement has already been faulted once
          --signature-state first|progress|repeat|repeat_exhausted|
                            flake_candidate|flake|plan_defect
-         --files <n>  --code-change|--no-code-change  --attempt <n>
-         --previous-failed    ← all accepted, telemetry only (see below)
+         --files <n>  --code-change|--no-code-change  --task-level <level>
+         --attempt <n>  --previous-failed  --explain    ← signals are recorded;
+                                                         attempt flags are telemetry only
 ```
 
 Without `--json` it prints one **tier alias**; with `--json` it prints
-`{"model": "...", "effort": "..."}` — and a third field, `strategy`, whenever a
-valid `--signature-state` was passed. Pass model AND effort on every spawn that
+`{"model": "...", "effort": "...", "route": "..."}` — and a third field,
+`strategy`, whenever a valid `--signature-state` was passed. Add `--explain` to
+include `task_level`, `task_level_rule` and `ladder_mode`. Pass model AND effort on every spawn that
 supports them (Workflow's `agent()` takes `effort`; the args contracts carry
 `effort` per item), and hand the `strategy` to the fixer as part of its input.
 
@@ -354,7 +386,26 @@ run against ≈2.5× for a tier step. Never argue an effort row as a saving.
 `minimal` is clamped to `low` (it is not in Workflow's enum). On the Codex runtime
 this table does NOT apply: the effort axis there is two values wide by measurement
 — `low` for the mechanical role, `high` for everything else — and depth comes from
-the model instead (ADR-005 D6, and the `-deep` agents below).
+the model instead (ADR-005 D6, and the `-critical`/`-deep` agents below).
+
+**Adaptive task levels.** Set `delivery_pipeline.model_ladder` to `adaptive` when
+the project wants the measured cost/quality split:
+
+```text
+mechanical  drift-check and pr-sentinel; the external gate remains authoritative
+routine     executor/research, risk=low, 1–4 changed files, no checkpoint/contest
+complex     the normal implementation, repair and judgement lane
+critical    risk=high or checkpoint; starts on the stronger lane
+recovery    repeat_exhausted or contested judgement; use the ceiling lane
+```
+
+On Claude, routine work resolves to `sonnet`, complex work keeps `opus`, and
+critical work uses `opus` at `xhigh` effort. On Codex, routine/complex work uses
+the first palette entry and critical/recovery work uses the generated
+`-critical`/`-deep` file at the last palette entry for roles that have those
+variants. The integrator remains on the ceiling in both modes and has no
+variant. Missing facts keep a task in the complex lane and produce a warning;
+they never silently buy a cheaper lane.
 
 **The Agent tool takes no `effort` parameter at all** (verified against the live
 schema, CLI 2.1.263): only Workflow's `agent()` carries it. So effort is ENFORCED
@@ -455,7 +506,7 @@ Config lives in `.planning/config.json` under **two** namespaces, both read by
 - `pipeline.*` — shipyard's runtime knobs. Note `pipeline` is NOT a valid GSD
   config key, so `/gsd-config --set pipeline.x` is rejected; edit the file.
 
-Keys: `model_policy` (`economy | balanced (default) | premium`; GSD's own
+Keys: `model_ladder` (`conservative` (default) | `adaptive`), `model_policy` (`economy | balanced (default) | premium`; GSD's own
 `budget`/`quality` names are accepted as aliases — it mirrors GSD's own
 `model_profile` and no longer routes any conveyor role, since the floor is not a
 preference), `models`, `effort` (a per-role override; on a REPAIR role it also
@@ -493,18 +544,34 @@ are what that tool validates against, so they mean something only where it
 exists. (Phrased without naming the runtime on purpose — the Codex generator
 substitutes that name in prose, which would inflect this sentence into saying
 the opposite where it matters most.)
-On Codex there is no Workflow tool and no model parameter to pass: each
-`$shipyard-<role>` agent runs under its own `~/.codex/agents/<name>.toml`, which
-carries the model and the effort ALREADY — written at install time from the
-operator's palette (`pipeline.codex_models`, first entry the workhorse floor,
-last the ceiling). Do not try to hand a Codex dispatch a tier alias: there is no
-field to put it in, and the file has already answered the question.
+On Codex, static `$shipyard-<role>` agents run under their own
+`~/.codex/agents/<name>.toml`, which carries the model and effort ALREADY —
+written at install time from the operator's palette (`pipeline.codex_models`,
+first entry the workhorse floor, last the ceiling). Resolve a static file at
+dispatch time with `codex-agent.cjs select <role> --json [--project-dir <project>]`;
+if it runs from a ticket worktree, `--project-dir` must point at the conveyor
+root so the adaptive policy is loaded rather than the conservative defaults.
+Do not hand the Codex
+spawn a tier alias, because the static file is the field that carries the
+concrete model. `executor` is the one deliberate exception: it has no static
+file, so `codex-agent.cjs select executor --json` resolves the concrete palette
+model at runtime and has `agent_file: null`. Pass that model and effort to
+`spawn_agent`/`codex exec` when the schema supports them; otherwise the active
+session model is an explicit, measurable fallback. For the dispatch record, use
+the selector's `route`/`model_tier`; use its concrete `model` as
+`--observed-model` when the host reports it.
 
 **Escalating there means dispatching a DIFFERENT agent**, because a file cannot
-be re-parameterised: `$shipyard-ci-fix-deep`, `$shipyard-review-fix-deep`,
+be re-parameterised: `$shipyard-ci-fix-critical`, `$shipyard-review-fix-critical`,
+`$shipyard-arch-review-critical` and `$shipyard-inv-research-critical` are
+first-attempt critical variants;
+`$shipyard-ci-fix-deep`, `$shipyard-review-fix-deep`,
 `$shipyard-pr-sentinel-deep` and `$shipyard-arch-review-deep` are the same
-contracts at the palette's ceiling model. Two conditions select one, both read
+contracts at the palette's ceiling model. Three conditions select one, all read
 from the journal, never guessed:
+
+- `critical` — the resolver classified risk as high or the ticket as a checkpoint;
+  use the matching `-critical` file on Codex.
 
 - `repeat_exhausted` — for a repair role: the same failure signature has come
   back after the `rethink` strategy was already spent on it. One `-deep`
@@ -513,10 +580,10 @@ from the journal, never guessed:
   the conform gate has already refused this PR once, so the re-judgement goes to
   `$shipyard-arch-review-deep`.
 
-There is no `$shipyard-integrator-deep`: the integrator is at the ceiling on
-every call. Where the palette has no second entry (or the host's CLI is too old
-to configure it) the `-deep` files are not generated at all — check that the
-agent exists before naming it, and fall back to the ordinary one.
+The integrator's ordinary file stays at the ceiling in both modes and has no
+critical or deep variant. Where the palette has no second entry (or the host's
+CLI is too old to configure it) other variants are not generated — check that
+the selected file exists and use the selector's `fallback` field.
 
 Scripts (the deterministic layer — do NOT improvise git/gh by hand where a script
 exists):
@@ -646,7 +713,7 @@ session:
 ```text
 attempt    — each babysit round on a PR:
              log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<ci-fix|review-fix> model=<tier> \
-               effort_applied=<level|unknown> \
+               effort_applied=<level|unsupported|unknown> \
                outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha> hypothesis="<the fixer's own>"
 base_merge — a mechanical base merge that landed in a round (NOT an attempt):
              log-event.cjs base_merge ticket=<T> pr=<N> base=<base ref> head=<full 40-char sha>
@@ -1251,8 +1318,9 @@ recompute. When the cap prints `0 agents` the project config does not parse and 
 may be dispatched at all: fix the file.
 
 4. Launch the executor agent IN THE WORKTREE. Get its model from
-   `pipeline-config.cjs model executor --json --risk <risk> --type <type>
-   --files <n> [--checkpoint]` and pass the returned `model` and `effort` verbatim.
+   `pipeline-config.cjs model executor --json --explain --risk <risk> --type <type>
+   --files <n> [--checkpoint]` and pass the returned `model`, `effort` and
+   `task_level` verbatim.
    Assemble the prompt PER THE ANTI-INJECTION DISCIPLINE (see the Workflow section
    above): within `<TICKET-CONTRACT>…</TICKET-CONTRACT>` — the full text of the ticket's
    plan + Context reads + the rule "work ONLY within files_modified; commit atomically
@@ -1276,10 +1344,11 @@ may be dispatched at all: fix the file.
     above returns immediately with an id (the Workflow tool a task id, the Agent
     tool an agent id); once you hold that id the agent exists, and only then, for
     every ticket you just handed out:
-    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --route "<route>" --agent-id <launch id>`
+    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <workflow|agent|inline> --agent-id <launch id>`
     (add `--effort-applied <effort>` when you took the Workflow path — it carries an
-    effort into the spawn and the Agent fallback cannot, so on the fallback the flag
-    is OMITTED, never guessed; add `--graph <project>/.planning/graph` when you are
+    effort into the spawn. If the selected backend cannot support effort, record
+    `unsupported`; if it ran but did not expose the value, record `unknown`. Otherwise
+    omit the flag, never guess; add `--graph <project>/.planning/graph` when you are
     not standing in the project). `<model>`, `<effort>` and `<route>` are all three
     fields the `pipeline-config.cjs model executor --json …` call above already
     returned — nothing is re-derived and nothing is paraphrased here, or the record
@@ -1391,7 +1460,7 @@ As soon as Phase C has opened PRs, hand them to the guard and go back to Step 3
 for the cascade (see "The PR sentinel" above):
 
 ```text
-model+effort:  pipeline-config.cjs model pr-sentinel --json [--risk <max guarded>] [--checkpoint] [--signature-state <verdict>]
+model+effort:  pipeline-config.cjs model pr-sentinel --json --explain [--risk <max guarded>] [--checkpoint] [--signature-state <verdict>]
 prompt:        ${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md
              + the guarded list: {ticket, pr, branch, worktreePath, repo, base, planPath}
              + the absolute scripts path, the project's .planning/graph path,
@@ -1401,13 +1470,14 @@ spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose'
 
 Record that hand-over the same way the executors' was, and in the same order —
 the `Agent` call returns an agent id, and THEN
-`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>" --agent-id <the id that Agent call returned>`
+`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <agent|codex-agent> --agent-id <the id that Agent call returned>`
 for every ticket on the guarded list, taking all three resolver fields from the
 `model pr-sentinel` call above — the route included, verbatim — and the agent id
 from the spawn you just made. **Every ticket this guard holds carries THAT SAME
 id**, which is what makes one guard over four PRs one agent instead of four. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
-which carries no effort, so the applied depth is genuinely unmeasured and the
-record says so by leaving the key out;
+which carries no effort. Pass `--effort-applied unsupported` when that capability
+is known absent, `unknown` when the host did not expose what ran, or omit the flag
+when neither fact is available;
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
 one when the guard's report comes back for it — a `pr-sentinel` record also lifts
 by itself when the PR merges or its base moves. This half is not an
@@ -1489,7 +1559,7 @@ loop:
 
        first | progress | repeat | repeat_exhausted — dispatch ci-fix in the
          ticket's worktree. model+effort+strategy from `pipeline-config.cjs model
-         ci-fix --json --risk <r> --signature-state <verdict>`
+         ci-fix --json --explain --risk <r> --signature-state <verdict>`
          → {"model": …, "effort": …, "strategy": fix|continue|rethink}.
          On `repeat` the strategy is `rethink`: SAME tier, deeper effort (`max`),
          a DIFFERENT approach — re-read the plan, widen the context, raise the
@@ -1520,7 +1590,7 @@ loop:
      and Copilot actually said, and the half they file as issue comments is the
      half that silently went unaddressed)
      there is feedback → review-fix agent in the worktree; model+effort from
-       `pipeline-config.cjs model review-fix --json [--code-change|--no-code-change]
+       `pipeline-config.cjs model review-fix --json --explain [--code-change|--no-code-change]
         [--signature-state <verdict>]`
        (`opus`/`high` either way — the tier no longer turns on whether a thread
         needs code, because a reasoned disagreement with a bot is a judgement too.
@@ -1624,7 +1694,7 @@ loop:
        `attempt-history.cjs <T> --json` → `next_n`
      log the round with the keys the NEXT round reads back:
        `log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<role> model=<tier>
-        effort_applied=<the level the spawn actually carried, or "unknown">
+        effort_applied=<the level the spawn actually carried, "unsupported" or "unknown">
         outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha>
         hypothesis="<the fixer's own one sentence, verbatim>"`
        `signature`+`head` are what the next `verdict` compares; `hypothesis` is
@@ -1635,15 +1705,16 @@ loop:
        decided.** On the Workflow path that is the `effort` you put in
        `args.prs[].effort` — the script passes it into `agent()`, so it is a fact
        about the dispatch. On the Agent path there is no effort parameter at all, so
-       the honest record is `effort_applied=unknown`: the role ran at the session's
-       own depth whatever the ladder chose. Never copy the resolved value across —
+       the honest record is `effort_applied=unsupported` when the backend has no
+       effort parameter, or `unknown` when the host did not expose what ran. Never
+       copy the resolved value across —
        that turns a check into a synonym, which is the entire reason the two fields
        are separate. This is not bookkeeping: `failure-signature.cjs` will only
        claim `repeat_exhausted` — the rung that opens the ceiling model and then
        spends a person's attention — off a prior round whose row NAMES a real level,
        so an unrecorded depth reads as not-yet-spent and the loop rethinks once more
        instead of escalating early. Levels: the resolver's own vocabulary
-       (`low|medium|high|xhigh|max`), or `unknown`; `log-event.cjs` WARNS on anything
+       (`low|medium|high|xhigh|max`), or `unsupported`/`unknown`; `log-event.cjs` WARNS on anything
        else and still logs the row as written — an unrecognised level is read
        exactly like absence by the rethink rule above, so nothing downstream is
        silently misled, but nothing refuses the write either.

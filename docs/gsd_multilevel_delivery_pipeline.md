@@ -716,6 +716,19 @@ what moves is the model. And the last row is why the threshold is named rather
 than written as a number: it is `pipeline.fable_window_tokens`, a knob, and a
 literal here would go stale the first time anyone tuned it.
 
+Projects that opt into the accepted ADR-012 amendment can set
+`delivery_pipeline.model_ladder: adaptive`. The shared classifier then adds a
+bounded `routine` lane for low-risk executor/research dispatches with 1–4
+changed files, keeps ordinary work in `complex`, starts high-risk or checkpoint
+work in `critical`, and uses `recovery` only after `repeat_exhausted`. Claude
+uses `sonnet` for the routine lane and `opus` for the quality lanes. Codex uses
+the first palette entry for routine/complex work and selects generated
+`-critical`/`-deep` files at the ceiling where a role has a distinct variant;
+the integrator remains at the ceiling in both modes. Missing evidence stays in
+the complex lane and is reported in dispatch telemetry. This is a canary
+configuration with no savings claim; evaluate it through the ADR-011 baseline
+and quality gates before changing the policy further.
+
 **The policy is code, not prose.** `scripts/pipeline-config.cjs model <role>
 [--risk|--type|--files|--attempt|…]` returns the tier for a spawn, applying the
 role × risk × attempt matrix, the `model_policy` profile, and any

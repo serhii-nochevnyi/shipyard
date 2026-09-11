@@ -56,7 +56,12 @@
     "delivery_pipeline.codex_models": {
       "type": "string",
       "default": "gpt-5.6-terra:high, gpt-6-astra:high@0.153.1",
-      "description": "The Codex model palette, in preference order: 'model[:effort][@min_cli]' per entry, comma separated. The effort is the one to USE for that model, never the deepest it accepts; min_cli is the Codex CLI version that can first configure it, below which the generator writes the previous entry instead. First entry is the workhorse floor every agent gets; last is the ceiling, taken statically by the integrator and reachable elsewhere through the '-deep' escalation agents. An empty value writes no model at all, leaving every agent on the CLI default. 'gpt-5.6-sol' is a valid entry no built-in path selects: with the deeper efforts retired on this runtime, advertising 'ultra' was its only distinguishing property."
+      "description": "The Codex model palette, in preference order: 'model[:effort][@min_cli]' per entry, comma separated. The effort is the one to USE for that model, never the deepest it accepts; min_cli is the Codex CLI version that can first configure it, below which the generator writes the previous entry instead. First entry is the workhorse floor every agent gets; last is the ceiling, taken statically by the integrator and reachable elsewhere through adaptive '-critical' or recovery '-deep' escalation agents. An empty value writes no model at all, leaving every agent on the CLI default. 'gpt-5.6-sol' is a valid entry no built-in path selects: with the deeper efforts retired on this runtime, advertising 'ultra' was its only distinguishing property."
+    },
+    "delivery_pipeline.model_ladder": {
+      "type": "string",
+      "default": "conservative",
+      "description": "Task-level model routing: 'conservative' keeps the role floor; 'adaptive' classifies each dispatch as mechanical, routine, complex, critical or recovery. In adaptive mode, low-risk executor/research work with 1-4 changed files uses the workhorse lane, high-risk or checkpoint work uses the critical lane, and repeated repair signatures use recovery. Claude applies the tier at dispatch time; Codex selects a generated '-critical' or '-deep' agent file where that role has a distinct variant. The integrator remains on the palette ceiling in both modes. Invalid values fall back to conservative."
     },
     "delivery_pipeline.jira_transitions": {
       "type": "string",

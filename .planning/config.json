@@ -61,10 +61,10 @@
   "phase_naming": "sequential",
   "agent_skills": {
     "gsd-executor": [
-      "global:shipyard:delivery-rules"
+      "global:shipyard-delivery-rules"
     ],
     "gsd-planner": [
-      "global:shipyard:delivery-rules"
+      "global:shipyard-delivery-rules"
     ]
   },
   "claude_md_path": "./.claude/CLAUDE.md",
@@ -98,7 +98,7 @@
       "gsd-code-reviewer": "xhigh"
     }
   },
-  "runtime": "claude",
+  "runtime": "codex",
   "pipeline": {
     "jira": {
       "enabled": false
@@ -109,6 +109,7 @@
     "gsd-code-reviewer": "opus"
   },
   "delivery_pipeline": {
-    "max_concurrent_agents": 4
+    "max_concurrent_agents": 4,
+    "model_ladder": "adaptive"
   }
 }
