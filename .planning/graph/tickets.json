@@ -2552,6 +2552,7 @@
       "files": [
         "plugins/delivery-pipeline/scripts/repo-resolve.cjs",
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
         "tests/unit/repo-resolve.test.cjs",
         "tests/unit/record-stores.test.cjs"
       ],
