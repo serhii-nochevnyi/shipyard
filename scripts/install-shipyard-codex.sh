@@ -103,14 +103,15 @@ restore_agents() {
 restore_runtime_paths() {
   local index="${RUNTIME_BACKUP_INDEX:-}"
   local backup="${RUNTIME_BACKUP:-}"
-  local state kind name target restore_status=0
+  local state kind name target restore_status=0 backup_path
   [[ -n "$index" && -f "$index" && -n "$backup" ]] || return 0
   while IFS=$'\t' read -r state kind name target; do
     [[ -n "$kind" && -n "$name" && -n "$target" ]] || continue
+    backup_path="$backup/$kind-$(runtime_backup_key "$target")"
     rm -rf "$target" || restore_status=1
     if [[ "$state" == present ]]; then
       mkdir -p "$(dirname "$target")" || restore_status=1
-      cp -a "$backup/$kind-$name" "$target" || restore_status=1
+      cp -a "$backup_path" "$target" || restore_status=1
     fi
   done < "$index"
   return "$restore_status"
@@ -151,15 +152,19 @@ replace_dir() {
   fi
   return "$status"
 }
+runtime_backup_key() {
+  node -e "const crypto=require('crypto');process.stdout.write(crypto.createHash('sha256').update(process.argv[1]).digest('hex'))" "$1"
+}
 snapshot_runtime_path() {
   local kind="$1" name="$2" target="$3"
-  local state=absent backup_path="$RUNTIME_BACKUP/$kind-$name"
+  local state=absent backup_path
   case "$target" in
     *$'\t'* | *$'\n'*)
       echo "error: refusing to snapshot a runtime path whose name cannot be recorded safely: $target" >&2
       exit 1
       ;;
   esac
+  backup_path="$RUNTIME_BACKUP/$kind-$(runtime_backup_key "$target")"
   if grep -Fqx $'present\t'"$kind"$'\t'"$name"$'\t'"$target" "$RUNTIME_BACKUP_INDEX" 2>/dev/null \
     || grep -Fqx $'absent\t'"$kind"$'\t'"$name"$'\t'"$target" "$RUNTIME_BACKUP_INDEX" 2>/dev/null; then
     return 0
