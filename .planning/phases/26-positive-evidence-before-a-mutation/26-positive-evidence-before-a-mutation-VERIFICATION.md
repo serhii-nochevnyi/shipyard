@@ -1,13 +1,13 @@
 ---
 # shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6
 phase: 26
-status: passed
+status: human_needed
 shipyard_source_fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6
 ---
 
 # Phase 26: Positive evidence before a mutation — Verification Projection
 
-**Status:** passed
+**Status:** human_needed
 
 ## Observable Truths
 
@@ -15,7 +15,7 @@ shipyard_source_fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f59
 |---|---|---|
 | Every phase plan is accounted for | 15/15 delivery records are merged | ✓ VERIFIED |
 | Integration is coherent | integration evidence records passed | ✓ VERIFIED |
-| Verification evidence is present | integration evidence records repository-local verification facts | ✓ VERIFIED |
+| Verification evidence is present | verification evidence records a failed check | ✗ FAILED |
 
 ## Plan Evidence
 
@@ -44,4 +44,4 @@ shipyard_source_fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f59
 
 ## Gaps Summary
 
-**No gaps found in the available repository evidence.**
+**Not green:** verification evidence records a failed check.

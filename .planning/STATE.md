@@ -4,7 +4,7 @@ gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 16
-  completed_phases: 4
+  completed_phases: 3
   total_plans: 82
   completed_plans: 80
   percent: 97
@@ -44,7 +44,7 @@ Progress: [█████████░] 97%
 | 23 | 3 | 3 | pending |
 | 24 | 11 | 11 | gaps_found |
 | 25 | 6 | 6 | passed |
-| 26 | 15 | 15 | passed |
+| 26 | 15 | 15 | pending |
 | 27 | 9 | 9 | gaps_found |
 | 28 | 9 | 9 | gaps_found |
 | 29 | 8 | 8 | passed |
@@ -75,7 +75,7 @@ Review and resolve phase integration findings shown in the phase artifacts.
 - Phase 22: INTEGRATION.md is missing
 - Phase 23: INTEGRATION.md is missing
 - Phase 24: integration evidence records a finding or failed verdict
-- Phase 27: integration evidence records a finding or failed verdict
+- Phase 26: verification evidence records a failed check
 
 ## Deferred Items
 

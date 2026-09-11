@@ -36,17 +36,17 @@
 - [x] **REQ-26**: The image and the smokes pin the runtimes the conveyor is tested on: Claude Code with Fable 5.1/Opus 5 aliases, gsd-core 1.13.0.
 - [x] **REQ-27**: A Codex agent carries EFFORT, not a model baked from a catalog that can be stale; a `model =` line appears only when the user's GSD remap names one, resolved through GSD's resolver.
 - [x] **REQ-28**: Prose names the runtimes as they are: the Agent tool's accepted values, `opus` = Opus 5 and its version floor, `fable` = Fable 5.1 and its consent hazard, the conveyor's `gate_status:` PR trailer vs GSD's `gate-status:` commit trailer.
-- [x] **REQ-29**: One ownership matcher decides Gate 2 overlap, the scope gate and base-merge conflict resolution; ambiguous declarations are rejected and an uncertain owner never authorizes a mechanical resolution.
-- [x] **REQ-30**: A corrupt configuration permits no mutation: merge, duty, escalation and retarget refuse on an unparseable config and name the file.
-- [x] **REQ-31**: Readiness needs positive evidence: an epic comparison that failed is `unknown`, not `landed`; availability and path reachability are checked in both integration modes.
-- [x] **REQ-32**: Worktree gc removes only a worktree PROVEN landed by delivery state; a clean local-only branch is reported and kept.
-- [x] **REQ-33**: A lock is released only by its owner and taken over atomically; a delivery-state snapshot is never overwritten by an older observation.
-- [x] **REQ-34**: The Codex config merge produces valid TOML for every valid input, detecting headers by grammar and re-parsing before it replaces the file.
-- [x] **REQ-35**: GSD tuning merges the delivery-rules skill into `agent_skills` and preserves every foreign entry; a missing `~/.gsd/` is created.
-- [x] **REQ-36**: Jira idempotency keys are namespaced by repository so two repositories exporting the same ticket id never select one issue.
-- [x] **REQ-37**: Workflow scripts validate `args` before dispatching: malformed input throws, an empty list returns empty, every ticket yields one result.
-- [x] **REQ-38**: "Left behind" is decided by the ticket's own phase having landed without it, never by phase-number arithmetic.
-- [x] **REQ-39**: An unavailable check reading (gh error, malformed JSON) is a state of its own, distinct from an observed empty list, and never green.
+- [ ] **REQ-29**: One ownership matcher decides Gate 2 overlap, the scope gate and base-merge conflict resolution; ambiguous declarations are rejected and an uncertain owner never authorizes a mechanical resolution.
+- [ ] **REQ-30**: A corrupt configuration permits no mutation: merge, duty, escalation and retarget refuse on an unparseable config and name the file.
+- [ ] **REQ-31**: Readiness needs positive evidence: an epic comparison that failed is `unknown`, not `landed`; availability and path reachability are checked in both integration modes.
+- [ ] **REQ-32**: Worktree gc removes only a worktree PROVEN landed by delivery state; a clean local-only branch is reported and kept.
+- [ ] **REQ-33**: A lock is released only by its owner and taken over atomically; a delivery-state snapshot is never overwritten by an older observation.
+- [ ] **REQ-34**: The Codex config merge produces valid TOML for every valid input, detecting headers by grammar and re-parsing before it replaces the file.
+- [ ] **REQ-35**: GSD tuning merges the delivery-rules skill into `agent_skills` and preserves every foreign entry; a missing `~/.gsd/` is created.
+- [ ] **REQ-36**: Jira idempotency keys are namespaced by repository so two repositories exporting the same ticket id never select one issue.
+- [ ] **REQ-37**: Workflow scripts validate `args` before dispatching: malformed input throws, an empty list returns empty, every ticket yields one result.
+- [ ] **REQ-38**: "Left behind" is decided by the ticket's own phase having landed without it, never by phase-number arithmetic.
+- [ ] **REQ-39**: An unavailable check reading (gh error, malformed JSON) is a state of its own, distinct from an observed empty list, and never green.
 - [x] **REQ-40**: No role that writes code or renders a judgement is dispatched below `opus`; `pr-sentinel` and `drift-check` stay on `sonnet` because neither's answer is the gate, and no built-in path reaches `haiku`. Depth is expressed by EFFORT keyed on the role and its signals, not on the tier; a configured effort override must not silently disable the signature escalation it outranks; and **every signal a row is keyed on is passed by the dispatch, with an absent signal never resolving upward.** *(Amended 2026-09-08: the universal floor is retired for those two roles, and effort is chosen for the work rather than for the price — output is 12–19% of a model line, so an effort step moves ~3% of a run against ~2.5× for a tier step. ADR-005 D2.)*
 - [x] **REQ-41**: `fable` is a ceiling the conveyor reaches mechanically (window pressure, exhausted repair depth, contested judgment) and never by default, the integrator included; it is never emitted where the runtime would resolve it to Fable 5. *(Amended 2026-09-08: the integrator's standing exception is withdrawn — its measured run was 291k tokens against a 1M window at 2× the price, so it earns `fable` through the window route like every other role.)*
 - [x] **REQ-45**: Every dispatch records the model and the effort it ran at, so the ladder can be revised on evidence instead of judgement.
@@ -151,17 +151,17 @@
 | REQ-26 | Phase 25 | Complete |
 | REQ-27 | Phase 25 | Complete |
 | REQ-28 | Phase 25 | Complete |
-| REQ-29 | Phase 26 | Complete |
-| REQ-30 | Phase 26 | Complete |
-| REQ-31 | Phase 26 | Complete |
-| REQ-32 | Phase 26 | Complete |
-| REQ-33 | Phase 26 | Complete |
-| REQ-34 | Phase 26 | Complete |
-| REQ-35 | Phase 26 | Complete |
-| REQ-36 | Phase 26 | Complete |
-| REQ-37 | Phase 26 | Complete |
-| REQ-38 | Phase 26 | Complete |
-| REQ-39 | Phase 26 | Complete |
+| REQ-29 | Phase 26 | In Progress |
+| REQ-30 | Phase 26 | In Progress |
+| REQ-31 | Phase 26 | In Progress |
+| REQ-32 | Phase 26 | In Progress |
+| REQ-33 | Phase 26 | In Progress |
+| REQ-34 | Phase 26 | In Progress |
+| REQ-35 | Phase 26 | In Progress |
+| REQ-36 | Phase 26 | In Progress |
+| REQ-37 | Phase 26 | In Progress |
+| REQ-38 | Phase 26 | In Progress |
+| REQ-39 | Phase 26 | In Progress |
 | REQ-40 | Phase 25 | Complete |
 | REQ-41 | Phase 25 | Complete |
 | REQ-45 | Phase 25 | Complete |

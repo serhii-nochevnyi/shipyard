@@ -24,4 +24,4 @@ actual: pending — INTEGRATION.md is missing
 ### 3. Phase verification is evidence-backed
 result: pending
 expected: the phase verification projection is not green without evidence
-actual: pending; pending — INTEGRATION.md is missing
+actual: pending

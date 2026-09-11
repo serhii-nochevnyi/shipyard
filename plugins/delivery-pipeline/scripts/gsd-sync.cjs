@@ -309,17 +309,22 @@ function collectPlans(existingDirs) {
 function verificationEvidence(text, integrationStatus = 'pending') {
   if (!text) return { status: 'pending', reason: 'INTEGRATION.md is missing' };
   const lower = String(text).toLowerCase();
-  const evidenceText = String(text).split(/\r?\n/).filter((line) => !/verdict/i.test(line)).join('\n');
+  const evidenceText = String(text).split(/\r?\n/)
+    .filter((line) => !/verdict/i.test(line))
+    .join('\n')
+    // The command name `uat-passed` is not a result. Prevent its suffix from
+    // satisfying the positive evidence token by itself.
+    .replace(/\buat-passed\b/gi, 'uat-result');
   if (integrationStatus === 'needs-fix') {
     return { status: 'failed', reason: 'integration evidence records a finding or failed verdict' };
   }
   const verificationSignal = /\b(?:verification(?:\s+(?:evidence|rerun|commands|result))?|uat|test-fast|test-codex-shipyard|current-head\s+ci|ci)\b/i.test(evidenceText);
+  if (/\b(?:verification|uat|test|ci)\b[^\n]{0,120}\b(?:failed|needs[- ]fix|error|red)\b/i.test(evidenceText)) {
+    return { status: 'failed', reason: 'verification evidence records a failed check' };
+  }
   const positiveSignal = /\b(?:passed|green|exit\s*0|successful|success|verified|no\s+unresolved)\b/i.test(evidenceText);
   if (verificationSignal && positiveSignal) {
     return { status: 'passed', reason: 'integration evidence records repository-local verification facts' };
-  }
-  if (/\b(?:verification|uat|test|ci)\b[^\n]{0,120}\b(?:failed|needs[- ]fix|error|red)\b/i.test(evidenceText)) {
-    return { status: 'failed', reason: 'verification evidence records a failed check' };
   }
   return {
     status: 'pending',

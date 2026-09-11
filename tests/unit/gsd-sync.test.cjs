@@ -102,6 +102,19 @@ test('requires positive verification evidence before a passed phase', () => {
   assert.match(verification, /no verification evidence/i);
 });
 
+test('does not treat the uat-passed command name as a verification result', () => {
+  const root = project({
+    integration: 'Verdict: passed\n\n## Verification evidence\n- `gsd-tools phase uat-passed 1 --raw`',
+  });
+  assert.equal(run(root).status, 0);
+  const verification = fs.readFileSync(
+    path.join(root, '.planning', 'phases', '01-foundation', '01-foundation-VERIFICATION.md'),
+    'utf8',
+  );
+  assert.match(verification, /status: human_needed/);
+  assert.match(verification, /no positive repository-local verification result/i);
+});
+
 test('preserves wrapped roadmap requirement descriptions', () => {
   const root = project();
   write(path.join(root, '.planning', 'ROADMAP.md'), [

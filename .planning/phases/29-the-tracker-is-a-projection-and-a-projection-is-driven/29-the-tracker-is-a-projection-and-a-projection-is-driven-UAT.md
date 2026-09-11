@@ -24,4 +24,4 @@ actual: passed — integration evidence records passed
 ### 3. Phase verification is evidence-backed
 result: passed
 expected: the phase verification projection is passed
-actual: passed; passed — integration evidence records repository-local verification facts
+actual: passed

@@ -24,4 +24,4 @@ actual: needs-fix — integration evidence records a finding or failed verdict
 ### 3. Phase verification is evidence-backed
 result: failed
 expected: the phase verification projection is not green without evidence
-actual: gaps_found; failed — integration evidence records a finding or failed verdict
+actual: gaps_found
