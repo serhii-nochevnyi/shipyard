@@ -91,6 +91,33 @@ test('is not applicable when a project has no delivery plans', () => {
   assert.equal(payload.applicable, false);
 });
 
+test('does not treat a body delivery marker as conveyor applicability', () => {
+  const root = project();
+  const plan = path.join(root, '.planning', 'phases', '01-foundation', '01-01-PLAN.md');
+  write(plan, [
+    '---', 'phase: 1', 'plan: 1', 'title: Foundation',
+    'files_modified: [src/example.js]', 'requirements: [SYNC-01]', '---', '',
+    '## Notes', '', 'The prose mentions delivery: but is not a delivery plan.',
+  ].join('\n'));
+  const result = run(root);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).applicable, false);
+});
+
+test('fails closed when delivery state is missing or has no plan observation', () => {
+  const root = project();
+  const state = path.join(root, '.planning', 'graph', 'delivery-state.json');
+  fs.unlinkSync(state);
+  const missing = run(root);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stdout, /delivery-state\.json must be an object/);
+
+  write(state, JSON.stringify({}));
+  const absent = run(root);
+  assert.equal(absent.status, 1);
+  assert.match(absent.stdout, /T-01-01: delivery-state\.json has no observation/);
+});
+
 test('requires positive verification evidence before a passed phase', () => {
   const root = project({ integration: 'Verdict: passed' });
   assert.equal(run(root).status, 0);
@@ -267,6 +294,10 @@ test('adopts existing native artifacts only when explicitly requested', () => {
   const r = run(root, ['--adopt-native']);
   assert.equal(r.status, 0, r.stderr);
   assert.match(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), /shipyard:gsd-sync generated/);
+});
+
+test('publishes under the shared state lock', () => {
+  assert.match(sync.run.toString(), /withLock\(lockDirFor\(ROOT\), 'state'/);
 });
 
 done();

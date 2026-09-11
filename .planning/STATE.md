@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9344e10c3c7a7991edb09a4700bcfe74bdf4c0e157ddcc965f9371949294ed29
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 16
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 82
   completed_plans: 82
   percent: 100
@@ -53,7 +53,7 @@ Progress: [██████████] 100%
 | 32 | 2 | 2 | passed |
 | 33 | 0 | 0 | pending |
 | 34 | 0 | 0 | pending |
-| 35 | 3 | 3 | pending |
+| 35 | 3 | 3 | passed |
 
 ## Accumulated Context
 

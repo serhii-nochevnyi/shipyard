@@ -84,20 +84,30 @@ if (fs.existsSync(pluginCache)) {
     }
   }
 }
-const script = candidates.find((file) => fs.existsSync(file));
+const requiredSiblings = ['frontmatter.cjs', 'lock.cjs'];
+const script = candidates.find((file) => fs.existsSync(file) && requiredSiblings.every((sibling) =>
+  fs.existsSync(path.join(path.dirname(file), sibling))
+));
 if (!script) fail('gsd-sync.cjs is missing beside the installed gate and in the source plugin; reinstall Shipyard');
 
 const args = [script, '--json', '--adopt-native'];
 if (mode === 'check') args.push('--check');
 const result = spawnSync(process.execPath, args, { cwd: ROOT, encoding: 'utf8' });
 if (result.error) fail(`could not run ${script}: ${result.error.message}`);
+const childExit = Number.isInteger(result.status) && result.status >= 0 ? result.status : 1;
 let payload;
 try {
   payload = JSON.parse((result.stdout || '').trim());
 } catch {
-  fail(`gsd-sync returned non-JSON output: ${(result.stdout || result.stderr || '').trim()}`);
+  fail(`gsd-sync returned non-JSON output: ${(result.stdout || result.stderr || '').trim()}`, childExit);
 }
-if (result.status !== 0 || payload.ok !== true || payload.applicable !== true) {
+if (result.status !== 0) {
+  const blockers = payload.applicable === false
+    ? 'gsd-sync reported that the delivery project is not applicable'
+    : Array.isArray(payload.blockers) ? payload.blockers.join('; ') : (payload.error || result.stderr || 'unknown projection failure');
+  fail(`${mode} blocked: ${blockers}`, childExit);
+}
+if (payload.ok !== true || payload.applicable !== true) {
   const blockers = payload.applicable === false
     ? 'gsd-sync reported that the delivery project is not applicable'
     : Array.isArray(payload.blockers) ? payload.blockers.join('; ') : (payload.error || result.stderr || 'unknown projection failure');

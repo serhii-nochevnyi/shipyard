@@ -108,4 +108,10 @@ test('honors the declared opt-out without touching artifacts', () => {
   assert.equal(fs.existsSync(path.join(root, '.planning', 'STATE.md')), false);
 });
 
+test('selects complete bundles and preserves synchronizer exit codes', () => {
+  const source = fs.readFileSync(GATE, 'utf8');
+  assert.match(source, /requiredSiblings = \['frontmatter\.cjs', 'lock\.cjs'\]/);
+  assert.match(source, /fail\(`\$\{mode\} blocked: \$\{blockers\}`, childExit\)/);
+});
+
 done();

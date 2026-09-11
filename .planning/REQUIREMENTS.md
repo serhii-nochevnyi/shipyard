@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9344e10c3c7a7991edb09a4700bcfe74bdf4c0e157ddcc965f9371949294ed29 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -105,12 +105,12 @@
 - [ ] **REQ-95**: A manual-merge verdict carry proves ancestry, head tree, base tree and current PR identity; missing proof requires fresh review.
 - [ ] **REQ-96**: Participating projects count distinct nested agents through owned leases, report coverage, and never interpret store failure as unlimited capacity.
 - [ ] **REQ-97**: Each optimization has a versioned baseline, quality and recovery gates, rollback, and a report that feeds evidence into the next backlog decision.
-- [ ] **REQ-98**: Shipyard publishes one deterministic native-GSD projection from the validated plan and delivery graph; no second execution authority is hand-maintained.
-- [ ] **REQ-99**: The projection materializes the canonical STATE, REQUIREMENTS, plan summary, UAT, and verification artifacts with explicit ownership and source fingerprints.
-- [ ] **REQ-100**: A plan or phase is marked complete only from positive delivery, integration, and verification evidence; missing evidence remains visible and non-green.
-- [ ] **REQ-101**: Planning, delivery, verification, and ship boundaries run a blocking synchronization/check gate for Shipyard projects and remain inert for ordinary GSD projects.
-- [ ] **REQ-102**: Synchronization is local-only, atomic, idempotent, and checkable without mutation, with deterministic refusal on conflicting files or ambiguous plan/ticket identity.
-- [ ] **REQ-103**: Claude and Codex consume the same canonical synchronizer through generated/bundled installer surfaces, with smoke coverage for both. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [x] **REQ-98**: Shipyard publishes one deterministic native-GSD projection from the validated plan and delivery graph; no second execution authority is hand-maintained.
+- [x] **REQ-99**: The projection materializes the canonical STATE, REQUIREMENTS, plan summary, UAT, and verification artifacts with explicit ownership and source fingerprints.
+- [x] **REQ-100**: A plan or phase is marked complete only from positive delivery, integration, and verification evidence; missing evidence remains visible and non-green.
+- [x] **REQ-101**: Planning, delivery, verification, and ship boundaries run a blocking synchronization/check gate for Shipyard projects and remain inert for ordinary GSD projects.
+- [x] **REQ-102**: Synchronization is local-only, atomic, idempotent, and checkable without mutation, with deterministic refusal on conflicting files or ambiguous plan/ticket identity.
+- [x] **REQ-103**: Claude and Codex consume the same canonical synchronizer through generated/bundled installer surfaces, with smoke coverage for both. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
 ## Out of Scope
 
@@ -220,12 +220,12 @@
 | REQ-95 | Phase 34 | In Progress |
 | REQ-96 | Phase 34 | In Progress |
 | REQ-97 | Phase 34 | In Progress |
-| REQ-98 | Phase 35 | In Progress |
-| REQ-99 | Phase 35 | In Progress |
-| REQ-100 | Phase 35 | In Progress |
-| REQ-101 | Phase 35 | In Progress |
-| REQ-102 | Phase 35 | In Progress |
-| REQ-103 | Phase 35 | In Progress |
+| REQ-98 | Phase 35 | Complete |
+| REQ-99 | Phase 35 | Complete |
+| REQ-100 | Phase 35 | Complete |
+| REQ-101 | Phase 35 | Complete |
+| REQ-102 | Phase 35 | Complete |
+| REQ-103 | Phase 35 | Complete |
 
 **Coverage:**
 - v1 requirements: 103 total

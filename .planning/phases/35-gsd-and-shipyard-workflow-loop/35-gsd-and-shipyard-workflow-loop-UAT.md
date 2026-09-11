@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9344e10c3c7a7991edb09a4700bcfe74bdf4c0e157ddcc965f9371949294ed29
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
 phase: 35
-status: pending
-result: pending
+status: passed
+result: passed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 9344e10c3c7a7991edb09a4700bcfe74bdf4c0e157ddcc965f9371949294ed29
+shipyard_source_fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
 ---
 
 # Phase 35: Close the GSD and Shipyard workflow loop — UAT Projection
@@ -17,11 +17,11 @@ expected: all 3 phase plan(s) are merged
 actual: 3 merged
 
 ### 2. Integration evidence is explicit
-result: pending
+result: passed
 expected: an explicit passed verdict in .planning/phases/35-gsd-and-shipyard-workflow-loop/INTEGRATION.md
-actual: pending — INTEGRATION.md is missing
+actual: passed — integration evidence records passed
 
 ### 3. Phase verification is evidence-backed
-result: pending
-expected: the phase verification projection is not green without evidence
-actual: pending
+result: passed
+expected: the phase verification projection is passed
+actual: passed

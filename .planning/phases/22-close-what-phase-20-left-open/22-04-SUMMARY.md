@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9344e10c3c7a7991edb09a4700bcfe74bdf4c0e157ddcc965f9371949294ed29
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
 phase: 22-close-what-phase-20-left-open
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 9344e10c3c7a7991edb09a4700bcfe74bdf4c0e157ddcc965f9371949294ed29
+shipyard_source_fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
 ---
 
 # Phase 22: A lock is held from the instant it exists — Delivery Projection

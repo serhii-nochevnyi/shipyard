@@ -95,6 +95,16 @@ function readJson(file, { required = false, fallback = null } = {}) {
   }
 }
 
+function hasDeliveryMarker(raw) {
+  const text = String(raw);
+  const frontmatter = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  // A truncated plan has no closing fence, so keep the raw fallback: the
+  // synchronizer must remain applicable and report malformed source instead of
+  // silently becoming an ordinary GSD project. For a complete plan, inspect
+  // only frontmatter so prose mentioning `delivery:` stays inert.
+  return /^\s*delivery\s*:/m.test(frontmatter ? frontmatter[1] : text);
+}
+
 function posixRelative(file) {
   return path.relative(ROOT, file).split(path.sep).join('/');
 }
@@ -265,7 +275,7 @@ function collectPlans(existingDirs) {
       const raw = readText(file, { required: true });
       // Keep malformed Shipyard plans applicable so their parse error blocks
       // publication instead of making the synchronizer silently inert.
-      const declaresDelivery = /^\s*delivery\s*:/m.test(raw);
+      const declaresDelivery = hasDeliveryMarker(raw);
       if (declaresDelivery) deliveryPlanFileCount += 1;
       const parsed = parseFrontmatter(raw);
       if (!parsed.data || parsed.errors.length) {
@@ -432,11 +442,20 @@ function checkSource({ roadmapText, roadmapInfo, projectText, plans, planErrors,
   if (front != null && typeof front !== 'object') blockers.push('delivery-front.json must be an object');
 
   const graphTickets = graph && graph.tickets && typeof graph.tickets === 'object' ? graph.tickets : {};
+  const stateEntries = state && typeof state === 'object' && !Array.isArray(state) ? state : null;
   const seen = new Set();
   for (const plan of plans) {
     if (seen.has(plan.ticket)) blockers.push(`${posixRelative(plan.file)}: duplicate ticket ${plan.ticket}`);
     seen.add(plan.ticket);
     if (!graphTickets[plan.ticket]) blockers.push(`${plan.ticket}: PLAN is absent from tickets.json`);
+    if (stateEntries && !Object.prototype.hasOwnProperty.call(stateEntries, plan.ticket)) {
+      blockers.push(`${plan.ticket}: delivery-state.json has no observation`);
+    } else if (stateEntries) {
+      const observation = stateEntries[plan.ticket];
+      if (!observation || typeof observation !== 'object' || Array.isArray(observation) || typeof observation.status !== 'string') {
+        blockers.push(`${plan.ticket}: delivery-state.json has no valid status observation`);
+      }
+    }
     if (!roadmapInfo.phases.some((phase) => phase.number === plan.phase)) {
       blockers.push(`${posixRelative(plan.file)}: phase ${plan.phase} is not declared in ROADMAP.md`);
     }
@@ -850,7 +869,7 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
   const roadmapText = readText(ROADMAP);
   const projectText = readText(PROJECT);
   const graph = readJson(TICKETS, { fallback: null });
-  const state = readJson(DELIVERY_STATE, { fallback: {} });
+  const state = readJson(DELIVERY_STATE, { fallback: null });
   const front = readJson(DELIVERY_FRONT, { fallback: null });
   const roadmapInfo = parseRoadmap(roadmapText || '');
   const existingDirs = listPhaseDirs();
@@ -1003,7 +1022,11 @@ function run(args) {
     const drift = checkSnapshot(snapshot);
     return { result: resultFor(snapshot, args, drift), code: snapshot.blockers.length || drift.length ? 1 : 0 };
   }
-  const published = withLock(lockDirFor(ROOT), 'gsd-sync', () => {
+  // Share the state lock with state-sync and dispatch-record's front refresh.
+  // The projection reads delivery-state/front while publishing generated
+  // artifacts; a private lock would let a board update land between those
+  // reads and produce a native projection for a different observation.
+  const published = withLock(lockDirFor(ROOT), 'state', () => {
     // Rebuild inside the lock. A planning/delivery writer may have changed the
     // source while the first read was in progress; publishing an old projection
     // is worse than waiting for the next run.
