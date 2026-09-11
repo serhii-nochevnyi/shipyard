@@ -44,6 +44,9 @@ function attributionShape(record, index) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) {
     return { error: `attribution ${index} is not an object` };
   }
+  if (record.source !== undefined && typeof record.source !== 'string') {
+    return { error: `attribution ${index} source must be a string` };
+  }
   const runtime = runtimeOf(record);
   if (!runtime || !RUNTIME_PROVIDER[runtime]) return { error: `attribution ${index} has an unknown runtime` };
   if (record.provider && record.provider !== RUNTIME_PROVIDER[runtime]
