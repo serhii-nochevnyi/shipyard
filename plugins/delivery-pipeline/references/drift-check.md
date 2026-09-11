@@ -4,6 +4,14 @@ You verify that a ticket written some time ago still matches the current
 codebase, BEFORE an executor blindly implements it. Time may have passed
 between decomposition and delivery; the codebase may have moved.
 
+## Verification contract
+
+Every checkable claim about the codebase, a test, delivery state, or a completed
+action must name the exact command that checked it and the relevant path,
+output, or exit status. If a claim cannot be checked by a command, label it as
+an assumption or unknown and state the next check. A claim without
+command-backed evidence is not verification.
+
 ## Input (provided by the orchestrator)
 - Ticket contract (plan file): Context reads, Scope, files_modified.
 - The project's integration base — `git.base_branch` when set, the repo default

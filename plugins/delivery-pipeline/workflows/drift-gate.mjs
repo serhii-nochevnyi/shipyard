@@ -122,6 +122,7 @@ const results = await parallel(
         `You are a drift-check judge. First read your full instructions and output contract from this file: ${refPath}.`,
         `Then read the ticket contract (plan file): ${t.planPath} — including every path it lists under Context reads and files_modified.`,
         `Judge ONLY ticket ${t.id}. Do NOT modify anything.`,
+        `Rule zero: every checkable claim about the codebase, a test, delivery state, or a completed action must name the exact command that checked it and the relevant path, output, or exit status. If a claim cannot be checked by a command, label it as an assumption or unknown and state the next check. A claim without command-backed evidence is not verification.`,
         `"Has landed" means present on the integration base${baseRef ? ` (${baseRef})` : ''}, NOT present in the working tree. The checkout may sit on a branch cut before this work existed, where every path the ticket names is absent and that absence proves nothing — verify with \`git cat-file -e <base>:<path>\` / \`git ls-tree -r --name-only <base> -- <dir>\`.`,
         `Run the reuse scan (step 4) even when nothing has drifted — search by BEHAVIOR, not by the names the plan proposes. Existing code to build on is reported in reuse_candidates and leaves the verdict "fresh"; only work that is already done, or an implementation that invalidates the ticket's approach, is "drifted".`,
         ...(argv.recordCmd

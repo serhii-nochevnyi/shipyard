@@ -423,6 +423,50 @@ test('`transitionName` appears in no script and no prompt we ship', () => {
   );
 });
 
+const VERIFICATION_RULE = 'Every checkable claim about the codebase, a test, delivery state, or a completed action must name the exact command that checked it';
+const VERIFICATION_EVIDENCE = 'A claim without command-backed evidence is not verification';
+const ROLE_REFERENCES = [
+  'plugins/delivery-pipeline/references/arch-review.md',
+  'plugins/delivery-pipeline/references/ci-fix.md',
+  'plugins/delivery-pipeline/references/drift-check.md',
+  'plugins/delivery-pipeline/references/integrator.md',
+  'plugins/delivery-pipeline/references/inv-research.md',
+  'plugins/delivery-pipeline/references/pr-sentinel.md',
+  'plugins/delivery-pipeline/references/review-fix.md',
+];
+const PROMPT_BUILDERS = [
+  'plugins/delivery-pipeline/workflows/executors.mjs',
+  'plugins/delivery-pipeline/workflows/drift-gate.mjs',
+  'plugins/delivery-pipeline/workflows/fix-round.mjs',
+];
+const normalized = (src) => src.replace(/\s+/g, ' ').toLowerCase();
+
+test('command-backed verification rule reaches every delivery boundary', () => {
+  const canonical = readRepo('plugins/delivery-pipeline/skills/delivery-rules/SKILL.md');
+  assert.ok(canonical.includes('## Rule zero: make claims executable'), 'the canonical delivery rules must define rule zero');
+  assert.ok(normalized(canonical).includes(normalized(VERIFICATION_RULE)), 'the canonical delivery rules must state the exact-command requirement');
+  assert.ok(normalized(canonical).includes(normalized(VERIFICATION_EVIDENCE)), 'the canonical delivery rules must reject claims without evidence');
+
+  for (const rel of ROLE_REFERENCES) {
+    const src = readRepo(rel);
+    assert.ok(src.includes('## Verification contract'), `${rel} must carry the verification contract for direct role dispatch`);
+    assert.ok(normalized(src).includes(normalized(VERIFICATION_RULE)), `${rel} must require the exact command for every checkable claim`);
+    assert.ok(normalized(src).includes(normalized(VERIFICATION_EVIDENCE)), `${rel} must reject claims without command-backed evidence`);
+  }
+
+  for (const rel of PROMPT_BUILDERS) {
+    const src = readRepo(rel);
+    assert.ok(src.includes('agent('), `${rel} must retain its agent dispatch caller`);
+    assert.ok(src.includes('Rule zero:'), `${rel} must repeat rule zero because its prompt bypasses the role document`);
+    assert.ok(normalized(src).includes(normalized(VERIFICATION_RULE)), `${rel} must pass the exact-command requirement into its prompt`);
+    assert.ok(normalized(src).includes(normalized(VERIFICATION_EVIDENCE)), `${rel} must pass the evidence requirement into its prompt`);
+  }
+
+  const arch = readRepo('plugins/delivery-pipeline/references/arch-review.md');
+  assert.ok(/unverified checkable claim as a `violation`/.test(arch), 'arch-review must turn an unverified claim into a violation');
+  assert.ok(/missing command:/.test(arch), 'arch-review violations must name the missing command');
+});
+
 test('the comment exemption is per file type — and markdown gets none', () => {
   const dir = fixture('code.cjs', [
     "// transitionName is what this file must never call — naming it is fine",

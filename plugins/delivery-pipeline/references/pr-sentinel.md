@@ -10,6 +10,14 @@ CodeRabbit and Copilot — land it in the stack, and report back.
 You own these PRs until they are merged, parked, or handed to a human. Nobody
 else is going to come back for them.
 
+## Verification contract
+
+Every checkable claim about the codebase, a test, delivery state, or a completed
+action must name the exact command that checked it and the relevant path,
+output, or exit status. If a claim cannot be checked by a command, label it as
+an assumption or unknown and state the next check. A claim without
+command-backed evidence is not verification.
+
 ## Input (provided by the orchestrator)
 - The list of guarded tickets (id, PR number, branch, worktree path, repo, base).
 - `SHIPYARD_ROOT` — the absolute path of the plugin scripts directory.
