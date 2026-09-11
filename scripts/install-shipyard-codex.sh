@@ -188,15 +188,23 @@ for d in "$OUT"/skills/*/; do
         ) |
         node -e '
           const fs = require("fs");
+          const path = require("path");
+          const root = path.resolve(process.argv[2]);
+          const safeRelative = (value) => {
+            if (typeof value !== "string" || !value) return false;
+            if (path.isAbsolute(value)) return false;
+            const resolved = path.resolve(root, value);
+            return resolved === root || resolved.startsWith(`${root}${path.sep}`);
+          };
           const values = new Set(fs.readFileSync(0, "utf8").split(/\n/).filter(Boolean));
           try {
             const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
             for (const value of Array.isArray(manifest.paths) ? manifest.paths : []) {
-              if (typeof value === "string" && value) values.add(value);
+              if (safeRelative(value)) values.add(value);
             }
           } catch {}
           process.stdout.write([...values].sort().join("\n"));
-        ' "$target/$SKILL_MANIFEST_NAME"
+        ' "$target/$SKILL_MANIFEST_NAME" "$target"
       )
       for rel in "${managed[@]}"; do
         src="$target/$rel"
