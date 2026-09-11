@@ -895,3 +895,10 @@
 {"ts":"2026-09-10T09:09:18.255Z","event":"attempt","ticket":"T-29-07","pr":90,"n":1,"role":"ci-fix","model":"sonnet","effort_applied":"unknown","outcome":"pushed","signature":"merge-conflict-deliver-md-tracker-projection-post-parent-squash","head":"d7d1f63867cdd980d125c2bbae6afacd4444a9c7","hypothesis":"T-29-07's new Where-it-runs paragraph was inserted right after the same anchor line T-29-06's squash merge into the epic rewrote, so the three-way merge flagged it as a conflict even though the base side had no competing text at that point; resolved by keeping the ticket's own edition of the paragraph and dropping the empty base side, leaving no other diff"}
 {"ts":"2026-09-10T09:10:05.988Z","event":"base_merge","ticket":"T-29-07","pr":90,"base":"epic/29-the-tracker-is-a-projection-and-a-projection-is-driven","head":"d7d1f63867cdd980d125c2bbae6afacd4444a9c7"}
 {"ts":"2026-09-10T09:13:08.374Z","event":"dispatch","ticket":"T-29-07","role":"pr-sentinel","pr":90,"model":"sonnet","effort":"high","agent_id":"afd99fee9af56c4ea","reason":"tier=floor:exempt(sonnet) effort=row(high)","by":"dispatch-record"}
+{"ts":"2026-09-11T07:04:01.173Z","event":"status_change","ticket":"T-29-07","from":"pr-open","to":"merged","pr":90}
+{"ts":"2026-09-11T07:04:01.173Z","event":"status_change","ticket":"T-29-08","from":null,"to":"merged","pr":91}
+{"ts":"2026-09-11T07:04:01.173Z","event":"status_change","ticket":"T-32-01","from":null,"to":"merged","pr":92}
+{"ts":"2026-09-11T07:04:01.173Z","event":"status_change","ticket":"T-32-02","from":null,"to":"merged","pr":93}
+{"ts":"2026-09-11T07:04:01.173Z","event":"status_change","ticket":"T-35-01","from":null,"to":"pr-open","pr":96}
+{"ts":"2026-09-11T07:04:01.173Z","event":"status_change","ticket":"T-35-02","from":null,"to":"pr-open","pr":98}
+{"ts":"2026-09-11T07:04:01.173Z","event":"status_change","ticket":"T-35-03","from":null,"to":"pr-open","pr":101}
