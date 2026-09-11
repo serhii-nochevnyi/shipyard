@@ -2420,7 +2420,7 @@
       "risk": "high",
       "type": "implementation",
       "human_checkpoint": true,
-      "preauthorized": false,
+      "preauthorized": true,
       "branch": "ticket/T-32-06-deliver-the-accepted-task-level-model-la",
       "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
       "primary_parent": null,
