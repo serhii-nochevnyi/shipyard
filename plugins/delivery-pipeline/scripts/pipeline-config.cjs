@@ -670,7 +670,10 @@ function defaultRepositoryRoot(projectRoot = process.cwd()) {
 }
 
 function repositoryRootValue(value, projectRoot = process.cwd()) {
-  if (value === undefined) {
+  // GSD materializes string capability defaults into config.json. The declared
+  // empty string is therefore the persisted spelling of an omitted root, not a
+  // malformed operator policy; keep it on the documented project-parent path.
+  if (value === undefined || value === '') {
     return { valid: true, path: defaultRepositoryRoot(projectRoot), reason: null };
   }
   if (typeof value !== 'string' || value.length === 0 || !path.isAbsolute(value)) {

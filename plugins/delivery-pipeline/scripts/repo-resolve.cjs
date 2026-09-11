@@ -137,6 +137,13 @@ function configuredRepos(config) {
   return isRecord(config.repos) ? config.repos : {};
 }
 
+function invalidRepositoryPolicy(config) {
+  if (!Object.prototype.hasOwnProperty.call(config, 'repos_root')) return false;
+  return typeof config.repos_root !== 'string'
+    || config.repos_root.length === 0
+    || !path.isAbsolute(config.repos_root);
+}
+
 function hasConfiguredRepo(config, repo) {
   return Object.prototype.hasOwnProperty.call(configuredRepos(config), repo);
 }
@@ -202,6 +209,14 @@ function discoverRepository(input) {
   }
 
   const { ticket = null, repo, config } = input;
+  if (invalidRepositoryPolicy(config)) {
+    return trackOnly(
+      ticket,
+      repo,
+      'pipeline.repos_root is invalid; repository discovery is refused until the configured absolute path is fixed',
+      { resolution: 'invalid-policy', discovery_status: 'invalid' },
+    );
+  }
   const searchedRoots = discoveryRoots(config, input.projectRoot);
   const candidates = [];
   const seen = new Set();

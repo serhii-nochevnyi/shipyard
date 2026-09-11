@@ -976,8 +976,14 @@ test('an absolute repos_root is accepted and the declared namespace wins', () =>
   assert.deepStrictEqual(warnings, []);
 });
 
+test('the materialized empty repos_root default uses the project parent', () => {
+  const { dir, config, warnings } = withRawOptions({ pipeline: { repos_root: '' } }, {});
+  assert.strictEqual(config.repos_root, defaultRepositoryRoot(dir));
+  assert.deepStrictEqual(warnings, []);
+});
+
 test('relative and malformed repos_root values are refused without creating a directory', () => {
-  for (const value of ['checkouts', '', null, {}, true]) {
+  for (const value of ['checkouts', null, {}, true]) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-root-'));
     fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ pipeline: { repos_root: value } }));
