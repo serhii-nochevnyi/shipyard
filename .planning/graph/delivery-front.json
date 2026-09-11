@@ -1,23 +1,21 @@
 {
-  "generated_at": "2026-09-11T07:42:06.216Z",
-  "observed_at": "2026-09-11T07:42:06.216Z",
-  "generation": 200,
+  "generated_at": "2026-09-11T07:52:18.043Z",
+  "observed_at": "2026-09-11T07:52:18.043Z",
+  "generation": 201,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-11T07:42:06.216Z",
+  "dispatches_applied_at": "2026-09-11T07:52:18.043Z",
   "actionable": {
     "execute": [],
     "publish": [],
-    "fix": [
+    "fix": [],
+    "finalize": [
       "T-35-03"
     ],
-    "finalize": [],
     "merge": []
   },
   "waiting": {
-    "ci": [
-      "T-35-02"
-    ],
+    "ci": [],
     "dispatched": [],
     "parent": [],
     "merge_human": [],
@@ -105,26 +103,26 @@
       "T-29-08",
       "T-32-01",
       "T-32-02",
-      "T-35-01"
+      "T-35-01",
+      "T-35-02"
     ]
   },
   "why": {
-    "T-35-02": "PR #98: 1 check(s) still running",
-    "T-35-03": "PR #101: the base moved: `ticket/T-35-02-wire-synchronization-into-both-gsd-runti` is 6 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads."
+    "T-35-03": "PR #101: green, the conform trailer is for 9b1e810, the PR is at 491fec6 — threads + arch-review still owed"
   },
   "counts": {
     "execute": 0,
     "publish": 0,
-    "fix": 1,
-    "finalize": 0,
+    "fix": 0,
+    "finalize": 1,
     "merge": 0,
-    "ci": 1,
+    "ci": 0,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
     "blocked": 0,
-    "done": 80
+    "done": 81
   },
   "parent_of": {},
   "actionable_count": 1,
@@ -139,9 +137,7 @@
     "duty": [
       "T-35-03"
     ],
-    "waiting_ci": [
-      "T-35-02"
-    ],
+    "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
     "clear": false

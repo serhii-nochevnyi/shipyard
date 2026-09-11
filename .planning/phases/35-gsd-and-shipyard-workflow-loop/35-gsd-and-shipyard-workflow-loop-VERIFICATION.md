@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b6496b0114e7d2ebd6c35c1942f912cc2729ea62eb479e94307fae64fbc0ca0c
 phase: 35
 status: human_needed
-shipyard_source_fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6
+shipyard_source_fingerprint: b6496b0114e7d2ebd6c35c1942f912cc2729ea62eb479e94307fae64fbc0ca0c
 ---
 
 # Phase 35: Close the GSD and Shipyard workflow loop — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f59
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 1/3 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 2/3 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -22,7 +22,7 @@ shipyard_source_fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f59
 | Ticket | Delivery | Plan status |
 |---|---|---|
 | T-35-01 | merged | ✓ VERIFIED |
-| T-35-02 | pr-open | ? UNCERTAIN |
+| T-35-02 | merged | ✓ VERIFIED |
 | T-35-03 | pr-open | ? UNCERTAIN |
 
 ## Verification Commands
@@ -32,4 +32,4 @@ shipyard_source_fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f59
 
 ## Gaps Summary
 
-**Not green:** 2 plan(s) are not merged.
+**Not green:** 1 plan(s) are not merged.
