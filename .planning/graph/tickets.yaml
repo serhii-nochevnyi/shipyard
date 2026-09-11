@@ -1314,3 +1314,19 @@ tickets:
     primary_parent: null
     pr_base: epic/32-measure-usage-and-make-the-backlog-actionable
     jira: null
+  T-32-03:
+    title: Expose routing attribution eligibility in delivery stats
+    plan: '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-PLAN.md'
+    phase: '32'
+    repo: null
+    wave: 9
+    depends_on: [T-32-06, T-32-01]
+    files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-PLAN.md', plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, docs/pipeline-stats.md]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-32-03-expose-routing-attribution-eligibility-i
+    epic: epic/32-measure-usage-and-make-the-backlog-actionable
+    primary_parent: T-32-06
+    pr_base: ticket/T-32-06-deliver-the-accepted-task-level-model-la
+    jira: null
