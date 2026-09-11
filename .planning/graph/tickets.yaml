@@ -1324,7 +1324,7 @@ tickets:
     repo: null
     wave: 2
     depends_on: [T-35-01]
-    files: [capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs, capabilities/delivery-pipeline/capability.json, tests/unit/gsd-sync-gate.test.cjs, tests/smoke/codex-shipyard-smoke.sh, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
+    files: [capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs, capabilities/delivery-pipeline/capability.json, tests/unit/gsd-sync-gate.test.cjs, tests/smoke/codex-shipyard-smoke.sh, README.md, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: true

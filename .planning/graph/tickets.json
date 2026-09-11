@@ -2411,6 +2411,7 @@
         "capabilities/delivery-pipeline/capability.json",
         "tests/unit/gsd-sync-gate.test.cjs",
         "tests/smoke/codex-shipyard-smoke.sh",
+        "README.md",
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "tests/unit/pipeline-config.test.cjs"
       ],
