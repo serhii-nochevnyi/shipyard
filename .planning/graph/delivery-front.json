@@ -1,26 +1,39 @@
 {
-  "generated_at": "2026-09-11T18:59:59.751Z",
-  "observed_at": "2026-09-11T18:59:59.751Z",
-  "generation": 204,
+  "generated_at": "2026-09-11T20:56:37.487Z",
+  "observed_at": "2026-09-11T20:56:37.487Z",
+  "generation": 207,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-11T18:59:59.751Z",
+  "dispatches_applied_at": "2026-09-11T20:56:37.487Z",
   "actionable": {
-    "execute": [],
+    "execute": [
+      "T-30-04"
+    ],
     "publish": [],
-    "fix": [],
+    "fix": [
+      "T-30-02",
+      "T-30-01"
+    ],
     "finalize": [],
     "merge": []
   },
   "waiting": {
     "ci": [],
     "dispatched": [],
-    "parent": [],
+    "parent": [
+      "T-30-03"
+    ],
     "merge_human": [],
     "human": []
   },
   "parked": {
-    "blocked": [],
+    "blocked": [
+      "T-30-05",
+      "T-30-06",
+      "T-30-07",
+      "T-30-08",
+      "T-30-09"
+    ],
     "done": [
       "T-20-01",
       "T-20-02",
@@ -111,36 +124,53 @@
       "T-35-03"
     ]
   },
-  "why": {},
+  "why": {
+    "T-30-01": "PR #109: 1 failing check(s)",
+    "T-30-02": "PR #110: 1 failing check(s)",
+    "T-30-03": "PR #111: stacked on T-30-02 (PR #110: 1 failing check(s)) — driving this one to green now buys a green the base move will undo. Drive the parent; this follows when it lands.",
+    "T-30-04": "ready — worktree + executor",
+    "T-30-05": "T-30-04 (parent has no branch yet (nothing to cascade from))",
+    "T-30-06": "T-30-05 (parent has no branch yet (nothing to cascade from))",
+    "T-30-07": "T-30-06 (parent has no branch yet (nothing to cascade from))",
+    "T-30-08": "T-30-07 (parent has no branch yet (nothing to cascade from))",
+    "T-30-09": "T-30-08 (parent has no branch yet (nothing to cascade from))"
+  },
   "counts": {
-    "execute": 0,
+    "execute": 1,
     "publish": 0,
-    "fix": 0,
+    "fix": 2,
     "finalize": 0,
     "merge": 0,
     "ci": 0,
     "dispatched": 0,
-    "parent": 0,
+    "parent": 1,
     "merge_human": 0,
     "human": 0,
-    "blocked": 0,
+    "blocked": 5,
     "done": 87
   },
-  "parent_of": {},
-  "actionable_count": 0,
+  "parent_of": {
+    "T-30-03": "T-30-02"
+  },
+  "actionable_count": 3,
   "left_behind_count": 0,
-  "fixpoint": true,
+  "fixpoint": false,
   "capacity": {
     "max": 4,
     "in_flight": 0,
     "free": 4
   },
   "sentinel": {
-    "duty": [],
+    "duty": [
+      "T-30-02",
+      "T-30-01"
+    ],
     "waiting_ci": [],
-    "waiting_parent": [],
+    "waiting_parent": [
+      "T-30-03"
+    ],
     "dispatched": [],
-    "clear": true
+    "clear": false
   },
   "roles": {
     "execute": [
