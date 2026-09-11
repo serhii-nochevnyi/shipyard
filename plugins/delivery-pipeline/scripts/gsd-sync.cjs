@@ -28,7 +28,9 @@ const DELIVERY_STATE = path.join(GRAPH_DIR, 'delivery-state.json');
 const DELIVERY_FRONT = path.join(GRAPH_DIR, 'delivery-front.json');
 
 function pad(n) {
-  const s = String(n);
+  const raw = String(n ?? '').trim();
+  if (!/^\d+$/.test(raw)) return raw;
+  const s = String(Number(raw));
   return s.length >= 2 ? s : `0${s}`;
 }
 
@@ -100,7 +102,8 @@ function isoDate(value, fallback = new Date().toISOString()) {
 }
 
 function dateOnly(value, fallback = new Date().toISOString()) {
-  return isoDate(value, fallback).slice(0, 10);
+  const date = value ? new Date(value) : null;
+  return date && Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : fallback;
 }
 
 function stripRoadmapProjection(text) {
@@ -192,9 +195,17 @@ function parsePhaseRequirements(cleanRoadmap, phaseNumberValue) {
 }
 
 function parseProjectCore(projectText) {
-  const match = String(projectText || '').match(/^##\s+Core Value\s*\n+([\s\S]*?)(?=^##\s|$)/im);
-  return match ? match[1].trim().replace(/\s+/g, ' ') :
-    'Maintain a truthful, resumable synchronization between Shipyard delivery and GSD.';
+  const lines = String(projectText || '').split(/\r?\n/);
+  const heading = lines.findIndex((line) => /^##\s+Core Value\s*$/i.test(line));
+  if (heading >= 0) {
+    const value = [];
+    for (let i = heading + 1; i < lines.length && !/^##\s/.test(lines[i]); i += 1) {
+      value.push(lines[i]);
+    }
+    const coreValue = value.join(' ').replace(/\s+/g, ' ').trim();
+    if (coreValue) return coreValue;
+  }
+  return 'Maintain a truthful, resumable synchronization between Shipyard delivery and GSD.';
 }
 
 function listPhaseDirs() {
@@ -213,9 +224,13 @@ function phaseDirFor(number, title, existingDirs) {
 function collectPlans(existingDirs) {
   const plans = [];
   const errors = [];
+  let planFileCount = 0;
+  let deliveryPlanFileCount = 0;
   for (const dirName of existingDirs) {
     const dir = path.join(PHASES_DIR, dirName);
-    for (const fileName of fs.readdirSync(dir).filter((name) => /-PLAN\.md$/.test(name)).sort()) {
+    const planFiles = fs.readdirSync(dir).filter((name) => /-PLAN\.md$/.test(name)).sort();
+    planFileCount += planFiles.length;
+    for (const fileName of planFiles) {
       const file = path.join(dir, fileName);
       const raw = readText(file, { required: true });
       const parsed = parseFrontmatter(raw);
@@ -228,6 +243,7 @@ function collectPlans(existingDirs) {
       const base = fileName.replace(/-PLAN\.md$/, '');
       const plan = String(fm.plan ?? base.split('-').slice(-1)[0]).trim();
       const delivery = fm.delivery && typeof fm.delivery === 'object' ? fm.delivery : {};
+      if (Object.keys(delivery).length) deliveryPlanFileCount += 1;
       const ticket = canonicalTicket(delivery.ticket, phase);
       if (phase == null || !ticket) {
         errors.push(`${posixRelative(file)}: missing phase or delivery.ticket`);
@@ -238,7 +254,7 @@ function collectPlans(existingDirs) {
         dirName,
         fileName,
         phase,
-        plan: pad(Number(plan)) || plan,
+        plan: pad(plan),
         title: String(fm.title || base),
         ticket,
         requirements: Array.isArray(fm.requirements) ? fm.requirements.map(String) : [],
@@ -248,7 +264,12 @@ function collectPlans(existingDirs) {
       });
     }
   }
-  return { plans: plans.sort((a, b) => a.phase - b.phase || a.plan.localeCompare(b.plan)), errors };
+  return {
+    plans: plans.sort((a, b) => a.phase - b.phase || a.plan.localeCompare(b.plan)),
+    errors,
+    planFileCount,
+    deliveryPlanFileCount,
+  };
 }
 
 function integrationStatus(text) {
@@ -409,7 +430,9 @@ function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreVa
   const completedPhases = [...evidenceByPhase.values()].filter((e) => e.status === 'passed').length;
   const totalPlans = planRecords.length;
   const percent = totalPlans ? Math.floor((completedPlans / totalPlans) * 100) : 0;
-  const current = phases.find((phase) => evidenceByPhase.get(phase.number).status !== 'passed') || phases[phases.length - 1] || null;
+  const firstIncomplete = phases.findIndex((phase) => evidenceByPhase.get(phase.number).status !== 'passed');
+  const currentIndex = firstIncomplete >= 0 ? firstIncomplete : phases.length - 1;
+  const current = currentIndex >= 0 ? phases[currentIndex] : null;
   const currentEvidence = current ? evidenceByPhase.get(current.number) : null;
   const bar = `${'█'.repeat(Math.floor(percent / 10))}${'░'.repeat(10 - Math.floor(percent / 10))}`;
   const phaseRows = phases.map((phase) => {
@@ -441,7 +464,7 @@ function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreVa
     '',
     '## Current Position',
     '',
-    `Phase: ${current ? `${current.number} of ${phases.length} (${current.title})` : 'None'}`,
+    `Phase: ${current ? `${currentIndex + 1} of ${phases.length} (Phase ${current.number}: ${current.title})` : 'None'}`,
     `Plan: ${currentEvidence ? `${currentEvidence.merged} of ${currentEvidence.plans.length} merged` : 'None'}`,
     `Status: ${currentEvidence ? currentEvidence.status : 'Planning'}`,
     `Last activity: ${dateOnly(lastActivity)} — Shipyard projection synchronized`,
@@ -493,7 +516,7 @@ function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreVa
 function renderSummary(plan, fingerprint) {
   const complete = plan.delivery_status === 'merged';
   const status = complete ? 'complete' : 'halted';
-  const date = dateOnly(plan.merged_at);
+  const completionDate = complete ? dateOnly(plan.merged_at, null) : null;
   const provides = complete ? `Delivery evidence for ${plan.ticket}` : `Tracked delivery state for ${plan.ticket}`;
   return [
     '---',
@@ -518,7 +541,7 @@ function renderSummary(plan, fingerprint) {
     'key-decisions:',
     '  - "Shipyard delivery state is projected; no native executor claim is invented."',
     'duration: 0min',
-    `completed: ${date}`,
+    ...(completionDate ? [`completed: ${completionDate}`] : []),
     `status: ${status}`,
     'shipyard_sync: delivery-projection',
     `shipyard_source_fingerprint: ${fingerprint}`,
@@ -549,7 +572,8 @@ function renderSummary(plan, fingerprint) {
 
 function renderUat(phase, evidence, fingerprint) {
   const phaseStatus = evidence.status;
-  const planResult = evidence.plans.length > 0 && evidence.allMerged ? 'passed' : 'pending';
+  const hasPlans = evidence.plans.length > 0;
+  const planResult = hasPlans && evidence.allMerged ? 'passed' : 'pending';
   const integrationResult = phaseStatus === 'passed' ? 'passed' : phaseStatus === 'gaps_found' ? 'failed' : 'pending';
   const verificationResult = phaseStatus === 'passed' ? 'passed' : phaseStatus === 'gaps_found' ? 'failed' : 'pending';
   return [
@@ -568,8 +592,8 @@ function renderUat(phase, evidence, fingerprint) {
     '',
     '### 1. Delivery plans are accounted for',
     `result: ${planResult}`,
-    `expected: all ${evidence.plans.length} phase plan(s) are merged`,
-    `actual: ${evidence.merged} merged`,
+    `expected: ${hasPlans ? `all ${evidence.plans.length} phase plan(s) are merged` : 'at least one delivery PLAN.md is present'}`,
+    `actual: ${hasPlans ? `${evidence.merged} merged` : 'no delivery PLAN.md files; evidence is missing'}`,
     '',
     '### 2. Integration evidence is explicit',
     `result: ${integrationResult}`,
@@ -589,6 +613,12 @@ function renderVerification(phase, evidence, fingerprint, lastActivity) {
   const rows = evidence.plans.length
     ? evidence.plans.map((plan) => `| ${plan.ticket} | ${plan.delivery_status} | ${plan.delivery_status === 'merged' ? '✓ VERIFIED' : '✗ FAILED'} |`).join('\n')
     : '| — | no plans | ? UNCERTAIN |';
+  const planEvidence = evidence.plans.length
+    ? `${evidence.merged}/${evidence.plans.length} delivery records are merged`
+    : 'No PLAN files are present; delivery evidence is missing';
+  const planStatus = evidence.plans.length
+    ? (evidence.allMerged ? '✓ VERIFIED' : '✗ FAILED')
+    : '? UNCERTAIN';
   return [
     '---',
     `# ${marker(fingerprint).slice(5, -4)}`,
@@ -606,7 +636,7 @@ function renderVerification(phase, evidence, fingerprint, lastActivity) {
     '',
     '| Truth | Evidence | Status |',
     '|---|---|---|',
-    `| Every phase plan is accounted for | ${evidence.merged}/${evidence.plans.length} delivery records are merged | ${evidence.allMerged ? '✓ VERIFIED' : '✗ FAILED'} |`,
+    `| Every phase plan is accounted for | ${planEvidence} | ${planStatus} |`,
     `| Integration is coherent | ${evidence.integration.reason} | ${evidence.integration.status === 'passed' ? '✓ VERIFIED' : evidence.integration.status === 'needs-fix' ? '✗ FAILED' : '? UNCERTAIN'} |`,
     '',
     '## Plan Evidence',
@@ -702,6 +732,18 @@ function buildSnapshot({ phase: focusPhase = null } = {}) {
   const existingDirs = listPhaseDirs();
   const phaseList = phaseNameMap(roadmapInfo, existingDirs);
   const collected = collectPlans(existingDirs);
+  if (collected.deliveryPlanFileCount === 0) {
+    return {
+      applicable: false,
+      ok: true,
+      blockers: [],
+      source_fingerprint: null,
+      generated: [],
+      obsolete: [],
+      phases: [],
+      counts: { phases: 0, plans: 0, merged_plans: 0, verified_phases: 0, generated_files: 0, obsolete_files: 0 },
+    };
+  }
   const blockers = checkSource({ roadmapText, roadmapInfo, projectText, plans: collected.plans, planErrors: collected.errors, graph, state, front });
   if (focusPhase != null && !phaseList.some((phase) => phase.number === Number(focusPhase))) {
     blockers.push(`requested phase ${focusPhase} is not declared in ROADMAP.md`);

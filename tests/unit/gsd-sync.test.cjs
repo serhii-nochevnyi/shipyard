@@ -15,11 +15,11 @@ function write(file, content) {
   fs.writeFileSync(file, content);
 }
 
-function project({ integration = 'Verdict: passed', merged = true, conflict = false } = {}) {
+function project({ integration = 'Verdict: passed', merged = true, conflict = false, plan = 1, coreValue = 'One truthful workflow' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-sync-'));
   const graph = path.join(root, '.planning', 'graph');
   const phase = path.join(root, '.planning', 'phases', '01-foundation');
-  write(path.join(root, '.planning', 'PROJECT.md'), '# shipyard\n\n## Core Value\nOne truthful workflow\n');
+  write(path.join(root, '.planning', 'PROJECT.md'), `# shipyard\n\n## Core Value\n${coreValue}\n`);
   write(path.join(root, '.planning', 'ROADMAP.md'), [
     '# Roadmap: shipyard', '', '## Requirements', '',
     '- **SYNC-01** — Native GSD state matches the delivery graph.', '',
@@ -27,7 +27,7 @@ function project({ integration = 'Verdict: passed', merged = true, conflict = fa
     '**Requirements**: SYNC-01', '',
   ].join('\n'));
   write(path.join(phase, '01-01-PLAN.md'), [
-    '---', 'phase: 1', 'plan: 1', 'title: "Projection"',
+    '---', 'phase: 1', `plan: ${plan}`, 'title: "Projection"',
     'files_modified: [src/example.js]', 'requirements: [SYNC-01]',
     'delivery:', '  ticket: T-01-01', '  risk: low', '---', '',
     '## Goal', '', 'Create the projection.',
@@ -56,6 +56,37 @@ test('canonicalizes ticket identities and rejects malformed CLI flags', () => {
   const r = spawnSync(process.execPath, [SCRIPT, '--phase'], { cwd: ROOT, encoding: 'utf8' });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /--phase requires/);
+});
+
+test('keeps non-numeric plan ids, full core value, and incomplete summaries deterministic', () => {
+  const root = project({
+    merged: false,
+    plan: 'alpha',
+    coreValue: 'Keep delivery decisions truthful\nacross every generated artifact.',
+  });
+  const first = run(root);
+  assert.equal(first.status, 0, first.stderr);
+  const summaryPath = path.join(root, '.planning', 'phases', '01-foundation', '01-01-SUMMARY.md');
+  const summary = fs.readFileSync(summaryPath, 'utf8');
+  assert.match(summary, /^plan: alpha$/m);
+  assert.doesNotMatch(summary, /NaN/);
+  assert.doesNotMatch(summary, /^completed:/m);
+  assert.match(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), /Keep delivery decisions truthful across every generated artifact\./);
+  assert.match(fs.readFileSync(path.join(root, '.planning', 'REQUIREMENTS.md'), 'utf8'), /Keep delivery decisions truthful across every generated artifact\./);
+  const before = fs.readFileSync(summaryPath, 'utf8');
+  assert.equal(run(root).status, 0);
+  assert.equal(fs.readFileSync(summaryPath, 'utf8'), before);
+});
+
+test('is not applicable when a project has no delivery plans', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-no-delivery-'));
+  write(path.join(root, '.planning', 'PROJECT.md'), '# shipyard\n');
+  write(path.join(root, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+  const result = run(root);
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.applicable, false);
 });
 
 test('writes a complete native projection and is idempotent', () => {

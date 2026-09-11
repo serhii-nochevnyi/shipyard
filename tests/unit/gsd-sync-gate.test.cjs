@@ -64,6 +64,14 @@ test('is inert for ordinary GSD projects', () => {
   assert.match(result.stdout, /not applicable/);
 });
 
+test('ignores malformed config while determining applicability', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-malformed-config-'));
+  write(path.join(root, '.planning', 'config.json'), '{broken');
+  const result = run(root, 'check');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /not applicable/);
+});
+
 test('honors the declared opt-out without touching artifacts', () => {
   const root = project();
   write(path.join(root, '.planning', 'config.json'), JSON.stringify({ delivery_pipeline: { gsd_sync: false } }));
