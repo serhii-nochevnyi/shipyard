@@ -86,7 +86,11 @@ restore_skills() {
     target="$AGENTS_SKILLS/$name"
     rm -rf "$target" || restore_status=1
     if [[ "$state" == present ]]; then
-      cp -a "$backup/$name" "$target" || restore_status=1
+      mkdir -p "$target" || restore_status=1
+      if [[ -d "$backup/$name" ]]; then
+        cp -a "$backup/$name"/. "$target"/ || restore_status=1
+      fi
+      rmdir "$target" 2>/dev/null || true
     fi
   done < "$index"
   return "$restore_status"
@@ -149,7 +153,16 @@ for d in "$OUT"/skills/*/; do
   name="$(basename "$d")"
   target="$AGENTS_SKILLS/$name"
   if [[ -e "$target" || -L "$target" ]]; then
-    cp -a "$target" "$SKILLS_BACKUP/$name"
+    mkdir -p "$SKILLS_BACKUP/$name"
+    (
+      cd "${d%/}"
+      find . -mindepth 1 -print0
+    ) | while IFS= read -r -d '' rel; do
+      src="$target/$rel"
+      [[ -e "$src" || -L "$src" ]] || continue
+      mkdir -p "$SKILLS_BACKUP/$name/$(dirname "$rel")"
+      cp -a "$src" "$SKILLS_BACKUP/$name/$rel"
+    done
     printf 'present\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
   else
     printf 'absent\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
