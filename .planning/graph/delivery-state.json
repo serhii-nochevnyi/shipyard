@@ -878,7 +878,7 @@
     "pr_base": "epic/35-gsd-and-shipyard-workflow-loop",
     "pr_created_at": "2026-09-10T18:51:26Z",
     "head_sha": "6b4aa196d609442877521da3f755c03cf055563b",
-    "merge_state": "UNSTABLE",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "gate": {
       "arch-review": "conform",
@@ -890,7 +890,7 @@
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -911,19 +911,19 @@
     "pr_base": "ticket/T-35-01-deterministic-native-gsd-projection",
     "pr_created_at": "2026-09-10T18:53:33Z",
     "head_sha": "dfd33aab26e24031210b1fcca8ed785f3770c1d0",
-    "merge_state": "UNSTABLE",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "gate": {
       "arch-review": "conform",
       "drift-check": "fresh",
       "degenerate-green": "skipped",
       "checks": "green",
-      "head": "c7b31d27e5c7d5d7a1e8a15b6ac5c81fef200cd6"
+      "head": "dfd33aab26e24031210b1fcca8ed785f3770c1d0"
     },
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -943,9 +943,9 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/101",
     "pr_base": "ticket/T-35-02-wire-synchronization-into-both-gsd-runti",
     "pr_created_at": "2026-09-10T18:58:20Z",
-    "head_sha": "1d6256f8d455933dc56576968a74ecaefc92682c",
-    "merge_state": "UNKNOWN",
-    "behind_by": 3,
+    "head_sha": "c0942807f59863ce42d53323c3a3e7451177ae82",
+    "merge_state": "CLEAN",
+    "behind_by": 0,
     "gate": {
       "arch-review": "conform",
       "drift-check": "fresh",

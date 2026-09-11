@@ -1,31 +1,31 @@
 {
-  "generated_at": "2026-09-11T07:12:25.054Z",
-  "observed_at": "2026-09-11T07:12:25.054Z",
-  "generation": 193,
+  "generated_at": "2026-09-11T07:17:45.844Z",
+  "observed_at": "2026-09-11T07:17:45.844Z",
+  "generation": 195,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-11T07:12:25.054Z",
+  "dispatches_applied_at": "2026-09-11T07:17:45.844Z",
   "actionable": {
     "execute": [],
     "publish": [],
     "fix": [],
-    "finalize": [],
+    "finalize": [
+      "T-35-01",
+      "T-35-03"
+    ],
     "merge": []
   },
   "waiting": {
-    "ci": [
-      "T-35-01",
-      "T-35-02"
-    ],
+    "ci": [],
     "dispatched": [],
     "parent": [],
     "merge_human": [],
-    "human": []
+    "human": [
+      "T-35-02"
+    ]
   },
   "parked": {
-    "blocked": [
-      "T-35-03"
-    ],
+    "blocked": [],
     "done": [
       "T-20-01",
       "T-20-02",
@@ -109,26 +109,26 @@
     ]
   },
   "why": {
-    "T-35-01": "PR #96: 1 check(s) still running",
-    "T-35-02": "PR #98: 1 check(s) still running",
-    "T-35-03": "escalated — held for operator review 2026-09-11: phase 35 and ADR-013 are under evaluation in docs/audits/2026-09-11-codex-delivery-review.md; #104 carries runtime:codex toward main and two authorizations (ADR-012 lane, T-32-06 preauth) are unconfirmed — finalize only after the operator answers. It lifts by itself once the PR moves (a push, a review answer, undrafting); `escalation-record.cjs clear T-35-03` to take it back."
+    "T-35-01": "PR #96: green, the conform trailer is for ea70314, the PR is at 6b4aa19 — threads + arch-review still owed",
+    "T-35-02": "PR #98: green + conform, but its base is T-35-01 — a pre-authorized human_checkpoint PR still open. Nobody is reading it, but it lands first; this one follows.",
+    "T-35-03": "PR #101: green, the conform trailer is for 9b1e810, the PR is at c094280 — threads + arch-review still owed"
   },
   "counts": {
     "execute": 0,
     "publish": 0,
     "fix": 0,
-    "finalize": 0,
+    "finalize": 2,
     "merge": 0,
-    "ci": 2,
+    "ci": 0,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
-    "human": 0,
-    "blocked": 1,
+    "human": 1,
+    "blocked": 0,
     "done": 79
   },
   "parent_of": {},
-  "actionable_count": 0,
+  "actionable_count": 2,
   "left_behind_count": 0,
   "fixpoint": false,
   "capacity": {
@@ -137,11 +137,11 @@
     "free": 4
   },
   "sentinel": {
-    "duty": [],
-    "waiting_ci": [
+    "duty": [
       "T-35-01",
-      "T-35-02"
+      "T-35-03"
     ],
+    "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
     "clear": false
