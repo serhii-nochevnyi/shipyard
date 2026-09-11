@@ -30,6 +30,7 @@ CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
 BUNDLE_ROOT="$CODEX_HOME/shipyard"
 GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
+SKILL_MANIFEST_NAME=".shipyard-files.json"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -85,7 +86,9 @@ restore_skills() {
     [[ -n "$name" ]] || continue
     target="$AGENTS_SKILLS/$name"
     rm -rf "$target" || restore_status=1
-    if [[ "$state" == present ]]; then
+    if [[ "$state" == legacy ]]; then
+      cp -a "$backup/$name" "$target" || restore_status=1
+    elif [[ "$state" == present ]]; then
       mkdir -p "$target" || restore_status=1
       if [[ -d "$backup/$name" ]]; then
         cp -a "$backup/$name"/. "$target"/ || restore_status=1
@@ -132,6 +135,28 @@ restore_config() {
   fi
   return "$restore_status"
 }
+write_skill_manifest() {
+  node - "$1" "$SKILL_MANIFEST_NAME" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const dir = process.argv[2];
+const manifestName = process.argv[3];
+const out = [];
+
+function walk(root, rel = '') {
+  for (const entry of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+    if (entry.name === manifestName) continue;
+    const next = rel ? path.join(rel, entry.name) : entry.name;
+    out.push(next);
+    if (entry.isDirectory()) walk(root, next);
+  }
+}
+
+walk(dir);
+fs.writeFileSync(path.join(dir, manifestName), JSON.stringify({ paths: out.sort() }, null, 2) + '\n');
+NODE
+}
 trap 'cleanup $?' EXIT
 OUT="$STAGE/bundle-out"
 
@@ -154,16 +179,36 @@ for d in "$OUT"/skills/*/; do
   target="$AGENTS_SKILLS/$name"
   if [[ -e "$target" || -L "$target" ]]; then
     mkdir -p "$SKILLS_BACKUP/$name"
-    (
-      cd "${d%/}"
-      find . -mindepth 1 -print0
-    ) | while IFS= read -r -d '' rel; do
-      src="$target/$rel"
-      [[ -e "$src" || -L "$src" ]] || continue
-      mkdir -p "$SKILLS_BACKUP/$name/$(dirname "$rel")"
-      cp -a "$src" "$SKILLS_BACKUP/$name/$rel"
-    done
-    printf 'present\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
+    if [[ -f "$target/$SKILL_MANIFEST_NAME" ]]; then
+      cp -a "$target/$SKILL_MANIFEST_NAME" "$SKILLS_BACKUP/$name/$SKILL_MANIFEST_NAME"
+      mapfile -t managed < <(
+        (
+          cd "${d%/}"
+          find . -mindepth 1 ! -name "$SKILL_MANIFEST_NAME" -printf '%P\n'
+        ) |
+        node -e '
+          const fs = require("fs");
+          const values = new Set(fs.readFileSync(0, "utf8").split(/\n/).filter(Boolean));
+          try {
+            const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            for (const value of Array.isArray(manifest.paths) ? manifest.paths : []) {
+              if (typeof value === "string" && value) values.add(value);
+            }
+          } catch {}
+          process.stdout.write([...values].sort().join("\n"));
+        ' "$target/$SKILL_MANIFEST_NAME"
+      )
+      for rel in "${managed[@]}"; do
+        src="$target/$rel"
+        [[ -e "$src" || -L "$src" ]] || continue
+        mkdir -p "$SKILLS_BACKUP/$name/$(dirname "$rel")"
+        cp -a "$src" "$SKILLS_BACKUP/$name/$rel"
+      done
+      printf 'present\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
+    else
+      cp -a "$target"/. "$SKILLS_BACKUP/$name"/
+      printf 'legacy\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
+    fi
   else
     printf 'absent\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
   fi
@@ -173,6 +218,7 @@ for d in "$OUT"/skills/*/; do
   name="$(basename "$d")"
   rm -rf "${AGENTS_SKILLS:?}/$name"
   cp -R "${d%/}" "$AGENTS_SKILLS/$name"
+  write_skill_manifest "$AGENTS_SKILLS/$name"
 done
 
 # ── bundle payload (CLAUDE_PLUGIN_ROOT target: scripts/references/templates) ──
