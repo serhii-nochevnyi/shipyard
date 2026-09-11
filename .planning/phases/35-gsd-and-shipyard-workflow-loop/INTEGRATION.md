@@ -39,7 +39,7 @@ handshake; neither installer persists a shared project runtime
   (`plugins/delivery-pipeline/scripts/gsd-sync.cjs:319-417`).
 - **Concurrency boundary:** projection publication uses the same `state` lock
   as state-sync and front refresh, so delivery observations cannot be read from
-  one snapshot and published beside another (`plugins/delivery-pipeline/scripts/gsd-sync.cjs:1017-1026`,
+  one snapshot and published beside another (`plugins/delivery-pipeline/scripts/gsd-sync.cjs:1029-1040`,
   `plugins/delivery-pipeline/scripts/state-sync.cjs:828-850`).
 - **Lifecycle boundary:** the launcher selects only a complete canonical script
   bundle, invokes write/check mode with explicit native-artifact adoption, and
@@ -76,8 +76,10 @@ runtime-neutral synchronization setting and all four lifecycle points
 The generated project artifacts are reviewed as projections: they retain
 pending/non-green historical evidence rather than inventing completion, while
 the phase-35 integration record supplies the explicit evidence required for
-this phase to become green. The public workflow documents the same projection
-and runtime boundary (`docs/gsd_multilevel_delivery_pipeline.md:47-62`,
+this phase to become green. T-35-03 remains a human checkpoint in both the
+plan frontmatter and regenerated graph, so the final epic merge cannot be
+silently delegated. The public workflow documents the same projection and
+runtime boundary (`docs/gsd_multilevel_delivery_pipeline.md:47-62`,
 `docs/gsd_multilevel_delivery_pipeline.md:888-893`,
 `docs/gsd_multilevel_delivery_pipeline.md:917-943`).
 
@@ -86,7 +88,7 @@ and runtime boundary (`docs/gsd_multilevel_delivery_pipeline.md:47-62`,
 - `node plugins/delivery-pipeline/scripts/validate-graph.cjs` passed on the
   integration tree: 82 tickets, 15 waves; only pre-existing graph warnings
   were reported.
-- `node tests/unit/gsd-sync.test.cjs` passed: 21 tests.
+- `node tests/unit/gsd-sync.test.cjs` passed: 22 tests.
 - `node tests/unit/gsd-sync-gate.test.cjs` passed: 9 tests.
 - `make test-fast` passed on the exact integration tree: 160 tests passed, 0
   failed; graph, worktree, sentinel, docs, and SSH sync smoke suites passed.

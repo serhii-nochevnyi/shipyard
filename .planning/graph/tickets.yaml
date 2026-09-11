@@ -1342,7 +1342,7 @@ tickets:
     depends_on: [T-35-02]
     files: ['.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-PLAN.md', '.planning/PROJECT.md', '.planning/ROADMAP.md', '.planning/config.json', '.planning/REQUIREMENTS.md', '.planning/STATE.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/graph/escalations.json', '.planning/graph/delivery-front.json', '.planning/graph/delivery-log.jsonl', '.planning/graph/delivery-state-meta.json', '.planning/graph/delivery-state.json', '.planning/graph/delivery-state.yaml', '.planning/architecture/**', '.planning/investigations/**', '.planning/phases/**', plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs, docs/gsd_multilevel_delivery_pipeline.md]
     risk: medium
-    human_checkpoint: false
+    human_checkpoint: true
     preauthorized: false
     branch: ticket/T-35-03-document-normalize-and-bootstrap-the-syn
     epic: epic/35-gsd-and-shipyard-workflow-loop

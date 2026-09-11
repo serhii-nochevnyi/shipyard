@@ -2462,7 +2462,7 @@
       ],
       "risk": "medium",
       "type": "implementation",
-      "human_checkpoint": false,
+      "human_checkpoint": true,
       "preauthorized": false,
       "branch": "ticket/T-35-03-document-normalize-and-bootstrap-the-syn",
       "epic": "epic/35-gsd-and-shipyard-workflow-loop",

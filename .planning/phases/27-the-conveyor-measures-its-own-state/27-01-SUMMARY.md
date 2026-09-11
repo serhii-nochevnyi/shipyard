@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
 phase: 27-the-conveyor-measures-its-own-state
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
+shipyard_source_fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
 ---
 
 # Phase 27: The cap counts agents, and the three capacity readers give one answer — Delivery Projection

@@ -155,6 +155,18 @@ test('surfaces failed verification evidence as a phase gap', () => {
   assert.match(verification, /verification evidence records a failed check/i);
 });
 
+test('keeps integration and verification UAT results independent', () => {
+  const root = project({ integration: 'Verdict: passed\n\n## Verification\n- no repository-local result yet' });
+  assert.equal(run(root).status, 0);
+  const uat = fs.readFileSync(
+    path.join(root, '.planning', 'phases', '01-foundation', '01-foundation-UAT.md'),
+    'utf8',
+  );
+  assert.match(uat, /### 2\. Integration evidence is explicit[\s\S]*result: passed/);
+  assert.match(uat, /### 3\. Phase verification is evidence-backed[\s\S]*result: pending/);
+  assert.match(uat, /actual: pending — integration evidence has no positive repository-local verification result/);
+});
+
 test('preserves wrapped roadmap requirement descriptions', () => {
   const root = project();
   write(path.join(root, '.planning', 'ROADMAP.md'), [

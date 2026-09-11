@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
 phase: 26
 status: failed
 result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
+shipyard_source_fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
 ---
 
 # Phase 26: Positive evidence before a mutation — UAT Projection
@@ -17,11 +17,11 @@ expected: all 15 phase plan(s) are merged
 actual: 15 merged
 
 ### 2. Integration evidence is explicit
-result: failed
+result: passed
 expected: an explicit passed verdict in .planning/phases/26-positive-evidence-before-a-mutation/INTEGRATION.md
 actual: passed — integration evidence records passed
 
 ### 3. Phase verification is evidence-backed
 result: failed
-expected: the phase verification projection is not green without evidence
-actual: gaps_found
+expected: positive repository-local verification evidence is present
+actual: failed — verification evidence records a failed check

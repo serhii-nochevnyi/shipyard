@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
 phase: 23
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
+shipyard_source_fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
 ---
 
 # Phase 23: The board tells the truth about itself — UAT Projection
@@ -23,5 +23,5 @@ actual: pending — INTEGRATION.md is missing
 
 ### 3. Phase verification is evidence-backed
 result: pending
-expected: the phase verification projection is not green without evidence
-actual: pending
+expected: positive repository-local verification evidence is present
+actual: pending — INTEGRATION.md is missing

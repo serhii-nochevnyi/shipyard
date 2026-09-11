@@ -715,8 +715,12 @@ function renderUat(phase, evidence, fingerprint) {
   const phaseStatus = evidence.status;
   const hasPlans = evidence.plans.length > 0;
   const planResult = hasPlans && evidence.allMerged ? 'passed' : 'pending';
-  const integrationResult = phaseStatus === 'passed' ? 'passed' : phaseStatus === 'gaps_found' ? 'failed' : 'pending';
-  const verificationResult = phaseStatus === 'passed' ? 'passed' : phaseStatus === 'gaps_found' ? 'failed' : 'pending';
+  const integrationResult = evidence.integration.status === 'passed'
+    ? 'passed'
+    : evidence.integration.status === 'needs-fix' ? 'failed' : 'pending';
+  const verificationResult = evidence.verification.status === 'passed'
+    ? 'passed'
+    : evidence.verification.status === 'failed' ? 'failed' : 'pending';
   return [
     '---',
     `# ${marker(fingerprint).slice(5, -4)}`,
@@ -743,8 +747,8 @@ function renderUat(phase, evidence, fingerprint) {
     '',
     '### 3. Phase verification is evidence-backed',
     `result: ${verificationResult}`,
-    `expected: the phase verification projection is ${phaseStatus === 'passed' ? 'passed' : 'not green without evidence'}`,
-    `actual: ${phaseStatus}`,
+    'expected: positive repository-local verification evidence is present',
+    `actual: ${evidence.verification.status} — ${evidence.verification.reason}`,
     '',
   ].join('\n');
 }

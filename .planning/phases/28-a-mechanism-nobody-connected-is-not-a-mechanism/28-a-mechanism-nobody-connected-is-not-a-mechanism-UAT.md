@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
 phase: 28
 status: failed
 result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 215d0f8867c0aed072de013f3c3f8b9fd2516103a9760236d265453ffece42af
+shipyard_source_fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
 ---
 
 # Phase 28: A mechanism nobody connected is not a mechanism — UAT Projection
@@ -23,5 +23,5 @@ actual: needs-fix — integration evidence records a finding or failed verdict
 
 ### 3. Phase verification is evidence-backed
 result: failed
-expected: the phase verification projection is not green without evidence
-actual: gaps_found
+expected: positive repository-local verification evidence is present
+actual: failed — integration evidence records a finding or failed verdict
