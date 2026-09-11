@@ -1368,7 +1368,10 @@ may be dispatched at all: fix the file.
     above returns immediately with an id (the Workflow tool a task id, the Agent
     tool an agent id); once you hold that id the agent exists, and only then, for
     every ticket you just handed out:
-    `dispatch-record.cjs mark <T> executor --model <model> --effort <effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <workflow|agent|inline> --agent-id <launch id>`
+    `dispatch-record.cjs mark <T> executor --model <model_tier> --effort <requested_effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <workflow|agent|inline> --agent-id <launch id>`
+    For a Codex selection, use its `model_tier` for `--model` and its
+    `requested_effort` for `--effort`; keep the concrete selector `model` for
+    `--observed-model` when the host reports it.
     (add `--effort-applied <effort>` when you took the Workflow path — it carries an
     effort into the spawn. If the selected backend cannot support effort, record
     `unsupported`; if it ran but did not expose the value, record `unknown`. Otherwise

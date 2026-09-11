@@ -753,6 +753,17 @@ function graphDir(cwd = process.cwd()) {
   return path.join(cwd, '.planning', 'graph');
 }
 
+// The front, state-sync and the other durable stores all agree on one graph
+// layout: `<project>/.planning/graph`.  `--graph` is an explicit project graph
+// selector, not a second arbitrary store location.  Accepting a different
+// shape here is unsafe because the CLI derives the project root from this path
+// for the refresh and then the readers silently look in another graph.
+function isCanonicalGraphDir(dir) {
+  const resolved = path.resolve(dir);
+  return path.basename(resolved) === 'graph'
+    && path.basename(path.dirname(resolved)) === '.planning';
+}
+
 function readState(cwd) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(graphDir(cwd), 'delivery-state.json'), 'utf8'));
@@ -1019,6 +1030,12 @@ module.exports = {
 
 if (require.main === module) {
   const [cmd, ...rest] = ARGV;
+  if (GRAPH_EXPLICIT && !isCanonicalGraphDir(GRAPH_DIR)) {
+    fail(
+      `--graph must point to a project graph at <project>/.planning/graph (got ${GRAPH_DIR})` +
+      '\n  An arbitrary directory would be written by this command but read by the front from a different graph.'
+    );
+  }
   const cwd = path.resolve(GRAPH_DIR, '..', '..');
 
   // Fail-closed, exactly as drift-record and escalation-record do: this command

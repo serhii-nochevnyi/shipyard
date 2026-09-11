@@ -227,7 +227,17 @@ test('explicit empty attribution fields are rejected instead of defaulted', () =
    const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), { attributions:[record] });
    assert.ok(r.warnings.some((w) => w.includes(needle)), `${field}=${String(value)} should be rejected`);
    assert.equal(r.efficiency.eligible_rows, 0);
- }
+  }
+});
+
+test('inherited runtime names are rejected as unknown', () => {
+ const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), {
+   attributions: [{ observation_id:'bad-runtime-prototype', dispatch_id:'dispatch-prototype', runtime:'toString',
+     source:'fixture', session_id:'s1' }],
+ });
+ assert.ok(r.warnings.some((w) => w.includes('unknown runtime')));
+ assert.equal(r.coverage.attribution_records, 0);
+ assert.equal(r.observations[0].attribution_status, 'unattributed');
 });
 
 test('malformed observed_model text is rejected before matching', () => {

@@ -311,7 +311,7 @@ const attributionStatus = (event) => {
   return 'incomplete';
 };
 const missingAttribution = Object.fromEntries([
-  'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'agent_file',
+  'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'role', 'agent_file',
   'effort_applied', 'observed_model', 'observed_effort', 'dispatch_id',
 ].map((field) => [field, ladderEvents.filter((e) => {
   if (field === 'agent_file') return staticCodexNeedsFile(e);

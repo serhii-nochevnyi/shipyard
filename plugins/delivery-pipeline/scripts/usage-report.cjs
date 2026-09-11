@@ -48,7 +48,9 @@ function attributionShape(record, index) {
     return { error: `attribution ${index} source must be a string` };
   }
   const runtime = runtimeOf(record);
-  if (!runtime || !RUNTIME_PROVIDER[runtime]) return { error: `attribution ${index} has an unknown runtime` };
+  if (!runtime || !Object.prototype.hasOwnProperty.call(RUNTIME_PROVIDER, runtime)) {
+    return { error: `attribution ${index} has an unknown runtime` };
+  }
   if (Object.prototype.hasOwnProperty.call(record, 'provider')
       && record.provider !== RUNTIME_PROVIDER[runtime]
       && record.provider !== runtime) {

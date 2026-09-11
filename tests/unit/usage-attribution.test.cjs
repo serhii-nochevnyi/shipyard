@@ -143,6 +143,21 @@ test('the write API refuses a graph directory without the project marker', () =>
   }
 });
 
+test('a custom graph serializes writers beside its own ledger', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-uattr-custom-'));
+  const graph = path.join(dir, 'custom-graph');
+  fs.mkdirSync(graph, { recursive: true });
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: {} }));
+  try {
+    const result = recordBatch(graph, base());
+    assert.equal(result.recorded.length, 1);
+    assert.ok(fs.existsSync(path.join(graph, 'usage-attribution.jsonl')));
+    assert.ok(fs.existsSync(path.join(graph, '.locks')), 'the lock root follows the selected ledger');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Codex attributions reject Claude-only requested tiers', () => {
   assert.throws(
     () => normalizeRecord(base({ runtime: 'codex', provider: 'openai', model: 'fable' })),

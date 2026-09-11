@@ -496,6 +496,22 @@ test('a real --graph works in either position, from a foreign cwd', () => {
   assert.ok(store(last.graph)['T-01-01'], 'recorded in the PROJECT graph');
 });
 
+test('a noncanonical --graph is refused instead of splitting the board from its readers', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-custom-'));
+  const graph = path.join(dir, 'custom-graph');
+  fs.mkdirSync(graph, { recursive: true });
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': {} } }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({ 'T-01-01': { ...READY } }));
+  try {
+    const r = run(['mark', 'T-01-01', 'executor', '--graph', graph], dir);
+    assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+    assert.match(r.stderr, /must point to a project graph/);
+    assert.ok(!fs.existsSync(path.join(graph, 'dispatches.json')), 'nothing is written to an unreadable store');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 suite('dispatch-record — a whole wave is marked at once');
 
 test('six concurrent marks all survive', async () => {

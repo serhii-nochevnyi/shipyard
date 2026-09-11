@@ -19,7 +19,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { withLock, lockDirFor } = require('./lock.cjs');
+const { withLock } = require('./lock.cjs');
 const pipeline = require('./pipeline-config.cjs');
 
 const LEDGER_NAME = 'usage-attribution.jsonl';
@@ -246,7 +246,8 @@ function sameRecord(a, b) {
 function recordBatch(graphDir, raw) {
   const input = Array.isArray(raw) ? raw : [raw];
   if (!input.length) return { recorded: [], skipped: 0 };
-  graphGuard(graphDir, true);
+  const dir = path.resolve(graphDir);
+  graphGuard(dir, true);
   // Validate all items before taking the lock or changing the file.
   const now = new Date().toISOString();
   const normalized = input.map((item) => normalizeRecord(item, now));
@@ -256,8 +257,11 @@ function recordBatch(graphDir, raw) {
     ids.add(item.observation_id);
   }
 
-  return withLock(lockDirFor(path.resolve(graphDir, '..', '..')), 'usage-attribution', () => {
-    const current = readLedger(graphDir).records;
+  // The ledger can be explicitly selected outside the usual project layout.
+  // Lock beside that ledger, otherwise `/tmp/graph` would contend on
+  // `/.planning/graph/.locks` while two writers to the selected file race.
+  return withLock(path.join(dir, '.locks'), 'usage-attribution', () => {
+    const current = readLedger(dir).records;
     const latest = new Map(latestRecords(current).map((item) => [item.observation_id, item]));
     const toAppend = [];
     for (const item of normalized) {
@@ -267,9 +271,9 @@ function recordBatch(graphDir, raw) {
       toAppend.push({ ...item, revision: Math.max(priorRevision + 1, item.revision || 1) });
     }
     if (toAppend.length) {
-      fs.mkdirSync(graphDir, { recursive: true });
+      fs.mkdirSync(dir, { recursive: true });
       fs.appendFileSync(
-        path.join(graphDir, LEDGER_NAME),
+        path.join(dir, LEDGER_NAME),
         toAppend.map((item) => JSON.stringify(item)).join('\n') + '\n'
       );
     }
