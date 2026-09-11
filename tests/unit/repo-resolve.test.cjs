@@ -264,6 +264,98 @@ test('clone preparation reports unavailable metadata without invoking git clone'
   assert.strictEqual(result.url, null);
 });
 
+test('clone refuses a local source whose origin identifies another repository', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const source = gitRepo();
+  git(source, ['remote', 'add', 'origin', 'git@github.com:someone-else/service.git']);
+  const destination = path.join(parent, 'service');
+  const result = mod.cloneRepository({
+    ticket: 'T-30-07',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/base',
+    cloneUrl: source,
+  });
+
+  assert.strictEqual(result.executable, false);
+  assert.match(result.reason, /local clone source.*does not identify/);
+  assert.strictEqual(fs.existsSync(destination), false, 'an untrusted local source must not start a clone');
+});
+
+test('clone command is full and proves the requested origin base ref', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const source = gitRepo();
+  git(source, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(source, ['config', 'user.name', 'Shipyard Tests']);
+  git(source, ['remote', 'add', 'origin', 'git@github.com:acme/service.git']);
+  fs.writeFileSync(path.join(source, 'README.md'), 'seed\n');
+  git(source, ['add', 'README.md']);
+  git(source, ['commit', '-qm', 'seed']);
+  git(source, ['branch', 'epic/base']);
+
+  const destination = path.join(parent, 'service');
+  const calls = [];
+  const result = mod.cloneRepository({
+    ticket: 'T-30-07',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/base',
+    cloneUrl: source,
+  }, (command, args, options) => {
+    calls.push({ command, args, options });
+    return spawnSync(command, args, options);
+  });
+
+  assert.strictEqual(result.executable, true, result.reason);
+  assert.strictEqual(result.resolution, 'cloned');
+  assert.strictEqual(result.base_ref, 'origin/epic/base');
+  assert.strictEqual(result.base_verified, true);
+  assert.strictEqual(result.repository_root, fs.realpathSync(destination));
+  assert.deepStrictEqual(calls.map(({ command, args }) => ({ command, args })), [{
+    command: 'git',
+    args: ['clone', '--origin', 'origin', source, destination],
+  }, {
+    command: 'git',
+    args: ['-C', destination, 'remote', 'set-url', 'origin', 'git@github.com:acme/service.git'],
+  }]);
+  assert.strictEqual(git(destination, ['rev-parse', '--verify', 'refs/remotes/origin/epic/base^{commit}']).length, 40);
+});
+
+test('clone parks a checkout when the required origin base is missing', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const source = gitRepo();
+  git(source, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(source, ['config', 'user.name', 'Shipyard Tests']);
+  git(source, ['remote', 'add', 'origin', 'git@github.com:acme/service.git']);
+  fs.writeFileSync(path.join(source, 'README.md'), 'seed\n');
+  git(source, ['add', 'README.md']);
+  git(source, ['commit', '-qm', 'seed']);
+  const destination = path.join(parent, 'missing-base-service');
+
+  const result = mod.cloneRepository({
+    ticket: 'T-30-07',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/does-not-exist',
+    cloneUrl: source,
+  });
+
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'clone-unverified');
+  assert.strictEqual(result.base_verified, false);
+  assert.match(result.park_reason, /origin\/epic\/does-not-exist/);
+  assert.strictEqual(fs.existsSync(destination), true, 'verification must not hide the clone failure by deleting it');
+});
+
 test('discovery matches origin rather than the directory basename and scans one level', () => {
   const parent = tempDir();
   const projectDir = path.join(parent, 'project');

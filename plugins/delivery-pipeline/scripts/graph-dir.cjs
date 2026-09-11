@@ -101,11 +101,37 @@ function loadTickets(argv, worktree, label) {
  * naturally. Callers print the resolved ref: a silently substituted base would be
  * a new invisible behaviour, which is the exact class this exists to remove.
  */
-function resolveBaseRef(worktreePath, base) {
-  const r = spawnSync('git',
-    ['-C', worktreePath, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${base}`],
-    { encoding: 'utf8' });
-  return r.status === 0 ? `origin/${base}` : base;
+function originRefName(base) {
+  if (typeof base !== 'string') return null;
+  const value = base.trim().replace(/^origin\//, '');
+  // This is used as one component of a ref path passed to git. Keep the
+  // accepted vocabulary narrower than git's full ref grammar so a malformed
+  // ticket base cannot escape the intended refs/remotes/origin namespace.
+  if (!value || value.startsWith('-') || value.endsWith('/') || value.endsWith('.lock')) return null;
+  if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.includes('..') || value.includes('//')) return null;
+  return value;
 }
 
-module.exports = { resolveGraphDir, loadTickets, repoRootOf, resolveBaseRef };
+/**
+ * Resolve a named base strictly through origin's remote-tracking namespace.
+ * A missing result is deliberately null: callers that require a fresh clone
+ * must not silently fall back to a local branch or bare name.
+ *
+ * @param {string} worktreePath
+ * @param {string} base
+ * @returns {string|null} `origin/<base>` when the commit exists
+ */
+function resolveOriginRef(worktreePath, base) {
+  const name = originRefName(base);
+  if (!name) return null;
+  const r = spawnSync('git',
+    ['-C', worktreePath, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${name}^{commit}`],
+    { encoding: 'utf8' });
+  return r.status === 0 ? `origin/${name}` : null;
+}
+
+function resolveBaseRef(worktreePath, base) {
+  return resolveOriginRef(worktreePath, base) || base;
+}
+
+module.exports = { resolveGraphDir, loadTickets, repoRootOf, originRefName, resolveOriginRef, resolveBaseRef };
