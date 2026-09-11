@@ -52,6 +52,14 @@ function project(config) {
   return dir;
 }
 
+function isolatedProject(config) {
+  const workspace = tempDir('shipyard-repo-workspace-');
+  const dir = path.join(workspace, 'project');
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ pipeline: config }, null, 2));
+  return dir;
+}
+
 function run(args, cwd = os.tmpdir()) {
   return spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8' });
 }
@@ -307,12 +315,132 @@ test('human-readable discovery output names the selected resolution', () => {
   assert.match(result.stdout, /acme\/service: discovered checkout /);
 });
 
+test('the operator prompt names the repository and all three D3 choices', () => {
+  const prompt = mod.choicePrompt('acme/service', '/work/service');
+  assert.match(prompt, /acme\/service/);
+  assert.match(prompt, /clone to \/work\/service/);
+  assert.match(prompt, /existing checkout path/);
+  assert.match(prompt, /skip/);
+});
+
+test('an unanswered choice becomes a durable park payload without filesystem mutation', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const before = fs.readdirSync(parent).sort();
+  const result = mod.chooseRepository({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: {} },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.resolution, 'track-only');
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.decision, 'skip');
+  assert.strictEqual(result.operator_choice, 'skip');
+  assert.strictEqual(result.choice_source, 'unattended');
+  assert.match(result.park_reason, /no operator choice.*skipped/);
+  assert.strictEqual(result.reason, result.park_reason);
+  assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, 'unanswered choice must not create a destination');
+});
+
+test('an explicit existing path is adopted only when its origin and nesting are valid', () => {
+  const projectDir = isolatedProject({});
+  const checkout = repoAt(path.join(tempDir(), 'held-under-another-name'), 'git@github.com:acme/service.git');
+  const result = mod.chooseRepository({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: {} },
+    projectRoot: projectDir,
+    choice: 'existing',
+    existingPath: checkout,
+  });
+  assert.strictEqual(result.resolution, 'supplied');
+  assert.strictEqual(result.executable, true);
+  assert.strictEqual(result.repository_root, checkout);
+  assert.strictEqual(result.decision, 'existing');
+  assert.strictEqual(result.operator_choice, 'existing');
+
+  const wrongOrigin = repoAt(path.join(tempDir(), 'wrong-origin'), 'git@github.com:someone-else/service.git');
+  const rejected = mod.chooseRepository({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: {} },
+    projectRoot: projectDir,
+    choice: 'existing',
+    existingPath: wrongOrigin,
+  });
+  assert.strictEqual(rejected.executable, false);
+  assert.strictEqual(rejected.decision, 'existing');
+  assert.match(rejected.park_reason, /origin.*acme\/service/);
+});
+
+test('an existing path nested in the project is refused unless sub_repos declares it', () => {
+  const projectDir = isolatedProject({});
+  const nested = repoAt(path.join(projectDir, 'foreign-checkout'), 'git@github.com:acme/service.git');
+  const rejected = mod.chooseRepository({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: {}, sub_repos: [] },
+    projectRoot: projectDir,
+    choice: 'existing',
+    existingPath: nested,
+  });
+  assert.strictEqual(rejected.executable, false);
+  assert.match(rejected.park_reason, /nested inside project/);
+
+  const allowed = mod.chooseRepository({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: {}, sub_repos: ['foreign-checkout'] },
+    projectRoot: projectDir,
+    choice: 'existing',
+    existingPath: nested,
+  });
+  assert.strictEqual(allowed.executable, true);
+  assert.strictEqual(allowed.resolution, 'supplied');
+});
+
+test('clone records explicit intent and a validated destination without cloning or writing', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const destination = path.join(parent, 'service');
+  const before = fs.readdirSync(parent).sort();
+  const result = mod.chooseRepository({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    choice: 'clone',
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'track-only');
+  assert.strictEqual(result.decision, 'clone');
+  assert.strictEqual(result.operator_choice, 'clone');
+  assert.strictEqual(result.destination, destination);
+  assert.match(result.park_reason, /clone.*pending/);
+  assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, 'clone choice must not create a destination in T-30-04');
+
+  const outside = path.join(tempDir(), 'outside-service');
+  const rejected = mod.chooseRepository({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    choice: 'clone',
+    destination: outside,
+  });
+  assert.strictEqual(rejected.executable, false);
+  assert.match(rejected.park_reason, /outside pipeline\.repos_root/);
+});
+
 test('state-sync and deliver name the configured resolver caller', () => {
   const stateSync = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'), 'utf8');
   const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
   assert.match(stateSync, /require\(path\.join\(__dirname, 'repo-resolve\.cjs'\)\)/);
   assert.match(stateSync, /resolveConfiguredRepo\(\{ repo, config: cfg \}\)/);
   assert.match(deliver, /repo-resolve\.cjs resolve <owner\/name>/);
+  assert.match(deliver, /repo-resolve\.cjs choose <owner\/name>/);
+  assert.match(deliver, /escalation-record\.cjs mark <T-id>/);
   assert.match(deliver, /resolution: "discovered"/);
 });
 
