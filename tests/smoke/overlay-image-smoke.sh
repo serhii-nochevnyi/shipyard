@@ -13,6 +13,7 @@ for f in commands/route.md commands/investigate.md commands/decompose.md command
          scripts/validate-graph.cjs scripts/state-sync.cjs scripts/reviewers.cjs \
          scripts/validate-inv.cjs scripts/ticket-worktree.sh scripts/epic-branch.sh \
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
+         scripts/usage-attribution.cjs scripts/usage-report.cjs \
          scripts/frontmatter.cjs scripts/pipeline-config.cjs scripts/front.cjs \
          workflows/drift-gate.mjs workflows/executors.mjs workflows/fix-round.mjs; do
   [[ -f "plugins/delivery-pipeline/$f" ]] || { echo "missing delivery-pipeline $f"; exit 1; }
@@ -114,6 +115,8 @@ docker run --rm claude-shipyard:test bash -lc '
   test -x /opt/delivery-pipeline/scripts/ticket-worktree.sh
   test -x /opt/delivery-pipeline/scripts/epic-branch.sh
   test -f /opt/delivery-pipeline/scripts/pipeline-stats.cjs
+  test -f /opt/delivery-pipeline/scripts/usage-attribution.cjs
+  test -f /opt/delivery-pipeline/scripts/usage-report.cjs
   test -f /opt/delivery-pipeline/scripts/frontmatter.cjs
   test -f /opt/delivery-pipeline/scripts/pipeline-config.cjs
   test -f /opt/delivery-pipeline/workflows/executors.mjs

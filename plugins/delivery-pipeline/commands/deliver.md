@@ -168,6 +168,15 @@ instead, and the front reads it back by itself:
   --model`; that flag accepts the resolver tier alias.
   `-critical` is the first-attempt lane for risky/checkpointed work; `-deep` is
   recovery after `repeat_exhausted` or a contested judgement.
+  Every mark prints a unique `dispatch_id`. After the runtime exposes its
+  transcript identity, record the join with
+  `usage-attribution.cjs record --stdin`: include that `dispatch_id`,
+  `runtime=claude, provider=anthropic` or `runtime=codex, provider=openai`, the
+  transcript `session_id`/`request_id`/`message_id`, source path, ticket, role,
+  requested fields and any reliable observed model/effort. The ledger rejects
+  cross-provider links and the usage report leaves missing or conflicting facts
+  out of model-efficiency comparisons. Do not use the requested model as an
+  observed model.
 Reserve `--parked` for what genuinely holds only for this session.
 
 **The ladder review, as one query.** Run it from the project (not a worktree) when

@@ -16,6 +16,11 @@ The `ladder` section has three deliberately separate coverage levels:
 - `observed_comparable` adds the concrete `observed_model` and
   `observed_effort`. Missing observations stay unknown and are excluded from a
   runtime comparison.
+- `usage_join_comparable` adds the generated `dispatch_id`, which is the
+  correlation key needed to join a dispatch to its transcript usage.
+
+`missing_attribution.dispatch_id` and `by_dispatch_id` show whether that join
+will be possible for each dispatch.
 
 `missing_attribution` counts each missing field, and `by_attribution_status`
 groups rows as `incomplete`, `requested_complete`, `applied_complete` or
@@ -24,6 +29,16 @@ subscription usage, API billing, quality scores or proof that an adaptive lane
 saves tokens. A treatment must first have prospective dispatch attribution and
 the evaluation gates in
 `.planning/architecture/ADR-011-ROLLOUT.md` before its outcomes are compared.
+
+For token-level model efficiency, join transcripts with the dispatch
+correlation ledger:
+`node plugins/delivery-pipeline/scripts/usage-report.cjs <transcript.jsonl> --attribution .planning/graph/usage-attribution.jsonl`.
+That report carries the concrete provider model, observed effort and ticket
+usage rows. `pipeline-stats` remains the source for delivery outcomes and
+verified merge state; a transcript stop marker does not by itself count as a
+verified completion. The report marks each efficiency row `eligible` only when
+the dispatch is attributed unambiguously, has a concrete observed model and
+effort, and has complete input counters.
 
 Use `--since 14d` (the default), `--since all`, or an ISO timestamp to limit the
 windowed ladder warnings and coverage counts. Ticket and phase outcome rows

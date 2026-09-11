@@ -1362,3 +1362,19 @@ tickets:
     primary_parent: T-32-04
     pr_base: ticket/T-32-04-batch-dispatch-attribution-atomically
     jira: null
+  T-32-07:
+    title: Join transcript usage to dispatches without guessing
+    plan: '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-PLAN.md'
+    phase: '32'
+    repo: null
+    wave: 12
+    depends_on: [T-32-05]
+    files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-PLAN.md', plugins/delivery-pipeline/scripts/usage-attribution.cjs, plugins/delivery-pipeline/scripts/usage-report.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/usage-attribution.test.cjs, tests/unit/dispatch-record.test.cjs, docs/usage-report.md, docs/dispatch-record.md, docs/pipeline-stats.md, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/smoke/codex-shipyard-smoke.sh, tests/smoke/overlay-image-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-32-07-join-transcript-usage-to-dispatches-with
+    epic: epic/32-measure-usage-and-make-the-backlog-actionable
+    primary_parent: T-32-05
+    pr_base: ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the
+    jira: null
