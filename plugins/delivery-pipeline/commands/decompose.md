@@ -53,13 +53,12 @@ code by risk, repair via an escalation ladder, mechanics → Sonnet; profile —
 ```json
 {
   "model_profile": "balanced",
-  "runtime": "claude",
   "granularity": "standard",
   "models": { "planning": "opus", "research": "sonnet", "execution": "opus", "verification": "sonnet" },
   "context_window": 1000000,
   "agent_skills": {
-    "gsd-planner": ["global:shipyard:delivery-rules"],
-    "gsd-executor": ["global:shipyard:delivery-rules"]
+    "gsd-planner": [".shipyard/generated/gsd-delivery-rules"],
+    "gsd-executor": [".shipyard/generated/gsd-delivery-rules"]
   },
   "ship": {
     "pr_body_sections": [
@@ -76,7 +75,9 @@ code by risk, repair via an escalation ladder, mechanics → Sonnet; profile —
 
 **Config namespaces — do not conflate them:**
 - `models` / `model_profile` / `model_overrides` / `granularity` / `runtime`
-  (TOP level) belong to **GSD** and govern the GSD agents. `models.*` takes only
+  (TOP level) belong to **GSD** and govern the GSD agents. `runtime` is an
+  execution context, not a shared project preference; leave it unset so the
+  active install can select it. `models.*` takes only
   tier aliases; a full model ID may be pinned per-agent via `model_overrides`, and
   GSD resolves it itself. If you pin one, verify the id against the current model
   catalog first — do NOT copy a generation out of this document, it will be stale.
@@ -85,19 +86,18 @@ code by risk, repair via an escalation ladder, mechanics → Sonnet; profile —
   conveyor's own agents (see /shipyard:deliver). They take tier aliases ONLY,
   because the Agent tool rejects full model IDs.
 
-**`agent_skills` — the working value depends on `runtime`.** This is how the
-frontmatter contract actually reaches the GSD planner, and it fails SILENTLY if
-the form is wrong. Check `runtime` in config.json and use the matching form:
-- `runtime: "claude"` (or unset) → `"global:shipyard:delivery-rules"`. The
-  plugin-namespaced form is emitted as a Skill-tool directive, which only the
-  claude runtime can act on.
-- any other runtime (`codex`, …) → `"global:shipyard-delivery-rules"`. The
-  namespaced form is **skipped with a stderr warning** on non-claude runtimes; the
-  bare name resolves from the runtime's global skills dir, which is exactly where
-  `install-shipyard-codex.sh` installs `shipyard-delivery-rules`.
+**`agent_skills` — use the project-relative projection.** This is how the
+frontmatter contract actually reaches the GSD planner and executor without
+making a shared checkout choose one host. `gsd-tune.cjs --apply` generates
+`.shipyard/generated/gsd-delivery-rules/SKILL.md` from the canonical skill and
+merges the path into both agent entries. A project-relative path resolves on
+both Claude and Codex; the runtime-native global skills remain available for
+direct Shipyard commands. Legacy `global:shipyard:delivery-rules` and
+`global:shipyard-delivery-rules` entries are migrated out by `gsd-tune`.
 
-Set it with `/gsd-config --integrations` (it validates the paths) rather than by
-hand. `state-sync` warns when a namespaced entry cannot resolve on your runtime.
+Do not put a hardcoded `runtime` in a shared project config. `pipeline-config`
+warns when a legacy namespaced entry would be skipped on the active runtime or
+when the project projection has not been generated.
 
 (`context_window` — GSD enables adaptive-context enrichment at **≥ 500 000**;
 `1000000` is for 1M-context models. Context-window selection is a GSD/runtime

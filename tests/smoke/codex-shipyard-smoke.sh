@@ -13,6 +13,7 @@ cd "$ROOT"
 
 # ── static ───────────────────────────────────────────────────────────────────
 for f in scripts/gen-codex-shipyard.cjs scripts/merge-codex-config.cjs scripts/install-shipyard-codex.sh \
+         plugins/delivery-pipeline/scripts/runtime-context.cjs \
          plugins/delivery-pipeline/scripts/gsd-sync.cjs capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs; do
   [[ -f "$f" ]] || { echo "missing $f"; exit 1; }
 done
@@ -112,6 +113,8 @@ for f in scripts/state-sync.cjs scripts/reviewers.cjs scripts/validate-graph.cjs
          scripts/ticket-worktree.sh scripts/epic-branch.sh; do
   [[ -f "$CODEX_HOME/shipyard/$f" ]] || { echo "bundle missing $f"; exit 1; }
 done
+[[ -f "$CODEX_HOME/shipyard/skills/delivery-rules/SKILL.md" ]] \
+  || { echo "bundle missing the runtime-neutral delivery-rules source"; exit 1; }
 bash -n "$CODEX_HOME/shipyard/scripts/epic-branch.sh" || { echo "bundled epic-branch.sh syntax error"; exit 1; }
 bash -n "$CODEX_HOME/shipyard/scripts/ticket-worktree.sh" || { echo "bundled ticket-worktree.sh syntax error"; exit 1; }
 for f in state-sync log-event pipeline-stats ticket-pr-match frontmatter pipeline-config gsd-sync; do
@@ -155,15 +158,14 @@ vg_out="$( ( cd "$WORK" && node -e 'require(process.argv[1])' "$CODEX_HOME/shipy
 grep -q 'missing .planning' <<<"$vg_out" || { echo "bundled validate-graph.cjs cannot load its modules: $vg_out"; exit 1; }
 # The model resolver travels with the bundle and only emits tier aliases.
 # Run it from "$WORK" for the same reason validate-graph is run there: the
-# resolver reads `<cwd>/.planning/config.json`, and this smoke's own cwd is the
-# repo root, which BECAME a GSD project (`runtime: claude`) after this line was
-# written. That config legitimately resolves the two judgment roles to `fable`,
-# so the assertion started failing on a correct resolver. What is under test is
-# that the bundled copy loads and answers with a tier alias — not what the host
-# project happens to configure.
+# resolver reads `<cwd>/.planning/config.json`. The bundled script is itself
+# under the throwaway Codex home, so runtime-context must identify Codex from
+# that path even though the fixture has no persisted project runtime. On Codex
+# the runtime cap deliberately maps the judgment tier to `sonnet`; this checks
+# the active-runtime policy rather than the old ambiguous-runtime fallback.
 pc_tier="$( cd "$WORK" && node "$CODEX_HOME/shipyard/scripts/pipeline-config.cjs" model arch-review )"
-[[ "$pc_tier" == opus ]] \
-  || { echo "bundled pipeline-config.cjs does not resolve the judgment tier (got '$pc_tier', want 'opus')"; exit 1; }
+[[ "$pc_tier" == sonnet ]] \
+  || { echo "bundled pipeline-config.cjs does not resolve the Codex judgment tier (got '$pc_tier', want 'sonnet')"; exit 1; }
 
 # ${CLAUDE_PLUGIN_ROOT} is rewritten to the bundle root, so every path the skills
 # reference must actually EXIST there — including workflows/, which used to be

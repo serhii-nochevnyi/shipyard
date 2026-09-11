@@ -49,7 +49,10 @@ chmod +x "$CAP_STAGE"/checks/*.cjs
 
 VERSION="$(node -p "require('$CAP_SRC/capability.json').version")"
 echo "→ installing delivery-pipeline capability $VERSION for $RUNTIME (global scope)…"
-node "$GSD_TOOLS" capability install "$CAP_STAGE" --scope global --yes
+# Keep the runtime in the process context. The capability is shared, but the
+# GSD install that is receiving it is not: writing a runtime into shared GSD
+# defaults would make the last installer win for both Claude and Codex.
+GSD_RUNTIME="$RUNTIME" SHIPYARD_RUNTIME="$RUNTIME" node "$GSD_TOOLS" capability install "$CAP_STAGE" --scope global --yes
 
 echo "✓ installed. The plan:post gate is applicability-scoped: it stays inert in"
 echo "  projects with no delivery: blocks, and fails closed for conveyor projects."

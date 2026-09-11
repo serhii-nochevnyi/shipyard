@@ -85,6 +85,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const { resolveRuntime } = require('./runtime-context.cjs');
+
+// GSD resolves project-relative agent skills without consulting config.runtime,
+// which is the only form that remains correct when Claude and Codex share one
+// checkout. gsd-tune generates this projection from the canonical delivery-rules
+// source before it writes the agent_skills entries.
+const PROJECT_DELIVERY_RULES = '.shipyard/generated/gsd-delivery-rules';
 
 // The Agent tool validates `model` against exactly these aliases: a full model id
 // (`claude-opus-…`) or a suffixed alias (`opus[1m]`) is rejected on input. Full ids
@@ -541,7 +548,7 @@ function configPath(root) {
 // `error.file` is ABSOLUTE (ci-wait.cjs runs from a worktree, where a relative
 // path names nothing a person can open) and `error.relative` is the project-root
 // spelling the human-facing sentences use.
-function loadConfig(root) {
+function loadConfig(root, options = {}) {
   const base = root || process.cwd();
   const file = configPath(base);
   const warnings = [];
@@ -605,6 +612,11 @@ function loadConfig(root) {
   // Every container value is copied, never shared with DEFAULTS: a caller that
   // sorts or filters the palette in place would otherwise change what the next
   // loadConfig() in the same process returns.
+  const runtimeContext = resolveRuntime(base, {
+    ...options,
+    scriptPath: options.scriptPath || __filename,
+  });
+
   const cfg = {
     ...DEFAULTS,
     jira: { ...DEFAULTS.jira },
@@ -833,12 +845,25 @@ function loadConfig(root) {
   const git = obj(raw.git);
   const workflow = obj(raw.workflow);
   cfg.gsd = {
-    runtime: typeof raw.runtime === 'string' ? raw.runtime : null,
+    // `runtime` is an execution-context value. GSD resolves it from
+    // GSD_RUNTIME/the per-install marker; a project value is retained only as
+    // a legacy fallback by runtime-context.cjs. This lets one checkout be used
+    // by Claude and Codex concurrently without rewriting config.json per run.
+    runtime: runtimeContext.runtime,
+    runtime_source: runtimeContext.source,
+    persisted_runtime: runtimeContext.persisted,
     base_branch: typeof git.base_branch === 'string' && git.base_branch ? git.base_branch : null,
     branching_strategy: typeof git.branching_strategy === 'string' ? git.branching_strategy : null,
     response_language: typeof raw.response_language === 'string' ? raw.response_language : null,
     use_worktrees: typeof workflow.use_worktrees === 'boolean' ? workflow.use_worktrees : null,
   };
+  if (runtimeContext.conflict) {
+    warnings.push(
+      `project runtime "${runtimeContext.conflict.persisted}" is a legacy persisted value, but the active ` +
+      `runtime is "${runtimeContext.conflict.effective}" (${runtimeContext.source}); using the active runtime. ` +
+      'Remove the top-level "runtime" key from .planning/config.json so both runtimes can share this checkout.'
+    );
+  }
   // Same collision as branching_strategy, one level down. GSD's writer workflows
   // fork their own git worktree when this is true — and the conveyor calls
   // `/gsd-code-review --fix` from INSIDE a ticket worktree, so the fixer would
@@ -872,8 +897,15 @@ function loadConfig(root) {
       if (namespaced && cfg.gsd.runtime && cfg.gsd.runtime !== 'claude') {
         warnings.push(
           `agent_skills."${agent}" uses "${entry}", a plugin-namespaced skill that GSD resolves ONLY on the claude ` +
-          `runtime — it is silently skipped on runtime "${cfg.gsd.runtime}". Use the bare global form instead ` +
-          '(e.g. "global:shipyard-delivery-rules", installed under the runtime\'s global skills dir).'
+          `runtime — it is silently skipped on runtime "${cfg.gsd.runtime}". Use the project-relative ` +
+          `"${PROJECT_DELIVERY_RULES}" projection instead (run gsd-tune.cjs --apply).`
+        );
+      }
+      if (entry === PROJECT_DELIVERY_RULES
+          && !fs.existsSync(path.join(base, PROJECT_DELIVERY_RULES, 'SKILL.md'))) {
+        warnings.push(
+          `agent_skills."${agent}" points at "${PROJECT_DELIVERY_RULES}", but its SKILL.md is missing — ` +
+          'run gsd-tune.cjs --apply to generate the Shipyard project skill projection.'
         );
       }
     }
@@ -893,8 +925,9 @@ function loadConfig(root) {
 // on a job that usually fits anyway; on Codex, `fable` is a model id nothing can
 // resolve. So the default is the one that degrades rather than the one that
 // breaks, and the 1M tier is taken only where the runtime SAYS it is available.
-// `gsd-tune.cjs` writes that declaration — it is in the REQUIRED group precisely
-// because several behaviours, this one included, hang off it.
+// The active runtime context supplies that declaration. `gsd-tune.cjs` refuses
+// to apply runtime-specific values without one and migrates legacy persisted
+// values away, because several behaviours, this one included, hang off it.
 const RUNTIMES_WITH_1M_TIER = new Set(['claude']);
 function topTier(cfg) {
   const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
@@ -1241,7 +1274,12 @@ module.exports = {
 // ── CLI ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {
   const [, , cmd, ...rest] = process.argv;
-  const { config, warnings, file, exists, valid, error } = loadConfig(process.cwd());
+  const runtimeIndex = rest.indexOf('--runtime');
+  const runtimeFlag = runtimeIndex === -1 ? undefined : rest[runtimeIndex + 1];
+  const { config, warnings, file, exists, valid, error } = loadConfig(
+    process.cwd(),
+    runtimeFlag ? { runtime: runtimeFlag } : {},
+  );
 
   if (cmd === 'resolve' || cmd === undefined) {
     // `valid` rides the CLI answer too, for the same reason it rides the module's
@@ -1353,6 +1391,7 @@ if (require.main === module) {
 
   process.stderr.write(
     'usage: pipeline-config.cjs <resolve | model <role> [--json] [flags]>\n' +
+    '  --runtime claude|codex  override the active runtime for this invocation\n' +
     '  flags: --risk low|medium|high  --type <plan type>  --checkpoint\n' +
     '         --input-tokens <n>   the caller\'s measurement of this dispatch\'s input;\n' +
     '                              over pipeline.fable_window_tokens it earns the ceiling\n' +

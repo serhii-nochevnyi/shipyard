@@ -475,8 +475,10 @@ projection's map, EMPTY by default, which is the projection off), `repos`
 - `git.branching_strategy` — must be `none` (the default). `phase`/`milestone`
   make GSD create its own branches while the conveyor owns branching; state-sync
   warns if it is set.
-- `runtime` — decides effort clamping, and whether a plugin-namespaced
-  `agent_skills` entry resolves at all (claude only).
+- `runtime` — selects the active effort/model policy for this invocation. The
+  GSD delivery contract itself uses the project-relative
+  `.shipyard/generated/gsd-delivery-rules` projection so Claude and Codex can
+  share the checkout without rewriting `agent_skills`.
 - `response_language` — governs how agents talk to the USER. Shipped artifacts
   stay English regardless (delivery-rules); the Workflow prompts state that
   explicitly, since they bypass this skill's language block.
@@ -911,12 +913,18 @@ itself a STOP signal, not a reason to improvise.
    This runs here rather than at install time for a plain reason: installation is
    global (`~/.claude`, `~/.codex`) and there is no project to configure yet — the
    settings live in each project's `.planning/config.json`.
-   - REQUIRED drift (`runtime`, `git.branching_strategy`) means the conveyor is
-     INCORRECT here: show it to the user and offer
-     `gsd-tune.cjs --apply` before delivering. Two orchestrators creating branches
-     or worktrees for the same plans is what those values prevent.
+   - REQUIRED drift (`git.branching_strategy`) means the conveyor is INCORRECT
+     here: show it to the user and offer `gsd-tune.cjs --apply` before delivering.
+     A legacy top-level `runtime` is reported separately as migration debt;
+     applying removes it so this invocation's runtime context remains selected by
+     the active install rather than by whichever runtime wrote the file last.
+     Two orchestrators creating branches or worktrees for the same plans is what
+     the branching setting prevents.
    - tuning drift is cost and quality, never correctness — mention it once, do not
-     block on it, and never apply it without the user saying so.
+     block on it, and never apply it without the user saying so. The generated
+     project-relative delivery-rules skill is part of this same report: if it is
+     missing, `--apply` creates it before updating `agent_skills`; a foreign file
+     is never overwritten.
 1. `validate-graph.cjs` — the graph against the current state of the plans; errors →
    stop, show them (perhaps something was merged past the pipeline — route to
    /shipyard:decompose).

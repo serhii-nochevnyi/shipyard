@@ -180,6 +180,8 @@ test-worktree-gates:
 
 # Report (or apply) the GSD settings a conveyor project needs on this runtime.
 # Run from the PROJECT, not from here — it reads that project's .planning/config.json.
+# Set SHIPYARD_RUNTIME=claude|codex (or GSD_RUNTIME) when invoking these targets
+# from a checkout rather than through an installed runtime bundle.
 # Install or refresh gsd-core — the base shipyard is a superstructure over.
 # GSD_CORE_VERSION pins it; default is the latest.
 ensure-gsd-core-claude:
