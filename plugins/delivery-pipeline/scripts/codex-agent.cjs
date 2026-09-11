@@ -332,6 +332,7 @@ function selectAgent(role, options = {}) {
   const route = pc.routeOf(ladderRole, signals, cfg);
   const parsedRoute = pc.parseRoute(route);
   if (!parsedRoute) fail(`the shared resolver returned an invalid route for ${ladderRole}: ${route}`);
+  const routeIsOverride = /^(?:override)(?:\+|$)/.test(parsedRoute.tier.rule);
   const ceilingMatch = parsedRoute.tier.rule.match(/^ceiling:([a-z][a-z0-9_-]*)/);
   const ceilingKind = ceilingMatch ? ceilingMatch[1] : null;
   const ceilingRoute = Boolean(ceilingKind);
@@ -341,7 +342,12 @@ function selectAgent(role, options = {}) {
   // select that artifact; task-level critical/recovery signals still select
   // their own variants below candidateSuffix.
   const artifactCeiling = ceilingKind === 'exhausted' || ceilingKind === 'contested';
-  const suffix = candidateSuffix(baseRole, classification.value, cfg.model_ladder, artifactCeiling);
+  // The same precedence applies to static artifacts: a stale -critical/-deep
+  // file from an earlier install must not override an explicit pipeline.models
+  // choice merely because the current classifier sees a risky task.
+  const suffix = routeIsOverride
+    ? ''
+    : candidateSuffix(baseRole, classification.value, cfg.model_ladder, artifactCeiling);
   const baseName = `${PREFIX}${baseRole}`;
   const wantedName = `${baseName}${suffix}`;
   const dir = options.agentDir || agentDirFrom(options.flags || new Map());

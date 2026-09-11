@@ -263,6 +263,21 @@ test('an explicit executor model override is not promoted by automatic classific
   assert.strictEqual(result.model, 'gpt-5.6-terra');
 });
 
+test('a static model override never selects a stale critical artifact', () => {
+  const f = fixture('adaptive', STANDARD_FILES, {
+    pipeline: { models: { 'arch-review': 'sonnet' } },
+  });
+  const result = selectAgent('arch-review', {
+    cwd: f.project,
+    agentDir: f.agentDir,
+    signals: { risk: 'high' },
+  });
+  assert.match(result.route, /tier=override\(sonnet\)/);
+  assert.strictEqual(result.agent_file, 'shipyard-arch-review');
+  assert.strictEqual(result.model, 'gpt-5.6-terra');
+  assert.strictEqual(result.fallback, undefined);
+});
+
 test('static Codex roles keep recovery variants for documented routes only', () => {
   const f = fixture('adaptive', STANDARD_FILES, {
     pipeline: { fable_window_tokens: 100 },
