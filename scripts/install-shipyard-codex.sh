@@ -203,6 +203,7 @@ snapshot_runtime_path() {
   fi
   backup_path="$RUNTIME_BACKUP/$(runtime_backup_key "$target")"
   if [[ -e "$target" || -L "$target" ]]; then
+    mkdir -p "$(dirname "$backup_path")"
     cp -a "$target" "$backup_path"
     state=present
   fi
