@@ -174,28 +174,30 @@ runtime_backup_key() {
 }
 snapshot_runtime_path() {
   local kind="$1" name="$2" target="$3"
-  local state=absent backup_path
+  local state=absent backup_path seen_key
   case "$target" in
     *$'\t'* | *$'\n'*)
       echo "error: refusing to snapshot a runtime path whose name cannot be recorded safely: $target" >&2
       exit 1
       ;;
   esac
-  backup_path="$RUNTIME_BACKUP/$kind-$(runtime_backup_key "$target")"
-  if grep -Fqx $'present\t'"$kind"$'\t'"$name"$'\t'"$target" "$RUNTIME_BACKUP_INDEX" 2>/dev/null \
-    || grep -Fqx $'absent\t'"$kind"$'\t'"$name"$'\t'"$target" "$RUNTIME_BACKUP_INDEX" 2>/dev/null; then
+  seen_key="$kind"$'\t'"$name"$'\t'"$target"
+  if [[ -n "${RUNTIME_BACKUP_SEEN[$seen_key]+x}" ]]; then
     return 0
   fi
+  backup_path="$RUNTIME_BACKUP/$kind-$(runtime_backup_key "$target")"
   if [[ -e "$target" || -L "$target" ]]; then
     cp -a "$target" "$backup_path"
     state=present
   fi
+  RUNTIME_BACKUP_SEEN["$seen_key"]=1
   printf '%s\t%s\t%s\t%s\n' "$state" "$kind" "$name" "$target" >> "$RUNTIME_BACKUP_INDEX"
 }
 trap 'cleanup $?' EXIT
 OUT="$STAGE/bundle-out"
 RUNTIME_BACKUP="$STAGE/runtime-before"
 RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
+declare -A RUNTIME_BACKUP_SEEN=()
 mkdir -p "$RUNTIME_BACKUP"
 : > "$RUNTIME_BACKUP_INDEX"
 
