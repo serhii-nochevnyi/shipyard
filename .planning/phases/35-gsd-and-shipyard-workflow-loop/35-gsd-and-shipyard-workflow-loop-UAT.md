@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ad1ed16bc8d3238e1dbbf5dea09610f556d49d40fe94c68454f9c85b10f15300
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 74719035933d7e19cf19ca1f8825561356c13f3b9a39c5d8ce0dbe07f550715b
 phase: 35
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: ad1ed16bc8d3238e1dbbf5dea09610f556d49d40fe94c68454f9c85b10f15300
+shipyard_source_fingerprint: 74719035933d7e19cf19ca1f8825561356c13f3b9a39c5d8ce0dbe07f550715b
 ---
 
 # Phase 35: Close the GSD and Shipyard workflow loop — UAT Projection
@@ -12,9 +12,9 @@ shipyard_source_fingerprint: ad1ed16bc8d3238e1dbbf5dea09610f556d49d40fe94c68454f
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: pending
+result: passed
 expected: all 3 phase plan(s) are merged
-actual: 2 merged
+actual: 3 merged
 
 ### 2. Integration evidence is explicit
 result: pending

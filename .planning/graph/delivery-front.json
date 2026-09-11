@@ -1,18 +1,16 @@
 {
-  "generated_at": "2026-09-11T07:53:25.991Z",
-  "observed_at": "2026-09-11T07:53:25.991Z",
-  "generation": 202,
+  "generated_at": "2026-09-11T08:00:15.458Z",
+  "observed_at": "2026-09-11T08:00:15.458Z",
+  "generation": 203,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-11T07:53:25.991Z",
+  "dispatches_applied_at": "2026-09-11T08:00:15.458Z",
   "actionable": {
     "execute": [],
     "publish": [],
     "fix": [],
     "finalize": [],
-    "merge": [
-      "T-35-03"
-    ]
+    "merge": []
   },
   "waiting": {
     "ci": [],
@@ -104,43 +102,40 @@
       "T-32-01",
       "T-32-02",
       "T-35-01",
-      "T-35-02"
+      "T-35-02",
+      "T-35-03"
     ]
   },
-  "why": {
-    "T-35-03": "PR #101: green + conform — squash into epic/35-gsd-and-shipyard-workflow-loop (sentinel)"
-  },
+  "why": {},
   "counts": {
     "execute": 0,
     "publish": 0,
     "fix": 0,
     "finalize": 0,
-    "merge": 1,
+    "merge": 0,
     "ci": 0,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
     "blocked": 0,
-    "done": 81
+    "done": 82
   },
   "parent_of": {},
-  "actionable_count": 1,
+  "actionable_count": 0,
   "left_behind_count": 0,
-  "fixpoint": false,
+  "fixpoint": true,
   "capacity": {
     "max": 4,
     "in_flight": 0,
     "free": 4
   },
   "sentinel": {
-    "duty": [
-      "T-35-03"
-    ],
+    "duty": [],
     "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
-    "clear": false
+    "clear": true
   },
   "roles": {
     "execute": [

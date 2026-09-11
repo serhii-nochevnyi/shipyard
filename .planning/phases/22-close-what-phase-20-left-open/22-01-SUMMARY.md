@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ad1ed16bc8d3238e1dbbf5dea09610f556d49d40fe94c68454f9c85b10f15300
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 74719035933d7e19cf19ca1f8825561356c13f3b9a39c5d8ce0dbe07f550715b
 phase: 22-close-what-phase-20-left-open
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ad1ed16bc8d3238e1dbbf5dea09610f556d49d40fe94c68454f9c85b10f15300
+shipyard_source_fingerprint: 74719035933d7e19cf19ca1f8825561356c13f3b9a39c5d8ce0dbe07f550715b
 ---
 
 # Phase 22: A park is described by the store that owns it — Delivery Projection

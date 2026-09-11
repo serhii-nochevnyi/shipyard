@@ -908,3 +908,4 @@
 {"ts":"2026-09-11T07:21:51.904Z","event":"merge","ticket":"T-35-01","pr":96,"base":"epic/35-gsd-and-shipyard-workflow-loop","repo":null,"by":"sentinel","preauthorized":true}
 {"ts":"2026-09-11T07:24:03.333Z","event":"status_change","ticket":"T-35-01","from":"pr-open","to":"merged","pr":96}
 {"ts":"2026-09-11T07:52:18.043Z","event":"status_change","ticket":"T-35-02","from":"pr-open","to":"merged","pr":98}
+{"ts":"2026-09-11T08:00:15.458Z","event":"status_change","ticket":"T-35-03","from":"pr-open","to":"merged","pr":101}
