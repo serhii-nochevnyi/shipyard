@@ -342,7 +342,7 @@ function integrationStatus(text) {
   // the body of a final passed review. Use the last explicit Verdict line as
   // the authority and only inspect the document preamble when no such line
   // exists; never downgrade a final pass because of retrospective prose.
-  const verdictLines = String(text).split(/\r?\n/).filter((line) => /verdict/i.test(line));
+  const verdictLines = String(text).split(/\r?\n/).filter((line) => /\bverdict\b/i.test(line));
   const explicit = verdictLines.length ? verdictLines[verdictLines.length - 1].toLowerCase() : '';
   if (/needs[- ]fix|gaps_found|failed/.test(explicit)) {
     return {
