@@ -639,6 +639,14 @@ function main() {
     const s = path.join(pluginDir, sub);
     if (fs.existsSync(s)) copyDir(s, path.join(outDir, 'bundle', sub));
   }
+  // gsd-tune uses one project-relative delivery-rules projection for both
+  // runtimes. Keep the canonical, runtime-neutral source beside the Codex
+  // bundle so the installed copy can generate that projection without reading
+  // the checkout it was built from.
+  const neutralRules = path.join(pluginDir, 'skills', 'delivery-rules');
+  if (fs.existsSync(path.join(neutralRules, 'SKILL.md'))) {
+    copyDir(neutralRules, path.join(outDir, 'bundle', 'skills', 'delivery-rules'));
+  }
 
   // ── manifest (for the installer + smoke test) ──────────────────────────────
   //

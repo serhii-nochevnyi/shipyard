@@ -272,6 +272,23 @@ script — not in a prompt.** Every requirement below is an instance of it.
   leases, report coverage, and never interpret store failure as unlimited capacity.
 - **REQ-97** — Each optimization has a versioned baseline, quality and recovery
   gates, rollback, and a report that feeds evidence into the next backlog decision.
+- **REQ-98** — Shipyard publishes one deterministic native-GSD projection from
+  the validated plan and delivery graph; no second execution authority is
+  hand-maintained.
+- **REQ-99** — The projection materializes the canonical STATE, REQUIREMENTS,
+  plan summary, UAT, and verification artifacts with explicit ownership and
+  source fingerprints.
+- **REQ-100** — A plan or phase is marked complete only from positive delivery,
+  integration, and verification evidence; missing evidence remains visible and
+  non-green.
+- **REQ-101** — Planning, delivery, verification, and ship boundaries run a
+  blocking synchronization/check gate for Shipyard projects and remain inert
+  for ordinary GSD projects.
+- **REQ-102** — Synchronization is local-only, atomic, idempotent, and
+  checkable without mutation, with deterministic refusal on conflicting files
+  or ambiguous plan/ticket identity.
+- **REQ-103** — Claude and Codex consume the same canonical synchronizer through
+  generated/bundled installer surfaces, with smoke coverage for both.
 
 *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
 initial isolated tooling slice; subsequent packages remain subject to decomposition
@@ -563,3 +580,42 @@ manual-merge carry, shared participating-agent admission and experiment reports.
 Apply one behavioral treatment at a time and retain failed/interrupted runs in
 accounting. Quality regressions roll back the affected treatment and create a
 linked backlog item. Model-floor changes require a separate ADR amendment.
+
+### Phase 35: Close the GSD and Shipyard workflow loop
+**Status**: planned (ADR-013)
+**Requirements**: REQ-98, REQ-99, REQ-100, REQ-101, REQ-102, REQ-103
+
+Shipyard remains the execution authority while publishing a deterministic native
+GSD read model. The phase adds the projection generator, evidence-based phase
+artifacts, lifecycle gates, cross-runtime packaging, and a reviewed bootstrap of
+this repository's missing GSD state. It must not rewrite historical integration
+findings or turn a merged ticket count into a false phase pass.
+
+<!-- shipyard:gsd-sync:begin -->
+## Shipyard synchronization (generated)
+
+- Source fingerprint: `8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2`
+- Plans merged: 82/82
+- Phases verified: 4/16
+- Current phase: 20
+
+| Phase | Plans | Merged | Verification |
+|---|---:|---:|---|
+| 20 — Autonomy of the drive-to-green loop | 6 | 6 | pending |
+| 21 — Verdicts a human would have made anyway | 5 | 5 | pending |
+| 22 — Close what phase 20 left open | 5 | 5 | pending |
+| 23 — The board tells the truth about itself | 3 | 3 | pending |
+| 24 — The conveyor stops interrupting itself | 11 | 11 | gaps_found |
+| 25 — The conveyor follows the models it runs on | 6 | 6 | passed |
+| 26 — Positive evidence before a mutation | 15 | 15 | gaps_found |
+| 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
+| 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
+| 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
+| 30 — A ticket you cannot reach is not deliverable | 0 | 0 | pending |
+| 31 — Not every ticket is available work | 0 | 0 | pending |
+| 32 — Measure usage and make the backlog actionable | 2 | 2 | passed |
+| 33 — Reduce orchestration context and transfer sessions safely | 0 | 0 | pending |
+| 34 — Improve convergence and tune from measured outcomes | 0 | 0 | pending |
+| 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
+
+<!-- shipyard:gsd-sync:end -->

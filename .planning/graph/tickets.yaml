@@ -33,6 +33,9 @@ epics:
   '32':
     branch: epic/32-measure-usage-and-make-the-backlog-actionable
     repos: [null]
+  '35':
+    branch: epic/35-gsd-and-shipyard-workflow-loop
+    repos: [null]
 tickets:
   T-20-01:
     title: 'Failure signature: normalize, history verdict, flake quarantine'
@@ -1369,7 +1372,7 @@ tickets:
     repo: null
     wave: 12
     depends_on: [T-32-05]
-    files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-PLAN.md', plugins/delivery-pipeline/scripts/usage-attribution.cjs, plugins/delivery-pipeline/scripts/usage-report.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/usage-attribution.test.cjs, tests/unit/dispatch-record.test.cjs, docs/usage-report.md, docs/dispatch-record.md, docs/pipeline-stats.md, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/smoke/codex-shipyard-smoke.sh, tests/smoke/overlay-image-smoke.sh]
+    files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-PLAN.md', plugins/delivery-pipeline/scripts/usage-attribution.cjs, plugins/delivery-pipeline/scripts/usage-report.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/usage-attribution.test.cjs, tests/unit/pipeline-stats.test.cjs, tests/unit/dispatch-record.test.cjs, docs/usage-report.md, docs/dispatch-record.md, docs/pipeline-stats.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/smoke/codex-shipyard-smoke.sh, tests/smoke/overlay-image-smoke.sh]
     risk: medium
     human_checkpoint: false
     preauthorized: false
@@ -1377,4 +1380,52 @@ tickets:
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
     primary_parent: T-32-05
     pr_base: ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the
+    jira: null
+  T-35-01:
+    title: Deterministic native-GSD projection
+    plan: '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-01-PLAN.md'
+    phase: '35'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-35-01-deterministic-native-gsd-projection
+    epic: epic/35-gsd-and-shipyard-workflow-loop
+    primary_parent: null
+    pr_base: epic/35-gsd-and-shipyard-workflow-loop
+    jira: null
+  T-35-02:
+    title: Wire synchronization into both GSD runtimes
+    plan: '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-02-PLAN.md'
+    phase: '35'
+    repo: null
+    wave: 2
+    depends_on: [T-35-01]
+    files: [capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs, capabilities/delivery-pipeline/capability.json, tests/unit/gsd-sync-gate.test.cjs, tests/smoke/codex-shipyard-smoke.sh, README.md, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-35-02-wire-synchronization-into-both-gsd-runti
+    epic: epic/35-gsd-and-shipyard-workflow-loop
+    primary_parent: T-35-01
+    pr_base: ticket/T-35-01-deterministic-native-gsd-projection
+    jira: null
+  T-35-03:
+    title: 'Document, normalize, and bootstrap the synchronized project'
+    plan: '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-PLAN.md'
+    phase: '35'
+    repo: null
+    wave: 3
+    depends_on: [T-35-02]
+    files: ['.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-PLAN.md', '.planning/PROJECT.md', '.planning/ROADMAP.md', '.planning/config.json', '.planning/REQUIREMENTS.md', '.planning/STATE.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/graph/escalations.json', '.planning/graph/delivery-front.json', '.planning/graph/delivery-log.jsonl', '.planning/graph/delivery-state-meta.json', '.planning/graph/delivery-state.json', '.planning/graph/delivery-state.yaml', '.planning/architecture/**', '.planning/investigations/**', '.planning/phases/**', plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs, docs/gsd_multilevel_delivery_pipeline.md]
+    risk: medium
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-35-03-document-normalize-and-bootstrap-the-syn
+    epic: epic/35-gsd-and-shipyard-workflow-loop
+    primary_parent: T-35-02
+    pr_base: ticket/T-35-02-wire-synchronization-into-both-gsd-runti
     jira: null

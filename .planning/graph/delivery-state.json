@@ -827,35 +827,78 @@
   "T-29-07": {
     "branch": "ticket/T-29-07-wire-it-pin-the-wiring-and-keep-it-out-o",
     "pr": 90,
-    "status": "pr-open",
-    "draft": true,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/90",
-    "pr_base": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
-    "pr_created_at": "2026-09-10T08:37:13Z",
-    "head_sha": "d7d1f63867cdd980d125c2bbae6afacd4444a9c7",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
-    "gate": {
-      "arch-review": "conform",
-      "drift-check": "skipped",
-      "degenerate-green": "clean",
-      "checks": "green",
-      "base_tree": "a593747dc67d84790cc5179d753c765fb78b16b3",
-      "head": "1281acb924fe7081d0f87f7c5a9098abde3e1c82"
-    },
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false,
-      "unavailable": false
-    },
     "base": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
     "base_reason": "T-29-06 is MERGED, so its branch is no longer where work lands — the base is epic/29-the-tracker-is-a-projection-and-a-projection-is-driven (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-10T08:37:17.489Z"
+    "reapable": true,
+    "since": "2026-09-11T07:04:01.173Z"
+  },
+  "T-29-08": {
+    "branch": "ticket/T-29-08-bind-projection-evidence-to-the-item-act",
+    "pr": 91,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/91",
+    "base": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+    "base_reason": "T-29-07 is MERGED, so its branch is no longer where work lands — the base is epic/29-the-tracker-is-a-projection-and-a-projection-is-driven (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+    "reapable": true,
+    "since": "2026-09-11T07:04:01.173Z"
+  },
+  "T-32-01": {
+    "branch": "ticket/T-32-01-collect-deduplicated-usage-from-explicit",
+    "pr": 92,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/92",
+    "base": "epic/32-measure-usage-and-make-the-backlog-actionable",
+    "base_reason": "no primary parent — a root ticket PRs into epic/32-measure-usage-and-make-the-backlog-actionable",
+    "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
+    "reapable": true,
+    "since": "2026-09-11T07:04:01.173Z"
+  },
+  "T-32-02": {
+    "branch": "ticket/T-32-02-index-backlog-sources-with-stable-item-i",
+    "pr": 93,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/93",
+    "base": "epic/32-measure-usage-and-make-the-backlog-actionable",
+    "base_reason": "no primary parent — a root ticket PRs into epic/32-measure-usage-and-make-the-backlog-actionable",
+    "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
+    "reapable": true,
+    "since": "2026-09-11T07:04:01.173Z"
+  },
+  "T-35-01": {
+    "branch": "ticket/T-35-01-deterministic-native-gsd-projection",
+    "pr": 96,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/96",
+    "base": "epic/35-gsd-and-shipyard-workflow-loop",
+    "base_reason": "no primary parent — a root ticket PRs into epic/35-gsd-and-shipyard-workflow-loop",
+    "epic": "epic/35-gsd-and-shipyard-workflow-loop",
+    "reapable": true,
+    "since": "2026-09-11T07:24:03.333Z"
+  },
+  "T-35-02": {
+    "branch": "ticket/T-35-02-wire-synchronization-into-both-gsd-runti",
+    "pr": 98,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/98",
+    "base": "epic/35-gsd-and-shipyard-workflow-loop",
+    "base_reason": "T-35-01 is MERGED, so its branch is no longer where work lands — the base is epic/35-gsd-and-shipyard-workflow-loop (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/35-gsd-and-shipyard-workflow-loop",
+    "reapable": true,
+    "since": "2026-09-11T07:52:18.043Z"
+  },
+  "T-35-03": {
+    "branch": "ticket/T-35-03-document-normalize-and-bootstrap-the-syn",
+    "pr": 101,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/101",
+    "base": "epic/35-gsd-and-shipyard-workflow-loop",
+    "base_reason": "T-35-02 is MERGED, so its branch is no longer where work lands — the base is epic/35-gsd-and-shipyard-workflow-loop (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/35-gsd-and-shipyard-workflow-loop",
+    "reapable": true,
+    "since": "2026-09-11T08:00:15.458Z"
   }
 }

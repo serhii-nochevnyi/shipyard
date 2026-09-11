@@ -12,11 +12,15 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 # ── static ───────────────────────────────────────────────────────────────────
-for f in scripts/gen-codex-shipyard.cjs scripts/merge-codex-config.cjs scripts/install-shipyard-codex.sh; do
+for f in scripts/gen-codex-shipyard.cjs scripts/merge-codex-config.cjs scripts/install-shipyard-codex.sh \
+         plugins/delivery-pipeline/scripts/runtime-context.cjs \
+         plugins/delivery-pipeline/scripts/gsd-sync.cjs capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs; do
   [[ -f "$f" ]] || { echo "missing $f"; exit 1; }
 done
 node --check scripts/gen-codex-shipyard.cjs
 node --check scripts/merge-codex-config.cjs
+node --check plugins/delivery-pipeline/scripts/gsd-sync.cjs
+node --check capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs
 bash -n scripts/install-shipyard-codex.sh
 
 # ── isolate: throwaway HOME so ~/.codex and ~/.agents never touch the host ────
@@ -107,14 +111,48 @@ for f in scripts/state-sync.cjs scripts/reviewers.cjs scripts/validate-graph.cjs
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
          scripts/usage-attribution.cjs scripts/usage-report.cjs \
          scripts/codex-agent.cjs \
+         scripts/gsd-sync.cjs \
          scripts/ticket-worktree.sh scripts/epic-branch.sh; do
   [[ -f "$CODEX_HOME/shipyard/$f" ]] || { echo "bundle missing $f"; exit 1; }
 done
+[[ -f "$CODEX_HOME/shipyard/skills/delivery-rules/SKILL.md" ]] \
+  || { echo "bundle missing the runtime-neutral delivery-rules source"; exit 1; }
 bash -n "$CODEX_HOME/shipyard/scripts/epic-branch.sh" || { echo "bundled epic-branch.sh syntax error"; exit 1; }
 bash -n "$CODEX_HOME/shipyard/scripts/ticket-worktree.sh" || { echo "bundled ticket-worktree.sh syntax error"; exit 1; }
-for f in state-sync log-event pipeline-stats usage-attribution usage-report ticket-pr-match frontmatter pipeline-config codex-agent; do
+for f in state-sync log-event pipeline-stats usage-attribution usage-report ticket-pr-match frontmatter pipeline-config codex-agent gsd-sync; do
   node --check "$CODEX_HOME/shipyard/scripts/$f.cjs" || { echo "bundle $f.cjs fails node --check"; exit 1; }
 done
+cmp -s plugins/delivery-pipeline/scripts/gsd-sync.cjs "$CODEX_HOME/shipyard/scripts/gsd-sync.cjs" \
+  || { echo "bundled gsd-sync.cjs differs from the canonical script"; exit 1; }
+
+# The same bundled synchronizer must execute from an isolated conveyor project,
+# not merely exist in the payload. This proves its sibling parser/lock modules
+# travel with it and that write/check semantics are runtime-neutral.
+SYNC_FIXTURE="$WORK/gsd-sync-fixture"
+node - "$SYNC_FIXTURE" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const root = process.argv[2];
+const write = (name, value) => {
+  const file = path.join(root, name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, value);
+};
+write('.planning/PROJECT.md', '# Project\n\n## Core Value\nA truthful conveyor\n');
+write('.planning/ROADMAP.md', '# Roadmap\n\n## Requirements\n\n- **SYNC-01** — Native state follows delivery evidence.\n\n### Phase 1: Foundation\n**Requirements**: SYNC-01\n');
+write('.planning/phases/01-foundation/01-01-PLAN.md', '---\nphase: 1\nplan: 1\ntitle: Foundation\nrequirements: [SYNC-01]\ndelivery:\n  ticket: T-01-01\n  risk: low\n---\n');
+write('.planning/phases/01-foundation/INTEGRATION.md', '# Integration\n\nVerdict: passed\n');
+write('.planning/graph/tickets.json', JSON.stringify({ tickets: { 'T-01-01': { phase: '1' } } }));
+write('.planning/graph/delivery-state.json', JSON.stringify({ 'T-01-01': { status: 'merged', since: '2026-09-10T10:00:00Z' } }));
+NODE
+SYNC_WRITE=""
+SYNC_WRITE="$(cd "$SYNC_FIXTURE" && node "$CODEX_HOME/shipyard/scripts/gsd-sync.cjs" --json)" \
+  || { echo "bundled gsd-sync write failed: $SYNC_WRITE"; exit 1; }
+grep -q '"ok":true' <<<"$SYNC_WRITE" || { echo "bundled gsd-sync write was not successful: $SYNC_WRITE"; exit 1; }
+SYNC_CHECK=""
+SYNC_CHECK="$(cd "$SYNC_FIXTURE" && node "$CODEX_HOME/shipyard/scripts/gsd-sync.cjs" --check --json)" \
+  || { echo "bundled gsd-sync check failed: $SYNC_CHECK"; exit 1; }
+grep -q '"ok":true' <<<"$SYNC_CHECK" || { echo "bundled gsd-sync check was not clean: $SYNC_CHECK"; exit 1; }
 # The bundled validator must be able to load its siblings from the bundle root.
 # Capture first: it exits non-zero here by design, and `set -o pipefail` would
 # report that instead of the grep result.
@@ -122,15 +160,14 @@ vg_out="$( ( cd "$WORK" && node -e 'require(process.argv[1])' "$CODEX_HOME/shipy
 grep -q 'missing .planning' <<<"$vg_out" || { echo "bundled validate-graph.cjs cannot load its modules: $vg_out"; exit 1; }
 # The model resolver travels with the bundle and only emits tier aliases.
 # Run it from "$WORK" for the same reason validate-graph is run there: the
-# resolver reads `<cwd>/.planning/config.json`, and this smoke's own cwd is the
-# repo root, which BECAME a GSD project (`runtime: claude`) after this line was
-# written. That config legitimately resolves the two judgment roles to `fable`,
-# so the assertion started failing on a correct resolver. What is under test is
-# that the bundled copy loads and answers with a tier alias — not what the host
-# project happens to configure.
+# resolver reads `<cwd>/.planning/config.json`. The bundled script is itself
+# under the throwaway Codex home, so runtime-context must identify Codex from
+# that path even though the fixture has no persisted project runtime. On Codex
+# the runtime cap deliberately maps the judgment tier to `sonnet`; this checks
+# the active-runtime policy rather than the old ambiguous-runtime fallback.
 pc_tier="$( cd "$WORK" && node "$CODEX_HOME/shipyard/scripts/pipeline-config.cjs" model arch-review )"
-[[ "$pc_tier" == opus ]] \
-  || { echo "bundled pipeline-config.cjs does not resolve the judgment tier (got '$pc_tier', want 'opus')"; exit 1; }
+[[ "$pc_tier" == sonnet ]] \
+  || { echo "bundled pipeline-config.cjs does not resolve the Codex judgment tier (got '$pc_tier', want 'sonnet')"; exit 1; }
 
 # ${CLAUDE_PLUGIN_ROOT} is rewritten to the bundle root, so every path the skills
 # reference must actually EXIST there — including workflows/, which used to be
@@ -328,6 +365,23 @@ CAPDIR="$WORK/.gsd/capabilities/delivery-pipeline"
 for f in validate-graph.cjs frontmatter.cjs pipeline-config.cjs; do
   [[ -f "$CAPDIR/checks/$f" ]] || { echo "capability not self-contained ($f missing)"; exit 1; }
 done
+[[ -f "$CAPDIR/checks/gsd-sync-gate.cjs" ]] || { echo "capability missing gsd-sync gate"; exit 1; }
+
+# Exercise the installed lifecycle launcher as well as the bundled writer. The
+# launcher must resolve its sibling synchronizer from the installed capability,
+# publish a clean projection, and block ship:pre once a source plan drifts.
+GATE_WRITE=""
+GATE_WRITE="$(cd "$SYNC_FIXTURE" && node "$CAPDIR/checks/gsd-sync-gate.cjs" write)" \
+  || { echo "installed gsd-sync gate write failed: $GATE_WRITE"; exit 1; }
+grep -q 'projection published' <<<"$GATE_WRITE" \
+  || { echo "installed gsd-sync gate did not publish: $GATE_WRITE"; exit 1; }
+GATE_CHECK=""
+GATE_CHECK="$(cd "$SYNC_FIXTURE" && node "$CAPDIR/checks/gsd-sync-gate.cjs" check)" \
+  || { echo "installed gsd-sync gate check failed: $GATE_CHECK"; exit 1; }
+printf '\nsource drift\n' >> "$SYNC_FIXTURE/.planning/phases/01-foundation/01-01-PLAN.md"
+if ( cd "$SYNC_FIXTURE" && node "$CAPDIR/checks/gsd-sync-gate.cjs" check >/dev/null 2>&1 ); then
+  echo "installed gsd-sync gate let stale projection pass"; exit 1
+fi
 
 # ── the plan:post gate is GLOBAL, so applicability matters as much as strictness ──
 run_gate() { ( cd "$1" && GSD_CAP_DIR="$CAPDIR" node "$CAPDIR/checks/graph-gate.cjs" ); }

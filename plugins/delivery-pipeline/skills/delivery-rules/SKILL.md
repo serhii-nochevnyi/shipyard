@@ -1,6 +1,6 @@
 ---
 name: delivery-rules
-description: Delivery-conveyor rules for GSD planner/executor agents — plan frontmatter contract, delivery block, branch naming, scope discipline. Injected via agent_skills (global:shipyard:delivery-rules); also useful when authoring or editing PLAN.md files by hand.
+description: Delivery-conveyor rules for GSD planner/executor agents — plan frontmatter contract, delivery block, branch naming, scope discipline. Injected via the project-relative .shipyard/generated/gsd-delivery-rules projection; also useful when authoring or editing PLAN.md files by hand.
 ---
 
 # Delivery conveyor rules
