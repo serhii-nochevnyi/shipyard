@@ -594,9 +594,9 @@ findings or turn a merged ticket count into a false phase pass.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `d940bcef7cbf3f353291110a3d003e2c754da8ed13d124dff06681fcd2c27e6b`
-- Plans merged: 79/85
-- Phases verified: 2/16
+- Source fingerprint: `ad1ed16bc8d3238e1dbbf5dea09610f556d49d40fe94c68454f9c85b10f15300`
+- Plans merged: 81/82
+- Phases verified: 3/16
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -606,16 +606,16 @@ findings or turn a merged ticket count into a false phase pass.
 | 22 — Close what phase 20 left open | 5 | 5 | pending |
 | 23 — The board tells the truth about itself | 3 | 3 | pending |
 | 24 — The conveyor stops interrupting itself | 11 | 11 | gaps_found |
-| 25 — The conveyor follows the models it runs on | 6 | 6 | gaps_found |
-| 26 — Positive evidence before a mutation | 15 | 15 | passed |
+| 25 — The conveyor follows the models it runs on | 6 | 6 | passed |
+| 26 — Positive evidence before a mutation | 15 | 15 | pending |
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
 | 30 — A ticket you cannot reach is not deliverable | 0 | 0 | pending |
 | 31 — Not every ticket is available work | 0 | 0 | pending |
-| 32 — Measure usage and make the backlog actionable | 5 | 2 | pending |
+| 32 — Measure usage and make the backlog actionable | 2 | 2 | passed |
 | 33 — Reduce orchestration context and transfer sessions safely | 0 | 0 | pending |
 | 34 — Improve convergence and tune from measured outcomes | 0 | 0 | pending |
-| 35 — Close the GSD and Shipyard workflow loop | 3 | 0 | pending |
+| 35 — Close the GSD and Shipyard workflow loop | 3 | 2 | pending |
 
 <!-- shipyard:gsd-sync:end -->

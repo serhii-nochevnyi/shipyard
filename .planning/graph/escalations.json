@@ -10,6 +10,27 @@
       ],
       "pr": 66,
       "at": "2026-09-08T19:34:40.748Z"
+    },
+    "T-35-01": {
+      "reason": "held for operator review 2026-09-11: phase 35 and ADR-013 are under evaluation; see .planning/architecture/ADR-013-gsd-workflow-synchronization.md and the open phase PRs; #104 remains an integration review boundary — finalize only after the operator answers",
+      "fingerprint": "213fa4c0ff886c2b",
+      "fingerprint_kind": "park",
+      "pr": 96,
+      "at": "2026-09-11T07:12:24.942Z"
+    },
+    "T-35-02": {
+      "reason": "held for operator review 2026-09-11: phase 35 and ADR-013 are under evaluation; see .planning/architecture/ADR-013-gsd-workflow-synchronization.md and the open phase PRs; #104 remains an integration review boundary — finalize only after the operator answers",
+      "fingerprint": "7468c8084e6b26bb",
+      "fingerprint_kind": "park",
+      "pr": 98,
+      "at": "2026-09-11T07:12:24.974Z"
+    },
+    "T-35-03": {
+      "reason": "held for operator review 2026-09-11: phase 35 and ADR-013 are under evaluation; see .planning/architecture/ADR-013-gsd-workflow-synchronization.md and the open phase PRs; #104 remains an integration review boundary — finalize only after the operator answers",
+      "fingerprint": "43c0992d1668b496",
+      "fingerprint_kind": "park",
+      "pr": 101,
+      "at": "2026-09-11T07:12:25.013Z"
     }
   }
 }

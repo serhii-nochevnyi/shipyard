@@ -102,6 +102,19 @@ test('requires positive verification evidence before a passed phase', () => {
   assert.match(verification, /no verification evidence/i);
 });
 
+test('does not treat the uat-passed command name as a verification result', () => {
+  const root = project({
+    integration: 'Verdict: passed\n\n## Verification evidence\n- `gsd-tools phase uat-passed 1 --raw`',
+  });
+  assert.equal(run(root).status, 0);
+  const verification = fs.readFileSync(
+    path.join(root, '.planning', 'phases', '01-foundation', '01-foundation-VERIFICATION.md'),
+    'utf8',
+  );
+  assert.match(verification, /status: human_needed/);
+  assert.match(verification, /no positive repository-local verification result/i);
+});
+
 test('preserves wrapped roadmap requirement descriptions', () => {
   const root = project();
   write(path.join(root, '.planning', 'ROADMAP.md'), [
@@ -147,6 +160,29 @@ test('check mode detects source drift without rewriting the projection', () => {
   assert.equal(check.status, 1);
   assert.match(check.stdout, /stale|missing/);
   assert.equal(fs.readFileSync(requirements, 'utf8'), before);
+});
+
+test('ignores volatile delivery-front metadata in the source fingerprint', () => {
+  const root = project();
+  assert.equal(run(root).status, 0);
+  write(path.join(root, '.planning', 'graph', 'delivery-front.json'), JSON.stringify({
+    generated_at: '2026-09-11T07:00:00.000Z',
+    observed_at: '2026-09-11T07:00:00.000Z',
+    generation: 1,
+    dispatches_applied_at: '2026-09-11T07:00:00.000Z',
+    actionable: { execute: [], publish: [], fix: [], finalize: [], merge: [] },
+  }));
+  const before = fs.readFileSync(path.join(root, '.planning', 'ROADMAP.md'), 'utf8');
+  write(path.join(root, '.planning', 'graph', 'delivery-front.json'), JSON.stringify({
+    generated_at: '2026-09-11T08:00:00.000Z',
+    observed_at: '2026-09-11T08:00:00.000Z',
+    generation: 2,
+    dispatches_applied_at: '2026-09-11T08:00:00.000Z',
+    actionable: { execute: [], publish: [], fix: [], finalize: [], merge: [] },
+  }));
+  const check = run(root, ['--check']);
+  assert.equal(check.status, 0, check.stderr || check.stdout);
+  assert.equal(fs.readFileSync(path.join(root, '.planning', 'ROADMAP.md'), 'utf8'), before);
 });
 
 test('does not convert needs-fix integration into a green phase', () => {

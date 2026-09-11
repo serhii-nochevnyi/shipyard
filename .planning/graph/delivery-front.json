@@ -1,22 +1,22 @@
 {
-  "generated_at": "2026-09-10T09:13:10.596Z",
-  "observed_at": "2026-09-10T09:13:10.596Z",
-  "generation": 189,
+  "generated_at": "2026-09-11T07:53:25.991Z",
+  "observed_at": "2026-09-11T07:53:25.991Z",
+  "generation": 202,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-10T09:13:10.596Z",
+  "dispatches_applied_at": "2026-09-11T07:53:25.991Z",
   "actionable": {
     "execute": [],
     "publish": [],
     "fix": [],
     "finalize": [],
-    "merge": []
+    "merge": [
+      "T-35-03"
+    ]
   },
   "waiting": {
     "ci": [],
-    "dispatched": [
-      "T-29-07"
-    ],
+    "dispatched": [],
     "parent": [],
     "merge_human": [],
     "human": []
@@ -98,42 +98,48 @@
       "T-29-03",
       "T-29-04",
       "T-29-05",
-      "T-29-06"
+      "T-29-06",
+      "T-29-07",
+      "T-29-08",
+      "T-32-01",
+      "T-32-02",
+      "T-35-01",
+      "T-35-02"
     ]
   },
   "why": {
-    "T-29-07": "dispatched to pr-sentinel 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (the PR merges, or its base moves) or after 90m; `dispatch-record.cjs clear T-29-07` returns it now."
+    "T-35-03": "PR #101: green + conform — squash into epic/35-gsd-and-shipyard-workflow-loop (sentinel)"
   },
   "counts": {
     "execute": 0,
     "publish": 0,
     "fix": 0,
     "finalize": 0,
-    "merge": 0,
+    "merge": 1,
     "ci": 0,
-    "dispatched": 1,
+    "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
     "blocked": 0,
-    "done": 75
+    "done": 81
   },
   "parent_of": {},
-  "actionable_count": 0,
+  "actionable_count": 1,
   "left_behind_count": 0,
   "fixpoint": false,
   "capacity": {
     "max": 4,
-    "in_flight": 1,
-    "free": 3
+    "in_flight": 0,
+    "free": 4
   },
   "sentinel": {
-    "duty": [],
+    "duty": [
+      "T-35-03"
+    ],
     "waiting_ci": [],
     "waiting_parent": [],
-    "dispatched": [
-      "T-29-07"
-    ],
+    "dispatched": [],
     "clear": false
   },
   "roles": {
