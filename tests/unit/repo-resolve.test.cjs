@@ -114,6 +114,20 @@ test('an invalid configured path is trackable-only without filesystem mutation',
   assert.match(nonRepo.reason, /not a git repository/);
 });
 
+test('a configured directory inside another git checkout is trackable-only', () => {
+  const parent = gitRepo();
+  const nested = path.join(parent, 'nested-directory');
+  fs.mkdirSync(nested);
+  const result = mod.resolveConfiguredRepo({
+    ticket: 'T-30-02',
+    repo: 'acme/service',
+    config: { repos: { 'acme/service': nested } },
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'track-only');
+  assert.match(result.reason, /inside another git repository.*repository root/);
+});
+
 test('malformed repository arguments fail closed before any filesystem write', () => {
   const parent = tempDir();
   const before = fs.readdirSync(parent);

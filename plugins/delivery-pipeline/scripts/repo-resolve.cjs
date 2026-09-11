@@ -116,6 +116,13 @@ function resolveConfiguredRepo(input) {
   if (!repositoryRoot) {
     return trackOnly(ticket, repo, `configured checkout "${configuredPath}" is not a git repository`);
   }
+  if (path.resolve(repositoryRoot) !== path.resolve(checkoutPath)) {
+    return trackOnly(
+      ticket,
+      repo,
+      `configured checkout "${configuredPath}" is inside another git repository; supply its repository root`,
+    );
+  }
   return resolved(ticket, repo, checkoutPath, repositoryRoot);
 }
 
