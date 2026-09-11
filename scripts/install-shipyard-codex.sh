@@ -113,18 +113,96 @@ find "$BUNDLE_ROOT" -name '*.sh' -exec chmod +x {} +
 AGENT_MANIFEST_NAME=".shipyard-manifest.json"
 if compgen -G "$OUT/agents/*.toml" >/dev/null; then
   echo "→ installing agents → $CODEX_HOME/agents"
-  mkdir -p "$CODEX_HOME/agents"
-  cp "$OUT"/agents/*.toml "$CODEX_HOME/agents/"
+  AGENTS_DIR="$CODEX_HOME/agents"
+  AGENTS_DIR_PREEXISTED=0
+  [[ -d "$AGENTS_DIR" ]] && AGENTS_DIR_PREEXISTED=1
+  mkdir -p "$AGENTS_DIR"
+
+  # Agent files and config.toml are one installation unit. The merge helper is
+  # atomic for the config itself, but copying the files first would still leave
+  # a fresh set beside the old registrations when validation rejects the
+  # config. Snapshot only the generated names (the operator's other agents are
+  # outside this installer's ownership) and restore those names on either copy
+  # or merge failure. The successful path reaches the reconciliation only after
+  # both halves have committed.
+  AGENT_BACKUP="$STAGE/agents-before"
+  AGENT_BACKUP_INDEX="$STAGE/agents-before.tsv"
+  CONFIG_TARGET="$CODEX_HOME/config.toml"
+  CONFIG_BACKUP="$STAGE/config-before.toml"
+  CONFIG_PREEXISTED=0
+  if [[ -e "$CONFIG_TARGET" || -L "$CONFIG_TARGET" ]]; then
+    cp -p "$CONFIG_TARGET" "$CONFIG_BACKUP"
+    CONFIG_PREEXISTED=1
+  fi
+  mkdir -p "$AGENT_BACKUP"
+  : > "$AGENT_BACKUP_INDEX"
+  for source in "$OUT"/agents/*.toml; do
+    name="$(basename "$source")"
+    target="$AGENTS_DIR/$name"
+    if [[ -e "$target" || -L "$target" ]]; then
+      [[ -f "$target" || -L "$target" ]] || {
+        echo "error: refusing to replace non-file agent target: $target" >&2
+        exit 1
+      }
+      cp -a "$target" "$AGENT_BACKUP/$name"
+      printf 'present\t%s\n' "$name" >> "$AGENT_BACKUP_INDEX"
+    else
+      printf 'absent\t%s\n' "$name" >> "$AGENT_BACKUP_INDEX"
+    fi
+  done
+
+  restore_agents() {
+    local state name target restore_status=0
+    while IFS=$'\t' read -r state name; do
+      [[ -n "$name" ]] || continue
+      target="$AGENTS_DIR/$name"
+      rm -rf "$target" || restore_status=1
+      if [[ "$state" == present ]]; then
+        cp -a "$AGENT_BACKUP/$name" "$target" || restore_status=1
+      fi
+    done < "$AGENT_BACKUP_INDEX"
+    if [[ "$AGENTS_DIR_PREEXISTED" == 0 ]]; then
+      rmdir "$AGENTS_DIR" 2>/dev/null || true
+    fi
+    return "$restore_status"
+  }
+
+  restore_config() {
+    local restore_status=0
+    if [[ "$CONFIG_PREEXISTED" == 1 ]]; then
+      cp -p "$CONFIG_BACKUP" "$CONFIG_TARGET" || restore_status=1
+    else
+      rm -f "$CONFIG_TARGET" || restore_status=1
+    fi
+    return "$restore_status"
+  }
+
+  if cp "$OUT"/agents/*.toml "$AGENTS_DIR/"; then
+    :
+  else
+    status=$?
+    echo "error: could not install generated agent files; restoring the previous set" >&2
+    restore_agents || echo "warning: agent rollback was incomplete; inspect $AGENTS_DIR" >&2
+    exit "$status"
+  fi
+
   echo "→ merging agent registrations → $CODEX_HOME/config.toml"
-  node "$REPO_ROOT/scripts/merge-codex-config.cjs" \
-    --config "$CODEX_HOME/config.toml" --fragment "$OUT/config.fragment.toml"
-  # AFTER the merge, deliberately. The merge strips every `[agents.shipyard-*]`
-  # table and the whole fenced fragment before writing the fresh one, so an
-  # orphan's registration is already gone by the time its file is removed — and
-  # if the merge refuses (a duplicate table, a config that will not parse), it
-  # exits non-zero here and BOTH halves stay as they were. The other order
-  # produces the one broken state worth ruling out: a registration whose file is
-  # gone. A file whose registration is gone is merely inert.
+  if node "$REPO_ROOT/scripts/merge-codex-config.cjs" \
+    --config "$CONFIG_TARGET" --fragment "$OUT/config.fragment.toml"; then
+    :
+  else
+    status=$?
+    echo "error: config merge failed; restoring the previous agent and config set" >&2
+    restore_config || echo "warning: config rollback was incomplete; inspect $CONFIG_TARGET" >&2
+    restore_agents || echo "warning: agent rollback was incomplete; inspect $AGENTS_DIR" >&2
+    exit "$status"
+  fi
+  # AFTER the merge, deliberately. Both halves are committed before this
+  # reconciliation starts. The merge strips every `[agents.shipyard-*]` table
+  # and the whole fenced fragment before writing the fresh one, so an orphan's
+  # registration is already gone by the time its file is removed. A file whose
+  # registration is gone is inert; a registration whose file is gone is ruled
+  # out by the transaction above.
   echo "→ reconciling agent files this installer previously wrote"
   SHIPYARD_AGENTS_DIR="$CODEX_HOME/agents" \
   SHIPYARD_NEW_MANIFEST="$OUT/manifest.json" \

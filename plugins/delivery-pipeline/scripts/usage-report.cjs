@@ -15,7 +15,7 @@ const CODEX_FIELDS = ['input_tokens', 'cached_input_tokens', 'cache_write_input_
 const number = (v) => Number.isSafeInteger(v) && v >= 0;
 const sum = (values) => values.every(number) ? values.reduce((a, b) => a + b, 0) : null;
 const RUNTIME_PROVIDER = { claude: 'anthropic', codex: 'openai' };
-const concreteEffort = (value) => Boolean(value) && !['unknown', 'unsupported'].includes(value);
+const concreteEffort = (value) => Array.isArray(pipeline.EFFORTS) && pipeline.EFFORTS.includes(value);
 
 function valuesOf(context, key) {
   const plural = `${key}s`;
@@ -41,6 +41,9 @@ function sourceMatches(record, context) {
 }
 
 function attributionShape(record, index) {
+  if (record.source !== undefined && typeof record.source !== 'string') {
+    return { error: `attribution ${index} source must be a string` };
+  }
   const runtime = runtimeOf(record);
   if (!runtime || !RUNTIME_PROVIDER[runtime]) return { error: `attribution ${index} has an unknown runtime` };
   if (record.provider && record.provider !== RUNTIME_PROVIDER[runtime]

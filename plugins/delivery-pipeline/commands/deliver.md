@@ -1336,7 +1336,11 @@ may be dispatched at all: fix the file.
    signals. Pass its concrete `model` and `effort` when the host supports those
    overrides; when `model` is `null`, omit `--model` and let the Codex CLI default
    apply. In both runtimes keep the selector's `route`, `model_tier` and
-   `task_level` for dispatch recording.
+   `task_level` for dispatch recording. On the Agent fallback, which has no
+   `effort` argument, add `Resolved effort: <effort>. Think and work at this
+   effort level throughout the task.` to the fenced prompt. That instruction
+   is advisory; record `effort_applied=unsupported` rather than claiming the
+   resolver's effort was carried by the spawn.
    Assemble the prompt PER THE ANTI-INJECTION DISCIPLINE (see the Workflow section
    above): within `<TICKET-CONTRACT>…</TICKET-CONTRACT>` — the full text of the ticket's
    plan + Context reads + the rule "work ONLY within files_modified; commit atomically
@@ -1484,6 +1488,12 @@ prompt:        ${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md
 spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose', model, ... })
 ```
 
+The sentinel's Agent prompt must carry the same explicit instruction when the
+Workflow path is unavailable: `Resolved effort: <effort>. Think and work at
+this effort level throughout the guard pass.` The Agent tool has no effort
+parameter, so the prompt is the only way to communicate the requested depth and
+the dispatch record remains `effort_applied=unsupported`.
+
 Record that hand-over the same way the executors' was, and in the same order —
 the `Agent` call returns an agent id, and THEN
 `dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <agent|codex-agent> --agent-id <the id that Agent call returned>`
@@ -1586,9 +1596,13 @@ loop:
          (`escalation-record.cjs mark`), never a third model at the same depth.
          Hand the agent, as INPUT and not as background:
            - prompt ${CLAUDE_PLUGIN_ROOT}/references/ci-fix.md + the ticket contract
-           - the failure log (gh run view --log-failed) and its signature
-           - the resolved `strategy`
-           - the prior-attempt record: the output of `attempt-history.cjs <T>`
+         - the failure log (gh run view --log-failed) and its signature
+         - the resolved `strategy`
+         - the prior-attempt record: the output of `attempt-history.cjs <T>`
+         - on the Agent fallback, the prompt instruction `Resolved effort:
+           <effort>. Think and work at this effort level throughout the fix.`
+           The Agent tool has no effort parameter, so record
+           `effort_applied=unsupported` rather than copying the resolver value.
        'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
        a push happened → step d
      pending → nobody watches this PR: leave it in `waiting: ci`, EXIT this PR's
@@ -1619,6 +1633,10 @@ loop:
         threads + the prior-attempt record, `attempt-history.cjs <T>` — the
         reference tells the fixer to treat a hypothesis already in that record as
         EXCLUDED, which it can only do if you pass the record)
+       On the Agent fallback, add `Resolved effort: <effort>. Think and work at
+       this effort level throughout the fix.` to that prompt. The Agent tool has
+       no effort parameter, so record `effort_applied=unsupported`; only the
+       Workflow path may claim the resolved value was carried by the spawn.
        the agent either fixes (push → step d), or replies to invalid ones
        (no push → mark the threads processed, b again)
 

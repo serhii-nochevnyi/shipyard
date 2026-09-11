@@ -303,6 +303,27 @@ test('dispatch routing fields are grouped without turning missing observations i
   assert.strictEqual(json.ladder.missing_attribution.dispatch_id, 1);
 });
 
+test('non-concrete effort states do not count as applied or observed coverage', () => {
+  const row = {
+    ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor',
+    model: 'sonnet', effort: 'high', effort_applied: 'unsupported',
+    reason: 'tier=level:routine(sonnet) effort=row(high)', task_level: 'routine',
+    runtime: 'claude', backend: 'agent', observed_model: 'claude-sonnet-5',
+    observed_effort: 'unknown', dispatch_id: 'dispatch-no-effort',
+  };
+  const { code, json } = asJson({
+    tickets: {}, journal: [JSON.stringify(row)], prs: [],
+    config: { delivery_pipeline: { model_ladder: 'adaptive' } },
+  });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.ladder.requested_comparable, 1);
+  assert.strictEqual(json.ladder.applied_comparable, 0);
+  assert.strictEqual(json.ladder.observed_comparable, 0);
+  assert.strictEqual(json.ladder.missing_effort_applied, 1);
+  assert.strictEqual(json.ladder.missing_observed_effort, 1);
+  assert.equal(json.ladder.by_attribution_status.requested_complete, 1);
+});
+
 test('an invalid policy is visible in the ladder report', () => {
   const { code, json } = asJson({
     tickets: {}, journal: [JSON.stringify({ ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor' })],

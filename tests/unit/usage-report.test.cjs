@@ -148,3 +148,32 @@ test('Codex turn metadata is scoped by session, not only by turn_id', () => {
    ['session-a','gpt-5.6-luna','high'],['session-b','gpt-6-astra','xhigh'],
  ]);
 });
+
+test('malformed transcript effort stays visible but is not eligible for comparison', () => {
+ const row = {source:'session-bad-effort.jsonl',rows:[
+   {type:'session_meta',payload:{id:'session-bad-effort'}},
+   {type:'turn_context',payload:{turn_id:'turn-1',model:'gpt-6-astra',effort:'bogus'}},
+   {type:'token_usage_record',timestamp:'2026-09-10T00:02:00Z',payload:{
+     session_id:'session-bad-effort',response_id:'response-bad-effort',turn_id:'turn-1',
+     usage:{input_tokens:20,cached_input_tokens:0,output_tokens:1,reasoning_output_tokens:0},
+     thread_token_usage:{input_tokens:20,cached_input_tokens:0,cache_write_input_tokens:0,output_tokens:1,reasoning_output_tokens:0,total_tokens:21},
+   }},
+ ]};
+ const r = report([row]);
+ assert.equal(r.observations[0].observed_effort, 'bogus');
+ assert.equal(r.efficiency.eligible_rows, 0);
+ assert.equal(r.coverage.effort_observed, 0);
+});
+
+test('non-string attribution sources are skipped without aborting the report', () => {
+ const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), {
+   attributions: [{
+     observation_id:'bad-source', dispatch_id:'dispatch-1', runtime:'claude', provider:'anthropic', kind:'ordinary',
+     source: { path: 'not-a-path' }, session_id:'s1', request_id:'r1', message_id:'m1', ticket:'T-01-01',
+     role:'executor', task_level:'routine', backend:'workflow', model:'opus', effort:'high',
+     observed_model:'claude-opus-5', observed_effort:'high',
+   }],
+ });
+ assert.ok(r.warnings.some((w) => w.includes('source must be a string')));
+ assert.equal(r.observations[0].attribution_status, 'unattributed');
+});

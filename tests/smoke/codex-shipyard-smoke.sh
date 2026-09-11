@@ -429,6 +429,31 @@ bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 [[ -e "$CODEX_HOME/shipyard/scripts/state-sync.cjs" ]] \
   || { echo "re-install lost the real payload"; exit 1; }
 
+# Agent files and registrations are one transaction. Force the merge helper to
+# reject a duplicate foreign table after deliberately editing one generated
+# agent. A copy-first installer would leave the fresh agent beside the old
+# config; a rollback must preserve both the operator edit and the byte-for-byte
+# config when validation fails.
+ATOMIC_AGENT="$CODEX_HOME/agents/shipyard-arch-review.toml"
+ATOMIC_AGENT_EXPECTED="$WORK/atomic-agent-expected"
+ATOMIC_CONFIG_BEFORE="$WORK/atomic-config-before"
+ATOMIC_CONFIG_EXPECTED="$WORK/atomic-config-expected"
+cp "$CODEX_HOME/config.toml" "$ATOMIC_CONFIG_BEFORE"
+printf '\n# operator edit that a failed install must preserve\n' >> "$ATOMIC_AGENT"
+cp "$ATOMIC_AGENT" "$ATOMIC_AGENT_EXPECTED"
+printf '\n[shipyard-atomic-failure]\nvalue = "one"\n[shipyard-atomic-failure]\nvalue = "two"\n' >> "$CODEX_HOME/config.toml"
+cp "$CODEX_HOME/config.toml" "$ATOMIC_CONFIG_EXPECTED"
+if bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/atomic-failure.log" 2>&1; then
+  echo "an invalid config unexpectedly let the installer commit"; exit 1
+fi
+cmp -s "$ATOMIC_CONFIG_EXPECTED" "$CODEX_HOME/config.toml" \
+  || { echo "a failed agent/config transaction changed config.toml"; exit 1; }
+cmp -s "$ATOMIC_AGENT_EXPECTED" "$ATOMIC_AGENT" \
+  || { echo "a failed agent/config transaction did not roll back the agent file"; exit 1; }
+# Restore the valid fixture and prove the next install can still commit.
+cp "$ATOMIC_CONFIG_BEFORE" "$CODEX_HOME/config.toml"
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+
 # ── an installer owns what it wrote (ADR-007 D5) ──────────────────────────────
 # The palette's ceiling entry declares the Codex CLI version that can first
 # CONFIGURE it, and below that version every role takes the floor — which leaves

@@ -281,6 +281,13 @@ function selectAgent(role, options = {}) {
     ...loaded.config,
     gsd: { ...(loaded.config.gsd || {}), runtime: 'codex' },
   };
+  // Keep normalized config warnings attached to the selection. A fallback to
+  // conservative after a misspelled ladder mode is safe, but invisible safety
+  // is indistinguishable from an intentional conservative policy to the
+  // caller and to telemetry.
+  const configWarnings = Array.isArray(loaded.warnings) && loaded.warnings.length
+    ? { config_warnings: [...loaded.warnings] }
+    : {};
   const signals = options.signals || {};
   const classification = pc.taskLevelRoute(ladderRole, signals, cfg);
   if (ladderRole === 'executor') {
@@ -292,6 +299,7 @@ function selectAgent(role, options = {}) {
         options.env || process.env,
         options.cwd || process.cwd(),
       ),
+      ...configWarnings,
       project_dir: path.resolve(options.cwd || process.cwd()),
     };
   }
@@ -353,6 +361,7 @@ function selectAgent(role, options = {}) {
     requested_effort: parsedRoute.effort.effort,
     route,
     project_dir: path.resolve(options.cwd || process.cwd()),
+    ...configWarnings,
     ...(fallback ? { fallback } : {}),
   };
 }
@@ -369,6 +378,9 @@ function main() {
     signals: signalsFrom(flags),
     agentDir: agentDirFrom(flags),
   });
+  for (const warning of result.config_warnings || []) {
+    process.stderr.write(`codex-agent: warning: ${warning}\n`);
+  }
   process.stdout.write(flags.has('json')
     ? `${JSON.stringify(result)}\n`
     : `${result.agent_file || result.model}\n`);

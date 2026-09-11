@@ -120,6 +120,23 @@ test('conservative mode does not name a critical variant even if a stale file ex
   assert.ok(/conservative/.test(result.fallback.reason), result.fallback.reason);
 });
 
+test('config normalization warnings travel with a conservative fallback', () => {
+  const f = fixture('adapative', STANDARD_FILES);
+  const result = selectAgent('arch-review', {
+    cwd: f.project, agentDir: f.agentDir, signals: { risk: 'high' },
+  });
+  assert.strictEqual(result.ladder_mode, 'conservative');
+  assert.ok(result.config_warnings.some((warning) => /model_ladder/.test(warning)), result.config_warnings);
+
+  const cli = spawnSync(process.execPath, [
+    SCRIPT, 'select', 'arch-review', '--json', '--agent-dir', f.agentDir, '--risk', 'high',
+  ], { cwd: f.project, encoding: 'utf8' });
+  assert.strictEqual(cli.status, 0, cli.stderr);
+  const json = JSON.parse(cli.stdout);
+  assert.ok(json.config_warnings.some((warning) => /model_ladder/.test(warning)), json);
+  assert.match(cli.stderr, /codex-agent: warning:.*model_ladder/);
+});
+
 test('integrator always reads its ceiling file and has no generated variant', () => {
   const f = fixture('adaptive', STANDARD_FILES);
   const result = selectAgent('integrator', {

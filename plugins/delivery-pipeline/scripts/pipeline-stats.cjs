@@ -24,7 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
-const { loadConfig, ROLES } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { loadConfig, ROLES, EFFORTS } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
@@ -289,6 +289,7 @@ const countField = (field) => Object.fromEntries(
 // model lives. The dynamic executor is resolved at launch and has no file.
 const present = (event, field) =>
   event[field] !== undefined && event[field] !== null && event[field] !== '';
+const concreteEffort = (value) => Array.isArray(EFFORTS) && EFFORTS.includes(value);
 const staticCodexNeedsFile = (event) =>
   event.runtime === 'codex' && event.role !== 'executor' && !present(event, 'agent_file');
 const requestedMissing = (event) => [
@@ -297,9 +298,9 @@ const requestedMissing = (event) => [
 const requestedComparable = (event) =>
   requestedMissing(event).length === 0 && !staticCodexNeedsFile(event);
 const appliedComparable = (event) =>
-  requestedComparable(event) && present(event, 'effort_applied');
+  requestedComparable(event) && concreteEffort(event.effort_applied);
 const observedComparable = (event) =>
-  requestedComparable(event) && present(event, 'observed_model') && present(event, 'observed_effort');
+  requestedComparable(event) && present(event, 'observed_model') && concreteEffort(event.observed_effort);
 const usageJoinComparable = (event) =>
   observedComparable(event) && present(event, 'dispatch_id');
 const attributionStatus = (event) => {
@@ -313,6 +314,7 @@ const missingAttribution = Object.fromEntries([
   'effort_applied', 'observed_model', 'observed_effort', 'dispatch_id',
 ].map((field) => [field, ladderEvents.filter((e) => {
   if (field === 'agent_file') return staticCodexNeedsFile(e);
+  if (field === 'effort_applied' || field === 'observed_effort') return !concreteEffort(e[field]);
   return !present(e, field);
 }).length]));
 const ladder = {
@@ -323,13 +325,13 @@ const ladder = {
   dispatches: ladderEvents.length,
   missing_model: ladderEvents.filter((e) => !e.model).length,
   missing_effort: ladderEvents.filter((e) => !e.effort).length,
-  missing_effort_applied: ladderEvents.filter((e) => !e.effort_applied).length,
+  missing_effort_applied: ladderEvents.filter((e) => !concreteEffort(e.effort_applied)).length,
   missing_route: ladderEvents.filter((e) => !e.reason).length,
   missing_task_level: ladderEvents.filter((e) => !e.task_level).length,
   missing_runtime: ladderEvents.filter((e) => !e.runtime).length,
   missing_backend: ladderEvents.filter((e) => !e.backend).length,
   missing_observed_model: ladderEvents.filter((e) => !e.observed_model).length,
-  missing_observed_effort: ladderEvents.filter((e) => !e.observed_effort).length,
+  missing_observed_effort: ladderEvents.filter((e) => !concreteEffort(e.observed_effort)).length,
   missing_dispatch_id: ladderEvents.filter((e) => !e.dispatch_id).length,
   missing_agent_file: ladderEvents.filter((e) => e.runtime === 'codex' && e.role !== 'executor' && !e.agent_file).length,
   requested_comparable: ladderEvents.filter(requestedComparable).length,
