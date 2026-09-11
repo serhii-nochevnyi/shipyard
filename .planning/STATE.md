@@ -1,12 +1,12 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2fbe98ffd137a924016bae288ee8df2784ca91bf2f628ed741e5d6c654793ccb
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 16
   completed_phases: 4
-  total_plans: 82
-  completed_plans: 82
+  total_plans: 87
+  completed_plans: 87
   percent: 100
 ---
 
@@ -30,7 +30,7 @@ Progress: [██████████] 100%
 
 ## Performance Metrics
 
-- Total plans completed: 82
+- Total plans completed: 87
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -50,7 +50,7 @@ Progress: [██████████] 100%
 | 29 | 8 | 8 | passed |
 | 30 | 0 | 0 | pending |
 | 31 | 0 | 0 | pending |
-| 32 | 2 | 2 | passed |
+| 32 | 7 | 7 | passed |
 | 33 | 0 | 0 | pending |
 | 34 | 0 | 0 | pending |
 | 35 | 3 | 3 | passed |
@@ -85,6 +85,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-11 08:00
+Last session: 2026-09-11 18:59
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

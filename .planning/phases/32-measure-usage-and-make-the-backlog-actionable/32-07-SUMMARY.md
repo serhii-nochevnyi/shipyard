@@ -1,11 +1,11 @@
 ---
 # shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2fbe98ffd137a924016bae288ee8df2784ca91bf2f628ed741e5d6c654793ccb
-phase: 24-the-conveyor-stops-interrupting-itself
-plan: 11
+phase: 32-measure-usage-and-make-the-backlog-actionable
+plan: 07
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Delivery evidence for T-24-11
+  - Delivery evidence for T-32-07
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -20,22 +20,22 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-07
+completed: 2026-09-11
 status: complete
 shipyard_sync: delivery-projection
 shipyard_source_fingerprint: 2fbe98ffd137a924016bae288ee8df2784ca91bf2f628ed741e5d6c654793ccb
 ---
 
-# Phase 24: A resync writes the front it means — Delivery Projection
+# Phase 32: Join transcript usage to dispatches without guessing — Delivery Projection
 
 **Plan delivery is evidenced by a merged ticket.**
 
 ## Delivery Evidence
 
-- Ticket: T-24-11
+- Ticket: T-32-07
 - Delivery status: merged
-- PR: #47
-- Source plan: .planning/phases/24-the-conveyor-stops-interrupting-itself/24-11-PLAN.md
+- PR: #102
+- Source plan: .planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-PLAN.md
 - This summary is complete because the delivery state observes `merged`.
 
 ## Decisions & Deviations

@@ -77,6 +77,7 @@ const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
 // compare-and-swap subject has to have. The front gets an advisory copy for
 // readers; THIS is the authority.
 const META = path.join(GRAPH_DIR, 'delivery-state-meta.json');
+const GSD_SYNC = path.join(__dirname, 'gsd-sync.cjs');
 
 // Tickets the RUN parked (an agent returned `escalate`, attempts > max). GitHub
 // cannot know this, and a front that keeps re-offering an escalated PR is an
@@ -293,6 +294,34 @@ const nowIso = new Date().toISOString();
 const OBSERVED_AT = process.env.SHIPYARD_STATE_OBSERVED_AT || nowIso;
 
 const notices = [];
+
+// state-sync is the delivery writer. Once it has published the delivery state
+// and front, publish the native GSD read model from those same facts before the
+// board is shown or the command returns. This closes the manual delivery path:
+// it does not depend on a later GSD lifecycle hook that the conveyor never
+// invokes, and it releases the state lock before gsd-sync takes it.
+function publishGsdProjection() {
+  if (cfg.gsd_sync === false) return { skipped: true };
+  const result = spawnSync(process.execPath, [GSD_SYNC, '--json'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  });
+  if (result.error) fail(`could not run gsd-sync.cjs: ${result.error.message}`);
+  let payload;
+  try {
+    payload = JSON.parse((result.stdout || '').trim());
+  } catch {
+    fail(`gsd-sync.cjs returned non-JSON output: ${(result.stdout || result.stderr || '').trim()}`);
+  }
+  if (result.status !== 0 || payload.ok !== true) {
+    const blockers = payload.applicable === false
+      ? 'gsd-sync reported that the delivery project is not applicable'
+      : Array.isArray(payload.blockers) ? payload.blockers.join('; ')
+        : (payload.error || result.stderr || 'unknown projection failure');
+    fail(`gsd-sync finalization blocked: ${blockers}`);
+  }
+  return payload;
+}
 
 // The snapshot on disk, as it stands right now. Read INSIDE the lock and nowhere
 // else — a read taken before queueing for the lock is precisely the stale input
@@ -942,6 +971,7 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
 // board line — printing a summary built from facts we just declined to publish is
 // how a run acts on a rollback it decided against.
 if (published.stale) {
+  publishGsdProjection();
   const m = published.stale;
   console.log(
     `state-sync: a newer snapshot (generation ${Number.isInteger(m.generation) ? m.generation : '?'}, ` +
@@ -954,6 +984,7 @@ if (published.stale) {
   process.exit(0);
 }
 const front = published.front;
+publishGsdProjection();
 
 // ── board summary on stdout for the /shipyard:deliver skill ──
 function ageH(sinceIso) { return (Date.parse(nowIso) - Date.parse(sinceIso)) / 3_600_000; }

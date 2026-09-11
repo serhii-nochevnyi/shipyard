@@ -14,6 +14,16 @@ function write(file, content) {
   fs.writeFileSync(file, content);
 }
 
+function testEnv(root) {
+  const env = { ...process.env, HOME: path.join(root, 'home') };
+  for (const key of Object.keys(env)) {
+    if (/^(?:SHIPYARD_|GSD_|CLAUDE_|CODEX_)/.test(key)
+        || key === 'NODE_OPTIONS' || key === 'NODE_PATH') delete env[key];
+  }
+  fs.mkdirSync(env.HOME, { recursive: true });
+  return env;
+}
+
 function project() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-gate-'));
   write(path.join(root, '.planning', 'PROJECT.md'), '# Project\n');
@@ -33,7 +43,11 @@ function project() {
 }
 
 function run(root, mode) {
-  return spawnSync(process.execPath, [GATE, mode], { cwd: root, encoding: 'utf8' });
+  return spawnSync(process.execPath, [GATE, mode], {
+    cwd: root,
+    encoding: 'utf8',
+    env: testEnv(root),
+  });
 }
 
 suite('gsd-sync-gate — lifecycle applicability');
@@ -48,12 +62,14 @@ test('writes and then checks a conveyor project', () => {
   assert.match(checkResult.stdout, /projection is synchronized/);
 });
 
-test('adopts native GSD artifacts before publishing the projection', () => {
+test('refuses to adopt native GSD artifacts during a lifecycle write', () => {
   const root = project();
-  write(path.join(root, '.planning', 'STATE.md'), '# native GSD state\n');
+  const native = '# native GSD state\n';
+  write(path.join(root, '.planning', 'STATE.md'), native);
   const result = run(root, 'write');
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), /shipyard:gsd-sync generated/);
+  assert.equal(result.status, 1);
+  assert.match(`${result.stdout}\n${result.stderr}`, /not owned/);
+  assert.equal(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), native);
 });
 
 test('blocks check mode when the projection is stale', () => {
@@ -111,6 +127,7 @@ test('honors the declared opt-out without touching artifacts', () => {
 test('selects complete bundles and preserves synchronizer exit codes', () => {
   const source = fs.readFileSync(GATE, 'utf8');
   assert.match(source, /requiredSiblings = \['frontmatter\.cjs', 'lock\.cjs'\]/);
+  assert.doesNotMatch(source, /const args = \[script, '--json', '--adopt-native'\]/);
   assert.match(source, /fail\(`\$\{mode\} blocked: \$\{blockers\}`, childExit\)/);
 });
 

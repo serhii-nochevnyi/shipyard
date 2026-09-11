@@ -90,7 +90,11 @@ const script = candidates.find((file) => fs.existsSync(file) && requiredSiblings
 ));
 if (!script) fail('gsd-sync.cjs is missing beside the installed gate and in the source plugin; reinstall Shipyard');
 
-const args = [script, '--json', '--adopt-native'];
+// Lifecycle gates must preserve the synchronizer's ownership refusal. Native
+// GSD files that are already present without our marker are human-owned until
+// an operator explicitly runs `gsd-sync.cjs --adopt-native`; a gate is not that
+// operator and must never turn a hard error into an overwrite.
+const args = [script, '--json'];
 if (mode === 'check') args.push('--check');
 const result = spawnSync(process.execPath, args, { cwd: ROOT, encoding: 'utf8' });
 if (result.error) fail(`could not run ${script}: ${result.error.message}`);
