@@ -77,8 +77,11 @@ function readText(file, { required = false } = {}) {
   try {
     return fs.readFileSync(file, 'utf8');
   } catch (error) {
-    if (required) throw new Error(`cannot read ${path.relative(ROOT, file)}: ${error.message}`);
-    return null;
+    // Optional inputs are absent only when the path does not exist. An
+    // unreadable source must fail closed instead of becoming a pending
+    // projection that looks valid to a lifecycle gate.
+    if (error && error.code === 'ENOENT' && !required) return null;
+    throw new Error(`cannot read ${path.relative(ROOT, file)}: ${error.message}`);
   }
 }
 
@@ -121,8 +124,14 @@ function marker(fingerprint) {
   return `<!-- ${FILE_MARKER}; sync-version: ${SYNC_VERSION}; source fingerprint: ${fingerprint} -->`;
 }
 
-function hasMarker(text) {
-  return String(text).includes(FILE_MARKER);
+function hasMarker(text, file = null) {
+  const lines = String(text).split(/\r?\n/);
+  const markerLine = /^\s*(?:#\s+)?(?:<!--\s*)?shipyard:gsd-sync generated;\s*sync-version:\s*\d+;\s*source fingerprint:\s*[0-9a-f]+\s*(?:-->)?\s*$/;
+  // State, summaries, UAT, and verification use a YAML frontmatter marker on
+  // line 2. REQUIREMENTS.md is markdown-only and uses line 3 after its title.
+  if (file && path.basename(file) === 'REQUIREMENTS.md') return markerLine.test(lines[2] || '');
+  if (file) return markerLine.test(lines[1] || '');
+  return markerLine.test(lines[1] || '') || markerLine.test(lines[2] || '');
 }
 
 function normalizeForHash(text) {
@@ -234,6 +243,10 @@ function collectPlans(existingDirs) {
     for (const fileName of planFiles) {
       const file = path.join(dir, fileName);
       const raw = readText(file, { required: true });
+      // Keep malformed Shipyard plans applicable so their parse error blocks
+      // publication instead of making the synchronizer silently inert.
+      const declaresDelivery = /^\s*delivery\s*:/m.test(raw);
+      if (declaresDelivery) deliveryPlanFileCount += 1;
       const parsed = parseFrontmatter(raw);
       if (!parsed.data || parsed.errors.length) {
         errors.push(`${posixRelative(file)}: malformed frontmatter`);
@@ -244,7 +257,7 @@ function collectPlans(existingDirs) {
       const base = fileName.replace(/-PLAN\.md$/, '');
       const plan = String(fm.plan ?? base.split('-').slice(-1)[0]).trim();
       const delivery = fm.delivery && typeof fm.delivery === 'object' ? fm.delivery : {};
-      if (Object.keys(delivery).length) deliveryPlanFileCount += 1;
+      if (Object.keys(delivery).length && !declaresDelivery) deliveryPlanFileCount += 1;
       const ticket = canonicalTicket(delivery.ticket, phase);
       if (phase == null || !ticket) {
         errors.push(`${posixRelative(file)}: missing phase or delivery.ticket`);
@@ -282,10 +295,10 @@ function integrationStatus(text) {
   // exists; never downgrade a final pass because of retrospective prose.
   const verdictLines = String(text).split(/\r?\n/).filter((line) => /verdict/i.test(line));
   const explicit = verdictLines.length ? verdictLines[verdictLines.length - 1].toLowerCase() : '';
-  if (/passed/.test(explicit)) return { status: 'passed', reason: 'integration evidence records passed' };
   if (/needs[- ]fix|gaps_found|failed/.test(explicit)) {
     return { status: 'needs-fix', reason: 'integration evidence records a finding or failed verdict' };
   }
+  if (/\bpassed\b/.test(explicit)) return { status: 'passed', reason: 'integration evidence records passed' };
   const preamble = lower.split(/\r?\n/).slice(0, 18).join('\n');
   if (/\bneeds[- ]fix\b|\bgaps_found\b|\bfailed\b/.test(preamble)) {
     return { status: 'needs-fix', reason: 'integration evidence records a finding or failed verdict' };
@@ -342,6 +355,9 @@ function checkSource({ roadmapText, roadmapInfo, projectText, plans, planErrors,
     if (seen.has(plan.ticket)) blockers.push(`${posixRelative(plan.file)}: duplicate ticket ${plan.ticket}`);
     seen.add(plan.ticket);
     if (!graphTickets[plan.ticket]) blockers.push(`${plan.ticket}: PLAN is absent from tickets.json`);
+    if (!roadmapInfo.phases.some((phase) => phase.number === plan.phase)) {
+      blockers.push(`${posixRelative(plan.file)}: phase ${plan.phase} is not declared in ROADMAP.md`);
+    }
   }
   for (const id of Object.keys(graphTickets)) {
     if (!seen.has(id) && /^T-\d{2}-\d{2}/.test(id)) blockers.push(`${id}: graph ticket has no matching PLAN.md`);
@@ -612,13 +628,13 @@ function renderUat(phase, evidence, fingerprint) {
 function renderVerification(phase, evidence, fingerprint, lastActivity) {
   const status = evidence.status === 'passed' ? 'passed' : evidence.status === 'gaps_found' ? 'gaps_found' : 'human_needed';
   const rows = evidence.plans.length
-    ? evidence.plans.map((plan) => `| ${plan.ticket} | ${plan.delivery_status} | ${plan.delivery_status === 'merged' ? '✓ VERIFIED' : '✗ FAILED'} |`).join('\n')
+    ? evidence.plans.map((plan) => `| ${plan.ticket} | ${plan.delivery_status} | ${plan.delivery_status === 'merged' ? '✓ VERIFIED' : plan.delivery_status === 'unknown' ? '✗ FAILED' : '? UNCERTAIN'} |`).join('\n')
     : '| — | no plans | ? UNCERTAIN |';
   const planEvidence = evidence.plans.length
     ? `${evidence.merged}/${evidence.plans.length} delivery records are merged`
     : 'No PLAN files are present; delivery evidence is missing';
   const planStatus = evidence.plans.length
-    ? (evidence.allMerged ? '✓ VERIFIED' : '✗ FAILED')
+    ? (evidence.allMerged ? '✓ VERIFIED' : evidence.plans.some((plan) => plan.delivery_status === 'unknown') ? '✗ FAILED' : '? UNCERTAIN')
     : '? UNCERTAIN';
   return [
     '---',
@@ -699,7 +715,7 @@ function generatedFileContent(file, expected, { adoptNative = false } = {}) {
   // files are wholly owned and must carry our marker before they are replaced.
   // A lifecycle gate may explicitly adopt the native GSD files once the project
   // has opted into Shipyard delivery. Direct syncs remain fail-closed.
-  if (existing != null && file !== ROADMAP && !hasMarker(existing) && !adoptNative) {
+  if (existing != null && file !== ROADMAP && !hasMarker(existing, file) && !adoptNative) {
     throw new Error(`${posixRelative(file)} exists but is not owned by ${FILE_MARKER}`);
   }
   return { file, existing, expected };
@@ -720,7 +736,7 @@ function findObsoleteGeneratedFiles(expected, { prune = true } = {}) {
     }
   }
   for (const file of candidates) {
-    if (!expectedSet.has(path.resolve(file)) && hasMarker(readText(file) || '')) obsolete.push(file);
+    if (!expectedSet.has(path.resolve(file)) && hasMarker(readText(file) || '', file)) obsolete.push(file);
   }
   return obsolete;
 }
@@ -837,7 +853,7 @@ function publishSnapshot(snapshot) {
   for (const file of snapshot.obsolete) {
     // Only delete files that were positively identified as ours in the snapshot.
     // No glob or recursive deletion is used here.
-    if (hasMarker(readText(file) || '')) fs.unlinkSync(file);
+    if (hasMarker(readText(file) || '', file)) fs.unlinkSync(file);
   }
 }
 

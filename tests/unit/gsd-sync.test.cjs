@@ -53,6 +53,7 @@ test('canonicalizes ticket identities and rejects malformed CLI flags', () => {
   assert.equal(sync.canonicalTicket('t-1-2'), 'T-01-02');
   assert.equal(sync.canonicalTicket('2', 1), 'T-01-02');
   assert.equal(sync.integrationStatus('Round 1 was needs-fix\n## Verdict — `passed`').status, 'passed');
+  assert.equal(sync.integrationStatus('## Verdict — failed (previously passed)').status, 'needs-fix');
   const r = spawnSync(process.execPath, [SCRIPT, '--phase'], { cwd: ROOT, encoding: 'utf8' });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /--phase requires/);
@@ -140,6 +141,42 @@ test('refuses to overwrite an unowned generated artifact', () => {
   assert.equal(r.status, 1);
   assert.match(r.stdout, /not owned/);
   assert.equal(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), '# human-owned state\n');
+});
+
+test('requires the ownership marker at the generated header', () => {
+  const root = project();
+  write(path.join(root, '.planning', 'STATE.md'), '# human-authored note\n\nThe shipyard:gsd-sync generated phrase is only documentation.\n');
+  const r = run(root);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /not owned/);
+});
+
+test('malformed delivery plans remain applicable and block publication', () => {
+  const root = project();
+  const plan = path.join(root, '.planning', 'phases', '01-foundation', '01-01-PLAN.md');
+  const raw = fs.readFileSync(plan, 'utf8').replace(/\n---\n\n## Goal/, '\n\n## Goal');
+  write(plan, raw);
+  const r = run(root);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /malformed frontmatter/);
+});
+
+test('rejects plans whose phase is absent from the roadmap', () => {
+  const root = project();
+  const plan = path.join(root, '.planning', 'phases', '01-foundation', '01-01-PLAN.md');
+  const raw = fs.readFileSync(plan, 'utf8').replace('phase: 1', 'phase: 2');
+  write(plan, raw);
+  const r = run(root);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /phase 2 is not declared/);
+});
+
+test('renders open delivery records as uncertain rather than failed', () => {
+  const root = project({ merged: false });
+  assert.equal(run(root).status, 0);
+  const verification = fs.readFileSync(path.join(root, '.planning', 'phases', '01-foundation', '01-foundation-VERIFICATION.md'), 'utf8');
+  assert.match(verification, /\? UNCERTAIN/);
+  assert.doesNotMatch(verification, /T-01-01 \| pr-open \| ✗ FAILED/);
 });
 
 test('adopts existing native artifacts only when explicitly requested', () => {
