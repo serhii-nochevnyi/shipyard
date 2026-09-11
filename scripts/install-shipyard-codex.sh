@@ -30,7 +30,6 @@ CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
 BUNDLE_ROOT="$CODEX_HOME/shipyard"
 GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
-SKILL_MANIFEST_NAME=".shipyard-files.json"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,36 +76,8 @@ cleanup() {
   trap - EXIT
   exit "$status"
 }
-restore_skills() {
-  local index="${SKILLS_BACKUP_INDEX:-}"
-  local backup="${SKILLS_BACKUP:-}"
-  local state name target restore_status=0
-  [[ -n "$index" && -f "$index" && -n "$backup" ]] || return 0
-  while IFS=$'\t' read -r state name; do
-    [[ -n "$name" ]] || continue
-    target="$AGENTS_SKILLS/$name"
-    rm -rf "$target" || restore_status=1
-    if [[ "$state" == legacy ]]; then
-      cp -a "$backup/$name" "$target" || restore_status=1
-    elif [[ "$state" == present ]]; then
-      mkdir -p "$target" || restore_status=1
-      if [[ -d "$backup/$name" ]]; then
-        cp -a "$backup/$name"/. "$target"/ || restore_status=1
-      fi
-      rmdir "$target" 2>/dev/null || true
-    fi
-  done < "$index"
-  return "$restore_status"
-}
-restore_bundle() {
-  local restore_status=0
-  [[ -n "${BUNDLE_PREEXISTED:-}" ]] || return 0
-  rm -rf "${BUNDLE_ROOT:?}" || restore_status=1
-  if [[ "${BUNDLE_PREEXISTED:-0}" == 1 ]]; then
-    cp -a "$BUNDLE_BACKUP" "$BUNDLE_ROOT" || restore_status=1
-  fi
-  return "$restore_status"
-}
+restore_skills() { return 0; }
+restore_bundle() { return 0; }
 restore_agents() {
   local index="${AGENT_BACKUP_INDEX:-}"
   local backup="${AGENT_BACKUP:-}"
@@ -135,27 +106,25 @@ restore_config() {
   fi
   return "$restore_status"
 }
-write_skill_manifest() {
-  node - "$1" "$SKILL_MANIFEST_NAME" <<'NODE'
-const fs = require('fs');
-const path = require('path');
-
-const dir = process.argv[2];
-const manifestName = process.argv[3];
-const out = [];
-
-function walk(root, rel = '') {
-  for (const entry of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
-    if (entry.name === manifestName) continue;
-    const next = rel ? path.join(rel, entry.name) : entry.name;
-    out.push(next);
-    if (entry.isDirectory()) walk(root, next);
-  }
-}
-
-walk(dir);
-fs.writeFileSync(path.join(dir, manifestName), JSON.stringify({ paths: out.sort() }, null, 2) + '\n');
-NODE
+replace_dir() {
+  local src="$1" target="$2" label="$3"
+  local tmp="${target}.tmp-$$" backup="${target}.bak-$$" had_target=0 status=0
+  rm -rf "$tmp" "$backup"
+  cp -R "$src" "$tmp" || return $?
+  if [[ -e "$target" || -L "$target" ]]; then
+    mv "$target" "$backup" || return $?
+    had_target=1
+  fi
+  if mv "$tmp" "$target"; then
+    rm -rf "$backup"
+    return 0
+  fi
+  status=$?
+  rm -rf "$tmp"
+  if [[ "$had_target" == 1 ]]; then
+    mv "$backup" "$target" || echo "warning: could not restore previous $label at $target" >&2
+  fi
+  return "$status"
 }
 trap 'cleanup $?' EXIT
 OUT="$STAGE/bundle-out"
@@ -167,87 +136,10 @@ node "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" \
   --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE" \
   --project-dir "$REPO_ROOT"
 
-# ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
-echo "→ installing skills → $AGENTS_SKILLS"
-mkdir -p "$AGENTS_SKILLS"
-SKILLS_BACKUP="$STAGE/skills-before"
-SKILLS_BACKUP_INDEX="$STAGE/skills-before.tsv"
-mkdir -p "$SKILLS_BACKUP"
-: > "$SKILLS_BACKUP_INDEX"
-for d in "$OUT"/skills/*/; do
-  name="$(basename "$d")"
-  target="$AGENTS_SKILLS/$name"
-  if [[ -e "$target" || -L "$target" ]]; then
-    mkdir -p "$SKILLS_BACKUP/$name"
-    if [[ -f "$target/$SKILL_MANIFEST_NAME" ]]; then
-      cp -a "$target/$SKILL_MANIFEST_NAME" "$SKILLS_BACKUP/$name/$SKILL_MANIFEST_NAME"
-      mapfile -t managed < <(
-        (
-          cd "${d%/}"
-          find . -mindepth 1 ! -name "$SKILL_MANIFEST_NAME" -printf '%P\n'
-        ) |
-        node -e '
-          const fs = require("fs");
-          const path = require("path");
-          const root = path.resolve(process.argv[2]);
-          const safeRelative = (value) => {
-            if (typeof value !== "string" || !value) return false;
-            if (path.isAbsolute(value)) return false;
-            const resolved = path.resolve(root, value);
-            return resolved === root || resolved.startsWith(`${root}${path.sep}`);
-          };
-          const values = new Set(fs.readFileSync(0, "utf8").split(/\n/).filter(Boolean));
-          try {
-            const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            for (const value of Array.isArray(manifest.paths) ? manifest.paths : []) {
-              if (safeRelative(value)) values.add(value);
-            }
-          } catch {}
-          process.stdout.write([...values].sort().join("\n"));
-        ' "$target/$SKILL_MANIFEST_NAME" "$target"
-      )
-      for rel in "${managed[@]}"; do
-        src="$target/$rel"
-        [[ -e "$src" || -L "$src" ]] || continue
-        mkdir -p "$SKILLS_BACKUP/$name/$(dirname "$rel")"
-        cp -a "$src" "$SKILLS_BACKUP/$name/$rel"
-      done
-      printf 'present\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
-    else
-      cp -a "$target"/. "$SKILLS_BACKUP/$name"/
-      printf 'legacy\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
-    fi
-  else
-    printf 'absent\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
-  fi
-done
+# ── skills + bundle install LAST ───────────────────────────────────────────────
+# Keep both staged until agent/config/capability/AGENTS.md have succeeded, so a
+# failure in those earlier steps cannot leave a partially updated runtime bundle.
 ROLLBACK_ACTIVE=1
-for d in "$OUT"/skills/*/; do
-  name="$(basename "$d")"
-  rm -rf "${AGENTS_SKILLS:?}/$name"
-  cp -R "${d%/}" "$AGENTS_SKILLS/$name"
-  write_skill_manifest "$AGENTS_SKILLS/$name"
-done
-
-# ── bundle payload (CLAUDE_PLUGIN_ROOT target: scripts/references/templates) ──
-# REPLACED, not merged over — the same way the skills above are. Copying onto an
-# existing bundle leaves every file the plugin has since deleted or renamed in
-# place forever, still reachable by path. Three stale `*.mjs.bak` files survived
-# an upgrade that way, and a renamed script would be worse: both editions present,
-# the old one silently callable. The bundle is wholly generated, so nothing
-# user-authored is at risk.
-echo "→ installing bundle payload → $BUNDLE_ROOT"
-if [[ -e "$BUNDLE_ROOT" || -L "$BUNDLE_ROOT" ]]; then
-  BUNDLE_BACKUP="$STAGE/bundle-before"
-  cp -a "$BUNDLE_ROOT" "$BUNDLE_BACKUP"
-  BUNDLE_PREEXISTED=1
-else
-  BUNDLE_PREEXISTED=0
-fi
-rm -rf "${BUNDLE_ROOT:?}"
-mkdir -p "$BUNDLE_ROOT"
-cp -R "$OUT"/bundle/. "$BUNDLE_ROOT/"
-find "$BUNDLE_ROOT" -name '*.sh' -exec chmod +x {} +
 
 # ── agents + non-destructive config.toml merge ───────────────────────────────
 #
@@ -522,6 +414,33 @@ if [[ -f "$GSD_TUNE" ]]; then
   echo "→ GSD global defaults (~/.gsd/defaults.json)"
   node "$GSD_TUNE" --global --runtime codex --apply 2>&1 | sed 's/^/  /' || true
 fi
+
+# ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
+echo "→ installing skills → $AGENTS_SKILLS"
+mkdir -p "$AGENTS_SKILLS"
+for d in "$OUT"/skills/*/; do
+  name="$(basename "$d")"
+  replace_dir "${d%/}" "$AGENTS_SKILLS/$name" "skill directory" || {
+    status=$?
+    echo "error: could not install skill $name" >&2
+    exit "$status"
+  }
+done
+
+# ── bundle payload (CLAUDE_PLUGIN_ROOT target: scripts/references/templates) ──
+# REPLACED, not merged over — the same way the skills above are. Copying onto an
+# existing bundle leaves every file the plugin has since deleted or renamed in
+# place forever, still reachable by path. Three stale `*.mjs.bak` files survived
+# an upgrade that way, and a renamed script would be worse: both editions present,
+# the old one silently callable. The bundle is wholly generated, so nothing
+# user-authored is at risk.
+echo "→ installing bundle payload → $BUNDLE_ROOT"
+replace_dir "$OUT/bundle" "$BUNDLE_ROOT" "bundle payload" || {
+  status=$?
+  echo "error: could not install bundle payload" >&2
+  exit "$status"
+}
+find "$BUNDLE_ROOT" -name '*.sh' -exec chmod +x {} +
 
 deliver_hint=""
 [[ "$PHASE" -ge 2 ]] && deliver_hint=' | $shipyard-deliver'

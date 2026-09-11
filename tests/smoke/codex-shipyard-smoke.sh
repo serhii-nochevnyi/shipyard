@@ -454,9 +454,10 @@ cmp -s "$ATOMIC_AGENT_EXPECTED" "$ATOMIC_AGENT" \
 cp "$ATOMIC_CONFIG_BEFORE" "$CODEX_HOME/config.toml"
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 
-# A failure AFTER the agent/config transaction must still roll back the installer
-# owned skill and bundle artifacts, not just the agent/config pair. Force the
-# later AGENTS.md update to fail and prove every earlier artifact is byte-identical.
+# A failure AFTER the agent/config transaction must leave the already-installed
+# skill and bundle artifacts untouched while rolling back the agent/config pair.
+# Force the later AGENTS.md update to fail and prove every earlier artifact is
+# byte-identical.
 ROLLBACK_SKILL="$SKILLS/shipyard-deliver/SKILL.md"
 ROLLBACK_SKILL_EXTRA="$SKILLS/shipyard-deliver/operator-note.txt"
 ROLLBACK_BUNDLE="$CODEX_HOME/shipyard/scripts/state-sync.cjs"
@@ -476,8 +477,8 @@ if CODEX_AGENTS_MD="$WORK/broken-agents-md" bash scripts/install-shipyard-codex.
 fi
 cmp -s "$WORK/rollback-skill-expected" "$ROLLBACK_SKILL" \
   || { echo "a late installer failure changed the installed skill"; exit 1; }
-[[ ! -e "$ROLLBACK_SKILL_EXTRA" ]] \
-  || { echo "a late installer failure restored an operator-owned file inside a managed skill dir"; exit 1; }
+[[ -f "$ROLLBACK_SKILL_EXTRA" ]] \
+  || { echo "a late installer failure unexpectedly touched operator-owned files inside the skill dir"; exit 1; }
 cmp -s "$WORK/rollback-bundle-expected" "$ROLLBACK_BUNDLE" \
   || { echo "a late installer failure changed the installed bundle"; exit 1; }
 cmp -s "$WORK/rollback-agent-expected" "$ROLLBACK_AGENT" \
