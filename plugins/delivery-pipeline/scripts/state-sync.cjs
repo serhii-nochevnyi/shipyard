@@ -55,6 +55,7 @@ const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { resolveConfiguredRepo } = require(path.join(__dirname, 'repo-resolve.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
 const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
@@ -1059,14 +1060,12 @@ if (mode === 'epic-stacked') {
 // the local checkout is (worktrees and git are local operations)
 for (const repo of REPO_IDS) {
   if (!repo) continue;
-  const localPath = (cfg.repos || {})[repo];
   const n = Object.values(tickets).filter((t) => repoOf(t) === repo).length;
-  if (!localPath) {
-    console.log(`⚠ repo ${repo} holds ${n} ticket(s) but has no local checkout configured — add pipeline.repos["${repo}"] = "<absolute path>" so worktrees/PRs can be driven there; without it the conveyor can only TRACK them`);
-  } else if (!fs.existsSync(localPath)) {
-    console.log(`⚠ repo ${repo}: pipeline.repos path "${localPath}" does not exist — fix it or the run cannot execute those ${n} ticket(s)`);
+  const resolution = resolveConfiguredRepo({ repo, config: cfg });
+  if (!resolution.executable) {
+    console.log(`⚠ repo ${repo} holds ${n} ticket(s) but is track-only — ${resolution.reason}; without an executable checkout the conveyor can only TRACK them`);
   } else {
-    console.log(`repo ${repo}: ${n} ticket(s), checkout ${localPath}`);
+    console.log(`repo ${repo}: ${n} ticket(s), checkout ${resolution.repository_root}`);
   }
 }
 

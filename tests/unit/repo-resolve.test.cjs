@@ -1,0 +1,188 @@
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+const { suite, test, done, assert } = require('./assert-harness.cjs');
+
+const SCRIPT = path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'repo-resolve.cjs'
+);
+const mod = require(SCRIPT);
+
+const trash = [];
+process.on('exit', () => {
+  for (const dir of trash) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
+
+function tempDir(prefix = 'shipyard-repo-resolve-') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  trash.push(dir);
+  return dir;
+}
+
+function git(cwd, args) {
+  const result = spawnSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: path.join(cwd, 'gitconfig'),
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0',
+    },
+  });
+  assert.strictEqual(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`);
+  return (result.stdout || '').trim();
+}
+
+function gitRepo() {
+  const dir = tempDir();
+  fs.writeFileSync(path.join(dir, 'gitconfig'), '');
+  git(dir, ['init', '-q']);
+  return dir;
+}
+
+function project(config) {
+  const dir = tempDir('shipyard-repo-project-');
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ pipeline: config }, null, 2));
+  return dir;
+}
+
+function run(args, cwd = os.tmpdir()) {
+  return spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8' });
+}
+
+suite('configured repository resolution');
+
+test('an existing configured git checkout resolves to its repository root', () => {
+  const checkout = gitRepo();
+  const canonicalCheckout = fs.realpathSync(checkout);
+  const result = mod.resolveConfiguredRepo({
+    ticket: 'T-30-02',
+    repo: 'acme/service',
+    config: { repos: { 'acme/service': checkout } },
+  });
+  assert.deepStrictEqual(result, {
+    ticket: 'T-30-02',
+    repo: 'acme/service',
+    resolution: 'configured',
+    executable: true,
+    configured_path: canonicalCheckout,
+    repository_root: canonicalCheckout,
+    reason: null,
+  });
+});
+
+test('a missing entry is trackable-only and keeps the ticket and reason', () => {
+  const result = mod.resolveConfiguredRepo({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {} },
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'track-only');
+  assert.strictEqual(result.ticket, 'T-30-03');
+  assert.strictEqual(result.repo, 'acme/service');
+  assert.match(result.reason, /pipeline\.repos/);
+});
+
+test('an invalid configured path is trackable-only without filesystem mutation', () => {
+  const parent = tempDir();
+  const missing = path.join(parent, 'does-not-exist');
+  const before = fs.readdirSync(parent);
+  const result = mod.resolveConfiguredRepo({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: { 'acme/service': missing } },
+  });
+  assert.strictEqual(result.executable, false);
+  assert.match(result.reason, /does-not-exist/);
+  assert.deepStrictEqual(fs.readdirSync(parent), before, 'resolution must not create a checkout');
+
+  const notGit = path.join(parent, 'not-git');
+  fs.mkdirSync(notGit);
+  const nonRepo = mod.resolveConfiguredRepo({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: { 'acme/service': notGit } },
+  });
+  assert.strictEqual(nonRepo.executable, false);
+  assert.match(nonRepo.reason, /not a git repository/);
+});
+
+test('a configured directory inside another git checkout is trackable-only', () => {
+  const parent = gitRepo();
+  const nested = path.join(parent, 'nested-directory');
+  fs.mkdirSync(nested);
+  const result = mod.resolveConfiguredRepo({
+    ticket: 'T-30-02',
+    repo: 'acme/service',
+    config: { repos: { 'acme/service': nested } },
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'track-only');
+  assert.match(result.reason, /inside another git repository.*repository root/);
+});
+
+test('malformed repository arguments fail closed before any filesystem write', () => {
+  const parent = tempDir();
+  const before = fs.readdirSync(parent);
+  for (const input of [
+    null,
+    { repo: 'acme', config: { repos: {} } },
+    { repo: 'acme/service/extra', config: { repos: {} } },
+    { repo: 'acme/service', config: null },
+    { repo: 'acme/service', ticket: 30, config: { repos: {} } },
+  ]) {
+    assert.throws(() => mod.resolveConfiguredRepo(input), /repo-resolve:/, JSON.stringify(input));
+  }
+  assert.deepStrictEqual(fs.readdirSync(parent), before, 'invalid arguments must not touch the filesystem');
+});
+
+test('the CLI uses the same configured branch and returns machine-readable resolution', () => {
+  const checkout = gitRepo();
+  const canonicalCheckout = fs.realpathSync(checkout);
+  const projectDir = project({ repos: { 'acme/service': checkout } });
+  const result = run([
+    'configured', 'acme/service', '--ticket', 'T-30-02', '--project-dir', projectDir, '--json',
+  ]);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.ticket, 'T-30-02');
+  assert.strictEqual(output.resolution, 'configured');
+  assert.strictEqual(output.executable, true);
+  assert.strictEqual(output.repository_root, canonicalCheckout);
+});
+
+test('the CLI rejects an unknown slug instead of treating it as a checkout request', () => {
+  const result = run(['configured', 'not-a-slug', '--json']);
+  assert.strictEqual(result.status, 2);
+  assert.match(result.stderr, /owner\/name/);
+});
+
+test('the CLI rejects option-like values for value-taking flags', () => {
+  for (const flags of [
+    ['--ticket', '--json'],
+    ['--project-dir', '--json'],
+  ]) {
+    const result = run(['configured', 'acme/service', ...flags]);
+    assert.strictEqual(result.status, 2, `${flags[0]} must not consume ${flags[1]} as its value`);
+    assert.match(result.stderr, new RegExp(`${flags[0]} requires a value`));
+    assert.match(result.stderr, /the flag "--json"/);
+  }
+});
+
+test('state-sync and deliver name the configured resolver caller', () => {
+  const stateSync = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'), 'utf8');
+  const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
+  assert.match(stateSync, /require\(path\.join\(__dirname, 'repo-resolve\.cjs'\)\)/);
+  assert.match(stateSync, /resolveConfiguredRepo\(\{ repo, config: cfg \}\)/);
+  assert.match(deliver, /repo-resolve\.cjs configured <owner\/name>/);
+  assert.match(deliver, /resolution: "configured"/);
+});
+
+done();
