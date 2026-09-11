@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { fileURLToPath } = require('url');
 const { loadConfig, validateRepositoryDestination } = require('./pipeline-config.cjs');
 const { originRefName, resolveOriginRef } = require('./graph-dir.cjs');
 
@@ -620,7 +621,40 @@ function cloneCommand(cloneUrl, destination) {
   // graph resolution and ticket-worktree both need origin/<base>, so adding a
   // depth, filter, or single-branch flag here would create a clone that lies
   // about the branch set it can execute against.
-  return ['clone', cloneUrl, destination];
+  return ['clone', '--origin', 'origin', cloneUrl, destination];
+}
+
+function localCloneSourcePath(value) {
+  if (path.isAbsolute(value)) return value;
+  if (!/^file:\/\//i.test(value)) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.hostname && parsed.hostname !== 'localhost') return null;
+    return fileURLToPath(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function localCloneSourceInfo(value, repo) {
+  const sourcePath = localCloneSourcePath(value);
+  if (!sourcePath) {
+    return { valid: false, origin: null, reason: `local clone source for ${repo} is not a usable checkout path` };
+  }
+  const repositoryRoot = gitRepositoryRoot(sourcePath);
+  if (!repositoryRoot) {
+    return { valid: false, origin: null, reason: `local clone source for ${repo} is not a git repository` };
+  }
+  const rawOrigin = gitRemoteOrigin(repositoryRoot);
+  const protocol = originProtocol(rawOrigin);
+  if (!protocol) {
+    return { valid: false, origin: null, reason: `local clone source for ${repo} has no supported GitHub origin` };
+  }
+  const safe = safeCloneUrl(rawOrigin, protocol, repo);
+  if (!safe.valid) {
+    return { valid: false, origin: null, reason: `local clone source for ${repo} was refused: ${safe.reason}` };
+  }
+  return { valid: true, origin: safe.url, reason: null };
 }
 
 function safeExecutionCloneUrl(value, repo, projectOrigin) {
@@ -652,10 +686,11 @@ function safeExecutionCloneUrl(value, repo, projectOrigin) {
   if (url.startsWith('-') || url.includes('\0')) {
     return { valid: false, url: null, protocol: null, field: null, reason: `clone URL for ${repo} is malformed` };
   }
-  if (url.startsWith('file://')) {
+  if (/^file:\/\//i.test(url)) {
     try {
       const parsed = new URL(url);
-      if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+      if (parsed.hostname && parsed.hostname !== 'localhost'
+          || parsed.username || parsed.password || parsed.search || parsed.hash) {
         return { valid: false, url: null, protocol: null, field: null, reason: `clone URL for ${repo} contains credentials or query data and was refused` };
       }
     } catch {
@@ -664,7 +699,16 @@ function safeExecutionCloneUrl(value, repo, projectOrigin) {
   } else if (!path.isAbsolute(url)) {
     return { valid: false, url: null, protocol: null, field: null, reason: `clone URL for ${repo} is not an absolute local path or supported remote URL` };
   }
-  return { valid: true, url, protocol: null, field: null, reason: null };
+  const local = localCloneSourceInfo(url, repo);
+  if (!local.valid) return { valid: false, url: null, protocol: null, field: null, reason: local.reason };
+  return {
+    valid: true,
+    url,
+    protocol: null,
+    field: null,
+    source_origin: local.origin,
+    reason: null,
+  };
 }
 
 function cloneFailure(input, reason, fields = {}) {
@@ -767,7 +811,7 @@ function cloneRepository(input, runner = spawnSync) {
     });
   }
 
-  const result = runner('git', cloneCommand(clone.url, destination), {
+  const commandOptions = {
     cwd: projectRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -775,7 +819,8 @@ function cloneRepository(input, runner = spawnSync) {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0',
     },
-  });
+  };
+  const result = runner('git', cloneCommand(clone.url, destination), commandOptions);
   if (!result || result.status !== 0) {
     const exit = result && result.status !== undefined ? result.status : 'unknown';
     return cloneFailure(input, `git clone for ${input.repo} failed (exit ${exit}); the checkout remains unverified`, {
@@ -786,6 +831,41 @@ function cloneRepository(input, runner = spawnSync) {
       clone_source: clone.field || null,
       required_base: `origin/${baseName}`,
     });
+  }
+
+  // A local/file source is validated by its own GitHub origin, but git clone
+  // records the filesystem path as the destination's origin. Restore the
+  // validated origin before checking the checkout so local test fixtures and
+  // any explicitly supported local source cannot bypass repository identity.
+  if (clone.source_origin) {
+    const originResult = runner('git', ['-C', destination, 'remote', 'set-url', 'origin', clone.source_origin], commandOptions);
+    if (!originResult || originResult.status !== 0) {
+      const exit = originResult && originResult.status !== undefined ? originResult.status : 'unknown';
+      return cloneFailure(input,
+        `clone for ${input.repo} completed at "${destination}" but its origin could not be set safely (exit ${exit})`, {
+          resolution: 'clone-unverified',
+          destination,
+          clone_root: root,
+          clone_url: clone.url,
+          clone_protocol: clone.protocol || null,
+          clone_source: clone.field || null,
+          required_base: `origin/${baseName}`,
+        });
+    }
+  }
+
+  const destinationOrigin = normalizeOrigin(gitRemoteOrigin(destination));
+  if (destinationOrigin !== input.repo.toLowerCase()) {
+    return cloneFailure(input,
+      `clone for ${input.repo} completed at "${destination}" but its origin does not resolve to ${input.repo}`, {
+        resolution: 'clone-unverified',
+        destination,
+        clone_root: root,
+        clone_url: clone.url,
+        clone_protocol: clone.protocol || null,
+        clone_source: clone.field || null,
+        required_base: `origin/${baseName}`,
+      });
   }
 
   const baseRef = resolveOriginRef(destination, baseName);

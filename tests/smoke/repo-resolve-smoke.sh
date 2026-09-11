@@ -79,6 +79,7 @@ mkdir -p "$source_repo" "$clone_project/.planning" "$clone_root"
 git -C "$source_repo" init -q
 git -C "$source_repo" config user.email shipyard-tests@example.invalid
 git -C "$source_repo" config user.name 'Shipyard Tests'
+git -C "$source_repo" remote add origin git@github.com:acme/service.git
 printf 'seed\n' > "$source_repo/README.md"
 git -C "$source_repo" add README.md
 git -C "$source_repo" commit -qm seed
@@ -110,6 +111,10 @@ if [[ "$(git -C "$clone_destination" rev-parse --is-shallow-repository)" != "fal
   exit 1
 fi
 git -C "$clone_destination" rev-parse --verify --quiet 'refs/remotes/origin/epic/base^{commit}' >/dev/null
+if [[ "$(git -C "$clone_destination" remote get-url origin)" != "git@github.com:acme/service.git" ]]; then
+  echo 'repo-resolve smoke: clone origin identity was not preserved' >&2
+  exit 1
+fi
 
 worktree_root="$fixture/ticket-worktrees"
 worktree_path=$(cd "$clone_destination" && SHIPYARD_WORKTREE_ROOT="$worktree_root" bash \

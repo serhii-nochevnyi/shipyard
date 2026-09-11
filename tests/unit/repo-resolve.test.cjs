@@ -256,12 +256,34 @@ test('clone preparation reports unavailable metadata without invoking git clone'
   assert.strictEqual(result.url, null);
 });
 
+test('clone refuses a local source whose origin identifies another repository', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const source = gitRepo();
+  git(source, ['remote', 'add', 'origin', 'git@github.com:someone-else/service.git']);
+  const destination = path.join(parent, 'service');
+  const result = mod.cloneRepository({
+    ticket: 'T-30-07',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/base',
+    cloneUrl: source,
+  });
+
+  assert.strictEqual(result.executable, false);
+  assert.match(result.reason, /local clone source.*does not identify/);
+  assert.strictEqual(fs.existsSync(destination), false, 'an untrusted local source must not start a clone');
+});
+
 test('clone command is full and proves the requested origin base ref', () => {
   const projectDir = isolatedProject({});
   const parent = path.dirname(projectDir);
   const source = gitRepo();
   git(source, ['config', 'user.email', 'shipyard-tests@example.invalid']);
   git(source, ['config', 'user.name', 'Shipyard Tests']);
+  git(source, ['remote', 'add', 'origin', 'git@github.com:acme/service.git']);
   fs.writeFileSync(path.join(source, 'README.md'), 'seed\n');
   git(source, ['add', 'README.md']);
   git(source, ['commit', '-qm', 'seed']);
@@ -289,7 +311,10 @@ test('clone command is full and proves the requested origin base ref', () => {
   assert.strictEqual(result.repository_root, fs.realpathSync(destination));
   assert.deepStrictEqual(calls.map(({ command, args }) => ({ command, args })), [{
     command: 'git',
-    args: ['clone', source, destination],
+    args: ['clone', '--origin', 'origin', source, destination],
+  }, {
+    command: 'git',
+    args: ['-C', destination, 'remote', 'set-url', 'origin', 'git@github.com:acme/service.git'],
   }]);
   assert.strictEqual(git(destination, ['rev-parse', '--verify', 'refs/remotes/origin/epic/base^{commit}']).length, 40);
 });
@@ -300,6 +325,7 @@ test('clone parks a checkout when the required origin base is missing', () => {
   const source = gitRepo();
   git(source, ['config', 'user.email', 'shipyard-tests@example.invalid']);
   git(source, ['config', 'user.name', 'Shipyard Tests']);
+  git(source, ['remote', 'add', 'origin', 'git@github.com:acme/service.git']);
   fs.writeFileSync(path.join(source, 'README.md'), 'seed\n');
   git(source, ['add', 'README.md']);
   git(source, ['commit', '-qm', 'seed']);
