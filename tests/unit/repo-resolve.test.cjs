@@ -156,6 +156,23 @@ function repoAt(dir, origin) {
   return fs.realpathSync(dir);
 }
 
+test('the discovery CLI passes an explicitly configured repository root to the resolver', () => {
+  const configuredRoot = tempDir('shipyard-configured-repos-root-');
+  const projectDir = path.join(configuredRoot, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos_root: configuredRoot } }, null, 2) + '\n',
+  );
+  const checkout = repoAt(path.join(configuredRoot, 'checkout-found-only-under-configured-root'), 'git@github.com:acme/service.git');
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'discovered');
+  assert.strictEqual(output.repository_root, checkout);
+  assert.ok(output.searched_roots.includes(configuredRoot));
+});
+
 test('origin normalization accepts GitHub SSH, HTTPS, and scp-like forms', () => {
   for (const origin of [
     'git@github.com:Acme/Service.git',

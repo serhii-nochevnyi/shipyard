@@ -122,6 +122,43 @@ function configuredRepos(config) {
   return isRecord(config.repos) ? config.repos : {};
 }
 
+function repositoryRootFromFile(projectRoot) {
+  const file = path.join(path.resolve(projectRoot || process.cwd()), '.planning', 'config.json');
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(raw)) return undefined;
+
+  // Keep the same shallow namespace precedence as pipeline-config.cjs. This
+  // compatibility read exists only for the discovery ticket's CLI: older
+  // pipeline-config readers do not yet expose repos_root, while silently
+  // dropping an explicitly declared root makes discovery inspect the wrong
+  // parent and report a false absence.
+  if (Object.prototype.hasOwnProperty.call(raw, 'delivery_pipeline')) {
+    if (!isRecord(raw.delivery_pipeline)) return null;
+    if (Object.prototype.hasOwnProperty.call(raw.delivery_pipeline, 'repos_root')) {
+      return raw.delivery_pipeline.repos_root;
+    }
+  }
+  if (isRecord(raw.pipeline) && Object.prototype.hasOwnProperty.call(raw.pipeline, 'repos_root')) {
+    return raw.pipeline.repos_root;
+  }
+  return undefined;
+}
+
+function resolverConfig(loaded, projectRoot) {
+  if (!loaded || !isRecord(loaded.config)) return loaded && loaded.config;
+  if (Object.prototype.hasOwnProperty.call(loaded.config, 'repos_root')) return loaded.config;
+  if (loaded.valid === false) return loaded.config;
+  const declaredRoot = repositoryRootFromFile(projectRoot);
+  return declaredRoot === undefined
+    ? loaded.config
+    : { ...loaded.config, repos_root: declaredRoot };
+}
+
 function hasConfiguredRepo(config, repo) {
   return Object.prototype.hasOwnProperty.call(configuredRepos(config), repo);
 }
@@ -360,7 +397,7 @@ if (require.main === module) {
     const input = {
       ticket: options.ticket,
       repo: options.repo,
-      config: loaded.config,
+      config: resolverConfig(loaded, projectDir),
       projectRoot: projectDir,
     };
     const result = options.command === 'configured'
