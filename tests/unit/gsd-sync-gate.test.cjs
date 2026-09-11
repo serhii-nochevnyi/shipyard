@@ -89,6 +89,16 @@ test('blocks a malformed delivery marker that the synchronizer cannot project', 
   assert.match(result.stderr, /not applicable|blocked/);
 });
 
+test('keeps a truncated delivery plan applicable so malformed source blocks', () => {
+  const root = project();
+  const plan = path.join(root, '.planning', 'phases', '01-foundation', '01-01-PLAN.md');
+  write(plan, '---\nphase: 1\nplan: 1\ntitle: Foundation\ndelivery:\n  ticket: T-01-01\n  risk: low\n');
+  const result = run(root, 'check');
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stdout, /not applicable/);
+  assert.match(result.stderr, /malformed frontmatter|blocked/);
+});
+
 test('honors the declared opt-out without touching artifacts', () => {
   const root = project();
   write(path.join(root, '.planning', 'config.json'), JSON.stringify({ delivery_pipeline: { gsd_sync: false } }));
