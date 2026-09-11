@@ -114,8 +114,9 @@ replace_dir() {
   if mv "$tmp" "$target"; then
     rm -rf "$backup"
     return 0
+  else
+    status=$?
   fi
-  status=$?
   if [[ "$had_target" == 1 ]]; then
     if mv "$backup" "$target"; then
       rm -rf "$tmp"
