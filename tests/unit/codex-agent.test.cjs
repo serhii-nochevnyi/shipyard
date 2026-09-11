@@ -14,16 +14,16 @@ const ROOT = path.join(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'codex-agent.cjs');
 const { selectAgent, parseArgs, signalsFrom, candidateSuffix, projectDirFrom } = require(SCRIPT);
 
-function fixture(mode = 'adaptive', files = {}) {
+function fixture(mode = 'adaptive', files = {}, raw = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-agent-'));
   const project = path.join(root, 'project');
   const agentDir = path.join(root, 'agents');
   fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
   fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(project, '.planning', 'config.json'),
-    JSON.stringify({ delivery_pipeline: { model_ladder: mode } }, null, 2),
-  );
+  fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({
+    ...raw,
+    delivery_pipeline: { ...(raw.delivery_pipeline || {}), model_ladder: mode },
+  }, null, 2));
   for (const [name, spec] of Object.entries(files)) {
     fs.writeFileSync(path.join(agentDir, `${name}.toml`), [
       `name = "${name}"`,
@@ -157,6 +157,52 @@ test('executor resolves the ceiling model dynamically for critical work', () => 
   assert.strictEqual(result.agent_file, null);
   assert.strictEqual(result.model, 'gpt-6-astra');
   assert.strictEqual(result.palette_lane, 'ceiling');
+});
+
+test('executor returns the Codex default when the palette has no usable entry', () => {
+  const f = fixture('adaptive', STANDARD_FILES, { delivery_pipeline: { codex_models: [] } });
+  const result = selectAgent('executor', {
+    cwd: f.project,
+    agentDir: f.agentDir,
+    env: { SHIPYARD_CODEX_CLI_VERSION: '0.999.0' },
+    signals: { risk: 'low', files: 2 },
+  });
+  assert.strictEqual(result.model, null);
+  assert.strictEqual(result.agent_file, null);
+  assert.strictEqual(result.model_source, 'codex-cli-default');
+  assert.strictEqual(result.palette_lane, 'default');
+  assert.strictEqual(result.selection_reason, 'no_usable_palette_entry');
+  assert.strictEqual(result.effort, result.requested_effort);
+});
+
+test('executor applies the GSD runtime remap before the profile override', () => {
+  const f = fixture('adaptive', STANDARD_FILES, {
+    model_policy: { runtime_tiers: { codex: { sonnet: 'runtime-remap' } } },
+    model_profile_overrides: { codex: { sonnet: 'profile-remap' } },
+  });
+  const result = selectAgent('executor', {
+    cwd: f.project,
+    agentDir: f.agentDir,
+    env: { SHIPYARD_CODEX_CLI_VERSION: '0.999.0', CODEX_HOME: path.join(f.project, 'no-gsd') },
+    signals: { risk: 'low', files: 2 },
+  });
+  assert.strictEqual(result.model, 'runtime-remap');
+  assert.strictEqual(result.model_source, 'gsd-remap');
+  assert.strictEqual(result.palette_lane, 'remap');
+});
+
+test('executor uses the profile override when no runtime-tier remap exists', () => {
+  const f = fixture('adaptive', STANDARD_FILES, {
+    model_profile_overrides: { codex: { sonnet: 'profile-remap' } },
+  });
+  const result = selectAgent('executor', {
+    cwd: f.project,
+    agentDir: f.agentDir,
+    env: { SHIPYARD_CODEX_CLI_VERSION: '0.999.0', CODEX_HOME: path.join(f.project, 'no-gsd') },
+    signals: { risk: 'low', files: 2 },
+  });
+  assert.strictEqual(result.model, 'profile-remap');
+  assert.strictEqual(result.model_source, 'gsd-remap');
 });
 
 test('conservative executor keeps automatic high-risk work on the floor', () => {

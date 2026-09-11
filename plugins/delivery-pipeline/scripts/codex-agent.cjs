@@ -19,6 +19,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const pc = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { createCodexRemapper } = require(path.join(__dirname, 'codex-model-remap.cjs'));
 
 const ROLE_ALIASES = { 'inv-research': 'research' };
 const AGENT_ROLE = (role) => ROLE_ALIASES[role] || role;
@@ -171,10 +172,13 @@ function compareVersions(a, b) {
 
 function usableCodexPalette(cfg, env = process.env) {
   const cliVersion = detectCodexCliVersion(env);
+  const allEntries = Array.isArray(cfg.codex_models)
+    ? cfg.codex_models.filter((entry) => entry && entry.model)
+    : [];
   return {
     cliVersion,
-    entries: (Array.isArray(cfg.codex_models) ? cfg.codex_models : []).filter((entry) => {
-      if (!entry || !entry.model) return false;
+    allEntries,
+    entries: allEntries.filter((entry) => {
       if (!entry.min_cli) return true;
       return Boolean(cliVersion) && compareVersions(cliVersion, entry.min_cli) >= 0;
     }),
@@ -195,23 +199,23 @@ function lowerEffort(requested, configured) {
 // worktree and dispatches gsd-executor (or performs the fallback inline). The
 // palette still needs to be resolved at that point so a supported
 // spawn_agent/codex exec path does not inherit the session model by accident.
-function selectDynamicExecutor(cfg, classification, signals, env = process.env) {
-  const { cliVersion, entries } = usableCodexPalette(cfg, env);
-  if (!entries.length) {
-    fail(
-      'the Codex palette has no usable model for executor dispatch' +
-      (cliVersion ? ` on CLI ${cliVersion}` : ' (Codex CLI version is unavailable)'),
-    );
-  }
+function selectDynamicExecutor(cfg, classification, signals, env = process.env, projectDir = process.cwd()) {
+  const { cliVersion, allEntries, entries } = usableCodexPalette(cfg, env);
   const ceiling = classification.value === 'recovery'
     || classification.value === 'critical'
       && (cfg.model_ladder === 'adaptive' || classification.requested === 'critical');
-  const entry = ceiling ? entries[entries.length - 1] : entries[0];
   const route = pc.routeOf('executor', signals, cfg);
   const parsedRoute = pc.parseRoute(route);
   if (!parsedRoute) fail(`the shared resolver returned an invalid route for executor: ${route}`);
   const requestedEffort = parsedRoute.effort.effort;
-  return {
+  const remapFor = createCodexRemapper({ codexHome: env.CODEX_HOME, cwd: projectDir, env });
+  const remapped = remapFor(parsedRoute.tier.model);
+  const declaredFloor = new Map(
+    allEntries.filter((entry) => entry.min_cli).map((entry) => [entry.model, entry.min_cli]),
+  );
+  const remapFloor = declaredFloor.get(remapped);
+  const remapUsable = remapped && (!remapFloor || (cliVersion && compareVersions(cliVersion, remapFloor) >= 0));
+  const common = {
     role: 'executor',
     ladder_role: 'executor',
     task_level: classification.value,
@@ -219,11 +223,41 @@ function selectDynamicExecutor(cfg, classification, signals, env = process.env) 
     ladder_mode: cfg.model_ladder,
     agent_file: null,
     agent_path: null,
-    model: entry.model,
-    effort: lowerEffort(requestedEffort, entry.effort),
     model_tier: parsedRoute.tier.model,
     requested_effort: requestedEffort,
     route,
+    project_dir: path.resolve(projectDir),
+  };
+  if (remapUsable) {
+    return {
+      ...common,
+      model: remapped,
+      // A remapped model is an operator choice, so its effort is the shared
+      // resolver's effort rather than the palette entry's measured effort.
+      effort: requestedEffort,
+      model_source: 'gsd-remap',
+      palette_lane: 'remap',
+    };
+  }
+  if (!entries.length) {
+    // An empty or CLI-filtered palette is intentional: generated Codex files
+    // omit `model` in this state and let the CLI choose its default. Returning
+    // an explicit null lets the caller omit --model without aborting dispatch.
+    return {
+      ...common,
+      model: null,
+      effort: requestedEffort,
+      model_source: 'codex-cli-default',
+      palette_lane: 'default',
+      selection_reason: 'no_usable_palette_entry',
+      ...(remapped ? { remap_fallback: 'declared_cli_floor' } : {}),
+    };
+  }
+  const entry = ceiling ? entries[entries.length - 1] : entries[0];
+  return {
+    ...common,
+    model: entry.model,
+    effort: lowerEffort(requestedEffort, entry.effort),
     model_source: 'codex_models',
     ...(ceiling ? { palette_lane: 'ceiling' } : { palette_lane: 'floor' }),
   };
@@ -251,7 +285,13 @@ function selectAgent(role, options = {}) {
   const classification = pc.taskLevelRoute(ladderRole, signals, cfg);
   if (ladderRole === 'executor') {
     return {
-      ...selectDynamicExecutor(cfg, classification, signals, options.env || process.env),
+      ...selectDynamicExecutor(
+        cfg,
+        classification,
+        signals,
+        options.env || process.env,
+        options.cwd || process.cwd(),
+      ),
       project_dir: path.resolve(options.cwd || process.cwd()),
     };
   }

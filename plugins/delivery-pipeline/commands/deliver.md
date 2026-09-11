@@ -580,7 +580,9 @@ contracts at the palette's ceiling model. Three conditions select one, all read
 from the journal, never guessed:
 
 - `critical` — the resolver classified risk as high or the ticket as a checkpoint;
-  use the matching `-critical` file on Codex.
+  in Codex **adaptive** mode use the matching `-critical` file. Conservative mode
+  intentionally does not generate that variant: use the selector's ordinary-file
+  fallback and record its `fallback` reason.
 
 - `repeat_exhausted` — for a repair role: the same failure signature has come
   back after the `rethink` strategy was already spent on it. One `-deep`
@@ -1326,10 +1328,15 @@ refused. `free: 0` means dispatch nothing this round — collect what is out, th
 recompute. When the cap prints `0 agents` the project config does not parse and nothing
 may be dispatched at all: fix the file.
 
-4. Launch the executor agent IN THE WORKTREE. Get its model from
+4. Launch the executor agent IN THE WORKTREE. For Claude, get its model from
    `pipeline-config.cjs model executor --json --explain --risk <risk> --type <type>
    --files <n> [--checkpoint]` and pass the returned `model`, `effort` and
-   `task_level` verbatim.
+   `task_level` verbatim. For Codex, call
+   `codex-agent.cjs select executor --json --project-dir <project>` with the same
+   signals. Pass its concrete `model` and `effort` when the host supports those
+   overrides; when `model` is `null`, omit `--model` and let the Codex CLI default
+   apply. In both runtimes keep the selector's `route`, `model_tier` and
+   `task_level` for dispatch recording.
    Assemble the prompt PER THE ANTI-INJECTION DISCIPLINE (see the Workflow section
    above): within `<TICKET-CONTRACT>…</TICKET-CONTRACT>` — the full text of the ticket's
    plan + Context reads + the rule "work ONLY within files_modified; commit atomically
@@ -1359,8 +1366,8 @@ may be dispatched at all: fix the file.
     `unsupported`; if it ran but did not expose the value, record `unknown`. Otherwise
     omit the flag, never guess; add `--graph <project>/.planning/graph` when you are
     not standing in the project). `<model>`, `<effort>` and `<route>` are all three
-    fields the `pipeline-config.cjs model executor --json …` call above already
-    returned — nothing is re-derived and nothing is paraphrased here, or the record
+    fields the runtime-specific selector call above already returned — nothing is
+    re-derived and nothing is paraphrased here, or the record
     would hold your reading of the ladder instead of the ladder's own answer. The
     recorder checks the route against the pair, so a route copied from the previous
     round is refused rather than filed. The launch id is now RECORDED as well as kept:
