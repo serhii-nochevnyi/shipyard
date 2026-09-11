@@ -802,15 +802,50 @@ function dispatchIdInUse(store, id) {
   );
 }
 
-function withDispatchId(decided, store) {
+// Dispatch ids are also the durable join key for usage attribution. Clearing
+// an active record removes it from `dispatches.json`, but the journal line is
+// intentionally append-only; allowing the same explicit id after a clear would
+// make one id describe two launches and merge their transcript usage. Read the
+// journal while the caller's store lock is held so an explicit id is rejected
+// against both the live store and every durable event already recorded.
+function dispatchIdInHistory(cwd, id) {
+  const file = path.join(graphDir(cwd), 'delivery-log.jsonl');
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return false;
+    throw new Error(`cannot inspect dispatch history at ${file}: ${error && error.message ? error.message : error}`);
+  }
+  return raw.split(/\r?\n/).some((line) => {
+    if (!line.trim()) return false;
+    try {
+      const event = JSON.parse(line);
+      return event && event.dispatch_id === id;
+    } catch {
+      // Other conveyor writers may leave a malformed line. It cannot prove
+      // ownership of this id, so keep the existing journal-read tolerance.
+      return false;
+    }
+  });
+}
+
+function dispatchIdKnown(cwd, store, id) {
+  return dispatchIdInUse(store, id) || dispatchIdInHistory(cwd, id);
+}
+
+function withDispatchId(decided, store, cwd) {
   if (decided.dispatch_id) {
     if (dispatchIdInUse(store, decided.dispatch_id)) {
       throw new Error(`dispatch id "${decided.dispatch_id}" is already active`);
     }
+    if (dispatchIdInHistory(cwd, decided.dispatch_id)) {
+      throw new Error(`dispatch id "${decided.dispatch_id}" already exists in delivery history`);
+    }
     return { ...decided, dispatch_id: decided.dispatch_id };
   }
   let id;
-  do { id = newDispatchId(); } while (dispatchIdInUse(store, id));
+  do { id = newDispatchId(); } while (dispatchIdKnown(cwd, store, id));
   return { ...decided, dispatch_id: id };
 }
 
@@ -1089,7 +1124,7 @@ if (require.main === module) {
       const s = state[ticket];
       // A re-dispatch restarts the clock: the previous agent is not the one
       // holding it now.
-      const recorded = withDispatchId(decided, store);
+      const recorded = withDispatchId(decided, store, cwd);
       dispatchId = recorded.dispatch_id;
       store.tickets[ticket] = {
         role,
@@ -1163,7 +1198,7 @@ if (require.main === module) {
           const events = [];
           for (const entry of entries) {
             const s = current[entry.ticket];
-            const recorded = withDispatchId(entry.decided, store);
+            const recorded = withDispatchId(entry.decided, store, cwd);
             if ([...dispatchIds.values()].includes(recorded.dispatch_id)) {
               throw new Error(`mark-many contains duplicate dispatch id "${recorded.dispatch_id}"`);
             }

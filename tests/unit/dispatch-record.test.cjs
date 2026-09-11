@@ -736,6 +736,17 @@ test('an explicit dispatch id is preserved and cannot be active on two tickets',
   assert.ok(!store(graph)['T-01-02'], 'the duplicate id does not create a second active join');
 });
 
+test('an explicit dispatch id cannot be reused after the active record is cleared', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
+  assert.equal(run(['mark', 'T-01-01', 'executor', '--dispatch-id', 'dispatch-replayed'], project).status, 0);
+  assert.equal(run(['clear', 'T-01-01', 'dispatch-replayed'], project).status, 0);
+
+  const reused = run(['mark', 'T-01-02', 'executor', '--dispatch-id', 'dispatch-replayed'], project);
+  assert.equal(reused.status, 1, reused.stderr);
+  assert.match(reused.stderr, /already exists in delivery history/);
+  assert.ok(!store(graph)['T-01-02'], 'a historical id does not create a second launch');
+});
+
 test('a mark with no flags writes NO such key at all — not null', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   assert.equal(run(['mark', 'T-01-01', 'executor'], project).status, 0);

@@ -725,6 +725,17 @@ test('a suspect dispatch with no dispatch_id says so instead of printing a fake 
   assert.ok(!v.reason.includes('<dispatch_id>'), 'placeholder text must not look copy-paste-ready');
 });
 
+test('a cleanup command quotes a graph path containing spaces', () => {
+  const original = project(ciOnly(['T-01-02']));
+  const dir = `${original} with spaces`;
+  fs.renameSync(original, dir);
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60), dispatch_id: 'dispatch-spaced-path' } });
+  const v = runIn(dir, { session_id: 'sess-spaced-path' });
+  const graph = fs.realpathSync(path.join(dir, '.planning', 'graph'));
+  assert.ok(v && v.decision === 'block');
+  assert.ok(v.reason.includes(`--graph '${graph}'`), 'the graph argument must remain one shell word');
+});
+
 test('a dispatched ticket with no record keeps the hatch open', () => {
   // Unknown age is not proof the agent is gone, and the direction that traps a
   // session is the one this hook must never take. Positive evidence only.

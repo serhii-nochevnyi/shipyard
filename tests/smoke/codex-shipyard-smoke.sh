@@ -511,6 +511,20 @@ bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 [[ -e "$CODEX_HOME/shipyard/scripts/state-sync.cjs" ]] \
   || { echo "re-install lost the real payload"; exit 1; }
 
+# A generated agent replaces the destination entry itself. If an operator has
+# linked that entry elsewhere, the install must not follow the link and mutate
+# the external file while believing it replaced an installer-owned agent.
+AGENT_SYMLINK="$CODEX_HOME/agents/shipyard-arch-review.toml"
+AGENT_SYMLINK_TARGET="$WORK/operator-agent-target.toml"
+printf '# operator-owned agent target\n' > "$AGENT_SYMLINK_TARGET"
+rm -f "$AGENT_SYMLINK"
+ln -s "$AGENT_SYMLINK_TARGET" "$AGENT_SYMLINK"
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+[[ ! -L "$AGENT_SYMLINK" && -f "$AGENT_SYMLINK" ]] \
+  || { echo "the generated agent install left a destination symlink in place"; exit 1; }
+grep -q '^# operator-owned agent target$' "$AGENT_SYMLINK_TARGET" \
+  || { echo "the generated agent install followed a destination symlink"; exit 1; }
+
 # Agent files and registrations are one transaction. Force the merge helper to
 # reject a duplicate foreign table after deliberately editing one generated
 # agent. A copy-first installer would leave the fresh agent beside the old

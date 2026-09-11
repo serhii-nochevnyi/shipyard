@@ -332,7 +332,20 @@ NODE
     snapshot_agent "$source"
   done
 
-  if cp "$OUT"/agents/*.toml "$AGENTS_DIR/"; then
+  # Replace each destination directory entry atomically. A plain `cp
+  # source "$AGENTS_DIR/"` follows an existing symlink and writes into the
+  # operator's external target, even though the manifest says this installer
+  # owns only the entry itself. Copy to a sibling temporary file first, then
+  # rename it over the entry; rename replaces a symlink rather than following
+  # it, while the snapshot above keeps the link available for rollback.
+  if for source in "$OUT"/agents/*.toml; do
+       name="$(basename "$source")"
+       target="$AGENTS_DIR/$name"
+       tmp="$target.tmp-$$"
+       rm -f -- "$tmp"
+       cp -- "$source" "$tmp"
+       mv -f -- "$tmp" "$target"
+     done; then
     :
   else
     status=$?

@@ -600,6 +600,12 @@ if (age !== null && age > FRESH_MS) {
 let agesCache = null;
 const agentsOut = () => (agesCache || (agesCache = dispatchAges(graphDir, dispatched)));
 
+// Render a value as one POSIX shell argument when the gate prints a remediation
+// command. Graph paths come from the host and may contain spaces, quotes or
+// shell metacharacters; leaving one unquoted turns a copy/paste instruction into
+// a different command (or lets a path fragment be interpreted by the shell).
+const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+
 // The dispatch marks that did NOT keep this quiet, as a sentence. Shared by the
 // CI branch and the front-is-not-empty verdict below: on a board the cap called
 // FULL, a suspect mark is the whole explanation for why the gate is blocking
@@ -615,11 +621,11 @@ const goneText = () => {
       'happened looks like. If that work really is out it will wake you; if it is gone, return the\n' +
       (suspectDispatchId
         ? 'ticket to the board with\n' +
-          `  \`dispatch-record.cjs clear ${suspectId} ${suspectDispatchId} --graph ${graphDir}\`\n`
+          `  \`dispatch-record.cjs clear ${suspectId} ${suspectDispatchId} --graph ${shellQuote(graphDir)}\`\n`
         : 'ticket to the board only after checking `.planning/graph/dispatches.json`: this record is\n' +
           'missing `dispatch_id`, so no exact clear command can be suggested.\n' +
           `  Once you have the recorded id, re-run \`dispatch-record.cjs clear\` for ticket ${suspectId} with that id and\n` +
-          `  \`--graph ${graphDir}\`.\n`) +
+          `  \`--graph ${shellQuote(graphDir)}\`.\n`) +
       'The --graph is not optional: this hook\'s cwd is the SESSION\'s, and a clear run from the wrong\n' +
       'one reports "no dispatch recorded" and changes nothing.'
     : '';
