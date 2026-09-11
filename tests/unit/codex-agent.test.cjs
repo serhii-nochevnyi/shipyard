@@ -176,6 +176,37 @@ test('executor resolves the ceiling model dynamically for critical work', () => 
   assert.strictEqual(result.palette_lane, 'ceiling');
 });
 
+test('executor promotes an ordinary dispatch when the measured window ceiling fires', () => {
+  const f = fixture('adaptive', STANDARD_FILES, {
+    pipeline: { fable_window_tokens: 100 },
+  });
+  const result = selectAgent('executor', {
+    cwd: f.project,
+    agentDir: f.agentDir,
+    env: { SHIPYARD_CODEX_CLI_VERSION: '0.999.0' },
+    signals: { risk: 'low', files: 2, inputTokens: 101 },
+  });
+  assert.strictEqual(result.task_level, 'routine', 'window pressure is independent of task classification');
+  assert.match(result.route, /tier=ceiling:window:degraded(?:\+cap:codex)?\(sonnet\)/);
+  assert.strictEqual(result.palette_lane, 'ceiling');
+  assert.strictEqual(result.model, 'gpt-6-astra');
+});
+
+test('static Codex roles use the deep file when the measured window ceiling fires', () => {
+  const f = fixture('adaptive', STANDARD_FILES, {
+    pipeline: { fable_window_tokens: 100 },
+  });
+  const result = selectAgent('arch-review', {
+    cwd: f.project,
+    agentDir: f.agentDir,
+    signals: { inputTokens: 101 },
+  });
+  assert.strictEqual(result.task_level, 'complex');
+  assert.match(result.route, /tier=ceiling:window:degraded(?:\+cap:codex)?\(sonnet\)/);
+  assert.strictEqual(result.agent_file, 'shipyard-arch-review-deep');
+  assert.strictEqual(result.model, 'gpt-6-astra');
+});
+
 test('executor returns the Codex default when the palette has no usable entry', () => {
   const f = fixture('adaptive', STANDARD_FILES, { delivery_pipeline: { codex_models: [] } });
   const result = selectAgent('executor', {

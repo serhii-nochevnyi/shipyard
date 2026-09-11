@@ -78,11 +78,12 @@ const guardMerge = (id, pr, preauthorized) => JSON.stringify({
 // open-only review-decision pass. Anything else exits non-zero, which the script
 // already tolerates — `pr view` for merged-by attribution is only reached for
 // UNGUARDED merges, and a checkpoint is never one of those.
-function stubGh(dir, prs) {
+function stubGh(dir, prs, unreachableRepo = null) {
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'gh'),
     '#!/bin/sh\n' +
+    (unreachableRepo ? `case "$*" in *"--repo ${unreachableRepo}"*) echo "unreachable" >&2; exit 1 ;; esac\n` : '') +
     'case "$*" in\n' +
     '  *"--state open"*) echo "[]" ;;\n' +
     `  *"--state all"*) cat <<'J'\n${JSON.stringify(prs)}\nJ\n    ;;\n` +
@@ -92,7 +93,7 @@ function stubGh(dir, prs) {
 }
 
 // tickets → journal lines → PR rows, in one temp project.
-function project({ tickets, journal, prs, config, configRaw }) {
+function project({ tickets, journal, prs, config, configRaw, unreachableRepo }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-stats-'));
   const g = path.join(dir, '.planning', 'graph');
   fs.mkdirSync(g, { recursive: true });
@@ -104,7 +105,7 @@ function project({ tickets, journal, prs, config, configRaw }) {
       configRaw !== undefined ? configRaw : JSON.stringify(config, null, 2),
     );
   }
-  const bin = stubGh(dir, prs);
+  const bin = stubGh(dir, prs, unreachableRepo);
   return { dir, bin };
 }
 
@@ -333,6 +334,21 @@ test('an invalid policy is visible in the ladder report', () => {
   assert.strictEqual(json.ladder.policy_valid, false);
   assert.ok(json.ladder.policy_error && json.ladder.policy_error.file);
   assert.strictEqual(json.ladder.mode, 'conservative', 'invalid policy cannot enable a treatment');
+});
+
+test('json reports repositories that could not be reached', () => {
+  const { code, json } = asJson({
+    tickets: {
+      'T-01-01': {
+        phase: '1', risk: 'low', repo: 'org/unreachable',
+        branch: 'ticket/T-01-01-x', title: 'unreachable repository',
+      },
+    },
+    journal: [], prs: [], unreachableRepo: 'org/unreachable',
+  });
+  assert.strictEqual(code, 0);
+  assert.deepStrictEqual(json.unreachable_repos, ['org/unreachable']);
+  assert.strictEqual(json.tickets[0].status, 'pending', 'the row remains conservative while data is unavailable');
 });
 
 test('Codex agent-file coverage is required only when the runtime is known', () => {

@@ -389,6 +389,10 @@ if (asJson) {
     reuse_hits: reuseHits,
     journal_events: journal.length,
     prs_truncated: prsTruncated,
+    // A zero-row result is not the same as a reachable repository with no
+    // matching PRs. Keep the outage visible to JSON consumers too; otherwise
+    // automation can treat incomplete GitHub data as a clean pending board.
+    unreachable_repos: unreachableRepos,
     ladder,
   }, null, 2));
   process.exit(0);

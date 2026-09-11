@@ -81,11 +81,14 @@ The JSON contains:
 `exact` and `session` attribution can be used for a model comparison. An
 `ambiguous`, `mismatch` or `unattributed` row is excluded from the ready counts.
 Older Codex `token_count` and current `token_usage_record` totals are cumulative
-per session. For the current format, the collector sums each response's usage
-after deduplication and splits it by the model/effort from `turn_context`; it
-does not mix the duplicate legacy snapshots into that total. Claude streaming
-updates are deduplicated by stable message identity, and late updates replace
-incomplete maxima.
+per session. For the current format, the final deduplicated
+`thread_token_usage` snapshot is the source of the session total. The collector
+uses per-response usage only when those responses reconcile exactly with that
+snapshot, then splits the reconciled total by the model/effort from
+`turn_context`; otherwise it retains the cumulative session row and warns. It
+does not mix duplicate legacy snapshots into the total. Claude streaming updates
+are deduplicated by stable message identity, and late updates replace incomplete
+maxima.
 
 The report remains read-only and rescans the supplied files. A malformed
 transcript or attribution line produces a warning and a non-comparable report;

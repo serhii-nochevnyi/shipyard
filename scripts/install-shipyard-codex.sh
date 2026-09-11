@@ -66,7 +66,8 @@ ROLLBACK_ACTIVE=0
 cleanup() {
   local status="${1:-0}"
   if [[ "$status" -ne 0 && "$ROLLBACK_ACTIVE" == 1 ]]; then
-    echo "error: install failed after mutating agent/config state; restoring the previous set" >&2
+    echo "error: install failed after mutating installer-owned state; restoring the previous set" >&2
+    restore_runtime_dirs 2>/dev/null || echo "warning: runtime artifact rollback was incomplete; inspect ${AGENTS_SKILLS:-$HOME/.agents/skills} and ${BUNDLE_ROOT:-$CODEX_HOME/shipyard}" >&2
     restore_config 2>/dev/null || echo "warning: config rollback was incomplete; inspect ${CONFIG_TARGET:-$CODEX_HOME/config.toml}" >&2
     restore_agents 2>/dev/null || echo "warning: agent rollback was incomplete; inspect ${AGENTS_DIR:-$CODEX_HOME/agents}" >&2
   fi
@@ -78,18 +79,44 @@ restore_agents() {
   local index="${AGENT_BACKUP_INDEX:-}"
   local backup="${AGENT_BACKUP:-}"
   local state name target restore_status=0
-  [[ -n "$index" && -f "$index" && -n "$backup" && -n "${AGENTS_DIR:-}" ]] || return 0
-  while IFS=$'\t' read -r state name; do
-    [[ -n "$name" ]] || continue
-    target="$AGENTS_DIR/$name"
-    rm -rf "$target" || restore_status=1
-    if [[ "$state" == present ]]; then
-      cp -a "$backup/$name" "$target" || restore_status=1
+  if [[ -n "$index" && -f "$index" && -n "$backup" && -n "${AGENTS_DIR:-}" ]]; then
+    while IFS=$'\t' read -r state name; do
+      [[ -n "$name" ]] || continue
+      target="$AGENTS_DIR/$name"
+      rm -rf "$target" || restore_status=1
+      if [[ "$state" == present ]]; then
+        cp -a "$backup/$name" "$target" || restore_status=1
+      fi
+    done < "$index"
+  fi
+  if [[ -n "${AGENT_MANIFEST_TARGET:-}" ]]; then
+    rm -rf "$AGENT_MANIFEST_TARGET" || restore_status=1
+    if [[ "${AGENT_MANIFEST_PREEXISTED:-0}" == 1 ]]; then
+      cp -a "$AGENT_MANIFEST_BACKUP" "$AGENT_MANIFEST_TARGET" || restore_status=1
     fi
-  done < "$index"
+  fi
   if [[ "${AGENTS_DIR_PREEXISTED:-0}" == 0 ]]; then
     rmdir "$AGENTS_DIR" 2>/dev/null || true
   fi
+  return "$restore_status"
+}
+restore_runtime_dirs() {
+  local index="${RUNTIME_BACKUP_INDEX:-}"
+  local backup="${RUNTIME_BACKUP:-}"
+  local state kind name target restore_status=0
+  [[ -n "$index" && -f "$index" && -n "$backup" ]] || return 0
+  while IFS=$'\t' read -r state kind name; do
+    [[ -n "$kind" && -n "$name" ]] || continue
+    if [[ "$kind" == bundle ]]; then
+      target="$BUNDLE_ROOT"
+    else
+      target="$AGENTS_SKILLS/$name"
+    fi
+    rm -rf "$target" || restore_status=1
+    if [[ "$state" == present ]]; then
+      cp -a "$backup/$kind-$name" "$target" || restore_status=1
+    fi
+  done < "$index"
   return "$restore_status"
 }
 restore_config() {
@@ -127,6 +154,19 @@ replace_dir() {
     rm -rf "$tmp"
   fi
   return "$status"
+}
+snapshot_runtime_dir() {
+  local kind="$1" name="$2" target="$3"
+  local state=absent backup_path="$RUNTIME_BACKUP/$kind-$name"
+  if grep -Fqx $'present\t'"$kind"$'\t'"$name" "$RUNTIME_BACKUP_INDEX" 2>/dev/null \
+    || grep -Fqx $'absent\t'"$kind"$'\t'"$name" "$RUNTIME_BACKUP_INDEX" 2>/dev/null; then
+    return 0
+  fi
+  if [[ -e "$target" || -L "$target" ]]; then
+    cp -a "$target" "$backup_path"
+    state=present
+  fi
+  printf '%s\t%s\t%s\n' "$state" "$kind" "$name" >> "$RUNTIME_BACKUP_INDEX"
 }
 trap 'cleanup $?' EXIT
 OUT="$STAGE/bundle-out"
@@ -178,15 +218,58 @@ if compgen -G "$OUT/agents/*.toml" >/dev/null; then
   AGENT_BACKUP_INDEX="$STAGE/agents-before.tsv"
   CONFIG_TARGET="$CODEX_HOME/config.toml"
   CONFIG_BACKUP="$STAGE/config-before.toml"
+  AGENT_MANIFEST_TARGET="$AGENTS_DIR/$AGENT_MANIFEST_NAME"
+  AGENT_MANIFEST_BACKUP="$STAGE/manifest-before.json"
+  AGENT_MANIFEST_PREEXISTED=0
   CONFIG_PREEXISTED=0
   if [[ -e "$CONFIG_TARGET" || -L "$CONFIG_TARGET" ]]; then
     cp -p "$CONFIG_TARGET" "$CONFIG_BACKUP"
     CONFIG_PREEXISTED=1
   fi
+  if [[ -e "$AGENT_MANIFEST_TARGET" || -L "$AGENT_MANIFEST_TARGET" ]]; then
+    cp -a "$AGENT_MANIFEST_TARGET" "$AGENT_MANIFEST_BACKUP"
+    AGENT_MANIFEST_PREEXISTED=1
+  fi
   mkdir -p "$AGENT_BACKUP"
   : > "$AGENT_BACKUP_INDEX"
-  for source in "$OUT"/agents/*.toml; do
+
+  # Snapshot every file the PREVIOUS manifest claims before reconciliation.
+  # The current bundle may stop emitting a variant, so looking only at this
+  # run's names leaves an old claimed file with no rollback copy. Invalid or
+  # unsafe manifest entries are ignored here, exactly as the reconciler refuses
+  # to act on them; the manifest itself is always backed up above.
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    target="$AGENTS_DIR/$name"
+    if [[ -e "$target" || -L "$target" ]]; then
+      cp -a "$target" "$AGENT_BACKUP/$name"
+      printf 'present\t%s\n' "$name" >> "$AGENT_BACKUP_INDEX"
+    else
+      printf 'absent\t%s\n' "$name" >> "$AGENT_BACKUP_INDEX"
+    fi
+  done < <(
+    SHIPYARD_PREV_MANIFEST="$AGENT_MANIFEST_TARGET" node - <<'NODE'
+const fs = require('fs');
+const file = process.env.SHIPYARD_PREV_MANIFEST;
+try {
+  const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const safe = /^shipyard-[A-Za-z0-9._-]*\.toml$/;
+  if (manifest && Array.isArray(manifest.agent_files)) {
+    for (const name of new Set(manifest.agent_files)) {
+      if (typeof name === 'string' && safe.test(name)) process.stdout.write(`${name}\n`);
+    }
+  }
+} catch { /* no trustworthy previous claim: reconcile conservatively */ }
+NODE
+  )
+
+  snapshot_agent() {
+    local source="$1" name target
     name="$(basename "$source")"
+    if grep -Fqx $'present\t'"$name" "$AGENT_BACKUP_INDEX" \
+      || grep -Fqx $'absent\t'"$name" "$AGENT_BACKUP_INDEX"; then
+      return 0
+    fi
     target="$AGENTS_DIR/$name"
     if [[ -e "$target" || -L "$target" ]]; then
       [[ -f "$target" || -L "$target" ]] || {
@@ -198,6 +281,9 @@ if compgen -G "$OUT/agents/*.toml" >/dev/null; then
     else
       printf 'absent\t%s\n' "$name" >> "$AGENT_BACKUP_INDEX"
     fi
+  }
+  for source in "$OUT"/agents/*.toml; do
+    snapshot_agent "$source"
   done
 
   if cp "$OUT"/agents/*.toml "$AGENTS_DIR/"; then
@@ -416,11 +502,19 @@ if [[ -f "$GSD_TUNE" ]]; then
   echo "→ GSD global defaults (~/.gsd/defaults.json)"
   node "$GSD_TUNE" --global --runtime codex --apply 2>&1 | sed 's/^/  /' || true
 fi
-ROLLBACK_ACTIVE=0
 
 # ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
 echo "→ installing skills → $AGENTS_SKILLS"
 mkdir -p "$AGENTS_SKILLS"
+RUNTIME_BACKUP="$STAGE/runtime-before"
+RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
+mkdir -p "$RUNTIME_BACKUP"
+: > "$RUNTIME_BACKUP_INDEX"
+for d in "$OUT"/skills/*/; do
+  name="$(basename "${d%/}")"
+  snapshot_runtime_dir skill "$name" "$AGENTS_SKILLS/$name"
+done
+snapshot_runtime_dir bundle payload "$BUNDLE_ROOT"
 for d in "$OUT"/skills/*/; do
   name="$(basename "$d")"
   replace_dir "${d%/}" "$AGENTS_SKILLS/$name" "skill directory" || {
@@ -444,6 +538,11 @@ replace_dir "$OUT/bundle" "$BUNDLE_ROOT" "bundle payload" || {
   echo "error: could not install bundle payload" >&2
   exit "$status"
 }
+
+# Nothing installer-owned remains to roll back after this point. Keeping the
+# rollback active through both replacement loops is what makes a failed second
+# skill or bundle swap restore the earlier swaps as one generation.
+ROLLBACK_ACTIVE=0
 
 deliver_hint=""
 [[ "$PHASE" -ge 2 ]] && deliver_hint=' | $shipyard-deliver'

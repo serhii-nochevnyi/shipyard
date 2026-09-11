@@ -201,12 +201,17 @@ function lowerEffort(requested, configured) {
 // spawn_agent/codex exec path does not inherit the session model by accident.
 function selectDynamicExecutor(cfg, classification, signals, env = process.env, projectDir = process.cwd()) {
   const { cliVersion, allEntries, entries } = usableCodexPalette(cfg, env);
-  const ceiling = classification.value === 'recovery'
-    || classification.value === 'critical'
-      && (cfg.model_ladder === 'adaptive' || classification.requested === 'critical');
   const route = pc.routeOf('executor', signals, cfg);
   const parsedRoute = pc.parseRoute(route);
   if (!parsedRoute) fail(`the shared resolver returned an invalid route for executor: ${route}`);
+  // The window route is an earned ceiling independent of task classification:
+  // an ordinary executor can cross the configured context threshold while its
+  // task level remains routine. Read the resolver's route, not just the
+  // classifier, or this dispatch silently takes the floor palette entry.
+  const ceiling = parsedRoute.tier.rule.startsWith('ceiling:')
+    || classification.value === 'recovery'
+    || classification.value === 'critical'
+      && (cfg.model_ladder === 'adaptive' || classification.requested === 'critical');
   const requestedEffort = parsedRoute.effort.effort;
   const remapFor = createCodexRemapper({ codexHome: env.CODEX_HOME, cwd: projectDir, env });
   const remapped = remapFor(parsedRoute.tier.model);
@@ -263,8 +268,10 @@ function selectDynamicExecutor(cfg, classification, signals, env = process.env, 
   };
 }
 
-function candidateSuffix(role, level, mode = 'adaptive') {
+function candidateSuffix(role, level, mode = 'adaptive', ceiling = false) {
   const generatedRole = role;
+  if (ceiling && DEEP_ROLES.has(generatedRole)) return DEEP_SUFFIX;
+  if (ceiling && mode === 'adaptive' && CRITICAL_ROLES.has(generatedRole)) return CRITICAL_SUFFIX;
   if (level === 'recovery' && DEEP_ROLES.has(generatedRole)) return DEEP_SUFFIX;
   if (mode === 'adaptive' && level === 'critical' && CRITICAL_ROLES.has(generatedRole)) return CRITICAL_SUFFIX;
   return '';
@@ -304,7 +311,11 @@ function selectAgent(role, options = {}) {
     };
   }
   const baseRole = requestedRole === 'research' ? 'inv-research' : requestedRole;
-  const suffix = candidateSuffix(baseRole, classification.value, cfg.model_ladder);
+  const route = pc.routeOf(ladderRole, signals, cfg);
+  const parsedRoute = pc.parseRoute(route);
+  if (!parsedRoute) fail(`the shared resolver returned an invalid route for ${ladderRole}: ${route}`);
+  const ceilingRoute = parsedRoute.tier.rule.startsWith('ceiling:');
+  const suffix = candidateSuffix(baseRole, classification.value, cfg.model_ladder, ceilingRoute);
   const baseName = `${PREFIX}${baseRole}`;
   const wantedName = `${baseName}${suffix}`;
   const dir = options.agentDir || agentDirFrom(options.flags || new Map());
@@ -340,9 +351,6 @@ function selectAgent(role, options = {}) {
   }
   const fields = readAgent(selectedPath);
   if (fields.error) fail(`cannot read Codex agent file ${selectedPath}: ${fields.error}`);
-  const route = pc.routeOf(ladderRole, signals, cfg);
-  const parsedRoute = pc.parseRoute(route);
-  if (!parsedRoute) fail(`the shared resolver returned an invalid route for ${ladderRole}: ${route}`);
   return {
     role: requestedRole,
     ladder_role: ladderRole,

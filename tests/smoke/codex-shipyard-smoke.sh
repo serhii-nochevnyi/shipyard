@@ -477,14 +477,28 @@ ROLLBACK_SKILL_EXTRA="$SKILLS/shipyard-deliver/operator-note.txt"
 ROLLBACK_BUNDLE="$CODEX_HOME/shipyard/scripts/state-sync.cjs"
 ROLLBACK_AGENT="$CODEX_HOME/agents/shipyard-arch-review.toml"
 ROLLBACK_CONFIG="$CODEX_HOME/config.toml"
+ROLLBACK_OLD_AGENT="$CODEX_HOME/agents/shipyard-old-variant.toml"
+ROLLBACK_MANIFEST="$CODEX_HOME/agents/.shipyard-manifest.json"
 printf '\n<!-- operator rollback marker -->\n' >> "$ROLLBACK_SKILL"
 printf 'operator-only note\n' > "$ROLLBACK_SKILL_EXTRA"
 printf '\n// operator rollback marker\n' >> "$ROLLBACK_BUNDLE"
 printf '\n# operator rollback marker\n' >> "$ROLLBACK_AGENT"
+printf '# previously generated variant\n' > "$ROLLBACK_OLD_AGENT"
+AGENT_MANIFEST="$ROLLBACK_MANIFEST" node - <<'NODE'
+const fs = require('fs');
+const file = process.env.AGENT_MANIFEST;
+const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+manifest.agent_files.push('shipyard-old-variant.toml');
+manifest.registrations = Array.isArray(manifest.registrations) ? manifest.registrations : [];
+manifest.registrations.push('agents.shipyard-old-variant');
+fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+NODE
 cp "$ROLLBACK_SKILL" "$WORK/rollback-skill-expected"
 cp "$ROLLBACK_BUNDLE" "$WORK/rollback-bundle-expected"
 cp "$ROLLBACK_AGENT" "$WORK/rollback-agent-expected"
+cp "$ROLLBACK_OLD_AGENT" "$WORK/rollback-old-agent-expected"
 cp "$ROLLBACK_CONFIG" "$WORK/rollback-config-expected"
+cp "$ROLLBACK_MANIFEST" "$WORK/rollback-manifest-expected"
 mkdir -p "$WORK/broken-agents-md"
 if CODEX_AGENTS_MD="$WORK/broken-agents-md" bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/late-failure.log" 2>&1; then
   echo "a late installer failure unexpectedly committed"; exit 1
@@ -497,8 +511,12 @@ cmp -s "$WORK/rollback-bundle-expected" "$ROLLBACK_BUNDLE" \
   || { echo "a late installer failure changed the installed bundle"; exit 1; }
 cmp -s "$WORK/rollback-agent-expected" "$ROLLBACK_AGENT" \
   || { echo "a late installer failure changed the installed agent"; exit 1; }
+cmp -s "$WORK/rollback-old-agent-expected" "$ROLLBACK_OLD_AGENT" \
+  || { echo "a late installer failure did not restore an older manifest-owned agent"; exit 1; }
 cmp -s "$WORK/rollback-config-expected" "$ROLLBACK_CONFIG" \
   || { echo "a late installer failure changed config.toml"; exit 1; }
+cmp -s "$WORK/rollback-manifest-expected" "$ROLLBACK_MANIFEST" \
+  || { echo "a late installer failure changed the ownership manifest"; exit 1; }
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 
 # ── an installer owns what it wrote (ADR-007 D5) ──────────────────────────────
