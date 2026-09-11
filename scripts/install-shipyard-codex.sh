@@ -64,7 +64,7 @@ fi
 STAGE="$(mktemp -d)"
 ROLLBACK_ACTIVE=0
 cleanup() {
-  local status=$?
+  local status="${1:-0}"
   if [[ "$status" -ne 0 && "$ROLLBACK_ACTIVE" == 1 ]]; then
     echo "error: install failed after mutating shipyard artifacts; restoring the previous set" >&2
     restore_config 2>/dev/null || echo "warning: config rollback was incomplete; inspect ${CONFIG_TARGET:-$CODEX_HOME/config.toml}" >&2
@@ -128,7 +128,7 @@ restore_config() {
   fi
   return "$restore_status"
 }
-trap cleanup EXIT
+trap 'cleanup $?' EXIT
 OUT="$STAGE/bundle-out"
 
 # ── generate ─────────────────────────────────────────────────────────────────
