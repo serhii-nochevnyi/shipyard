@@ -197,7 +197,7 @@ snapshot_runtime_path() {
       exit 1
       ;;
   esac
-  seen_key="$kind"$'\t'"$name"$'\t'"$target"
+  seen_key="$target"
   if [[ -n "${RUNTIME_BACKUP_SEEN[$seen_key]+x}" ]]; then
     return 0
   fi
