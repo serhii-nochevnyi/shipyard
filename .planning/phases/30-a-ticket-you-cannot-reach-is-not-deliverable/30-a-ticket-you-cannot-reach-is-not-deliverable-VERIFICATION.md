@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2fbe98ffd137a924016bae288ee8df2784ca91bf2f628ed741e5d6c654793ccb
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a38b48f43fb1f7
 phase: 30
 status: human_needed
-shipyard_source_fingerprint: 2fbe98ffd137a924016bae288ee8df2784ca91bf2f628ed741e5d6c654793ccb
+shipyard_source_fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a38b48f43fb1f7
 ---
 
 # Phase 30: A ticket you cannot reach is not deliverable — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 2fbe98ffd137a924016bae288ee8df2784ca91bf2f628ed741e
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | No PLAN files are present; delivery evidence is missing | ? UNCERTAIN |
+| Every phase plan is accounted for | 0/9 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -21,7 +21,15 @@ shipyard_source_fingerprint: 2fbe98ffd137a924016bae288ee8df2784ca91bf2f628ed741e
 
 | Ticket | Delivery | Plan status |
 |---|---|---|
-| — | no plans | ? UNCERTAIN |
+| T-30-01 | pr-open | ? UNCERTAIN |
+| T-30-02 | pr-open | ? UNCERTAIN |
+| T-30-03 | pr-open | ? UNCERTAIN |
+| T-30-04 | pending | ? UNCERTAIN |
+| T-30-05 | pending | ? UNCERTAIN |
+| T-30-06 | pending | ? UNCERTAIN |
+| T-30-07 | pending | ? UNCERTAIN |
+| T-30-08 | pending | ? UNCERTAIN |
+| T-30-09 | pending | ? UNCERTAIN |
 
 ## Verification Commands
 
@@ -30,4 +38,4 @@ shipyard_source_fingerprint: 2fbe98ffd137a924016bae288ee8df2784ca91bf2f628ed741e
 
 ## Gaps Summary
 
-**Not green:** phase has no PLAN files yet.
+**Not green:** 9 plan(s) are not merged.
