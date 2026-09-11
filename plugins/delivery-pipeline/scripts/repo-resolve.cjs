@@ -127,6 +127,19 @@ function policyPath(value) {
   }
 }
 
+// existsSync follows symbolic links, so it reports a dangling destination as
+// absent and would let the clone branch treat it as safe to create. lstat
+// keeps the decision fail-closed for every filesystem entry, including broken
+// links and entries whose metadata cannot be read.
+function filesystemEntryExists(candidate) {
+  try {
+    fs.lstatSync(candidate);
+    return true;
+  } catch (error) {
+    return error && error.code !== 'ENOENT';
+  }
+}
+
 function subRepositories(config) {
   if (!isRecord(config)) return [];
   const nested = isRecord(config.planning) ? config.planning.sub_repos : undefined;
@@ -468,7 +481,7 @@ function cloneChoiceResult(input, initial, destinationInfo) {
 
   // D7: an existing destination with the right origin is adopted. An existing
   // destination with anything else is refused; this branch never overwrites.
-  if (fs.existsSync(destination)) {
+  if (filesystemEntryExists(destination)) {
     const adopted = suppliedPathResult(input, destination);
     if (adopted.executable) {
       return {
@@ -711,18 +724,36 @@ function readProjectPolicy(projectDir) {
   }
 }
 
-async function readInteractiveChoice(repo, destination) {
+async function readInteractiveChoice(repo, destination, suppliedPath = null) {
   const readline = require('readline');
   process.stderr.write(`${choicePrompt(repo, destination)}\n`);
   const prompt = readline.createInterface({ input: process.stdin, output: process.stderr });
   const answer = await new Promise((resolve) => prompt.question('> ', resolve));
-  prompt.close();
+  let choice;
   try {
-    return normalizeChoice(answer);
+    choice = normalizeChoice(answer);
   } catch {
     process.stderr.write('Unrecognized choice; treating it as unanswered and parking the ticket.\n');
-    return null;
+    prompt.close();
+    return { choice: null, existingPath: null };
   }
+
+  if (choice !== 'existing') {
+    prompt.close();
+    return { choice, existingPath: null };
+  }
+
+  let existingPath = suppliedPath;
+  if (typeof existingPath !== 'string' || existingPath.trim().length === 0) {
+    existingPath = await new Promise((resolve) => prompt.question('Existing checkout path: ', resolve));
+  }
+  prompt.close();
+  return {
+    choice,
+    existingPath: typeof existingPath === 'string' && existingPath.trim().length > 0
+      ? existingPath.trim()
+      : null,
+  };
 }
 
 if (require.main === module) {
@@ -751,13 +782,20 @@ if (require.main === module) {
       const destinationInfo = options.destination
         ? { destination: path.resolve(options.destination) }
         : defaultCloneDestination(options.repo, projectDir, config);
+      let existingPath = options.existingPath;
       if (choice === null && !options.nonInteractive && process.stdin.isTTY && process.stdout.isTTY) {
-        choice = await readInteractiveChoice(options.repo, destinationInfo.destination || '<validated destination>');
+        const selected = await readInteractiveChoice(
+          options.repo,
+          destinationInfo.destination || '<validated destination>',
+          existingPath,
+        );
+        choice = selected.choice;
+        existingPath = selected.existingPath;
       }
       result = chooseRepository({
         ...input,
         choice,
-        existingPath: options.existingPath,
+        existingPath,
         destination: options.destination,
       });
     }
