@@ -709,9 +709,10 @@ Consequences you must honour:
   "@coderabbitai full review" on whatever unrelated PR shares that number here.
 - **Tracking is free, EXECUTING needs a local checkout.** Configure it:
   `pipeline.repos: {"pdffiller/jsfiller": "/abs/path/to/jsfiller"}` (absolute —
-  the run works from many worktrees). state-sync prints a `⚠ repo … has no local
-  checkout configured` line when it is missing: those tickets can be tracked but
-  not driven, and saying so is mandatory, not optional.
+  the run works from many worktrees). state-sync prints a `⚠ repo … holds …
+  ticket(s) but is track-only — <reason>` line when resolution cannot produce an
+  executable checkout: those tickets can be tracked but not driven, and saying
+  so is mandatory, not optional.
 - **Cold-start resolution follows the configured then discovery branches.** For
   every foreign ticket before preparing its worktree, call:
   `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs resolve <owner/name> \
