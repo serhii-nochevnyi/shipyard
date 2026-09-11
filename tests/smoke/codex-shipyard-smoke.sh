@@ -389,6 +389,18 @@ node scripts/gen-codex-shipyard.cjs --plugin plugins/delivery-pipeline \
 # whole substitution fail and takes the script down before it can assert.
 P1_DEEP="$(find "$WORK/p1/agents" -name '*-deep.toml' | wc -l | tr -d ' ')"
 [[ "$P1_DEEP" -eq 0 ]] || { echo "phase 1 emitted an escalation variant for a role it does not ship"; exit 1; }
+# The global instructions must describe the same phase as the installed skills:
+# phase 1 may route to decompose, but must not teach a user to invoke the absent
+# deliver skill. Reinstall phase 2 afterwards so the rest of this smoke exercises
+# the full palette.
+PHASE1_AGENTS="$WORK/phase1-AGENTS.md"
+CODEX_AGENTS_MD="$PHASE1_AGENTS" bash scripts/install-shipyard-codex.sh --phase 1 >/dev/null
+grep -q 'large / multi-ticket -> `\$shipyard-decompose`; install phase 2 before delivery' "$PHASE1_AGENTS" \
+  || { echo "phase 1 auto-route advertises an unavailable deliver skill"; exit 1; }
+if grep -q '\$shipyard-decompose` -> `\$shipyard-deliver' "$PHASE1_AGENTS"; then
+  echo "phase 1 auto-route still advertises shipyard-deliver"; exit 1
+fi
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 
 # ── a GSD remap still wins over the palette ──────────────────────────────────
 # The claim the docs made and the generator never honoured: it read

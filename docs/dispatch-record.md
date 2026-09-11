@@ -56,3 +56,13 @@ model, launch an agent, infer applied effort or make quota/savings claims. After
 the runtime supplies a transcript session/request/message id, connect it with
 `usage-attribution.cjs record`; the dispatch record alone cannot prove which
 concrete model or effort the host applied.
+
+For one completion, the dispatch id is mandatory for the same reason:
+
+```bash
+node plugins/delivery-pipeline/scripts/dispatch-record.cjs clear T-01-01 \
+  <dispatch_id> --graph .planning/graph
+```
+
+The command compares the id while holding the store lock. A delayed completion
+therefore leaves a newer dispatch in place instead of deleting it.

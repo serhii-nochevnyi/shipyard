@@ -57,6 +57,16 @@ test('current Codex thread snapshots win over duplicate legacy snapshots',()=>{
  assert.equal(r.groups[0].input_tokens,300);assert.equal(r.groups[0].cache_read_input_tokens,150);
  assert.equal(r.groups[0].output_tokens,30);assert.equal(r.comparable,true);
 });
+test('current Codex format wins when legacy snapshots are in a resumed file',()=>{
+ const legacy={...codex(250,'2026-09-10T00:01:59Z'),payload:{...codex(250,'2026-09-10T00:01:59Z').payload,session_id:'codex-session'}};
+ const r=report([
+   {source:'legacy-part',rows:[{type:'session_meta',payload:{id:'codex-session'}},legacy]},
+   {source:'current-part',rows:[{type:'session_meta',payload:{id:'codex-session'}},codexCurrent,codexCurrent2]},
+ ]);
+ assert.equal(r.groups[0].input_tokens,300);
+ assert.equal(r.groups[0].output_tokens,30);
+ assert.equal(r.observations.length,2);
+});
 test('current Codex response usage must reconcile with the thread total',()=>{
  const mismatched={...codexCurrent2,payload:{...codexCurrent2.payload,usage:{...codexCurrent2.payload.usage,input_tokens:1}}};
  const r=report([{source:'current',rows:[meta,codexCurrent,mismatched]}]);
@@ -176,6 +186,23 @@ test('non-string attribution sources are skipped without aborting the report', (
  });
  assert.ok(r.warnings.some((w) => w.includes('source must be a string')));
   assert.equal(r.observations[0].attribution_status, 'unattributed');
+});
+
+test('explicit empty attribution fields are rejected instead of defaulted', () => {
+ const base = { dispatch_id:'dispatch-fields', runtime:'claude', provider:'anthropic', kind:'ordinary',
+   source:'fixture', session_id:'s1', request_id:'r1', message_id:'m1', ticket:'T-01-01',
+   role:'executor', task_level:'routine', backend:'workflow', model:'opus', effort:'high',
+   observed_model:'example-model', observed_effort:'high' };
+ for (const [field, value, needle] of [
+   ['provider', '', 'provider does not match'], ['provider', null, 'provider does not match'],
+   ['kind', '', 'unknown kind'], ['kind', null, 'unknown kind'],
+   ['runtime', '', 'unknown runtime'], ['runtime', null, 'unknown runtime'],
+ ]) {
+   const record = { ...base, observation_id:`bad-${field}-${String(value)}`, [field]:value };
+   const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), { attributions:[record] });
+   assert.ok(r.warnings.some((w) => w.includes(needle)), `${field}=${String(value)} should be rejected`);
+   assert.equal(r.efficiency.eligible_rows, 0);
+ }
 });
 
 test('malformed observed_model text is rejected before matching', () => {

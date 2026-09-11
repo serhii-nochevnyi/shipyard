@@ -26,7 +26,7 @@ function valuesOf(context, key) {
 }
 
 function runtimeOf(record) {
-  if (record && record.runtime) return record.runtime;
+  if (record && Object.prototype.hasOwnProperty.call(record, 'runtime')) return record.runtime;
   if (record && record.provider === 'anthropic') return 'claude';
   if (record && record.provider === 'openai') return 'codex';
   // Older local fixtures used the runtime name in `provider`.
@@ -49,11 +49,12 @@ function attributionShape(record, index) {
   }
   const runtime = runtimeOf(record);
   if (!runtime || !RUNTIME_PROVIDER[runtime]) return { error: `attribution ${index} has an unknown runtime` };
-  if (record.provider && record.provider !== RUNTIME_PROVIDER[runtime]
+  if (Object.prototype.hasOwnProperty.call(record, 'provider')
+      && record.provider !== RUNTIME_PROVIDER[runtime]
       && record.provider !== runtime) {
     return { error: `attribution ${index} provider does not match runtime ${runtime}` };
   }
-  const kind = record.kind || 'ordinary';
+  const kind = Object.prototype.hasOwnProperty.call(record, 'kind') ? record.kind : 'ordinary';
   if (!attributionRules.KINDS.has(kind)) return { error: `attribution ${index} has an unknown kind` };
   if (!record.dispatch_id) return { error: `attribution ${index} has no dispatch_id` };
   if (!record.session_id && !record.request_id && !record.message_id) {
@@ -219,6 +220,22 @@ function report(sources, options = {}) {
   const attributionEnabled = options.attributions !== undefined;
   let usageRows = 0;
   const warn = (s) => warnings.push(s);
+  // A resumed Codex session may be split across transcript files. Decide which
+  // schema owns that session from the complete input set before processing any
+  // rows, otherwise a legacy event_msg in an older file is admitted before a
+  // current token_usage_record is encountered in another file and both views
+  // contaminate the same cumulative accumulator.
+  const currentCodexSessions = new Set();
+  for (const source of sources) {
+    const metaSession = source.rows.find((row) => row?.type === 'session_meta')?.payload?.id
+      || source.rows.find((row) => row?.type === 'session_meta')?.payload?.session_id
+      || null;
+    for (const row of source.rows) {
+      if (row?.type !== 'token_usage_record' || !row.payload?.thread_token_usage) continue;
+      const id = row.payload.session_id || metaSession;
+      if (id) currentCodexSessions.add(id);
+    }
+  }
   function mergeUsage(dest, src, fields, label) {
     for (const f of fields) {
       if (src[f] === undefined || src[f] === null) continue;
@@ -288,7 +305,8 @@ function report(sources, options = {}) {
         (row.type === 'event_msg' && row.payload?.type === 'token_count')
         || row.type === 'token_usage_record'
       ) {
-        if (row.type === 'event_msg' && hasCurrentCodexUsage) continue;
+        const rowSession = row.payload?.session_id || row.sessionId || row.session_id || session;
+        if (row.type === 'event_msg' && (hasCurrentCodexUsage || currentCodexSessions.has(rowSession))) continue;
         // The current record carries per-response `usage`, per-turn totals and
         // a thread-level cumulative total. Only the thread-level total is safe
         // for a session aggregate; the per-response value is retained below for

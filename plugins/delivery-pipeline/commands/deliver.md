@@ -940,8 +940,10 @@ Rules:
   The did-work gate has to be MECHANICAL (`git log <base>..HEAD`, run by you), and
   an agent that both self-certifies and publishes is exactly the hole that gate
   exists to close. So: agents code+verify+commit in parallel → you gate, push and
-  open the PR. The agent hands back a ready `prBody` (it holds the verification
-  evidence), so PR quality does not regress.
+  open the PR. The agent returns `prBodyPath` and `evidencePath` inside its
+  worktree; read those files and pass the body to `gh pr create --body-file`, so
+  PR quality does not regress without copying the documents into the
+  orchestrator transcript.
 - Gates stay with the main loop: attempts, waiting for CI, arch-review, the conform
   gate, human-checkpoints, escalations. Workflow does only the burst work and
   returns structured verdicts — you make the decisions.
@@ -1355,7 +1357,7 @@ may be dispatched at all: fix the file.
      creating all worktrees — `Workflow({scriptPath: <workflows/executors.mjs>,
      args: {tickets: [{id, title, planPath, branch, worktreePath, prBase, model, effort,
      reuseCandidates}], deliveryRulesHint, prBodyGuide, artifactLanguage}})`. Returns
-     `{id, status: committed|blocked, evidence, prBody}` per ticket.
+     `{id, status: committed|blocked, prBodyPath, evidencePath, summary}` per ticket.
      `reuseCandidates` is that ticket's `reuse_candidates` from Step 2 (omit when the
      ticket skipped drift-check or the list was empty).
    - **Fallback**: several executor `Agent`s in one message. Independent tickets —
@@ -1381,8 +1383,10 @@ may be dispatched at all: fix the file.
     id, because the cap counts DISTINCT agents and the id is the only thing that tells
     two of them apart. On the Workflow path one task id covers the whole batch, and
     that is correct — an executor is one agent per ticket whatever the id says, so
-    there the id is provenance and not a count. Keep it in your turn too: it is still
-    what you correlate the completion with, and the recorder's returned `dispatch_id` is what you clear against.
+    there the id is provenance and not a count. The recorder also prints a generated
+    `dispatch_id`; capture that value from the `mark` result and keep it in your turn.
+    The launch `agent_id` identifies the holder, while the generated `dispatch_id`
+    is the compare-and-delete identity used to clear this ticket safely.
     **Marking first is how the board comes to describe an agent that does not
     exist**: a launch that fails (the tool refused, Workflow is absent on this
     runtime and the Agent fallback was not taken) leaves a 90-minute dispatch the
@@ -1404,7 +1408,8 @@ may be dispatched at all: fix the file.
 
 **Phase C — gate and publish (main loop, per ticket).** Never delegate this.
 
-4c. The executor has returned, so the ticket is yours again:
+4c. The executor has returned, so the ticket is yours again. Clear the exact
+   dispatch returned by the launch, before the gates below:
    `dispatch-record.cjs clear <T> <dispatch_id>`. Do this BEFORE the gates below — their verdict
    (including `blocked`) is a fact about a ticket nobody is working on, and a
    record left standing over an escalation would hide it from the next run for as
@@ -1439,8 +1444,9 @@ may be dispatched at all: fix the file.
    A violation is a decision, never a retry: revert the stray edit and escalate
    (it belongs to another ticket), or re-plan the ticket with the path declared.
 6. There are commits → push the branch (`git -C <worktree> push -u origin <branch>`),
-   then `gh pr create --base <state[T].base> --head <branch> --draft
-   --title "<T>: <title>" --body <the agent's prBody>` (add
+   then read the returned `prBodyPath` (and `evidencePath` when recording the
+   verification) from the worktree and run `gh pr create --base <state[T].base> --head <branch> --draft
+   --title "<T>: <title>" --body-file <prBodyPath>` (add
    `--repo <state[T].repo>` for a foreign-repo ticket).
    `--base` is the RESOLVED base of the ticket, NOT main directly in
    epic-stacked. **The base is one field with two jobs: it decides what the

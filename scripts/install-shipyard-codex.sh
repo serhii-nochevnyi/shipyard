@@ -178,27 +178,18 @@ replace_dir() {
   return "$status"
 }
 runtime_backup_key() {
-  local target="$1" cached
-  cached="${RUNTIME_BACKUP_KEYS[$target]:-}"
-  if [[ -n "$cached" ]]; then
-    printf '%s' "$cached"
-    return 0
-  fi
-  cached="$(node -e "const crypto=require('crypto');process.stdout.write(crypto.createHash('sha256').update(process.argv[1]).digest('hex'))" "$target")"
-  RUNTIME_BACKUP_KEYS["$target"]="$cached"
-  printf '%s' "$cached"
+  node -e "const crypto=require('crypto');process.stdout.write(crypto.createHash('sha256').update(process.argv[1]).digest('hex'))" "$1"
 }
 snapshot_runtime_path() {
   local kind="$1" name="$2" target="$3"
-  local state=absent backup_path seen_key
+  local state=absent backup_path
   case "$target" in
     *$'\t'* | *$'\n'*)
       echo "error: refusing to snapshot a runtime path whose name cannot be recorded safely: $target" >&2
       exit 1
       ;;
   esac
-  seen_key="$target"
-  if [[ -n "${RUNTIME_BACKUP_SEEN[$seen_key]+x}" ]]; then
+  if awk -F '\t' -v target="$target" '$4 == target { found=1; exit } END { exit found ? 0 : 1 }' "$RUNTIME_BACKUP_INDEX"; then
     return 0
   fi
   backup_path="$RUNTIME_BACKUP/$(runtime_backup_key "$target")"
@@ -207,15 +198,12 @@ snapshot_runtime_path() {
     cp -a "$target" "$backup_path"
     state=present
   fi
-  RUNTIME_BACKUP_SEEN["$seen_key"]=1
   printf '%s\t%s\t%s\t%s\n' "$state" "$kind" "$name" "$target" >> "$RUNTIME_BACKUP_INDEX"
 }
 trap 'cleanup $?' EXIT
 OUT="$STAGE/bundle-out"
 RUNTIME_BACKUP="$STAGE/runtime-before"
 RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
-declare -A RUNTIME_BACKUP_SEEN=()
-declare -A RUNTIME_BACKUP_KEYS=()
 mkdir -p "$RUNTIME_BACKUP"
 : > "$RUNTIME_BACKUP_INDEX"
 
@@ -515,11 +503,15 @@ AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
 snapshot_runtime_path agents-md main "$AGENTS_MD"
 echo "→ ensuring shipyard auto-route block in $AGENTS_MD"
 mkdir -p "$(dirname "$AGENTS_MD")"
-CODEX_AGENTS_MD="$AGENTS_MD" node - <<'NODE'
+SHIPYARD_INSTALL_PHASE="$PHASE" CODEX_AGENTS_MD="$AGENTS_MD" node - <<'NODE'
 const fs = require('fs');
 const p = process.env.CODEX_AGENTS_MD;
+const phase = Number(process.env.SHIPYARD_INSTALL_PHASE || 2);
 const BEGIN = '<!-- shipyard-auto-route:begin -->';
 const END = '<!-- shipyard-auto-route:end -->';
+const largeRoute = phase >= 2
+  ? '  large / multi-ticket -> `$shipyard-decompose` -> `$shipyard-deliver`; a small'
+  : '  large / multi-ticket -> `$shipyard-decompose`; install phase 2 before delivery; a small';
 const block = `${BEGIN}
 ## shipyard auto-route (managed by shipyard install — do not edit between markers)
 
@@ -527,7 +519,7 @@ When a message defines a scope of work or asks to implement / build / change /
 fix something in a codebase, handle it through shipyard rather than ad hoc — do
 not wait to be told to run a command:
 - Use the shipyard router \`$shipyard-route\` to size and dispatch the work:
-  large / multi-ticket -> \`$shipyard-decompose\` -> \`$shipyard-deliver\`; a small
+${largeRoute}
   change, an existing ticket, or "no ticket" -> \`$shipyard-bench\`; a one-liner ->
   inline.
 - Research first (proportionate) and apply GSD at full across stages
