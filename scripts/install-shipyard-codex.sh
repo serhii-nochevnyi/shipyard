@@ -103,7 +103,7 @@ restore_agents() {
 restore_runtime_paths() {
   local index="${RUNTIME_BACKUP_INDEX:-}"
   local backup="${RUNTIME_BACKUP:-}"
-  local state kind name target restore_status=0 backup_path restore_tmp
+  local state kind name target restore_status=0 backup_path restore_tmp copy_status
   [[ -n "$index" && -f "$index" && -n "$backup" ]] || return 0
   while IFS=$'\t' read -r state kind name target; do
     [[ -n "$kind" && -n "$name" ]] || continue
@@ -123,7 +123,14 @@ restore_runtime_paths() {
       mkdir -p "$(dirname "$target")" || restore_status=1
       restore_tmp="${target}.restore-$$"
       rm -rf "$restore_tmp" || restore_status=1
-      if cp -a "$backup_path" "$restore_tmp" && mv "$restore_tmp" "$target"; then
+      copy_status=0
+      if [[ -L "$backup_path" || ! -d "$backup_path" ]]; then
+        cp -a "$backup_path" "$restore_tmp" || copy_status=1
+      else
+        mkdir -p "$restore_tmp" || copy_status=1
+        cp -a "$backup_path/." "$restore_tmp/" || copy_status=1
+      fi
+      if [[ "$copy_status" == 0 ]] && mv "$restore_tmp" "$target"; then
         :
       else
         restore_status=1
