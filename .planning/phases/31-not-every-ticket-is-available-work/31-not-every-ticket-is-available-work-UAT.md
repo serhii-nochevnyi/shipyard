@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fa5303a77ad014941811c8ab0889764b44d882ceb30140f4383311d66c09b7a2
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 16440c72f52e6fe4b10995d69e9f3446f1f6c51ce3ff27d7af9d1a0bdf17ebf8
 phase: 31
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: fa5303a77ad014941811c8ab0889764b44d882ceb30140f4383311d66c09b7a2
+shipyard_source_fingerprint: 16440c72f52e6fe4b10995d69e9f3446f1f6c51ce3ff27d7af9d1a0bdf17ebf8
 ---
 
 # Phase 31: Not every ticket is available work — UAT Projection
@@ -24,4 +24,4 @@ actual: pending — INTEGRATION.md is missing
 ### 3. Phase verification is evidence-backed
 result: pending
 expected: the phase verification projection is not green without evidence
-actual: pending
+actual: pending; pending — INTEGRATION.md is missing verification evidence

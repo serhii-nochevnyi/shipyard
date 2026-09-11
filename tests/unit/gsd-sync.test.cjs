@@ -15,7 +15,7 @@ function write(file, content) {
   fs.writeFileSync(file, content);
 }
 
-function project({ integration = 'Verdict: passed', merged = true, conflict = false, plan = 1, coreValue = 'One truthful workflow' } = {}) {
+function project({ integration = 'Verdict: passed\n\n## Verification evidence\n\n- `node --test` passed', merged = true, conflict = false, plan = 1, coreValue = 'One truthful workflow' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-sync-'));
   const graph = path.join(root, '.planning', 'graph');
   const phase = path.join(root, '.planning', 'phases', '01-foundation');
@@ -54,6 +54,7 @@ test('canonicalizes ticket identities and rejects malformed CLI flags', () => {
   assert.equal(sync.canonicalTicket('2', 1), 'T-01-02');
   assert.equal(sync.integrationStatus('Round 1 was needs-fix\n## Verdict — `passed`').status, 'passed');
   assert.equal(sync.integrationStatus('## Verdict — failed (previously passed)').status, 'needs-fix');
+  assert.match(sync.parseRoadmap('- **REQ-01** — first line +\n  continuation line').requirements[0].description, /first line \+ continuation line/);
   const r = spawnSync(process.execPath, [SCRIPT, '--phase'], { cwd: ROOT, encoding: 'utf8' });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /--phase requires/);
@@ -133,6 +134,16 @@ test('does not convert needs-fix integration into a green phase', () => {
   assert.match(uat, /result: failed/);
   assert.match(verification, /status: gaps_found/);
   assert.match(verification, /needs-fix|finding/i);
+});
+
+test('requires independent verification evidence before marking a phase passed', () => {
+  const root = project({ integration: '## Verdict — passed\n\nNo verification command was recorded.' });
+  assert.equal(run(root).status, 0);
+  const dir = path.join(root, '.planning', 'phases', '01-foundation');
+  const verification = fs.readFileSync(path.join(dir, '01-foundation-VERIFICATION.md'), 'utf8');
+  assert.match(verification, /status: human_needed/);
+  assert.match(verification, /Verification evidence is present/);
+  assert.match(verification, /UNCERTAIN/);
 });
 
 test('refuses to overwrite an unowned generated artifact', () => {

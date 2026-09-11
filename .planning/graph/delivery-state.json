@@ -889,7 +889,7 @@
     "pr_base": "epic/35-gsd-and-shipyard-workflow-loop",
     "pr_created_at": "2026-09-10T18:53:33Z",
     "head_sha": "2814f5ec2b4465ae5faab308cfc45d72783ccc18",
-    "merge_state": "UNSTABLE",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "gate": {
       "arch-review": "conform",
@@ -901,7 +901,7 @@
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -921,9 +921,9 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/101",
     "pr_base": "ticket/T-35-02-wire-synchronization-into-both-gsd-runti",
     "pr_created_at": "2026-09-10T18:58:20Z",
-    "head_sha": "a58fb8bf5b5672a40dada441e9ef5af8f69fb5a2",
-    "merge_state": "UNKNOWN",
-    "behind_by": 4,
+    "head_sha": "a0fd33f5df17fae4efac4b3cfe45aee6d2f06533",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "gate": {
       "arch-review": "conform",
       "drift-check": "fresh",
