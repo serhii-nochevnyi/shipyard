@@ -900,7 +900,7 @@ human's, so GSD's "no auto-merge" boundary is preserved where it matters.
   `uat-gate.cjs ${PHASE_NUMBER}` wraps the fail-closed predicate
   `phase uat-passed` — /gsd-ship will not pass without verification evidence
   (switch: `delivery_pipeline.uat_gate`). Without a phase in context — skip.
-- **GSD projection gates** (capability v0.51.0): `gsd-sync.cjs` writes after
+- **GSD projection gates** (capability v0.51.1): `gsd-sync.cjs` writes after
   `plan:post`, `execute:post`, and `verify:post`, then runs in `--check` mode at
   `ship:pre` (switch: `delivery_pipeline.gsd_sync`). The launcher is inert when
   no plan carries a Shipyard `delivery:` block, so ordinary GSD projects are not
