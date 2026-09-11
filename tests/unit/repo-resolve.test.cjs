@@ -284,6 +284,7 @@ test('clone command is full and proves the requested origin base ref', () => {
 
   assert.strictEqual(result.executable, true, result.reason);
   assert.strictEqual(result.resolution, 'cloned');
+  assert.strictEqual(result.config_written, true);
   assert.strictEqual(result.base_ref, 'origin/epic/base');
   assert.strictEqual(result.base_verified, true);
   assert.strictEqual(result.repository_root, fs.realpathSync(destination));
@@ -292,6 +293,8 @@ test('clone command is full and proves the requested origin base ref', () => {
     args: ['clone', source, destination],
   }]);
   assert.strictEqual(git(destination, ['rev-parse', '--verify', 'refs/remotes/origin/epic/base^{commit}']).length, 40);
+  const persisted = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf8'));
+  assert.strictEqual(persisted.pipeline.repos['acme/service'], fs.realpathSync(destination));
 });
 
 test('clone parks a checkout when the required origin base is missing', () => {
@@ -370,6 +373,110 @@ test('an existing non-git or mismatched destination is refused untouched', () =>
     assert.match(result.park_reason, expected);
     assert.deepStrictEqual(fs.readdirSync(destination).sort(), before);
   }
+});
+
+test('successful resolution writes one canonical path and the next cold start uses it', () => {
+  const projectDir = isolatedProject({ custom_setting: 'keep-me' });
+  const parent = path.dirname(projectDir);
+  const checkout = repoAt(path.join(parent, 'service-with-an-unrelated-name'), 'git@github.com:acme/service.git');
+  const first = mod.resolveAndPersistRepository({
+    repo: 'acme/service',
+    config: { repos: {} },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(first.resolution, 'discovered');
+  assert.strictEqual(first.executable, true, first.reason);
+  assert.strictEqual(first.config_written, true);
+
+  const file = path.join(projectDir, '.planning', 'config.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(raw.pipeline.custom_setting, 'keep-me');
+  assert.strictEqual(raw.pipeline.repos['acme/service'], checkout);
+
+  const loaded = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'));
+  const second = mod.resolveAndPersistRepository({
+    repo: 'acme/service',
+    config: loaded.loadConfig(projectDir).config,
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(second.resolution, 'configured');
+  assert.strictEqual(second.executable, true);
+  assert.strictEqual(second.repository_root, checkout);
+});
+
+test('write-back prefers delivery_pipeline and preserves the legacy namespace', () => {
+  const projectDir = isolatedProject({});
+  const file = path.join(projectDir, '.planning', 'config.json');
+  const checkout = repoAt(path.join(path.dirname(projectDir), 'preferred-service'), 'git@github.com:acme/service.git');
+  fs.writeFileSync(file, JSON.stringify({
+    keep: { owner: 'operator' },
+    pipeline: { repos: { 'legacy/keep': '/legacy/path' }, old_key: true },
+    delivery_pipeline: {
+      models: { executor: 'opus' },
+      repos: { 'legacy/preferred': '/preferred/path' },
+    },
+  }, null, 2) + '\n');
+
+  const result = mod.persistResolvedRepository(projectDir, 'acme/service', checkout);
+  assert.strictEqual(result.valid, true);
+  assert.strictEqual(result.written, true);
+  assert.strictEqual(result.namespace, 'delivery_pipeline');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepStrictEqual(raw.keep, { owner: 'operator' });
+  assert.deepStrictEqual(raw.pipeline, { repos: { 'legacy/keep': '/legacy/path' }, old_key: true });
+  assert.strictEqual(raw.delivery_pipeline.models.executor, 'opus');
+  assert.strictEqual(raw.delivery_pipeline.repos['legacy/preferred'], '/preferred/path');
+  assert.strictEqual(raw.delivery_pipeline.repos['acme/service'], checkout);
+
+  const before = fs.readFileSync(file, 'utf8');
+  const repeated = mod.persistResolvedRepository(projectDir, 'acme/service', checkout);
+  assert.strictEqual(repeated.valid, true);
+  assert.strictEqual(repeated.written, false);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), before, 'an unchanged path must not rewrite config');
+});
+
+test('unparseable or malformed config is refused without changing the file', () => {
+  const projectDir = isolatedProject({});
+  const file = path.join(projectDir, '.planning', 'config.json');
+  const checkout = repoAt(path.join(path.dirname(projectDir), 'unparseable-service'), 'git@github.com:acme/service.git');
+  for (const contents of ['{broken\n', JSON.stringify({ pipeline: { repos: [] } }, null, 2) + '\n']) {
+    fs.writeFileSync(file, contents);
+    const before = fs.readFileSync(file, 'utf8');
+    const result = mod.persistResolvedRepository(projectDir, 'acme/service', checkout);
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(result.written, false);
+    assert.match(result.reason, /write-back refused/);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), before);
+  }
+});
+
+test('a config write failure parks only the resolved repository with its reason', () => {
+  const projectDir = isolatedProject({});
+  const file = path.join(projectDir, '.planning', 'config.json');
+  fs.writeFileSync(file, '{broken\n');
+  const checkout = repoAt(path.join(path.dirname(projectDir), 'parked-service'), 'git@github.com:acme/service.git');
+  const result = mod.resolveAndPersistRepository({
+    repo: 'acme/service',
+    config: { repos: {} },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.resolution, 'config-write-failed');
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolved_repository_root, checkout);
+  assert.match(result.park_reason, /config write-back was refused/);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken\n');
+});
+
+test('an invalid repository root refuses discovery instead of falling back to the project parent', () => {
+  const projectDir = isolatedProject({});
+  const result = mod.resolveRepository({
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: null },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'invalid-policy');
+  assert.match(result.reason, /repos_root is invalid/);
 });
 
 test('discovery matches origin rather than the directory basename and scans one level', () => {
@@ -640,10 +747,15 @@ test('state-sync and deliver name the repository resolver caller', () => {
   const stateSync = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'), 'utf8');
   const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
   assert.match(stateSync, /require\(path\.join\(__dirname, 'repo-resolve\.cjs'\)\)/);
-  assert.match(stateSync, /resolveRepository\(\{ repo, config: cfg, projectRoot: ROOT \}\)/);
+  assert.match(stateSync, /resolveAndPersistRepository\(\{/);
+  assert.match(stateSync, /configValid: CFG_VALID/);
+  assert.match(stateSync, /repo_resolution/);
   assert.match(deliver, /repo-resolve\.cjs resolve <owner\/name>/);
   assert.match(deliver, /repo-resolve\.cjs choose <owner\/name>/);
   assert.match(deliver, /escalation-record\.cjs mark <T-id>/);
+  assert.match(deliver, /repo-resolve\.cjs clone <owner\/name>/);
+  assert.match(deliver, /atomically|atomic/i);
+  assert.match(deliver, /inaccessible or\s+nonexistent/);
   assert.match(deliver, /resolution: "discovered"/);
 });
 

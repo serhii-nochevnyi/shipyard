@@ -736,6 +736,17 @@ Consequences you must honour:
   records the safe `clone_url`, protocol, validated destination, and intent; it
   does not run `git clone` in this resolver step. Never let gh's global git
   protocol preference choose the URL.
+- **An explicit clone is a delivery action.** After the operator chooses clone,
+  use the state entry's effective `base` and the safe values returned by `choose`:
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs clone <owner/name> \
+  --ticket <T-id> --project-dir <project-root> --destination <validated-destination> \
+  --base <state[T-id].base> --clone-url <safe-clone-url> --json`. This performs a
+  full clone, verifies `refs/remotes/origin/<base>`, and writes the canonical
+  checkout path back to `.planning/config.json` atomically while preserving the
+  other keys. A failed clone, missing base, or refused config write returns a
+  track-only result with a `park_reason`; park that ticket and continue the rest
+  of the board. A 404 from GitHub says the repository is inaccessible or
+  nonexistent; it does not prove which one.
 - **Silence selects skip.** In a text-mode or unattended run, omit the choice
   and pass `--non-interactive`; the result is `resolution: "track-only"`,
   `decision: "skip"`, and a non-empty `park_reason`. Immediately make that
