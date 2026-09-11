@@ -130,6 +130,7 @@ restore_runtime_paths() {
         mkdir -p "$restore_tmp" || copy_status=1
         cp -a "$backup_path/." "$restore_tmp/" || copy_status=1
       fi
+      rm -rf "$target" || copy_status=1
       if [[ "$copy_status" == 0 ]] && mv "$restore_tmp" "$target"; then
         :
       else
