@@ -711,7 +711,7 @@ test('an hour-old dispatch does not, and the refusal names it', () => {
   assert.ok(v && v.decision === 'block', 'a mark this old is not evidence anyone is working');
   assert.ok(/T-01-02/.test(v.reason), 'the refusal names the ticket');
   assert.ok(/dispatch-record\.cjs clear/.test(v.reason), 'and how to return it to the board');
-  assert.ok(v.reason.includes('dispatch-record.cjs clear T-01-02 dispatch-stale-1'),
+  assert.ok(v.reason.includes("dispatch-record.cjs clear 'T-01-02' 'dispatch-stale-1'"),
     'the cleanup command names the dispatch record, not the ticket-array lookup');
   assert.ok(/ci-wait\.cjs/.test(v.reason), 'while still naming the wait, which is the actual next move');
 });
@@ -733,7 +733,8 @@ test('a cleanup command quotes a graph path containing spaces', () => {
   const v = runIn(dir, { session_id: 'sess-spaced-path' });
   const graph = fs.realpathSync(path.join(dir, '.planning', 'graph'));
   assert.ok(v && v.decision === 'block');
-  assert.ok(v.reason.includes(`--graph '${graph}'`), 'the graph argument must remain one shell word');
+  assert.ok(v.reason.includes(`dispatch-record.cjs clear 'T-01-02' 'dispatch-spaced-path' --graph '${graph}'`),
+    'all dynamic command arguments must remain one shell word');
 });
 
 test('a dispatched ticket with no record keeps the hatch open', () => {

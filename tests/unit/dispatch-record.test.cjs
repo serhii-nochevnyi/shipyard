@@ -635,6 +635,7 @@ test('clear-many rejects duplicate or malformed ids before mutating the store', 
   for (const input of [
     [{ ticket: 'T-01-01', dispatch_id: 'd' }, { ticket: 'T-01-01', dispatch_id: 'e' }],
     [{ ticket: 'T-01-01', dispatch_id: 7 }],
+    [{ ticket: 'T-01-01', dispatch_id: 'd', disptach_id: 'typo' }],
     {},
   ]) {
     const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {

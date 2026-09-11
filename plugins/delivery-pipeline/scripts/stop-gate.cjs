@@ -621,7 +621,7 @@ const goneText = () => {
       'happened looks like. If that work really is out it will wake you; if it is gone, return the\n' +
       (suspectDispatchId
         ? 'ticket to the board with\n' +
-          `  \`dispatch-record.cjs clear ${suspectId} ${suspectDispatchId} --graph ${shellQuote(graphDir)}\`\n`
+          `  \`dispatch-record.cjs clear ${shellQuote(suspectId)} ${shellQuote(suspectDispatchId)} --graph ${shellQuote(graphDir)}\`\n`
         : 'ticket to the board only after checking `.planning/graph/dispatches.json`: this record is\n' +
           'missing `dispatch_id`, so no exact clear command can be suggested.\n' +
           `  Once you have the recorded id, re-run \`dispatch-record.cjs clear\` for ticket ${suspectId} with that id and\n` +

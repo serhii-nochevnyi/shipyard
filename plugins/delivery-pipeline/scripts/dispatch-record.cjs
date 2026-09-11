@@ -686,6 +686,12 @@ function parseClearBatch(raw) {
       throw new Error(`clear-many item ${index + 1} must be an object with ticket and dispatch_id`);
     }
     const { ticket, dispatch_id: dispatchId } = item;
+    const unsupported = Object.keys(item).filter((key) => !['ticket', 'dispatch_id'].includes(key));
+    if (unsupported.length) {
+      throw new Error(
+        `clear-many item ${index + 1} has unsupported field "${unsupported[0]}" — use only ticket and dispatch_id`
+      );
+    }
     if (typeof ticket !== 'string' || ticket.trim() === '') {
       throw new Error(`clear-many item ${index + 1} must carry a non-empty ticket id`);
     }
