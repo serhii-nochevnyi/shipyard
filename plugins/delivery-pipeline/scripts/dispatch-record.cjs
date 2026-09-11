@@ -1181,16 +1181,25 @@ if (require.main === module) {
     const why = opaqueDispatchValueIssue(dispatchId);
     if (why !== null) fail(`clear dispatch_id cannot be recorded: ${why}`);
     let cleared = false;
+    let currentDispatchId = null;
     mutate(cwd, (store) => {
       const current = store.tickets[ticket];
-      if (!current || current.dispatch_id !== dispatchId) return;
+      if (!current) return;
+      currentDispatchId = current.dispatch_id || null;
+      if (current.dispatch_id !== dispatchId) return;
       delete store.tickets[ticket];
       cleared = true;
     });
     if (cleared) {
       refreshFront(cwd);
     }
-    console.log(cleared ? `dispatch cleared for ${ticket} — it is the board's again` : `no dispatch recorded for ${ticket}`);
+    console.log(
+      cleared
+        ? `dispatch cleared for ${ticket} — it is the board's again`
+        : (currentDispatchId
+          ? `dispatch for ${ticket} is ${currentDispatchId}, not ${dispatchId} — leaving the newer record in place`
+          : `no dispatch recorded for ${ticket}`)
+    );
   } else if (cmd === 'clear-many') {
     if (rest.length !== 1 || rest[0] !== '--stdin') {
       fail(

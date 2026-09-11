@@ -651,7 +651,7 @@ test('clear requires dispatch_id and leaves a newer dispatch in place', () => {
 
   const stale = run(['clear', 'T-01-01', oldId], project);
   assert.equal(stale.status, 0, stale.stderr);
-  assert.match(stale.stdout, /no dispatch recorded for T-01-01/);
+  assert.match(stale.stdout, new RegExp(`dispatch for T-01-01 is ${currentId}, not ${oldId}`));
   assert.equal(store(graph)['T-01-01'].dispatch_id, currentId);
 
   const ok = run(['clear', 'T-01-01', currentId], project);
