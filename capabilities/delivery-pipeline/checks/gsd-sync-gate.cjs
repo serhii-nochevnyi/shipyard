@@ -57,7 +57,10 @@ if (!plans.length) pass('no *-PLAN.md files under .planning/phases');
 const hasDelivery = plans.some((file) => {
   const text = fs.readFileSync(file, 'utf8');
   const frontmatter = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
-  return frontmatter ? /^delivery:/m.test(frontmatter[1]) : false;
+  // A truncated plan can contain the delivery marker but no closing
+  // frontmatter fence. Keep it applicable so the canonical synchronizer can
+  // report malformed source instead of letting ship:pre pass as a no-op.
+  return /^\s*delivery\s*:/m.test(frontmatter ? frontmatter[1] : text);
 });
 if (!hasDelivery) pass(`none of the ${plans.length} plan(s) carry a delivery: block`);
 
