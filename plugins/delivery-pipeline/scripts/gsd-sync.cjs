@@ -648,7 +648,7 @@ function renderVerification(phase, evidence, fingerprint, lastActivity) {
     '## Verification Commands',
     '',
     '- `node plugins/delivery-pipeline/scripts/gsd-sync.cjs --check --json`',
-    '- `node /Users/serhii/.codex/gsd-core/bin/gsd-tools.cjs phase uat-passed ' + phase.number + ' --raw`',
+    '- `gsd-tools phase uat-passed ' + phase.number + ' --raw`',
     '',
     '## Gaps Summary',
     '',
