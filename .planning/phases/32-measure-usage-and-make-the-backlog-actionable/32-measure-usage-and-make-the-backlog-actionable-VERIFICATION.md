@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2fbe98ffd137a924016bae288ee8df2784ca91bf2f628ed741e5d6c654793ccb
 phase: 32
 status: passed
-shipyard_source_fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc7a652cd38a1a2
+shipyard_source_fingerprint: 2fbe98ffd137a924016bae288ee8df2784ca91bf2f628ed741e5d6c654793ccb
 ---
 
 # Phase 32: Measure usage and make the backlog actionable — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 2/2 delivery records are merged | ✓ VERIFIED |
+| Every phase plan is accounted for | 7/7 delivery records are merged | ✓ VERIFIED |
 | Integration is coherent | integration evidence records passed | ✓ VERIFIED |
 | Verification evidence is present | integration evidence records repository-local verification facts | ✓ VERIFIED |
 
@@ -23,6 +23,11 @@ shipyard_source_fingerprint: 8d3d28ac81933e3d25bcc79d6f2158e6569f31be64e802a9fdc
 |---|---|---|
 | T-32-01 | merged | ✓ VERIFIED |
 | T-32-02 | merged | ✓ VERIFIED |
+| T-32-03 | merged | ✓ VERIFIED |
+| T-32-04 | merged | ✓ VERIFIED |
+| T-32-05 | merged | ✓ VERIFIED |
+| T-32-06 | merged | ✓ VERIFIED |
+| T-32-07 | merged | ✓ VERIFIED |
 
 ## Verification Commands
 

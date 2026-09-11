@@ -909,3 +909,8 @@
 {"ts":"2026-09-11T07:24:03.333Z","event":"status_change","ticket":"T-35-01","from":"pr-open","to":"merged","pr":96}
 {"ts":"2026-09-11T07:52:18.043Z","event":"status_change","ticket":"T-35-02","from":"pr-open","to":"merged","pr":98}
 {"ts":"2026-09-11T08:00:15.458Z","event":"status_change","ticket":"T-35-03","from":"pr-open","to":"merged","pr":101}
+{"ts":"2026-09-11T18:59:59.751Z","event":"status_change","ticket":"T-32-06","from":null,"to":"merged","pr":95}
+{"ts":"2026-09-11T18:59:59.751Z","event":"status_change","ticket":"T-32-03","from":null,"to":"merged","pr":97}
+{"ts":"2026-09-11T18:59:59.751Z","event":"status_change","ticket":"T-32-04","from":null,"to":"merged","pr":99}
+{"ts":"2026-09-11T18:59:59.751Z","event":"status_change","ticket":"T-32-05","from":null,"to":"merged","pr":100}
+{"ts":"2026-09-11T18:59:59.751Z","event":"status_change","ticket":"T-32-07","from":null,"to":"merged","pr":102}

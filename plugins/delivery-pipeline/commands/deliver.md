@@ -1028,7 +1028,12 @@ itself a STOP signal, not a reason to improvise.
    c. if there are no external tickets — route to /shipyard:decompose.
    NEVER construct tickets.json by hand, bypassing validate-graph.
 2. `state-sync.cjs` — rebuild delivery-state from the actual GitHub
-   (the local file is just a cache).
+   (the local file is just a cache). After publishing delivery-state and the
+   front, this command invokes `gsd-sync.cjs` to publish the native GSD read
+   model from the same snapshot. That finalization is part of state-sync, so
+   every manual delivery round and every babysit round closes the projection
+   boundary before the board is shown. It honors `delivery_pipeline.gsd_sync: false`;
+   otherwise a projection refusal is a delivery error.
 2a. **`epic-branch.sh refresh <epic>` — let each LIVE epic learn what landed
    under it.** Nothing in delivery used to merge the base INTO an epic at all:
    two epics were measured 27 then 31 commits behind, each containing zero
@@ -1492,6 +1497,7 @@ may be dispatched at all: fix the file.
    `<T>: ` — this is the second anchor of the same matching.
 7. Immediately the first `reviewers.cjs reinit <pr>`.
 8. Update delivery-state (`state-sync.cjs`) — once, AFTER all of Phase C.
+   This also finalizes the native GSD projection after the delivery facts land.
 
 File conflicts between parallel tickets are ruled out by Gate 2.
 
@@ -1894,11 +1900,12 @@ is a fixer with no memory. Until each PR is green or park-blocked — and do NOT
 stop at that: move on to the recomputation of the front below.
 
 **Loop-back to the fixpoint (after each round/merge — mandatory).**
-1. `state-sync.cjs` — fresh state and board. Then, as a SEPARATE act and from
-   the project directory, the tracker projection (see "Tracker projection — the
-   acting half"): it is bookkeeping, so it is neither actionable nor a reason to
-   block — the watermark makes catch-up free, and a round that skips it costs
-   one round of tracker lag that the next round closes.
+1. `state-sync.cjs` — fresh state and board, followed by the native GSD
+   projection finalization from that same published snapshot. Then, as a
+   SEPARATE act and from the project directory, run the tracker projection (see
+   "Tracker projection — the acting half"): it is bookkeeping, so it is neither
+   actionable nor a reason to block — the watermark makes catch-up free, and a
+   round that skips it costs one round of tracker lag that the next round closes.
 2. Recompute the actionable front (the Principle at the top): new `ready` (unblocked
    children, cascade dependents) + `branched-needs-pr` + open non-green PRs.
 3. Front NOT empty → add the new ready ones to scope, return to Step 2/3 for them;
@@ -1976,7 +1983,8 @@ is `ci-wait.cjs`'s (loop-back item 5) — not a stop. "Merge everything" is done
 the board says `fixpoint: YES`, not when the first ticket lands.
 
 After each parent merge:
-- rerun `state-sync.cjs` — the children of the merged parent will get the base `epic`;
+- rerun `state-sync.cjs` — the children of the merged parent will get the base
+  `epic`, and the same run finalizes the native GSD projection;
 - retarget their open PRs: `epic-branch.sh retarget <child-pr> <epic>`
   (GitHub often does this itself, and `sentinel.cjs merge` does it for the children
   it can see; the command stays idempotent);

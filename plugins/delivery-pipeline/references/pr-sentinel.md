@@ -37,7 +37,7 @@ so "go to 1" after a fix means `cd` back first. They fail loudly rather than
 guessing, but the message names a missing graph, which is not what went wrong.
 
 ```text
-1. node $SHIPYARD_ROOT/scripts/state-sync.cjs            # live GitHub → state
+1. node $SHIPYARD_ROOT/scripts/state-sync.cjs            # live GitHub → state + gsd-sync projection
 2. node $SHIPYARD_ROOT/scripts/sentinel.cjs duty --json  # what each PR needs now
 3. serve every actionable item (below); items are independent — order them by
    what is unblocked, not by ticket number

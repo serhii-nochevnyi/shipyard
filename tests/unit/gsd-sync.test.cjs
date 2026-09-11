@@ -15,6 +15,16 @@ function write(file, content) {
   fs.writeFileSync(file, content);
 }
 
+function testEnv(root) {
+  const env = { ...process.env, HOME: path.join(root, 'home') };
+  for (const key of Object.keys(env)) {
+    if (/^(?:SHIPYARD_|GSD_|CLAUDE_|CODEX_)/.test(key)
+        || key === 'NODE_OPTIONS' || key === 'NODE_PATH') delete env[key];
+  }
+  fs.mkdirSync(env.HOME, { recursive: true });
+  return env;
+}
+
 function project({ integration = 'Verdict: passed\n\n## Verification evidence\n- node --test tests/unit/gsd-sync.test.cjs: exit 0', merged = true, conflict = false, plan = 1, coreValue = 'One truthful workflow' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-sync-'));
   const graph = path.join(root, '.planning', 'graph');
@@ -44,7 +54,11 @@ function project({ integration = 'Verdict: passed\n\n## Verification evidence\n-
 }
 
 function run(root, args = []) {
-  return spawnSync(process.execPath, [SCRIPT, '--json', ...args], { cwd: root, encoding: 'utf8' });
+  return spawnSync(process.execPath, [SCRIPT, '--json', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    env: testEnv(root),
+  });
 }
 
 suite('gsd-sync — evidence projection');
@@ -55,7 +69,11 @@ test('canonicalizes ticket identities and rejects malformed CLI flags', () => {
   assert.equal(sync.integrationStatus('Round 1 was needs-fix\n## Verdict — `passed`').status, 'passed');
   assert.equal(sync.integrationStatus('## Verdict — failed (previously passed)').status, 'needs-fix');
   assert.equal(sync.verificationEvidence('## Verdict — `passed`').status, 'pending');
-  const r = spawnSync(process.execPath, [SCRIPT, '--phase'], { cwd: ROOT, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [SCRIPT, '--phase'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: testEnv(ROOT),
+  });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /--phase requires/);
 });
@@ -237,6 +255,42 @@ test('ignores volatile delivery-front metadata in the source fingerprint', () =>
   assert.equal(fs.readFileSync(path.join(root, '.planning', 'ROADMAP.md'), 'utf8'), before);
 });
 
+test('ignores heartbeat fields in delivery-state while tracking rendered facts', () => {
+  const root = project();
+  const first = run(root);
+  assert.equal(first.status, 0, first.stderr);
+  const initial = JSON.parse(first.stdout);
+  const stateFile = path.join(root, '.planning', 'graph', 'delivery-state.json');
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  state['T-01-01'].merge_state = 'CLEAN';
+  state['T-01-01'].review_decision = 'APPROVED';
+  state['T-01-01'].checks = { state: 'green', checked_at: '2026-09-11T08:00:00Z' };
+  state['T-01-01'].head_sha = '1111111111111111111111111111111111111111';
+  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+
+  const check = run(root, ['--check']);
+  assert.equal(check.status, 0, check.stderr || check.stdout);
+  const current = JSON.parse(check.stdout);
+  assert.equal(current.source_fingerprint, initial.source_fingerprint);
+});
+
+test('delivery facts invalidate the projection fingerprint', () => {
+  const root = project();
+  const first = run(root);
+  assert.equal(first.status, 0, first.stderr);
+  const initial = JSON.parse(first.stdout);
+  const stateFile = path.join(root, '.planning', 'graph', 'delivery-state.json');
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  state['T-01-01'].status = 'pr-open';
+  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+
+  const check = run(root, ['--check']);
+  assert.equal(check.status, 1);
+  const current = JSON.parse(check.stdout);
+  assert.notEqual(current.source_fingerprint, initial.source_fingerprint);
+  assert.ok(current.blockers.some((item) => /stale|missing/.test(item)), current.blockers.join('; '));
+});
+
 test('does not convert needs-fix integration into a green phase', () => {
   const root = project({ integration: 'Verdict: needs-fix' });
   assert.equal(run(root).status, 0);
@@ -302,9 +356,20 @@ test('does not stamp a global activity date as phase verification', () => {
 });
 
 test('adopts existing native artifacts only when explicitly requested', () => {
+  const humanRoot = project({ conflict: true });
+  const human = spawnSync(process.execPath, [SCRIPT, '--adopt-native'], {
+    cwd: humanRoot,
+    encoding: 'utf8',
+    env: testEnv(humanRoot),
+  });
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /native adoption — \.planning\/STATE\.md/);
+
   const root = project({ conflict: true });
   const r = run(root, ['--adopt-native']);
   assert.equal(r.status, 0, r.stderr);
+  const payload = JSON.parse(r.stdout);
+  assert.deepStrictEqual(payload.adopted_files, ['.planning/STATE.md']);
   assert.match(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), /shipyard:gsd-sync generated/);
 });
 

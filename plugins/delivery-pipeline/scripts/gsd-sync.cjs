@@ -155,6 +155,33 @@ function sourceFileEntries(files) {
     .sort((a, b) => a[0].localeCompare(b[0]));
 }
 
+// delivery-state.json is both a durable observation cache and a heartbeat
+// record. The projection reads only the ticket status, PR number, completion
+// timestamp and the status clock when it is the activity fallback;
+// merge_state, review_decision, checks, head_sha, behind_by and the other live
+// GitHub fields are consumed by the delivery board but never rendered into
+// native GSD artifacts. Hash the exact stable view the projection consumes so
+// a babysit heartbeat does not make every native file stale while still making
+// every visible delivery change invalidate it.
+function deliveryStateProjection(state, plans) {
+  return JSON.stringify(plans
+    .map((plan) => {
+      const entry = state && typeof state === 'object' ? state[plan.ticket] : null;
+      const mergedAt = entry && (entry.mergedAt || entry.merged_at
+        || (entry.status === 'merged' ? entry.since : null));
+      return {
+        ticket: plan.ticket,
+        status: deliveryStatus(entry),
+        pr: entry && entry.pr !== undefined ? entry.pr : null,
+        merged_at: mergedAt || null,
+        // Once an explicit or merged-status completion time exists, `since`
+        // cannot affect the projection's last-activity value and is excluded.
+        since: mergedAt ? null : (entry && entry.since !== undefined ? entry.since : null),
+      };
+    })
+    .sort((a, b) => a.ticket.localeCompare(b.ticket)));
+}
+
 function sourceFingerprint(entries) {
   const hash = crypto.createHash('sha256');
   hash.update(`gsd-sync:${SYNC_VERSION}\n`);
@@ -841,12 +868,13 @@ function generatedFileContent(file, expected, { adoptNative = false } = {}) {
   const existing = readText(file);
   // ROADMAP is human-authored outside its marked block; all other projection
   // files are wholly owned and must carry our marker before they are replaced.
-  // A lifecycle gate may explicitly adopt the native GSD files once the project
-  // has opted into Shipyard delivery. Direct syncs remain fail-closed.
-  if (existing != null && file !== ROADMAP && !hasMarker(existing, file) && !adoptNative) {
+  // Adoption is an explicit direct-sync action. Lifecycle gates never pass the
+  // flag, so an unmarked native file remains a hard error there.
+  const adopted = existing != null && file !== ROADMAP && !hasMarker(existing, file);
+  if (adopted && !adoptNative) {
     throw new Error(`${posixRelative(file)} exists but is not owned by ${FILE_MARKER}`);
   }
-  return { file, existing, expected };
+  return { file, existing, expected, adopted };
 }
 
 function findObsoleteGeneratedFiles(expected, { prune = true } = {}) {
@@ -906,15 +934,20 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
   // state-sync heartbeats, while none of those fields feed this projection.
   // Hashing it would make an otherwise unchanged native projection fail
   // --check after every delivery round. The authoritative delivery facts are
-  // already represented by delivery-state.json, so keep the volatile front
-  // out of the source fingerprint while still validating its shape above.
+  // already represented by the stable subset of delivery-state.json below, so
+  // keep the volatile front and heartbeat fields out of the source fingerprint
+  // while still validating their shape above.
   const sourceFiles = [ROADMAP, PROJECT, CONFIG, TICKETS, DELIVERY_STATE];
   for (const plan of planRecords) sourceFiles.push(plan.file);
   for (const phase of phaseList) {
     const integration = path.join(PHASES_DIR, phase.dirName, 'INTEGRATION.md');
     if (fs.existsSync(integration)) sourceFiles.push(integration);
   }
-  const sourceEntries = sourceFileEntries(sourceFiles.filter((file) => file !== ROADMAP));
+  const sourceEntries = sourceFileEntries(sourceFiles.filter((file) => file !== ROADMAP && file !== DELIVERY_STATE));
+  sourceEntries.push([
+    posixRelative(DELIVERY_STATE),
+    deliveryStateProjection(state, planRecords),
+  ]);
   // The first publication appends the marked block after the human prose; the
   // block remover must not make the source fingerprint depend on whether that
   // block has already existed (one extra trailing blank line was enough to make
@@ -982,6 +1015,9 @@ function checkSnapshot(snapshot) {
 function publishSnapshot(snapshot) {
   if (snapshot.blockers.length) throw new Error(snapshot.blockers.join('; '));
   for (const item of snapshot.generated) {
+    // state-sync now calls this writer after every delivery round. Avoid
+    // replacing identical files so a quiet heartbeat remains a no-op on disk.
+    if (isSame(item.file, item.expected)) continue;
     fs.mkdirSync(path.dirname(item.file), { recursive: true });
     writeAtomic(item.file, item.expected);
   }
@@ -1000,6 +1036,7 @@ function resultFor(snapshot, args, drift = []) {
     phase: args.phase,
     source_fingerprint: snapshot.source_fingerprint,
     generated_files: snapshot.generated.map((item) => posixRelative(item.file)),
+    adopted_files: args.check ? [] : snapshot.generated.filter((item) => item.adopted).map((item) => posixRelative(item.file)),
     obsolete_files: snapshot.obsolete.map(posixRelative),
     phases: snapshot.phases,
     counts: snapshot.counts,
@@ -1013,7 +1050,7 @@ function help() {
     '',
     'Project Shipyard delivery evidence into native GSD artifacts.',
     'The command is local-only and inert only when no Shipyard delivery plans exist.',
-    '--adopt-native explicitly adopts existing native GSD projection files; lifecycle gates use this only after delivery applicability is proven.',
+    '--adopt-native is an explicit ownership transfer for existing native GSD projection files; lifecycle gates never pass it.',
     '--phase performs a targeted projection of one phase while keeping global state coherent; run a full sync before ship.',
   ].join('\n');
 }
@@ -1052,7 +1089,13 @@ function main(argv = process.argv.slice(2)) {
     const output = run(args);
     if (args.json) console.log(JSON.stringify(output.result));
     else if (output.result && output.result.applicable === false) console.log('gsd-sync: not applicable — no Shipyard delivery plans');
-    else if (output.result && output.result.ok) console.log(`gsd-sync: ${args.check ? 'projection is synchronized' : 'projection published'} (${output.result.counts.generated_files} generated files)`);
+    else if (output.result && output.result.ok) {
+      if (args.adoptNative && !args.check) {
+        const adopted = output.result.adopted_files || [];
+        console.log(`gsd-sync: native adoption — ${adopted.length ? adopted.join(', ') : 'none'}`);
+      }
+      console.log(`gsd-sync: ${args.check ? 'projection is synchronized' : 'projection published'} (${output.result.counts.generated_files} generated files)`);
+    }
     else console.error(`gsd-sync: blocked — ${(output.result.blockers || []).join('; ')}`);
     return output.code;
   } catch (error) {
@@ -1069,6 +1112,7 @@ module.exports = {
   integrationStatus,
   verificationEvidence,
   canonicalTicket,
+  deliveryStateProjection,
   sourceFingerprint,
   buildSnapshot,
   checkSnapshot,
