@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 21b68eebe289ea76365b08c31e3b357246d31b361c048e4ecfe3e94df016fcee
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3d8ba793c48cd73e9aa6b22dd419cc2fa1f84bdbab8ab390c6f2e15ccf3cdfa7
 phase: 20-autonomy-of-the-drive-to-green-loop
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 21b68eebe289ea76365b08c31e3b357246d31b361c048e4ecfe3e94df016fcee
+shipyard_source_fingerprint: 3d8ba793c48cd73e9aa6b22dd419cc2fa1f84bdbab8ab390c6f2e15ccf3cdfa7
 ---
 
 # Phase 20: Failure signature: normalize, history verdict, flake quarantine — Delivery Projection

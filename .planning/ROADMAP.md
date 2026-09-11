@@ -594,7 +594,7 @@ findings or turn a merged ticket count into a false phase pass.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `21b68eebe289ea76365b08c31e3b357246d31b361c048e4ecfe3e94df016fcee`
+- Source fingerprint: `3d8ba793c48cd73e9aa6b22dd419cc2fa1f84bdbab8ab390c6f2e15ccf3cdfa7`
 - Plans merged: 79/82
 - Phases verified: 3/16
 - Current phase: 20
