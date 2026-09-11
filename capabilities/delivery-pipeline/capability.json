@@ -1,7 +1,7 @@
 {
   "id": "delivery-pipeline",
   "role": "feature",
-  "version": "0.50.0",
+  "version": "0.51.0",
   "title": "Delivery pipeline loop gates",
   "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: Gate 2 validates the ticket graph and a deterministic local projection keeps native GSD state synchronized through planning, delivery, verification, and ship.",
   "tier": "full",
