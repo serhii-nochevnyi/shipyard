@@ -22,9 +22,10 @@
 //   REQUIRED — the conveyor is INCORRECT without them. Branch ownership and
 //     worktree ownership are not preferences: two orchestrators creating branches
 //     or worktrees for the same plans is the collision these values prevent.
-//     `runtime` belongs here too, because it decides whether a plugin-namespaced
-//     agent_skills entry resolves at all — wrong, and the skill is silently
-//     skipped rather than failing loudly.
+//     Runtime is deliberately NOT a required project key: it is an execution
+//     context supplied by the active GSD install. A legacy top-level `runtime`
+//     is reported and migrated away under --apply so Claude and Codex can share
+//     the checkout without a last-write-wins setting.
 //
 //   TUNING — models and effort. These change cost and quality, never correctness,
 //     so they are reported but only written under --apply like the rest, and a
@@ -57,6 +58,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { resolveRuntime } = require(path.join(__dirname, 'runtime-context.cjs'));
 
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
@@ -70,10 +72,10 @@ const flag = (n) => { const i = argv.indexOf(`--${n}`); return i === -1 ? null :
 // contributing. So this is the install-time surface, and the only one: there is
 // no project to configure when a plugin is installed.
 //
-// It is also the file where a dual-runtime machine goes wrong. This one held
-// `runtime: "codex"` — written by whichever installer ran last — so on a Claude
-// machine every unconfigured directory resolved `gpt-5.6-sol`. Hence the narrow
-// global set below, and the loud warning when the runtime changes hands.
+// It is also the file where a dual-runtime machine used to go wrong: a single
+// `runtime` value was written by whichever installer ran last. Runtime identity
+// now comes from GSD_RUNTIME / the per-install marker, so this script migrates
+// that old global key out instead of writing a new last-write-wins value.
 const GLOBAL = argv.includes('--global');
 const ROOT = process.cwd();
 const CONFIG = GLOBAL
@@ -91,54 +93,89 @@ if (!fs.existsSync(CONFIG)) {
   catch (e) { fail(`${CONFIG} is not valid JSON (${e.message}) — refusing to rewrite a file I cannot parse`); }
 }
 
-// The runtime decides two of the settings below, so guessing it wrong is worse
-// than not guessing: an explicit flag wins, then the config's own value, then the
-// bundle actually installed on this machine.
-function detectRuntime() {
-  const explicit = flag('runtime');
-  if (explicit) return { runtime: explicit, how: '--runtime' };
-  if (typeof raw.runtime === 'string' && raw.runtime) return { runtime: raw.runtime, how: 'config' };
-  const home = process.env.HOME || '';
-  const codex = fs.existsSync(path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'shipyard'));
-  const claude = fs.existsSync(path.join(home, '.claude', 'plugins'));
-  if (codex && !claude) return { runtime: 'codex', how: 'installed bundle' };
-  if (claude && !codex) return { runtime: 'claude', how: 'installed plugin' };
-  // Both (or neither) present: claude is the canonical runtime, and saying which
-  // way we guessed matters more than the guess.
-  return { runtime: 'claude', how: 'default (both runtimes present)' };
-}
-const { runtime, how } = detectRuntime();
+// The runtime is an execution context, not a project preference. Explicit
+// invocation/launcher context wins, then GSD's own environment and install
+// marker, and only then the legacy project value. An unresolved context is
+// allowed for read-only reporting but cannot be applied: choosing Claude just
+// because both runtimes happen to be installed is the exact defect this guard
+// closes.
+const explicitRuntime = flag('runtime');
+const runtimeContext = resolveRuntime(ROOT, {
+  runtime: explicitRuntime || undefined,
+  scriptPath: __filename,
+});
+const runtime = runtimeContext.runtime;
+const how = explicitRuntime ? '--runtime' : runtimeContext.source;
 
-// The delivery-rules skill resolves under a DIFFERENT NAME per runtime, and the
-// difference is not cosmetic: the plugin-namespaced form works only on claude and
-// is silently skipped elsewhere.
-//
-//   claude — `global:<plugin>:<skill>`, and the skill directory is `delivery-rules`
-//            (the plugin is `shipyard`), so: global:shipyard:delivery-rules
-//   codex  — flat skills dir, and the generator PREFIXES the name, so the
-//            installed directory is `shipyard-delivery-rules`
-//
-// Both names are read from the artifacts rather than assumed. The first draft of
-// this script asserted `global:shipyard:shipyard-delivery-rules` — a mix of the
-// two — and would have rewritten a correct config into a skill that resolves
-// nowhere. The proving ground already had the right value; the tool was wrong.
-const DELIVERY_RULES = runtime === 'claude'
-  ? 'global:shipyard:delivery-rules'
-  : 'global:shipyard-delivery-rules';
-const OTHER_DELIVERY_RULES = runtime === 'claude'
-  ? 'global:shipyard-delivery-rules'
-  : 'global:shipyard:delivery-rules';
+// GSD's `agent_skills` resolver currently chooses its global skills directory
+// from `config.runtime`, and defaults that field to Claude. That is correct for
+// a project that pins a runtime, but it is the wrong shared-checkout contract:
+// Claude and Codex would have to rewrite the same config.json on every run.
+// Keep the injected delivery contract project-relative instead. Both runtimes
+// can read it, and its source is deliberately runtime-neutral; the runtime-
+// native generated skills remain available for direct `$shipyard-*` calls.
+const DELIVERY_RULES = '.shipyard/generated/gsd-delivery-rules';
+const LEGACY_DELIVERY_RULES = new Set([
+  'global:shipyard:delivery-rules',
+  'global:shipyard-delivery-rules',
+]);
+const DELIVERY_RULES_MARKER = '<!-- shipyard-managed: gsd-delivery-rules -->';
+
+function managedProjectionContent(sourceContent) {
+  const source = sourceContent.endsWith('\n') ? sourceContent : `${sourceContent}\n`;
+  return `${source}\n${DELIVERY_RULES_MARKER}\n`;
+}
+
+function deliveryRulesSource() {
+  const candidates = [
+    process.env.SHIPYARD_DELIVERY_RULES_SOURCE,
+    path.join(__dirname, '..', 'skills', 'delivery-rules', 'SKILL.md'),
+    path.join(__dirname, '..', 'bundle', 'skills', 'delivery-rules', 'SKILL.md'),
+  ].filter(Boolean);
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function deliveryRulesTarget() {
+  return path.join(ROOT, DELIVERY_RULES, 'SKILL.md');
+}
+
+function projectSkillStatus() {
+  if (GLOBAL) return { required: false, status: 'not-applicable', source: null, file: null };
+  const source = deliveryRulesSource();
+  const file = deliveryRulesTarget();
+  if (!source) return { required: true, status: 'source-missing', source: null, file };
+  try {
+    const sourceContent = fs.readFileSync(source, 'utf8');
+    if (!fs.existsSync(file)) return { required: true, status: 'missing', source, file, sourceContent };
+    const content = fs.readFileSync(file, 'utf8');
+    return {
+      required: true,
+      status: content === managedProjectionContent(sourceContent)
+        ? 'managed'
+        : content.includes(DELIVERY_RULES_MARKER)
+          ? 'stale-managed'
+          : content === sourceContent ? 'legacy-managed' : 'foreign',
+      source,
+      file,
+      sourceContent,
+    };
+  } catch (e) {
+    return { required: true, status: 'unreadable', source, file, error: e.message };
+  }
+}
+
+const skillProjection = projectSkillStatus();
 
 // The desired value for an agent_skills.* entry is a MERGE, not a replacement:
-// present entries ∪ {delivery-rules-for-this-runtime} − {delivery-rules-for-the-
-// OTHER-runtime}, order preserved and ours appended last. A static one-element
-// array here (the earlier shape) is what produced ADR-004 D7 / audit F22: a
-// project's own [custom-test-contract, custom-quality] became
-// [global:shipyard-delivery-rules] after a successful --apply, because the
-// generic `set()` below replaces the whole key with whatever "want" is.
+// present entries ∪ {project-relative delivery rules} − {legacy runtime forms},
+// order preserved and ours appended last. A static one-element array here (the
+// earlier shape) is what produced ADR-004 D7 / audit F22: a project's own
+// [custom-test-contract, custom-quality] became [delivery-rules] after a
+// successful --apply, because the generic `set()` below replaces the whole key
+// with whatever "want" is.
 function mergedSkills(have) {
   const existing = Array.isArray(have) ? have : [];
-  const kept = existing.filter((s) => s !== OTHER_DELIVERY_RULES);
+  const kept = existing.filter((s) => !LEGACY_DELIVERY_RULES.has(s));
   return kept.includes(DELIVERY_RULES) ? kept : [...kept, DELIVERY_RULES];
 }
 
@@ -156,7 +193,10 @@ function mergedSkills(have) {
 // Verify against `VALID_PROFILES`, never against the catalog's field names.
 const PROFILE_FOR_POLICY = { economy: 'budget', balanced: 'balanced', premium: 'quality' };
 
-const { config: pipeline, valid: PIPE_VALID, error: PIPE_ERROR } = loadConfig(ROOT);
+const { config: pipeline, valid: PIPE_VALID, error: PIPE_ERROR } = loadConfig(
+  ROOT,
+  runtime ? { runtime } : {},
+);
 
 // A PROJECT CONFIG THAT DOES NOT PARSE IS NOT READ (ADR-004 D2, audit F03).
 //
@@ -188,12 +228,7 @@ const CONFIG_REFUSAL = (GLOBAL && !PIPE_VALID)
 // machine — an ordinary GSD project legitimately wants phase branches, so
 // forcing this machine-wide is the same overreach the capability's plan:post
 // gate has an applicability check to avoid.
-const REQUIRED = GLOBAL ? [
-  ['runtime', runtime,
-    'which runtime an unconfigured project should assume on this machine'],
-] : [
-  ['runtime', runtime,
-    'decides whether a plugin-namespaced agent_skills entry resolves at all — wrong, and the skill is silently skipped'],
+const REQUIRED = GLOBAL ? [] : [
   ['git.branching_strategy', 'none',
     'the conveyor owns branching (epic/<phase> + ticket/<id>); GSD phase/milestone branches would fight it'],
 ];
@@ -344,9 +379,9 @@ const TUNING_ALL = [
   // executor was set here until decomposing this repo through the conveyor
   // surfaced the omission — the skill's own template lists both.
   [`agent_skills.gsd-planner`, mergedSkills,
-    `the frontmatter contract, in the form the "${runtime}" runtime resolves — merged in, not replacing what's already there`],
+    'the frontmatter contract, through the runtime-neutral project skill projection — merged in, not replacing what is already there'],
   [`agent_skills.gsd-executor`, mergedSkills,
-    `the delivery-rules skill in the form the "${runtime}" runtime resolves — merged in, not replacing what's already there`],
+    'the delivery-rules contract, through the runtime-neutral project skill projection — merged in, not replacing what is already there'],
 ];
 
 // The rows whose WANT is derived from the project's `pipeline.*` — the only ones
@@ -406,6 +441,8 @@ for (const [group, list] of [['required', REQUIRED], ['tuning', TUNING]]) {
     drift.push(entry);
   }
 }
+
+const projectionNeedsAction = !GLOBAL && skillProjection.status !== 'managed';
 
 // ── the blockers: floors no key can fix ──────────────────────────────────────
 //
@@ -641,34 +678,69 @@ if (codexToml && !CONFIG_REFUSAL) {
   }
 }
 
-// A machine can have BOTH runtimes installed, and this file holds one `runtime`.
-// Whichever installer ran last wins — which is exactly how it came to say
-// "codex" on a Claude machine, making every unconfigured directory resolve
-// gpt-5.6-sol. Silent last-write-wins is the defect; saying so is the fix.
-const runtimeHandover = GLOBAL && typeof raw.runtime === 'string' && raw.runtime && raw.runtime !== runtime
-  ? raw.runtime : null;
+// A machine and a checkout can have BOTH runtimes installed. The old global or
+// project `runtime` key was shared by both installers, so whichever one ran last
+// won for every unconfigured directory or shared checkout. It is migration debt,
+// not a new setting: remove it and let GSD use the per-install `.gsd-runtime`
+// marker (or GSD_RUNTIME for an explicit run).
+const legacyRuntime = typeof raw.runtime === 'string' && raw.runtime.trim()
+  ? raw.runtime.trim() : null;
+const legacyRuntimeScope = GLOBAL ? 'global' : 'project';
+const runtimeDisplay = runtime || 'unresolved';
 
 if (AS_JSON) {
   console.log(JSON.stringify({
-    runtime, detected_by: how, applied: APPLY, scope: GLOBAL ? 'global' : 'project',
+    runtime: runtime || null, runtime_source: how, applied: APPLY, scope: GLOBAL ? 'global' : 'project',
+    runtime_legacy: legacyRuntime,
+    runtime_legacy_scope: legacyRuntime ? legacyRuntimeScope : null,
+    runtime_conflict: runtimeContext.conflict,
+    runtime_ambiguous: !runtime,
+    skill_projection: {
+      path: skillProjection.file ? path.relative(ROOT, skillProjection.file) : null,
+      status: skillProjection.status,
+      source: skillProjection.source,
+    },
     // Carried on the result rather than only where it came due — ci-wait.cjs's
     // template. A caller reading `drift` cannot otherwise tell a row that was
     // withheld from a row that already agrees.
     ...(CONFIG_REFUSAL ? { config_invalid: CONFIG_REFUSAL } : {}),
-    runtime_handover: runtimeHandover, drift, blockers,
+    drift, blockers,
   }, null, 2));
 } else {
-  console.log(`gsd-tune: runtime "${runtime}" (${how}) — ${CONFIG}${GLOBAL ? '  [global defaults]' : ''}`);
+  console.log(`gsd-tune: runtime "${runtimeDisplay}" (${how}) — ${CONFIG}${GLOBAL ? '  [global defaults]' : ''}`);
   // FIRST, before any row a reader might act on: the project's own policy could
   // not be read, so the rows that mirror it are absent rather than defaulted.
   if (CONFIG_REFUSAL) console.log(`\n  ${CONFIG_REFUSAL}`);
-  if (runtimeHandover) {
+  if (legacyRuntime) {
     console.log(
-      `\n  ⚠ these global defaults currently say runtime "${runtimeHandover}".\n` +
-      `    This file is ONE value shared by both installs, and it is inherited by every\n` +
-      '    directory that has no .planning/ of its own — so the wrong one there makes an\n' +
-      `    unconfigured project resolve ${runtimeHandover}'s models. Applying sets it to "${runtime}".\n` +
-      '    A project with its own config.json is unaffected either way.'
+      `\n  ⚠ legacy ${legacyRuntimeScope} runtime "${legacyRuntime}" is present.\n` +
+      (GLOBAL
+        ? '    ~/.gsd/defaults.json is shared by both installs, so this key makes the\n' +
+          '    active runtime depend on which installer ran last. Applying removes the key; GSD then uses the\n'
+        : '    .planning/config.json is shared by both runtimes, so this key overrides\n' +
+          '    the active install marker. Applying removes the key; GSD then uses the\n') +
+      '    per-install marker or GSD_RUNTIME.'
+    );
+  }
+  if (!runtime) {
+    console.log(
+      '\n  ⚠ runtime is ambiguous. Read-only output uses the Claude-compatible policy, but --apply is refused.\n' +
+      '    Run with --runtime claude|codex, or set SHIPYARD_RUNTIME/GSD_RUNTIME for the active host.'
+    );
+  }
+  if (projectionNeedsAction) {
+    const projectionMessage = {
+      missing: 'the project-relative delivery-rules skill has not been generated yet',
+      'legacy-managed': 'the project-relative delivery-rules skill predates Shipyard ownership marking',
+      'stale-managed': 'the project-relative delivery-rules skill is out of date with the canonical source',
+      'source-missing': 'the Shipyard delivery-rules source is not present beside this installer',
+      foreign: 'the project-relative delivery-rules path exists but is not Shipyard-managed',
+      unreadable: `the project-relative delivery-rules skill cannot be read${skillProjection.error ? ` (${skillProjection.error})` : ''}`,
+    }[skillProjection.status] || `the project-relative delivery-rules skill is ${skillProjection.status}`;
+    console.log(
+      `\n  ⚠ GSD skill projection: ${projectionMessage}.\n` +
+      `    Expected at ${path.relative(ROOT, skillProjection.file)}. ` +
+      'Applying generates or refreshes it; a foreign file is never overwritten.'
     );
   }
   if (blockers.length) {
@@ -682,7 +754,9 @@ if (AS_JSON) {
       console.log(`        ${b.why}`);
     }
   }
-  if (!drift.length && !blockers.length) console.log('  nothing to change: this project already agrees with the conveyor');
+  if (!drift.length && !legacyRuntime && !blockers.length && runtime && !projectionNeedsAction) {
+    console.log('  nothing to change: this project already agrees with the conveyor');
+  }
   for (const g of ['required', 'tuning']) {
     const rows = drift.filter((d) => d.group === g);
     if (!rows.length) continue;
@@ -734,12 +808,15 @@ if (CONFIG_REFUSAL) {
   process.exit(1);
 }
 
-if (!drift.length && !staleGlobalOverrides.length && !blockers.length) process.exit(0);
+if (!drift.length && !staleGlobalOverrides.length && !legacyRuntime && !blockers.length && !projectionNeedsAction) {
+  if (!runtime && APPLY) process.exit(2);
+  process.exit(0);
+}
 
 // A blocker survives --apply, because there is nothing to apply: the exit code
 // has to keep saying so, or the one finding a write cannot fix would be the one
 // finding a caller stops seeing.
-if (!drift.length && !staleGlobalOverrides.length) process.exit(1);
+if (!drift.length && !staleGlobalOverrides.length && !legacyRuntime && !projectionNeedsAction) process.exit(1);
 
 if (!APPLY) {
   if (!AS_JSON) {
@@ -749,10 +826,36 @@ if (!APPLY) {
   process.exit(1);
 }
 
+if (!runtime) {
+  process.stderr.write(
+    'gsd-tune: refusing --apply because the active runtime is ambiguous; ' +
+    'set --runtime claude|codex or SHIPYARD_RUNTIME/GSD_RUNTIME\n'
+  );
+  process.exit(2);
+}
+
+if (projectionNeedsAction && ['source-missing', 'unreadable', 'foreign'].includes(skillProjection.status)) {
+  process.stderr.write(
+    `gsd-tune: refusing --apply because the delivery-rules projection is ${skillProjection.status}; ` +
+    'provide the Shipyard source or resolve the existing file before applying\n'
+  );
+  process.exit(2);
+}
+
+if (projectionNeedsAction) {
+  const target = skillProjection.file;
+  const body = managedProjectionContent(skillProjection.sourceContent);
+  const tmpSkill = `${target}.gsd-tune.tmp`;
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(tmpSkill, body);
+  fs.renameSync(tmpSkill, target);
+}
+
 for (const d of drift) set(raw, d.key, d.want);
 for (const agent of staleGlobalOverrides) delete raw.model_overrides[agent];
 // Leave no empty husk behind — an empty object reads as "someone configured this".
 if (raw.model_overrides && !Object.keys(raw.model_overrides).length) delete raw.model_overrides;
+if (legacyRuntime) delete raw.runtime;
 
 const tmp = `${CONFIG}.gsd-tune.tmp`;
 // `--global` on a machine that never ran GSD has no ~/.gsd at all, not just a
@@ -764,6 +867,8 @@ if (!AS_JSON) {
   const parts = [];
   if (drift.length) parts.push(`wrote ${drift.length} setting(s)`);
   if (staleGlobalOverrides.length) parts.push(`withdrew ${staleGlobalOverrides.length} stale override(s)`);
+  if (legacyRuntime) parts.push(`removed legacy ${legacyRuntimeScope} runtime`);
+  if (projectionNeedsAction) parts.push(`generated ${DELIVERY_RULES}/SKILL.md`);
   console.log(`\n✓ ${parts.join(', ')} in ${CONFIG}`);
   if (blockers.length) {
     console.log(`  ${blockers.length} version floor(s) remain — nothing here can write those.`);

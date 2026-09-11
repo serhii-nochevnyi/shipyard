@@ -37,7 +37,7 @@ pg 300 claude plugin install shipyard@delivery-pipeline
 # making Gate 2 a mechanical part of the GSD loop.
 GSD_TOOLS="$HOME/.claude/gsd-core/bin/gsd-tools.cjs"
 if [[ -f "$GSD_TOOLS" && -d /opt/delivery-capability/delivery-pipeline ]]; then
-  pg 120 node "$GSD_TOOLS" capability install /opt/delivery-capability/delivery-pipeline --scope global --yes
+  pg 120 env GSD_RUNTIME=claude SHIPYARD_RUNTIME=claude node "$GSD_TOOLS" capability install /opt/delivery-capability/delivery-pipeline --scope global --yes
 else
   echo "WARNING: gsd-tools or capability dir missing; delivery-pipeline capability not installed" >&2
 fi

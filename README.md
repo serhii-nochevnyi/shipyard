@@ -294,8 +294,14 @@ projection switched off), `repos`.
 The conveyor also **obeys GSD's own settings** rather than second-guessing them:
 `git.base_branch` decides where epics are cut from and where the integration PR
 goes (it outranks the repo default), `git.branching_strategy` must stay `none`
-because the conveyor owns branching, and `runtime` decides effort clamping.
-`state-sync` echoes the effective settings and warns about anything not in effect.
+because the conveyor owns branching. Runtime is selected per invocation: an
+explicit `SHIPYARD_RUNTIME`/`GSD_RUNTIME` handshake wins, followed by the
+runtime-specific GSD install marker; a legacy top-level `runtime` is migration
+debt, never an active project preference. `gsd-tune --apply` removes that old
+key without replacing it, so GSD can use the active install's marker. This means
+one checkout can be used by Claude Code and Codex concurrently. `state-sync`
+echoes the effective runtime and warns when an old persisted value conflicts
+with the active runner.
 
 ## Shipyard on the OpenAI Codex CLI
 
@@ -308,7 +314,9 @@ The canonical source stays the Claude plugin
 artifacts from it, so the two runtimes never drift — change a command once and
 re-run the installer. Where the runtimes genuinely differ, the conveyor adapts
 instead of pretending: Codex has no Workflow tool, so `deliver` runs its built-in
-agent path, and `agent_skills` needs the bare skill form (both spelled out below).
+agent path. The GSD delivery contract is projected into the project at a
+runtime-neutral path, so the shared checkout does not have to rewrite
+`config.json` when the host changes.
 
 Prerequisite — gsd-core installed for Codex:
 
@@ -373,14 +381,17 @@ install time from a palette you declare — `delivery_pipeline.codex_models` (or
   without a better result, so depth there comes from the model instead.
 
 <!-- keep in sync with commands/decompose.md -->
-**One config detail matters on Codex.** The delivery-rules contract reaches GSD's
-planner and executor through `agent_skills` in `.planning/config.json`, and the
-working value depends on `runtime`: the plugin-namespaced form
-`global:shipyard:delivery-rules` is resolved **only** on the `claude` runtime and
-is silently skipped elsewhere. On Codex use the bare form
-`global:shipyard-delivery-rules`, which resolves from `~/.agents/skills` — exactly
-where this installer puts it. `state-sync` warns when the form cannot resolve on
-your runtime.
+**One config detail matters on both runtimes.** The delivery-rules contract reaches
+GSD's planner and executor through `agent_skills` in `.planning/config.json`, but
+the value is the project-relative
+`.shipyard/generated/gsd-delivery-rules` projection. `gsd-tune.cjs --apply`
+generates it from the canonical source and merges it without replacing the
+project's other skills. This avoids GSD's shared-config last-write-wins trap:
+Claude's plugin-namespaced and Codex's flat global skill forms are both
+runtime-specific, while the delivery contract itself is not. The generated
+runtime-native skills remain installed for direct `$shipyard-*` calls. Do not
+persist `"runtime": "claude"` or `"runtime": "codex"` in a shared project
+config just to select the host; use the runtime context above.
 It also writes a managed "shipyard auto-route" block into
 `$CODEX_HOME/AGENTS.md`, so a defined scope of work is routed through shipyard
 (research-first, proportionate GSD) without the user invoking `$shipyard-*` by

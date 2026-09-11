@@ -141,3 +141,5 @@ language; English is for the artifacts, the user's language is for conversation.
    catches "the agent reported success and changed nothing", and it only works
    if publishing is not in the hands of the agent being checked. Hand back your
    verification evidence and a PR body instead.
+
+<!-- shipyard-managed: gsd-delivery-rules -->

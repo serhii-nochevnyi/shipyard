@@ -20,6 +20,15 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 const SCRIPT = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'gsd-tune.cjs'
 );
+const PROJECT_DELIVERY_RULES = '.shipyard/generated/gsd-delivery-rules';
+const DELIVERY_RULES_SOURCE = path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'skills', 'delivery-rules', 'SKILL.md'
+);
+const DELIVERY_RULES_MARKER = '<!-- shipyard-managed: gsd-delivery-rules -->';
+const projectionBody = (source) => {
+  const normalized = source.endsWith('\n') ? source : `${source}\n`;
+  return `${normalized}\n${DELIVERY_RULES_MARKER}\n`;
+};
 const pc = require(path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
 ));
@@ -28,6 +37,14 @@ function project(config = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsdtune-'));
   fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(config, null, 2));
+  return dir;
+}
+
+function projectWithSkill(config = {}) {
+  const dir = project(config);
+  const target = path.join(dir, PROJECT_DELIVERY_RULES, 'SKILL.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, projectionBody(fs.readFileSync(DELIVERY_RULES_SOURCE, 'utf8')));
   return dir;
 }
 
@@ -73,13 +90,11 @@ const keyed = (drift) => Object.fromEntries(drift.map((d) => [d.key, d]));
 
 suite('gsd-tune — the required settings');
 
-test('a bare project is missing both required settings, and they are marked so', () => {
+test('a bare project is missing the conveyor-required setting, and it is marked so', () => {
   const d = keyed(driftOf(project({}), ['--runtime', 'claude']));
   assert.equal(d['git.branching_strategy'].want, 'none');
-  assert.equal(d['runtime'].want, 'claude');
-  for (const k of ['git.branching_strategy', 'runtime']) {
-    assert.equal(d[k].group, 'required', `${k} is correctness, not taste`);
-  }
+  assert.equal(d['git.branching_strategy'].group, 'required', 'branching is correctness, not taste');
+  assert.equal(d.runtime, undefined, 'runtime is selected by the active runner, not written to the project');
   // use_worktrees is NOT required. It was, on a nesting scenario that GSD 1.9.1's
   // source does not support: code-review never mentions worktrees, and
   // `git worktree add` lives only in execute-phase/new-workspace/worktree-safety,
@@ -104,23 +119,45 @@ test('a wrong value is reported as the user\'s, not as an absence', () => {
   assert.equal(d['git.branching_strategy'].have, 'phase');
 });
 
-suite('gsd-tune — the runtime decides two values');
+suite('gsd-tune — the delivery contract is runtime-neutral');
 
-test('the delivery-rules skill takes the form each runtime actually resolves', () => {
-  // claude: plugin-namespaced, `global:<plugin>:<skill>` — the plugin is
-  // `shipyard` and the skill directory is `delivery-rules`.
-  // codex: flat skills dir, and the generator prefixes the name.
-  // A mix of the two resolves nowhere and is silently skipped, never failed.
+test('both runtimes use the same project-relative delivery-rules projection', () => {
   const claude = keyed(driftOf(project({}), ['--runtime', 'claude']));
-  assert.deepEqual(claude['agent_skills.gsd-executor'].want, ['global:shipyard:delivery-rules']);
+  assert.deepEqual(claude['agent_skills.gsd-executor'].want, [PROJECT_DELIVERY_RULES]);
   const codex = keyed(driftOf(project({}), ['--runtime', 'codex']));
-  assert.deepEqual(codex['agent_skills.gsd-executor'].want, ['global:shipyard-delivery-rules']);
+  assert.deepEqual(codex['agent_skills.gsd-executor'].want, [PROJECT_DELIVERY_RULES]);
 });
 
 test('an already-correct skill entry is left alone', () => {
-  const dir = project({ agent_skills: { 'gsd-executor': ['global:shipyard:delivery-rules'] } });
+  const dir = projectWithSkill({ agent_skills: { 'gsd-executor': [PROJECT_DELIVERY_RULES] } });
   const d = keyed(driftOf(dir, ['--runtime', 'claude']));
   assert.equal(d['agent_skills.gsd-executor'], undefined, 'no drift on a correct value');
+});
+
+test('a managed projection is refreshed when the canonical source changes', () => {
+  const dir = projectWithSkill({ agent_skills: { 'gsd-executor': [PROJECT_DELIVERY_RULES] } });
+  const file = path.join(dir, PROJECT_DELIVERY_RULES, 'SKILL.md');
+  fs.appendFileSync(file, 'stale generated content\n');
+  const report = JSON.parse(run(dir, ['--runtime', 'claude', '--json']).stdout);
+  assert.equal(report.skill_projection.status, 'stale-managed');
+  assert.equal(run(dir, ['--runtime', 'claude', '--apply']).status, 0);
+  assert.equal(
+    fs.readFileSync(file, 'utf8'),
+    projectionBody(fs.readFileSync(DELIVERY_RULES_SOURCE, 'utf8')),
+    'apply restores the exact canonical projection plus ownership marker',
+  );
+});
+
+test('a foreign projection is reported and never overwritten', () => {
+  const dir = project({ agent_skills: { 'gsd-executor': [PROJECT_DELIVERY_RULES] } });
+  const file = path.join(dir, PROJECT_DELIVERY_RULES, 'SKILL.md');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, 'operator-owned content\n');
+  const before = fs.readFileSync(file, 'utf8');
+  const result = run(dir, ['--runtime', 'claude', '--apply']);
+  assert.equal(result.status, 2, result.stdout || result.stderr);
+  assert.ok(/projection is foreign/.test(result.stderr), result.stderr);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'foreign content is preserved');
 });
 
 test('GSD\'s two context-bound agents take the paid tier on the SAME terms as ours', () => {
@@ -157,8 +194,22 @@ test('only context-bound GSD agents get it — not the executor or the fixer', (
 test('the config\'s own runtime is honoured when no flag is given', () => {
   const d = keyed(driftOf(project({ runtime: 'codex' })));
   assert.equal(d['runtime'], undefined, 'it already matches, so it is not drift');
-  assert.deepEqual(d['agent_skills.gsd-executor'].want, ['global:shipyard-delivery-rules'],
-    'and the skill form follows that runtime');
+  assert.deepEqual(d['agent_skills.gsd-executor'].want, [PROJECT_DELIVERY_RULES],
+    'the skill projection is independent of the selected runtime');
+});
+
+test('a legacy project runtime is announced and removed, not replaced', () => {
+  const dir = project({ runtime: 'codex', agent_skills: { 'gsd-executor': [] } });
+  const report = run(dir, ['--runtime', 'claude']);
+  assert.ok(/legacy project runtime "codex"/.test(report.stdout), report.stdout);
+  assert.equal(report.status, 1, 'migration debt is reported');
+  assert.equal(readCfg(dir).runtime, 'codex', 'reporting does not write');
+
+  const applied = run(dir, ['--runtime', 'claude', '--apply']);
+  assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+  assert.equal(readCfg(dir).runtime, undefined, 'the shared project key is removed');
+  assert.deepEqual(readCfg(dir).agent_skills['gsd-executor'], [PROJECT_DELIVERY_RULES]);
+  assert.ok(fs.existsSync(path.join(dir, PROJECT_DELIVERY_RULES, 'SKILL.md')), 'projection is generated');
 });
 
 suite('gsd-tune — agent_skills is merged into, never replaced');
@@ -171,10 +222,10 @@ suite('gsd-tune — agent_skills is merged into, never replaced');
 test('an existing list gains the delivery-rules entry, appended last', () => {
   const dir = project({ agent_skills: { 'gsd-executor': ['a', 'b'] } });
   const d = keyed(driftOf(dir, ['--runtime', 'claude']));
-  assert.deepEqual(d['agent_skills.gsd-executor'].want, ['a', 'b', 'global:shipyard:delivery-rules'],
-    'today this reports just [global:shipyard:delivery-rules] and the fixture entries are lost');
+  assert.deepEqual(d['agent_skills.gsd-executor'].want, ['a', 'b', PROJECT_DELIVERY_RULES],
+    'the projection is appended without replacing fixture entries');
   run(dir, ['--runtime', 'claude', '--apply']);
-  assert.deepEqual(readCfg(dir).agent_skills['gsd-executor'], ['a', 'b', 'global:shipyard:delivery-rules']);
+  assert.deepEqual(readCfg(dir).agent_skills['gsd-executor'], ['a', 'b', PROJECT_DELIVERY_RULES]);
 });
 
 test('reproduces ADR-004 D7 / audit F22 exactly: custom entries survive apply', () => {
@@ -183,8 +234,8 @@ test('reproduces ADR-004 D7 / audit F22 exactly: custom entries survive apply', 
   });
   run(dir, ['--runtime', 'claude', '--apply']);
   assert.deepEqual(readCfg(dir).agent_skills['gsd-executor'],
-    ['custom-test-contract', 'custom-quality', 'global:shipyard:delivery-rules'],
-    'F22: these became just [global:shipyard-delivery-rules] before this fix');
+    ['custom-test-contract', 'custom-quality', PROJECT_DELIVERY_RULES],
+    'F22: custom entries survive the projection migration');
 });
 
 test('gsd-planner merges too — not just the executor path', () => {
@@ -197,11 +248,11 @@ test('gsd-planner merges too — not just the executor path', () => {
   });
   const d = keyed(driftOf(dir, ['--runtime', 'claude']));
   assert.deepEqual(d['agent_skills.gsd-planner'].want,
-    ['custom-test-contract', 'custom-quality', 'global:shipyard:delivery-rules']);
+    ['custom-test-contract', 'custom-quality', PROJECT_DELIVERY_RULES]);
   run(dir, ['--runtime', 'claude', '--apply']);
   assert.deepEqual(readCfg(dir).agent_skills['gsd-planner'],
-    ['custom-test-contract', 'custom-quality', 'global:shipyard:delivery-rules'],
-    'F22 applies equally to gsd-planner: this must not collapse to [global:shipyard:delivery-rules]');
+    ['custom-test-contract', 'custom-quality', PROJECT_DELIVERY_RULES],
+    'F22 applies equally to gsd-planner');
 });
 
 test('the OTHER runtime\'s form is removed while everything else is kept', () => {
@@ -212,14 +263,14 @@ test('the OTHER runtime\'s form is removed while everything else is kept', () =>
   });
   const d = keyed(driftOf(dir, ['--runtime', 'claude']));
   assert.deepEqual(d['agent_skills.gsd-executor'].want,
-    ['custom-test-contract', 'custom-quality', 'global:shipyard:delivery-rules']);
+    ['custom-test-contract', 'custom-quality', PROJECT_DELIVERY_RULES]);
   run(dir, ['--runtime', 'claude', '--apply']);
   assert.deepEqual(readCfg(dir).agent_skills['gsd-executor'],
-    ['custom-test-contract', 'custom-quality', 'global:shipyard:delivery-rules']);
+    ['custom-test-contract', 'custom-quality', PROJECT_DELIVERY_RULES]);
 });
 
 test('a list that already has our form and nothing else reports no drift', () => {
-  const dir = project({ agent_skills: { 'gsd-executor': ['x', 'global:shipyard:delivery-rules'] } });
+  const dir = projectWithSkill({ agent_skills: { 'gsd-executor': ['x', PROJECT_DELIVERY_RULES] } });
   const d = keyed(driftOf(dir, ['--runtime', 'claude']));
   assert.equal(d['agent_skills.gsd-executor'], undefined, 'nothing to add, nothing to remove');
 });
@@ -230,8 +281,11 @@ test('the report names additions and removals, never a wholesale "set"', () => {
       'gsd-executor': ['custom-test-contract', 'global:shipyard-delivery-rules'],
     },
   });
+  const skillFile = path.join(dir, PROJECT_DELIVERY_RULES, 'SKILL.md');
+  fs.mkdirSync(path.dirname(skillFile), { recursive: true });
+  fs.writeFileSync(skillFile, projectionBody(fs.readFileSync(DELIVERY_RULES_SOURCE, 'utf8')));
   const r = run(dir, ['--runtime', 'claude']);
-  assert.ok(/\+ global:shipyard:delivery-rules/.test(r.stdout), r.stdout);
+  assert.ok(r.stdout.includes(`+ ${PROJECT_DELIVERY_RULES}`), r.stdout);
   assert.ok(/- global:shipyard-delivery-rules/.test(r.stdout), r.stdout);
   assert.ok(!/agent_skills\.gsd-executor →/.test(r.stdout),
     'must not read as a wholesale replacement of the list');
@@ -246,7 +300,7 @@ test('--global with no ~/.gsd directory at all still succeeds', () => {
     { cwd: h, encoding: 'utf8', env: { ...process.env, HOME: h } });
   assert.equal(r.status, 0, r.stderr);
   const cfg = JSON.parse(fs.readFileSync(path.join(h, '.gsd', 'defaults.json'), 'utf8'));
-  assert.equal(cfg.runtime, 'claude');
+  assert.equal(cfg.runtime, undefined, 'runtime belongs to the per-install marker, not shared defaults');
 });
 
 suite('gsd-tune — restraint');
@@ -258,6 +312,20 @@ test('nothing is written without --apply, and the exit code reports drift', () =
   assert.equal(r.status, 1, 'a caller must be able to gate on it, like the other conveyor gates');
   assert.equal(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8'), before,
     'the report must not be a write');
+});
+
+test('--apply refuses an ambiguous runtime instead of choosing Claude', () => {
+  const dir = project({});
+  const before = fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8');
+  const r = run(dir, ['--apply'], {
+    SHIPYARD_RUNTIME: '', GSD_RUNTIME: '',
+    CODEX_SANDBOX: '', CODEX_SANDBOX_NETWORK_DISABLED: '', CODEX_HOME: EMPTY_CODEX,
+    CLAUDE_PLUGIN_ROOT: '', CLAUDE_CODE_ENTRYPOINT: '',
+  });
+  assert.equal(r.status, 2, r.stdout || r.stderr);
+  assert.ok(/runtime is ambiguous/.test(r.stderr), r.stderr);
+  assert.equal(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8'), before,
+    'an unresolved runtime must not write runtime-specific settings');
 });
 
 test('--apply preserves every key it was not asked about', () => {
@@ -434,7 +502,7 @@ test('a blocker survives --apply: the write happens, the exit code still reports
   const r = run(dir, ['--apply'], env);
   assert.equal(r.status, 1, 'nothing here can write a CLI version');
   assert.equal(readCfg(dir).git.branching_strategy, 'none', 'and the writable half still landed');
-  const again = run(dir, ['--apply'], env);
+  const again = run(dir, ['--runtime', 'claude', '--apply'], env);
   assert.equal(again.status, 1, 'with no drift left, the floor alone keeps it non-zero');
   assert.ok(/2\.1\.255/.test(again.stdout), again.stdout);
 });
@@ -486,18 +554,17 @@ test('nothing conveyor-shaped is ever written machine-wide', () => {
   assert.equal(cfg.model_overrides, undefined, 'a Claude-only value must not go machine-wide');
 });
 
-test('a runtime handover is announced, not performed silently', () => {
-  // One `runtime` shared by two installers means last-write-wins. That is how
-  // the real file came to say "codex" on a Claude machine, where every
-  // unconfigured directory then resolved gpt-5.6-sol.
+test('a legacy shared runtime is announced and removed, not replaced', () => {
+  // One `runtime` shared by two installers means last-write-wins. The migration
+  // removes it; it must never be replaced with the other install's value.
   const h = home({ runtime: 'codex', resolve_model_ids: 'omit' });
   const r = runGlobal(h, ['--runtime', 'claude']);
-  assert.ok(/currently say runtime "codex"/.test(r.stdout), r.stdout);
+  assert.ok(/legacy global runtime "codex"/.test(r.stdout), r.stdout);
   assert.equal(r.status, 1, 'drift is reported, and reporting is not writing');
   assert.equal(globalCfg(h).runtime, 'codex', 'nothing written without --apply');
 
   runGlobal(h, ['--runtime', 'claude', '--apply']);
-  assert.equal(globalCfg(h).runtime, 'claude');
+  assert.equal(globalCfg(h).runtime, undefined, 'the shared runtime key is removed, never handed over');
   assert.equal(globalCfg(h).resolve_model_ids, 'omit', 'unrelated keys survive');
 });
 
@@ -506,7 +573,7 @@ test('the global file is created when absent — unlike a project config', () =>
   // refused. A missing global defaults file just means nobody has written one.
   const h = home(undefined);
   assert.equal(runGlobal(h, ['--runtime', 'codex', '--apply']).status, 0);
-  assert.equal(globalCfg(h).runtime, 'codex');
+  assert.equal(globalCfg(h).runtime, undefined);
 });
 
 test('an override this script wrote machine-wide earlier is withdrawn', () => {

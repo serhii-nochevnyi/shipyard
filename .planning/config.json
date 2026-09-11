@@ -61,10 +61,10 @@
   "phase_naming": "sequential",
   "agent_skills": {
     "gsd-executor": [
-      "global:shipyard:delivery-rules"
+      ".shipyard/generated/gsd-delivery-rules"
     ],
     "gsd-planner": [
-      "global:shipyard:delivery-rules"
+      ".shipyard/generated/gsd-delivery-rules"
     ]
   },
   "claude_md_path": "./.claude/CLAUDE.md",
@@ -98,7 +98,6 @@
       "gsd-code-reviewer": "xhigh"
     }
   },
-  "runtime": "claude",
   "model_overrides": {
     "gsd-planner": "opus",
     "gsd-code-reviewer": "opus"
