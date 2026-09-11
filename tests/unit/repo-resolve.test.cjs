@@ -381,7 +381,7 @@ test('state-sync and deliver name the configured resolver caller', () => {
   assert.match(stateSync, /resolveConfiguredRepo\(\{ repo, config: cfg \}\)/);
   assert.match(deliver, /repo-resolve\.cjs resolve <owner\/name>/);
   assert.match(deliver, /resolution: "discovered"/);
-  assert.match(deliver, /Carry an executable result's[\s\S]*repository_root/);
+  assert.match(deliver, /Carry an executable result's\n  `repository_root` in the ticket's per-repo execution context/);
   assert.match(deliver, /do not re-read `pipeline\.repos`/);
   assert.match(deliver, /resolved `repository_root` from the cold-start execution context/);
 });
