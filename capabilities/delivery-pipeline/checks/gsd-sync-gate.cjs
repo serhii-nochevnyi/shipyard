@@ -84,7 +84,7 @@ if (fs.existsSync(pluginCache)) {
 const script = candidates.find((file) => fs.existsSync(file));
 if (!script) fail('gsd-sync.cjs is missing beside the installed gate and in the source plugin; reinstall Shipyard');
 
-const args = [script, '--json'];
+const args = [script, '--json', '--adopt-native'];
 if (mode === 'check') args.push('--check');
 const result = spawnSync(process.execPath, args, { cwd: ROOT, encoding: 'utf8' });
 if (result.error) fail(`could not run ${script}: ${result.error.message}`);
@@ -94,8 +94,10 @@ try {
 } catch {
   fail(`gsd-sync returned non-JSON output: ${(result.stdout || result.stderr || '').trim()}`);
 }
-if (result.status !== 0 || payload.ok !== true) {
-  const blockers = Array.isArray(payload.blockers) ? payload.blockers.join('; ') : (payload.error || result.stderr || 'unknown projection failure');
+if (result.status !== 0 || payload.ok !== true || payload.applicable !== true) {
+  const blockers = payload.applicable === false
+    ? 'gsd-sync reported that the delivery project is not applicable'
+    : Array.isArray(payload.blockers) ? payload.blockers.join('; ') : (payload.error || result.stderr || 'unknown projection failure');
   fail(`${mode} blocked: ${blockers}`);
 }
 console.log(`gsd-sync-gate: ${mode === 'check' ? 'projection is synchronized' : 'projection published'} (${payload.counts?.generated_files ?? 0} files)`);

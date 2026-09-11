@@ -584,7 +584,16 @@ function loadConfig(root) {
   const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
   // delivery_pipeline.* (the capability's declared, GSD-native namespace) wins
   // over pipeline.* for any key present in both.
-  const merged = { ...obj(raw.pipeline), ...obj(raw.delivery_pipeline) };
+  const legacyPipeline = obj(raw.pipeline);
+  const declaredPipeline = obj(raw.delivery_pipeline);
+  const merged = { ...legacyPipeline, ...declaredPipeline };
+  // gsd_sync is a capability-declared switch. Do not let the legacy pipeline
+  // namespace appear to configure a key that the lifecycle gate never reads.
+  if (Object.prototype.hasOwnProperty.call(legacyPipeline, 'gsd_sync')
+      && !Object.prototype.hasOwnProperty.call(declaredPipeline, 'gsd_sync')) {
+    delete merged.gsd_sync;
+    warnings.push('pipeline.gsd_sync is not supported — use delivery_pipeline.gsd_sync');
+  }
 
   // GSD's own `sub_repos` (both the flat and the nested shape it accepts). It is
   // the declared way to say "this nested checkout belongs to my project", and

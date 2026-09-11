@@ -144,11 +144,12 @@ function sourceFingerprint(entries) {
 }
 
 function parseArgs(argv) {
-  const args = { check: false, json: false, phase: null, help: false };
+  const args = { check: false, json: false, phase: null, help: false, adoptNative: false };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--check') args.check = true;
     else if (token === '--json') args.json = true;
+    else if (token === '--adopt-native') args.adoptNative = true;
     else if (token === '--help' || token === '-h') args.help = true;
     else if (token === '--phase') {
       const value = argv[++i];
@@ -692,11 +693,13 @@ function replaceRoadmapBlock(original, block) {
   );
 }
 
-function generatedFileContent(file, expected) {
+function generatedFileContent(file, expected, { adoptNative = false } = {}) {
   const existing = readText(file);
   // ROADMAP is human-authored outside its marked block; all other projection
   // files are wholly owned and must carry our marker before they are replaced.
-  if (existing != null && file !== ROADMAP && !hasMarker(existing)) {
+  // A lifecycle gate may explicitly adopt the native GSD files once the project
+  // has opted into Shipyard delivery. Direct syncs remain fail-closed.
+  if (existing != null && file !== ROADMAP && !hasMarker(existing) && !adoptNative) {
     throw new Error(`${posixRelative(file)} exists but is not owned by ${FILE_MARKER}`);
   }
   return { file, existing, expected };
@@ -722,7 +725,7 @@ function findObsoleteGeneratedFiles(expected, { prune = true } = {}) {
   return obsolete;
 }
 
-function buildSnapshot({ phase: focusPhase = null } = {}) {
+function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
   const roadmapText = readText(ROADMAP);
   const projectText = readText(PROJECT);
   const graph = readJson(TICKETS, { fallback: null });
@@ -784,7 +787,7 @@ function buildSnapshot({ phase: focusPhase = null } = {}) {
     expected.set(path.join(dir, `${phase.dirName}-UAT.md`), renderUat(phase, evidence, fingerprint));
     expected.set(path.join(dir, `${phase.dirName}-VERIFICATION.md`), renderVerification(phase, evidence, fingerprint, lastActivity));
   }
-  const generated = [...expected.entries()].map(([file, content]) => generatedFileContent(file, content));
+  const generated = [...expected.entries()].map(([file, content]) => generatedFileContent(file, content, { adoptNative }));
   const obsolete = findObsoleteGeneratedFiles([...expected.keys()], { prune: focusPhase == null });
   const counts = {
     phases: phaseList.length,
@@ -855,17 +858,18 @@ function resultFor(snapshot, args, drift = []) {
 
 function help() {
   return [
-    'usage: gsd-sync.cjs [--check] [--json] [--phase <number>]',
+    'usage: gsd-sync.cjs [--check] [--json] [--adopt-native] [--phase <number>]',
     '',
     'Project Shipyard delivery evidence into native GSD artifacts.',
     'The command is local-only and inert only when no Shipyard delivery plans exist.',
+    '--adopt-native explicitly adopts existing native GSD projection files; lifecycle gates use this only after delivery applicability is proven.',
     '--phase performs a targeted projection of one phase while keeping global state coherent; run a full sync before ship.',
   ].join('\n');
 }
 
 function run(args) {
   if (args.help) return { help: help(), code: 0 };
-  const snapshot = buildSnapshot({ phase: args.phase });
+  const snapshot = buildSnapshot({ phase: args.phase, adoptNative: args.adoptNative });
   if (!snapshot.applicable) return { result: { ok: true, applicable: false }, code: 0 };
   if (args.check) {
     const drift = checkSnapshot(snapshot);
@@ -875,7 +879,7 @@ function run(args) {
     // Rebuild inside the lock. A planning/delivery writer may have changed the
     // source while the first read was in progress; publishing an old projection
     // is worse than waiting for the next run.
-    const locked = buildSnapshot({ phase: args.phase });
+    const locked = buildSnapshot({ phase: args.phase, adoptNative: args.adoptNative });
     publishSnapshot(locked);
     return locked;
   }, { label: 'gsd-sync' });

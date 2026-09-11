@@ -48,6 +48,14 @@ test('writes and then checks a conveyor project', () => {
   assert.match(checkResult.stdout, /projection is synchronized/);
 });
 
+test('adopts native GSD artifacts before publishing the projection', () => {
+  const root = project();
+  write(path.join(root, '.planning', 'STATE.md'), '# native GSD state\n');
+  const result = run(root, 'write');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), /shipyard:gsd-sync generated/);
+});
+
 test('blocks check mode when the projection is stale', () => {
   const root = project();
   assert.equal(run(root, 'write').status, 0);
@@ -70,6 +78,15 @@ test('ignores malformed config while determining applicability', () => {
   const result = run(root, 'check');
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /not applicable/);
+});
+
+test('blocks a malformed delivery marker that the synchronizer cannot project', () => {
+  const root = project();
+  const plan = path.join(root, '.planning', 'phases', '01-foundation', '01-01-PLAN.md');
+  write(plan, '---\nphase: 1\nplan: 1\ntitle: Foundation\ndelivery:\n---\n');
+  const result = run(root, 'check');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /not applicable|blocked/);
 });
 
 test('honors the declared opt-out without touching artifacts', () => {
