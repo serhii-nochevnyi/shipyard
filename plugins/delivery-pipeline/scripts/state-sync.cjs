@@ -55,7 +55,7 @@ const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
-const { resolveRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
+const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
 const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
@@ -416,6 +416,38 @@ function loadRepo(repo) {
 const repoData = new Map();
 for (const r of REPO_IDS) repoData.set(r, loadRepo(r));
 
+// Resolve each foreign repository once per cold start. The resolver owns the
+// configured→discovered decision and atomically caches a successful discovery;
+// keeping the result here prevents the readiness pass and the summary from
+// making different decisions or asking twice. A failure is data for that repo,
+// not a reason to abort the project's board.
+const localResolutions = new Map();
+for (const repo of REPO_IDS) {
+  if (!repo) continue;
+  try {
+    localResolutions.set(repo, resolveAndPersistRepository({
+      repo,
+      config: cfg,
+      configValid: CFG_VALID,
+      projectRoot: ROOT,
+    }));
+  } catch (error) {
+    localResolutions.set(repo, {
+      ticket: null,
+      repo,
+      resolution: 'resolver-error',
+      executable: false,
+      configured_path: null,
+      repository_root: null,
+      reason: `repository resolver failed for ${repo}: ${error.message}`,
+      discovery_status: 'error',
+      candidates: [],
+      searched_roots: [],
+      park_reason: `repository resolver failed for ${repo}: ${error.message}`,
+    });
+  }
+}
+
 function prsForBranch(repo, branch) {
   // branch-scoped, so a handful of rows: asking for the open-only fields here is
   // cheap and keeps a fallback-matched open PR from looking like it has no review,
@@ -442,7 +474,18 @@ for (const [id, t] of Object.entries(tickets)) {
   const pr = match ? match.pr : null;
   /** @type {Record<string, any>} */
   const entry = { branch: t.branch, pr: pr ? pr.number : null, status: 'pending' };
-  if (repo) entry.repo = repo;
+  if (repo) {
+    entry.repo = repo;
+    const local = localResolutions.get(repo);
+    if (local) {
+      entry.repo_resolution = {
+        resolution: local.resolution,
+        executable: local.executable === true,
+        repository_root: local.repository_root || null,
+        reason: local.reason || null,
+      };
+    }
+  }
   if (match && match.matchedBy === 'marker') {
     entry.matched_by = 'marker';
     entry.pr_branch = pr.headRefName;
@@ -609,6 +652,10 @@ for (const [id, t] of Object.entries(tickets)) {
   const deps = t.depends_on || [];
   const blockers = [];
   const reasons = {};
+  const addBlocker = (key, reason) => {
+    if (!blockers.includes(key)) blockers.push(key);
+    if (!reasons[key]) reasons[key] = reason;
+  };
 
   // Two facts about whether this ticket can be executed AT ALL, and they hold in
   // BOTH integration modes — so they are checked BEFORE the mode split, where
@@ -623,12 +670,23 @@ for (const [id, t] of Object.entries(tickets)) {
   // cannot be executed as written — park it with the reason instead of offering
   // it as `ready`.
   if (t.unreachable_paths) {
-    blockers.push('plan');
-    reasons.plan = 'files_modified points outside the repo — declare delivery.repo and use repo-relative paths (validate-graph warns with the exact entry)';
+    addBlocker('plan', 'files_modified points outside the repo — declare delivery.repo and use repo-relative paths (validate-graph warns with the exact entry)');
   }
-  if (!repoData.get(repoOf(t)).available) {
-    blockers.push('repo');
-    reasons.repo = `repo ${repoOf(t)} is not reachable through gh — status unknown, nothing can be driven there`;
+  const ticketRepo = repoOf(t);
+  const remote = repoData.get(ticketRepo) || { available: false };
+  const local = ticketRepo ? localResolutions.get(ticketRepo) : null;
+  if (ticketRepo && (!local || !local.executable)) {
+    addBlocker(
+      'repo',
+      `repo ${ticketRepo} has no executable local checkout — ${local && local.reason ? local.reason : 'resolution did not return a usable checkout'}`,
+    );
+  }
+  if (!remote.available) {
+    const remoteReason = `repo ${ticketRepo || 'this repo'} is not reachable through gh — status unknown (could be inaccessible or nonexistent)`;
+    const combined = ticketRepo && local && !local.executable
+      ? `${remoteReason}; local resolution: ${local.reason}`
+      : remoteReason;
+    addBlocker('repo', combined);
   }
 
   if (mode === 'epic-stacked') {
@@ -1061,10 +1119,7 @@ if (mode === 'epic-stacked') {
 for (const repo of REPO_IDS) {
   if (!repo) continue;
   const n = Object.values(tickets).filter((t) => repoOf(t) === repo).length;
-  // Configured paths still win. When there is no declaration, a unique
-  // origin-matching sibling checkout is executable too; resolution remains
-  // read-only here, while T-30-09 owns any durable config write-back.
-  const resolution = resolveRepository({ repo, config: cfg, projectRoot: ROOT });
+  const resolution = localResolutions.get(repo);
   if (!resolution.executable) {
     console.log(`⚠ repo ${repo} holds ${n} ticket(s) but is track-only — ${resolution.reason}; without an executable checkout the conveyor can only TRACK them`);
   } else {

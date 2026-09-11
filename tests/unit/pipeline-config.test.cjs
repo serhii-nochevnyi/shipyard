@@ -12,6 +12,7 @@ const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const mod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs');
+const repoResolver = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'repo-resolve.cjs'));
 const {
   loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps,
   taskLevelRoute, routeOf,
@@ -998,6 +999,28 @@ test('the shared destination helper gives the same nesting verdict to callers', 
   });
   assert.strictEqual(allowed.valid, true);
   assert.strictEqual(allowed.repos_root, null);
+});
+
+test('a resolver write-back remains readable as the configured checkout on the next load', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-writeback-'));
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  const checkout = path.join(dir, 'checkout');
+  fs.mkdirSync(checkout);
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({
+    project_key: 'preserve-me',
+    pipeline: { custom_key: 'keep-me' },
+  }, null, 2) + '\n');
+
+  const written = repoResolver.persistResolvedRepository(dir, 'acme/service', checkout);
+  assert.strictEqual(written.valid, true);
+  assert.strictEqual(written.written, true);
+  const loaded = loadConfig(dir);
+  assert.strictEqual(loaded.valid, true);
+  assert.strictEqual(loaded.config.repos['acme/service'], fs.realpathSync(checkout));
+  assert.strictEqual(loaded.config.custom_key, undefined);
+  const raw = JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8'));
+  assert.strictEqual(raw.project_key, 'preserve-me');
+  assert.strictEqual(raw.pipeline.custom_key, 'keep-me');
 });
 
 suite('sentinel + auto_merge — the knobs that decide whether PRs land by themselves');

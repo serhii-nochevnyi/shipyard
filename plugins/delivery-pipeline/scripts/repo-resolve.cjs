@@ -15,7 +15,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { loadConfig, validateRepositoryDestination } = require('./pipeline-config.cjs');
 const { originRefName, resolveOriginRef } = require('./graph-dir.cjs');
-const { withLock, lockDirFor } = require('./lock.cjs');
+const { withLock, writeAtomic, lockDirFor } = require('./lock.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
@@ -266,6 +266,148 @@ function configuredRepos(config) {
   return isRecord(config.repos) ? config.repos : {};
 }
 
+function invalidRepositoryPolicy(config) {
+  return Object.prototype.hasOwnProperty.call(config, 'repos_root')
+    && config.repos_root === null;
+}
+
+function configFile(projectRoot) {
+  return path.join(path.resolve(projectRoot || process.cwd()), '.planning', 'config.json');
+}
+
+function configWriteFailure(repo, repositoryPath, file, reason) {
+  return {
+    valid: false,
+    written: false,
+    repo,
+    path: repositoryPath || null,
+    file,
+    namespace: null,
+    reason,
+  };
+}
+
+/**
+ * Persist a successfully resolved checkout without replacing any unrelated
+ * project configuration. The read, merge, and atomic rename are one transaction
+ * under a lock distinct from state-sync's publication lock.
+ *
+ * @param {string} projectRoot
+ * @param {string} repo
+ * @param {string} repositoryPath
+ * @returns {{valid:boolean, written:boolean, repo:string, path:string|null, file:string, namespace:string|null, reason:string|null}}
+ */
+function persistResolvedRepository(projectRoot, repo, repositoryPath) {
+  const root = path.resolve(projectRoot || process.cwd());
+  const file = configFile(root);
+  if (typeof repo !== 'string' || !REPO_SLUG.test(repo)) {
+    return configWriteFailure(repo, repositoryPath, file, `repo must be an owner/name slug, got ${JSON.stringify(repo)}`);
+  }
+  if (typeof repositoryPath !== 'string' || !path.isAbsolute(repositoryPath)) {
+    return configWriteFailure(repo, repositoryPath, file, `resolved checkout for ${repo} must be an absolute path`);
+  }
+
+  let canonical;
+  try {
+    canonical = fs.realpathSync(repositoryPath);
+    if (!fs.statSync(canonical).isDirectory()) {
+      return configWriteFailure(repo, canonical, file, `resolved checkout for ${repo} is not a directory`);
+    }
+  } catch (error) {
+    return configWriteFailure(
+      repo,
+      path.resolve(repositoryPath),
+      file,
+      `resolved checkout for ${repo} is not available (${error.code || error.message})`,
+    );
+  }
+
+  try {
+    return withLock(lockDirFor(root), 'repo-config', () => {
+      let raw;
+      try {
+        raw = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+      } catch (error) {
+        return configWriteFailure(repo, canonical, file, `config write-back refused: ${file} is not valid JSON (${error.message})`);
+      }
+      if (!isRecord(raw)) {
+        const shape = raw === null ? 'null' : Array.isArray(raw) ? 'an array' : typeof raw;
+        return configWriteFailure(repo, canonical, file, `config write-back refused: ${file} is not a JSON object (got ${shape})`);
+      }
+
+      // `pipeline.repos` is the ADR-010 write-back surface. If the preferred
+      // namespace already owns that key, keep writing there so its effective
+      // map is not shadowed by a newly-created legacy section.
+      const namespace = isRecord(raw.delivery_pipeline)
+        && Object.prototype.hasOwnProperty.call(raw.delivery_pipeline, 'repos')
+        ? 'delivery_pipeline'
+        : 'pipeline';
+      if (Object.prototype.hasOwnProperty.call(raw, namespace) && !isRecord(raw[namespace])) {
+        return configWriteFailure(repo, canonical, file, `config write-back refused: ${namespace} must be a JSON object`);
+      }
+      const section = isRecord(raw[namespace]) ? raw[namespace] : {};
+      if (Object.prototype.hasOwnProperty.call(section, 'repos') && !isRecord(section.repos)) {
+        return configWriteFailure(repo, canonical, file, `config write-back refused: ${namespace}.repos must be a JSON object`);
+      }
+      const repos = isRecord(section.repos) ? section.repos : {};
+      if (repos[repo] === canonical) {
+        return {
+          valid: true,
+          written: false,
+          repo,
+          path: canonical,
+          file,
+          namespace,
+          reason: null,
+        };
+      }
+
+      raw[namespace] = { ...section, repos: { ...repos, [repo]: canonical } };
+      writeAtomic(file, `${JSON.stringify(raw, null, 2)}\n`);
+      return {
+        valid: true,
+        written: true,
+        repo,
+        path: canonical,
+        file,
+        namespace,
+        reason: null,
+      };
+    }, { label: `repo-config write-back ${repo}` });
+  } catch (error) {
+    return configWriteFailure(repo, canonical, file, `config write-back failed for ${repo}: ${error.message}`);
+  }
+}
+
+function configWritePark(input, result, persisted) {
+  const reason = `repository ${input.repo} resolved at "${result.repository_root}" but config write-back was refused: ${persisted.reason}`;
+  return {
+    ...result,
+    resolution: 'config-write-failed',
+    executable: false,
+    configured_path: null,
+    repository_root: null,
+    resolved_repository_root: result.repository_root,
+    config_written: false,
+    config_path: persisted.file,
+    config_namespace: persisted.namespace,
+    reason,
+    park_reason: reason,
+  };
+}
+
+function persistExecutableResult(input, result) {
+  if (!result || !result.executable || result.resolution === 'configured') return result;
+  const persisted = persistResolvedRepository(input.projectRoot, input.repo, result.repository_root);
+  if (!persisted.valid) return configWritePark(input, result, persisted);
+  return {
+    ...result,
+    config_written: persisted.written,
+    config_path: persisted.file,
+    config_namespace: persisted.namespace,
+  };
+}
+
 function hasConfiguredRepo(config, repo) {
   return Object.prototype.hasOwnProperty.call(configuredRepos(config), repo);
 }
@@ -279,9 +421,9 @@ function discoveryRoots(config, projectRoot) {
     if (!roots.includes(resolvedRoot)) roots.push(resolvedRoot);
   };
 
-  // `repos_root` is consumed here when the caller already has that normalized
-  // value. pipeline-config.cjs owns its parsing/default in the later destination
-  // ticket; until then, the project parent remains the safe documented root.
+  // `repos_root` is consumed here after pipeline-config.cjs has normalized it.
+  // An explicit null is reserved for a malformed declaration and is refused by
+  // discoverRepository instead of silently falling back to the project parent.
   add(config.repos_root);
   add(path.dirname(project));
   return roots;
@@ -331,6 +473,14 @@ function discoverRepository(input) {
   }
 
   const { ticket = null, repo, config } = input;
+  if (invalidRepositoryPolicy(config)) {
+    return trackOnly(
+      ticket,
+      repo,
+      'pipeline.repos_root is invalid; repository discovery is refused until the configured absolute path is fixed',
+      { resolution: 'invalid-policy', discovery_status: 'invalid' },
+    );
+  }
   const searchedRoots = discoveryRoots(config, input.projectRoot);
   const candidates = [];
   const seen = new Set();
@@ -554,7 +704,7 @@ function cloneChoiceResult(input, initial, destinationInfo) {
   if (fs.existsSync(destination)) {
     const adopted = suppliedPathResult(input, destination);
     if (adopted.executable) {
-      return {
+      return persistExecutableResult(input, {
         ...adopted,
         decision: 'clone',
         operator_choice: 'clone',
@@ -562,7 +712,7 @@ function cloneChoiceResult(input, initial, destinationInfo) {
         adopted: true,
         destination,
         clone_root: root,
-      };
+      });
     }
     const reason = `clone destination "${destination}" already exists and cannot be adopted: ${adopted.reason}`;
     return {
@@ -725,6 +875,12 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
   if (input.projectRoot !== undefined && typeof input.projectRoot !== 'string') {
     invalidArgument('projectRoot must be a string when provided');
   }
+  if (input.configValid === false) {
+    return cloneFailure(
+      input,
+      `clone for ${input.repo} is parked because ${configFile(input.projectRoot)} is invalid; fix the project config before cloning`,
+    );
+  }
   if (input.base === undefined || input.base === null || String(input.base).trim() === '') {
     return cloneFailure(input, `clone for ${input.repo} requires a named base ref to verify origin refs`);
   }
@@ -762,7 +918,7 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
   if (fs.existsSync(destination)) {
     const adopted = suppliedPathResult(input, destination);
     if (adopted.executable) {
-      return {
+      return persistExecutableResult(input, {
         ...adopted,
         resolution: 'adopted',
         decision: 'clone',
@@ -775,7 +931,7 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
         base_ref: null,
         base_verified: false,
         park_reason: null,
-      };
+      });
     }
     return cloneFailure(input,
       `clone destination "${destination}" already exists and cannot be adopted: ${adopted.reason}`, {
@@ -837,7 +993,7 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
   const repositoryRoot = (() => {
     try { return fs.realpathSync(destination); } catch { return path.resolve(destination); }
   })();
-  return {
+  return persistExecutableResult(input, {
     ...resolved(input.ticket ?? null, input.repo, destination, repositoryRoot, { resolution: 'cloned' }),
     decision: 'clone',
     operator_choice: 'clone',
@@ -851,7 +1007,7 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
     base_ref: baseRef,
     base_verified: true,
     park_reason: null,
-  };
+  });
 }
 
 function choicePrompt(repo, destination) {
@@ -885,9 +1041,12 @@ function normalizeChoice(value) {
 /**
  * Apply D3 after configured resolution and origin discovery.
  *
- * This function never clones, creates a directory, or writes pipeline config.
- * Its `park_reason` is the durable message the delivery caller must pass to
- * escalation-record.cjs when the result is not executable.
+ * This function never clones or creates a directory. A successful discovered or
+ * explicitly supplied checkout is written back by the same atomic config
+ * transaction used by state-sync; a clone choice only records intent and stays
+ * parked until the separate `clone` command runs. Its `park_reason` is the
+ * durable message the delivery caller must pass to escalation-record.cjs when
+ * the result is not executable.
  *
  * @param {{ticket?: string|null, repo: string, config: object, projectRoot?: string, choice?: string, existingPath?: string, destination?: string, resolutionResult?: object}} input
  */
@@ -898,7 +1057,7 @@ function chooseRepository(input) {
   }
 
   const initial = input.resolutionResult || resolveRepository(input);
-  if (initial.executable) return initial;
+  if (initial.executable) return persistExecutableResult(input, initial);
   const choice = normalizeChoice(input.choice);
   const destinationInfo = defaultCloneDestination(input.repo, input.projectRoot, input.config);
   if (input.destination !== undefined && input.destination !== null) {
@@ -923,12 +1082,12 @@ function chooseRepository(input) {
   if (choice === 'existing') {
     const supplied = suppliedPathResult(input, input.existingPath);
     if (supplied.executable) {
-      return {
+      return persistExecutableResult(input, {
         ...supplied,
         decision: 'existing',
         operator_choice: 'existing',
         choice_source: 'operator',
-      };
+      });
     }
     const reason = `operator supplied a checkout for ${input.repo}, but it was rejected: ${supplied.reason}`;
     return parkedChoice(initial, 'existing', reason, {
@@ -954,9 +1113,28 @@ function chooseRepository(input) {
  */
 function resolveRepository(input) {
   validateArgs(input);
+  if (input.configValid === false) {
+    return trackOnly(
+      input.ticket ?? null,
+      input.repo,
+      `repository ${input.repo} cannot be resolved because ${configFile(input.projectRoot)} is invalid`,
+      { resolution: 'config-invalid', discovery_status: 'invalid' },
+    );
+  }
   const configured = resolveConfiguredRepo(input);
   if (hasConfiguredRepo(input.config, input.repo) || configured.executable) return configured;
   return discoverRepository(input);
+}
+
+/**
+ * Resolve a repository for a cold start and cache any newly found executable
+ * checkout. Configured paths are already durable and therefore are not rewritten.
+ * A write failure turns only this repository into a trackable parked result.
+ */
+function resolveAndPersistRepository(input) {
+  validateArgs(input);
+  const result = resolveRepository(input);
+  return persistExecutableResult(input, result);
 }
 
 // Short aliases for callers that use command-style names.
@@ -982,10 +1160,12 @@ module.exports = {
   resolveConfigured,
   resolveConfiguredRepo,
   resolveCloneUrl,
+  resolveAndPersistRepository,
   resolveRepo,
   resolveRepository,
   resolveSupplied,
   selectCloneUrl,
+  persistResolvedRepository,
   suppliedPathResult,
 };
 
@@ -1074,6 +1254,7 @@ if (require.main === module) {
       ticket: options.ticket,
       repo: options.repo,
       config,
+      configValid: loaded.valid,
       projectRoot: projectDir,
     };
     let result;
@@ -1082,7 +1263,7 @@ if (require.main === module) {
     } else if (options.command === 'discover') {
       result = discoverRepository(input);
     } else if (options.command === 'resolve') {
-      result = resolveRepository(input);
+      result = resolveAndPersistRepository(input);
     } else if (options.command === 'clone') {
       result = cloneRepository({
         ...input,
