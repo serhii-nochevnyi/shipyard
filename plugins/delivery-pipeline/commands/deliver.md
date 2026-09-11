@@ -712,14 +712,16 @@ Consequences you must honour:
   the run works from many worktrees). state-sync prints a `⚠ repo … has no local
   checkout configured` line when it is missing: those tickets can be tracked but
   not driven, and saying so is mandatory, not optional.
-- **Cold-start resolution begins with the configured branch.** For every foreign
-  ticket before preparing its worktree, call:
-  `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs configured <owner/name> \
+- **Cold-start resolution follows the configured then discovery branches.** For
+  every foreign ticket before preparing its worktree, call:
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs resolve <owner/name> \
   --ticket <T-id> --project-dir <project-root> --json`. A result with
-  `resolution: "configured"` and `executable: true` supplies
-  `repository_root`; `resolution: "track-only"` supplies the ticket and reason
-  and must remain a diagnostic at this stage. Do not discover or clone from this
-  branch; those are later resolver steps.
+  `resolution: "configured"` or `resolution: "discovered"` and `executable: true`
+  supplies `repository_root`; `resolution: "track-only"` or
+  `resolution: "undiscovered"` supplies the ticket and reason. An
+  `resolution: "ambiguous"` result lists every candidate and must be handed to
+  the operator; this branch never picks by basename. Do not prompt or clone from
+  this branch; those are later resolver steps.
 - **`.planning/` stays in the project repo only.** State, plans and the log never
   get copied into the sibling checkout.
 - A plan whose `files_modified` uses `../other-repo/...` paths is a broken plan,

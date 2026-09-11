@@ -74,6 +74,9 @@ test('an existing configured git checkout resolves to its repository root', () =
     configured_path: canonicalCheckout,
     repository_root: canonicalCheckout,
     reason: null,
+    discovery_status: 'not-run',
+    candidates: [],
+    searched_roots: [],
   });
 });
 
@@ -88,6 +91,7 @@ test('a missing entry is trackable-only and keeps the ticket and reason', () => 
   assert.strictEqual(result.ticket, 'T-30-03');
   assert.strictEqual(result.repo, 'acme/service');
   assert.match(result.reason, /pipeline\.repos/);
+  assert.strictEqual(result.discovery_status, 'not-run');
 });
 
 test('an invalid configured path is trackable-only without filesystem mutation', () => {
@@ -144,6 +148,97 @@ test('the CLI uses the same configured branch and returns machine-readable resol
   assert.strictEqual(output.repository_root, canonicalCheckout);
 });
 
+function repoAt(dir, origin) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'gitconfig'), '');
+  git(dir, ['init', '-q']);
+  git(dir, ['remote', 'add', 'origin', origin]);
+  return fs.realpathSync(dir);
+}
+
+test('origin normalization accepts GitHub SSH, HTTPS, and scp-like forms', () => {
+  for (const origin of [
+    'git@github.com:Acme/Service.git',
+    'ssh://git@github.com/Acme/Service.git',
+    'https://github.com/Acme/Service.git/',
+    'https://token@github.com/Acme/Service',
+  ]) {
+    assert.strictEqual(mod.normalizeOrigin(origin), 'acme/service', origin);
+  }
+  assert.strictEqual(mod.normalizeOrigin('https://gitlab.com/acme/service.git'), null);
+  assert.strictEqual(mod.normalizeOrigin('acme/service'), null);
+});
+
+test('discovery matches origin rather than the directory basename and scans one level', () => {
+  const parent = tempDir();
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(projectDir);
+  const matching = repoAt(path.join(parent, 'unrelated-directory-name'), 'git@github.com:Acme/Service.git');
+  repoAt(path.join(parent, 'service'), 'git@github.com:someone-else/Service.git');
+  const nested = path.join(parent, 'nested-root', 'service');
+  repoAt(nested, 'git@github.com:acme/service.git');
+
+  const result = mod.discoverRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.resolution, 'discovered');
+  assert.strictEqual(result.discovery_status, 'unique');
+  assert.strictEqual(result.executable, true);
+  assert.strictEqual(result.repository_root, matching);
+  assert.deepStrictEqual(result.candidates.map((candidate) => candidate.path), [matching]);
+  assert.ok(result.searched_roots.includes(fs.realpathSync(parent)) || result.searched_roots.includes(parent));
+});
+
+test('zero discovery candidates are distinct from an ambiguous result', () => {
+  const parent = tempDir();
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(projectDir);
+  const none = mod.discoverRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(none.resolution, 'undiscovered');
+  assert.strictEqual(none.discovery_status, 'none');
+  assert.deepStrictEqual(none.candidates, []);
+  assert.strictEqual(none.executable, false);
+
+  repoAt(path.join(parent, 'first'), 'https://github.com/acme/service.git');
+  repoAt(path.join(parent, 'second'), 'git@github.com:acme/service.git');
+  const ambiguous = mod.discoverRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(ambiguous.resolution, 'ambiguous');
+  assert.strictEqual(ambiguous.discovery_status, 'ambiguous');
+  assert.strictEqual(ambiguous.executable, false);
+  assert.strictEqual(ambiguous.candidates.length, 2);
+  assert.match(ambiguous.reason, /multiple checkouts/);
+});
+
+test('resolveRepository keeps a valid configured checkout ahead of discovery', () => {
+  const parent = tempDir();
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(projectDir);
+  const configured = repoAt(path.join(parent, 'configured'), 'git@github.com:acme/service.git');
+  repoAt(path.join(parent, 'discovered'), 'git@github.com:acme/service.git');
+  const result = mod.resolveRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: { 'acme/service': configured }, repos_root: parent },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.resolution, 'configured');
+  assert.strictEqual(result.repository_root, configured);
+  assert.strictEqual(result.discovery_status, 'not-run');
+});
+
 test('the CLI rejects an unknown slug instead of treating it as a checkout request', () => {
   const result = run(['configured', 'not-a-slug', '--json']);
   assert.strictEqual(result.status, 2);
@@ -155,8 +250,8 @@ test('state-sync and deliver name the configured resolver caller', () => {
   const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
   assert.match(stateSync, /require\(path\.join\(__dirname, 'repo-resolve\.cjs'\)\)/);
   assert.match(stateSync, /resolveConfiguredRepo\(\{ repo, config: cfg \}\)/);
-  assert.match(deliver, /repo-resolve\.cjs configured <owner\/name>/);
-  assert.match(deliver, /resolution: "configured"/);
+  assert.match(deliver, /repo-resolve\.cjs resolve <owner\/name>/);
+  assert.match(deliver, /resolution: "discovered"/);
 });
 
 done();
