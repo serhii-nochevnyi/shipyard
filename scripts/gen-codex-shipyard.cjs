@@ -349,16 +349,26 @@ function codexModelPolicy(pluginDir, codexHome, opts = {}) {
       const tier = pc.resolveModel(ladderRole, signals, cfg);
       const effort = pc.resolveEffort(ladderRole, tier, cfg, signals);
       const remapped = remapFor(tier);
+      // A pipeline.models.<role> entry is an explicit operator choice. It must
+      // remain one concrete lane when we render the optional critical/recovery
+      // files; otherwise those generation-only flags would silently promote the
+      // override to the palette ceiling.
+      const hasModelOverride = Boolean(
+        cfg.models && Object.prototype.hasOwnProperty.call(cfg.models, ladderRole),
+      );
       // A remapped tier is one model for every role that resolves to it, so the
       // palette's floor/ceiling distinction does not apply — and the entry's
       // declared effort belongs to the entry's model, not to this one. The CLI
       // floor is the one thing that still applies, so it is measured on the way
       // out rather than skipped by the early return this used to be.
       if (remapped && !remapBelowFloor(remapped, role)) return { model: remapped, effort };
-      const entry = deep
+      const promoteToCeiling = !hasModelOverride && (
+        deep
         || (cfg.model_ladder === 'adaptive' && level === 'critical')
         || level === 'recovery'
         || role === 'integrator'
+      );
+      const entry = promoteToCeiling
         ? ceiling
         : floor;
       if (!entry) return { model: null, effort };

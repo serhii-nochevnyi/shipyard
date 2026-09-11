@@ -249,7 +249,7 @@ function report(sources, options = {}) {
     codexSourceSessions.set(source, metaSession);
     for (const row of rows) {
       if (!isCurrentCodexUsage(row)) continue;
-      const id = row.payload.session_id || metaSession;
+      const id = row.payload?.session_id || row.sessionId || row.session_id || metaSession;
       if (id) currentCodexSessions.add(id);
     }
   }

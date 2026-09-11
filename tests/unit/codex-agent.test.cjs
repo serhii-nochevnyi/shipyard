@@ -247,7 +247,23 @@ test('executor promotes an ordinary dispatch when the measured window ceiling fi
   assert.strictEqual(result.model, 'gpt-6-astra');
 });
 
-test('static Codex roles use the deep file when the measured window ceiling fires', () => {
+test('an explicit executor model override is not promoted by automatic classification', () => {
+  const f = fixture('adaptive', STANDARD_FILES, {
+    pipeline: { models: { executor: 'sonnet' } },
+  });
+  const result = selectAgent('executor', {
+    cwd: f.project,
+    agentDir: f.agentDir,
+    env: { SHIPYARD_CODEX_CLI_VERSION: '0.999.0' },
+    signals: { risk: 'high', files: 2 },
+  });
+  assert.strictEqual(result.task_level, 'critical');
+  assert.match(result.route, /tier=override\(sonnet\)/);
+  assert.strictEqual(result.palette_lane, 'floor');
+  assert.strictEqual(result.model, 'gpt-5.6-terra');
+});
+
+test('static Codex roles keep recovery variants for documented routes only', () => {
   const f = fixture('adaptive', STANDARD_FILES, {
     pipeline: { fable_window_tokens: 100 },
   });
@@ -258,8 +274,27 @@ test('static Codex roles use the deep file when the measured window ceiling fire
   });
   assert.strictEqual(result.task_level, 'complex');
   assert.match(result.route, /tier=ceiling:window:degraded(?:\+cap:codex)?\(sonnet\)/);
-  assert.strictEqual(result.agent_file, 'shipyard-arch-review-deep');
-  assert.strictEqual(result.model, 'gpt-6-astra');
+  assert.strictEqual(result.agent_file, 'shipyard-arch-review');
+  assert.strictEqual(result.model, 'gpt-5.6-terra');
+  assert.strictEqual(result.fallback.requested, 'shipyard-arch-review-ceiling');
+  assert.match(result.fallback.reason, /window ceiling route.*no generated Codex ceiling variant/);
+});
+
+test('a conservative static role reports a missing ceiling variant instead of hiding it', () => {
+  const f = fixture('conservative', {
+    'shipyard-inv-research': { model: 'gpt-5.6-terra' },
+  }, {
+    pipeline: { fable_window_tokens: 100 },
+  });
+  const result = selectAgent('research', {
+    cwd: f.project,
+    agentDir: f.agentDir,
+    signals: { inputTokens: 101 },
+  });
+  assert.match(result.route, /tier=ceiling:window:degraded(?:\+cap:codex)?\(sonnet\)/);
+  assert.strictEqual(result.agent_file, 'shipyard-inv-research');
+  assert.strictEqual(result.fallback.requested, 'shipyard-inv-research-ceiling');
+  assert.match(result.fallback.reason, /no generated Codex ceiling variant/);
 });
 
 test('executor returns the Codex default when the palette has no usable entry', () => {

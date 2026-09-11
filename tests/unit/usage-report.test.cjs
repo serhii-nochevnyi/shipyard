@@ -67,6 +67,19 @@ test('current Codex format wins when legacy snapshots are in a resumed file',()=
  assert.equal(r.groups[0].output_tokens,30);
  assert.equal(r.observations.length,2);
 });
+test('current Codex identity on a row-level session field suppresses legacy snapshots', () => {
+ const current = { ...codexCurrent, payload: { ...codexCurrent.payload } };
+ delete current.payload.session_id;
+ current.sessionId = 'codex-session';
+ const legacy = { ...codex(250,'2026-09-10T00:01:59Z'), sessionId: 'codex-session' };
+ const r = report([
+   { source: 'legacy-part', rows: [legacy] },
+   { source: 'current-part', rows: [current] },
+ ]);
+ assert.equal(r.observations.length, 1);
+ assert.equal(r.observations[0].session_id, 'codex-session');
+ assert.equal(r.groups[0].input_tokens, 300);
+});
 test('current Codex usage record supplies session identity without session_meta', () => {
  const session = 'fragment-session';
  const row = { ...codexCurrent, payload: { ...codexCurrent.payload, session_id: session } };

@@ -206,14 +206,20 @@ function selectDynamicExecutor(cfg, classification, signals, env = process.env, 
   const route = pc.routeOf('executor', signals, cfg);
   const parsedRoute = pc.parseRoute(route);
   if (!parsedRoute) fail(`the shared resolver returned an invalid route for executor: ${route}`);
+  // A per-role model override is an operator's explicit ceiling/floor choice.
+  // Classification must not silently promote it to the palette ceiling: the
+  // resolver has already put the override ahead of every automatic route.
+  const routeIsOverride = /^(?:override)(?:\+|$)/.test(parsedRoute.tier.rule);
   // The window route is an earned ceiling independent of task classification:
   // an ordinary executor can cross the configured context threshold while its
   // task level remains routine. Read the resolver's route, not just the
   // classifier, or this dispatch silently takes the floor palette entry.
   const ceiling = parsedRoute.tier.rule.startsWith('ceiling:')
-    || classification.value === 'recovery'
-    || classification.value === 'critical'
-      && (cfg.model_ladder === 'adaptive' || classification.requested === 'critical');
+    || (!routeIsOverride && (
+      classification.value === 'recovery'
+      || classification.value === 'critical'
+        && (cfg.model_ladder === 'adaptive' || classification.requested === 'critical')
+    ));
   const requestedEffort = parsedRoute.effort.effort;
   const remapFor = createCodexRemapper({ codexHome: env.CODEX_HOME, cwd: projectDir, env });
   const remapped = remapFor(parsedRoute.tier.model);
@@ -326,8 +332,16 @@ function selectAgent(role, options = {}) {
   const route = pc.routeOf(ladderRole, signals, cfg);
   const parsedRoute = pc.parseRoute(route);
   if (!parsedRoute) fail(`the shared resolver returned an invalid route for ${ladderRole}: ${route}`);
-  const ceilingRoute = parsedRoute.tier.rule.startsWith('ceiling:');
-  const suffix = candidateSuffix(baseRole, classification.value, cfg.model_ladder, ceilingRoute);
+  const ceilingMatch = parsedRoute.tier.rule.match(/^ceiling:([a-z][a-z0-9_-]*)/);
+  const ceilingKind = ceilingMatch ? ceilingMatch[1] : null;
+  const ceilingRoute = Boolean(ceilingKind);
+  // `-deep` is a recovery artifact, not a generic synonym for any ceiling.
+  // The measured window route is a first attempt and its generated recovery
+  // prompt would be false. Only the documented exhausted/contested routes may
+  // select that artifact; task-level critical/recovery signals still select
+  // their own variants below candidateSuffix.
+  const artifactCeiling = ceilingKind === 'exhausted' || ceilingKind === 'contested';
+  const suffix = candidateSuffix(baseRole, classification.value, cfg.model_ladder, artifactCeiling);
   const baseName = `${PREFIX}${baseRole}`;
   const wantedName = `${baseName}${suffix}`;
   const dir = options.agentDir || agentDirFrom(options.flags || new Map());
@@ -335,6 +349,18 @@ function selectAgent(role, options = {}) {
   let selectedName = wantedName;
   let selectedPath = wantedPath;
   let fallback = null;
+  // A ceiling route can be real even when this role has no generated variant
+  // (for example research/drift-check on a conservative window route). Keep the
+  // ordinary file as the compatibility path, but expose that loss of the
+  // requested ceiling in telemetry so it cannot look like an ordinary dispatch.
+  // The integrator is deliberately excluded: its ordinary file is the ceiling
+  // in both modes and is therefore not a fallback.
+  if (ceilingRoute && !suffix && baseRole !== 'integrator') {
+    fallback = {
+      requested: `${baseName}-ceiling`,
+      reason: `the ${ceilingKind} ceiling route fired (${parsedRoute.tier.rule}) but no generated Codex ceiling variant exists for ${baseRole}; using the ordinary file`,
+    };
+  }
   // The classifier still labels a high-risk/checkpoint dispatch `critical` in
   // conservative mode so telemetry describes the work. Conservative policy does
   // not emit first-attempt critical files, however, and silently selecting the
@@ -344,7 +370,8 @@ function selectAgent(role, options = {}) {
   // variant is genuinely unavailable.
   if (classification.value === 'critical'
       && cfg.model_ladder !== 'adaptive'
-      && CRITICAL_ROLES.has(baseRole)) {
+      && CRITICAL_ROLES.has(baseRole)
+      && !fallback) {
     fallback = {
       requested: `${baseName}${CRITICAL_SUFFIX}`,
       reason: 'the project ladder is conservative, so no first-attempt critical Codex variant is generated',

@@ -359,6 +359,21 @@ test('adaptive mode adds distinct critical files while keeping the integrator at
   assert.strictEqual(Object.keys(g.agents).length, 15, Object.keys(g.agents).join(', '));
 });
 
+test('an explicit pipeline model override keeps generated variants on its chosen lane', () => {
+  const g = generate({
+    project: {
+      delivery_pipeline: {
+        model_ladder: 'adaptive',
+        models: { 'arch-review': 'sonnet' },
+      },
+    },
+  });
+  assert.strictEqual(g.run.status, 0, g.stderr);
+  assert.strictEqual(g.agents['shipyard-arch-review'].model, FLOOR.model, g.stderr);
+  assert.ok(!g.agents['shipyard-arch-review-deep'], 'override must not create a promoted recovery file');
+  assert.ok(!g.agents['shipyard-arch-review-critical'], 'override must not create a promoted critical file');
+});
+
 test('no generated file asks for a retired effort', () => {
   // ADR-005 D6: on this runtime the axis is two values wide. `xhigh`/`max` cost
   // more for no better result, and `ultra` is not in the vocabulary at all.

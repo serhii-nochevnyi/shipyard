@@ -155,7 +155,12 @@ for (const [id, t] of Object.entries(tickets)) {
     pr: pr ? pr.number : null,
     hours_open_to_merge: pr && pr.mergedAt ? hours(Date.parse(pr.createdAt), Date.parse(pr.mergedAt)) : null,
     hours_open: pr && pr.state === 'OPEN' ? hours(Date.parse(pr.createdAt), now) : null,
-    approved: pr && pr.state === 'OPEN' ? pr.reviewDecision === 'APPROVED' : null,
+    // The open-only review-decision pass is best-effort. Missing data means the
+    // API query failed (or did not return this PR), not that GitHub answered
+    // CHANGES_REQUESTED; preserve that distinction for the report consumer.
+    approved: pr && pr.state === 'OPEN'
+      ? (typeof pr.reviewDecision === 'string' ? pr.reviewDecision === 'APPROVED' : null)
+      : null,
     attempts: attempts.length ? Math.max(...attempts.map((e) => Number(e.n) || 0), attempts.length) : 0,
     fix_fixed: outcome('fixed'),
     fix_noop: outcome('no-op'),

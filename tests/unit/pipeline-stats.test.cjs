@@ -248,6 +248,28 @@ test('a hand-written merge event with no `by` is still a human merge', () => {
   assert.strictEqual(lineWith(out, /^⚠.*pre-authoriz/).length, 0, `and it is not the warning case:\n${out}`);
 });
 
+test('an unavailable open-only review decision stays unknown rather than becoming false', () => {
+  const id = 'T-27-11';
+  const { code, json } = asJson({
+    tickets: { ...ticket(id, { human_checkpoint: false }) },
+    journal: [],
+    prs: [{
+      number: 73,
+      state: 'OPEN',
+      isDraft: false,
+      headRefName: `ticket/${id}-x`,
+      baseRefName: 'epic/27-x',
+      createdAt: iso(Date.now() - DAY),
+      mergedAt: null,
+      url: 'https://example.invalid/pull/73',
+      title: `${id}: something`,
+    }],
+  });
+  assert.strictEqual(code, 0);
+  const row = json.tickets.find((entry) => entry.ticket === id);
+  assert.strictEqual(row.approved, null, 'a missing reviewDecision is an unknown API result');
+});
+
 suite('pipeline-stats — ladder coverage is windowed and explicit');
 
 test('dispatch routing fields are grouped without turning missing observations into zeroes', () => {
