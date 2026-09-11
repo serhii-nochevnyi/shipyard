@@ -44,6 +44,7 @@ GSD should not be duplicated. The verified boundary:
 | Clean PR branch without `.planning/` | `/gsd-pr-branch` | Used as a utility in delivery |
 | UAT | `/gsd-verify-work` (conversational UAT) | Mechanical verification lives in CI + babysit loop |
 | PR / ship | `/gsd-ship <phase>` — one PR per phase | **PR-per-ticket + babysit to green** |
+| Native GSD state after delivery | GSD reads `STATE.md`, summaries, UAT, and verification artifacts | **`gsd-sync.cjs` projects the validated delivery graph and integration evidence** |
 | Running the review cycle | — | **Reviewer re-init + fix loop (CodeRabbit/Copilot)** |
 
 The conclusion is the same as in v1, but with a more precise boundary:
@@ -51,7 +52,16 @@ The conclusion is the same as in v1, but with a more precise boundary:
 ```text
 GSD          = investigation support + planning + plan quality convergence
 Overlay      = ticket discipline + PR-per-ticket delivery + review babysitting
+Projection   = deterministic native-GSD read model; it never becomes a second execution authority
 ```
+
+The replacement boundary is therefore closed rather than one-way. Whenever the
+graph or delivery evidence changes, `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-sync.cjs`
+publishes the native GSD projection. `--check` is the no-write consistency
+predicate used before ship. A merged ticket produces a completed plan summary;
+only explicit integration and verification evidence can produce a passed phase.
+Missing evidence remains pending or human-needed, and existing `needs-fix`
+findings remain gaps.
 
 **Entry points.** Three loops (investigate → decompose → deliver) plus two
 non-loop entries: `/shipyard:bench` for off-conveyor direct work (§6.6) and
@@ -875,6 +885,12 @@ human's, so GSD's "no auto-merge" boundary is preserved where it matters.
   `uat-gate.cjs ${PHASE_NUMBER}` wraps the fail-closed predicate
   `phase uat-passed` — /gsd-ship will not pass without verification evidence
   (switch: `delivery_pipeline.uat_gate`). Without a phase in context — skip.
+- **GSD projection gates** (capability v0.50.0): `gsd-sync.cjs` writes after
+  `plan:post`, `execute:post`, and `verify:post`, then runs in `--check` mode at
+  `ship:pre` (switch: `delivery_pipeline.gsd_sync`). The launcher is inert when
+  no plan carries a Shipyard `delivery:` block, so ordinary GSD projects are not
+  forced into the conveyor. The projection is local-only and atomic; it does not
+  call GitHub/Jira or remove worktrees.
 - **`ship.pr_body_sections`** seeded into the recommended decompose config
   (Acceptance Criteria + Risks & Dependencies from PLAN.md).
 - **Pre-push review** — an optional step 4b in deliver

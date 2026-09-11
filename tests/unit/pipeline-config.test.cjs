@@ -36,12 +36,20 @@ function withRaw(raw) {
   return loadConfig(dir);
 }
 
+function withRawOptions(raw, options) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cfg-'));
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
+  return { dir, ...loadConfig(dir, options) };
+}
+
 suite('loadConfig');
 
 test('no config file → defaults, no warnings', () => {
   const { config, warnings } = withConfig(undefined);
   assert.strictEqual(config.integration_mode, 'epic-stacked');
   assert.strictEqual(config.model_policy, 'balanced');
+  assert.strictEqual(config.gsd_sync, true);
   assert.strictEqual(config.max_attempts, 5);
   assert.deepStrictEqual(warnings, []);
 });
@@ -201,6 +209,18 @@ test('the cap is DECLARED in capability.json, so GSD tooling can set it', () => 
 test('the declared namespace wins for the cap, as it does for every other knob', () => {
   const { config } = withRaw({ pipeline: { max_concurrent_agents: 9 }, delivery_pipeline: { max_concurrent_agents: 3 } });
   assert.strictEqual(config.max_concurrent_agents, 3);
+});
+
+test('the native GSD synchronization key is understood by the runtime config reader', () => {
+  const { config, warnings } = withRaw({ delivery_pipeline: { gsd_sync: false } });
+  assert.strictEqual(config.gsd_sync, false);
+  assert.ok(!warnings.some((warning) => /gsd_sync/.test(warning)), warnings.join('; '));
+});
+
+test('the native GSD synchronization key is declared-only', () => {
+  const { config, warnings } = withRaw({ pipeline: { gsd_sync: false } });
+  assert.strictEqual(config.gsd_sync, true);
+  assert.ok(warnings.some((warning) => /pipeline\.gsd_sync.*delivery_pipeline\.gsd_sync/.test(warning)), warnings.join('; '));
 });
 
 // ── absent is not the same fact as unparseable (ADR-004 D2, audit F03) ──────
@@ -489,6 +509,53 @@ test('the capability-declared namespace wins on a conflicting key', () => {
 });
 
 suite("GSD's own settings the conveyor must obey");
+
+test('the active runtime context overrides a legacy project runtime without rewriting it', () => {
+  const { dir, config, warnings } = withRawOptions(
+    { runtime: 'claude', agent_skills: { 'gsd-planner': ['global:shipyard-delivery-rules'] } },
+    { env: { SHIPYARD_RUNTIME: 'codex' } },
+  );
+  assert.equal(config.gsd.runtime, 'codex');
+  assert.equal(config.gsd.runtime_source, 'shipyard-env');
+  assert.equal(config.gsd.persisted_runtime, 'claude');
+  assert.ok(warnings.some((warning) => /legacy persisted value/.test(warning)), warnings.join('; '));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8')).runtime, 'claude');
+  assert.ok(!warnings.some((warning) => /only on the claude/.test(warning)), warnings.join('; '));
+});
+
+test('a Codex runtime can use the shared checkout with no runtime key', () => {
+  const { config, warnings } = withRawOptions(
+    { agent_skills: { 'gsd-planner': ['global:shipyard-delivery-rules'] } },
+    { env: { GSD_RUNTIME: 'codex' } },
+  );
+  assert.equal(config.gsd.runtime, 'codex');
+  assert.equal(config.gsd.runtime_source, 'gsd-env');
+  assert.deepEqual(warnings, []);
+});
+
+test('the runtime-neutral project skill projection is accepted on both runtimes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cfg-projection-'));
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, '.planning', 'config.json'),
+    JSON.stringify({ agent_skills: { 'gsd-planner': ['.shipyard/generated/gsd-delivery-rules'] } }, null, 2),
+  );
+  fs.mkdirSync(path.join(dir, '.shipyard', 'generated', 'gsd-delivery-rules'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.shipyard', 'generated', 'gsd-delivery-rules', 'SKILL.md'), '# generated\n');
+  for (const runtime of ['claude', 'codex']) {
+    const { config, warnings } = loadConfig(dir, { runtime });
+    assert.equal(config.gsd.runtime, runtime);
+    assert.deepEqual(warnings, [], runtime);
+  }
+});
+
+test('a missing project skill projection is a named warning, not a silent skip', () => {
+  const { warnings } = withRawOptions(
+    { agent_skills: { 'gsd-planner': ['.shipyard/generated/gsd-delivery-rules'] } },
+    { runtime: 'codex' },
+  );
+  assert.ok(warnings.some((warning) => /SKILL\.md is missing/.test(warning)), warnings.join('; '));
+});
 
 test('git.base_branch is read and exposed', () => {
   const { config } = withRaw({ git: { base_branch: 'develop' } });
@@ -979,8 +1046,8 @@ test('an UNSET runtime degrades to opus rather than guessing the paid tier', () 
   // The two failures are not equal, so the default is not symmetric: `opus` on
   // Claude costs a smaller window on work that usually fits, while `fable` on
   // Codex is a model id nothing resolves. The 1M tier is taken only where the
-  // runtime says it exists — which is why `runtime` is in gsd-tune's REQUIRED
-  // group rather than its tuning half.
+  // runtime says it exists — the active runtime is process context, not a
+  // project key that gsd-tune should persist.
   const { config } = withConfig({});
   for (const role of ['arch-review', 'integrator']) {
     assert.strictEqual(resolveModel(role, {}, asRuntime(config, null)), 'opus', role);

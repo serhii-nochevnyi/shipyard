@@ -3,7 +3,7 @@
   "role": "feature",
   "version": "0.50.0",
   "title": "Delivery pipeline loop gates",
-  "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: a blocking plan:post gate runs the ticket-graph validator (Gate 2), so a decomposition without materialized, valid PLAN files cannot pass planning.",
+  "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: Gate 2 validates the ticket graph and a deterministic local projection keeps native GSD state synchronized through planning, delivery, verification, and ship.",
   "tier": "full",
   "requires": [],
   "engines": {
@@ -37,6 +37,11 @@
       "type": "boolean",
       "default": true,
       "description": "Block ship until the phase has verification evidence (fail-closed `phase uat-passed` predicate at ship:pre)."
+    },
+    "delivery_pipeline.gsd_sync": {
+      "type": "boolean",
+      "default": true,
+      "description": "Run the local Shipyard→GSD projection at lifecycle boundaries and block ship when the native projection is stale."
     },
     "delivery_pipeline.arch_verdict": {
       "type": "boolean",
@@ -99,6 +104,58 @@
       "blocking": true,
       "onError": "halt",
       "when": "delivery_pipeline.graph_gate"
+    },
+    {
+      "point": "plan:post",
+      "check": {
+        "predicate": {
+          "kind": "command-exit-zero",
+          "command": "node \"${GSD_CAP_DIR}/checks/gsd-sync-gate.cjs\" write",
+          "timeout": 60
+        }
+      },
+      "blocking": true,
+      "onError": "halt",
+      "when": "delivery_pipeline.gsd_sync"
+    },
+    {
+      "point": "execute:post",
+      "check": {
+        "predicate": {
+          "kind": "command-exit-zero",
+          "command": "node \"${GSD_CAP_DIR}/checks/gsd-sync-gate.cjs\" write",
+          "timeout": 60
+        }
+      },
+      "blocking": true,
+      "onError": "halt",
+      "when": "delivery_pipeline.gsd_sync"
+    },
+    {
+      "point": "verify:post",
+      "check": {
+        "predicate": {
+          "kind": "command-exit-zero",
+          "command": "node \"${GSD_CAP_DIR}/checks/gsd-sync-gate.cjs\" write",
+          "timeout": 60
+        }
+      },
+      "blocking": true,
+      "onError": "halt",
+      "when": "delivery_pipeline.gsd_sync"
+    },
+    {
+      "point": "ship:pre",
+      "check": {
+        "predicate": {
+          "kind": "command-exit-zero",
+          "command": "node \"${GSD_CAP_DIR}/checks/gsd-sync-gate.cjs\" check",
+          "timeout": 60
+        }
+      },
+      "blocking": true,
+      "onError": "halt",
+      "when": "delivery_pipeline.gsd_sync"
     },
     {
       "point": "ship:pre",

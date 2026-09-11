@@ -67,7 +67,9 @@ OUT="$STAGE/bundle-out"
 
 # ── generate ─────────────────────────────────────────────────────────────────
 echo "→ generating Codex bundle (phase $PHASE)…"
-node "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" \
+# Keep the runtime in the process context. Do not persist it into the shared
+# project/global GSD config: the same checkout may be driven by Claude next.
+GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" \
   --plugin "$PLUGIN_DIR" --out "$OUT" \
   --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE"
 
@@ -268,7 +270,7 @@ cp -R "$CAP_SRC/." "$CAP_STAGE/"
 # so the whole .cjs set travels with it — staging validate-graph.cjs alone would
 # leave the gate unable to load its parser.
 cp "$PLUGIN_DIR"/scripts/*.cjs "$CAP_STAGE/checks/"
-node "$GSD_TOOLS" capability install "$CAP_STAGE" --scope global --yes
+GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$GSD_TOOLS" capability install "$CAP_STAGE" --scope global --yes
 
 # ── auto-route policy → global AGENTS.md (Codex's always-loaded instructions) ──
 # So the pipeline is applied without the user invoking $shipyard-* by hand.
@@ -308,14 +310,15 @@ NODE
 
 # ── GSD's global defaults for this runtime ───────────────────────────────────
 # See install-shipyard-claude-hook.sh for the full reasoning. In short:
-# ~/.gsd/defaults.json is inherited by any directory with no `.planning/`, it
-# holds ONE `runtime` shared by both installs, and only model-shaped keys belong
-# there — conveyor settings stay per-project.
+# ~/.gsd/defaults.json is inherited by any directory with no `.planning/`. Runtime
+# is deliberately not written there: GSD's Codex install marker and this process
+# handshake select Codex without overwriting Claude's context. Only model-shaped
+# keys belong there — conveyor settings stay per-project.
 GSD_TUNE="$REPO_ROOT/plugins/delivery-pipeline/scripts/gsd-tune.cjs"
 [[ -f "$GSD_TUNE" ]] || GSD_TUNE="$BUNDLE_ROOT/scripts/gsd-tune.cjs"
 if [[ -f "$GSD_TUNE" ]]; then
   echo "→ GSD global defaults (~/.gsd/defaults.json)"
-  node "$GSD_TUNE" --global --runtime codex --apply 2>&1 | sed 's/^/  /' || true
+  GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$GSD_TUNE" --global --runtime codex --apply 2>&1 | sed 's/^/  /' || true
 fi
 
 deliver_hint=""

@@ -70,6 +70,20 @@
       "repos": [
         null
       ]
+    },
+    "32": {
+      "branch": "epic/32-measure-usage-and-make-the-backlog-actionable",
+      "base": null,
+      "repos": [
+        null
+      ]
+    },
+    "35": {
+      "branch": "epic/35-gsd-and-shipyard-workflow-loop",
+      "base": null,
+      "repos": [
+        null
+      ]
     }
   },
   "tickets": {
@@ -2147,7 +2161,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/jira-project.cjs",
         "tests/unit/record-stores.test.cjs"
@@ -2174,7 +2188,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/jira-project.cjs",
         "tests/unit/jira-project.test.cjs"
@@ -2201,7 +2215,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/jira-project.cjs",
         "plugins/delivery-pipeline/scripts/log-event.cjs",
@@ -2270,6 +2284,190 @@
       "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
       "primary_parent": "T-29-06",
       "pr_base": "ticket/T-29-06-the-acting-half-resolve-by-target-status",
+      "jira": null
+    },
+    "T-29-08": {
+      "title": "Bind projection evidence to the item actually performed",
+      "plan": ".planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-08-PLAN.md",
+      "phase": "29",
+      "repo": null,
+      "wave": 7,
+      "depends_on": [
+        "T-29-07"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/jira-project.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "tests/unit/jira-project.test.cjs",
+        "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "tests/unit/log-event.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-29-08-bind-projection-evidence-to-the-item-act",
+      "epic": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "primary_parent": "T-29-07",
+      "pr_base": "ticket/T-29-07-wire-it-pin-the-wiring-and-keep-it-out-o",
+      "jira": null
+    },
+    "T-32-01": {
+      "title": "Collect deduplicated usage from explicit transcript files",
+      "plan": ".planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-01-PLAN.md",
+      "phase": "32",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/usage-report.cjs",
+        "tests/unit/usage-report.test.cjs",
+        "docs/usage-report.md"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-32-01-collect-deduplicated-usage-from-explicit",
+      "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
+      "primary_parent": null,
+      "pr_base": "epic/32-measure-usage-and-make-the-backlog-actionable",
+      "jira": null
+    },
+    "T-32-02": {
+      "title": "Index backlog sources with stable item identities",
+      "plan": ".planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-02-PLAN.md",
+      "phase": "32",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/backlog-index.cjs",
+        "tests/unit/backlog-index.test.cjs",
+        "docs/backlog-index.md"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-32-02-index-backlog-sources-with-stable-item-i",
+      "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
+      "primary_parent": null,
+      "pr_base": "epic/32-measure-usage-and-make-the-backlog-actionable",
+      "jira": null
+    },
+    "T-35-01": {
+      "title": "Deterministic native-GSD projection",
+      "plan": ".planning/phases/35-gsd-and-shipyard-workflow-loop/35-01-PLAN.md",
+      "phase": "35",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/gsd-sync.cjs",
+        "tests/unit/gsd-sync.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-35-01-deterministic-native-gsd-projection",
+      "epic": "epic/35-gsd-and-shipyard-workflow-loop",
+      "primary_parent": null,
+      "pr_base": "epic/35-gsd-and-shipyard-workflow-loop",
+      "jira": null
+    },
+    "T-35-02": {
+      "title": "Wire synchronization into both GSD runtimes",
+      "plan": ".planning/phases/35-gsd-and-shipyard-workflow-loop/35-02-PLAN.md",
+      "phase": "35",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-35-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs",
+        "capabilities/delivery-pipeline/capability.json",
+        "tests/unit/gsd-sync-gate.test.cjs",
+        "tests/smoke/codex-shipyard-smoke.sh",
+        "README.md",
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "tests/unit/pipeline-config.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-35-02-wire-synchronization-into-both-gsd-runti",
+      "epic": "epic/35-gsd-and-shipyard-workflow-loop",
+      "primary_parent": "T-35-01",
+      "pr_base": "ticket/T-35-01-deterministic-native-gsd-projection",
+      "jira": null
+    },
+    "T-35-03": {
+      "title": "Document, normalize, and bootstrap the synchronized project",
+      "plan": ".planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-PLAN.md",
+      "phase": "35",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-35-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        ".planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-PLAN.md",
+        ".planning/PROJECT.md",
+        ".planning/ROADMAP.md",
+        ".planning/config.json",
+        ".planning/REQUIREMENTS.md",
+        ".planning/STATE.md",
+        ".planning/graph/tickets.json",
+        ".planning/graph/tickets.yaml",
+        ".planning/graph/escalations.json",
+        ".planning/graph/delivery-front.json",
+        ".planning/graph/delivery-log.jsonl",
+        ".planning/graph/delivery-state-meta.json",
+        ".planning/graph/delivery-state.json",
+        ".planning/graph/delivery-state.yaml",
+        ".planning/architecture/**",
+        ".planning/investigations/**",
+        ".planning/phases/**",
+        "plugins/delivery-pipeline/scripts/gsd-sync.cjs",
+        "tests/unit/gsd-sync.test.cjs",
+        "docs/gsd_multilevel_delivery_pipeline.md"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-35-03-document-normalize-and-bootstrap-the-syn",
+      "epic": "epic/35-gsd-and-shipyard-workflow-loop",
+      "primary_parent": "T-35-02",
+      "pr_base": "ticket/T-35-02-wire-synchronization-into-both-gsd-runti",
       "jira": null
     }
   }
