@@ -210,6 +210,12 @@ test('the native GSD synchronization key is understood by the runtime config rea
   assert.ok(!warnings.some((warning) => /gsd_sync/.test(warning)), warnings.join('; '));
 });
 
+test('the native GSD synchronization key is declared-only', () => {
+  const { config, warnings } = withRaw({ pipeline: { gsd_sync: false } });
+  assert.strictEqual(config.gsd_sync, true);
+  assert.ok(warnings.some((warning) => /pipeline\.gsd_sync.*delivery_pipeline\.gsd_sync/.test(warning)), warnings.join('; '));
+});
+
 // ── absent is not the same fact as unparseable (ADR-004 D2, audit F03) ──────
 // A truncated config that CONTAINED `auto_merge: off` used to resolve to the
 // default `epic` with nothing but a warning, and the sentinel merged under it.
