@@ -337,6 +337,23 @@ CAPDIR="$WORK/.gsd/capabilities/delivery-pipeline"
 for f in validate-graph.cjs frontmatter.cjs pipeline-config.cjs; do
   [[ -f "$CAPDIR/checks/$f" ]] || { echo "capability not self-contained ($f missing)"; exit 1; }
 done
+[[ -f "$CAPDIR/checks/gsd-sync-gate.cjs" ]] || { echo "capability missing gsd-sync gate"; exit 1; }
+
+# Exercise the installed lifecycle launcher as well as the bundled writer. The
+# launcher must resolve its sibling synchronizer from the installed capability,
+# publish a clean projection, and block ship:pre once a source plan drifts.
+GATE_WRITE=""
+GATE_WRITE="$(cd "$SYNC_FIXTURE" && node "$CAPDIR/checks/gsd-sync-gate.cjs" write)" \
+  || { echo "installed gsd-sync gate write failed: $GATE_WRITE"; exit 1; }
+grep -q 'projection published' <<<"$GATE_WRITE" \
+  || { echo "installed gsd-sync gate did not publish: $GATE_WRITE"; exit 1; }
+GATE_CHECK=""
+GATE_CHECK="$(cd "$SYNC_FIXTURE" && node "$CAPDIR/checks/gsd-sync-gate.cjs" check)" \
+  || { echo "installed gsd-sync gate check failed: $GATE_CHECK"; exit 1; }
+printf '\nsource drift\n' >> "$SYNC_FIXTURE/.planning/phases/01-foundation/01-01-PLAN.md"
+if ( cd "$SYNC_FIXTURE" && node "$CAPDIR/checks/gsd-sync-gate.cjs" check >/dev/null 2>&1 ); then
+  echo "installed gsd-sync gate let stale projection pass"; exit 1
+fi
 
 # ── the plan:post gate is GLOBAL, so applicability matters as much as strictness ──
 run_gate() { ( cd "$1" && GSD_CAP_DIR="$CAPDIR" node "$CAPDIR/checks/graph-gate.cjs" ); }

@@ -281,13 +281,15 @@ Configuration lives in `.planning/config.json` under two namespaces:
 `delivery_pipeline.*` (the capability's own declared config — GSD-native, settable
 and validated through GSD's tooling, and it wins) and `pipeline.*` (shipyard's
 runtime knobs; note `pipeline` is not a valid GSD config key, so edit the file
-directly). Keys: `model_policy` (GSD's own `budget`/`quality` names work as
+directly). The synchronization gate is `delivery_pipeline.gsd_sync` and defaults
+to on; set it to `false` to opt out of only the projection lifecycle gate. Keys:
+`model_policy` (GSD's own `budget`/`quality` names work as
 aliases — it mirrors GSD's own `model_profile` and routes none of our roles, since
 the floor is not a preference), `models`, `effort`, `fable` (`off` | `auto`),
 `fable_window_tokens`, `max_attempts`, `pr_fetch_limit`,
 `integration_mode`, `use_workflow`, `graph_gate`, `jira`, `jira_transitions`
 (the tracker projection's status map — empty by default, which is the
-projection switched off), `gsd_sync`, `repos`.
+projection switched off), `repos`.
 
 The conveyor also **obeys GSD's own settings** rather than second-guessing them:
 `git.base_branch` decides where epics are cut from and where the integration PR
@@ -470,8 +472,9 @@ for Codex as part of its own run.
 
 The `plan:post` gate is installed at global scope but is applicability-scoped: it
 stays inert in projects that carry no `delivery:` blocks, and fails closed for
-real conveyor projects. Opt a project out entirely with
-`.planning/config.json` → `pipeline.graph_gate: false`.
+real conveyor projects. Opt the graph gate out with
+`.planning/config.json` → `pipeline.graph_gate: false`, or opt only the native
+GSD projection gate out with `delivery_pipeline.gsd_sync: false`.
 
 Set `SHIPYARD_CODEX_PHASE=1` to install `investigate`+`decompose` only and leave
 `deliver` out. Skills land in `~/.agents/skills`; nothing outside shipyard's own

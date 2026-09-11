@@ -15,7 +15,7 @@ function write(file, content) {
   fs.writeFileSync(file, content);
 }
 
-function project({ integration = 'Verdict: passed\n\n## Verification evidence\n\n- `node --test` passed', merged = true, conflict = false, plan = 1, coreValue = 'One truthful workflow' } = {}) {
+function project({ integration = 'Verdict: passed\n\n## Verification evidence\n- node --test tests/unit/gsd-sync.test.cjs: exit 0', merged = true, conflict = false, plan = 1, coreValue = 'One truthful workflow' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-sync-'));
   const graph = path.join(root, '.planning', 'graph');
   const phase = path.join(root, '.planning', 'phases', '01-foundation');
@@ -54,7 +54,7 @@ test('canonicalizes ticket identities and rejects malformed CLI flags', () => {
   assert.equal(sync.canonicalTicket('2', 1), 'T-01-02');
   assert.equal(sync.integrationStatus('Round 1 was needs-fix\n## Verdict — `passed`').status, 'passed');
   assert.equal(sync.integrationStatus('## Verdict — failed (previously passed)').status, 'needs-fix');
-  assert.match(sync.parseRoadmap('- **REQ-01** — first line +\n  continuation line').requirements[0].description, /first line \+ continuation line/);
+  assert.equal(sync.verificationEvidence('## Verdict — `passed`').status, 'pending');
   const r = spawnSync(process.execPath, [SCRIPT, '--phase'], { cwd: ROOT, encoding: 'utf8' });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /--phase requires/);
@@ -89,6 +89,31 @@ test('is not applicable when a project has no delivery plans', () => {
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.ok, true);
   assert.equal(payload.applicable, false);
+});
+
+test('requires positive verification evidence before a passed phase', () => {
+  const root = project({ integration: 'Verdict: passed' });
+  assert.equal(run(root).status, 0);
+  const dir = path.join(root, '.planning', 'phases', '01-foundation');
+  const uat = fs.readFileSync(path.join(dir, '01-foundation-UAT.md'), 'utf8');
+  const verification = fs.readFileSync(path.join(dir, '01-foundation-VERIFICATION.md'), 'utf8');
+  assert.match(uat, /status: pending/);
+  assert.match(verification, /status: human_needed/);
+  assert.match(verification, /no verification evidence/i);
+});
+
+test('preserves wrapped roadmap requirement descriptions', () => {
+  const root = project();
+  write(path.join(root, '.planning', 'ROADMAP.md'), [
+    '# Roadmap: shipyard', '', '## Requirements', '',
+    '- **SYNC-01** — Native GSD state matches',
+    '  the delivery graph across every runtime.', '',
+    '## Phases', '', '### Phase 1: Foundation',
+    '**Requirements**: SYNC-01', '',
+  ].join('\n'));
+  assert.equal(run(root).status, 0);
+  const requirements = fs.readFileSync(path.join(root, '.planning', 'REQUIREMENTS.md'), 'utf8');
+  assert.match(requirements, /Native GSD state matches the delivery graph across every runtime\./);
 });
 
 test('writes a complete native projection and is idempotent', () => {
@@ -136,16 +161,6 @@ test('does not convert needs-fix integration into a green phase', () => {
   assert.match(verification, /needs-fix|finding/i);
 });
 
-test('requires independent verification evidence before marking a phase passed', () => {
-  const root = project({ integration: '## Verdict — passed\n\nNo verification command was recorded.' });
-  assert.equal(run(root).status, 0);
-  const dir = path.join(root, '.planning', 'phases', '01-foundation');
-  const verification = fs.readFileSync(path.join(dir, '01-foundation-VERIFICATION.md'), 'utf8');
-  assert.match(verification, /status: human_needed/);
-  assert.match(verification, /Verification evidence is present/);
-  assert.match(verification, /UNCERTAIN/);
-});
-
 test('refuses to overwrite an unowned generated artifact', () => {
   const root = project({ conflict: true });
   const r = run(root);
@@ -188,6 +203,14 @@ test('renders open delivery records as uncertain rather than failed', () => {
   const verification = fs.readFileSync(path.join(root, '.planning', 'phases', '01-foundation', '01-foundation-VERIFICATION.md'), 'utf8');
   assert.match(verification, /\? UNCERTAIN/);
   assert.doesNotMatch(verification, /T-01-01 \| pr-open \| ✗ FAILED/);
+  assert.match(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), /T-01-01: delivery status is pr-open/);
+});
+
+test('does not stamp a global activity date as phase verification', () => {
+  const root = project();
+  assert.equal(run(root).status, 0);
+  const verification = fs.readFileSync(path.join(root, '.planning', 'phases', '01-foundation', '01-foundation-VERIFICATION.md'), 'utf8');
+  assert.doesNotMatch(verification, /^verified:/m);
 });
 
 test('adopts existing native artifacts only when explicitly requested', () => {
