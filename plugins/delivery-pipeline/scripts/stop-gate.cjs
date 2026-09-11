@@ -456,7 +456,12 @@ function dispatchAges(dir, ids) {
     const rec = recs[id];
     const at = Date.parse((rec && rec.at) || '');
     if (!Number.isFinite(at) || now - at < DISPATCH_SUSPECT_MS) { plausible.push(id); continue; }
-    suspect.push({ id, role: (rec && rec.role) || 'an agent', mins: Math.round((now - at) / 60000) });
+    suspect.push({
+      id,
+      role: (rec && rec.role) || 'an agent',
+      mins: Math.round((now - at) / 60000),
+      dispatch_id: rec && typeof rec.dispatch_id === 'string' ? rec.dispatch_id : null,
+    });
   }
   return { plausible, suspect };
 }
@@ -602,9 +607,8 @@ const agentsOut = () => (agesCache || (agesCache = dispatchAges(graphDir, dispat
 const goneText = () => {
   const { suspect } = agentsOut();
   const suspectId = suspect[0] && suspect[0].id;
-  const suspectDispatch = suspectId ? dispatched[suspectId] : null;
-  const suspectDispatchId = suspectDispatch && suspectDispatch.dispatch_id
-    ? suspectDispatch.dispatch_id
+  const suspectDispatchId = suspect[0] && suspect[0].dispatch_id
+    ? suspect[0].dispatch_id
     : '<dispatch_id>';
   return suspect.length
     ? '\nThe dispatch mark(s) on this board did NOT keep this quiet: ' +

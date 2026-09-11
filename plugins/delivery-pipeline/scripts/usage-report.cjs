@@ -315,6 +315,7 @@ function report(sources, options = {}) {
         || row.type === 'token_usage_record'
       ) {
         const rowSession = row.payload?.session_id || row.sessionId || row.session_id || session;
+        if (rowSession) session = rowSession;
         if (row.type === 'event_msg' && (hasCurrentCodexUsage || currentCodexSessions.has(rowSession))) continue;
         // The current record carries per-response `usage`, per-turn totals and
         // a thread-level cumulative total. Only the thread-level total is safe
@@ -329,7 +330,6 @@ function report(sources, options = {}) {
         if (row.type === 'token_usage_record' && !payload.thread_token_usage && !payload.total_token_usage) {
           warn('Codex token usage record has no cumulative thread usage; skipped'); continue;
         }
-        if (payload.session_id) session = payload.session_id;
         if (typeof u !== 'object' || Array.isArray(u)) { warn('Codex usage object is malformed'); continue; }
         if (!session) { warn('Codex cumulative usage without session identity was skipped'); continue; }
         if (!row.timestamp || !Number.isFinite(Date.parse(row.timestamp))) {

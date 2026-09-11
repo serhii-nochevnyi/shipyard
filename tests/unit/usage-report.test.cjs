@@ -67,6 +67,15 @@ test('current Codex format wins when legacy snapshots are in a resumed file',()=
  assert.equal(r.groups[0].output_tokens,30);
  assert.equal(r.observations.length,2);
 });
+test('current Codex usage record supplies session identity without session_meta', () => {
+ const session = 'fragment-session';
+ const row = { ...codexCurrent, payload: { ...codexCurrent.payload, session_id: session } };
+ const r = report([{ source: 'resumed-fragment.jsonl', rows: [row] }]);
+ assert.equal(r.observations.length, 1);
+ assert.equal(r.observations[0].session_id, session);
+ assert.equal(r.observations[0].unit, 'session_cumulative');
+ assert.ok(!r.warnings.some((w) => w.includes('without session identity')));
+});
 test('resumed Codex responses use their source for joins and a session turn fallback', () => {
  const session = 'resumed-session';
  const first = { ...codexCurrent, payload: { ...codexCurrent.payload, session_id: session, response_id: 'resume-1' } };
