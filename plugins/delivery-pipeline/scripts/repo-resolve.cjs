@@ -103,6 +103,144 @@ function gitRemoteOrigin(candidate) {
   return value || null;
 }
 
+function originProtocol(value) {
+  if (typeof value !== 'string') return null;
+  const origin = value.trim();
+  if (/^(?:git@[^/:]+:|ssh:\/\/)/i.test(origin)) return 'ssh';
+  if (/^https?:\/\//i.test(origin)) return 'https';
+  return null;
+}
+
+function safeCloneUrl(value, protocol, repo) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return { valid: false, reason: `gh metadata has no usable ${protocol === 'ssh' ? 'sshUrl' : 'url'} for ${repo}` };
+  }
+  const url = value.trim();
+  if (originProtocol(url) !== protocol) {
+    return { valid: false, reason: `gh metadata URL for ${repo} does not use the project origin protocol (${protocol})` };
+  }
+  if (normalizeOrigin(url) !== repo.toLowerCase()) {
+    return { valid: false, reason: `gh metadata URL does not identify ${repo}` };
+  }
+  if (/^(?:https?|ssh):\/\//i.test(url)) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.password || (parsed.username && (protocol === 'https' || parsed.username !== 'git'))) {
+        return { valid: false, reason: `gh metadata URL for ${repo} contains credentials and was refused` };
+      }
+      if (parsed.search || parsed.hash) {
+        return { valid: false, reason: `gh metadata URL for ${repo} contains query or fragment data and was refused` };
+      }
+    } catch {
+      return { valid: false, reason: `gh metadata URL for ${repo} is not a valid ${protocol} URL` };
+    }
+  }
+  return { valid: true, url };
+}
+
+/**
+ * Choose the clone URL from the project's origin protocol. This pure decision
+ * keeps gh's global git protocol preference out of the conveyor's policy.
+ *
+ * @param {string} projectOrigin
+ * @param {{sshUrl?: string, url?: string}} metadata
+ * @param {string} repo
+ * @returns {{valid: boolean, protocol: string|null, field: string|null, url: string|null, reason: string|null}}
+ */
+function selectCloneUrl(projectOrigin, metadata, repo) {
+  const protocol = originProtocol(projectOrigin);
+  if (!protocol) {
+    return {
+      valid: false,
+      protocol: null,
+      field: null,
+      url: null,
+      reason: `project origin for ${repo} is neither SSH nor HTTPS; clone protocol cannot be selected safely`,
+    };
+  }
+  const field = protocol === 'ssh' ? 'sshUrl' : 'url';
+  if (!isRecord(metadata)) {
+    return {
+      valid: false,
+      protocol,
+      field,
+      url: null,
+      reason: `gh repo metadata for ${repo} is missing or not an object`,
+    };
+  }
+  const selected = safeCloneUrl(metadata[field], protocol, repo);
+  return {
+    valid: selected.valid,
+    protocol,
+    field,
+    url: selected.valid ? selected.url : null,
+    reason: selected.valid ? null : selected.reason,
+  };
+}
+
+function readGhRepositoryMetadata(repo, projectRoot, runner = spawnSync) {
+  const result = runner(
+    'gh',
+    ['repo', 'view', repo, '--json', 'sshUrl,url'],
+    {
+      cwd: projectRoot || process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        GH_PROMPT_DISABLED: '1',
+      },
+    },
+  );
+  if (!result || result.status !== 0) {
+    return {
+      valid: false,
+      metadata: null,
+      reason: `gh repo view could not read clone metadata for ${repo} (exit ${result && result.status !== undefined ? result.status : 'unknown'})`,
+    };
+  }
+  try {
+    const metadata = JSON.parse(String(result.stdout || ''));
+    if (!isRecord(metadata)) throw new Error('metadata is not an object');
+    return { valid: true, metadata, reason: null };
+  } catch {
+    return {
+      valid: false,
+      metadata: null,
+      reason: `gh repo view returned invalid clone metadata for ${repo}`,
+    };
+  }
+}
+
+function resolveCloneUrl(input) {
+  const { repo } = input;
+  const projectOrigin = input.projectOrigin !== undefined
+    ? input.projectOrigin
+    : gitRemoteOrigin(input.projectRoot || process.cwd());
+  if (!projectOrigin) {
+    return {
+      valid: false,
+      protocol: null,
+      field: null,
+      url: null,
+      reason: `project origin for ${repo} could not be read; clone is refused`,
+    };
+  }
+  const metadataResult = input.cloneMetadata !== undefined
+    ? { valid: true, metadata: input.cloneMetadata, reason: null }
+    : readGhRepositoryMetadata(repo, input.projectRoot);
+  if (!metadataResult.valid) {
+    return {
+      valid: false,
+      protocol: originProtocol(projectOrigin),
+      field: null,
+      url: null,
+      reason: metadataResult.reason,
+    };
+  }
+  return selectCloneUrl(projectOrigin, metadataResult.metadata, repo);
+}
+
 /**
  * Normalize the GitHub URL forms a local git checkout commonly stores.
  *
@@ -437,8 +575,25 @@ function cloneChoiceResult(input, initial, destinationInfo) {
     };
   }
 
-  // T-30-04 records intent only. T-30-06 owns URL/protocol selection and a
-  // later delivery ticket owns the actual clone/write-back transaction.
+  const clone = resolveCloneUrl(input);
+  if (!clone.valid) {
+    const reason = `operator chose clone for ${repo}, but clone preparation was refused: ${clone.reason}`;
+    return {
+      ...initial,
+      resolution: 'track-only',
+      executable: false,
+      reason,
+      decision: 'clone',
+      operator_choice: 'clone',
+      choice_source: 'operator',
+      destination,
+      clone_root: root,
+      park_reason: reason,
+    };
+  }
+
+  // T-30-06 records a protocol-bound URL and intent only. A later delivery
+  // ticket owns the actual clone/write-back transaction.
   const reason = `operator chose clone for ${repo}; clone is pending a delivery step`;
   return {
     ...initial,
@@ -447,8 +602,12 @@ function cloneChoiceResult(input, initial, destinationInfo) {
     reason,
     decision: 'clone',
     operator_choice: 'clone',
+    choice_source: 'operator',
     destination,
     clone_root: root,
+    clone_url: clone.url,
+    clone_protocol: clone.protocol,
+    clone_source: clone.field,
     park_reason: reason,
   };
 }
@@ -574,11 +733,15 @@ module.exports = {
   discoverRepo,
   discoverRepository,
   normalizeOrigin,
+  originProtocol,
+  readGhRepositoryMetadata,
   resolveConfigured,
   resolveConfiguredRepo,
+  resolveCloneUrl,
   resolveRepo,
   resolveRepository,
   resolveSupplied,
+  selectCloneUrl,
   suppliedPathResult,
 };
 
