@@ -9,6 +9,9 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 const SCRIPT = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'repo-resolve.cjs'
 );
+const STATE_SYNC = path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'
+);
 const mod = require(SCRIPT);
 
 const trash = [];
@@ -329,6 +332,12 @@ test('a repeated clone adopts an existing matching checkout without invoking clo
   const projectDir = isolatedProject({});
   const parent = path.dirname(projectDir);
   const destination = repoAt(path.join(parent, 'service'), 'git@github.com:acme/service.git');
+  git(destination, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(destination, ['config', 'user.name', 'Shipyard Tests']);
+  fs.writeFileSync(path.join(destination, 'README.md'), 'adopted\n');
+  git(destination, ['add', 'README.md']);
+  git(destination, ['commit', '-qm', 'seed']);
+  git(destination, ['update-ref', 'refs/remotes/origin/epic/base', 'HEAD']);
   let invoked = false;
   const result = mod.cloneRepository({
     ticket: 'T-30-08',
@@ -347,7 +356,30 @@ test('a repeated clone adopts an existing matching checkout without invoking clo
   assert.strictEqual(result.resolution, 'adopted');
   assert.strictEqual(result.adopted, true);
   assert.strictEqual(result.repository_root, destination);
+  assert.strictEqual(result.base_ref, 'origin/epic/base');
+  assert.strictEqual(result.base_verified, true);
   assert.strictEqual(invoked, false);
+});
+
+test('a matching clone destination without the requested base stays unverified', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const destination = repoAt(path.join(parent, 'missing-base'), 'git@github.com:acme/service.git');
+  const result = mod.cloneRepository({
+    ticket: 'T-30-09',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/base',
+    cloneUrl: '/a/source-that-must-not-be-used',
+  }, () => { throw new Error('an unverified checkout must not invoke clone'); });
+
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'clone-unverified');
+  assert.strictEqual(result.base_verified, false);
+  assert.match(result.park_reason, /required ref origin\/epic\/base is missing/);
+  assert.strictEqual(fs.existsSync(destination), true);
 });
 
 test('an existing non-git or mismatched destination is refused untouched', () => {
@@ -433,6 +465,26 @@ test('write-back prefers delivery_pipeline and preserves the legacy namespace', 
   assert.strictEqual(repeated.valid, true);
   assert.strictEqual(repeated.written, false);
   assert.strictEqual(fs.readFileSync(file, 'utf8'), before, 'an unchanged path must not rewrite config');
+});
+
+test('write-back refuses malformed namespaces instead of falling back silently', () => {
+  const projectDir = isolatedProject({});
+  const file = path.join(projectDir, '.planning', 'config.json');
+  const checkout = repoAt(path.join(path.dirname(projectDir), 'malformed-namespace-service'), 'git@github.com:acme/service.git');
+  for (const raw of [
+    { pipeline: { repos: {} }, delivery_pipeline: [] },
+    { pipeline: { repos: {} }, delivery_pipeline: null },
+    { pipeline: [], delivery_pipeline: {} },
+    { pipeline: 'legacy', delivery_pipeline: { repos: {} } },
+  ]) {
+    fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n');
+    const before = fs.readFileSync(file, 'utf8');
+    const result = mod.persistResolvedRepository(projectDir, 'acme/service', checkout);
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(result.written, false);
+    assert.match(result.reason, /config write-back refused: (pipeline|delivery_pipeline) must be a JSON object/);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), before);
+  }
 });
 
 test('unparseable or malformed config is refused without changing the file', () => {
@@ -757,6 +809,89 @@ test('state-sync and deliver name the repository resolver caller', () => {
   assert.match(deliver, /atomically|atomic/i);
   assert.match(deliver, /inaccessible or\s+nonexistent/);
   assert.match(deliver, /resolution: "discovered"/);
+});
+
+test('state-sync persists discovered checkouts, copies resolution per ticket, and keeps other repos actionable', () => {
+  const workspace = tempDir('shipyard-state-sync-repos-');
+  const projectDir = path.join(workspace, 'project');
+  const graphDir = path.join(projectDir, '.planning', 'graph');
+  const phaseDir = path.join(projectDir, '.planning', 'phases', '30-reachability');
+  fs.mkdirSync(graphDir, { recursive: true });
+  fs.mkdirSync(phaseDir, { recursive: true });
+
+  const acmeCheckout = repoAt(path.join(workspace, 'service-checkout'), 'git@github.com:acme/service.git');
+  const betaCheckout = repoAt(path.join(workspace, 'other-checkout'), 'git@github.com:beta/other.git');
+  fs.writeFileSync(path.join(projectDir, '.planning', 'config.json'), JSON.stringify({
+    pipeline: { repos_root: workspace, auto_merge: 'off', sentinel: 'off' },
+  }, null, 2) + '\n');
+  fs.writeFileSync(path.join(projectDir, '.planning', 'PROJECT.md'), '# shipyard\n\n## Core Value\nKeep delivery observable.\n');
+  fs.writeFileSync(path.join(projectDir, '.planning', 'ROADMAP.md'), [
+    '# Roadmap: shipyard', '', '## Requirements', '',
+    '- **REQ-30** — Reachable work remains executable.', '',
+    '## Phases', '', '### Phase 30: Reachability',
+    '**Requirements**: REQ-30', '',
+  ].join('\n'));
+
+  const tickets = {
+    'T-30-10': { phase: '30', title: 'First service ticket', branch: 'ticket/T-30-10', files: ['src/service.js'], repo: 'acme/service' },
+    'T-30-11': { phase: '30', title: 'Second service ticket', branch: 'ticket/T-30-11', files: ['src/other-service.js'], repo: 'acme/service' },
+    'T-30-12': { phase: '30', title: 'Other repository ticket', branch: 'ticket/T-30-12', files: ['src/other.js'], repo: 'beta/other' },
+    'T-30-13': { phase: '30', title: 'Unreachable repository ticket', branch: 'ticket/T-30-13', files: ['src/missing.js'], repo: 'missing/repo' },
+  };
+  fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets }, null, 2) + '\n');
+  fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), '{}\n');
+  for (const [ticket, entry] of Object.entries(tickets)) {
+    const plan = ticket.slice(2).toLowerCase();
+    fs.writeFileSync(path.join(phaseDir, `${plan}-PLAN.md`), [
+      '---', 'phase: 30', `plan: ${ticket.slice(-2)}`, `title: "${entry.title}"`,
+      `files_modified: [${entry.files.join(', ')}]`, 'requirements: [REQ-30]',
+      'delivery:', `  ticket: ${ticket}`, '  risk: low', '  human_checkpoint: false', '---', '',
+      `## Goal\n\n${entry.title}.`,
+    ].join('\n'));
+  }
+
+  const bin = path.join(workspace, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const gh = path.join(bin, 'gh');
+  fs.writeFileSync(gh, [
+    '#!/bin/sh',
+    'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then printf "[]\\n"; exit 0; fi',
+    'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then printf "main\\n"; exit 0; fi',
+    'if [ "$1" = "api" ]; then printf "main\\n"; exit 0; fi',
+    'echo "unhandled gh call: $*" >&2; exit 1',
+    '',
+  ].join('\n'));
+  fs.chmodSync(gh, 0o755);
+
+  const env = { ...process.env, HOME: path.join(workspace, 'home'), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  for (const key of Object.keys(env)) {
+    if (/^(?:SHIPYARD_|GSD_|CLAUDE_|CODEX_)/.test(key)
+        || key === 'NODE_OPTIONS' || key === 'NODE_PATH') delete env[key];
+  }
+  fs.mkdirSync(env.HOME, { recursive: true });
+  const result = spawnSync(process.execPath, [STATE_SYNC], {
+    cwd: projectDir,
+    encoding: 'utf8',
+    env,
+  });
+  assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+
+  const raw = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf8'));
+  assert.strictEqual(raw.pipeline.repos['acme/service'], acmeCheckout);
+  assert.strictEqual(raw.pipeline.repos['beta/other'], betaCheckout);
+
+  const state = JSON.parse(fs.readFileSync(path.join(graphDir, 'delivery-state.json'), 'utf8'));
+  for (const ticket of ['T-30-10', 'T-30-11']) {
+    assert.deepStrictEqual(state[ticket].repo_resolution, {
+      resolution: 'discovered', executable: true, repository_root: acmeCheckout, reason: null,
+    });
+  }
+  assert.deepStrictEqual(state['T-30-12'].repo_resolution, {
+    resolution: 'discovered', executable: true, repository_root: betaCheckout, reason: null,
+  });
+  assert.strictEqual(state['T-30-12'].ready, true, 'a healthy sibling repo must remain actionable');
+  assert.strictEqual(state['T-30-13'].ready, false, 'only the unreachable repo should be parked');
+  assert.deepStrictEqual(state['T-30-13'].blocked_by, ['repo']);
 });
 
 done();

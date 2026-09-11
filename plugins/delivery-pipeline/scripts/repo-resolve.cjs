@@ -335,6 +335,17 @@ function persistResolvedRepository(projectRoot, repo, repositoryPath) {
         return configWriteFailure(repo, canonical, file, `config write-back refused: ${file} is not a JSON object (got ${shape})`);
       }
 
+      // The declared namespace is preferred by loadConfig. A malformed
+      // delivery_pipeline section must therefore not be treated as if it were
+      // absent and silently redirected into the legacy namespace. Validate both
+      // containers before deciding where the write belongs; otherwise a typo
+      // can make the effective reader and the write-back writer disagree.
+      for (const name of ['pipeline', 'delivery_pipeline']) {
+        if (Object.prototype.hasOwnProperty.call(raw, name) && !isRecord(raw[name])) {
+          return configWriteFailure(repo, canonical, file, `config write-back refused: ${name} must be a JSON object`);
+        }
+      }
+
       // `pipeline.repos` is the ADR-010 write-back surface. If the preferred
       // namespace already owns that key, keep writing there so its effective
       // map is not shadowed by a newly-created legacy section.
@@ -918,6 +929,16 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
   if (fs.existsSync(destination)) {
     const adopted = suppliedPathResult(input, destination);
     if (adopted.executable) {
+      const baseRef = resolveOriginRef(destination, baseName);
+      if (!baseRef) {
+        return cloneFailure(input,
+          `clone destination "${destination}" matches ${input.repo} but required ref origin/${baseName} is missing`, {
+            resolution: 'clone-unverified',
+            destination,
+            clone_root: root,
+            required_base: `origin/${baseName}`,
+          });
+      }
       return persistExecutableResult(input, {
         ...adopted,
         resolution: 'adopted',
@@ -928,8 +949,8 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
         destination,
         clone_root: root,
         required_base: `origin/${baseName}`,
-        base_ref: null,
-        base_verified: false,
+        base_ref: baseRef,
+        base_verified: true,
         park_reason: null,
       });
     }
