@@ -298,7 +298,18 @@ const present = (event, field) =>
 const concreteEffort = (value) => Array.isArray(EFFORTS) && EFFORTS.includes(value);
 const staticCodexNeedsFile = (event) =>
   event.runtime === 'codex' && event.role !== 'executor' && !present(event, 'agent_file');
-const routeValid = (event) => present(event, 'reason') && Boolean(parseRoute(event.reason));
+// A parseable route is not enough: the structured columns are the values that
+// downstream comparisons actually group by. If they disagree with the route
+// sentence, treating the row as comparable would silently compare one policy
+// against another. The dispatch recorder writes these fields from the route,
+// so equality is the integrity check for older or hand-written journal rows.
+const routeValid = (event) => {
+  if (!present(event, 'reason')) return false;
+  const route = parseRoute(event.reason);
+  return Boolean(route)
+    && route.tier.model === event.model
+    && route.effort.effort === event.effort;
+};
 const requestedMissing = (event) => [
   'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'role',
 ].filter((field) => !present(event, field));

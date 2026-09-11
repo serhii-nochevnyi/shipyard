@@ -70,6 +70,23 @@ test('transcript sources are canonicalized before the durable ledger is written'
   assert.equal(result.observations[0].attribution_status, 'session');
 });
 
+test('transcript source symlinks use the same realpath identity as the report', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-source-link-'));
+  const target = path.join(dir, 'actual.jsonl');
+  const link = path.join(dir, 'alias.jsonl');
+  fs.writeFileSync(target, '');
+  fs.symlinkSync(target, link);
+  try {
+    const record = normalizeRecord(base({ source: link }));
+    assert.equal(record.source, fs.realpathSync(link));
+    const result = report([{ source: link, rows: [claude] }], { attributions: [record] });
+    assert.equal(result.coverage.attributed_observations, 1);
+    assert.equal(result.observations[0].attribution_status, 'session');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('recording is atomic, revisioned and idempotent', () => {
   const { graph } = project();
   try {

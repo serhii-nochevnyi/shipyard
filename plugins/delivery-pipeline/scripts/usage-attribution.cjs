@@ -80,6 +80,17 @@ function graphGuard(dir, explicit) {
   }
 }
 
+// Transcript paths can be supplied through a symlink (for example, a rotated
+// log directory). Resolve existing paths the same way the report CLI resolves
+// its explicit inputs, while retaining the absolute path for a file that does
+// not exist yet. This gives the durable ledger one stable source identity.
+function canonicalSource(value) {
+  if (typeof value !== 'string') return value;
+  const resolved = path.resolve(value);
+  try { return fs.realpathSync(resolved); }
+  catch { return resolved; }
+}
+
 function canonicalIdentity(raw) {
   return JSON.stringify([
     raw.dispatch_id,
@@ -178,7 +189,7 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
   // The ledger can outlive the checkout that recorded it. Store transcript
   // sources as absolute paths at write time so a later report process in a
   // different cwd can still join the durable fact to its transcript.
-  if (record.source !== undefined) record.source = path.resolve(record.source);
+  if (record.source !== undefined) record.source = canonicalSource(record.source);
 
   record.observation_id = raw.observation_id === undefined
     ? deriveObservationId(record)
@@ -326,6 +337,7 @@ module.exports = {
   readLedger,
   latestRecords,
   recordBatch,
+  canonicalSource,
   textIssue,
 };
 

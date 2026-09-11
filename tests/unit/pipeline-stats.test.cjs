@@ -308,6 +308,22 @@ test('dispatch routing fields are grouped without turning missing observations i
   assert.strictEqual(json.ladder.missing_attribution.dispatch_id, 1);
 });
 
+test('a parseable route whose structured fields disagree is not comparable', () => {
+  const contradictory = {
+    ts: recently, event: 'dispatch', ticket: 'T-01-04', role: 'executor',
+    model: 'opus', effort: 'high',
+    reason: 'tier=level:routine(sonnet) effort=row(high)', task_level: 'routine',
+    runtime: 'claude', backend: 'workflow',
+  };
+  const { code, json } = asJson({
+    tickets: {}, journal: [JSON.stringify(contradictory)], prs: [],
+    config: { delivery_pipeline: { model_ladder: 'adaptive' } },
+  });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.ladder.missing_route, 1);
+  assert.strictEqual(json.ladder.requested_comparable, 0);
+});
+
 test('non-concrete effort states do not count as applied or observed coverage', () => {
   const row = {
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor',

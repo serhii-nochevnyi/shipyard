@@ -92,7 +92,7 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
 
   **`critical` — the resolver classified the dispatch from high risk or a
   checkpoint.** On Codex, select the matching `-critical` agent file with
-  `codex-agent.cjs select arch-review --json --checkpoint [--project-dir <project>]`
+  `codex-agent.cjs select ci-fix --json --checkpoint [--project-dir <project>]`
   and record that file alongside the resolver's model, effort and route. Run
   it from the conveyor project, or pass `--project-dir <project>` from a ticket
   worktree so the selector reads the project's adaptive policy.
@@ -436,8 +436,9 @@ reinit is not optional.
   returns) belongs in your report — `mark` stores the ticket, the role, the time,
   what you dispatched it at and a generated `dispatch_id`. Once the runtime
   exposes the transcript session/request/message id, connect it with
-  `usage-attribution.cjs record`: use `provider=anthropic` for Workflow/Agent-tool
-  launches and `provider=openai` for `codex-agent.cjs` launches, and keep concrete observed model/effort separate
+  `usage-attribution.cjs record --stdin --graph <project>/.planning/graph`: use
+  `provider=anthropic` for Workflow/Agent-tool launches and `provider=openai` for
+  `codex-agent.cjs` launches, and keep concrete observed model/effort separate
   from the requested tier/effort. Missing observations remain unknown and are
   excluded from efficiency comparisons.
   **The pair AND the route are the ones `pipeline-config.cjs model <role> --json …`

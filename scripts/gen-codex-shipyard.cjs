@@ -472,8 +472,9 @@ function main() {
   const codexHome = expandHome(args['codex-home']) || process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex');
   // A malformed --phase used to become NaN, which silently compared false in
   // every gate: no deliver skill AND every phase-2 agent emitted anyway.
-  const phase = args.phase === undefined ? 2 : parseInt(args.phase, 10);
-  if (![1, 2].includes(phase)) fail(`--phase must be 1 or 2 (got "${args.phase}")`);
+  const phaseArg = args.phase === undefined ? '2' : String(args.phase);
+  if (!/^[12]$/.test(phaseArg)) fail(`--phase must be 1 or 2 (got "${args.phase}")`);
+  const phase = Number(phaseArg);
   // Where the CLAUDE_PLUGIN_ROOT payload lands on the host (absolute, host-installed).
   const scriptsRoot = expandHome(args['bundle-root']) || path.join(codexHome, 'shipyard');
 

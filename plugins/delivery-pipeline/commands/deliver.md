@@ -170,7 +170,7 @@ instead, and the front reads it back by itself:
   recovery after `repeat_exhausted` or a contested judgement.
   Every mark prints a unique `dispatch_id`. After the runtime exposes its
   transcript identity, record the join with
-  `usage-attribution.cjs record --stdin`: include that `dispatch_id`,
+  `usage-attribution.cjs record --stdin --graph <project>/.planning/graph`: include that `dispatch_id`,
   `runtime=claude, provider=anthropic` or `runtime=codex, provider=openai`, the
   transcript `session_id`/`request_id`/`message_id`, source path, ticket, role,
   requested fields and any reliable observed model/effort. The ledger rejects

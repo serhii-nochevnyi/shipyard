@@ -37,8 +37,11 @@ function runtimeOf(record) {
 
 function sourceMatches(record, context) {
   if (!record.source) return true;
-  return valuesOf(context, 'source').includes(record.source)
-    || valuesOf(context, 'source').some((value) => path.resolve(value) === path.resolve(record.source));
+  if (typeof record.source !== 'string') return false;
+  const wanted = valuesOf(context, 'source')
+    .filter((value) => typeof value === 'string')
+    .map((value) => attributionRules.canonicalSource(value));
+  return wanted.includes(attributionRules.canonicalSource(record.source));
 }
 
 function attributionShape(record, index) {
@@ -229,11 +232,17 @@ function report(sources, options = {}) {
   // current token_usage_record is encountered in another file and both views
   // contaminate the same cumulative accumulator.
   const currentCodexSessions = new Set();
+  const codexSourceSessions = new Map();
   for (const source of sources) {
-    const metaSession = source.rows.find((row) => row?.type === 'session_meta')?.payload?.id
-      || source.rows.find((row) => row?.type === 'session_meta')?.payload?.session_id
+    const rows = Array.isArray(source?.rows) ? source.rows : [];
+    const meta = rows.find((row) => row?.type === 'session_meta');
+    const metaSession = meta?.payload?.id
+      || meta?.payload?.session_id
       || null;
-    for (const row of source.rows) {
+    // Keep the source's session_meta available before the row that needs it is
+    // visited. Codex files can place a token_usage_record before metadata.
+    codexSourceSessions.set(source, metaSession);
+    for (const row of rows) {
       if (row?.type !== 'token_usage_record' || !row.payload?.thread_token_usage) continue;
       const id = row.payload.session_id || metaSession;
       if (id) currentCodexSessions.add(id);
@@ -247,16 +256,17 @@ function report(sources, options = {}) {
     }
   }
   for (const source of sources) {
-    let session = null;
+    const rows = Array.isArray(source?.rows) ? source.rows : [];
+    let session = codexSourceSessions.get(source) || null;
     // Recent Codex transcripts contain both the legacy event_msg snapshot and
     // the newer token_usage_record for the same response. They expose related
     // but different cumulative views, so combining them makes counters appear
     // to go backwards. Prefer the thread-level records for that source and
     // retain the legacy adapter for older files that have no current records.
-    const hasCurrentCodexUsage = source.rows.some((row) =>
+    const hasCurrentCodexUsage = rows.some((row) =>
       row?.type === 'token_usage_record' && row.payload?.thread_token_usage);
     const sourceName = source.source || null;
-    for (const row of source.rows) {
+    for (const row of rows) {
       if (!row || typeof row !== 'object') continue;
       if (row.type === 'session_meta') session = row.payload?.id || row.payload?.session_id || null;
       if (row.type === 'turn_context' && row.payload?.turn_id) {

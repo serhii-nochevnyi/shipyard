@@ -631,6 +631,12 @@ test('phase 1 emits no -deep file — none of those roles exists yet', () => {
   assert.deepStrictEqual(Object.keys(g.agents), ['shipyard-inv-research']);
 });
 
+test('phase validation rejects numeric prefixes instead of accepting a partial integer', () => {
+  const g = generate({ phase: '2foo' });
+  assert.notStrictEqual(g.run.status, 0);
+  assert.match(g.stderr, /--phase must be 1 or 2/);
+});
+
 suite('the CLI floor is measured against what is EFFECTIVE (ADR-007 D4)');
 
 // The remap wins over the palette — deliberately, and that stays. What does NOT
