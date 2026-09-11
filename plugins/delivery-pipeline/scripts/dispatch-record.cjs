@@ -15,6 +15,8 @@
 //   dispatch-record.cjs mark-many --stdin [--graph <dir>]
 //                             # JSON array of {ticket, role, ...mark fields}
 //   dispatch-record.cjs clear <ticket>        [--graph <dir>]
+//   dispatch-record.cjs clear-many --stdin [--graph <dir>]
+//                             # JSON array of ticket ids
 //   dispatch-record.cjs list  [--json]        [--graph <dir>]
 //
 // Why this exists. The front's vocabulary had no state for DISPATCHED AND
@@ -636,6 +638,32 @@ function parseBatchEntries(raw) {
   });
 }
 
+// A completed fan-out has the same opposite shape as a launch wave: one
+// operation owns several ticket records. Clearing them one process at a time
+// re-takes the lock and refreshes the derived front for every ticket, so a
+// short Workflow round can cost more orchestration turns than the work itself.
+// Keep this input deliberately smaller than mark-many: a clear carries no
+// attribution and therefore needs only a ticket id. Missing records are
+// accepted, matching the single-ticket clear's idempotent behaviour — a
+// dispatch may already have lifted on its owner's output by the time the
+// result is collected.
+function parseClearBatch(raw) {
+  if (!Array.isArray(raw)) {
+    throw new Error('clear-many input must be a JSON array of ticket ids');
+  }
+  const seen = new Set();
+  return raw.map((ticket, index) => {
+    if (typeof ticket !== 'string' || ticket.trim() === '') {
+      throw new Error(`clear-many item ${index + 1} must be a non-empty ticket id`);
+    }
+    if (seen.has(ticket)) {
+      throw new Error(`clear-many contains duplicate ticket ${ticket} — pass each id once`);
+    }
+    seen.add(ticket);
+    return ticket;
+  });
+}
+
 // `draft` is normalized so `undefined` and `false` are one state; everything else
 // is compared as it stands, with an absent field as null.
 function fieldValue(s, field) {
@@ -1080,6 +1108,41 @@ if (require.main === module) {
       refreshFront(cwd);
     }
     console.log(had ? `dispatch cleared for ${ticket} — it is the board's again` : `no dispatch recorded for ${ticket}`);
+  } else if (cmd === 'clear-many') {
+    if (rest.length !== 1 || rest[0] !== '--stdin') {
+      fail(
+        'usage: dispatch-record.cjs clear-many --stdin [--graph <dir>]\n' +
+        '  stdin must contain a JSON array of ticket ids; an empty array is a no-op'
+      );
+    }
+    let raw;
+    try {
+      raw = JSON.parse(fs.readFileSync(0, 'utf8'));
+    } catch (e) {
+      fail(`clear-many stdin is not valid JSON — ${e && e.message ? e.message : e}`);
+    }
+    let ticketsToClear;
+    try {
+      ticketsToClear = parseClearBatch(raw);
+    } catch (e) {
+      fail(e && e.message ? e.message : e);
+    }
+    if (!ticketsToClear.length) {
+      console.log('no dispatches cleared — the batch was explicitly empty');
+    } else {
+      const current = load(cwd).tickets || {};
+      const present = ticketsToClear.filter((ticket) => Object.prototype.hasOwnProperty.call(current, ticket));
+      if (present.length) {
+        mutate(cwd, (store) => {
+          for (const ticket of present) delete store.tickets[ticket];
+        });
+        refreshFront(cwd);
+      }
+      console.log(
+        `dispatch cleared for ${present.length} of ${ticketsToClear.length} ticket(s) — ` +
+        'the board can offer them again'
+      );
+    }
   } else if (cmd === 'list') {
     const active = activeDispatches(cwd);
     if (rest.includes('--json')) {
@@ -1093,6 +1156,6 @@ if (require.main === module) {
       }
     }
   } else {
-    fail('usage: dispatch-record.cjs <mark|mark-many|clear|list> …');
+    fail('usage: dispatch-record.cjs <mark|mark-many|clear|clear-many|list> …');
   }
 }
