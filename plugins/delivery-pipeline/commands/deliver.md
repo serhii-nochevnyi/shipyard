@@ -1368,7 +1368,7 @@ may be dispatched at all: fix the file.
     above returns immediately with an id (the Workflow tool a task id, the Agent
     tool an agent id); once you hold that id the agent exists, and only then, for
     every ticket you just handed out:
-    `dispatch-record.cjs mark <T> executor --model <model_tier> --effort <requested_effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <workflow|agent|inline> --agent-id <launch id>`
+    `dispatch-record.cjs mark <T> executor --model <model_tier> --effort <requested_effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <workflow|agent|codex-agent|inline> --agent-id <launch id>`
     For a Codex selection, use its `model_tier` for `--model` and its
     `requested_effort` for `--effort`; keep the concrete selector `model` for
     `--observed-model` when the host reports it.
@@ -1507,14 +1507,17 @@ the dispatch record remains `effort_applied=unsupported`.
 
 Record that hand-over the same way the executors' was, and in the same order —
 the `Agent` call returns an agent id, and THEN
-`dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <agent|codex-agent> --agent-id <the id that Agent call returned>`
+    `dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <agent|codex-agent> --agent-id <the id that Agent call returned> [--agent-file <agent_file>]`
 for every ticket on the guarded list, taking all three resolver fields from the
 `model pr-sentinel` call above — the route included, verbatim — and the agent id
-from the spawn you just made. **Every ticket this guard holds carries THAT SAME
-id**, which is what makes one guard over four PRs one agent instead of four. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
-which carries no effort. Pass `--effort-applied unsupported` when that capability
-is known absent, `unknown` when the host did not expose what ran, or omit the flag
-when neither fact is available;
+    from the spawn you just made. **Every ticket this guard holds carries THAT SAME
+    id**, which is what makes one guard over four PRs one agent instead of four. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
+    which carries no effort. Pass `--effort-applied unsupported` when that capability
+    is known absent, `unknown` when the host did not expose what ran, or omit the flag
+    when neither fact is available;
+    on the Codex path also pass `--agent-file <agent_file>` from the same
+    `codex-agent.cjs select pr-sentinel` call, so the ordinary or recovery lane is
+    recorded; omit that field for the Agent path.
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
 one when the guard's report comes back for it — a `pr-sentinel` record also lifts
 by itself when the PR merges or its base moves. This half is not an

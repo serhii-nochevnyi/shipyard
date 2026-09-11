@@ -240,6 +240,20 @@ test('inherited runtime names are rejected as unknown', () => {
  assert.equal(r.observations[0].attribution_status, 'unattributed');
 });
 
+test('malformed transcript models remain visible but are excluded from efficiency coverage', () => {
+ const row = claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'});
+ row.message.model = { provider: 'unknown' };
+ const r = report(files(row), { attributions: [{
+   observation_id:'bad-transcript-model', dispatch_id:'dispatch-bad-model', runtime:'claude', provider:'anthropic',
+   source:'fixture', session_id:'s1', request_id:'r1', message_id:'m1', ticket:'T-01-01', role:'executor',
+   task_level:'routine', backend:'workflow', model:'opus', effort:'high', observed_effort:'high',
+ }] });
+ assert.deepEqual(r.observations[0].model, { provider: 'unknown' });
+ assert.equal(r.coverage.model_observed, 0);
+ assert.equal(r.efficiency.eligible_rows, 0);
+ assert.ok(r.efficiency.rows[0].exclusion_reasons.includes('missing_model'));
+});
+
 test('malformed observed_model text is rejected before matching', () => {
  const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), {
    attributions: [{ observation_id:'bad-observed', dispatch_id:'dispatch-2', runtime:'claude', provider:'anthropic', kind:'ordinary',

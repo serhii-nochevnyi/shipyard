@@ -16,6 +16,7 @@ const number = (v) => Number.isSafeInteger(v) && v >= 0;
 const sum = (values) => values.every(number) ? values.reduce((a, b) => a + b, 0) : null;
 const RUNTIME_PROVIDER = { claude: 'anthropic', codex: 'openai' };
 const concreteEffort = (value) => Array.isArray(pipeline.EFFORTS) && pipeline.EFFORTS.includes(value);
+const validModel = (value) => typeof value === 'string' && value.trim().length > 0;
 
 function valuesOf(context, key) {
   const plural = `${key}s`;
@@ -579,15 +580,15 @@ function report(sources, options = {}) {
   const ratio = (n) => observations.length ? Math.round((n / observations.length) * 10000) / 100 : null;
   const attributed = count((o) => o.attribution_status === 'exact' || o.attribution_status === 'session');
   const modelEffort = count((o) => (o.attribution_status === 'exact' || o.attribution_status === 'session')
-    && o.model && concreteEffort(o.observed_effort) && o.dispatch_id);
+    && validModel(o.model) && concreteEffort(o.observed_effort) && o.dispatch_id);
   const ticketReady = count((o) => (o.attribution_status === 'exact' || o.attribution_status === 'session')
-    && o.model && concreteEffort(o.observed_effort) && o.dispatch_id && o.ticket && o.input_tokens !== null);
+    && validModel(o.model) && concreteEffort(o.observed_effort) && o.dispatch_id && o.ticket && o.input_tokens !== null);
   const efficiencyEligible = (o) => (o.attribution_status === 'exact' || o.attribution_status === 'session')
-    && o.model && concreteEffort(o.observed_effort) && o.dispatch_id && o.ticket && o.input_tokens !== null;
+    && validModel(o.model) && concreteEffort(o.observed_effort) && o.dispatch_id && o.ticket && o.input_tokens !== null;
   const efficiencyExclusionReasons = (o) => [
     ...(o.attribution_status !== 'exact' && o.attribution_status !== 'session'
       ? [`attribution_${o.attribution_status}`] : []),
-    ...(!o.model ? ['missing_model'] : []),
+    ...(!validModel(o.model) ? ['missing_model'] : []),
     ...(!concreteEffort(o.observed_effort) ? ['missing_or_nonconcrete_effort'] : []),
     ...(!o.dispatch_id ? ['missing_dispatch_id'] : []),
     ...(!o.ticket ? ['missing_ticket'] : []),
@@ -657,7 +658,7 @@ function report(sources, options = {}) {
       attributed_observations: attributed,
       unattributed_observations: count((o) => o.attribution_status === 'unattributed'),
       ambiguous_observations: count((o) => o.attribution_status === 'ambiguous'),
-      model_observed: count((o) => Boolean(o.model)),
+      model_observed: count((o) => validModel(o.model)),
       effort_observed: count((o) => concreteEffort(o.observed_effort)),
       dispatch_attributed: count((o) => Boolean(o.dispatch_id)),
       ticket_attributed: count((o) => Boolean(o.ticket)),

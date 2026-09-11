@@ -436,8 +436,8 @@ reinit is not optional.
   returns) belongs in your report — `mark` stores the ticket, the role, the time,
   what you dispatched it at and a generated `dispatch_id`. Once the runtime
   exposes the transcript session/request/message id, connect it with
-  `usage-attribution.cjs record`: use `provider=anthropic` for Claude and
-  `provider=openai` for Codex, and keep concrete observed model/effort separate
+  `usage-attribution.cjs record`: use `provider=anthropic` for Workflow/Agent-tool
+  launches and `provider=openai` for `codex-agent.cjs` launches, and keep concrete observed model/effort separate
   from the requested tier/effort. Missing observations remain unknown and are
   excluded from efficiency comparisons.
   **The pair AND the route are the ones `pipeline-config.cjs model <role> --json …`
