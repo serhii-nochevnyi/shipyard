@@ -67,7 +67,7 @@ cleanup() {
   local status="${1:-0}"
   if [[ "$status" -ne 0 && "$ROLLBACK_ACTIVE" == 1 ]]; then
     echo "error: install failed after mutating installer-owned state; restoring the previous set" >&2
-    restore_runtime_dirs 2>/dev/null || echo "warning: runtime artifact rollback was incomplete; inspect ${AGENTS_SKILLS:-$HOME/.agents/skills} and ${BUNDLE_ROOT:-$CODEX_HOME/shipyard}" >&2
+    restore_runtime_paths 2>/dev/null || echo "warning: runtime artifact rollback was incomplete; inspect ${AGENTS_SKILLS:-$HOME/.agents/skills}, ${BUNDLE_ROOT:-$CODEX_HOME/shipyard}, ${AGENTS_MD:-$CODEX_HOME/AGENTS.md} and ${CAPABILITY_TARGET:-${GSD_CAPABILITIES_ROOT:-$HOME/.gsd/capabilities}/delivery-pipeline}" >&2
     restore_config 2>/dev/null || echo "warning: config rollback was incomplete; inspect ${CONFIG_TARGET:-$CODEX_HOME/config.toml}" >&2
     restore_agents 2>/dev/null || echo "warning: agent rollback was incomplete; inspect ${AGENTS_DIR:-$CODEX_HOME/agents}" >&2
   fi
@@ -100,20 +100,16 @@ restore_agents() {
   fi
   return "$restore_status"
 }
-restore_runtime_dirs() {
+restore_runtime_paths() {
   local index="${RUNTIME_BACKUP_INDEX:-}"
   local backup="${RUNTIME_BACKUP:-}"
   local state kind name target restore_status=0
   [[ -n "$index" && -f "$index" && -n "$backup" ]] || return 0
-  while IFS=$'\t' read -r state kind name; do
-    [[ -n "$kind" && -n "$name" ]] || continue
-    if [[ "$kind" == bundle ]]; then
-      target="$BUNDLE_ROOT"
-    else
-      target="$AGENTS_SKILLS/$name"
-    fi
+  while IFS=$'\t' read -r state kind name target; do
+    [[ -n "$kind" && -n "$name" && -n "$target" ]] || continue
     rm -rf "$target" || restore_status=1
     if [[ "$state" == present ]]; then
+      mkdir -p "$(dirname "$target")" || restore_status=1
       cp -a "$backup/$kind-$name" "$target" || restore_status=1
     fi
   done < "$index"
@@ -155,21 +151,25 @@ replace_dir() {
   fi
   return "$status"
 }
-snapshot_runtime_dir() {
+snapshot_runtime_path() {
   local kind="$1" name="$2" target="$3"
   local state=absent backup_path="$RUNTIME_BACKUP/$kind-$name"
-  if grep -Fqx $'present\t'"$kind"$'\t'"$name" "$RUNTIME_BACKUP_INDEX" 2>/dev/null \
-    || grep -Fqx $'absent\t'"$kind"$'\t'"$name" "$RUNTIME_BACKUP_INDEX" 2>/dev/null; then
+  if grep -Fqx $'present\t'"$kind"$'\t'"$name"$'\t'"$target" "$RUNTIME_BACKUP_INDEX" 2>/dev/null \
+    || grep -Fqx $'absent\t'"$kind"$'\t'"$name"$'\t'"$target" "$RUNTIME_BACKUP_INDEX" 2>/dev/null; then
     return 0
   fi
   if [[ -e "$target" || -L "$target" ]]; then
     cp -a "$target" "$backup_path"
     state=present
   fi
-  printf '%s\t%s\t%s\n' "$state" "$kind" "$name" >> "$RUNTIME_BACKUP_INDEX"
+  printf '%s\t%s\t%s\t%s\n' "$state" "$kind" "$name" "$target" >> "$RUNTIME_BACKUP_INDEX"
 }
 trap 'cleanup $?' EXIT
 OUT="$STAGE/bundle-out"
+RUNTIME_BACKUP="$STAGE/runtime-before"
+RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
+mkdir -p "$RUNTIME_BACKUP"
+: > "$RUNTIME_BACKUP_INDEX"
 
 # ── generate ─────────────────────────────────────────────────────────────────
 echo "→ generating Codex bundle (phase $PHASE)…"
@@ -447,6 +447,9 @@ fi
 # from its own checks/ dir on a host (there is no /opt/delivery-pipeline here).
 echo "→ registering GSD capability (Gate 2 / UAT gates)…"
 CAP_STAGE="$STAGE/capability/delivery-pipeline"
+GSD_CAPABILITIES_ROOT="${GSD_CAPABILITIES_DIR:-$HOME/.gsd/capabilities}"
+CAPABILITY_TARGET="$GSD_CAPABILITIES_ROOT/delivery-pipeline"
+snapshot_runtime_path capability delivery-pipeline "$CAPABILITY_TARGET"
 mkdir -p "$CAP_STAGE/checks"
 cp -R "$CAP_SRC/." "$CAP_STAGE/"
 # The validator requires sibling modules (frontmatter.cjs, pipeline-config.cjs),
@@ -461,6 +464,7 @@ node "$GSD_TOOLS" capability install "$CAP_STAGE" --scope global --yes
 # Honour CODEX_HOME: with a custom home everything else installs there, so
 # hardcoding ~/.codex here split the install across two locations.
 AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
+snapshot_runtime_path agents-md main "$AGENTS_MD"
 echo "→ ensuring shipyard auto-route block in $AGENTS_MD"
 mkdir -p "$(dirname "$AGENTS_MD")"
 CODEX_AGENTS_MD="$AGENTS_MD" node - <<'NODE'
@@ -497,6 +501,8 @@ NODE
 # holds ONE `runtime` shared by both installs, and only model-shaped keys belong
 # there — conveyor settings stay per-project.
 GSD_TUNE="$REPO_ROOT/plugins/delivery-pipeline/scripts/gsd-tune.cjs"
+GSD_DEFAULTS="${GSD_DEFAULTS_PATH:-$HOME/.gsd/defaults.json}"
+snapshot_runtime_path gsd-defaults defaults.json "$GSD_DEFAULTS"
 [[ -f "$GSD_TUNE" ]] || GSD_TUNE="$BUNDLE_ROOT/scripts/gsd-tune.cjs"
 if [[ -f "$GSD_TUNE" ]]; then
   echo "→ GSD global defaults (~/.gsd/defaults.json)"
@@ -506,15 +512,11 @@ fi
 # ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
 echo "→ installing skills → $AGENTS_SKILLS"
 mkdir -p "$AGENTS_SKILLS"
-RUNTIME_BACKUP="$STAGE/runtime-before"
-RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
-mkdir -p "$RUNTIME_BACKUP"
-: > "$RUNTIME_BACKUP_INDEX"
 for d in "$OUT"/skills/*/; do
   name="$(basename "${d%/}")"
-  snapshot_runtime_dir skill "$name" "$AGENTS_SKILLS/$name"
+  snapshot_runtime_path skill "$name" "$AGENTS_SKILLS/$name"
 done
-snapshot_runtime_dir bundle payload "$BUNDLE_ROOT"
+snapshot_runtime_path bundle payload "$BUNDLE_ROOT"
 for d in "$OUT"/skills/*/; do
   name="$(basename "$d")"
   replace_dir "${d%/}" "$AGENTS_SKILLS/$name" "skill directory" || {

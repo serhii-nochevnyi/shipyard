@@ -3,9 +3,10 @@
 `dispatch-record.cjs mark` records one ticket. When a launch hands out several
 tickets, record them as one validated mutation. The same batching rule applies
 when a wave completes: `clear-many --stdin` removes all returned
-`{ticket, dispatch_id}` identities in one lock and one front refresh. The
-dispatch id is required because a ticket can be re-dispatched before an older
-completion arrives.
+`{ticket, dispatch_id}` identities in one lock and one front refresh, and
+`clear <ticket> <dispatch_id>` is the one-ticket equivalent. The dispatch id
+is required because a ticket can be re-dispatched before an older completion
+arrives.
 
 ```bash
 cat <<'JSON' | node plugins/delivery-pipeline/scripts/dispatch-record.cjs mark-many --stdin

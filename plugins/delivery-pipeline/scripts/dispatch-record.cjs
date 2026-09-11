@@ -14,7 +14,7 @@
 //                             [--graph <dir>]
 //   dispatch-record.cjs mark-many --stdin [--graph <dir>]
 //                             # JSON array of {ticket, role, ...mark fields}
-//   dispatch-record.cjs clear <ticket>        [--graph <dir>]
+//   dispatch-record.cjs clear <ticket> <dispatch_id> [--graph <dir>]
 //   dispatch-record.cjs clear-many --stdin [--graph <dir>]
 //                             # JSON array of {ticket, dispatch_id}
 //   dispatch-record.cjs list  [--json]        [--graph <dir>]
@@ -876,7 +876,7 @@ function dispatchWhy(id, rec) {
   return `dispatched to ${role}${age} — an agent holds it, so it is nobody else's to start. ` +
     `It returns to the board by itself when the delivery state moves in the way this role's own output moves it ` +
     `(${subjectOf(role).lifts}) or after ${Math.round(DISPATCH_TTL_MS / 60000)}m; ` +
-    `\`dispatch-record.cjs clear ${id}\` returns it now.`;
+    `\`dispatch-record.cjs clear ${id} ${rec && rec.dispatch_id ? rec.dispatch_id : '<dispatch_id>'}\` returns it now.`;
 }
 
 /**
@@ -1176,14 +1176,21 @@ if (require.main === module) {
       );
     }
   } else if (cmd === 'clear') {
-    const [ticket] = rest;
-    if (!ticket) fail('usage: dispatch-record.cjs clear <ticket> [--graph <dir>]');
-    const had = !!load(cwd).tickets[ticket];
-    if (had) {
-      mutate(cwd, (store) => { delete store.tickets[ticket]; });
+    const [ticket, dispatchId] = rest;
+    if (!ticket || !dispatchId) fail('usage: dispatch-record.cjs clear <ticket> <dispatch_id> [--graph <dir>]');
+    const why = opaqueDispatchValueIssue(dispatchId);
+    if (why !== null) fail(`clear dispatch_id cannot be recorded: ${why}`);
+    let cleared = false;
+    mutate(cwd, (store) => {
+      const current = store.tickets[ticket];
+      if (!current || current.dispatch_id !== dispatchId) return;
+      delete store.tickets[ticket];
+      cleared = true;
+    });
+    if (cleared) {
       refreshFront(cwd);
     }
-    console.log(had ? `dispatch cleared for ${ticket} — it is the board's again` : `no dispatch recorded for ${ticket}`);
+    console.log(cleared ? `dispatch cleared for ${ticket} — it is the board's again` : `no dispatch recorded for ${ticket}`);
   } else if (cmd === 'clear-many') {
     if (rest.length !== 1 || rest[0] !== '--stdin') {
       fail(

@@ -184,7 +184,8 @@ test('garbage in SHIPYARD_DISPATCH_TTL_MS does not disable the backstop', () => 
 test('clear removes it immediately', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
-  assert.equal(run(['clear', 'T-01-01'], project).status, 0);
+  const dispatchId = store(graph)['T-01-01'].dispatch_id;
+  assert.equal(run(['clear', 'T-01-01', dispatchId], project).status, 0);
   assert.deepStrictEqual(store(graph), {}, 'gone from the store');
   assert.deepStrictEqual(activeDispatches(project), {});
 });
@@ -331,11 +332,15 @@ test('the board\'s sentence names the output that will lift it, and not a check'
   // `clear` that becomes routine clears work that has not returned. The old
   // sentence listed "a check" among the things that return the ticket, which was
   // both wrong and an invitation to distrust the board.
-  const why = dispatchWhy('T-01-01', { role: 'review-fix', at: new Date().toISOString() });
+  const why = dispatchWhy('T-01-01', {
+    role: 'review-fix', at: new Date().toISOString(), dispatch_id: 'dispatch-why',
+  });
   assert.ok(/review-fix/.test(why), why);
   assert.ok(/head/.test(why), `it must name the fixer's own output: ${why}`);
   assert.ok(!/a check/.test(why), `and must not promise a check lifts it: ${why}`);
   assert.ok(/\d+m/.test(why), 'the timeout is still named');
+  assert.ok(/dispatch-record\.cjs clear T-01-01 dispatch-why/.test(why),
+    `the guarded clear command is named: ${why}`);
   assert.ok(/branch/.test(dispatchWhy('T', { role: 'executor', at: new Date().toISOString() })),
     'and each role gets its own output named');
 });
@@ -405,8 +410,9 @@ test('the mark that hides the work also puts it back', () => {
     actionable: { execute: ['T-01-01'], publish: [], fix: [], finalize: [], merge: [] },
   });
   execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const dispatchId = store(path.join(project, '.planning', 'graph'))['T-01-01'].dispatch_id;
   assert.equal(gate(project).stdout.trim(), '');
-  execFileSync('node', [DISPATCH, 'clear', 'T-01-01'], { cwd: project });
+  execFileSync('node', [DISPATCH, 'clear', 'T-01-01', dispatchId], { cwd: project });
   assert.equal(JSON.parse(gate(project).stdout).decision, 'block', 'the board offers it again');
 });
 
@@ -630,6 +636,28 @@ test('clear-many does not erase a newer dispatch when an older completion arrive
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /dispatch cleared for 0 of 1 ticket\(s\)/);
   assert.equal(store(graph)['T-01-01'].dispatch_id, currentId);
+});
+
+test('clear requires dispatch_id and leaves a newer dispatch in place', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const oldId = store(graph)['T-01-01'].dispatch_id;
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const currentId = store(graph)['T-01-01'].dispatch_id;
+
+  const missing = run(['clear', 'T-01-01'], project);
+  assert.equal(missing.status, 1, 'ticket-only clear must refuse');
+  assert.match(missing.stderr, /usage: dispatch-record\.cjs clear <ticket> <dispatch_id>/);
+
+  const stale = run(['clear', 'T-01-01', oldId], project);
+  assert.equal(stale.status, 0, stale.stderr);
+  assert.match(stale.stdout, /no dispatch recorded for T-01-01/);
+  assert.equal(store(graph)['T-01-01'].dispatch_id, currentId);
+
+  const ok = run(['clear', 'T-01-01', currentId], project);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /dispatch cleared for T-01-01/);
+  assert.deepStrictEqual(store(graph), {});
 });
 
 suite('dispatch-record — a dispatch records WHAT it dispatched, or says it does not know');
@@ -1287,6 +1315,11 @@ test('delivery docs prefer one mark/clear batch per fan-out', () => {
     'the background guard must use the same batch launch path');
   assert.match(sentinel, /dispatch-record\.cjs clear-many --stdin/,
     'the background guard must use the same batch cleanup path');
+  assert.match(sentinel, /clear <T> <dispatch_id>/,
+    'the background guard must keep the guarded one-ticket clear form');
+  const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
+  assert.match(deliver, /dispatch-record\.cjs clear <T> <dispatch_id>/,
+    'the main loop must clear executors with the guarded one-ticket form');
   const docs = fs.readFileSync(path.join(__dirname, '..', '..', 'docs', 'dispatch-record.md'), 'utf8');
   assert.match(docs, /dispatch-record\.cjs mark-many --stdin/,
     'the operator reference must expose the one-call launch recording path');

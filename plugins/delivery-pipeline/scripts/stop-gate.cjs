@@ -607,7 +607,7 @@ const goneText = () => {
       'A mark that old is not an agent at work — it is what a mark written before a launch that never\n' +
       'happened looks like. If that work really is out it will wake you; if it is gone, return the\n' +
       'ticket to the board with\n' +
-      `  \`dispatch-record.cjs clear ${suspect[0].id} --graph ${graphDir}\`\n` +
+      `  \`dispatch-record.cjs clear ${suspect[0].id} ${dispatched[suspect[0].id] && dispatched[suspect[0].id].dispatch_id ? dispatched[suspect[0].id].dispatch_id : '<dispatch_id>'} --graph ${graphDir}\`\n` +
       'The --graph is not optional: this hook\'s cwd is the SESSION\'s, and a clear run from the wrong\n' +
       'one reports "no dispatch recorded" and changes nothing.'
     : '';

@@ -1382,7 +1382,7 @@ may be dispatched at all: fix the file.
     two of them apart. On the Workflow path one task id covers the whole batch, and
     that is correct — an executor is one agent per ticket whatever the id says, so
     there the id is provenance and not a count. Keep it in your turn too: it is still
-    what you collect and clear against.
+    what you correlate the completion with, and the recorder's returned `dispatch_id` is what you clear against.
     **Marking first is how the board comes to describe an agent that does not
     exist**: a launch that fails (the tool refused, Workflow is absent on this
     runtime and the Agent fallback was not taken) leaves a 90-minute dispatch the
@@ -1405,7 +1405,7 @@ may be dispatched at all: fix the file.
 **Phase C — gate and publish (main loop, per ticket).** Never delegate this.
 
 4c. The executor has returned, so the ticket is yours again:
-   `dispatch-record.cjs clear <T>`. Do this BEFORE the gates below — their verdict
+   `dispatch-record.cjs clear <T> <dispatch_id>`. Do this BEFORE the gates below — their verdict
    (including `blocked`) is a fact about a ticket nobody is working on, and a
    record left standing over an escalation would hide it from the next run for as
    long as it takes to time out.

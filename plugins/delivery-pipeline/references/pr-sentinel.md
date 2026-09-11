@@ -425,7 +425,7 @@ reinit is not optional.
   `dispatch-record.cjs clear-many --stdin --graph <project>/.planning/graph` as
   soon as a group of PRs is merged, parked, or handed to a person; stdin must
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
-  delayed result cannot clear a newer dispatch. `clear <T>` remains the
+  delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
   `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend>`
   again if you hand it to a fixer you do not wait for — **after that fixer is
