@@ -142,4 +142,11 @@ test('refuses to overwrite an unowned generated artifact', () => {
   assert.equal(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), '# human-owned state\n');
 });
 
+test('adopts existing native artifacts only when explicitly requested', () => {
+  const root = project({ conflict: true });
+  const r = run(root, ['--adopt-native']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(path.join(root, '.planning', 'STATE.md'), 'utf8'), /shipyard:gsd-sync generated/);
+});
+
 done();
