@@ -155,7 +155,10 @@ replace_dir() {
   local src="$1" target="$2" label="$3"
   local tmp="${target}.tmp-$$" backup="${target}.bak-$$" had_target=0 status=0
   rm -rf "$tmp" "$backup"
-  cp -R "$src" "$tmp" || return $?
+  # Preserve executable bits and symlinks while staging the replacement. The
+  # staged directory becomes the live target with one rename, so copying it
+  # without archive semantics can silently change the installed bundle.
+  cp -a "$src" "$tmp" || return $?
   if [[ -e "$target" || -L "$target" ]]; then
     mv "$target" "$backup" || return $?
     had_target=1
