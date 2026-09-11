@@ -875,7 +875,14 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
     const integration = integrationStatus(readText(path.join(PHASES_DIR, phase.dirName, 'INTEGRATION.md')));
     evidenceByPhase.set(phase.number, phaseEvidence(phase, planRecords, integration));
   }
-  const sourceFiles = [ROADMAP, PROJECT, CONFIG, TICKETS, DELIVERY_STATE, DELIVERY_FRONT];
+  // delivery-front.json is a live dispatch cache. It carries generated_at,
+  // observed_at, generation, and dispatch timestamps that change on ordinary
+  // state-sync heartbeats, while none of those fields feed this projection.
+  // Hashing it would make an otherwise unchanged native projection fail
+  // --check after every delivery round. The authoritative delivery facts are
+  // already represented by delivery-state.json, so keep the volatile front
+  // out of the source fingerprint while still validating its shape above.
+  const sourceFiles = [ROADMAP, PROJECT, CONFIG, TICKETS, DELIVERY_STATE];
   for (const plan of planRecords) sourceFiles.push(plan.file);
   for (const phase of phaseList) {
     const integration = path.join(PHASES_DIR, phase.dirName, 'INTEGRATION.md');

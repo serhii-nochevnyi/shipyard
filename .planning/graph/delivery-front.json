@@ -1,18 +1,18 @@
 {
-  "generated_at": "2026-09-11T07:52:18.043Z",
-  "observed_at": "2026-09-11T07:52:18.043Z",
-  "generation": 201,
+  "generated_at": "2026-09-11T07:53:25.991Z",
+  "observed_at": "2026-09-11T07:53:25.991Z",
+  "generation": 202,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-11T07:52:18.043Z",
+  "dispatches_applied_at": "2026-09-11T07:53:25.991Z",
   "actionable": {
     "execute": [],
     "publish": [],
     "fix": [],
-    "finalize": [
+    "finalize": [],
+    "merge": [
       "T-35-03"
-    ],
-    "merge": []
+    ]
   },
   "waiting": {
     "ci": [],
@@ -108,14 +108,14 @@
     ]
   },
   "why": {
-    "T-35-03": "PR #101: green, the conform trailer is for 9b1e810, the PR is at 491fec6 — threads + arch-review still owed"
+    "T-35-03": "PR #101: green + conform — squash into epic/35-gsd-and-shipyard-workflow-loop (sentinel)"
   },
   "counts": {
     "execute": 0,
     "publish": 0,
     "fix": 0,
-    "finalize": 1,
-    "merge": 0,
+    "finalize": 0,
+    "merge": 1,
     "ci": 0,
     "dispatched": 0,
     "parent": 0,

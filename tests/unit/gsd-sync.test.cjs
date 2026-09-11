@@ -162,6 +162,29 @@ test('check mode detects source drift without rewriting the projection', () => {
   assert.equal(fs.readFileSync(requirements, 'utf8'), before);
 });
 
+test('ignores volatile delivery-front metadata in the source fingerprint', () => {
+  const root = project();
+  assert.equal(run(root).status, 0);
+  write(path.join(root, '.planning', 'graph', 'delivery-front.json'), JSON.stringify({
+    generated_at: '2026-09-11T07:00:00.000Z',
+    observed_at: '2026-09-11T07:00:00.000Z',
+    generation: 1,
+    dispatches_applied_at: '2026-09-11T07:00:00.000Z',
+    actionable: { execute: [], publish: [], fix: [], finalize: [], merge: [] },
+  }));
+  const before = fs.readFileSync(path.join(root, '.planning', 'ROADMAP.md'), 'utf8');
+  write(path.join(root, '.planning', 'graph', 'delivery-front.json'), JSON.stringify({
+    generated_at: '2026-09-11T08:00:00.000Z',
+    observed_at: '2026-09-11T08:00:00.000Z',
+    generation: 2,
+    dispatches_applied_at: '2026-09-11T08:00:00.000Z',
+    actionable: { execute: [], publish: [], fix: [], finalize: [], merge: [] },
+  }));
+  const check = run(root, ['--check']);
+  assert.equal(check.status, 0, check.stderr || check.stdout);
+  assert.equal(fs.readFileSync(path.join(root, '.planning', 'ROADMAP.md'), 'utf8'), before);
+});
+
 test('does not convert needs-fix integration into a green phase', () => {
   const root = project({ integration: 'Verdict: needs-fix' });
   assert.equal(run(root).status, 0);
