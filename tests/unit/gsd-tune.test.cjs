@@ -152,7 +152,7 @@ test('a foreign projection is reported and never overwritten', () => {
   const dir = project({ agent_skills: { 'gsd-executor': [PROJECT_DELIVERY_RULES] } });
   const file = path.join(dir, PROJECT_DELIVERY_RULES, 'SKILL.md');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, 'operator-owned content\n');
+  fs.writeFileSync(file, 'operator-owned content; <!-- shipyard-managed: gsd-delivery-rules --> is documentation\n');
   const before = fs.readFileSync(file, 'utf8');
   const result = run(dir, ['--runtime', 'claude', '--apply']);
   assert.equal(result.status, 2, result.stdout || result.stderr);

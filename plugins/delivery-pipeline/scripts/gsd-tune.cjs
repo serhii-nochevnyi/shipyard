@@ -120,6 +120,7 @@ const LEGACY_DELIVERY_RULES = new Set([
   'global:shipyard-delivery-rules',
 ]);
 const DELIVERY_RULES_MARKER = '<!-- shipyard-managed: gsd-delivery-rules -->';
+const HAS_DELIVERY_RULES_MARKER = new RegExp(`(?:^|\\n)${DELIVERY_RULES_MARKER.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}(?:\\r?\\n|$)`);
 
 function managedProjectionContent(sourceContent) {
   const source = sourceContent.endsWith('\n') ? sourceContent : `${sourceContent}\n`;
@@ -152,7 +153,7 @@ function projectSkillStatus() {
       required: true,
       status: content === managedProjectionContent(sourceContent)
         ? 'managed'
-        : content.includes(DELIVERY_RULES_MARKER)
+        : HAS_DELIVERY_RULES_MARKER.test(content)
           ? 'stale-managed'
           : content === sourceContent ? 'legacy-managed' : 'foreign',
       source,
