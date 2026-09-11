@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6
 phase: 27
 status: failed
 result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
+shipyard_source_fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6
 ---
 
 # Phase 27: The conveyor measures its own state — UAT Projection
@@ -24,4 +24,4 @@ actual: needs-fix — integration evidence records a finding or failed verdict
 ### 3. Phase verification is evidence-backed
 result: failed
 expected: the phase verification projection is not green without evidence
-actual: gaps_found
+actual: gaps_found; failed — integration evidence records a finding or failed verdict

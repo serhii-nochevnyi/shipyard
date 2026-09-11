@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -33,9 +33,9 @@
 - [ ] **REQ-23**: The CI waiter distinguishes a stalled pipeline from an unreachable `gh`, clears only the settled ticket's record, and sizes its window from the observed CI.
 - [ ] **REQ-24**: Prose names only what the scripts implement: no instruction sanctions a wait, a bucket or an order of operations the code does not have.
 - [ ] **REQ-25**: Every writer of `delivery-front.json` writes the SAME front: a resync must carry the dispatch overlay, so the board and the stop gate never read work in flight as actionable between one `mark` and the next.
-- [ ] **REQ-26**: The image and the smokes pin the runtimes the conveyor is tested on: Claude Code with Fable 5.1/Opus 5 aliases, gsd-core 1.13.0.
-- [ ] **REQ-27**: A Codex agent carries EFFORT, not a model baked from a catalog that can be stale; a `model =` line appears only when the user's GSD remap names one, resolved through GSD's resolver.
-- [ ] **REQ-28**: Prose names the runtimes as they are: the Agent tool's accepted values, `opus` = Opus 5 and its version floor, `fable` = Fable 5.1 and its consent hazard, the conveyor's `gate_status:` PR trailer vs GSD's `gate-status:` commit trailer.
+- [x] **REQ-26**: The image and the smokes pin the runtimes the conveyor is tested on: Claude Code with Fable 5.1/Opus 5 aliases, gsd-core 1.13.0.
+- [x] **REQ-27**: A Codex agent carries EFFORT, not a model baked from a catalog that can be stale; a `model =` line appears only when the user's GSD remap names one, resolved through GSD's resolver.
+- [x] **REQ-28**: Prose names the runtimes as they are: the Agent tool's accepted values, `opus` = Opus 5 and its version floor, `fable` = Fable 5.1 and its consent hazard, the conveyor's `gate_status:` PR trailer vs GSD's `gate-status:` commit trailer.
 - [x] **REQ-29**: One ownership matcher decides Gate 2 overlap, the scope gate and base-merge conflict resolution; ambiguous declarations are rejected and an uncertain owner never authorizes a mechanical resolution.
 - [x] **REQ-30**: A corrupt configuration permits no mutation: merge, duty, escalation and retarget refuse on an unparseable config and name the file.
 - [x] **REQ-31**: Readiness needs positive evidence: an epic comparison that failed is `unknown`, not `landed`; availability and path reachability are checked in both integration modes.
@@ -47,10 +47,10 @@
 - [x] **REQ-37**: Workflow scripts validate `args` before dispatching: malformed input throws, an empty list returns empty, every ticket yields one result.
 - [x] **REQ-38**: "Left behind" is decided by the ticket's own phase having landed without it, never by phase-number arithmetic.
 - [x] **REQ-39**: An unavailable check reading (gh error, malformed JSON) is a state of its own, distinct from an observed empty list, and never green.
-- [ ] **REQ-40**: No role that writes code or renders a judgement is dispatched below `opus`; `pr-sentinel` and `drift-check` stay on `sonnet` because neither's answer is the gate, and no built-in path reaches `haiku`. Depth is expressed by EFFORT keyed on the role and its signals, not on the tier; a configured effort override must not silently disable the signature escalation it outranks; and **every signal a row is keyed on is passed by the dispatch, with an absent signal never resolving upward.** *(Amended 2026-09-08: the universal floor is retired for those two roles, and effort is chosen for the work rather than for the price — output is 12–19% of a model line, so an effort step moves ~3% of a run against ~2.5× for a tier step. ADR-005 D2.)*
-- [ ] **REQ-41**: `fable` is a ceiling the conveyor reaches mechanically (window pressure, exhausted repair depth, contested judgment) and never by default, the integrator included; it is never emitted where the runtime would resolve it to Fable 5. *(Amended 2026-09-08: the integrator's standing exception is withdrawn — its measured run was 291k tokens against a 1M window at 2× the price, so it earns `fable` through the window route like every other role.)*
-- [ ] **REQ-45**: Every dispatch records the model and the effort it ran at, so the ladder can be revised on evidence instead of judgement.
-- [ ] **REQ-42**: A wave is cut to a concurrency the session can afford: the front reports capacity, the loop dispatches no more than that, and a front held back by the cap is never a fixpoint.
+- [x] **REQ-40**: No role that writes code or renders a judgement is dispatched below `opus`; `pr-sentinel` and `drift-check` stay on `sonnet` because neither's answer is the gate, and no built-in path reaches `haiku`. Depth is expressed by EFFORT keyed on the role and its signals, not on the tier; a configured effort override must not silently disable the signature escalation it outranks; and **every signal a row is keyed on is passed by the dispatch, with an absent signal never resolving upward.** *(Amended 2026-09-08: the universal floor is retired for those two roles, and effort is chosen for the work rather than for the price — output is 12–19% of a model line, so an effort step moves ~3% of a run against ~2.5× for a tier step. ADR-005 D2.)*
+- [x] **REQ-41**: `fable` is a ceiling the conveyor reaches mechanically (window pressure, exhausted repair depth, contested judgment) and never by default, the integrator included; it is never emitted where the runtime would resolve it to Fable 5. *(Amended 2026-09-08: the integrator's standing exception is withdrawn — its measured run was 291k tokens against a 1M window at 2× the price, so it earns `fable` through the window route like every other role.)*
+- [x] **REQ-45**: Every dispatch records the model and the effort it ran at, so the ladder can be revised on evidence instead of judgement.
+- [x] **REQ-42**: A wave is cut to a concurrency the session can afford: the front reports capacity, the loop dispatches no more than that, and a front held back by the cap is never a fixpoint.
 - [ ] **REQ-43**: Whether a ticket needs a drift check is COMPUTED against the base the ticket is cut from, not judged against the integration branch.
 - [ ] **REQ-44**: A workflow returns a reference to a document, not the document: what the orchestrator forwards but never reads must not enter its context.
 - [ ] **REQ-46**: The concurrency cap counts AGENTS, and the three mechanisms that read capacity give one answer: a capacity-full board must not have the front, `ci-wait` and the stop gate ordering three incompatible things at once.
@@ -148,9 +148,9 @@
 | REQ-23 | Phase 24 | Blocked |
 | REQ-24 | Phase 24 | Blocked |
 | REQ-25 | Phase 24 | Blocked |
-| REQ-26 | Phase 25 | Blocked |
-| REQ-27 | Phase 25 | Blocked |
-| REQ-28 | Phase 25 | Blocked |
+| REQ-26 | Phase 25 | Complete |
+| REQ-27 | Phase 25 | Complete |
+| REQ-28 | Phase 25 | Complete |
 | REQ-29 | Phase 26 | Complete |
 | REQ-30 | Phase 26 | Complete |
 | REQ-31 | Phase 26 | Complete |
@@ -162,10 +162,10 @@
 | REQ-37 | Phase 26 | Complete |
 | REQ-38 | Phase 26 | Complete |
 | REQ-39 | Phase 26 | Complete |
-| REQ-40 | Phase 25 | Blocked |
-| REQ-41 | Phase 25 | Blocked |
-| REQ-45 | Phase 25 | Blocked |
-| REQ-42 | Phase 25 | Blocked |
+| REQ-40 | Phase 25 | Complete |
+| REQ-41 | Phase 25 | Complete |
+| REQ-45 | Phase 25 | Complete |
+| REQ-42 | Phase 25 | Complete |
 | REQ-43 | Unmapped | Pending |
 | REQ-44 | Unmapped | Pending |
 | REQ-46 | Phase 27 | Blocked |

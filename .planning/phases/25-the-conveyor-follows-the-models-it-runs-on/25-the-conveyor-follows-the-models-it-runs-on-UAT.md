@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6
 phase: 25
-status: failed
-result: failed
+status: passed
+result: passed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
+shipyard_source_fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6
 ---
 
 # Phase 25: The conveyor follows the models it runs on — UAT Projection
@@ -17,11 +17,11 @@ expected: all 6 phase plan(s) are merged
 actual: 6 merged
 
 ### 2. Integration evidence is explicit
-result: failed
+result: passed
 expected: an explicit passed verdict in .planning/phases/25-the-conveyor-follows-the-models-it-runs-on/INTEGRATION.md
-actual: needs-fix — integration evidence records a finding or failed verdict
+actual: passed — integration evidence records passed
 
 ### 3. Phase verification is evidence-backed
-result: failed
-expected: the phase verification projection is not green without evidence
-actual: gaps_found
+result: passed
+expected: the phase verification projection is passed
+actual: passed; passed — integration evidence records repository-local verification facts

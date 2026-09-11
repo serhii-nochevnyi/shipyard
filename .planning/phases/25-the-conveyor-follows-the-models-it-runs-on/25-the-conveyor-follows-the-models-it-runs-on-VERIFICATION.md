@@ -1,21 +1,21 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6
 phase: 25
-status: gaps_found
-shipyard_source_fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077
+status: passed
+shipyard_source_fingerprint: 2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6
 ---
 
 # Phase 25: The conveyor follows the models it runs on — Verification Projection
 
-**Status:** gaps_found
+**Status:** passed
 
 ## Observable Truths
 
 | Truth | Evidence | Status |
 |---|---|---|
 | Every phase plan is accounted for | 6/6 delivery records are merged | ✓ VERIFIED |
-| Integration is coherent | integration evidence records a finding or failed verdict | ✗ FAILED |
-| Verification evidence is present | integration evidence records a finding or failed verdict | ✗ FAILED |
+| Integration is coherent | integration evidence records passed | ✓ VERIFIED |
+| Verification evidence is present | integration evidence records repository-local verification facts | ✓ VERIFIED |
 
 ## Plan Evidence
 
@@ -35,4 +35,4 @@ shipyard_source_fingerprint: 26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d4
 
 ## Gaps Summary
 
-**Not green:** integration evidence records a finding or failed verdict.
+**No gaps found in the available repository evidence.**

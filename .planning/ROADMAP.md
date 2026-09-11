@@ -594,9 +594,9 @@ findings or turn a merged ticket count into a false phase pass.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `26468f091c6e6254c9edbcc1cb21f2c2a9cbbd6df8a490854d43711246c1b077`
+- Source fingerprint: `2b794b8f7de7e9abd125ab9c9a2149b568059a8b6a4c2e17f5970d11533657d6`
 - Plans merged: 80/82
-- Phases verified: 3/16
+- Phases verified: 4/16
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -606,7 +606,7 @@ findings or turn a merged ticket count into a false phase pass.
 | 22 — Close what phase 20 left open | 5 | 5 | pending |
 | 23 — The board tells the truth about itself | 3 | 3 | pending |
 | 24 — The conveyor stops interrupting itself | 11 | 11 | gaps_found |
-| 25 — The conveyor follows the models it runs on | 6 | 6 | gaps_found |
+| 25 — The conveyor follows the models it runs on | 6 | 6 | passed |
 | 26 — Positive evidence before a mutation | 15 | 15 | passed |
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
