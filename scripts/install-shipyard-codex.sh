@@ -18,13 +18,15 @@ set -euo pipefail
 #   CODEX_HOME         Codex config home (default: ~/.codex)
 #   AGENTS_SKILLS_DIR  Codex/cursor/cline skills dir (default: ~/.agents/skills)
 #   SHIPYARD_CODEX_PHASE  1 = investigate+decompose only; 2 = + deliver (default 2)
+#   SHIPYARD_PROJECT_DIR  conveyor project root whose .planning/config.json is read
 #
-# Usage: bash scripts/install-shipyard-codex.sh [--phase 1|2]
+# Usage: bash scripts/install-shipyard-codex.sh [--phase 1|2] [--project-dir <dir>]
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUGIN_DIR="$REPO_ROOT/plugins/delivery-pipeline"
 CAP_SRC="$REPO_ROOT/capabilities/delivery-pipeline"
 PHASE="${SHIPYARD_CODEX_PHASE:-2}"
+PROJECT_DIR="${SHIPYARD_PROJECT_DIR:-$REPO_ROOT}"
 
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
@@ -34,6 +36,7 @@ GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --phase) PHASE="${2:?}"; shift 2 ;;
+    --project-dir) PROJECT_DIR="${2:?}"; shift 2 ;;
     -h | --help) sed -n '3,25p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -43,6 +46,8 @@ done
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
 [[ -d "$PLUGIN_DIR" ]] || { echo "error: plugin dir missing: $PLUGIN_DIR" >&2; exit 1; }
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
+[[ -d "$PROJECT_DIR" ]] || { echo "error: project dir missing: $PROJECT_DIR" >&2; exit 1; }
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 # gsd-core is a hard dependency here — the generator cannot convert a command
 # without it — so install/refresh it rather than telling the user to. Default is
 # the latest: shipyard is a superstructure over GSD, and pinning the base while
@@ -215,7 +220,7 @@ echo "→ generating Codex bundle (phase $PHASE)…"
 node "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" \
   --plugin "$PLUGIN_DIR" --out "$OUT" \
   --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE" \
-  --project-dir "$REPO_ROOT"
+  --project-dir "$PROJECT_DIR"
 
 # ── skills + bundle install LAST ───────────────────────────────────────────────
 # Keep both staged until agent/config/capability/AGENTS.md have succeeded, so a

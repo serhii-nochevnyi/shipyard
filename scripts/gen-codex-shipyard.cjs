@@ -132,7 +132,7 @@ function compareVersions(a, b) {
 // ignore, and the fallback (the previous palette entry) always works.
 function detectCodexCliVersion(env) {
   const pinned = String((env && env.SHIPYARD_CODEX_CLI_VERSION) || '').trim();
-  if (pinned) return pinned;
+  if (pinned) return /^\d+(?:\.\d+)*$/.test(pinned) ? pinned : null;
   // Bounded: a CLI that stalls here would stall the installer with nothing on
   // screen, and a timeout lands in the same branch as "no version" — unknown,
   // therefore below any floor.

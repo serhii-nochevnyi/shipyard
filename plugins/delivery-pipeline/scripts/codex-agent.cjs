@@ -152,7 +152,7 @@ function readAgent(file) {
 
 function detectCodexCliVersion(env = process.env) {
   const pinned = String((env && env.SHIPYARD_CODEX_CLI_VERSION) || '').trim();
-  if (pinned) return pinned;
+  if (pinned) return /^\d+(?:\.\d+)*$/.test(pinned) ? pinned : null;
   const result = spawnSync('codex', ['--version'], {
     encoding: 'utf8', timeout: 5000, env: { ...process.env, ...(env || {}) },
   });

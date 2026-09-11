@@ -433,6 +433,13 @@ done
 REMAP_DEEP="$(find "$WORK/remap/agents" -name '*-deep.toml' | wc -l | tr -d ' ')"
 [[ "$REMAP_DEEP" -eq 0 ]] || { echo "a remapped tier still produced $REMAP_DEEP duplicate -deep agents"; exit 1; }
 
+# The installer generates from this checkout's plugin but must read policy from
+# the TARGET project when explicitly told to. Otherwise a remote project with its
+# own remap/palette installs static files bound to this checkout's config.
+SHIPYARD_PROJECT_DIR="$WORK/remapproj" bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+grep -q '^model = "x-model"$' "$CODEX_HOME/agents/shipyard-arch-review.toml" \
+  || { echo "installer ignored SHIPYARD_PROJECT_DIR policy root"; exit 1; }
+
 # The bundle carries no editor leftovers. Three `*.mjs.bak` files — stale copies
 # of the Workflow prompt builders — reached both installed runtimes before the
 # generator learned to skip them, and nothing would ever have said so.

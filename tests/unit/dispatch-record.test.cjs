@@ -726,6 +726,9 @@ test('every mark creates a dispatch id for the later usage join', () => {
 test('an explicit dispatch id is preserved and cannot be active on two tickets', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
   assert.equal(run(['mark', 'T-01-01', 'executor', '--dispatch-id', 'dispatch-fixed'], project).status, 0);
+  const reused = run(['mark', 'T-01-01', 'executor', '--dispatch-id', 'dispatch-fixed'], project);
+  assert.equal(reused.status, 1, reused.stderr);
+  assert.match(reused.stderr, /already active/);
   const rejected = run(['mark', 'T-01-02', 'executor', '--dispatch-id', 'dispatch-fixed'], project);
   assert.equal(rejected.status, 1, rejected.stderr);
   assert.match(rejected.stderr, /already active/);

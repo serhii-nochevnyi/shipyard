@@ -115,6 +115,21 @@ test('a static model above the host CLI floor falls back when the version is unk
   assert.match(result.fallback.reason, /no version/);
 });
 
+test('a malformed SHIPYARD_CODEX_CLI_VERSION is treated as unknown', () => {
+  const f = fixture('adaptive', STANDARD_FILES, {
+    delivery_pipeline: { codex_models: [
+      { model: 'gpt-5.6-terra', effort: 'high' },
+      { model: 'gpt-6-astra', effort: 'high', min_cli: '0.153.1' },
+    ] },
+  });
+  const result = selectAgent('arch-review', {
+    cwd: f.project, agentDir: f.agentDir, env: { SHIPYARD_CODEX_CLI_VERSION: '0.999.0-local' }, signals: { risk: 'high' },
+  });
+  assert.strictEqual(result.agent_file, 'shipyard-arch-review');
+  assert.strictEqual(result.model, 'gpt-5.6-terra');
+  assert.match(result.fallback.reason, /no version/);
+});
+
 test('a missing variant falls back to the ordinary file with an explicit reason', () => {
   const f = fixture('adaptive', {
     'shipyard-arch-review': { model: 'gpt-5.6-terra' },

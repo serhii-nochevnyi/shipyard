@@ -455,6 +455,10 @@ test('compareVersions is numeric, not lexical', () => {
   assert.strictEqual(gen.compareVersions('1.0', '1.0.0'), 0);
 });
 
+test('a malformed SHIPYARD_CODEX_CLI_VERSION is treated as unknown', () => {
+  assert.strictEqual(gen.detectCodexCliVersion({ SHIPYARD_CODEX_CLI_VERSION: '0.999.0-local' }), null);
+});
+
 suite('a project config that does not parse is refused, not baked (ADR-004 D2)');
 
 // The generator is the LAST of ADR-004 D2's readers. `pc.loadConfig` answers

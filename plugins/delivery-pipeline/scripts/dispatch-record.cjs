@@ -796,17 +796,21 @@ function newDispatchId() {
   return `dispatch-${Date.now().toString(36)}-${random}`;
 }
 
-function dispatchIdInUse(store, id, ticket) {
-  return Object.entries(store.tickets || {}).some(([otherTicket, record]) =>
-    otherTicket !== ticket && record && record.dispatch_id === id
+function dispatchIdInUse(store, id) {
+  return Object.values(store.tickets || {}).some((record) =>
+    record && record.dispatch_id === id
   );
 }
 
-function withDispatchId(decided, store, ticket) {
-  const id = decided.dispatch_id || newDispatchId();
-  if (dispatchIdInUse(store, id, ticket)) {
-    throw new Error(`dispatch id "${id}" is already active for another ticket`);
+function withDispatchId(decided, store) {
+  if (decided.dispatch_id) {
+    if (dispatchIdInUse(store, decided.dispatch_id)) {
+      throw new Error(`dispatch id "${decided.dispatch_id}" is already active`);
+    }
+    return { ...decided, dispatch_id: decided.dispatch_id };
   }
+  let id;
+  do { id = newDispatchId(); } while (dispatchIdInUse(store, id));
   return { ...decided, dispatch_id: id };
 }
 
@@ -1085,7 +1089,7 @@ if (require.main === module) {
       const s = state[ticket];
       // A re-dispatch restarts the clock: the previous agent is not the one
       // holding it now.
-      const recorded = withDispatchId(decided, store, ticket);
+      const recorded = withDispatchId(decided, store);
       dispatchId = recorded.dispatch_id;
       store.tickets[ticket] = {
         role,
@@ -1159,7 +1163,7 @@ if (require.main === module) {
           const events = [];
           for (const entry of entries) {
             const s = current[entry.ticket];
-            const recorded = withDispatchId(entry.decided, store, entry.ticket);
+            const recorded = withDispatchId(entry.decided, store);
             if ([...dispatchIds.values()].includes(recorded.dispatch_id)) {
               throw new Error(`mark-many contains duplicate dispatch id "${recorded.dispatch_id}"`);
             }
