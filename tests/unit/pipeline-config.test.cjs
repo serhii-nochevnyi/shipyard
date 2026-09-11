@@ -954,6 +954,15 @@ test('repos_root defaults to the absolute project parent', () => {
   assert.deepStrictEqual(warnings, []);
 });
 
+test('repos_root is declared in the capability so GSD tooling can set it', () => {
+  const cap = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'capabilities', 'delivery-pipeline', 'capability.json'), 'utf8'
+  ));
+  const declared = (cap.config || {})['delivery_pipeline.repos_root'];
+  assert.ok(declared, 'capability.json must declare delivery_pipeline.repos_root');
+  assert.strictEqual(declared.type, 'string');
+});
+
 test('an absolute repos_root is accepted and the declared namespace wins', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-root-'));
   fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
