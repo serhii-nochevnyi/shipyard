@@ -205,6 +205,23 @@ node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve      # effect
 | drift-check | `sonnet` | `high` |
 | any repair role on a repeated failure signature | same | `max` |
 
+Set `delivery_pipeline.model_ladder` to `adaptive` to route by task level:
+
+| level | automatic signal | Claude | Codex |
+|---|---|---|---|
+| mechanical | drift-check, pr-sentinel | `sonnet` | floor palette entry |
+| routine | executor/research, low risk, 1–4 files | `sonnet` | floor palette entry |
+| complex | normal implementation, repair and judgement | `opus` | floor palette entry |
+| critical | high risk or checkpoint | `opus` + `xhigh` | `-critical` ceiling agent |
+| recovery | `repeat_exhausted` or contested judgement | ceiling route | `-deep` ceiling agent |
+
+The resolver guards missing evidence into the complex lane and records the
+classification in `route`/dispatch telemetry. On Claude, the integrator reaches
+the ceiling only when an earned ceiling route fires; on Codex, the generated
+integrator file stays on the palette ceiling. The default remains
+`conservative`; the current project enables `adaptive` in
+`.planning/config.json`.
+
 The floor is `opus` for every role that writes code or renders a judgement: the
 conveyor's failure mode is a wrong green reaching an epic, and every mechanical
 gate above the executor costs more to run than the difference between two tiers.
@@ -359,16 +376,23 @@ install time from a palette you declare — `delivery_pipeline.codex_models` (or
   and never more. `min_cli` is the Codex CLI version that can first configure the
   model: below it the generator writes the previous entry for every role and says
   so, rather than an agent your CLI may ignore.
-- The **integrator** takes the ceiling on every call here — one dispatch per phase,
-  and a static file cannot be re-parameterised, so this is where the two runtimes
-  legitimately differ: on Claude the same role reaches the ceiling only through a
-  route. Everything else reaches it through an escalation
-  agent: `$shipyard-ci-fix-deep`, `$shipyard-review-fix-deep`,
-  `$shipyard-pr-sentinel-deep` and `$shipyard-arch-review-deep` are the same
-  contracts at the ceiling, dispatched when a failure signature comes back after
-  a `rethink` or when the journal already holds an architecture `violation` for
-  the ticket. That is **eleven** agent files, not seven; a one-entry palette
-  produces seven and no dead variants.
+- The **integrator** takes the ceiling on every call in both modes. It has no
+  critical or recovery variant. Other critical first-attempt variants are
+  `$shipyard-inv-research-critical`, `$shipyard-arch-review-critical`,
+  `$shipyard-ci-fix-critical` and `$shipyard-review-fix-critical`. Recovery variants remain
+  `$shipyard-ci-fix-deep`, `$shipyard-review-fix-deep`,
+  `$shipyard-pr-sentinel-deep` and `$shipyard-arch-review-deep`.
+  Run `node $CODEX_HOME/shipyard/scripts/codex-agent.cjs select <role> --json
+  [--project-dir <project>]` with the dispatch signals. If it runs from a
+  ticket worktree, pass the conveyor root explicitly: the worktree may contain
+  generated agent files but not the project's `.planning/config.json`. For
+  static roles, pass its `agent_file` to the
+  record; for `executor`, use its concrete `model`/`effort` in the supported
+  `spawn_agent` or `codex exec` call and omit `--agent-file`. Use its
+  `route`/`model_tier` for the requested lane, and record its concrete `model`
+  as `--observed-model` when available.
+  A one-entry palette produces only base agents and the selector reports its
+  fallback instead of naming a file that was not generated.
 - An **empty** palette (`"codex_models": []`) writes no `model` key at all and
   leaves every agent on your CLI default. A GSD remap
   (`model_policy.runtime_tiers.codex.<tier>`,

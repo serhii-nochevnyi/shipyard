@@ -20,7 +20,10 @@
 //   bundle/{scripts,references,templates} → $CODEX_HOME/shipyard/ (CLAUDE_PLUGIN_ROOT payload)
 //
 // The install script (install-shipyard-codex.sh) places these; this script only
-// stages them and never writes outside --out.
+// stages them and never writes outside --out. `--project-dir` identifies the
+// checkout whose `.planning/config.json` supplies the model policy; it is
+// independent from the output/Codex home paths and is required when generating
+// from a worktree or another caller directory.
 
 const fs = require('fs');
 const path = require('path');
@@ -76,17 +79,18 @@ function resolveGsdLib(explicit, codexHome) {
 // The second layer is which concrete model a tier means, and on this runtime it
 // is the OPERATOR's, not the catalog's: `pipeline.codex_models` is an ordered
 // palette of `{model, effort, min_cli}` (ADR-005 D6/D7). The floor entry goes to
-// every role, the ceiling to the integrator — exactly as `integrator` takes the
-// 1M tier on the other runtime — and the four escalating roles get a SECOND file
-// at the ceiling, because a signal cannot reach an agent that does not exist
-// (D8). A GSD remap key still wins over the palette, resolved through GSD's own
+// every ordinary role; adaptive critical and recovery lanes use the ceiling
+// entry. The integrator stays at the ceiling in both modes: it is the final
+// integration judgement and is intentionally outside the routine treatment. A
+// GSD remap key still wins over the palette, resolved through GSD's own
 // resolver: reading `runtimeTierDefaults` straight out of the catalog, as this
 // did, meant `model_policy.runtime_tiers.codex.*` and
 // `model_profile_overrides.codex.*` changed nothing while the docs said they did.
 //
 // The signals are necessarily BASELINE (risk medium, attempt 1): risk is a
 // per-ticket fact and attempts are a per-run one, and neither exists when a
-// static file is written. The `-deep` files are how the escalation survives that.
+// static file is written. The `-critical` and `-deep` files are how dispatch-time
+// escalation survives that.
 //
 // The Codex agent names are not all ladder role names: the investigation
 // researcher ships as `inv-research` (its reference file) while the ladder calls
@@ -102,6 +106,11 @@ const LADDER_ROLE = { 'inv-research': 'research' };
 // at the ceiling.
 const DEEP_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel', 'arch-review']);
 const DEEP_SUFFIX = '-deep';
+// Critical work is a first-attempt lane. Mechanical roles keep their cheap
+// model because their surrounding gate is the authority; recovery remains the
+// separate repeated-failure lane above.
+const CRITICAL_ROLES = new Set(['inv-research', 'arch-review', 'ci-fix', 'review-fix']);
+const CRITICAL_SUFFIX = '-critical';
 
 // Numeric, part by part: a string compare makes 0.153.4 > 0.153.1 true by luck
 // and 0.153.10 > 0.153.9 false.
@@ -123,7 +132,7 @@ function compareVersions(a, b) {
 // ignore, and the fallback (the previous palette entry) always works.
 function detectCodexCliVersion(env) {
   const pinned = String((env && env.SHIPYARD_CODEX_CLI_VERSION) || '').trim();
-  if (pinned) return pinned;
+  if (pinned) return /^\d+(?:\.\d+)*$/.test(pinned) ? pinned : null;
   // Bounded: a CLI that stalls here would stall the installer with nothing on
   // screen, and a timeout lands in the same branch as "no version" — unknown,
   // therefore below any floor.
@@ -188,12 +197,17 @@ function gsdCodexRemapper(codexHome, cwd, log) {
 
 // One policy per run: the palette is filtered against the CLI once, so the
 // version refusal is ONE line rather than one per role, and GSD's config is read
-// once rather than eleven times.
+// once rather than once per generated agent.
 function codexModelPolicy(pluginDir, codexHome, opts = {}) {
   const log = opts.log || ((m) => process.stderr.write(m));
   const cwd = opts.cwd || process.cwd();
   const env = opts.env || process.env;
-  const inert = { forRole: () => ({ model: null, effort: null }), palette: [], cliVersion: null };
+  const inert = {
+    forRole: () => ({ model: null, effort: null }),
+    palette: [],
+    cliVersion: null,
+    config: { model_ladder: 'conservative' },
+  };
 
   let pc;
   let cfg;
@@ -208,8 +222,8 @@ function codexModelPolicy(pluginDir, codexHome, opts = {}) {
     //
     // `loadConfig` returns DEFAULTS in `config` so a reader always has something
     // to render, and `valid: false` beside it so a WRITER knows not to. This is
-    // a writer: it bakes the tier into eleven `.toml` files, once, at install
-    // time — and every dispatch for the life of that install then reads it back
+    // a writer: it bakes the tier into each generated `.toml` file, once, at
+    // install time — and every dispatch for the life of that install then reads it back
     // out of a file. Ignoring `valid` wrote THIS REPO's shipped palette (its
     // ceiling included) into every agent and presented it as the operator's
     // decision, with nothing on any face saying the file could not be read.
@@ -314,8 +328,8 @@ function codexModelPolicy(pluginDir, codexHome, opts = {}) {
     const need = declaredFloor.get(model);
     if (!need) return false;
     if (cliVersion && compareVersions(cliVersion, need) >= 0) return false;
-    // ONE line per refused model rather than one per role: forRole runs eleven
-    // times and eleven copies of the same sentence is how an installer's real
+    // ONE line per refused model rather than one per role: forRole runs once per
+    // generated agent and copies of the same sentence are how an installer's real
     // output gets scrolled past.
     if (!remapFloorWarned.has(model)) {
       remapFloorWarned.add(model);
@@ -328,19 +342,35 @@ function codexModelPolicy(pluginDir, codexHome, opts = {}) {
     return true;
   };
 
-  const forRole = (role, { deep = false } = {}) => {
+  const forRole = (role, { deep = false, level = null } = {}) => {
     try {
       const ladderRole = LADDER_ROLE[role] || role;
-      const tier = pc.resolveModel(ladderRole, {}, cfg);
-      const effort = pc.resolveEffort(ladderRole, tier, cfg, {});
+      const signals = level ? { taskLevel: level } : {};
+      const tier = pc.resolveModel(ladderRole, signals, cfg);
+      const effort = pc.resolveEffort(ladderRole, tier, cfg, signals);
       const remapped = remapFor(tier);
+      // A pipeline.models.<role> entry is an explicit operator choice. It must
+      // remain one concrete lane when we render the optional critical/recovery
+      // files; otherwise those generation-only flags would silently promote the
+      // override to the palette ceiling.
+      const hasModelOverride = Boolean(
+        cfg.models && Object.prototype.hasOwnProperty.call(cfg.models, ladderRole),
+      );
       // A remapped tier is one model for every role that resolves to it, so the
       // palette's floor/ceiling distinction does not apply — and the entry's
       // declared effort belongs to the entry's model, not to this one. The CLI
       // floor is the one thing that still applies, so it is measured on the way
       // out rather than skipped by the early return this used to be.
       if (remapped && !remapBelowFloor(remapped, role)) return { model: remapped, effort };
-      const entry = deep || role === 'integrator' ? ceiling : floor;
+      const promoteToCeiling = !hasModelOverride && (
+        deep
+        || (cfg.model_ladder === 'adaptive' && level === 'critical')
+        || level === 'recovery'
+        || role === 'integrator'
+      );
+      const entry = promoteToCeiling
+        ? ceiling
+        : floor;
       if (!entry) return { model: null, effort };
       return { model: entry.model, effort: lowerEffort(effort, entry.effort) };
     } catch (e) {
@@ -349,7 +379,7 @@ function codexModelPolicy(pluginDir, codexHome, opts = {}) {
     }
   };
 
-  return { forRole, palette, cliVersion };
+  return { forRole, palette, cliVersion, config: cfg };
 }
 
 // Kept as a function of its own because it is the unit under test: one role in,
@@ -441,13 +471,20 @@ function deriveDescription(body, roleName) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const repoRoot = path.resolve(__dirname, '..');
+  // The generator belongs to this checkout, so its safe default is the source
+  // repository rather than the caller's shell cwd. An installer invoked from a
+  // ticket worktree otherwise reads that worktree's absent config and silently
+  // bakes the conservative defaults. `--project-dir` makes the policy root
+  // explicit for callers that generate a plugin from elsewhere.
+  const projectDir = path.resolve(expandHome(args['project-dir']) || repoRoot);
   const pluginDir = expandHome(args.plugin) || path.join(repoRoot, 'plugins', 'delivery-pipeline');
   const outDir = expandHome(args.out) || path.join(repoRoot, '.build', 'codex-shipyard');
   const codexHome = expandHome(args['codex-home']) || process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex');
   // A malformed --phase used to become NaN, which silently compared false in
   // every gate: no deliver skill AND every phase-2 agent emitted anyway.
-  const phase = args.phase === undefined ? 2 : parseInt(args.phase, 10);
-  if (![1, 2].includes(phase)) fail(`--phase must be 1 or 2 (got "${args.phase}")`);
+  const phaseArg = args.phase === undefined ? '2' : String(args.phase);
+  if (!/^[12]$/.test(phaseArg)) fail(`--phase must be 1 or 2 (got "${args.phase}")`);
+  const phase = Number(phaseArg);
   // Where the CLAUDE_PLUGIN_ROOT payload lands on the host (absolute, host-installed).
   const scriptsRoot = expandHome(args['bundle-root']) || path.join(codexHome, 'shipyard');
 
@@ -500,7 +537,7 @@ function main() {
     'integrator': { sandbox: 'workspace-write', phase: 2 },
   };
   const emittedAgents = [];
-  const policy = codexModelPolicy(pluginDir, codexHome);
+  const policy = codexModelPolicy(pluginDir, codexHome, { cwd: projectDir });
   // The reason rides every RESULT, not stderr alone: an installer's log scrolls
   // past, while the `.toml` is what the next reader opens when an agent turns
   // out to carry no model. A `#` comment is valid TOML and adds no key, so the
@@ -529,31 +566,61 @@ function main() {
     );
     emittedAgents.push({ agentName, description });
 
-    // The escalation variant. Written only when it would actually DIFFER from
+    // The recovery variant. Written only when it would actually DIFFER from
     // the ordinary agent — a single-entry palette, or a GSD remap that maps the
     // whole tier to one model, leaves nothing for it to be, and a duplicate file
     // that reads as an escalation is worse than no file at all.
-    if (!DEEP_ROLES.has(role)) continue;
-    const deep = policy.forRole(role, { deep: true });
-    if (!deep.model || (deep.model === base.model && deep.effort === base.effort)) continue;
-    const deepName = `${agentName}${DEEP_SUFFIX}`;
-    const deepBody =
-      '> **Escalation variant.** The ordinary `' + agentName + '` agent has already been\n' +
-      '> tried on this failure and it came back. Same contract as below, on a deeper\n' +
-      '> model: change the hypothesis, do not re-run the one that just failed.\n\n' +
-      body;
-    writeFile(
-      path.join(outDir, 'agents', `${deepName}.toml`),
-      agentToml(
-        deepName,
-        `${description} — escalation variant, for a failure the ordinary ${agentName} already tried`,
-        meta.sandbox,
-        deep.model,
-        deep.effort,
-        deepBody,
-      ),
-    );
-    emittedAgents.push({ agentName: deepName, description: `${description} (escalation variant)` });
+    if (DEEP_ROLES.has(role)) {
+      const deep = policy.forRole(role, { deep: true, level: 'recovery' });
+      if (deep.model && (deep.model !== base.model || deep.effort !== base.effort)) {
+        const deepName = `${agentName}${DEEP_SUFFIX}`;
+        const deepBody =
+          '> **Escalation variant (recovery).** The ordinary `' + agentName + '` agent has already been\n' +
+          '> tried on this failure and it came back. Same contract as below, on the\n' +
+          '> ceiling model: change the hypothesis, do not re-run the one that failed.\n\n' +
+          body;
+        writeFile(
+          path.join(outDir, 'agents', `${deepName}.toml`),
+          agentToml(
+            deepName,
+            `${description} — recovery variant, for a failure the ordinary ${agentName} already tried`,
+            meta.sandbox,
+            deep.model,
+            deep.effort,
+            deepBody,
+          ),
+        );
+        emittedAgents.push({ agentName: deepName, description: `${description} (recovery variant)` });
+      }
+    }
+
+    // Critical work gets its own first-attempt file. It is separate from
+    // recovery because a risky/checkpointed task should start on the ceiling,
+    // while a repeated failure reaches the same ceiling only after the ordinary
+    // hypothesis has already failed.
+    if (policy.config.model_ladder === 'adaptive' && CRITICAL_ROLES.has(role)) {
+      const critical = policy.forRole(role, { level: 'critical' });
+      if (critical.model && (critical.model !== base.model || critical.effort !== base.effort)) {
+        const criticalName = `${agentName}${CRITICAL_SUFFIX}`;
+        const criticalBody =
+          '> **Critical task variant.** This dispatch was classified as critical\n' +
+          '> from its risk/checkpoint facts. Use the stronger model for the same\n' +
+          '> contract, and keep the acceptance gates below authoritative.\n\n' +
+          body;
+        writeFile(
+          path.join(outDir, 'agents', `${criticalName}.toml`),
+          agentToml(
+            criticalName,
+            `${description} — critical task variant`,
+            meta.sandbox,
+            critical.model,
+            critical.effort,
+            criticalBody,
+          ),
+        );
+        emittedAgents.push({ agentName: criticalName, description: `${description} (critical task variant)` });
+      }
+    }
   }
 
   // ── config fragment registering our agents (merged non-destructively) ──────
@@ -600,10 +667,10 @@ function main() {
   // the installer keeps the copy beside the agents, and the NEXT run takes back
   // exactly what the previous one claimed and no longer emits.
   //
-  // The count legitimately varies — a `-deep` variant is written only when it
-  // would DIFFER from the ordinary agent (ADR-005 D8), so a one-entry palette
-  // and a tier-wide remap both produce seven agents rather than eleven. That is
-  // precisely why removal cannot be inferred from "eleven expected", and why the
+  // The count legitimately varies — `-critical` and `-deep` variants are written
+  // only when they would DIFFER from the ordinary agent, so a one-entry palette
+  // and a tier-wide remap produce only the base agents. That is
+  // precisely why removal cannot be inferred from an expected count, and why the
   // files and registrations are listed EXPLICITLY here rather than left for the
   // installer to rebuild from `agents` by string concatenation: ownership is
   // decided in one place, and a delete driven by a reconstruction is a delete
@@ -632,7 +699,7 @@ function main() {
 
 module.exports = {
   codexModelPolicy, codexModelFor, compareVersions, detectCodexCliVersion,
-  DEEP_ROLES, DEEP_SUFFIX, LADDER_ROLE,
+  DEEP_ROLES, DEEP_SUFFIX, CRITICAL_ROLES, CRITICAL_SUFFIX, LADDER_ROLE,
 };
 
 // The installer runs this as a script; the unit test requires it as a module.

@@ -109,6 +109,8 @@ grep -q 'codex_skill_adapter' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "mis
 # and they are valid node — the deliver skill calls them via the rewritten root
 for f in scripts/state-sync.cjs scripts/reviewers.cjs scripts/validate-graph.cjs scripts/front.cjs \
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
+         scripts/usage-attribution.cjs scripts/usage-report.cjs \
+         scripts/codex-agent.cjs \
          scripts/gsd-sync.cjs \
          scripts/ticket-worktree.sh scripts/epic-branch.sh; do
   [[ -f "$CODEX_HOME/shipyard/$f" ]] || { echo "bundle missing $f"; exit 1; }
@@ -117,7 +119,7 @@ done
   || { echo "bundle missing the runtime-neutral delivery-rules source"; exit 1; }
 bash -n "$CODEX_HOME/shipyard/scripts/epic-branch.sh" || { echo "bundled epic-branch.sh syntax error"; exit 1; }
 bash -n "$CODEX_HOME/shipyard/scripts/ticket-worktree.sh" || { echo "bundled ticket-worktree.sh syntax error"; exit 1; }
-for f in state-sync log-event pipeline-stats ticket-pr-match frontmatter pipeline-config gsd-sync; do
+for f in state-sync log-event pipeline-stats usage-attribution usage-report ticket-pr-match frontmatter pipeline-config codex-agent gsd-sync; do
   node --check "$CODEX_HOME/shipyard/scripts/$f.cjs" || { echo "bundle $f.cjs fails node --check"; exit 1; }
 done
 cmp -s plugins/delivery-pipeline/scripts/gsd-sync.cjs "$CODEX_HOME/shipyard/scripts/gsd-sync.cjs" \
@@ -199,11 +201,21 @@ grep -q 'pipeline-config.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "del
 grep -q 'shipyard-auto-route:begin' "$CODEX_HOME/AGENTS.md" \
   || { echo "auto-route block missing from \$CODEX_HOME/AGENTS.md"; exit 1; }
 
-# agents present + registered; gsd agents intact. Eleven, not seven: on this
-# runtime an agent is a FILE, so the four roles that escalate need a second one
-# at the palette's ceiling — a signal cannot reach an agent that does not exist.
+# Runtime rollback snapshots are indexed in one file. Reject a target path whose
+# name would corrupt that record instead of silently recording it twice.
+BAD_AGENTS_MD="$(printf '%s' "$WORK")"$'\t'"agents.md"
+if CODEX_AGENTS_MD="$BAD_AGENTS_MD" bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/bad-agents-md.log" 2>&1; then
+  echo "installer accepted an AGENTS.md path it cannot snapshot safely"; exit 1
+fi
+grep -q 'refusing to snapshot a runtime path whose name cannot be recorded safely' "$WORK/bad-agents-md.log" \
+  || { echo "unsafe AGENTS.md path was not refused honestly"; cat "$WORK/bad-agents-md.log"; exit 1; }
+
+# agents present + registered; gsd agents intact. The active project policy is
+# adaptive, so there are fifteen files: seven base agents, four recovery files,
+# and four first-attempt critical files.
 for a in shipyard-arch-review shipyard-ci-fix shipyard-drift-check shipyard-integrator shipyard-inv-research shipyard-pr-sentinel shipyard-review-fix \
-         shipyard-ci-fix-deep shipyard-review-fix-deep shipyard-pr-sentinel-deep shipyard-arch-review-deep; do
+         shipyard-ci-fix-deep shipyard-review-fix-deep shipyard-pr-sentinel-deep shipyard-arch-review-deep \
+         shipyard-inv-research-critical shipyard-arch-review-critical shipyard-ci-fix-critical shipyard-review-fix-critical; do
   [[ -f "$CODEX_HOME/agents/$a.toml" ]] || { echo "missing agent $a.toml"; exit 1; }
   grep -q "^\[agents\.$a\]" "$CODEX_HOME/config.toml" || { echo "agent $a not registered in config.toml"; exit 1; }
 done
@@ -234,6 +246,9 @@ check_agent shipyard-integrator "$PALETTE_CEILING_MODEL" "$PALETTE_CEILING_EFFOR
 for a in shipyard-ci-fix-deep shipyard-review-fix-deep shipyard-pr-sentinel-deep shipyard-arch-review-deep; do
   check_agent "$a" "$PALETTE_CEILING_MODEL" "$PALETTE_CEILING_EFFORT"
 done
+for a in shipyard-inv-research-critical shipyard-arch-review-critical shipyard-ci-fix-critical shipyard-review-fix-critical; do
+  check_agent "$a" "$PALETTE_CEILING_MODEL" "$PALETTE_CEILING_EFFORT"
+done
 
 # The efforts retired on this runtime must not reappear: they cost more without a
 # better result (measured), and `ultra` is not in the vocabulary at all.
@@ -248,6 +263,10 @@ for role in ci-fix review-fix pr-sentinel arch-review; do
     || { echo "the deliver skill never names shipyard-$role-deep"; exit 1; }
   grep -q "shipyard-$role-deep" "$CODEX_HOME/agents/shipyard-pr-sentinel.toml" \
     || { echo "the pr-sentinel agent never names shipyard-$role-deep"; exit 1; }
+done
+for role in inv-research arch-review ci-fix review-fix; do
+  grep -q "shipyard-$role-critical" "$SKILLS/shipyard-deliver/SKILL.md" \
+    || { echo "the deliver skill never names shipyard-$role-critical"; exit 1; }
 done
 grep -q 'repeat_exhausted' "$SKILLS/shipyard-deliver/SKILL.md" \
   || { echo "the deliver skill states no trigger for the repair escalation"; exit 1; }
@@ -271,7 +290,14 @@ EXPECTED_AGENTS="$(node -e '
   // generator, for the same reason the role count is: a literal here rots the
   // moment a role joins either set.
   const deep = require("./scripts/gen-codex-shipyard.cjs").DEEP_ROLES;
-  console.log(eligible.length + eligible.filter(([, role]) => deep.has(role)).length);
+  const critical = require("./scripts/gen-codex-shipyard.cjs").CRITICAL_ROLES;
+  const pc = require("./plugins/delivery-pipeline/scripts/pipeline-config.cjs");
+  const mode = pc.loadConfig(process.cwd()).config.model_ladder;
+  const recovery = eligible.filter(([, role]) => deep.has(role)).length;
+  const firstAttemptCritical = mode === "adaptive"
+    ? eligible.filter(([, role]) => critical.has(role)).length
+    : 0;
+  console.log(eligible.length + recovery + firstAttemptCritical);
 ')"
 
 # Our fragment must sit ABOVE gsd-core's marker. Its installer removes
@@ -406,16 +432,29 @@ if run_gate "$WORK/conveyor" >/dev/null 2>&1; then
 fi
 
 # phase gating: --phase 1 emits neither the deliver skill nor phase-2 agents,
-# but still emits the phase-1 inv-research agent.
+# but still emits the phase-1 inv-research agent and its adaptive critical lane.
 node scripts/gen-codex-shipyard.cjs --plugin plugins/delivery-pipeline \
   --out "$WORK/p1" --codex-home "$CODEX_HOME" --phase 1 >/dev/null
 [[ ! -e "$WORK/p1/skills/shipyard-deliver" ]] || { echo "phase 1 leaked deliver skill"; exit 1; }
 [[ ! -e "$WORK/p1/agents/shipyard-arch-review.toml" ]] || { echo "phase 1 leaked a phase-2 agent"; exit 1; }
 [[ -e "$WORK/p1/agents/shipyard-inv-research.toml" ]] || { echo "phase 1 missing inv-research agent"; exit 1; }
+[[ -e "$WORK/p1/agents/shipyard-inv-research-critical.toml" ]] || { echo "phase 1 missing adaptive critical inv-research agent"; exit 1; }
 # `find`, not `ls`: with `set -o pipefail` a glob that matches nothing makes the
 # whole substitution fail and takes the script down before it can assert.
 P1_DEEP="$(find "$WORK/p1/agents" -name '*-deep.toml' | wc -l | tr -d ' ')"
 [[ "$P1_DEEP" -eq 0 ]] || { echo "phase 1 emitted an escalation variant for a role it does not ship"; exit 1; }
+# The global instructions must describe the same phase as the installed skills:
+# phase 1 may route to decompose, but must not teach a user to invoke the absent
+# deliver skill. Reinstall phase 2 afterwards so the rest of this smoke exercises
+# the full palette.
+PHASE1_AGENTS="$WORK/phase1-AGENTS.md"
+CODEX_AGENTS_MD="$PHASE1_AGENTS" bash scripts/install-shipyard-codex.sh --phase 1 >/dev/null
+grep -q 'large / multi-ticket -> `\$shipyard-decompose`; install phase 2 before delivery' "$PHASE1_AGENTS" \
+  || { echo "phase 1 auto-route advertises an unavailable deliver skill"; exit 1; }
+if grep -q '\$shipyard-decompose` -> `\$shipyard-deliver' "$PHASE1_AGENTS"; then
+  echo "phase 1 auto-route still advertises shipyard-deliver"; exit 1
+fi
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 
 # ── a GSD remap still wins over the palette ──────────────────────────────────
 # The claim the docs made and the generator never honoured: it read
@@ -423,9 +462,10 @@ P1_DEEP="$(find "$WORK/p1/agents" -name '*-deep.toml' | wc -l | tr -d ' ')"
 # reach, so a custom remap changed nothing. It is now resolved through GSD's OWN
 # resolver — which is exactly why this belongs in the smoke and not only in the
 # unit test: the unit test stubs that resolver, so only this asserts against the
-# gsd-core actually installed. Note the cwd rule while you are here: GSD reads
-# the config of the directory it is RUN in, so a remap must live where the
-# installer runs, and a project config outranks ~/.gsd/defaults.json entirely.
+# gsd-core actually installed. The project root is passed explicitly below, so
+# generation can run from a worktree or another caller directory without
+# silently selecting that directory's (possibly absent) policy; a project
+# config still outranks ~/.gsd/defaults.json entirely.
 mkdir -p "$WORK/remapproj/.planning"
 cat > "$WORK/remapproj/.planning/config.json" <<'EOF'
 {
@@ -433,9 +473,9 @@ cat > "$WORK/remapproj/.planning/config.json" <<'EOF'
   "model_policy": { "runtime_tiers": { "codex": { "sonnet": "x-model" } } }
 }
 EOF
-( cd "$WORK/remapproj" && node "$ROOT/scripts/gen-codex-shipyard.cjs" \
+( cd "$WORK" && node "$ROOT/scripts/gen-codex-shipyard.cjs" \
     --plugin "$ROOT/plugins/delivery-pipeline" --out "$WORK/remap" \
-    --codex-home "$CODEX_HOME" --phase 2 >/dev/null )
+    --codex-home "$CODEX_HOME" --phase 2 --project-dir "$WORK/remapproj" >/dev/null )
 REMAP_AGENTS="$(find "$WORK/remap/agents" -name 'shipyard-*.toml' | wc -l | tr -d ' ')"
 [[ "$REMAP_AGENTS" -gt 0 ]] || { echo "the remap run generated no agents at all"; exit 1; }
 for f in "$WORK/remap/agents"/shipyard-*.toml; do
@@ -446,6 +486,13 @@ done
 # duplicate file that reads as an escalation is worse than no file at all.
 REMAP_DEEP="$(find "$WORK/remap/agents" -name '*-deep.toml' | wc -l | tr -d ' ')"
 [[ "$REMAP_DEEP" -eq 0 ]] || { echo "a remapped tier still produced $REMAP_DEEP duplicate -deep agents"; exit 1; }
+
+# The installer generates from this checkout's plugin but must read policy from
+# the TARGET project when explicitly told to. Otherwise a remote project with its
+# own remap/palette installs static files bound to this checkout's config.
+SHIPYARD_PROJECT_DIR="$WORK/remapproj" bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+grep -q '^model = "x-model"$' "$CODEX_HOME/agents/shipyard-arch-review.toml" \
+  || { echo "installer ignored SHIPYARD_PROJECT_DIR policy root"; exit 1; }
 
 # The bundle carries no editor leftovers. Three `*.mjs.bak` files — stale copies
 # of the Workflow prompt builders — reached both installed runtimes before the
@@ -464,14 +511,124 @@ bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 [[ -e "$CODEX_HOME/shipyard/scripts/state-sync.cjs" ]] \
   || { echo "re-install lost the real payload"; exit 1; }
 
+# A generated agent replaces the destination entry itself. If an operator has
+# linked that entry elsewhere, the install must not follow the link and mutate
+# the external file while believing it replaced an installer-owned agent.
+AGENT_SYMLINK="$CODEX_HOME/agents/shipyard-arch-review.toml"
+AGENT_SYMLINK_TARGET="$WORK/operator-agent-target.toml"
+printf '# operator-owned agent target\n' > "$AGENT_SYMLINK_TARGET"
+rm -f "$AGENT_SYMLINK"
+ln -s "$AGENT_SYMLINK_TARGET" "$AGENT_SYMLINK"
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+[[ ! -L "$AGENT_SYMLINK" && -f "$AGENT_SYMLINK" ]] \
+  || { echo "the generated agent install left a destination symlink in place"; exit 1; }
+grep -q '^# operator-owned agent target$' "$AGENT_SYMLINK_TARGET" \
+  || { echo "the generated agent install followed a destination symlink"; exit 1; }
+
+# Agent files and registrations are one transaction. Force the merge helper to
+# reject a duplicate foreign table after deliberately editing one generated
+# agent. A copy-first installer would leave the fresh agent beside the old
+# config; a rollback must preserve both the operator edit and the byte-for-byte
+# config when validation fails.
+ATOMIC_AGENT="$CODEX_HOME/agents/shipyard-arch-review.toml"
+ATOMIC_AGENT_EXPECTED="$WORK/atomic-agent-expected"
+ATOMIC_CONFIG_BEFORE="$WORK/atomic-config-before"
+ATOMIC_CONFIG_EXPECTED="$WORK/atomic-config-expected"
+ATOMIC_BUNDLE_BEFORE="$WORK/atomic-bundle-before"
+ATOMIC_SKILL_BEFORE="$WORK/atomic-skill-before"
+ATOMIC_MANIFEST_BEFORE="$WORK/atomic-manifest-before"
+cp "$CODEX_HOME/config.toml" "$ATOMIC_CONFIG_BEFORE"
+cp -a "$CODEX_HOME/shipyard" "$ATOMIC_BUNDLE_BEFORE"
+cp -a "$SKILLS/shipyard-deliver" "$ATOMIC_SKILL_BEFORE"
+cp "$CODEX_HOME/agents/.shipyard-manifest.json" "$ATOMIC_MANIFEST_BEFORE"
+printf '\n# operator edit that a failed install must preserve\n' >> "$ATOMIC_AGENT"
+cp "$ATOMIC_AGENT" "$ATOMIC_AGENT_EXPECTED"
+printf '\n[shipyard-atomic-failure]\nvalue = "one"\n[shipyard-atomic-failure]\nvalue = "two"\n' >> "$CODEX_HOME/config.toml"
+cp "$CODEX_HOME/config.toml" "$ATOMIC_CONFIG_EXPECTED"
+if bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/atomic-failure.log" 2>&1; then
+  echo "an invalid config unexpectedly let the installer commit"; exit 1
+fi
+cmp -s "$ATOMIC_CONFIG_EXPECTED" "$CODEX_HOME/config.toml" \
+  || { echo "a failed agent/config transaction changed config.toml"; exit 1; }
+cmp -s "$ATOMIC_AGENT_EXPECTED" "$ATOMIC_AGENT" \
+  || { echo "a failed agent/config transaction did not roll back the agent file"; exit 1; }
+cmp -s "$ATOMIC_MANIFEST_BEFORE" "$CODEX_HOME/agents/.shipyard-manifest.json" \
+  || { echo "a failed install changed the agent ownership manifest"; exit 1; }
+if ! diff -ruN "$ATOMIC_BUNDLE_BEFORE" "$CODEX_HOME/shipyard" >/dev/null; then
+  echo "a failed install changed the bundle payload"; exit 1
+fi
+if ! diff -ruN "$ATOMIC_SKILL_BEFORE" "$SKILLS/shipyard-deliver" >/dev/null; then
+  echo "a failed install changed the installed skill"; exit 1
+fi
+# Restore the valid fixture and prove the next install can still commit.
+cp "$ATOMIC_CONFIG_BEFORE" "$CODEX_HOME/config.toml"
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+
+# A failure AFTER the agent/config transaction must leave the already-installed
+# skill, bundle and capability artifacts untouched while rolling back the
+# earlier transaction. Force the later AGENTS.md update to fail and prove every
+# earlier artifact is byte-identical.
+ROLLBACK_SKILL="$SKILLS/shipyard-deliver/SKILL.md"
+ROLLBACK_SKILL_EXTRA="$SKILLS/shipyard-deliver/operator-note.txt"
+ROLLBACK_BUNDLE="$CODEX_HOME/shipyard/scripts/state-sync.cjs"
+ROLLBACK_AGENT="$CODEX_HOME/agents/shipyard-arch-review.toml"
+ROLLBACK_CONFIG="$CODEX_HOME/config.toml"
+ROLLBACK_OLD_AGENT="$CODEX_HOME/agents/shipyard-old-variant.toml"
+ROLLBACK_MANIFEST="$CODEX_HOME/agents/.shipyard-manifest.json"
+ROLLBACK_CAPABILITY="$CAPDIR/checks/pipeline-config.cjs"
+ROLLBACK_BROKEN_AGENTS_MD="$WORK/broken-agents-md"
+printf '\n<!-- operator rollback marker -->\n' >> "$ROLLBACK_SKILL"
+printf 'operator-only note\n' > "$ROLLBACK_SKILL_EXTRA"
+printf '\n// operator rollback marker\n' >> "$ROLLBACK_BUNDLE"
+printf '\n# operator rollback marker\n' >> "$ROLLBACK_AGENT"
+printf '# previously generated variant\n' > "$ROLLBACK_OLD_AGENT"
+printf '\n// operator capability rollback marker\n' >> "$ROLLBACK_CAPABILITY"
+AGENT_MANIFEST="$ROLLBACK_MANIFEST" node - <<'NODE'
+const fs = require('fs');
+const file = process.env.AGENT_MANIFEST;
+const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+manifest.agent_files.push('shipyard-old-variant.toml');
+manifest.registrations = Array.isArray(manifest.registrations) ? manifest.registrations : [];
+manifest.registrations.push('agents.shipyard-old-variant');
+fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+NODE
+cp "$ROLLBACK_SKILL" "$WORK/rollback-skill-expected"
+cp "$ROLLBACK_BUNDLE" "$WORK/rollback-bundle-expected"
+cp "$ROLLBACK_AGENT" "$WORK/rollback-agent-expected"
+cp "$ROLLBACK_OLD_AGENT" "$WORK/rollback-old-agent-expected"
+cp "$ROLLBACK_CONFIG" "$WORK/rollback-config-expected"
+cp "$ROLLBACK_MANIFEST" "$WORK/rollback-manifest-expected"
+cp "$ROLLBACK_CAPABILITY" "$WORK/rollback-capability-expected"
+mkdir -p "$ROLLBACK_BROKEN_AGENTS_MD"
+if CODEX_AGENTS_MD="$ROLLBACK_BROKEN_AGENTS_MD" bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/late-failure.log" 2>&1; then
+  echo "a late installer failure unexpectedly committed"; exit 1
+fi
+cmp -s "$WORK/rollback-skill-expected" "$ROLLBACK_SKILL" \
+  || { echo "a late installer failure changed the installed skill"; exit 1; }
+[[ -f "$ROLLBACK_SKILL_EXTRA" ]] \
+  || { echo "a late installer failure unexpectedly touched operator-owned files inside the skill dir"; exit 1; }
+cmp -s "$WORK/rollback-bundle-expected" "$ROLLBACK_BUNDLE" \
+  || { echo "a late installer failure changed the installed bundle"; exit 1; }
+cmp -s "$WORK/rollback-agent-expected" "$ROLLBACK_AGENT" \
+  || { echo "a late installer failure changed the installed agent"; exit 1; }
+cmp -s "$WORK/rollback-old-agent-expected" "$ROLLBACK_OLD_AGENT" \
+  || { echo "a late installer failure did not restore an older manifest-owned agent"; exit 1; }
+cmp -s "$WORK/rollback-config-expected" "$ROLLBACK_CONFIG" \
+  || { echo "a late installer failure changed config.toml"; exit 1; }
+cmp -s "$WORK/rollback-manifest-expected" "$ROLLBACK_MANIFEST" \
+  || { echo "a late installer failure changed the ownership manifest"; exit 1; }
+cmp -s "$WORK/rollback-capability-expected" "$ROLLBACK_CAPABILITY" \
+  || { echo "a late installer failure changed the installed capability"; exit 1; }
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+
 # ── an installer owns what it wrote (ADR-007 D5) ──────────────────────────────
 # The palette's ceiling entry declares the Codex CLI version that can first
 # CONFIGURE it, and below that version every role takes the floor — which leaves
-# the four escalation variants nothing to BE (ADR-005 D8: a `-deep` file is
-# written only when it would differ), so the same generator emits seven agents
-# rather than eleven. Legitimate output, and exactly why removal cannot be
-# inferred from "eleven expected": the copy-over install left the four `-deep`
-# files behind, still registered, with "the file exists" certifying nothing.
+# both kinds of adaptive variant nothing to BE (a `-deep` recovery file and a
+# `-critical` first-attempt file are written only when they differ). Legitimate
+# output, and exactly why removal cannot be inferred from a fixed agent count:
+# the copy-over install left variant files behind, still registered, with "the
+# file exists" certifying nothing.
 #
 # Derived from the palette, so this file still carries no version literal of its
 # own — and it refuses loudly rather than silently testing nothing if the
@@ -497,6 +654,8 @@ CLI_BELOW_CEILING="$(node -e '
   process.stdout.write(parts.join("."));
 ')"
 DEEP_AGENTS=(shipyard-ci-fix-deep shipyard-review-fix-deep shipyard-pr-sentinel-deep shipyard-arch-review-deep)
+CRITICAL_AGENTS=(shipyard-inv-research-critical shipyard-arch-review-critical shipyard-ci-fix-critical shipyard-review-fix-critical)
+VARIANT_AGENTS=("${DEEP_AGENTS[@]}" "${CRITICAL_AGENTS[@]}")
 PLAIN_AGENTS=(shipyard-arch-review shipyard-ci-fix shipyard-drift-check shipyard-integrator
               shipyard-inv-research shipyard-pr-sentinel shipyard-review-fix)
 AGENT_MANIFEST="$CODEX_HOME/agents/.shipyard-manifest.json"
@@ -510,9 +669,10 @@ manifest_claims() {
   ' "$AGENT_MANIFEST" "$1" "$2"
 }
 
-# stage 1: the whole palette. Eleven agents, and a record of them.
+# stage 1: the whole palette. The active adaptive policy emits all variants, and
+# the ownership record must claim them before the shrink can reconcile them.
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
-for a in "${DEEP_AGENTS[@]}"; do
+for a in "${VARIANT_AGENTS[@]}"; do
   [[ -f "$CODEX_HOME/agents/$a.toml" ]] \
     || { echo "stage 1 emitted no $a.toml — the two-stage reconciliation test has nothing to reconcile"; exit 1; }
 done
@@ -521,7 +681,7 @@ done
 SHIPYARD_CODEX_CLI_VERSION="$CLI_BELOW_CEILING" \
   bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/shrunk.log" 2>&1 \
   || { echo "the shrunk-palette install failed:"; cat "$WORK/shrunk.log"; exit 1; }
-for a in "${DEEP_AGENTS[@]}"; do
+for a in "${VARIANT_AGENTS[@]}"; do
   [[ ! -e "$CODEX_HOME/agents/$a.toml" ]] \
     || { echo "orphan agent file survived a shrunk palette: $a.toml"; exit 1; }
   # Both halves, because either alone is a broken host: a registration whose
@@ -540,7 +700,7 @@ done
 # manifest is the record of what this install claims, and it is what the NEXT
 # one reconciles against.
 [[ -f "$AGENT_MANIFEST" ]] || { echo "the installer wrote no ownership manifest ($AGENT_MANIFEST)"; exit 1; }
-for a in "${DEEP_AGENTS[@]}"; do
+for a in "${VARIANT_AGENTS[@]}"; do
   [[ "$(manifest_claims agent_files "$a.toml")" == no ]] \
     || { echo "the shrunk install still claims $a.toml — the palette never shrank, so nothing was under test"; exit 1; }
 done
@@ -568,14 +728,14 @@ rm -f "$AGENT_MANIFEST"
 SHIPYARD_CODEX_CLI_VERSION="$CLI_BELOW_CEILING" \
   bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/nomanifest.log" 2>&1 \
   || { echo "the install over a manifest-less agents dir failed:"; cat "$WORK/nomanifest.log"; exit 1; }
-for a in "${DEEP_AGENTS[@]}"; do
+for a in "${VARIANT_AGENTS[@]}"; do
   [[ -f "$CODEX_HOME/agents/$a.toml" ]] \
     || { echo "with no previous manifest the installer removed $a.toml anyway"; exit 1; }
 done
 [[ -f "$FOREIGN_AGENT" ]] || { echo "an install with no previous manifest deleted $FOREIGN_AGENT"; exit 1; }
 grep -q 'no manifest from a previous install' "$WORK/nomanifest.log" \
   || { echo "the installer removed nothing and never said why"; exit 1; }
-for f in shipyard-ci-fix-deep.toml "$(basename "$FOREIGN_AGENT")"; do
+for f in shipyard-ci-fix-deep.toml shipyard-ci-fix-critical.toml "$(basename "$FOREIGN_AGENT")"; do
   grep -q "Leaving alone:.*$f" "$WORK/nomanifest.log" \
     || { echo "the installer left $f in place without naming it"; exit 1; }
 done
@@ -589,7 +749,7 @@ printf '{ "agent_files": [ "shipyard-ci-f' > "$AGENT_MANIFEST"
 SHIPYARD_CODEX_CLI_VERSION="$CLI_BELOW_CEILING" \
   bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/corrupt.log" 2>&1 \
   || { echo "an install over a truncated manifest failed:"; cat "$WORK/corrupt.log"; exit 1; }
-for a in "${DEEP_AGENTS[@]}"; do
+for a in "${VARIANT_AGENTS[@]}"; do
   [[ -f "$CODEX_HOME/agents/$a.toml" ]] \
     || { echo "a truncated manifest was read as licence to remove $a.toml"; exit 1; }
 done

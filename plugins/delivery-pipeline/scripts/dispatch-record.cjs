@@ -5,10 +5,18 @@
 // now".
 //
 //   dispatch-record.cjs mark  <ticket> <role> [--model <alias>] [--effort <level>]
-//                             [--effort-applied <level>] [--route <resolver route>]
-//                             [--agent-file <name>] [--agent-id <launch id>]
+//                             [--effort-applied <level|unsupported|unknown>]
+//                             [--route <resolver route>]
+//                             [--task-level <level>] [--runtime <runtime>]
+//                             [--backend <backend>] [--observed-model <id>]
+//                             [--observed-effort <level>] [--agent-file <name>]
+//                             [--agent-id <launch id>] [--dispatch-id <id>]
 //                             [--graph <dir>]
-//   dispatch-record.cjs clear <ticket>        [--graph <dir>]
+//   dispatch-record.cjs mark-many --stdin [--graph <dir>]
+//                             # JSON array of {ticket, role, ...mark fields}
+//   dispatch-record.cjs clear <ticket> <dispatch_id> [--graph <dir>]
+//   dispatch-record.cjs clear-many --stdin [--graph <dir>]
+//                             # JSON array of {ticket, dispatch_id}
 //   dispatch-record.cjs list  [--json]        [--graph <dir>]
 //
 // Why this exists. The front's vocabulary had no state for DISPATCHED AND
@@ -53,6 +61,7 @@
 // this safe to write from a loop that may not survive to clean up after itself.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
@@ -70,7 +79,9 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 // `parseRoute` for the same reason again: the route the journal records is the
 // RESOLVER's, so it is validated against the resolver's own grammar rather than a
 // regex copied over here — the drift `CODEX_DEEP_ROLES` already paid for.
-const { ROLES, TIERS, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const {
+  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime,
+} = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -160,7 +171,10 @@ const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
 //     would compare rows that were never in force against rows that were.
 // So the Agent path omits `--effort-applied`, its absence means "nobody measured
 // this", and the recorder must not helpfully fill it in from the other flag.
-const MARK_FLAGS = ['model', 'effort', 'effort-applied', 'route', 'agent-file', 'agent-id'];
+const MARK_FLAGS = [
+  'model', 'effort', 'effort-applied', 'route', 'task-level', 'runtime', 'backend',
+  'observed-model', 'observed-effort', 'agent-file', 'agent-id', 'dispatch-id',
+];
 
 // ── `reason` is the RESOLVER's route, never the caller's sentence ────────────
 //
@@ -192,8 +206,14 @@ const MARK_FIELD = {
   // ladder query reads it by that name. What changed is where the value comes
   // from, not what a reader greps for.
   route: 'reason',
+  'task-level': 'task_level',
+  runtime: 'runtime',
+  backend: 'backend',
+  'observed-model': 'observed_model',
+  'observed-effort': 'observed_effort',
   'agent-file': 'agent_file',
   'agent-id': 'agent_id',
+  'dispatch-id': 'dispatch_id',
 };
 
 // ── WHO holds it, not just WHAT it is (ADR-007 D1) ───────────────────────────
@@ -238,6 +258,21 @@ function agentIdSafetyIssue(id) {
   return null;
 }
 
+// Requested/applied/observed reconciliation is useful only when the extra
+// fields have stable vocabularies. Model ids are intentionally opaque because
+// Codex can expose a new concrete id before GSD's catalog knows it; the safety
+// check only protects the JSONL line and keeps whitespace from creating two
+// spellings of one value.
+const DISPATCH_RUNTIMES = new Set(['claude', 'codex']);
+const DISPATCH_BACKENDS = new Set(['agent', 'workflow', 'inline', 'codex-agent']);
+function opaqueDispatchValueIssue(value) {
+  if (typeof value !== 'string') return 'it is not a string';
+  if (value.trim() === '') return 'it is blank';
+  if (/[\s\u0000-\u001f\u007f]/.test(value)) return 'it contains whitespace or a control character';
+  if (value.length > AGENT_ID_MAX) return `it is longer than ${AGENT_ID_MAX} characters`;
+  return null;
+}
+
 // ── the Codex half: which FILE was invoked ───────────────────────────────────
 //
 // An agent on Codex is a static `.toml`, so the dispatch's real decision is the
@@ -256,6 +291,10 @@ function agentIdSafetyIssue(id) {
 // the copy cannot drift.
 const CODEX_DEEP_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel', 'arch-review']);
 const CODEX_DEEP_SUFFIX = '-deep';
+// Critical variants are first-attempt premium files. They are also a local copy
+// of the generator's set; the unit test keeps both surfaces in lockstep.
+const CODEX_CRITICAL_ROLES = new Set(['inv-research', 'arch-review', 'ci-fix', 'review-fix']);
+const CODEX_CRITICAL_SUFFIX = '-critical';
 const CODEX_AGENT_PREFIX = 'shipyard-';
 
 // The ladder's roles and the generator's agent files are NOT one-to-one, and the
@@ -280,18 +319,25 @@ function agentFilesFor(role, known) {
   const name = agentRoleName(role);
   const candidates = [`${CODEX_AGENT_PREFIX}${name}`];
   if (CODEX_DEEP_ROLES.has(name)) candidates.push(`${CODEX_AGENT_PREFIX}${name}${CODEX_DEEP_SUFFIX}`);
+  if (CODEX_CRITICAL_ROLES.has(name)) candidates.push(`${CODEX_AGENT_PREFIX}${name}${CODEX_CRITICAL_SUFFIX}`);
   return new Set(candidates.filter((f) => known.has(f)));
 }
 
-function codexAgentFiles(dir = path.join(__dirname, '..', 'references')) {
+function codexAgentDir(env = process.env) {
+  return path.resolve(
+    env.SHIPYARD_CODEX_AGENT_DIR
+      || env.CODEX_HOME && path.join(env.CODEX_HOME, 'agents')
+      || path.join(os.homedir(), '.codex', 'agents')
+  );
+}
+
+function codexAgentFiles(dir = codexAgentDir()) {
   let refs;
   try { refs = fs.readdirSync(dir); } catch { return null; }
   const out = new Set();
   for (const f of refs) {
-    if (!f.endsWith('.md')) continue;
-    const role = f.slice(0, -3);
-    out.add(`${CODEX_AGENT_PREFIX}${role}`);
-    if (CODEX_DEEP_ROLES.has(role)) out.add(`${CODEX_AGENT_PREFIX}${role}${CODEX_DEEP_SUFFIX}`);
+    if (!f.endsWith('.toml') || !f.startsWith(CODEX_AGENT_PREFIX)) continue;
+    out.add(f.slice(0, -5));
   }
   return out;
 }
@@ -352,13 +398,55 @@ function parseMarkFlags(argv, role) {
   for (const flag of ['effort', 'effort-applied']) {
     const level = given.get(flag);
     if (level === undefined) continue; // absent stays absent — never filled in from its twin
-    if (!EFFORTS.includes(level)) {
+    const evidenceState = flag === 'effort-applied' && ['unknown', 'unsupported'].includes(level);
+    if (!EFFORTS.includes(level) && !evidenceState) {
       fail(
-        `"${level}" is not an effort level — --${flag} would record a depth nothing ran at.\n` +
-        `  efforts: ${EFFORTS.join(', ')}`
+        `"${level}" is not an effort level or applied-effort state — --${flag} would record a depth ` +
+        'nothing ran at.\n' +
+        `  efforts: ${EFFORTS.join(', ')}; applied states: unsupported, unknown`
       );
     }
     decided[MARK_FIELD[flag]] = level;
+  }
+  const taskLevel = given.get('task-level');
+  if (taskLevel !== undefined) {
+    if (!TASK_LEVELS.includes(taskLevel)) {
+      fail(
+        `"${taskLevel}" is not a task level — --task-level would make the dispatch impossible to compare.\n` +
+        `  task levels: ${TASK_LEVELS.join(', ')}`
+      );
+    }
+    decided.task_level = taskLevel;
+  }
+  const runtime = given.get('runtime');
+  if (runtime !== undefined) {
+    if (!DISPATCH_RUNTIMES.has(runtime)) {
+      fail(`"${runtime}" is not a supported dispatch runtime — runtimes: ${[...DISPATCH_RUNTIMES].join(', ')}`);
+    }
+    decided.runtime = runtime;
+  }
+  const backend = given.get('backend');
+  if (backend !== undefined) {
+    if (!DISPATCH_BACKENDS.has(backend)) {
+      fail(`"${backend}" is not a dispatch backend — backends: ${[...DISPATCH_BACKENDS].join(', ')}`);
+    }
+    decided.backend = backend;
+  }
+  for (const flag of ['observed-model']) {
+    const observed = given.get(flag);
+    if (observed === undefined) continue;
+    const why = opaqueDispatchValueIssue(observed);
+    if (why !== null) fail(`--${flag} ${JSON.stringify(observed)} cannot be recorded: ${why}`);
+    decided[MARK_FIELD[flag]] = observed;
+  }
+  const observedEffort = given.get('observed-effort');
+  if (observedEffort !== undefined) {
+    if (!['unknown', 'unsupported'].includes(observedEffort) && !EFFORTS.includes(observedEffort)) {
+      fail(
+        `"${observedEffort}" is not an observed effort level — observed values: unknown, unsupported, ${EFFORTS.join(', ')}`
+      );
+    }
+    decided.observed_effort = observedEffort;
   }
   // The agent's identity. Opaque by nature — a launch id has no vocabulary to
   // check against, and inventing an allowlist for one is the mistake this repo
@@ -388,6 +476,17 @@ function parseMarkFlags(argv, role) {
       );
     }
     decided.agent_id = agentId;
+  }
+  // This id is generated when the record is written, so callers do not have to
+  // invent a correlation key before a launch exists. Accept an explicit value
+  // for orchestrators that already have one, but keep it opaque and safe for the
+  // JSONL journal. The id is separate from agent_id: one agent can own several
+  // ticket dispatches in a wave, while every dispatch needs its own usage join.
+  const dispatchId = given.get('dispatch-id');
+  if (dispatchId !== undefined) {
+    const why = opaqueDispatchValueIssue(dispatchId);
+    if (why !== null) fail(`--dispatch-id ${JSON.stringify(dispatchId)} cannot be recorded: ${why}`);
+    decided.dispatch_id = dispatchId;
   }
   // The RESOLVER's route, checked against the resolver's own grammar and then
   // against the pair recorded beside it. The grammar check is what stops a
@@ -439,13 +538,30 @@ function parseMarkFlags(argv, role) {
     if (decided.effort === undefined) decided.effort = parsed.effort.effort;
     decided.reason = route;
   }
+  if (runtime !== undefined && decided.model !== undefined
+      && typeof tierAllowedForRuntime === 'function'
+      && !tierAllowedForRuntime(runtime, decided.model)) {
+    fail(
+      `"${decided.model}" is not available on runtime "${runtime}" — the dispatch recorder only accepts ` +
+      'runnable tier aliases for that runtime.'
+    );
+  }
+  if (runtime !== undefined && decided.model === undefined) {
+    fail(
+      `a ${runtime} dispatch must carry the resolver's --model or --route — otherwise its model lane is unknown.\n` +
+      '  Resolve with `pipeline-config.cjs model <role> --json [signals]` and pass the returned pair and route.'
+    );
+  }
   const agentFile = given.get('agent-file');
   if (agentFile !== undefined) {
+    if (runtime !== undefined && runtime !== 'codex') {
+      fail('--agent-file is a Codex-only field — omit it for a Claude dispatch');
+    }
     const known = codexAgentFiles();
     if (!known) {
       fail(
-        `--agent-file cannot be verified: no references/ directory beside ${__dirname}.\n` +
-        '  The point of the field is to record which agent file RAN, so an unverifiable name is worse than none.'
+        `--agent-file cannot be verified: no Codex agents directory exists at ${codexAgentDir()}.\n` +
+        '  The point of the field is to record which generated file RAN, so an unverifiable name is worse than none.'
       );
     }
     if (!known.has(agentFile)) {
@@ -485,6 +601,108 @@ function parseMarkFlags(argv, role) {
     decided.agent_file = agentFile;
   }
   return decided;
+}
+
+// A wave is launched as one action, but the old CLI needed one process, lock and
+// front refresh per ticket. `mark-many` accepts the same facts as `mark` in a
+// JSON array and turns the whole batch into one validated mutation. The payload
+// uses JSON field names rather than shell flags so a route containing spaces is
+// not re-quoted by every caller. It deliberately does not accept `reason` or
+// `pr`: the former is the refused hand-composed route spelling, and the latter
+// is read from the state the record is bound to.
+const BATCH_FIELDS = new Map([
+  ['model', 'model'],
+  ['effort', 'effort'],
+  ['effort_applied', 'effort-applied'],
+  ['route', 'route'],
+  ['task_level', 'task-level'],
+  ['runtime', 'runtime'],
+  ['backend', 'backend'],
+  ['observed_model', 'observed-model'],
+  ['observed_effort', 'observed-effort'],
+  ['agent_file', 'agent-file'],
+  ['agent_id', 'agent-id'],
+  ['dispatch_id', 'dispatch-id'],
+]);
+
+function parseBatchEntries(raw) {
+  if (!Array.isArray(raw)) {
+    throw new Error('mark-many input must be a JSON array of dispatch objects');
+  }
+  const seen = new Set();
+  return raw.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`mark-many item ${index + 1} must be an object`);
+    }
+    if (typeof item.ticket !== 'string' || !item.ticket) {
+      throw new Error(`mark-many item ${index + 1} needs a non-empty ticket`);
+    }
+    if (typeof item.role !== 'string' || !item.role) {
+      throw new Error(`mark-many item ${index + 1} needs a non-empty role`);
+    }
+    if (!ROLES.includes(item.role)) {
+      throw new Error(`"${item.role}" is not a pipeline role — the board would name a holder nothing can identify.\n  roles: ${ROLES.join(', ')}`);
+    }
+    if (seen.has(item.ticket)) {
+      throw new Error(`mark-many contains duplicate ticket ${item.ticket} — one ticket can have only one active dispatch`);
+    }
+    seen.add(item.ticket);
+
+    const flags = [];
+    for (const [key, value] of Object.entries(item)) {
+      if (key === 'ticket' || key === 'role') continue;
+      const flag = BATCH_FIELDS.get(key);
+      if (!flag) {
+        throw new Error(`mark-many item ${index + 1} has unsupported field "${key}" — use ticket, role and the mark fields`);
+      }
+      if (typeof value !== 'string') {
+        throw new Error(`mark-many item ${index + 1} field "${key}" must be a string; omit it when it is unmeasured`);
+      }
+      flags.push(`--${flag}`, value);
+    }
+    return {
+      ticket: item.ticket,
+      role: item.role,
+      decided: parseMarkFlags(flags, item.role),
+    };
+  });
+}
+
+// A completed fan-out has the same opposite shape as a launch wave: one
+// operation owns several ticket records. Clearing them one process at a time
+// re-takes the lock and refreshes the derived front for every ticket, so a
+// short Workflow round can cost more orchestration turns than the work itself.
+// A completion must carry the dispatch id it is completing. Ticket ids are
+// reusable, so deleting by ticket alone lets a delayed result erase a newer
+// dispatch and its capacity/stop-gate protection. Missing or already-lifted
+// records remain idempotent, but a mismatched id is deliberately left alone.
+function parseClearBatch(raw) {
+  if (!Array.isArray(raw)) {
+    throw new Error('clear-many input must be a JSON array of {ticket, dispatch_id} objects');
+  }
+  const seen = new Set();
+  return raw.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`clear-many item ${index + 1} must be an object with ticket and dispatch_id`);
+    }
+    const { ticket, dispatch_id: dispatchId } = item;
+    const unsupported = Object.keys(item).filter((key) => !['ticket', 'dispatch_id'].includes(key));
+    if (unsupported.length) {
+      throw new Error(
+        `clear-many item ${index + 1} has unsupported field "${unsupported[0]}" — use only ticket and dispatch_id`
+      );
+    }
+    if (typeof ticket !== 'string' || ticket.trim() === '') {
+      throw new Error(`clear-many item ${index + 1} must carry a non-empty ticket id`);
+    }
+    const why = opaqueDispatchValueIssue(dispatchId);
+    if (why !== null) throw new Error(`clear-many item ${index + 1} dispatch_id cannot be recorded: ${why}`);
+    if (seen.has(ticket)) {
+      throw new Error(`clear-many contains duplicate ticket ${ticket} — pass each id once`);
+    }
+    seen.add(ticket);
+    return { ticket, dispatch_id: dispatchId };
+  });
 }
 
 // `draft` is normalized so `undefined` and `false` are one state; everything else
@@ -541,6 +759,17 @@ function graphDir(cwd = process.cwd()) {
   return path.join(cwd, '.planning', 'graph');
 }
 
+// The front, state-sync and the other durable stores all agree on one graph
+// layout: `<project>/.planning/graph`.  `--graph` is an explicit project graph
+// selector, not a second arbitrary store location.  Accepting a different
+// shape here is unsafe because the CLI derives the project root from this path
+// for the refresh and then the readers silently look in another graph.
+function isCanonicalGraphDir(dir) {
+  const resolved = path.resolve(dir);
+  return path.basename(resolved) === 'graph'
+    && path.basename(path.dirname(resolved)) === '.planning';
+}
+
 function readState(cwd) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(graphDir(cwd), 'delivery-state.json'), 'utf8'));
@@ -550,6 +779,9 @@ function readState(cwd) {
   }
 }
 
+const hasStateTicket = (state, id) =>
+  Object.prototype.hasOwnProperty.call(state || {}, id);
+
 function load(cwd = process.cwd()) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(graphDir(cwd), STORE_NAME), 'utf8'));
@@ -557,6 +789,70 @@ function load(cwd = process.cwd()) {
   } catch {
     return { tickets: {} };
   }
+}
+
+// A dispatch id is the join key between the delivery journal and a later
+// provider transcript. It is generated at write time rather than in the prompt
+// builder, because a retry must get a new id and a caller that never reaches the
+// recorder must not leave a phantom correlation key behind.
+function newDispatchId() {
+  const random = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
+  return `dispatch-${Date.now().toString(36)}-${random}`;
+}
+
+function dispatchIdInUse(store, id) {
+  return Object.values(store.tickets || {}).some((record) =>
+    record && record.dispatch_id === id
+  );
+}
+
+// Dispatch ids are also the durable join key for usage attribution. Clearing
+// an active record removes it from `dispatches.json`, but the journal line is
+// intentionally append-only; allowing the same explicit id after a clear would
+// make one id describe two launches and merge their transcript usage. Read the
+// journal while the caller's store lock is held so an explicit id is rejected
+// against both the live store and every durable event already recorded.
+function dispatchIdInHistory(cwd, id) {
+  const file = path.join(graphDir(cwd), 'delivery-log.jsonl');
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return false;
+    throw new Error(`cannot inspect dispatch history at ${file}: ${error && error.message ? error.message : error}`);
+  }
+  return raw.split(/\r?\n/).some((line) => {
+    if (!line.trim()) return false;
+    try {
+      const event = JSON.parse(line);
+      return event && event.dispatch_id === id;
+    } catch {
+      // Other conveyor writers may leave a malformed line. It cannot prove
+      // ownership of this id, so keep the existing journal-read tolerance.
+      return false;
+    }
+  });
+}
+
+function dispatchIdKnown(cwd, store, id) {
+  return dispatchIdInUse(store, id) || dispatchIdInHistory(cwd, id);
+}
+
+function withDispatchId(decided, store, cwd) {
+  if (decided.dispatch_id) {
+    if (dispatchIdInUse(store, decided.dispatch_id)) {
+      throw new Error(`dispatch id "${decided.dispatch_id}" is already active`);
+    }
+    if (dispatchIdInHistory(cwd, decided.dispatch_id)) {
+      throw new Error(`dispatch id "${decided.dispatch_id}" already exists in delivery history`);
+    }
+    return { ...decided, dispatch_id: decided.dispatch_id };
+  }
+  let id;
+  do { id = newDispatchId(); } while (dispatchIdKnown(cwd, store, id));
+  return { ...decided, dispatch_id: id };
 }
 
 // Read-modify-write plus the journal line, under ONE lock and written atomically —
@@ -571,7 +867,15 @@ function mutate(cwd, fn) {
     const store = load(cwd);
     const extra = fn(store);
     writeAtomic(path.join(graphDir(cwd), STORE_NAME), JSON.stringify(store, null, 2) + '\n');
-    if (extra) fs.appendFileSync(path.join(graphDir(cwd), 'delivery-log.jsonl'), JSON.stringify(extra) + '\n');
+    if (extra) {
+      const events = Array.isArray(extra) ? extra : [extra];
+      if (events.length) {
+        fs.appendFileSync(
+          path.join(graphDir(cwd), 'delivery-log.jsonl'),
+          events.map((event) => JSON.stringify(event)).join('\n') + '\n'
+        );
+      }
+    }
   }, { label: 'dispatch-record' });
 }
 
@@ -628,7 +932,7 @@ function dispatchWhy(id, rec) {
   return `dispatched to ${role}${age} — an agent holds it, so it is nobody else's to start. ` +
     `It returns to the board by itself when the delivery state moves in the way this role's own output moves it ` +
     `(${subjectOf(role).lifts}) or after ${Math.round(DISPATCH_TTL_MS / 60000)}m; ` +
-    `\`dispatch-record.cjs clear ${id}\` returns it now.`;
+    `\`dispatch-record.cjs clear ${id} ${rec && rec.dispatch_id ? rec.dispatch_id : '<dispatch_id>'}\` returns it now.`;
 }
 
 /**
@@ -650,11 +954,16 @@ function dispatchWhy(id, rec) {
  */
 function activeDispatches(cwd = process.cwd(), state = null) {
   const live = state || readState(cwd);
+  // Callers that already read delivery-state.json pass its full envelope; the
+  // disk reader above returns only `tickets` for the legacy map shape. Normalize
+  // both here so a merged ticket cannot keep consuming capacity until TTL.
+  const ticketState = live && typeof live === 'object' && live.tickets
+    && typeof live.tickets === 'object' ? live.tickets : live || {};
   const now = Date.now();
   const out = {};
   for (const [id, rec] of Object.entries(load(cwd).tickets || {})) {
     if (!rec) continue;
-    const s = live[id] || {};
+    const s = ticketState[id] || {};
     // A merged ticket is never suppressed, whoever was working on it: it landed.
     if (s.status === 'merged') continue;
     const at = Date.parse(rec.at || '');
@@ -760,11 +1069,18 @@ function refreshFront(cwd) {
 module.exports = {
   activeDispatches, dispatchWhy, dispatchFingerprint, agentIdOf, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
   MARK_FLAGS, MARK_FIELD, REFUSED_FLAGS, codexAgentFiles, agentFilesFor, agentRoleName,
-  CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_AGENT_PREFIX,
+  CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
+  CODEX_AGENT_PREFIX, DISPATCH_RUNTIMES, DISPATCH_BACKENDS, newDispatchId,
 };
 
 if (require.main === module) {
   const [cmd, ...rest] = ARGV;
+  if (GRAPH_EXPLICIT && !isCanonicalGraphDir(GRAPH_DIR)) {
+    fail(
+      `--graph must point to a project graph at <project>/.planning/graph (got ${GRAPH_DIR})` +
+      '\n  An arbitrary directory would be written by this command but read by the front from a different graph.'
+    );
+  }
   const cwd = path.resolve(GRAPH_DIR, '..', '..');
 
   // Fail-closed, exactly as drift-record and escalation-record do: this command
@@ -772,9 +1088,11 @@ if (require.main === module) {
   // their own, and a store written beside no ticket graph is unreadable rather
   // than merely misplaced — the front reads the PROJECT's. `list`/`clear` stay
   // permissive: they read or they remove, they never hide a ticket nowhere.
-  if (cmd === 'mark' && !GRAPH_EXPLICIT && !fs.existsSync(path.join(GRAPH_DIR, 'tickets.json'))) {
+  if (['mark', 'mark-many'].includes(cmd) && !fs.existsSync(path.join(GRAPH_DIR, 'tickets.json'))) {
     fail(
-      `no ticket graph at ${GRAPH_DIR} — refusing to record a dispatch nothing will read.\n` +
+      `no ticket graph at ${GRAPH_DIR} — refusing to record a dispatch nothing will read` +
+      (GRAPH_EXPLICIT ? ' (the explicitly selected graph is invalid).' : '.\n') +
+      (GRAPH_EXPLICIT ? '\n' : '') +
       '  The front reads the PROJECT\'s graph; one written in a worktree is invisible to it,\n' +
       '  so the ticket keeps being offered as work an agent already holds.\n' +
       '  Run this from the conveyor project, or pass --graph <project>/.planning/graph.'
@@ -800,18 +1118,26 @@ if (require.main === module) {
     // written: a usage error must cost no lock and must never leave half a
     // record behind.
     const decided = parseMarkFlags(rest.slice(2), role);
-    const s = readState(cwd)[ticket];
-    if (!s) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
     const at = new Date().toISOString();
+    let dispatchId;
     mutate(cwd, (store) => {
+      // Read the ticket state while the dispatch mutation is locked. A
+      // concurrent state-sync may move the PR between the preflight read and
+      // this callback; using the older fingerprint would make a fresh dispatch
+      // look expired on the next front evaluation.
+      const state = readState(cwd);
+      if (!hasStateTicket(state, ticket)) throw new Error(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+      const s = state[ticket];
       // A re-dispatch restarts the clock: the previous agent is not the one
       // holding it now.
+      const recorded = withDispatchId(decided, store, cwd);
+      dispatchId = recorded.dispatch_id;
       store.tickets[ticket] = {
         role,
         at,
         // Spread, never enumerated: a flag the caller did not pass contributes no
         // key, so the record distinguishes "ran at high" from "nobody measured".
-        ...decided,
+        ...recorded,
         fingerprint: dispatchFingerprint(role, s),
         // Which hash the line above is, so a reader upgrading over an existing
         // store compares each record with the rule it was written under.
@@ -824,7 +1150,7 @@ if (require.main === module) {
       // of the fields; the next one of each can be measured. The ticket's next
       // `status_change` closes the interval, so a `clear` needs no event of its
       // own.
-      return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...decided, by: 'dispatch-record' };
+      return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...recorded, by: 'dispatch-record' };
     });
     // The record is durable the instant `mutate` above returns — that alone is
     // what `activeDispatches` reads. `refreshFront` only decides whether the
@@ -833,21 +1159,153 @@ if (require.main === module) {
     // (no board yet, or a state-sync held the lock).
     const refreshed = refreshFront(cwd) !== null;
     console.log(
-      `dispatch recorded for ${ticket} (${role}) — ` +
+      `dispatch recorded for ${ticket} (${role}), dispatch_id=${dispatchId} — ` +
       (refreshed
         ? 'the front reports it as waiting, not as work to start. '
         : 'no board was refreshed just now (none exists yet, or a sync holds the lock); the record is durable and the next state-sync or refresh will apply it. ') +
       `It lifts when ${subjectOf(role).lifts}, or after ${Math.round(DISPATCH_TTL_MS / 60000)}m.`
     );
+  } else if (cmd === 'mark-many') {
+    if (rest.length !== 1 || rest[0] !== '--stdin') {
+      fail(
+        'usage: dispatch-record.cjs mark-many --stdin [--graph <dir>]\n' +
+        '  stdin must contain a JSON array of {ticket, role, ...mark fields}; an empty array is a no-op'
+      );
+    }
+    let raw;
+    try {
+      raw = JSON.parse(fs.readFileSync(0, 'utf8'));
+    } catch (e) {
+      fail(`mark-many stdin is not valid JSON — ${e && e.message ? e.message : e}`);
+    }
+    let entries;
+    try {
+      entries = parseBatchEntries(raw);
+    } catch (e) {
+      fail(e && e.message ? e.message : e);
+    }
+    if (!entries.length) {
+      console.log('no dispatches recorded — the batch was explicitly empty');
+    } else {
+      // Check every ticket before taking the lock. The callback repeats this
+      // check against the state read while the lock is held, so a concurrent
+      // state-sync cannot turn a valid batch into a record with a stale
+      // fingerprint or leave only the first item filed.
+      const state = readState(cwd);
+      const missing = entries.find((entry) => !hasStateTicket(state, entry.ticket));
+      if (missing) fail(`no ${missing.ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+      const at = new Date().toISOString();
+      const dispatchIds = new Map();
+      try {
+        mutate(cwd, (store) => {
+          const current = readState(cwd);
+          const absent = entries.find((entry) => !hasStateTicket(current, entry.ticket));
+          if (absent) throw new Error(`no ${absent.ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+          const events = [];
+          for (const entry of entries) {
+            const s = current[entry.ticket];
+            const recorded = withDispatchId(entry.decided, store, cwd);
+            if ([...dispatchIds.values()].includes(recorded.dispatch_id)) {
+              throw new Error(`mark-many contains duplicate dispatch id "${recorded.dispatch_id}"`);
+            }
+            dispatchIds.set(entry.ticket, recorded.dispatch_id);
+            store.tickets[entry.ticket] = {
+              role: entry.role,
+              at,
+              ...recorded,
+              fingerprint: dispatchFingerprint(entry.role, s),
+              fingerprint_kind: 'role',
+              pr: s.pr || null,
+            };
+            events.push({
+              ts: at,
+              event: 'dispatch',
+              ticket: entry.ticket,
+              role: entry.role,
+              pr: s.pr || null,
+              ...recorded,
+              by: 'dispatch-record',
+            });
+          }
+          return events;
+        });
+      } catch (e) {
+        fail(e && e.message ? e.message : e);
+      }
+      const refreshed = refreshFront(cwd) !== null;
+      console.log(
+        `dispatch recorded for ${entries.length} ticket(s) ` +
+        `(dispatch_ids=${[...dispatchIds.values()].join(',')}) — ` +
+        (refreshed
+          ? 'the front reports them as waiting, not as work to start. '
+          : 'no board was refreshed just now (none exists yet, or a sync holds the lock); the records are durable and the next state-sync or refresh will apply them. ') +
+        `They lift by their role output or after ${Math.round(DISPATCH_TTL_MS / 60000)}m.`
+      );
+    }
   } else if (cmd === 'clear') {
-    const [ticket] = rest;
-    if (!ticket) fail('usage: dispatch-record.cjs clear <ticket> [--graph <dir>]');
-    const had = !!load(cwd).tickets[ticket];
-    if (had) {
-      mutate(cwd, (store) => { delete store.tickets[ticket]; });
+    const [ticket, dispatchId] = rest;
+    if (!ticket || !dispatchId) fail('usage: dispatch-record.cjs clear <ticket> <dispatch_id> [--graph <dir>]');
+    const why = opaqueDispatchValueIssue(dispatchId);
+    if (why !== null) fail(`clear dispatch_id cannot be recorded: ${why}`);
+    let cleared = false;
+    let currentDispatchId = null;
+    mutate(cwd, (store) => {
+      const current = store.tickets[ticket];
+      if (!current) return;
+      currentDispatchId = current.dispatch_id || null;
+      if (current.dispatch_id !== dispatchId) return;
+      delete store.tickets[ticket];
+      cleared = true;
+    });
+    if (cleared) {
       refreshFront(cwd);
     }
-    console.log(had ? `dispatch cleared for ${ticket} — it is the board's again` : `no dispatch recorded for ${ticket}`);
+    console.log(
+      cleared
+        ? `dispatch cleared for ${ticket} — it is the board's again`
+        : (currentDispatchId
+          ? `dispatch for ${ticket} is ${currentDispatchId}, not ${dispatchId} — leaving the newer record in place`
+          : `no dispatch recorded for ${ticket}`)
+    );
+  } else if (cmd === 'clear-many') {
+    if (rest.length !== 1 || rest[0] !== '--stdin') {
+      fail(
+        'usage: dispatch-record.cjs clear-many --stdin [--graph <dir>]\n' +
+        '  stdin must contain a JSON array of {ticket, dispatch_id} objects; an empty array is a no-op'
+      );
+    }
+    let raw;
+    try {
+      raw = JSON.parse(fs.readFileSync(0, 'utf8'));
+    } catch (e) {
+      fail(`clear-many stdin is not valid JSON — ${e && e.message ? e.message : e}`);
+    }
+    let ticketsToClear;
+    try {
+      ticketsToClear = parseClearBatch(raw);
+    } catch (e) {
+      fail(e && e.message ? e.message : e);
+    }
+    if (!ticketsToClear.length) {
+      console.log('no dispatches cleared — the batch was explicitly empty');
+    } else {
+      let cleared = 0;
+      mutate(cwd, (store) => {
+        for (const { ticket, dispatch_id: dispatchId } of ticketsToClear) {
+          const current = store.tickets[ticket];
+          if (!current || current.dispatch_id !== dispatchId) continue;
+          delete store.tickets[ticket];
+          cleared++;
+        }
+      });
+      if (cleared) {
+        refreshFront(cwd);
+      }
+      console.log(
+        `dispatch cleared for ${cleared} of ${ticketsToClear.length} ticket(s) — ` +
+        'the board can offer them again'
+      );
+    }
   } else if (cmd === 'list') {
     const active = activeDispatches(cwd);
     if (rest.includes('--json')) {
@@ -861,6 +1319,6 @@ if (require.main === module) {
       }
     }
   } else {
-    fail('usage: dispatch-record.cjs <mark|clear|list> …');
+    fail('usage: dispatch-record.cjs <mark|mark-many|clear|clear-many|list> …');
   }
 }

@@ -18,13 +18,15 @@ set -euo pipefail
 #   CODEX_HOME         Codex config home (default: ~/.codex)
 #   AGENTS_SKILLS_DIR  Codex/cursor/cline skills dir (default: ~/.agents/skills)
 #   SHIPYARD_CODEX_PHASE  1 = investigate+decompose only; 2 = + deliver (default 2)
+#   SHIPYARD_PROJECT_DIR  conveyor project root whose .planning/config.json is read
 #
-# Usage: bash scripts/install-shipyard-codex.sh [--phase 1|2]
+# Usage: bash scripts/install-shipyard-codex.sh [--phase 1|2] [--project-dir <dir>]
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUGIN_DIR="$REPO_ROOT/plugins/delivery-pipeline"
 CAP_SRC="$REPO_ROOT/capabilities/delivery-pipeline"
 PHASE="${SHIPYARD_CODEX_PHASE:-2}"
+PROJECT_DIR="${SHIPYARD_PROJECT_DIR:-$REPO_ROOT}"
 
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
@@ -34,6 +36,7 @@ GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --phase) PHASE="${2:?}"; shift 2 ;;
+    --project-dir) PROJECT_DIR="${2:?}"; shift 2 ;;
     -h | --help) sed -n '3,25p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -43,6 +46,8 @@ done
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
 [[ -d "$PLUGIN_DIR" ]] || { echo "error: plugin dir missing: $PLUGIN_DIR" >&2; exit 1; }
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
+[[ -d "$PROJECT_DIR" ]] || { echo "error: project dir missing: $PROJECT_DIR" >&2; exit 1; }
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 # gsd-core is a hard dependency here — the generator cannot convert a command
 # without it — so install/refresh it rather than telling the user to. Default is
 # the latest: shipyard is a superstructure over GSD, and pinning the base while
@@ -62,8 +67,153 @@ if [[ ! -f "$GSD_TOOLS" ]]; then
 fi
 
 STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
+ROLLBACK_ACTIVE=0
+cleanup() {
+  local status="${1:-0}"
+  if [[ "$status" -ne 0 && "$ROLLBACK_ACTIVE" == 1 ]]; then
+    echo "error: install failed after mutating installer-owned state; restoring the previous set" >&2
+    restore_runtime_paths 2>/dev/null || echo "warning: runtime artifact rollback was incomplete; inspect ${AGENTS_SKILLS:-$HOME/.agents/skills}, ${BUNDLE_ROOT:-$CODEX_HOME/shipyard}, ${AGENTS_MD:-$CODEX_HOME/AGENTS.md} and ${CAPABILITY_TARGET:-${GSD_CAPABILITIES_ROOT:-$HOME/.gsd/capabilities}/delivery-pipeline}" >&2
+    restore_config 2>/dev/null || echo "warning: config rollback was incomplete; inspect ${CONFIG_TARGET:-$CODEX_HOME/config.toml}" >&2
+    restore_agents 2>/dev/null || echo "warning: agent rollback was incomplete; inspect ${AGENTS_DIR:-$CODEX_HOME/agents}" >&2
+  fi
+  rm -rf "$STAGE"
+  trap - EXIT
+  exit "$status"
+}
+restore_agents() {
+  local index="${AGENT_BACKUP_INDEX:-}"
+  local backup="${AGENT_BACKUP:-}"
+  local state name target restore_status=0
+  if [[ -n "$index" && -f "$index" && -n "$backup" && -n "${AGENTS_DIR:-}" ]]; then
+    while IFS=$'\t' read -r state name; do
+      [[ -n "$name" ]] || continue
+      target="$AGENTS_DIR/$name"
+      rm -rf "$target" || restore_status=1
+      if [[ "$state" == present ]]; then
+        cp -a "$backup/$name" "$target" || restore_status=1
+      fi
+    done < "$index"
+  fi
+  if [[ -n "${AGENT_MANIFEST_TARGET:-}" ]]; then
+    rm -rf "$AGENT_MANIFEST_TARGET" || restore_status=1
+    if [[ "${AGENT_MANIFEST_PREEXISTED:-0}" == 1 ]]; then
+      cp -a "$AGENT_MANIFEST_BACKUP" "$AGENT_MANIFEST_TARGET" || restore_status=1
+    fi
+  fi
+  if [[ "${AGENTS_DIR_PREEXISTED:-0}" == 0 ]]; then
+    rmdir "$AGENTS_DIR" 2>/dev/null || true
+  fi
+  return "$restore_status"
+}
+restore_runtime_paths() {
+  local index="${RUNTIME_BACKUP_INDEX:-}"
+  local backup="${RUNTIME_BACKUP:-}"
+  local state kind name target restore_status=0 backup_path restore_tmp copy_status
+  [[ -n "$index" && -f "$index" && -n "$backup" ]] || return 0
+  while IFS=$'\t' read -r state kind name target; do
+    [[ -n "$kind" && -n "$name" ]] || continue
+    if [[ -z "$target" ]]; then
+      case "$kind" in
+        bundle) target="$BUNDLE_ROOT" ;;
+        skill) target="$AGENTS_SKILLS/$name" ;;
+        capability) target="${CAPABILITY_TARGET:-${GSD_CAPABILITIES_ROOT:-$HOME/.gsd/capabilities}/$name}" ;;
+        agents-md) target="${AGENTS_MD:-$CODEX_HOME/AGENTS.md}" ;;
+        gsd-defaults) target="${GSD_DEFAULTS:-${GSD_DEFAULTS_PATH:-$HOME/.gsd/defaults.json}}" ;;
+        *) continue ;;
+      esac
+    fi
+    backup_path="$backup/$(runtime_backup_key "$target")"
+    rm -rf "$target" || restore_status=1
+    if [[ "$state" == present ]]; then
+      mkdir -p "$(dirname "$target")" || restore_status=1
+      restore_tmp="${target}.restore-$$"
+      rm -rf "$restore_tmp" || restore_status=1
+      copy_status=0
+      if [[ -L "$backup_path" || ! -d "$backup_path" ]]; then
+        cp -a "$backup_path" "$restore_tmp" || copy_status=1
+      else
+        mkdir -p "$restore_tmp" || copy_status=1
+        cp -a "$backup_path/." "$restore_tmp/" || copy_status=1
+      fi
+      rm -rf "$target" || copy_status=1
+      if [[ "$copy_status" == 0 ]] && mv "$restore_tmp" "$target"; then
+        :
+      else
+        restore_status=1
+        rm -rf "$restore_tmp" 2>/dev/null || true
+      fi
+    fi
+  done < "$index"
+  return "$restore_status"
+}
+restore_config() {
+  local restore_status=0
+  [[ -n "${CONFIG_PREEXISTED:-}" && -n "${CONFIG_TARGET:-}" ]] || return 0
+  if [[ "${CONFIG_PREEXISTED:-0}" == 1 ]]; then
+    cp -p "$CONFIG_BACKUP" "$CONFIG_TARGET" || restore_status=1
+  else
+    rm -f "$CONFIG_TARGET" || restore_status=1
+  fi
+  return "$restore_status"
+}
+replace_dir() {
+  local src="$1" target="$2" label="$3"
+  local tmp="${target}.tmp-$$" backup="${target}.bak-$$" had_target=0 status=0
+  rm -rf "$tmp" "$backup"
+  # Preserve executable bits and symlinks while staging the replacement. The
+  # staged directory becomes the live target with one rename, so copying it
+  # without archive semantics can silently change the installed bundle.
+  cp -a "$src" "$tmp" || return $?
+  if [[ -e "$target" || -L "$target" ]]; then
+    mv "$target" "$backup" || return $?
+    had_target=1
+  fi
+  if mv "$tmp" "$target"; then
+    rm -rf "$backup"
+    return 0
+  else
+    status=$?
+  fi
+  if [[ "$had_target" == 1 ]]; then
+    if mv "$backup" "$target"; then
+      rm -rf "$tmp"
+    else
+      echo "warning: could not restore previous $label at $target" >&2
+    fi
+  elif [[ -e "$tmp" || -L "$tmp" ]]; then
+    rm -rf "$tmp"
+  fi
+  return "$status"
+}
+runtime_backup_key() {
+  node -e "const crypto=require('crypto');process.stdout.write(crypto.createHash('sha256').update(process.argv[1]).digest('hex'))" "$1"
+}
+snapshot_runtime_path() {
+  local kind="$1" name="$2" target="$3"
+  local state=absent backup_path
+  case "$target" in
+    *$'\t'* | *$'\n'*)
+      echo "error: refusing to snapshot a runtime path whose name cannot be recorded safely: $target" >&2
+      exit 1
+      ;;
+  esac
+  if awk -F '\t' -v target="$target" '$4 == target { found=1; exit } END { exit found ? 0 : 1 }' "$RUNTIME_BACKUP_INDEX"; then
+    return 0
+  fi
+  backup_path="$RUNTIME_BACKUP/$(runtime_backup_key "$target")"
+  if [[ -e "$target" || -L "$target" ]]; then
+    mkdir -p "$(dirname "$backup_path")"
+    cp -a "$target" "$backup_path"
+    state=present
+  fi
+  printf '%s\t%s\t%s\t%s\n' "$state" "$kind" "$name" "$target" >> "$RUNTIME_BACKUP_INDEX"
+}
+trap 'cleanup $?' EXIT
 OUT="$STAGE/bundle-out"
+RUNTIME_BACKUP="$STAGE/runtime-before"
+RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
+mkdir -p "$RUNTIME_BACKUP"
+: > "$RUNTIME_BACKUP_INDEX"
 
 # ── generate ─────────────────────────────────────────────────────────────────
 echo "→ generating Codex bundle (phase $PHASE)…"
@@ -71,29 +221,12 @@ echo "→ generating Codex bundle (phase $PHASE)…"
 # project/global GSD config: the same checkout may be driven by Claude next.
 GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" \
   --plugin "$PLUGIN_DIR" --out "$OUT" \
-  --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE"
+  --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE" \
+  --project-dir "$PROJECT_DIR"
 
-# ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
-echo "→ installing skills → $AGENTS_SKILLS"
-mkdir -p "$AGENTS_SKILLS"
-for d in "$OUT"/skills/*/; do
-  name="$(basename "$d")"
-  rm -rf "${AGENTS_SKILLS:?}/$name"
-  cp -R "${d%/}" "$AGENTS_SKILLS/$name"
-done
-
-# ── bundle payload (CLAUDE_PLUGIN_ROOT target: scripts/references/templates) ──
-# REPLACED, not merged over — the same way the skills above are. Copying onto an
-# existing bundle leaves every file the plugin has since deleted or renamed in
-# place forever, still reachable by path. Three stale `*.mjs.bak` files survived
-# an upgrade that way, and a renamed script would be worse: both editions present,
-# the old one silently callable. The bundle is wholly generated, so nothing
-# user-authored is at risk.
-echo "→ installing bundle payload → $BUNDLE_ROOT"
-rm -rf "${BUNDLE_ROOT:?}"
-mkdir -p "$BUNDLE_ROOT"
-cp -R "$OUT"/bundle/. "$BUNDLE_ROOT/"
-find "$BUNDLE_ROOT" -name '*.sh' -exec chmod +x {} +
+# ── skills + bundle install LAST ───────────────────────────────────────────────
+# Keep both staged until agent/config/capability/AGENTS.md have succeeded, so a
+# failure in those earlier steps cannot leave a partially updated runtime bundle.
 
 # ── agents + non-destructive config.toml merge ───────────────────────────────
 #
@@ -114,18 +247,127 @@ find "$BUNDLE_ROOT" -name '*.sh' -exec chmod +x {} +
 AGENT_MANIFEST_NAME=".shipyard-manifest.json"
 if compgen -G "$OUT/agents/*.toml" >/dev/null; then
   echo "→ installing agents → $CODEX_HOME/agents"
-  mkdir -p "$CODEX_HOME/agents"
-  cp "$OUT"/agents/*.toml "$CODEX_HOME/agents/"
+  ROLLBACK_ACTIVE=1
+  AGENTS_DIR="$CODEX_HOME/agents"
+  AGENTS_DIR_PREEXISTED=0
+  [[ -d "$AGENTS_DIR" ]] && AGENTS_DIR_PREEXISTED=1
+  mkdir -p "$AGENTS_DIR"
+
+  # Agent files and config.toml are one installation unit. The merge helper is
+  # atomic for the config itself, but copying the files first would still leave
+  # a fresh set beside the old registrations when validation rejects the
+  # config. Snapshot only the generated names (the operator's other agents are
+  # outside this installer's ownership) and restore those names on either copy
+  # or merge failure. The successful path reaches the reconciliation only after
+  # both halves have committed.
+  AGENT_BACKUP="$STAGE/agents-before"
+  AGENT_BACKUP_INDEX="$STAGE/agents-before.tsv"
+  CONFIG_TARGET="$CODEX_HOME/config.toml"
+  CONFIG_BACKUP="$STAGE/config-before.toml"
+  AGENT_MANIFEST_TARGET="$AGENTS_DIR/$AGENT_MANIFEST_NAME"
+  AGENT_MANIFEST_BACKUP="$STAGE/manifest-before.json"
+  AGENT_MANIFEST_PREEXISTED=0
+  CONFIG_PREEXISTED=0
+  if [[ -e "$CONFIG_TARGET" || -L "$CONFIG_TARGET" ]]; then
+    cp -p "$CONFIG_TARGET" "$CONFIG_BACKUP"
+    CONFIG_PREEXISTED=1
+  fi
+  if [[ -e "$AGENT_MANIFEST_TARGET" || -L "$AGENT_MANIFEST_TARGET" ]]; then
+    cp -a "$AGENT_MANIFEST_TARGET" "$AGENT_MANIFEST_BACKUP"
+    AGENT_MANIFEST_PREEXISTED=1
+  fi
+  mkdir -p "$AGENT_BACKUP"
+  : > "$AGENT_BACKUP_INDEX"
+
+  # Snapshot every file the PREVIOUS manifest claims before reconciliation.
+  # The current bundle may stop emitting a variant, so looking only at this
+  # run's names leaves an old claimed file with no rollback copy. Invalid or
+  # unsafe manifest entries are ignored here, exactly as the reconciler refuses
+  # to act on them; the manifest itself is always backed up above.
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    target="$AGENTS_DIR/$name"
+    if [[ -e "$target" || -L "$target" ]]; then
+      cp -a "$target" "$AGENT_BACKUP/$name"
+      printf 'present\t%s\n' "$name" >> "$AGENT_BACKUP_INDEX"
+    else
+      printf 'absent\t%s\n' "$name" >> "$AGENT_BACKUP_INDEX"
+    fi
+  done < <(
+    SHIPYARD_PREV_MANIFEST="$AGENT_MANIFEST_TARGET" node - <<'NODE'
+const fs = require('fs');
+const file = process.env.SHIPYARD_PREV_MANIFEST;
+try {
+  const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const safe = /^shipyard-[A-Za-z0-9._-]*\.toml$/;
+  if (manifest && Array.isArray(manifest.agent_files)) {
+    for (const name of new Set(manifest.agent_files)) {
+      if (typeof name === 'string' && safe.test(name)) process.stdout.write(`${name}\n`);
+    }
+  }
+} catch { /* no trustworthy previous claim: reconcile conservatively */ }
+NODE
+  )
+
+  snapshot_agent() {
+    local source="$1" name target
+    name="$(basename "$source")"
+    if grep -Fqx $'present\t'"$name" "$AGENT_BACKUP_INDEX" \
+      || grep -Fqx $'absent\t'"$name" "$AGENT_BACKUP_INDEX"; then
+      return 0
+    fi
+    target="$AGENTS_DIR/$name"
+    if [[ -e "$target" || -L "$target" ]]; then
+      [[ -f "$target" || -L "$target" ]] || {
+        echo "error: refusing to replace non-file agent target: $target" >&2
+        exit 1
+      }
+      cp -a "$target" "$AGENT_BACKUP/$name"
+      printf 'present\t%s\n' "$name" >> "$AGENT_BACKUP_INDEX"
+    else
+      printf 'absent\t%s\n' "$name" >> "$AGENT_BACKUP_INDEX"
+    fi
+  }
+  for source in "$OUT"/agents/*.toml; do
+    snapshot_agent "$source"
+  done
+
+  # Replace each destination directory entry atomically. A plain `cp
+  # source "$AGENTS_DIR/"` follows an existing symlink and writes into the
+  # operator's external target, even though the manifest says this installer
+  # owns only the entry itself. Copy to a sibling temporary file first, then
+  # rename it over the entry; rename replaces a symlink rather than following
+  # it, while the snapshot above keeps the link available for rollback.
+  if for source in "$OUT"/agents/*.toml; do
+       name="$(basename "$source")"
+       target="$AGENTS_DIR/$name"
+       tmp="$target.tmp-$$"
+       rm -f -- "$tmp"
+       cp -- "$source" "$tmp"
+       mv -f -- "$tmp" "$target"
+     done; then
+    :
+  else
+    status=$?
+    echo "error: could not install generated agent files; restoring the previous set" >&2
+    exit "$status"
+  fi
+
   echo "→ merging agent registrations → $CODEX_HOME/config.toml"
-  node "$REPO_ROOT/scripts/merge-codex-config.cjs" \
-    --config "$CODEX_HOME/config.toml" --fragment "$OUT/config.fragment.toml"
-  # AFTER the merge, deliberately. The merge strips every `[agents.shipyard-*]`
-  # table and the whole fenced fragment before writing the fresh one, so an
-  # orphan's registration is already gone by the time its file is removed — and
-  # if the merge refuses (a duplicate table, a config that will not parse), it
-  # exits non-zero here and BOTH halves stay as they were. The other order
-  # produces the one broken state worth ruling out: a registration whose file is
-  # gone. A file whose registration is gone is merely inert.
+  if node "$REPO_ROOT/scripts/merge-codex-config.cjs" \
+    --config "$CONFIG_TARGET" --fragment "$OUT/config.fragment.toml"; then
+    :
+  else
+    status=$?
+    echo "error: config merge failed; restoring the previous agent and config set" >&2
+    exit "$status"
+  fi
+  # AFTER the merge, deliberately. Both halves are committed before this
+  # reconciliation starts. The merge strips every `[agents.shipyard-*]` table
+  # and the whole fenced fragment before writing the fresh one, so an orphan's
+  # registration is already gone by the time its file is removed. A file whose
+  # registration is gone is inert; a registration whose file is gone is ruled
+  # out by the transaction above.
   echo "→ reconciling agent files this installer previously wrote"
   SHIPYARD_AGENTS_DIR="$CODEX_HOME/agents" \
   SHIPYARD_NEW_MANIFEST="$OUT/manifest.json" \
@@ -264,6 +506,9 @@ fi
 # from its own checks/ dir on a host (there is no /opt/delivery-pipeline here).
 echo "→ registering GSD capability (Gate 2 / UAT gates)…"
 CAP_STAGE="$STAGE/capability/delivery-pipeline"
+GSD_CAPABILITIES_ROOT="${GSD_CAPABILITIES_DIR:-$HOME/.gsd/capabilities}"
+CAPABILITY_TARGET="$GSD_CAPABILITIES_ROOT/delivery-pipeline"
+snapshot_runtime_path capability delivery-pipeline "$CAPABILITY_TARGET"
 mkdir -p "$CAP_STAGE/checks"
 cp -R "$CAP_SRC/." "$CAP_STAGE/"
 # The validator requires sibling modules (frontmatter.cjs, pipeline-config.cjs),
@@ -278,13 +523,18 @@ GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$GSD_TOOLS" capability install "$
 # Honour CODEX_HOME: with a custom home everything else installs there, so
 # hardcoding ~/.codex here split the install across two locations.
 AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
+snapshot_runtime_path agents-md main "$AGENTS_MD"
 echo "→ ensuring shipyard auto-route block in $AGENTS_MD"
 mkdir -p "$(dirname "$AGENTS_MD")"
-CODEX_AGENTS_MD="$AGENTS_MD" node - <<'NODE'
+SHIPYARD_INSTALL_PHASE="$PHASE" CODEX_AGENTS_MD="$AGENTS_MD" node - <<'NODE'
 const fs = require('fs');
 const p = process.env.CODEX_AGENTS_MD;
+const phase = Number(process.env.SHIPYARD_INSTALL_PHASE || 2);
 const BEGIN = '<!-- shipyard-auto-route:begin -->';
 const END = '<!-- shipyard-auto-route:end -->';
+const largeRoute = phase >= 2
+  ? '  large / multi-ticket -> `$shipyard-decompose` -> `$shipyard-deliver`; a small'
+  : '  large / multi-ticket -> `$shipyard-decompose`; install phase 2 before delivery; a small';
 const block = `${BEGIN}
 ## shipyard auto-route (managed by shipyard install — do not edit between markers)
 
@@ -292,7 +542,7 @@ When a message defines a scope of work or asks to implement / build / change /
 fix something in a codebase, handle it through shipyard rather than ad hoc — do
 not wait to be told to run a command:
 - Use the shipyard router \`$shipyard-route\` to size and dispatch the work:
-  large / multi-ticket -> \`$shipyard-decompose\` -> \`$shipyard-deliver\`; a small
+${largeRoute}
   change, an existing ticket, or "no ticket" -> \`$shipyard-bench\`; a one-liner ->
   inline.
 - Research first (proportionate) and apply GSD at full across stages
@@ -315,11 +565,50 @@ NODE
 # handshake select Codex without overwriting Claude's context. Only model-shaped
 # keys belong there — conveyor settings stay per-project.
 GSD_TUNE="$REPO_ROOT/plugins/delivery-pipeline/scripts/gsd-tune.cjs"
+GSD_DEFAULTS="${GSD_DEFAULTS_PATH:-$HOME/.gsd/defaults.json}"
+snapshot_runtime_path gsd-defaults defaults.json "$GSD_DEFAULTS"
 [[ -f "$GSD_TUNE" ]] || GSD_TUNE="$BUNDLE_ROOT/scripts/gsd-tune.cjs"
 if [[ -f "$GSD_TUNE" ]]; then
   echo "→ GSD global defaults (~/.gsd/defaults.json)"
   GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$GSD_TUNE" --global --runtime codex --apply 2>&1 | sed 's/^/  /' || true
 fi
+
+# ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
+echo "→ installing skills → $AGENTS_SKILLS"
+mkdir -p "$AGENTS_SKILLS"
+for d in "$OUT"/skills/*/; do
+  name="$(basename "${d%/}")"
+  snapshot_runtime_path skill "$name" "$AGENTS_SKILLS/$name"
+done
+snapshot_runtime_path bundle payload "$BUNDLE_ROOT"
+for d in "$OUT"/skills/*/; do
+  name="$(basename "$d")"
+  replace_dir "${d%/}" "$AGENTS_SKILLS/$name" "skill directory" || {
+    status=$?
+    echo "error: could not install skill $name" >&2
+    exit "$status"
+  }
+done
+
+# ── bundle payload (CLAUDE_PLUGIN_ROOT target: scripts/references/templates) ──
+# REPLACED, not merged over — the same way the skills above are. Copying onto an
+# existing bundle leaves every file the plugin has since deleted or renamed in
+# place forever, still reachable by path. Three stale `*.mjs.bak` files survived
+# an upgrade that way, and a renamed script would be worse: both editions present,
+# the old one silently callable. The bundle is wholly generated, so nothing
+# user-authored is at risk.
+echo "→ installing bundle payload → $BUNDLE_ROOT"
+find "$OUT/bundle" -name '*.sh' -exec chmod +x {} +
+replace_dir "$OUT/bundle" "$BUNDLE_ROOT" "bundle payload" || {
+  status=$?
+  echo "error: could not install bundle payload" >&2
+  exit "$status"
+}
+
+# Nothing installer-owned remains to roll back after this point. Keeping the
+# rollback active through both replacement loops is what makes a failed second
+# skill or bundle swap restore the earlier swaps as one generation.
+ROLLBACK_ACTIVE=0
 
 deliver_hint=""
 [[ "$PHASE" -ge 2 ]] && deliver_hint=' | $shipyard-deliver'

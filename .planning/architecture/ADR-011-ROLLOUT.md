@@ -10,6 +10,17 @@
   read-only T-32-01/02 tooling advances first; cold-start and stats integration
   stay behind the existing owners. Phases 30/31 are not renumbered.
 
+## ADR-012 amendment and canary boundary
+
+[ADR-012](ADR-012-task-level-model-ladder.md) is an accepted, separate
+task-level routing amendment. The current Shipyard project enables its
+`delivery_pipeline.model_ladder: adaptive` setting so dispatch selection and
+telemetry can be exercised on a narrow canary lane. That setting does not close
+OPT-03, does not establish a savings result, and does not authorize an online
+policy rewrite. Keep baseline collection, quality/recovery gates and one
+treatment at a time from this rollout in force. Rollback is setting the project
+back to `conservative` and regenerating the Codex bundle.
+
 ## Execution contract
 
 `OPT-*` below are design work-package IDs, not dispatchable GSD ticket IDs.

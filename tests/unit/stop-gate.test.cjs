@@ -706,12 +706,35 @@ test('a ten-minute-old dispatch still opens the CI hatch', () => {
 
 test('an hour-old dispatch does not, and the refusal names it', () => {
   const dir = project(ciOnly(['T-01-02']));
-  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60) } });
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60), dispatch_id: 'dispatch-stale-1' } });
   const v = runIn(dir, { session_id: 'sess-disp' });
   assert.ok(v && v.decision === 'block', 'a mark this old is not evidence anyone is working');
   assert.ok(/T-01-02/.test(v.reason), 'the refusal names the ticket');
   assert.ok(/dispatch-record\.cjs clear/.test(v.reason), 'and how to return it to the board');
+  assert.ok(v.reason.includes("dispatch-record.cjs clear 'T-01-02' 'dispatch-stale-1'"),
+    'the cleanup command names the dispatch record, not the ticket-array lookup');
   assert.ok(/ci-wait\.cjs/.test(v.reason), 'while still naming the wait, which is the actual next move');
+});
+
+test('a suspect dispatch with no dispatch_id says so instead of printing a fake command', () => {
+  const dir = project(ciOnly(['T-01-02']));
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60) } });
+  const v = runIn(dir, { session_id: 'sess-disp-missing-id' });
+  assert.ok(v && v.decision === 'block');
+  assert.ok(/missing `dispatch_id`/.test(v.reason), 'the refusal explains why no exact clear command is shown');
+  assert.ok(!v.reason.includes('<dispatch_id>'), 'placeholder text must not look copy-paste-ready');
+});
+
+test('a cleanup command quotes a graph path containing spaces', () => {
+  const original = project(ciOnly(['T-01-02']));
+  const dir = `${original} with spaces`;
+  fs.renameSync(original, dir);
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60), dispatch_id: 'dispatch-spaced-path' } });
+  const v = runIn(dir, { session_id: 'sess-spaced-path' });
+  const graph = fs.realpathSync(path.join(dir, '.planning', 'graph'));
+  assert.ok(v && v.decision === 'block');
+  assert.ok(v.reason.includes(`dispatch-record.cjs clear 'T-01-02' 'dispatch-spaced-path' --graph '${graph}'`),
+    'all dynamic command arguments must remain one shell word');
 });
 
 test('a dispatched ticket with no record keeps the hatch open', () => {

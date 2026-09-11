@@ -28,6 +28,7 @@ const { activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DI
 // against. The per-role subject table below is checked against IT, not against a
 // second list written out here.
 const { ROLES } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
+const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
 
 // SHIPYARD_GRAPH_DIR is the other explicit channel for "which graph"; a value
 // inherited from the runner would decide these cases instead of the flag.
@@ -35,13 +36,35 @@ const run = (args, cwd, env = {}) => spawnSync('node', [DISPATCH, ...args], {
   cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '', ...env },
 });
 
+const DEFAULT_CODEX_AGENT_FILES = (() => {
+  const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => f.slice(0, -3));
+  const files = new Set();
+  for (const role of refs) {
+    files.add(`shipyard-${role}`);
+    if (gen.DEEP_ROLES.has(role)) files.add(`shipyard-${role}${gen.DEEP_SUFFIX}`);
+    if (gen.CRITICAL_ROLES.has(role)) files.add(`shipyard-${role}${gen.CRITICAL_SUFFIX}`);
+  }
+  return [...files].sort();
+})();
+
+function writeCodexAgents(dir, files = DEFAULT_CODEX_AGENT_FILES) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of files) {
+    fs.writeFileSync(path.join(dir, `${name}.toml`), `name = "${name}"\n`);
+  }
+  return dir;
+}
+
 // A project (has a ticket graph) and a worktree beside it (has none) — the two
 // cwds this command can find itself in, because the guard dispatches its fixers
 // from inside worktrees.
-function scratch(state) {
+function scratch(state, { codexFiles = DEFAULT_CODEX_AGENT_FILES } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-'));
   const project = path.join(dir, 'project');
   const worktree = path.join(dir, 'worktree');
+  const codexAgentDir = writeCodexAgents(path.join(dir, 'codex-agents'), codexFiles);
   const graph = path.join(project, '.planning', 'graph');
   fs.mkdirSync(graph, { recursive: true });
   fs.mkdirSync(worktree, { recursive: true });
@@ -49,7 +72,7 @@ function scratch(state) {
   for (const id of Object.keys(state)) tickets[id] = { phase: id.split('-')[1] };
   fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
-  return { dir, project, worktree, graph };
+  return { dir, project, worktree, graph, codexAgentDir };
 }
 
 const readState = (graph) => JSON.parse(fs.readFileSync(path.join(graph, 'delivery-state.json'), 'utf8'));
@@ -77,6 +100,14 @@ test('mark records the role and activeDispatches reports it', () => {
   const live = activeDispatches(project);
   assert.deepStrictEqual(Object.keys(live), ['T-01-01']);
   assert.equal(live['T-01-01'].role, 'executor');
+});
+
+test('activeDispatches accepts the full delivery-state envelope', () => {
+  const { project } = scratch({ 'T-01-01': { ...READY } });
+  assert.equal(run(['mark', 'T-01-01', 'executor'], project).status, 0);
+  const fullState = { tickets: { 'T-01-01': { status: 'merged' } }, generated_at: 'now' };
+  assert.deepStrictEqual(activeDispatches(project, fullState), {},
+    'a merged ticket in the state envelope must not consume capacity');
 });
 
 test('the guard\'s buckets are covered too, not just the executor\'s', () => {
@@ -161,7 +192,8 @@ test('garbage in SHIPYARD_DISPATCH_TTL_MS does not disable the backstop', () => 
 test('clear removes it immediately', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
-  assert.equal(run(['clear', 'T-01-01'], project).status, 0);
+  const dispatchId = store(graph)['T-01-01'].dispatch_id;
+  assert.equal(run(['clear', 'T-01-01', dispatchId], project).status, 0);
   assert.deepStrictEqual(store(graph), {}, 'gone from the store');
   assert.deepStrictEqual(activeDispatches(project), {});
 });
@@ -308,11 +340,15 @@ test('the board\'s sentence names the output that will lift it, and not a check'
   // `clear` that becomes routine clears work that has not returned. The old
   // sentence listed "a check" among the things that return the ticket, which was
   // both wrong and an invitation to distrust the board.
-  const why = dispatchWhy('T-01-01', { role: 'review-fix', at: new Date().toISOString() });
+  const why = dispatchWhy('T-01-01', {
+    role: 'review-fix', at: new Date().toISOString(), dispatch_id: 'dispatch-why',
+  });
   assert.ok(/review-fix/.test(why), why);
   assert.ok(/head/.test(why), `it must name the fixer's own output: ${why}`);
   assert.ok(!/a check/.test(why), `and must not promise a check lifts it: ${why}`);
   assert.ok(/\d+m/.test(why), 'the timeout is still named');
+  assert.ok(/dispatch-record\.cjs clear T-01-01 dispatch-why/.test(why),
+    `the guarded clear command is named: ${why}`);
   assert.ok(/branch/.test(dispatchWhy('T', { role: 'executor', at: new Date().toISOString() })),
     'and each role gets its own output named');
 });
@@ -382,8 +418,9 @@ test('the mark that hides the work also puts it back', () => {
     actionable: { execute: ['T-01-01'], publish: [], fix: [], finalize: [], merge: [] },
   });
   execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const dispatchId = store(path.join(project, '.planning', 'graph'))['T-01-01'].dispatch_id;
   assert.equal(gate(project).stdout.trim(), '');
-  execFileSync('node', [DISPATCH, 'clear', 'T-01-01'], { cwd: project });
+  execFileSync('node', [DISPATCH, 'clear', 'T-01-01', dispatchId], { cwd: project });
   assert.equal(JSON.parse(gate(project).stdout).decision, 'block', 'the board offers it again');
 });
 
@@ -459,6 +496,22 @@ test('a real --graph works in either position, from a foreign cwd', () => {
   assert.ok(store(last.graph)['T-01-01'], 'recorded in the PROJECT graph');
 });
 
+test('a noncanonical --graph is refused instead of splitting the board from its readers', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-custom-'));
+  const graph = path.join(dir, 'custom-graph');
+  fs.mkdirSync(graph, { recursive: true });
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': {} } }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({ 'T-01-01': { ...READY } }));
+  try {
+    const r = run(['mark', 'T-01-01', 'executor', '--graph', graph], dir);
+    assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+    assert.match(r.stderr, /must point to a project graph/);
+    assert.ok(!fs.existsSync(path.join(graph, 'dispatches.json')), 'nothing is written to an unreadable store');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 suite('dispatch-record — a whole wave is marked at once');
 
 test('six concurrent marks all survive', async () => {
@@ -491,6 +544,147 @@ test('every dispatch reaches the journal exactly once', () => {
   assert.equal(new Set(log.map((e) => e.ticket)).size, 3, 'no ticket logged twice');
 });
 
+test('mark-many validates and journals one wave under one mutation', () => {
+  const state = {};
+  for (let i = 1; i <= 3; i++) state[`T-01-0${i}`] = { ...READY };
+  const { project, graph } = scratch(state);
+  const payload = [
+    {
+      ticket: 'T-01-01', role: 'executor', model: 'opus', effort: 'high',
+      route: 'tier=floor(opus) effort=row(high)', task_level: 'routine',
+      runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-1',
+    },
+    {
+      ticket: 'T-01-02', role: 'executor', model: 'opus', effort: 'high',
+      route: 'tier=floor(opus) effort=row(high)', task_level: 'routine',
+      runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-2',
+    },
+    {
+      ticket: 'T-01-03', role: 'executor', model: 'opus', effort: 'high',
+      route: 'tier=floor(opus) effort=row(high)', task_level: 'routine',
+      runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-3',
+    },
+  ];
+  const r = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
+    cwd: project, input: JSON.stringify(payload), encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, `batch must succeed (${r.stderr})`);
+  assert.match(r.stdout, /dispatch recorded for 3 ticket\(s\)/);
+  assert.deepStrictEqual(Object.keys(store(graph)).sort(), ['T-01-01', 'T-01-02', 'T-01-03']);
+  const log = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(log.length, 3, 'one journal line per payload item');
+  assert.deepStrictEqual(log.map((e) => e.ticket).sort(), ['T-01-01', 'T-01-02', 'T-01-03']);
+  assert.ok(log.every((e) => e.event === 'dispatch' && e.backend === 'workflow' && e.effort_applied === 'high'));
+  assert.equal(new Set(log.map((e) => e.dispatch_id)).size, 3, 'each ticket gets its own usage join key');
+});
+
+test('mark-many rejects the whole batch before writing when one item is invalid', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
+    cwd: project,
+    input: JSON.stringify([
+      { ticket: 'T-01-01', role: 'executor', model: 'opus' },
+      { ticket: 'T-01-01', role: 'executor', model: 'opus' },
+    ]),
+    encoding: 'utf8',
+  });
+  assert.equal(r.status, 1, 'duplicate ticket must refuse the batch');
+  assert.match(r.stderr, /duplicate ticket/);
+  assert.deepStrictEqual(store(graph), {}, 'a failed batch must not write the valid prefix');
+  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'a failed batch must not append journal lines');
+});
+
+test('clear-many removes a completed wave with one refresh and is idempotent', () => {
+  const state = {};
+  for (let i = 1; i <= 3; i++) state[`T-01-0${i}`] = { ...READY };
+  const { project, graph } = scratch(state);
+  const mark = [DISPATCH, 'mark'];
+  for (let i = 1; i <= 3; i++) {
+    execFileSync('node', [...mark, `T-01-0${i}`, 'executor'], { cwd: project });
+  }
+  const before = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8');
+  const completed = Object.entries(store(graph)).map(([ticket, record]) => ({
+    ticket, dispatch_id: record.dispatch_id,
+  }));
+  const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
+    cwd: project,
+    input: JSON.stringify(completed),
+    encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, `batch clear must succeed (${r.stderr})`);
+  assert.match(r.stdout, /dispatch cleared for 3 of 3 ticket\(s\)/);
+  assert.deepStrictEqual(store(graph), {}, 'all completed records are removed');
+  assert.equal(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8'), before,
+    'clearing is not a second dispatch event');
+
+  // A result can arrive after a record has already lifted on its owner output;
+  // the batch remains safe to replay and reports the missing records honestly.
+  const again = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
+    cwd: project,
+    input: JSON.stringify(completed),
+    encoding: 'utf8',
+  });
+  assert.equal(again.status, 0, `replaying clear-many must be harmless (${again.stderr})`);
+  assert.match(again.stdout, /dispatch cleared for 0 of 3 ticket\(s\)/);
+});
+
+test('clear-many rejects duplicate or malformed ids before mutating the store', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const before = store(graph);
+  for (const input of [
+    [{ ticket: 'T-01-01', dispatch_id: 'd' }, { ticket: 'T-01-01', dispatch_id: 'e' }],
+    [{ ticket: 'T-01-01', dispatch_id: 7 }],
+    [{ ticket: 'T-01-01', dispatch_id: 'd', disptach_id: 'typo' }],
+    {},
+  ]) {
+    const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
+      cwd: project, input: JSON.stringify(input), encoding: 'utf8',
+    });
+    assert.equal(r.status, 1, `invalid clear-many payload must refuse: ${JSON.stringify(input)}`);
+    assert.deepStrictEqual(store(graph), before, 'a rejected clear batch leaves existing records intact');
+  }
+});
+
+test('clear-many does not erase a newer dispatch when an older completion arrives', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const oldId = store(graph)['T-01-01'].dispatch_id;
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const currentId = store(graph)['T-01-01'].dispatch_id;
+  assert.notEqual(oldId, currentId);
+  const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
+    cwd: project,
+    input: JSON.stringify([{ ticket: 'T-01-01', dispatch_id: oldId }]),
+    encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /dispatch cleared for 0 of 1 ticket\(s\)/);
+  assert.equal(store(graph)['T-01-01'].dispatch_id, currentId);
+});
+
+test('clear requires dispatch_id and leaves a newer dispatch in place', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const oldId = store(graph)['T-01-01'].dispatch_id;
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const currentId = store(graph)['T-01-01'].dispatch_id;
+
+  const missing = run(['clear', 'T-01-01'], project);
+  assert.equal(missing.status, 1, 'ticket-only clear must refuse');
+  assert.match(missing.stderr, /usage: dispatch-record\.cjs clear <ticket> <dispatch_id>/);
+
+  const stale = run(['clear', 'T-01-01', oldId], project);
+  assert.equal(stale.status, 0, stale.stderr);
+  assert.match(stale.stdout, new RegExp(`dispatch for T-01-01 is ${currentId}, not ${oldId}`));
+  assert.equal(store(graph)['T-01-01'].dispatch_id, currentId);
+
+  const ok = run(['clear', 'T-01-01', currentId], project);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /dispatch cleared for T-01-01/);
+  assert.deepStrictEqual(store(graph), {});
+});
+
 suite('dispatch-record — a dispatch records WHAT it dispatched, or says it does not know');
 
 // The whole value of these fields is that a later ladder review reads the journal
@@ -508,13 +702,51 @@ suite('dispatch-record — a dispatch records WHAT it dispatched, or says it doe
 const journal = (graph) => fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8')
   .trim().split('\n').map(JSON.parse);
 const lastDispatch = (graph) => journal(graph).filter((e) => e.event === 'dispatch').pop();
-const DECIDED_KEYS = ['model', 'effort', 'effort_applied', 'reason', 'agent_file', 'agent_id'];
+const DECIDED_KEYS = [
+  'model', 'effort', 'effort_applied', 'reason', 'task_level', 'runtime', 'backend',
+  'observed_model', 'observed_effort', 'agent_file', 'agent_id',
+];
 // What `pipeline-config.cjs model executor --json` returns for a signal-less
 // dispatch, in its own `route` field. Taken from the resolver rather than typed
 // here — a fixture that drifts from the grammar would make every test below
 // assert against a route the resolver cannot produce.
 const { routeOf, parseRoute } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
 const ROUTE = routeOf('executor', {});
+
+test('every mark creates a dispatch id for the later usage join', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor'], project);
+  assert.equal(r.status, 0, r.stderr);
+  const rec = store(graph)['T-01-01'];
+  const ev = lastDispatch(graph);
+  assert.match(rec.dispatch_id, /^dispatch-/);
+  assert.equal(ev.dispatch_id, rec.dispatch_id, 'the store and journal share the same join key');
+  assert.ok(r.stdout.includes(`dispatch_id=${rec.dispatch_id}`), 'the caller can pass the id to the attribution ledger');
+});
+
+test('an explicit dispatch id is preserved and cannot be active on two tickets', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
+  assert.equal(run(['mark', 'T-01-01', 'executor', '--dispatch-id', 'dispatch-fixed'], project).status, 0);
+  const reused = run(['mark', 'T-01-01', 'executor', '--dispatch-id', 'dispatch-fixed'], project);
+  assert.equal(reused.status, 1, reused.stderr);
+  assert.match(reused.stderr, /already active/);
+  const rejected = run(['mark', 'T-01-02', 'executor', '--dispatch-id', 'dispatch-fixed'], project);
+  assert.equal(rejected.status, 1, rejected.stderr);
+  assert.match(rejected.stderr, /already active/);
+  assert.equal(store(graph)['T-01-01'].dispatch_id, 'dispatch-fixed');
+  assert.ok(!store(graph)['T-01-02'], 'the duplicate id does not create a second active join');
+});
+
+test('an explicit dispatch id cannot be reused after the active record is cleared', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
+  assert.equal(run(['mark', 'T-01-01', 'executor', '--dispatch-id', 'dispatch-replayed'], project).status, 0);
+  assert.equal(run(['clear', 'T-01-01', 'dispatch-replayed'], project).status, 0);
+
+  const reused = run(['mark', 'T-01-02', 'executor', '--dispatch-id', 'dispatch-replayed'], project);
+  assert.equal(reused.status, 1, reused.stderr);
+  assert.match(reused.stderr, /already exists in delivery history/);
+  assert.ok(!store(graph)['T-01-02'], 'a historical id does not create a second launch');
+});
 
 test('a mark with no flags writes NO such key at all — not null', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
@@ -569,6 +801,65 @@ test('the full round trip reaches the store AND the journal', () => {
   for (const [k, v] of Object.entries(expect)) assert.equal(ev[k], v, `journal.${k}`);
   assert.equal(ev.role, 'executor', 'and the fields the event already had are untouched');
   assert.equal(ev.by, 'dispatch-record');
+});
+
+test('requested, applied and observed routing facts round-trip separately', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run([
+    'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
+    '--effort-applied', 'high', '--route', ROUTE, '--task-level', 'complex',
+    '--runtime', 'claude', '--backend', 'workflow', '--observed-model', 'claude-opus-5',
+    '--observed-effort', 'xhigh',
+  ], project);
+  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
+  const rec = store(graph)['T-01-01'];
+  assert.equal(rec.task_level, 'complex');
+  assert.equal(rec.runtime, 'claude');
+  assert.equal(rec.backend, 'workflow');
+  assert.equal(rec.effort, 'high', 'requested resolver effort');
+  assert.equal(rec.effort_applied, 'high', 'spawn effort');
+  assert.equal(rec.observed_model, 'claude-opus-5');
+  assert.equal(rec.observed_effort, 'xhigh', 'runtime observation is allowed to differ');
+  const ev = lastDispatch(graph);
+  for (const key of ['task_level', 'runtime', 'backend', 'effort', 'effort_applied', 'observed_model', 'observed_effort']) {
+    assert.equal(ev[key], rec[key], `journal carries ${key}`);
+  }
+});
+
+test('a known runtime cannot create an unmeasured model dispatch', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor', '--runtime', 'codex'], project);
+  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+  assert.ok(/must carry.*model.*route/.test(r.stderr), r.stderr);
+  assert.deepStrictEqual(store(graph), {});
+});
+
+test('a known runtime refuses a tier that cannot run there', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor', '--runtime', 'codex', '--model', 'fable'], project);
+  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+  assert.match(r.stderr, /not available on runtime "codex"/);
+  assert.deepStrictEqual(store(graph), {});
+});
+
+test('observed model ids reject whitespace and controls but keep opaque ids flexible', () => {
+  for (const bad of ['claude opus', 'claude\topus', 'claude\nopus']) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const r = run([
+      'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--observed-model', bad,
+    ], project);
+    assert.equal(r.status, 1, `${JSON.stringify(bad)} must refuse (${r.stderr})`);
+    assert.ok(/whitespace or a control character/.test(r.stderr), r.stderr);
+    assert.deepStrictEqual(store(graph), {});
+  }
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const ok = run([
+    'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--route', ROUTE,
+    '--observed-model', 'claude-opus-5.1-preview', '--observed-effort', 'unknown',
+  ], project);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(store(graph)['T-01-01'].observed_model, 'claude-opus-5.1-preview');
+  assert.equal(store(graph)['T-01-01'].observed_effort, 'unknown');
 });
 
 test('the flags survive --graph in any position, from a foreign cwd', () => {
@@ -627,39 +918,70 @@ test('--agent-file records the Codex file that ran, and refuses one nothing prod
   // On Codex the model lives IN the file, so the ordinary/-deep choice IS the
   // dispatch's decision. A name the generator does not produce is unverifiable,
   // and an unverifiable name is worse than none.
-  const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-  const ok = run(['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-deep'], project);
+  const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+  const ok = run(
+    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-deep'],
+    project,
+    { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+  );
   assert.equal(ok.status, 0, `must succeed (${ok.stderr})`);
   assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-deep', 'verbatim');
   assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-deep');
 
+  const claude = scratch({ 'T-01-02': { ...OPEN_PR } });
+  const impossible = run([
+    'mark', 'T-01-02', 'arch-review', '--runtime', 'claude',
+    '--agent-file', 'shipyard-arch-review', '--route', ROUTE,
+  ], claude.project);
+  assert.equal(impossible.status, 1, impossible.stderr);
+  assert.match(impossible.stderr, /Codex-only/);
+  assert.deepStrictEqual(store(claude.graph), {});
+
   for (const bad of ['shipyard-nope', 'arch-review', 'shipyard-integrator-deep']) {
     const s = scratch({ 'T-01-02': { ...OPEN_PR } });
-    const r = run(['mark', 'T-01-02', 'arch-review', '--agent-file', bad], s.project);
+    const r = run(
+      ['mark', 'T-01-02', 'arch-review', '--agent-file', bad],
+      s.project,
+      { SHIPYARD_CODEX_AGENT_DIR: s.codexAgentDir },
+    );
     assert.equal(r.status, 1, `"${bad}" must refuse (${r.stderr})`);
     assert.ok(r.stderr.includes(`"${bad}"`), 'and names it');
     assert.deepStrictEqual(store(s.graph), {}, 'nothing recorded');
   }
 });
 
-test('the accepted agent files ARE the ones the generator emits', () => {
-  // The recorder cannot require the generator — it lives in scripts/ at the repo
-  // root and never ships inside the bundle — so the deep set is a local copy. This
-  // is the test that stops the copy drifting, the same way DISPATCH_SUBJECT is
-  // checked against ROLES rather than against a second list.
-  const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
-  const { codexAgentFiles, CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX } = require(DISPATCH);
+test('the accepted agent files are read from the generated Codex agents directory', () => {
+  const {
+    codexAgentFiles, CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX,
+    CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
+  } = require(DISPATCH);
   assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), [...gen.DEEP_ROLES].sort(),
     'the deep-eligible roles must be the generator\'s own');
   assert.equal(CODEX_DEEP_SUFFIX, gen.DEEP_SUFFIX);
+  assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), [...gen.CRITICAL_ROLES].sort(),
+    'the critical-eligible roles must be the generator\'s own');
+  assert.equal(CODEX_CRITICAL_SUFFIX, gen.CRITICAL_SUFFIX);
 
   // And the ordinary names are one per shipped reference — the generator's own
   // filter — so a reference added there is accepted here without an edit.
   const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
     .filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
-  const files = codexAgentFiles();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agents-'));
+  const files = codexAgentFiles(writeCodexAgents(dir));
   for (const role of refs) assert.ok(files.has(`shipyard-${role}`), `shipyard-${role} must be accepted`);
-  assert.equal(files.size, refs.length + gen.DEEP_ROLES.size, 'and nothing else is');
+  assert.equal(files.size, refs.length + gen.DEEP_ROLES.size + gen.CRITICAL_ROLES.size, 'and nothing else is');
+});
+
+test('a stale critical file is refused when the installed Codex agents directory did not generate it', () => {
+  const s = scratch({ 'T-01-02': { ...OPEN_PR } }, { codexFiles: ['shipyard-arch-review'] });
+  const r = run(
+    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-critical'],
+    s.project,
+    { SHIPYARD_CODEX_AGENT_DIR: s.codexAgentDir },
+  );
+  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+  assert.match(r.stderr, /not an agent file the Codex generator produces/);
+  assert.deepStrictEqual(store(s.graph), {});
 });
 
 test('the front does not gain a field — the overlay is byte-identical', () => {
@@ -692,7 +1014,7 @@ test('the front does not gain a field — the overlay is byte-identical', () => 
     'mark', 'T-01-01', 'ci-fix', '--model', 'opus', '--effort', 'high',
     '--effort-applied', 'high', '--route', ROUTE, '--agent-file', 'shipyard-ci-fix-deep',
     '--agent-id', 'agent_01FIXER',
-  ], rich.project).status, 0);
+  ], rich.project, { SHIPYARD_CODEX_AGENT_DIR: rich.codexAgentDir }).status, 0);
 
   const richRaw = fs.readFileSync(path.join(rich.graph, 'delivery-front.json'), 'utf8');
   assert.deepStrictEqual(
@@ -829,8 +1151,12 @@ test('a KNOWN agent file belonging to another role is refused, and names both', 
     ['pr-sentinel', 'shipyard-arch-review'],
   ];
   for (const [role, file] of cases) {
-    const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-    const r = run(['mark', 'T-01-02', role, '--agent-file', file], project);
+    const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+    const r = run(
+      ['mark', 'T-01-02', role, '--agent-file', file],
+      project,
+      { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+    );
     assert.equal(r.status, 1, `${role} × ${file} must refuse (${r.stdout}${r.stderr})`);
     assert.ok(r.stderr.includes(`"${file}"`), `it names the file: ${r.stderr}`);
     assert.ok(r.stderr.includes(role), `and the role it was recorded against: ${r.stderr}`);
@@ -847,7 +1173,8 @@ test('every role accepts its OWN files, and a role with none says so instead', (
   // `.toml` — so a check built on `shipyard-<role>` refused every legitimate
   // research mark and offered executors a file name that does not exist.
   const { agentFilesFor, codexAgentFiles } = require(DISPATCH);
-  const known = codexAgentFiles();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agentfiles-'));
+  const known = codexAgentFiles(writeCodexAgents(dir));
   let withFiles = 0;
   const claimed = new Set();
   for (const role of ROLES) {
@@ -855,8 +1182,12 @@ test('every role accepts its OWN files, and a role with none says so instead', (
     if (!files.size) {
       // Any known file, to prove the refusal is about the ROLE having none rather
       // than about the file being unknown.
-      const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-      const r = run(['mark', 'T-01-02', role, '--agent-file', 'shipyard-ci-fix'], project);
+      const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+      const r = run(
+        ['mark', 'T-01-02', role, '--agent-file', 'shipyard-ci-fix'],
+        project,
+        { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+      );
       assert.equal(r.status, 1, `${role} has no agent file, so it must refuse (${r.stdout}${r.stderr})`);
       assert.ok(/no agent file/.test(r.stderr), `and say which fact refused it: ${r.stderr}`);
       assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
@@ -865,8 +1196,12 @@ test('every role accepts its OWN files, and a role with none says so instead', (
     withFiles += 1;
     for (const file of files) {
       claimed.add(file);
-      const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-      const r = run(['mark', 'T-01-02', role, '--agent-file', file], project);
+      const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+      const r = run(
+        ['mark', 'T-01-02', role, '--agent-file', file],
+        project,
+        { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+      );
       assert.equal(r.status, 0, `${role} × ${file} must be accepted (${r.stderr})`);
       assert.equal(store(graph)['T-01-02'].agent_file, file);
     }
@@ -1011,6 +1346,24 @@ test('every mark deliver.md documents passes the agent identity too', () => {
     assert.ok(/--agent-id /.test(l),
       `a documented mark that records no holder: ${l.trim()}`);
   }
+});
+
+test('delivery docs prefer one mark/clear batch per fan-out', () => {
+  const sentinel = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 'utf8');
+  assert.match(sentinel, /dispatch-record\.cjs mark-many --stdin/,
+    'the background guard must use the same batch launch path');
+  assert.match(sentinel, /dispatch-record\.cjs clear-many --stdin/,
+    'the background guard must use the same batch cleanup path');
+  assert.match(sentinel, /clear <T> <dispatch_id>/,
+    'the background guard must keep the guarded one-ticket clear form');
+  const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
+  assert.match(deliver, /dispatch-record\.cjs clear <T> <dispatch_id>/,
+    'the main loop must clear executors with the guarded one-ticket form');
+  const docs = fs.readFileSync(path.join(__dirname, '..', '..', 'docs', 'dispatch-record.md'), 'utf8');
+  assert.match(docs, /dispatch-record\.cjs mark-many --stdin/,
+    'the operator reference must expose the one-call launch recording path');
+  assert.match(docs, /dispatch-record\.cjs clear-many --stdin/,
+    'the operator reference must expose the one-call completion cleanup path');
 });
 
 test('deliver.md\'s ladder query runs, and UNCONFIRMED is a bucket rather than a hole', () => {

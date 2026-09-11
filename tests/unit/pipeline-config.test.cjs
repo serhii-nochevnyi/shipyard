@@ -13,9 +13,10 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const mod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs');
 const {
-  loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
+  loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps,
+  taskLevelRoute, routeOf,
   TIERS, EFFORTS, DEFAULTS, ROLES, SIGNATURE_STATES, DEFAULT_CODEX_MODELS, SONNET_ROLES,
-  NUMERIC_KNOBS, TICKET_STATUSES,
+  NUMERIC_KNOBS, TICKET_STATUSES, TASK_LEVELS,
 } = require(mod);
 const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
@@ -49,9 +50,19 @@ test('no config file → defaults, no warnings', () => {
   const { config, warnings } = withConfig(undefined);
   assert.strictEqual(config.integration_mode, 'epic-stacked');
   assert.strictEqual(config.model_policy, 'balanced');
+  assert.strictEqual(config.model_ladder, 'conservative');
   assert.strictEqual(config.gsd_sync, true);
   assert.strictEqual(config.max_attempts, 5);
   assert.deepStrictEqual(warnings, []);
+});
+
+test('model_ladder accepts adaptive and rejects a misspelling', () => {
+  const adaptive = withConfig({ model_ladder: 'adaptive' });
+  assert.strictEqual(adaptive.config.model_ladder, 'adaptive');
+  assert.deepStrictEqual(adaptive.warnings, []);
+  const bad = withConfig({ model_ladder: 'aggressive' });
+  assert.strictEqual(bad.config.model_ladder, 'conservative');
+  assert.ok(bad.warnings.some((w) => /model_ladder/.test(w)), bad.warnings.join('; '));
 });
 
 test('unknown key is ignored WITH a warning (a silent typo is a lie)', () => {
@@ -1031,6 +1042,102 @@ suite('model ladder — the top tier is runtime-aware');
 // nobody can resolve.
 const asRuntime = (config, runtime) => ({ ...config, gsd: { ...(config.gsd || {}), runtime } });
 
+suite('adaptive task-level ladder');
+
+test('the classifier keeps mechanical work cheap and guards missing evidence', () => {
+  const { config } = withConfig({ model_ladder: 'adaptive' });
+  assert.deepStrictEqual(
+    [
+      resolveTaskLevel('drift-check', { risk: 'high', files: 1 }, config),
+      resolveTaskLevel('pr-sentinel', { checkpoint: true }, config),
+      resolveTaskLevel('executor', { risk: 'low', files: 1 }, config),
+      resolveTaskLevel('research', { risk: 'low', files: 4 }, config),
+      resolveTaskLevel('executor', { risk: 'low', files: 5 }, config),
+      resolveTaskLevel('executor', { risk: 'low' }, config),
+      resolveTaskLevel('executor', { risk: 'high', files: 1 }, config),
+      resolveTaskLevel('ci-fix', { signatureState: 'repeat_exhausted' }, config),
+      resolveTaskLevel('pr-sentinel', { signatureState: 'repeat_exhausted' }, config),
+      resolveTaskLevel('arch-review', { contested: true }, config),
+    ],
+    ['mechanical', 'mechanical', 'routine', 'routine', 'complex', 'complex', 'critical', 'recovery', 'recovery', 'recovery']
+  );
+  const guarded = taskLevelRoute('executor', { risk: 'low' , taskLevel: 'routine' }, config);
+  assert.strictEqual(guarded.value, 'complex', 'a routine request without file evidence cannot cheapen the task');
+  assert.strictEqual(guarded.rule, 'guarded:complex');
+});
+
+test('recovery is evidence-backed, including the sentinel exception', () => {
+  const { config } = withConfig({ model_ladder: 'adaptive' });
+  const missing = taskLevelRoute('ci-fix', { taskLevel: 'recovery' }, config);
+  assert.strictEqual(missing.value, 'complex', 'a recovery label without its signature must not reach -deep');
+  assert.strictEqual(missing.rule, 'guarded:complex');
+  const fixer = taskLevelRoute('ci-fix', {
+    taskLevel: 'recovery', signatureState: 'repeat_exhausted',
+  }, config);
+  assert.strictEqual(fixer.value, 'recovery');
+  assert.strictEqual(fixer.rule, 'explicit:recovery');
+  const sentinel = taskLevelRoute('pr-sentinel', {
+    taskLevel: 'recovery', signatureState: 'repeat_exhausted',
+  }, config);
+  assert.strictEqual(sentinel.value, 'recovery', 'the evidence-backed mechanical exception reaches -deep');
+  assert.strictEqual(sentinel.rule, 'explicit:recovery');
+  const contested = taskLevelRoute('arch-review', {
+    taskLevel: 'recovery', contested: true,
+  }, config);
+  assert.strictEqual(contested.value, 'recovery');
+  assert.strictEqual(contested.rule, 'explicit:recovery');
+});
+
+test('adaptive routing differentiates Claude routine, complex and critical work', () => {
+  const { config } = withConfig({ model_ladder: 'adaptive' });
+  const claude = asRuntime(config, 'claude');
+  assert.strictEqual(resolveModel('executor', { risk: 'low', files: 2 }, claude), 'sonnet');
+  assert.strictEqual(resolveEffort('executor', 'sonnet', claude, { risk: 'low', files: 2 }), 'high');
+  assert.strictEqual(resolveModel('executor', { risk: 'low', files: 5 }, claude), 'opus');
+  assert.strictEqual(resolveModel('executor', { risk: 'high', files: 2 }, claude), 'opus');
+  assert.strictEqual(resolveEffort('executor', 'opus', claude, { risk: 'high', files: 2 }), 'xhigh');
+  assert.strictEqual(resolveEffort('ci-fix', 'opus', claude, { risk: 'high' }), 'xhigh');
+});
+
+test('a repeated repair keeps max depth when risk also marks it critical', () => {
+  const { config } = withConfig({ model_ladder: 'adaptive' });
+  const claude = asRuntime(config, 'claude');
+  for (const signals of [
+    { risk: 'high', signatureState: 'repeat' },
+    { checkpoint: true, signatureState: 'repeat' },
+  ]) {
+    assert.strictEqual(
+      resolveEffort('ci-fix', 'opus', claude, signals),
+      'max',
+      `repeated repair must spend max before the ordinary critical upgrade: ${JSON.stringify(signals)}`,
+    );
+  }
+});
+
+test('a closed ceiling keeps degraded max depth when risk also marks it critical', () => {
+  const { config } = withConfig({ model_ladder: 'adaptive' });
+  const claude = asRuntime(config, 'claude');
+  const signals = { risk: 'high', inputTokens: 300000 };
+  assert.strictEqual(resolveModel('executor', signals, claude), 'opus');
+  assert.strictEqual(
+    resolveEffort('executor', 'opus', claude, signals),
+    'max',
+    'a fired but closed ceiling is a stronger fact than the first-attempt critical lane',
+  );
+});
+
+test('adaptive Codex routing keeps effort flat and exposes the critical route', () => {
+  const { config } = withConfig({ model_ladder: 'adaptive' });
+  const codex = asRuntime(config, 'codex');
+  const routine = { risk: 'low', files: 2 };
+  const critical = { risk: 'high', files: 8 };
+  assert.strictEqual(resolveModel('executor', routine, codex), 'sonnet');
+  assert.strictEqual(resolveEffort('executor', 'sonnet', codex, routine), 'high');
+  assert.strictEqual(resolveModel('ci-fix', critical, codex), 'sonnet', 'the cap exposes the Codex workhorse tier');
+  assert.strictEqual(resolveEffort('ci-fix', 'sonnet', codex, critical), 'high');
+  assert.ok(routeOf('ci-fix', critical, codex).includes('level:critical'), routeOf('ci-fix', critical, codex));
+});
+
 test('the 1M tier is reached only through a route, and only on Claude', () => {
   // Nothing about the ROLE unlocks it any more; what unlocks it is a measured
   // input, an exhausted repair or a contested verdict — and consent.
@@ -1326,6 +1433,18 @@ test('without --signature-state the model/effort pair is unchanged, and route is
   assert.deepStrictEqual(pair(r.json()), { model: 'opus', effort: 'high' });
 });
 
+test('--explain exposes the adaptive classification without changing the stable pair shape', () => {
+  const r = runCli([
+    'model', 'executor', '--json', '--explain', '--risk', 'low', '--files', '2', '--task-level', 'routine',
+  ], { runtime: 'claude', pipeline: { model_ladder: 'adaptive' } });
+  assert.strictEqual(r.status, 0, r.err);
+  assert.deepStrictEqual(pair(r.json()), {
+    model: 'sonnet', effort: 'high',
+    task_level: 'routine', task_level_rule: 'explicit:routine',
+    ladder_mode: 'adaptive', task_level_requested: 'routine',
+  });
+});
+
 test('--attempt/--previous-failed are still accepted and resolve the same tier', () => {
   // deliver.md still documents them and telemetry callers still pass --attempt,
   // so they must keep working — silently, without a deprecation notice.
@@ -1357,6 +1476,19 @@ test('an unknown state warns on stderr, omits strategy, and still exits 0', () =
   assert.strictEqual(r.status, 0, 'a resolver that exits non-zero at 3am stops the round');
   assert.ok(/signature-state/.test(r.err) && /bogus/.test(r.err), r.err);
   assert.deepStrictEqual(Object.keys(r.json()).sort(), ['effort', 'model', 'route']);
+});
+
+test('an invalid signature cannot qualify the adaptive routine lane', () => {
+  const r = runCli([
+    'model', 'executor', '--json', '--explain', '--risk', 'low', '--files', '2',
+    '--signature-state', 'bogus',
+  ], { runtime: 'claude', delivery_pipeline: { model_ladder: 'adaptive' } });
+  assert.strictEqual(r.status, 0, r.err);
+  const result = r.json();
+  assert.strictEqual(result.model, 'opus', 'invalid evidence fails closed to the complex floor');
+  assert.strictEqual(result.task_level, 'complex');
+  assert.strictEqual(result.task_level_rule, 'auto:complex');
+  assert.ok(/signature-state/.test(r.err) && /bogus/.test(r.err), r.err);
 });
 
 test('--signature-state with no value is the same warn-and-ignore, not a crash', () => {
@@ -1615,7 +1747,7 @@ suite('the route — the resolver names the rule, so the journal need not guess'
 // against the DECISION it accompanies — a route that named a rule the resolver
 // did not take would be worse than no field at all.
 
-const { routeOf, parseRoute, ROUTE_RE, runtimeToken, DEFAULTS: D } = require(mod);
+const { parseRoute, ROUTE_RE, runtimeToken, DEFAULTS: D } = require(mod);
 const withCfg = (over) => ({ ...D, ...over });
 
 test('every route the resolver can emit parses under its own grammar', () => {

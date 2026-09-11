@@ -323,6 +323,14 @@ test('`unknown` is a legitimate value — the honest record of a spawn that carr
   assert.ok(!/WARNING/.test(r.stderr), r.stderr);
 });
 
+test('`unsupported` distinguishes a backend without effort from an unobserved value', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['attempt', 'ticket=T-28-02', 'n=2', 'effort_applied=unsupported']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(lines(graph)[0]).effort_applied, 'unsupported');
+  assert.ok(!/WARNING/.test(r.stderr), r.stderr);
+});
+
 test('a value outside the vocabulary is warned about — and the attempt is still charged', () => {
   // Warned, never refused. A refusal loses the whole `attempt` row, and that row
   // is what charges the attempt: `attempt-history.cjs` derives `next_n` from it,

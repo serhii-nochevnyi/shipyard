@@ -322,7 +322,10 @@ if (declared) {
 // is absence, the same rule the sha fields use. Neither is warned about, and
 // neither is declared — a DECLARED_FIELDS entry would fire on every honest row.
 const EFFORT_FIELDS = new Set(['effort_applied']);
-const UNMEASURED_EFFORT = 'unknown';
+// `unknown` means the host did not expose what ran; `unsupported` means the
+// selected backend has no effort parameter. Both are honest evidence states,
+// and both deliberately withhold the depth proof used by failure-signature.
+const UNMEASURED_EFFORTS = new Set(['unknown', 'unsupported']);
 for (const key of EFFORT_FIELDS) {
   // An empty value is absence — but a KEY holding `""` is still present, and a
   // reader that checks presence (`"effort_applied" in e`, deliver.md's ladder
@@ -331,7 +334,7 @@ for (const key of EFFORT_FIELDS) {
   // merely the same silence: delete the key rather than leave it holding ''.
   if (rec[key] === '') { delete rec[key]; continue; }
   const level = rec[key];
-  if (level === undefined || level === UNMEASURED_EFFORT) continue;
+  if (level === undefined || UNMEASURED_EFFORTS.has(level)) continue;
   try {
     const { EFFORTS } = require(path.join(__dirname, 'pipeline-config.cjs'));
     if (!EFFORTS.includes(level)) {
@@ -339,7 +342,7 @@ for (const key of EFFORT_FIELDS) {
         `log-event: WARNING ${key}="${level}" is not an effort level, so nothing reads it as one: ` +
         `\`failure-signature.cjs verdict\` treats an unrecognised level exactly as it treats an absent ` +
         `field, which withholds \`repeat_exhausted\` and rethinks again instead. Logging it as written. ` +
-        `Levels: ${EFFORTS.join(', ')}, or "${UNMEASURED_EFFORT}" where the spawn could carry no effort.`
+        `Levels: ${EFFORTS.join(', ')}, or "unknown"/"unsupported" where the spawn could not report a usable effort.`
       );
     }
   } catch { /* resolver unavailable — never block telemetry on it */ }

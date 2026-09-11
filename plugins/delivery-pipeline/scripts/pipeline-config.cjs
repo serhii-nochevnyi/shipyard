@@ -20,8 +20,9 @@
 //          --contested          this judgement has already been contested once
 //          --signature-state first|progress|repeat|repeat_exhausted|
 //                            flake_candidate|flake|plan_defect
-//          --files <n>  --code-change|--no-code-change
+//          --files <n>  --code-change|--no-code-change  --task-level <level>
 //          --attempt <n>  --previous-failed   ← all accepted, but INERT (see below)
+//          --explain     include the selected task level and ladder mode in JSON
 //
 // THE FLOOR IS `opus`, THE DEPTH IS EFFORT, AND `fable` IS EARNED (ADR-005 D1/D2
 // as amended 2026-09-08, D4/D5). Three layers, in this order:
@@ -126,6 +127,116 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // cheapest one — it now carries the plan-defect burden the executor stopped
 // carrying (ADR-005 D2 as amended).
 const MECHANICAL_ROLES = new Set(['drift-check']);
+
+// ── task levels (ADR-012) ───────────────────────────────────────────────────
+//
+// Role alone is too coarse for a cost policy: a four-file low-risk executor
+// and a high-risk cross-cutting executor do not buy the same amount of model
+// quality. The level is derived from facts already present in the ticket or
+// dispatch. It is deliberately an ordered vocabulary so a requested level can
+// be guarded against an unsafe downgrade rather than trusted as prose.
+const TASK_LEVELS = ['mechanical', 'routine', 'complex', 'critical', 'recovery'];
+const TASK_LEVEL_RANK = Object.fromEntries(TASK_LEVELS.map((level, i) => [level, i]));
+const LADDER_MODES = ['conservative', 'adaptive'];
+
+// The first treatment is intentionally narrow. These are the roles for which a
+// small, low-risk task has a bounded failure surface and can be evaluated
+// against the existing acceptance gates. Repair and judgment roles stay on the
+// quality floor until their own evidence earns a broader treatment.
+const ADAPTIVE_ROUTINE_ROLES = new Set(['executor', 'research']);
+const ADAPTIVE_ROUTINE_MAX_FILES = 4;
+
+function integerSignal(value) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+function taskLevelRoute(role, signals = {}, cfg = {}) {
+  const requested = TASK_LEVELS.includes(signals.taskLevel) ? signals.taskLevel : null;
+  let value;
+  let rule;
+
+  // A completed recovery history is stronger evidence than the role's normal
+  // classification. In particular, pr-sentinel has a cheap normal lane but
+  // still needs its generated `-deep` file after an exhausted repair signature,
+  // and arch-review needs the same file after a contested judgement.
+  const exhaustedRepair = REPAIR_ROLES && REPAIR_ROLES.has(role)
+    && signals.signatureState === 'repeat_exhausted';
+  const contestedJudgement = JUDGMENT_ROLES && JUDGMENT_ROLES.has(role)
+    && signals.contested === true;
+  if (exhaustedRepair) {
+    value = 'recovery';
+    rule = 'auto:recovery:exhausted';
+  } else if (contestedJudgement) {
+    value = 'recovery';
+    rule = 'auto:recovery:contested';
+  } else if (MECHANICAL_ROLES.has(role) || role === 'pr-sentinel') {
+    value = 'mechanical';
+    rule = 'auto:mechanical';
+  } else if (signals.risk === 'high' || signals.checkpoint === true) {
+    value = 'critical';
+    rule = 'auto:critical';
+  } else if (JUDGMENT_ROLES && JUDGMENT_ROLES.has(role)) {
+    value = 'complex';
+    rule = 'auto:complex';
+  } else {
+    const files = integerSignal(signals.files);
+    const routine = cfg.model_ladder === 'adaptive'
+      && ADAPTIVE_ROUTINE_ROLES.has(role)
+      && signals.risk === 'low'
+      && files !== null
+      && files > 0
+      && files <= ADAPTIVE_ROUTINE_MAX_FILES
+      && signals.checkpoint !== true
+      && signals.contested !== true
+      && signals.signatureState === undefined;
+    if (routine) {
+      value = 'routine';
+      rule = `auto:routine<=${ADAPTIVE_ROUTINE_MAX_FILES}files`;
+    } else {
+      value = 'complex';
+      rule = 'auto:complex';
+    }
+  }
+
+  // A caller may request a higher lane explicitly, which is useful for a
+  // measured canary or a human-marked critical task. A lower request is
+  // guarded by the inferred minimum; missing evidence therefore never buys a
+  // cheaper model by accident.
+  if (requested) {
+    // These roles are deliberately mechanical. A prose flag must not turn a
+    // merge sentinel or drift inventory into a premium model; their external
+    // gates are the authority and the generated Codex bundle has no critical
+    // variant for them.
+    // A repair sentinel is normally mechanical, but its evidence-backed
+    // recovery lane is the deliberate exception that makes the generated
+    // `-deep` file reachable after `repeat_exhausted`.
+    const evidencedRecovery = requested === 'recovery'
+      && ((REPAIR_ROLES && REPAIR_ROLES.has(role)
+        && signals.signatureState === 'repeat_exhausted')
+        || (JUDGMENT_ROLES && JUDGMENT_ROLES.has(role)
+          && signals.contested === true));
+    if ((MECHANICAL_ROLES.has(role) || role === 'pr-sentinel')
+        && requested !== 'mechanical' && !evidencedRecovery) {
+      return { value, rule: `guarded:${value}`, requested };
+    }
+    // `routine` and `recovery` have role-specific contracts. Accepting either
+    // for an unrelated role would make telemetry claim a lane that has no model
+    // implementation behind it. A caller can still request `complex` or
+    // `critical` for any non-mechanical role.
+    if (requested === 'routine' && !ADAPTIVE_ROUTINE_ROLES.has(role)) {
+      return { value, rule: `guarded:${value}`, requested };
+    }
+    if (requested === 'recovery' && !evidencedRecovery) {
+      return { value, rule: `guarded:${value}`, requested };
+    }
+    if (TASK_LEVEL_RANK[requested] < TASK_LEVEL_RANK[value]) {
+      return { value, rule: `guarded:${value}`, requested };
+    }
+    return { value: requested, rule: `explicit:${requested}`, requested };
+  }
+  return { value, rule };
+}
 
 // ── the Codex model palette (ADR-005 D6/D7) ──────────────────────────────────
 //
@@ -344,6 +455,9 @@ function normalizeJiraTransitions(value, warnings) {
 const DEFAULTS = {
   integration_mode: 'epic-stacked',   // | direct-to-main
   model_policy: 'balanced',           // economy | balanced | premium
+  // conservative preserves the role floor; adaptive classifies each dispatch
+  // and opens the routine lane for bounded low-risk work.
+  model_ladder: 'conservative',       // conservative | adaptive
   use_workflow: 'auto',               // auto | false
   // The PR sentinel: who drives open PRs to green and lands them in the stack
   // while the main loop cascades onward.
@@ -791,6 +905,13 @@ function loadConfig(root, options = {}) {
     warnings.push(`pipeline.model_policy "${cfg.model_policy}" is unknown — falling back to balanced`);
     cfg.model_policy = 'balanced';
   }
+  if (!LADDER_MODES.includes(cfg.model_ladder)) {
+    warnings.push(
+      `pipeline.model_ladder "${cfg.model_ladder}" is unknown — falling back to conservative ` +
+      `(values: ${LADDER_MODES.join(' | ')})`
+    );
+    cfg.model_ladder = 'conservative';
+  }
   // ONE numeric rule for every positive-number knob, and it is shared on purpose:
   // a bespoke coercion per knob is one more place to get the fallback direction
   // wrong. Two values used to pass it silently, and BOTH were properties of the
@@ -932,6 +1053,11 @@ const RUNTIMES_WITH_1M_TIER = new Set(['claude']);
 function topTier(cfg) {
   const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
   return RUNTIMES_WITH_1M_TIER.has(runtime) ? 'fable' : 'opus';
+}
+function tierAllowedForRuntime(runtime, tier) {
+  if (!TIERS.includes(tier)) return false;
+  if (tier !== 'fable') return true;
+  return RUNTIMES_WITH_1M_TIER.has(runtime);
 }
 
 // A tier alias means the same STRENGTH everywhere but not the same ECONOMICS.
@@ -1077,6 +1203,24 @@ function tierRoute(role, signals = {}, cfg = DEFAULTS) {
     return { value: ceiling.model, rule: `ceiling:${ceiling.route}${ceiling.degraded ? ':degraded' : ''}` };
   }
 
+  // Adaptive task levels are deliberately applied after overrides and earned
+  // ceilings. A routine lane is a bounded downgrade for executor/research; a
+  // critical lane makes the upgrade visible in the route even when the Claude
+  // floor already happens to be opus. An explicit critical request is honoured
+  // in conservative mode as a deliberate per-dispatch upgrade; automatic
+  // classification remains opt-in. Codex maps the same critical lane to its
+  // premium palette entry at generation/selection time.
+  const level = taskLevelRoute(role, signals, cfg);
+  const explicitCritical = level.requested === 'critical';
+  if (cfg.model_ladder === 'adaptive' || explicitCritical) {
+    if (level.value === 'routine' && ADAPTIVE_ROUTINE_ROLES.has(role)) {
+      return { value: 'sonnet', rule: 'level:routine' };
+    }
+    if (level.value === 'critical') {
+      return { value: 'opus', rule: 'level:critical' };
+    }
+  }
+
   // The floor. `model_policy` deliberately does not appear: the floor is not a
   // preference (ADR-005 D1), so no profile moves it in either direction. The key
   // survives because `gsd-tune` mirrors it onto GSD's own `model_profile`, which
@@ -1165,14 +1309,21 @@ function effortRoute(role, model, cfg = DEFAULTS, signals = null) {
     // in a route that a later reader groups by.
     return routed('max', signals.signatureState === 'repeat' ? 'repeat' : 'repeat:exhausted');
   }
-  // A ceiling route fired and the ceiling is shut (no consent, or a runtime with
-  // no 1M tier). The escalation does not simply vanish: it lands on the axis that
-  // IS available, which is depth at the floor model — ADR-005's own reading of
-  // Fable's positioning ("opus at higher effort first, fable after"), applied in
-  // the direction the config allows.
+  // A ceiling route that fired but cannot be honoured still owes the dispatch
+  // its depth escalation. This also outranks the ordinary critical lane: a
+  // high-risk input that exceeded the window must not lose the `degraded` proof
+  // merely because the task classifier saw the same risk flag.
   if (signals) {
     const ceiling = fableRoute(role, signals, cfg);
     if (ceiling && ceiling.degraded) return routed('max', `degraded:${ceiling.route}`);
+  }
+  // A first-attempt critical signal is the ordinary adaptive upgrade. It comes
+  // after the repeated-signature branch above: a fixer that has already seen the
+  // same failure must spend the recovery depth even when that dispatch is also
+  // marked high-risk or checkpointed.
+  const level = taskLevelRoute(role, signals || {}, cfg);
+  if (cfg.model_ladder === 'adaptive' || level.requested === 'critical') {
+    if (level.value === 'critical') return routed('xhigh', 'level:critical');
   }
   const row = Object.prototype.hasOwnProperty.call(EFFORT_ROWS, role) ? EFFORT_ROWS[role] : null;
   return routed(row ? row(signals || {}) : DEFAULT_EFFORT_ROW, row ? 'row' : 'row:default');
@@ -1180,6 +1331,10 @@ function effortRoute(role, model, cfg = DEFAULTS, signals = null) {
 
 function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
   return effortRoute(role, model, cfg, signals).value;
+}
+
+function resolveTaskLevel(role, signals = {}, cfg = DEFAULTS) {
+  return taskLevelRoute(role, signals, cfg).value;
 }
 
 // ── THE ROUTE: which rule chose the tier, and which chose the effort ─────────
@@ -1257,18 +1412,29 @@ const SIGNAL_GAPS = {
 };
 
 // The rows this dispatch could not reach for want of a signal, as sentences.
-function signalGaps(role, signals = {}) {
+function signalGaps(role, signals = {}, cfg = DEFAULTS) {
   const rows = Object.prototype.hasOwnProperty.call(SIGNAL_GAPS, role) ? SIGNAL_GAPS[role] : [];
-  return rows.filter((r) => r.absent(signals)).map((r) => `${role} reads ${r.flag} and did not get it — ${r.cost}`);
+  const out = rows.filter((r) => r.absent(signals)).map((r) => `${role} reads ${r.flag} and did not get it — ${r.cost}`);
+  if (cfg.model_ladder === 'adaptive'
+      && ADAPTIVE_ROUTINE_ROLES.has(role)
+      && signals.risk === 'low'
+      && signals.files === undefined) {
+    out.push(
+      `${role} reads --files <n> for the adaptive routine lane and did not get it — ` +
+      `assuming complex; pass 1-${ADAPTIVE_ROUTINE_MAX_FILES} changed files to qualify`
+    );
+  }
+  return out;
 }
 
 module.exports = {
-  loadConfig, resolveModel, resolveEffort, strategyFor, fableRoute, signalGaps,
+  loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps,
   routeOf, parseRoute, ROUTE_RE, runtimeToken,
   parseCodexModelEntry, normalizeCodexModels,
   normalizeJiraTransitions, TICKET_STATUSES,
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
-  DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS, NUMERIC_KNOBS,
+  TASK_LEVELS, TASK_LEVEL_RANK, LADDER_MODES, taskLevelRoute,
+  DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS, NUMERIC_KNOBS, tierAllowedForRuntime,
 };
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
@@ -1317,9 +1483,25 @@ if (require.main === module) {
       if (SIGNATURE_STATES.includes(value)) {
         signatureState = value;
       } else {
+        // Keep an invalid supplied value distinct from an omitted signal. An
+        // omitted signature is eligible for the adaptive routine lane; a bad
+        // signature must not silently qualify that cheaper route.
+        signatureState = null;
         signatureStateWarning =
           `--signature-state "${value === undefined ? '' : value}" is not a signature state — ignored ` +
           `(${SIGNATURE_STATES.join('|')}; compute it with \`failure-signature.cjs verdict\`)`;
+      }
+    }
+    let taskLevel;
+    let taskLevelWarning = null;
+    if (rest.includes('--task-level')) {
+      const value = flag('task-level');
+      if (TASK_LEVELS.includes(value)) {
+        taskLevel = value;
+      } else {
+        taskLevelWarning =
+          `--task-level "${value === undefined ? '' : value}" is not a task level — ignored ` +
+          `(${TASK_LEVELS.join('|')}; omit it to use automatic classification)`;
       }
     }
     const signals = {
@@ -1343,13 +1525,15 @@ if (require.main === module) {
       previousFailed: rest.includes('--previous-failed'),
       signatureState,
       checkpoint: rest.includes('--checkpoint'),
+      taskLevel,
     };
     for (const w of warnings) process.stderr.write(`pipeline-config: warning: ${w}\n`);
     if (signatureStateWarning) process.stderr.write(`pipeline-config: warning: ${signatureStateWarning}\n`);
+    if (taskLevelWarning) process.stderr.write(`pipeline-config: warning: ${taskLevelWarning}\n`);
     // A row this dispatch could not reach for want of a signal (see SIGNAL_GAPS):
     // it resolves DOWNWARD, which is correct, and it says so rather than leaving
     // the gap visible only in a shallow verdict.
-    for (const gap of signalGaps(role, signals)) {
+    for (const gap of signalGaps(role, signals, config)) {
       process.stderr.write(`pipeline-config: warning: ${gap}\n`);
     }
     // The ceiling, and the two ways it can be missed: a shut gate, or an override
@@ -1382,6 +1566,13 @@ if (require.main === module) {
       // `strategy` appears ONLY when a valid state was passed, so a consumer
       // reading `{model, effort, route}` sees a stable shape either way.
       if (signatureState) out.strategy = strategyFor(signatureState);
+      if (rest.includes('--explain')) {
+        const classification = taskLevelRoute(role, signals, config);
+        out.task_level = classification.value;
+        out.task_level_rule = classification.rule;
+        out.ladder_mode = config.model_ladder;
+        if (classification.requested) out.task_level_requested = classification.requested;
+      }
       process.stdout.write(JSON.stringify(out) + '\n');
     } else {
       process.stdout.write(model + '\n');
@@ -1390,14 +1581,15 @@ if (require.main === module) {
   }
 
   process.stderr.write(
-    'usage: pipeline-config.cjs <resolve | model <role> [--json] [flags]>\n' +
+    'usage: pipeline-config.cjs <resolve | model <role> [--json] [--explain] [flags]>\n' +
     '  --runtime claude|codex  override the active runtime for this invocation\n' +
     '  flags: --risk low|medium|high  --type <plan type>  --checkpoint\n' +
     '         --input-tokens <n>   the caller\'s measurement of this dispatch\'s input;\n' +
     '                              over pipeline.fable_window_tokens it earns the ceiling\n' +
     '         --contested          this judgement was already contested once\n' +
     '         --signature-state ' + SIGNATURE_STATES.join('|') + '\n' +
-    '         --files <n>  --code-change|--no-code-change  --attempt <n>  --previous-failed\n' +
+    '         --files <n>  --code-change|--no-code-change  --task-level <level>\n' +
+    '         --attempt <n>  --previous-failed  --explain\n' +
     '           (all accepted, telemetry only: the attempt pair never routed a repair\n' +
     '            tier since ADR-001 D1, and the opus floor removed the cheaper rows the\n' +
     '            other two used to gate)\n'

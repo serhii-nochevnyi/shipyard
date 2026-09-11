@@ -709,17 +709,19 @@ test('… and does exhaust once the rethink round records what it applied', () =
   assert.equal(fourth.depth_spent, true);
 });
 
-test('`effort_applied: unknown` is not evidence — it is the record saying nobody measured', () => {
-  // The honest value for a spawn that could not carry an effort. It must read as
-  // absence and not as a depth, or the one field built to admit "unmeasured"
-  // becomes the proof the escalation rests on.
-  const { project, graph } = scratch();
-  round(project, graph, 'aaaa', HEAD(1));
-  round(project, graph, 'bbbb', HEAD(2));
-  round(project, graph, 'aaaa', HEAD(3), { effort_applied: 'unknown' });
-  const got = verdict(project, ['--signature', 'aaaa', '--head', HEAD(4), '--k', '3']);
-  assert.equal(got.verdict, 'repeat');
-  assert.equal(got.depth_spent, false);
+test('unmeasured effort states are not evidence of a spent rethink', () => {
+  for (const state of ['unknown', 'unsupported']) {
+    // The honest value for a spawn that could not carry or expose an effort. It
+    // must read as absence and not as a depth, or the one field built to admit
+    // "unmeasured" becomes the proof the escalation rests on.
+    const { project, graph } = scratch();
+    round(project, graph, 'aaaa', HEAD(1));
+    round(project, graph, 'bbbb', HEAD(2));
+    round(project, graph, 'aaaa', HEAD(3), { effort_applied: state });
+    const got = verdict(project, ['--signature', 'aaaa', '--head', HEAD(4), '--k', '3']);
+    assert.equal(got.verdict, 'repeat', state);
+    assert.equal(got.depth_spent, false, state);
+  }
 });
 
 test("the FIRST round's own effort is not evidence of a rethink", () => {
