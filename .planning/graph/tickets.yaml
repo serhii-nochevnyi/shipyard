@@ -1311,7 +1311,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-35-01-deterministic-native-gsd-projection
     epic: epic/35-gsd-and-shipyard-workflow-loop
     primary_parent: null
@@ -1327,7 +1327,7 @@ tickets:
     files: [capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs, capabilities/delivery-pipeline/capability.json, tests/unit/gsd-sync-gate.test.cjs, tests/smoke/codex-shipyard-smoke.sh, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-35-02-wire-synchronization-into-both-gsd-runti
     epic: epic/35-gsd-and-shipyard-workflow-loop
     primary_parent: T-35-01
