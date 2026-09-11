@@ -135,16 +135,20 @@ function cliError(message) {
 
 function parseCli(argv) {
   const options = { command: argv.shift() || null, repo: null, ticket: null, projectDir: process.cwd(), json: false };
+  const valueFor = (flag, value) => {
+    if (value === undefined || value.startsWith('--')) {
+      invalidArgument(`${flag} requires a value (got ${value === undefined ? 'nothing' : `the flag "${value}"`})`);
+    }
+    return value;
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') {
       options.json = true;
     } else if (arg === '--ticket') {
-      options.ticket = argv[++i];
-      if (options.ticket === undefined) invalidArgument('--ticket requires a value');
+      options.ticket = valueFor('--ticket', argv[++i]);
     } else if (arg === '--project-dir') {
-      options.projectDir = argv[++i];
-      if (options.projectDir === undefined) invalidArgument('--project-dir requires a value');
+      options.projectDir = valueFor('--project-dir', argv[++i]);
     } else if (arg.startsWith('--')) {
       invalidArgument(`unknown option ${arg}`);
     } else if (options.repo === null) {
@@ -156,7 +160,7 @@ function parseCli(argv) {
   if (options.command !== 'configured') {
     invalidArgument('usage: repo-resolve.cjs configured <owner/name> [--ticket <T-id>] [--project-dir <path>] [--json]');
   }
-  if (options.repo === null) invalidArgument('configured requires an owner/name repository slug');
+  if (options.repo === null) invalidArgument('an owner/name repository slug is required');
   return options;
 }
 

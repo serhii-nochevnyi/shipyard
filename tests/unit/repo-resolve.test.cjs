@@ -150,6 +150,18 @@ test('the CLI rejects an unknown slug instead of treating it as a checkout reque
   assert.match(result.stderr, /owner\/name/);
 });
 
+test('the CLI rejects option-like values for value-taking flags', () => {
+  for (const flags of [
+    ['--ticket', '--json'],
+    ['--project-dir', '--json'],
+  ]) {
+    const result = run(['configured', 'acme/service', ...flags]);
+    assert.strictEqual(result.status, 2, `${flags[0]} must not consume ${flags[1]} as its value`);
+    assert.match(result.stderr, new RegExp(`${flags[0]} requires a value`));
+    assert.match(result.stderr, /the flag "--json"/);
+  }
+});
+
 test('state-sync and deliver name the configured resolver caller', () => {
   const stateSync = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'), 'utf8');
   const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
