@@ -469,6 +469,7 @@ test('command-backed verification rule reaches every delivery boundary', () => {
   const drift = readRepo('plugins/delivery-pipeline/workflows/drift-gate.mjs');
   assert.ok(/required: \['id', 'verdict', 'moved', 'reuse_candidates', 'evidence'\]/.test(drift), 'drift-gate must require its evidence channel');
   assert.ok(/evidence:\s*\{/.test(drift), 'drift-gate must expose evidence in the result schema');
+  assert.ok(/recorded:\s*\{/.test(drift), 'drift-gate must accept the recorded result field from drift-check');
 });
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;

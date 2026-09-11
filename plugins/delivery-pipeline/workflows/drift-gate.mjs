@@ -38,7 +38,7 @@ export const meta = {
 //                        // instead of leaving it in a reply that dies with the run
 //     graphDir: "<project>/.planning/graph",  // where that record belongs
 //   }
-// returns: [ { id, verdict: 'fresh'|'drifted', moved: [string], reuse_candidates: [string], evidence: [string] } ]
+// returns: [ { id, verdict: 'fresh'|'drifted', moved: [string], reuse_candidates: [string], evidence: [string], recorded?: string } ]
 //
 // `reuse_candidates` is ADVISORY and orthogonal to the verdict: a `fresh`
 // ticket carries it into the executor prompt so the implementation builds on
@@ -75,6 +75,10 @@ const VERDICT = {
       type: 'array',
       items: { type: 'string' },
       description: 'For every checkable claim: the exact command followed by the relevant path, output, or exit status. Empty only when the judge made no checkable claim.',
+    },
+    recorded: {
+      type: 'string',
+      description: 'For a drifted verdict, whether drift-record.cjs persisted it: "yes" or "no (reason)".',
     },
   },
 }
@@ -119,7 +123,8 @@ const driftFallback = (id, why) => ({
   verdict: 'drifted',
   moved: [why],
   reuse_candidates: [],
-  evidence: [`agent(...) — drift-gate dispatch — no judge result (${why})`],
+  evidence: [],
+  recorded: `no (${why})`,
 })
 
 const results = await parallel(
