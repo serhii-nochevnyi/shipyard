@@ -401,7 +401,8 @@ if (prsTruncated) {
   console.log(`⚠ the PR listing hit its limit (${cfg.pr_fetch_limit}) — some tickets may show as pending; raise pipeline.pr_fetch_limit`);
 }
 if (unreachableRepos.length) {
-  console.log(`⚠ could not list PRs for ${unreachableRepos.join(', ')} — every ticket in ${unreachableRepos.length > 1 ? 'those repos' : 'that repo'} reads as pending here regardless of what actually shipped`);
+  const unreachableLabels = unreachableRepos.map((repo) => repo || 'the project repository');
+  console.log(`⚠ could not list PRs for ${unreachableLabels.join(', ')} — every ticket in ${unreachableRepos.length > 1 ? 'those repos' : 'that repo'} reads as pending here regardless of what actually shipped`);
 }
 if (ladder.dispatches) {
   console.log(

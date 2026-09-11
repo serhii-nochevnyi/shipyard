@@ -81,9 +81,13 @@ const guardMerge = (id, pr, preauthorized) => JSON.stringify({
 function stubGh(dir, prs, unreachableRepo = null) {
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin, { recursive: true });
+  const unreachable = unreachableRepo === '__project__'
+    ? 'case "$*" in *"--repo"*) ;; *) echo "unreachable" >&2; exit 1 ;; esac\n'
+    : unreachableRepo
+      ? `case "$*" in *"--repo ${unreachableRepo}"*) echo "unreachable" >&2; exit 1 ;; esac\n`
+      : '';
   fs.writeFileSync(path.join(bin, 'gh'),
-    '#!/bin/sh\n' +
-    (unreachableRepo ? `case "$*" in *"--repo ${unreachableRepo}"*) echo "unreachable" >&2; exit 1 ;; esac\n` : '') +
+    '#!/bin/sh\n' + unreachable +
     'case "$*" in\n' +
     '  *"--state open"*) echo "[]" ;;\n' +
     `  *"--state all"*) cat <<'J'\n${JSON.stringify(prs)}\nJ\n    ;;\n` +
@@ -349,6 +353,18 @@ test('json reports repositories that could not be reached', () => {
   assert.strictEqual(code, 0);
   assert.deepStrictEqual(json.unreachable_repos, ['org/unreachable']);
   assert.strictEqual(json.tickets[0].status, 'pending', 'the row remains conservative while data is unavailable');
+});
+
+test('human output names the project repository when its PR listing is unreachable', () => {
+  const r = run({
+    tickets: {
+      'T-01-01': { phase: '1', risk: 'low', branch: 'ticket/T-01-01-x', title: 'project repository' },
+    },
+    journal: [], prs: [], unreachableRepo: '__project__',
+  });
+  assert.strictEqual(r.code, 0);
+  assert.match(r.out, /could not list PRs for the project repository/);
+  assert.doesNotMatch(r.out, /could not list PRs for  —/);
 });
 
 test('Codex agent-file coverage is required only when the runtime is known', () => {

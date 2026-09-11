@@ -720,7 +720,8 @@ Projects that opt into the accepted ADR-012 amendment can set
 `delivery_pipeline.model_ladder: adaptive`. The shared classifier then adds a
 bounded `routine` lane for low-risk executor/research dispatches with 1–4
 changed files, keeps ordinary work in `complex`, starts high-risk or checkpoint
-work in `critical`, and uses `recovery` only after `repeat_exhausted`. Claude
+work in `critical`, and uses `recovery` after `repeat_exhausted` or a contested
+judgement for roles whose route supports that escalation. Claude
 uses `sonnet` for the routine lane and `opus` for the quality lanes. Codex uses
 the first palette entry for routine/complex work and selects generated
 `-critical`/`-deep` files at the ceiling where a role has a distinct variant;

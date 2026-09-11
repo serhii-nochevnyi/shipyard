@@ -175,6 +175,10 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
   if (record.completion_status !== undefined && !COMPLETION_STATES.has(record.completion_status)) {
     fail(`completion_status must be one of ${[...COMPLETION_STATES].join(', ')}`);
   }
+  // The ledger can outlive the checkout that recorded it. Store transcript
+  // sources as absolute paths at write time so a later report process in a
+  // different cwd can still join the durable fact to its transcript.
+  if (record.source !== undefined) record.source = path.resolve(record.source);
 
   record.observation_id = raw.observation_id === undefined
     ? deriveObservationId(record)

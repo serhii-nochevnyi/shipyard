@@ -153,7 +153,9 @@ function readAgent(file) {
 function detectCodexCliVersion(env = process.env) {
   const pinned = String((env && env.SHIPYARD_CODEX_CLI_VERSION) || '').trim();
   if (pinned) return pinned;
-  const result = spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 5000 });
+  const result = spawnSync('codex', ['--version'], {
+    encoding: 'utf8', timeout: 5000, env: { ...process.env, ...(env || {}) },
+  });
   if (result.error || result.status !== 0) return null;
   const match = String(`${result.stdout || ''} ${result.stderr || ''}`).match(/\d+(?:\.\d+)+/);
   return match ? match[0] : null;
@@ -349,8 +351,49 @@ function selectAgent(role, options = {}) {
   if (!fs.existsSync(selectedPath)) {
     fail(`Codex agent file not found: ${selectedPath}. Run install-shipyard-codex.sh --phase 2 first`);
   }
-  const fields = readAgent(selectedPath);
+  let fields = readAgent(selectedPath);
   if (fields.error) fail(`cannot read Codex agent file ${selectedPath}: ${fields.error}`);
+
+  // Generated files are portable artifacts, but their concrete model may have
+  // been written by a newer Codex CLI than the one that is executing this
+  // dispatch. Re-apply the same `min_cli` floor the generator used. An unknown
+  // host version is not proof that the model is configurable, so fall back to
+  // the ordinary file when it is usable and otherwise refuse the dispatch.
+  const runtimeEnv = options.env || process.env;
+  const { cliVersion, allEntries } = usableCodexPalette(cfg, runtimeEnv);
+  const declaredFloor = new Map(
+    allEntries.filter((entry) => entry.min_cli).map((entry) => [entry.model, entry.min_cli]),
+  );
+  const usableStaticModel = (model) => {
+    const minCli = declaredFloor.get(model);
+    return {
+      minCli: minCli || null,
+      usable: !minCli || (Boolean(cliVersion) && compareVersions(cliVersion, minCli) >= 0),
+    };
+  };
+  let floor = usableStaticModel(fields.model);
+  if (!floor.usable) {
+    const ordinaryName = `${baseName}`;
+    const ordinaryPath = path.join(dir, `${ordinaryName}.toml`);
+    const ordinaryFields = selectedName !== ordinaryName && fs.existsSync(ordinaryPath)
+      ? readAgent(ordinaryPath)
+      : null;
+    const ordinaryFloor = ordinaryFields && !ordinaryFields.error
+      ? usableStaticModel(ordinaryFields.model)
+      : null;
+    if (ordinaryFields && !ordinaryFields.error && ordinaryFloor.usable) {
+      fallback = {
+        requested: selectedName,
+        reason: `the selected model requires Codex CLI ${floor.minCli}, but this host reports ${cliVersion || 'no version'}; using the ordinary file`,
+      };
+      selectedName = ordinaryName;
+      selectedPath = ordinaryPath;
+      fields = ordinaryFields;
+      floor = ordinaryFloor;
+    } else {
+      fail(`Codex agent file ${selectedPath} selects model "${fields.model}" requiring Codex CLI ${floor.minCli}; host reports ${cliVersion || 'no version'} and no usable fallback exists`);
+    }
+  }
   return {
     role: requestedRole,
     ladder_role: ladderRole,

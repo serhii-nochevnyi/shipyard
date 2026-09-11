@@ -22,7 +22,14 @@ function fixture(mode = 'adaptive', files = {}, raw = {}) {
   fs.mkdirSync(agentDir, { recursive: true });
   fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({
     ...raw,
-    delivery_pipeline: { ...(raw.delivery_pipeline || {}), model_ladder: mode },
+    delivery_pipeline: {
+      codex_models: [
+        { model: 'gpt-5.6-terra', effort: 'high' },
+        { model: 'gpt-6-astra', effort: 'high' },
+      ],
+      ...(raw.delivery_pipeline || {}),
+      model_ladder: mode,
+    },
   }, null, 2));
   for (const [name, spec] of Object.entries(files)) {
     fs.writeFileSync(path.join(agentDir, `${name}.toml`), [
@@ -91,6 +98,21 @@ test('a contested architecture judgement selects the recovery file', () => {
   assert.strictEqual(result.task_level_rule, 'auto:recovery:contested');
   assert.strictEqual(result.agent_file, 'shipyard-arch-review-deep');
   assert.strictEqual(result.model, 'gpt-6-astra');
+});
+
+test('a static model above the host CLI floor falls back when the version is unknown', () => {
+  const f = fixture('adaptive', STANDARD_FILES, {
+    delivery_pipeline: { codex_models: [
+      { model: 'gpt-5.6-terra', effort: 'high' },
+      { model: 'gpt-6-astra', effort: 'high', min_cli: '0.153.1' },
+    ] },
+  });
+  const result = selectAgent('arch-review', {
+    cwd: f.project, agentDir: f.agentDir, env: { PATH: '' }, signals: { risk: 'high' },
+  });
+  assert.strictEqual(result.agent_file, 'shipyard-arch-review');
+  assert.strictEqual(result.model, 'gpt-5.6-terra');
+  assert.match(result.fallback.reason, /no version/);
 });
 
 test('a missing variant falls back to the ordinary file with an explicit reason', () => {

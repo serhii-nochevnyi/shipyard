@@ -58,6 +58,18 @@ test('usage attribution keeps provider/runtime pairs explicit', () => {
   );
 });
 
+test('transcript sources are canonicalized before the durable ledger is written', () => {
+  const transcript = path.join(os.tmpdir(), 'shipyard-source-root', 'logs', 'session.jsonl');
+  const relative = path.relative(process.cwd(), transcript);
+  const record = normalizeRecord(base({ source: relative }));
+  assert.equal(record.source, transcript);
+  const result = report([
+    { source: transcript, rows: [claude] },
+  ], { attributions: [record] });
+  assert.equal(result.coverage.attributed_observations, 1);
+  assert.equal(result.observations[0].attribution_status, 'session');
+});
+
 test('recording is atomic, revisioned and idempotent', () => {
   const { graph } = project();
   try {
