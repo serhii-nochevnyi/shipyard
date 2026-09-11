@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 141cf4cebf1a4f1a478c0314a6b93ed1bec2f4045ddc31c665f6ea121c122792
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 16
-  completed_phases: 1
+  completed_phases: 3
   total_plans: 82
-  completed_plans: 75
-  percent: 91
+  completed_plans: 79
+  percent: 96
 ---
 
 # Project State
@@ -16,21 +16,21 @@ progress:
 
 See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
-**Core value:** Keep delivery decisions truthful, resumable, and synchronized between the
+**Core value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
 **Current focus:** Phase 20: Autonomy of the drive-to-green loop
 
 ## Current Position
 
-Phase: 20 of 16 (Autonomy of the drive-to-green loop)
+Phase: 1 of 16 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
-Last activity: 2026-09-10 — Shipyard projection synchronized
+Last activity: 2026-09-11 — Shipyard projection synchronized
 
-Progress: [█████████░] 91%
+Progress: [█████████░] 96%
 
 ## Performance Metrics
 
-- Total plans completed: 75
+- Total plans completed: 79
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -47,10 +47,10 @@ Progress: [█████████░] 91%
 | 26 | 15 | 15 | passed |
 | 27 | 9 | 9 | gaps_found |
 | 28 | 9 | 9 | gaps_found |
-| 29 | 8 | 6 | pending |
+| 29 | 8 | 8 | passed |
 | 30 | 0 | 0 | pending |
 | 31 | 0 | 0 | pending |
-| 32 | 2 | 0 | pending |
+| 32 | 2 | 2 | passed |
 | 33 | 0 | 0 | pending |
 | 34 | 0 | 0 | pending |
 | 35 | 3 | 0 | pending |
@@ -78,6 +78,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-10 09:03
+Last session: 2026-09-11 06:46
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

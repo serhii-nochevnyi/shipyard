@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 141cf4cebf1a4f1a478c0314a6b93ed1bec2f4045ddc31c665f6ea121c122792
 phase: 35-gsd-and-shipyard-workflow-loop
 plan: 03
 subsystem: shipyard delivery
@@ -20,10 +20,9 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-10
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
+shipyard_source_fingerprint: 141cf4cebf1a4f1a478c0314a6b93ed1bec2f4045ddc31c665f6ea121c122792
 ---
 
 # Phase 35: Document, normalize, and bootstrap the synchronized project — Delivery Projection
@@ -33,8 +32,8 @@ shipyard_source_fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879
 ## Delivery Evidence
 
 - Ticket: T-35-03
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #101
 - Source plan: .planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 

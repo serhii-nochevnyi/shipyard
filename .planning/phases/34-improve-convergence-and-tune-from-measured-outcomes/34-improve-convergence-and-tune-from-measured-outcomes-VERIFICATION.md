@@ -1,9 +1,9 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 141cf4cebf1a4f1a478c0314a6b93ed1bec2f4045ddc31c665f6ea121c122792
 phase: 34
-verified: 2026-09-10T09:03:52.068Z
+verified: 2026-09-11T06:46:47.775Z
 status: human_needed
-shipyard_source_fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec
+shipyard_source_fingerprint: 141cf4cebf1a4f1a478c0314a6b93ed1bec2f4045ddc31c665f6ea121c122792
 ---
 
 # Phase 34: Improve convergence and tune from measured outcomes — Verification Projection
@@ -14,7 +14,7 @@ shipyard_source_fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 0/0 delivery records are merged | ✗ FAILED |
+| Every phase plan is accounted for | No PLAN files are present; delivery evidence is missing | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 
 ## Plan Evidence
@@ -26,7 +26,7 @@ shipyard_source_fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879
 ## Verification Commands
 
 - `node plugins/delivery-pipeline/scripts/gsd-sync.cjs --check --json`
-- `node /Users/serhii/.codex/gsd-core/bin/gsd-tools.cjs phase uat-passed 34 --raw`
+- `gsd-tools phase uat-passed 34 --raw`
 
 ## Gaps Summary
 

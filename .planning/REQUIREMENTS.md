@@ -1,9 +1,9 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cc55f13c005382f4df7a840edfb39cf413e43136be8fa460879a71b3e2812bec -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 141cf4cebf1a4f1a478c0314a6b93ed1bec2f4045ddc31c665f6ea121c122792 -->
 
 **Defined:** 2026-09-10
-**Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the
+**Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
 
 ## v1 Requirements
 
@@ -69,13 +69,13 @@
 - [ ] **REQ-59**: Every reader has a writer or a recorded decision, and a mechanism
 - [ ] **REQ-60**: "Is this worktree dirty" asks about TRACKED content, and a
 - [ ] **REQ-61**: A clean exit is not evidence of a coherent result: a merge that
-- [ ] **REQ-62**: The tracker projection is driven off the OWNED journal, not off
-- [ ] **REQ-63**: The status map names the tracker's TARGET STATUS, never a
-- [ ] **REQ-64**: Deciding what to project is a pure function of three local files:
-- [ ] **REQ-65**: A transition is performed by ID, and a target the workflow cannot
-- [ ] **REQ-66**: The watermark advances only on evidence: a record that cannot
-- [ ] **REQ-67**: The projection is outside the tick rate and invisible to the stop
-- [ ] **REQ-68**: A mechanism this repository cannot exercise says so: CI proves the
+- [x] **REQ-62**: The tracker projection is driven off the OWNED journal, not off
+- [x] **REQ-63**: The status map names the tracker's TARGET STATUS, never a
+- [x] **REQ-64**: Deciding what to project is a pure function of three local files:
+- [x] **REQ-65**: A transition is performed by ID, and a target the workflow cannot
+- [x] **REQ-66**: The watermark advances only on evidence: a record that cannot
+- [x] **REQ-67**: The projection is outside the tick rate and invisible to the stop
+- [x] **REQ-68**: A mechanism this repository cannot exercise says so: CI proves the
 - [ ] **REQ-69**: Only the `execute` transition is gated, so "worked on" means by
 - [ ] **REQ-70**: An externally prepared ticket is not deliverable: it enters
 - [ ] **REQ-71**: "To Do" is a declared knob whose empty default means the gate is
@@ -92,11 +92,11 @@
 - [ ] **REQ-82**: Resolution is idempotent and refuses rather than clobbers: a
 - [ ] **REQ-83**: A resolved checkout is written back to config so nobody is asked
 - [ ] **REQ-84**: *Cross-cutting, and it belongs to ADR-006's 2026-09-10 amendment
-- [ ] **REQ-85**: Usage is deduplicated by provider, attributed with coverage, and
-- [ ] **REQ-86**: Backlog items are discoverable across local notes and GSD 999.x,
-- [ ] **REQ-87**: All eight roles reconcile requested routing with launch and runtime
-- [ ] **REQ-88**: Expected reviewers are explicit; disabling one does not disable
-- [ ] **REQ-89**: Advisor usage and effective policy are visible separately, and a
+- [x] **REQ-85**: Usage is deduplicated by provider, attributed with coverage, and
+- [x] **REQ-86**: Backlog items are discoverable across local notes and GSD 999.x,
+- [x] **REQ-87**: All eight roles reconcile requested routing with launch and runtime
+- [x] **REQ-88**: Expected reviewers are explicit; disabling one does not disable
+- [x] **REQ-89**: Advisor usage and effective policy are visible separately, and a
 - [ ] **REQ-90**: Unchanged observations do not require repeated model turns;
 - [ ] **REQ-91**: Role boundaries return bounded summaries and complete referenced
 - [ ] **REQ-92**: Context rotation transfers durable state with one acknowledged
@@ -184,13 +184,13 @@
 | REQ-59 | Phase 28 | Blocked |
 | REQ-60 | Phase 28 | Blocked |
 | REQ-61 | Phase 28 | Blocked |
-| REQ-62 | Phase 29 | In Progress |
-| REQ-63 | Phase 29 | In Progress |
-| REQ-64 | Phase 29 | In Progress |
-| REQ-65 | Phase 29 | In Progress |
-| REQ-66 | Phase 29 | In Progress |
-| REQ-67 | Phase 29 | In Progress |
-| REQ-68 | Phase 29 | In Progress |
+| REQ-62 | Phase 29 | Complete |
+| REQ-63 | Phase 29 | Complete |
+| REQ-64 | Phase 29 | Complete |
+| REQ-65 | Phase 29 | Complete |
+| REQ-66 | Phase 29 | Complete |
+| REQ-67 | Phase 29 | Complete |
+| REQ-68 | Phase 29 | Complete |
 | REQ-69 | Phase 31 | In Progress |
 | REQ-70 | Phase 31 | In Progress |
 | REQ-71 | Phase 31 | In Progress |
@@ -207,11 +207,11 @@
 | REQ-82 | Phase 30 | In Progress |
 | REQ-83 | Phase 30 | In Progress |
 | REQ-84 | Phase 30 | In Progress |
-| REQ-85 | Phase 32 | In Progress |
-| REQ-86 | Phase 32 | In Progress |
-| REQ-87 | Phase 32 | In Progress |
-| REQ-88 | Phase 32 | In Progress |
-| REQ-89 | Phase 32 | In Progress |
+| REQ-85 | Phase 32 | Complete |
+| REQ-86 | Phase 32 | Complete |
+| REQ-87 | Phase 32 | Complete |
+| REQ-88 | Phase 32 | Complete |
+| REQ-89 | Phase 32 | Complete |
 | REQ-90 | Phase 33 | In Progress |
 | REQ-91 | Phase 33 | In Progress |
 | REQ-92 | Phase 33 | In Progress |
