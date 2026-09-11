@@ -117,7 +117,7 @@ restore_runtime_paths() {
         *) continue ;;
       esac
     fi
-    backup_path="$backup/$kind-$(runtime_backup_key "$target")"
+    backup_path="$backup/$(runtime_backup_key "$target")"
     rm -rf "$target" || restore_status=1
     if [[ "$state" == present ]]; then
       mkdir -p "$(dirname "$target")" || restore_status=1
@@ -201,7 +201,7 @@ snapshot_runtime_path() {
   if [[ -n "${RUNTIME_BACKUP_SEEN[$seen_key]+x}" ]]; then
     return 0
   fi
-  backup_path="$RUNTIME_BACKUP/$kind-$(runtime_backup_key "$target")"
+  backup_path="$RUNTIME_BACKUP/$(runtime_backup_key "$target")"
   if [[ -e "$target" || -L "$target" ]]; then
     cp -a "$target" "$backup_path"
     state=present
