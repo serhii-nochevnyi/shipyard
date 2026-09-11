@@ -175,7 +175,39 @@ test('non-string attribution sources are skipped without aborting the report', (
    }],
  });
  assert.ok(r.warnings.some((w) => w.includes('source must be a string')));
- assert.equal(r.observations[0].attribution_status, 'unattributed');
+  assert.equal(r.observations[0].attribution_status, 'unattributed');
+});
+
+test('malformed observed_model text is rejected before matching', () => {
+ const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), {
+   attributions: [{ observation_id:'bad-observed', dispatch_id:'dispatch-2', runtime:'claude', provider:'anthropic', kind:'ordinary',
+       source:'fixture', session_id:'s1', model:'opus', observed_model:['claude-opus-5'] },
+   ],
+ });
+ assert.ok(r.warnings.some((w) => w.includes('observed_model must be a string')));
+ assert.equal(r.coverage.attribution_records, 0);
+});
+
+test('efficiency rows keep provider, runtime and backend as distinct joins', () => {
+ const codexRow = { type:'event_msg', timestamp:'2026-09-10T00:01:00Z', payload:{ type:'token_count', info:{ total_token_usage:{
+   input_tokens:100, cached_input_tokens:40, cache_write_input_tokens:0, output_tokens:8, reasoning_output_tokens:3, total_tokens:108,
+ } } } };
+ const r = report([
+   { source:'claude.jsonl', rows:[claude({input_tokens:10, cache_read_input_tokens:20,
+     cache_creation_input_tokens:0, output_tokens:4}, {stop_reason:'end_turn'})] },
+   { source:'codex.jsonl', rows:[{ type:'session_meta', payload:{ id:'codex-session' } }, codexRow] },
+ ], { attributions: [
+   { observation_id:'same-claude', dispatch_id:'dispatch-shared', runtime:'claude', provider:'anthropic', kind:'ordinary',
+     source:'claude.jsonl', session_id:'s1', request_id:'r1', message_id:'m1', ticket:'T-01-01', role:'executor',
+     task_level:'routine', backend:'workflow', model:'opus', effort:'high', observed_model:'example-model', observed_effort:'high' },
+   { observation_id:'same-codex', dispatch_id:'dispatch-shared', runtime:'codex', provider:'openai', kind:'ordinary',
+     source:'codex.jsonl', session_id:'codex-session', ticket:'T-01-01', role:'executor', task_level:'routine',
+     backend:'codex-agent', model:'sonnet', effort:'high', observed_model:'gpt-5.6-luna', observed_effort:'high' },
+ ] });
+ assert.equal(r.efficiency.rows.length, 2);
+ assert.deepEqual(r.efficiency.rows.map((row) => [row.provider, row.runtime]).sort(), [
+   ['anthropic', 'claude'], ['openai', 'codex'],
+ ]);
 });
 
 test('runtime-incompatible requested tiers are skipped from in-memory attributions', () => {

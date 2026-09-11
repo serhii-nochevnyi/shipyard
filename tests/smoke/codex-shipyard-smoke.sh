@@ -438,7 +438,13 @@ ATOMIC_AGENT="$CODEX_HOME/agents/shipyard-arch-review.toml"
 ATOMIC_AGENT_EXPECTED="$WORK/atomic-agent-expected"
 ATOMIC_CONFIG_BEFORE="$WORK/atomic-config-before"
 ATOMIC_CONFIG_EXPECTED="$WORK/atomic-config-expected"
+ATOMIC_BUNDLE_BEFORE="$WORK/atomic-bundle-before"
+ATOMIC_SKILL_BEFORE="$WORK/atomic-skill-before"
+ATOMIC_MANIFEST_BEFORE="$WORK/atomic-manifest-before"
 cp "$CODEX_HOME/config.toml" "$ATOMIC_CONFIG_BEFORE"
+cp -a "$CODEX_HOME/shipyard" "$ATOMIC_BUNDLE_BEFORE"
+cp -a "$SKILLS/shipyard-deliver" "$ATOMIC_SKILL_BEFORE"
+cp "$CODEX_HOME/agents/.shipyard-manifest.json" "$ATOMIC_MANIFEST_BEFORE"
 printf '\n# operator edit that a failed install must preserve\n' >> "$ATOMIC_AGENT"
 cp "$ATOMIC_AGENT" "$ATOMIC_AGENT_EXPECTED"
 printf '\n[shipyard-atomic-failure]\nvalue = "one"\n[shipyard-atomic-failure]\nvalue = "two"\n' >> "$CODEX_HOME/config.toml"
@@ -450,6 +456,14 @@ cmp -s "$ATOMIC_CONFIG_EXPECTED" "$CODEX_HOME/config.toml" \
   || { echo "a failed agent/config transaction changed config.toml"; exit 1; }
 cmp -s "$ATOMIC_AGENT_EXPECTED" "$ATOMIC_AGENT" \
   || { echo "a failed agent/config transaction did not roll back the agent file"; exit 1; }
+cmp -s "$ATOMIC_MANIFEST_BEFORE" "$CODEX_HOME/agents/.shipyard-manifest.json" \
+  || { echo "a failed install changed the agent ownership manifest"; exit 1; }
+if ! diff -ruN "$ATOMIC_BUNDLE_BEFORE" "$CODEX_HOME/shipyard" >/dev/null; then
+  echo "a failed install changed the bundle payload"; exit 1
+fi
+if ! diff -ruN "$ATOMIC_SKILL_BEFORE" "$SKILLS/shipyard-deliver" >/dev/null; then
+  echo "a failed install changed the installed skill"; exit 1
+fi
 # Restore the valid fixture and prove the next install can still commit.
 cp "$ATOMIC_CONFIG_BEFORE" "$CODEX_HOME/config.toml"
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
