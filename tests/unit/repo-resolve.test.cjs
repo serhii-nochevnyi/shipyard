@@ -200,6 +200,14 @@ test('clone URL selection follows the project origin protocol', () => {
   assert.strictEqual(https.protocol, 'https');
   assert.strictEqual(https.field, 'url');
   assert.strictEqual(https.url, 'https://github.com/Acme/Service.git');
+
+  const http = mod.selectCloneUrl(
+    'http://github.com/serhii-nochevnyi/shipyard.git',
+    { sshUrl: 'git@github.com:Acme/Service.git', url: 'http://github.com/Acme/Service.git' },
+    'acme/service',
+  );
+  assert.strictEqual(http.valid, false);
+  assert.match(http.reason, /neither SSH nor HTTPS/);
 });
 
 test('clone URL selection refuses inconsistent metadata and credentials', () => {

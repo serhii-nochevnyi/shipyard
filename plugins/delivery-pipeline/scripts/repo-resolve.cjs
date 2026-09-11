@@ -107,7 +107,7 @@ function originProtocol(value) {
   if (typeof value !== 'string') return null;
   const origin = value.trim();
   if (/^(?:git@[^/:]+:|ssh:\/\/)/i.test(origin)) return 'ssh';
-  if (/^https?:\/\//i.test(origin)) return 'https';
+  if (/^https:\/\//i.test(origin)) return 'https';
   return null;
 }
 
