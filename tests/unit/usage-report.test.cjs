@@ -346,3 +346,21 @@ test('efficiency rows stay separated by provider, runtime and backend', () => {
  assert.equal(r.efficiency.rows.length, 2);
  assert.deepEqual(r.efficiency.rows.map((row) => row.backend).sort(), ['agent', 'workflow']);
 });
+
+test('message-scoped attributions do not fall back to other responses in the same session', () => {
+ const rows = files(
+   claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'}),
+   {type:'assistant', requestId:'r2', sessionId:'s1', message:{id:'m2', model:'example-model',
+     usage:{input_tokens:7,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:3}, stop_reason:'end_turn'}},
+ );
+ const r = report(rows, {attributions:[{
+   observation_id:'message-only', dispatch_id:'dispatch-1', runtime:'claude', provider:'anthropic', kind:'ordinary',
+   source:'fixture', session_id:'s1', request_id:'r1', message_id:'m1', ticket:'T-01-01', role:'executor',
+   task_level:'routine', backend:'workflow', model:'opus', effort:'high', observed_model:'claude-opus-5',
+   observed_effort:'high',
+ }]});
+ assert.deepEqual(r.observations.map((o) => [o.message_id, o.dispatch_id, o.attribution_status]), [
+   ['m1', 'dispatch-1', 'mismatch'],
+   ['m2', null, 'unattributed'],
+ ]);
+});

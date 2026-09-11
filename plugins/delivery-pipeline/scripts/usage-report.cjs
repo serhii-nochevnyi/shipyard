@@ -149,16 +149,19 @@ function findAttribution(context, records, warn) {
     // A pass-specific record cannot be safely applied to a response aggregate
     // because the transcript adapter does not expose a matching pass id.
     if (record.pass_id && !valuesOf(context, 'pass_id').includes(record.pass_id)) continue;
-    let score = 0;
-    let level = null;
-    for (const [key, weight, name] of [
-      ['message_id', 3, 'message'], ['request_id', 2, 'request'], ['session_id', 1, 'session'],
-    ]) {
-      const wanted = valuesOf(context, key);
-      if (record[key] && wanted.includes(record[key]) && weight > score) {
-        score = weight;
-        level = name;
-      }
+    let score = 0, level = null;
+    if (record.message_id) {
+      if (!valuesOf(context, 'message_id').includes(record.message_id)) continue;
+      score = 3;
+      level = 'message';
+    } else if (record.request_id) {
+      if (!valuesOf(context, 'request_id').includes(record.request_id)) continue;
+      score = 2;
+      level = 'request';
+    } else if (record.session_id) {
+      if (!valuesOf(context, 'session_id').includes(record.session_id)) continue;
+      score = 1;
+      level = 'session';
     }
     if (score) candidates.push({ record, score, level });
   }
