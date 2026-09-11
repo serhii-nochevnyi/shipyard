@@ -180,13 +180,33 @@ class CliError extends Error {}
 function parseRoadmap(text) {
   const clean = stripRoadmapProjection(text);
   const requirements = [];
-  const requirementRe = /^\s*-\s+\*\*([A-Z][A-Z0-9]+-\d+)\*\*\s+[—-]\s+(.+)$/gm;
-  let match;
-  while ((match = requirementRe.exec(clean))) {
-    requirements.push({ id: match[1], description: match[2].trim() });
+  let current = null;
+  const flushRequirement = () => {
+    if (!current) return;
+    current.description = current.description.replace(/\s+/g, ' ').trim();
+    requirements.push(current);
+    current = null;
+  };
+  for (const line of clean.split(/\r?\n/)) {
+    const match = line.match(/^\s*-\s+\*\*([A-Z][A-Z0-9]+-\d+)\*\*\s+[—-]\s+(.+)$/);
+    if (match) {
+      flushRequirement();
+      current = { id: match[1], description: match[2].trim() };
+      continue;
+    }
+    if (!current) continue;
+    // A new heading, list item, or requirement metadata line ends the
+    // description. Ordinary wrapped/indented prose remains part of it.
+    if (/^\s*(?:#{1,6}\s|[-*]\s|\*\*Requirements\*\*)/.test(line)) {
+      flushRequirement();
+      continue;
+    }
+    if (line.trim()) current.description += ` ${line.trim()}`;
   }
+  flushRequirement();
 
   const phases = [];
+  let match;
   const phaseRe = /^###\s+Phase\s+(\d+)\s*:\s*(.+)$/gm;
   while ((match = phaseRe.exec(clean))) {
     phases.push({ number: Number(match[1]), title: match[2].trim() });
@@ -286,27 +306,78 @@ function collectPlans(existingDirs) {
   };
 }
 
-function integrationStatus(text) {
+function verificationEvidence(text, integrationStatus = 'pending') {
   if (!text) return { status: 'pending', reason: 'INTEGRATION.md is missing' };
+  const lower = String(text).toLowerCase();
+  const evidenceText = String(text).split(/\r?\n/).filter((line) => !/verdict/i.test(line)).join('\n');
+  if (integrationStatus === 'needs-fix') {
+    return { status: 'failed', reason: 'integration evidence records a finding or failed verdict' };
+  }
+  const verificationSignal = /\b(?:verification(?:\s+(?:evidence|rerun|commands|result))?|uat|test-fast|test-codex-shipyard|current-head\s+ci|ci)\b/i.test(evidenceText);
+  const positiveSignal = /\b(?:passed|green|exit\s*0|successful|success|verified|no\s+unresolved)\b/i.test(evidenceText);
+  if (verificationSignal && positiveSignal) {
+    return { status: 'passed', reason: 'integration evidence records repository-local verification facts' };
+  }
+  if (/\b(?:verification|uat|test|ci)\b[^\n]{0,120}\b(?:failed|needs[- ]fix|error|red)\b/i.test(evidenceText)) {
+    return { status: 'failed', reason: 'verification evidence records a failed check' };
+  }
+  return {
+    status: 'pending',
+    reason: lower.includes('verification')
+      ? 'integration evidence has no positive repository-local verification result'
+      : 'integration evidence has no verification evidence',
+  };
+}
+
+function integrationStatus(text) {
+  if (!text) {
+    return {
+      status: 'pending',
+      reason: 'INTEGRATION.md is missing',
+      verification: verificationEvidence(text),
+    };
+  }
   const lower = text.toLowerCase();
   // Historical integration reports may mention an earlier needs-fix round in
   // the body of a final passed review. Use the last explicit Verdict line as
   // the authority and only inspect the document preamble when no such line
   // exists; never downgrade a final pass because of retrospective prose.
-  const verdictLines = String(text).split(/\r?\n/).filter((line) => /verdict/i.test(line));
+  const verdictLines = String(text).split(/\r?\n/).filter((line) => /\bverdict\b/i.test(line));
   const explicit = verdictLines.length ? verdictLines[verdictLines.length - 1].toLowerCase() : '';
   if (/needs[- ]fix|gaps_found|failed/.test(explicit)) {
-    return { status: 'needs-fix', reason: 'integration evidence records a finding or failed verdict' };
+    return {
+      status: 'needs-fix',
+      reason: 'integration evidence records a finding or failed verdict',
+      verification: verificationEvidence(text, 'needs-fix'),
+    };
   }
-  if (/\bpassed\b/.test(explicit)) return { status: 'passed', reason: 'integration evidence records passed' };
+  if (/\bpassed\b/.test(explicit)) {
+    return {
+      status: 'passed',
+      reason: 'integration evidence records passed',
+      verification: verificationEvidence(text, 'passed'),
+    };
+  }
   const preamble = lower.split(/\r?\n/).slice(0, 18).join('\n');
   if (/\bneeds[- ]fix\b|\bgaps_found\b|\bfailed\b/.test(preamble)) {
-    return { status: 'needs-fix', reason: 'integration evidence records a finding or failed verdict' };
+    return {
+      status: 'needs-fix',
+      reason: 'integration evidence records a finding or failed verdict',
+      verification: verificationEvidence(text, 'needs-fix'),
+    };
   }
   if (/\bpassed\b/.test(preamble)) {
-    return { status: 'passed', reason: 'integration evidence records passed' };
+    return {
+      status: 'passed',
+      reason: 'integration evidence records passed',
+      verification: verificationEvidence(text, 'passed'),
+    };
   }
-  return { status: 'pending', reason: 'integration evidence has no explicit passed verdict' };
+  return {
+    status: 'pending',
+    reason: 'integration evidence has no explicit passed verdict',
+    verification: verificationEvidence(text),
+  };
 }
 
 function deliveryStatus(entry) {
@@ -319,22 +390,25 @@ function phaseEvidence(phase, planRecords, integration) {
   const merged = plans.filter((record) => record.delivery_status === 'merged').length;
   const incomplete = plans.filter((record) => record.delivery_status !== 'merged');
   const allMerged = plans.length > 0 && incomplete.length === 0;
+  const verification = integration.verification || { status: 'pending', reason: 'verification evidence is missing' };
   let status = 'pending';
   let reason = 'phase has no complete integration evidence';
-  if (incomplete.length) {
-    reason = `${incomplete.length} plan(s) are not merged`;
-  } else if (integration.status === 'needs-fix') {
+  if (integration.status === 'needs-fix') {
     status = 'gaps_found';
     reason = integration.reason;
-  } else if (allMerged && integration.status === 'passed') {
+  } else if (incomplete.length) {
+    reason = `${incomplete.length} plan(s) are not merged`;
+  } else if (allMerged && integration.status === 'passed' && verification.status === 'passed') {
     status = 'passed';
-    reason = 'all plans are merged and integration evidence passed';
+    reason = 'all plans are merged and integration and verification evidence passed';
   } else if (!plans.length) {
     reason = 'phase has no PLAN files yet';
+  } else if (integration.status === 'passed' && verification.status !== 'passed') {
+    reason = verification.reason;
   } else {
     reason = integration.reason;
   }
-  return { plans, merged, allMerged, status, reason, integration };
+  return { plans, merged, allMerged, status, reason, integration, verification };
 }
 
 function checkSource({ roadmapText, roadmapInfo, projectText, plans, planErrors, graph, state, front }) {
@@ -442,6 +516,25 @@ function latestActivity(planRecords) {
   return dates.length ? new Date(Math.max(...dates)).toISOString() : '2000-01-01T00:00:00.000Z';
 }
 
+function projectionBlockers(phases, planRecords, evidenceByPhase) {
+  const derived = [];
+  for (const plan of planRecords) {
+    if (plan.delivery_status !== 'merged') {
+      derived.push(`${plan.ticket}: delivery status is ${plan.delivery_status}`);
+    }
+  }
+  for (const phase of phases) {
+    const evidence = evidenceByPhase.get(phase.number);
+    // Roadmap placeholders without delivery plans are not actionable
+    // blockers. Once a phase has delivery evidence, every non-green state must
+    // remain visible in STATE.md.
+    if (evidence && evidence.plans.length && evidence.status !== 'passed') {
+      derived.push(`Phase ${phase.number}: ${evidence.reason}`);
+    }
+  }
+  return derived;
+}
+
 function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreValue, blockers, lastActivity }) {
   const completedPlans = planRecords.filter((plan) => plan.delivery_status === 'merged').length;
   const completedPhases = [...evidenceByPhase.values()].filter((e) => e.status === 'passed').length;
@@ -456,7 +549,11 @@ function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreVa
     const evidence = evidenceByPhase.get(phase.number);
     return `| ${phase.number} | ${evidence.plans.length} | ${evidence.merged} | ${evidence.status} |`;
   });
-  const blockerLines = blockers.length ? blockers.slice(0, 8).map((item) => `- ${item}`) : ['- None.'];
+  const allBlockers = [...new Set([
+    ...blockers,
+    ...projectionBlockers(phases, planRecords, evidenceByPhase),
+  ])];
+  const blockerLines = allBlockers.length ? allBlockers.slice(0, 8).map((item) => `- ${item}`) : ['- None.'];
   return [
     '---',
     `# ${marker(fingerprint).slice(5, -4)}`,
@@ -625,7 +722,7 @@ function renderUat(phase, evidence, fingerprint) {
   ].join('\n');
 }
 
-function renderVerification(phase, evidence, fingerprint, lastActivity) {
+function renderVerification(phase, evidence, fingerprint) {
   const status = evidence.status === 'passed' ? 'passed' : evidence.status === 'gaps_found' ? 'gaps_found' : 'human_needed';
   const rows = evidence.plans.length
     ? evidence.plans.map((plan) => `| ${plan.ticket} | ${plan.delivery_status} | ${plan.delivery_status === 'merged' ? '✓ VERIFIED' : plan.delivery_status === 'unknown' ? '✗ FAILED' : '? UNCERTAIN'} |`).join('\n')
@@ -640,7 +737,6 @@ function renderVerification(phase, evidence, fingerprint, lastActivity) {
     '---',
     `# ${marker(fingerprint).slice(5, -4)}`,
     `phase: ${phase.number}`,
-    `verified: ${isoDate(lastActivity)}`,
     `status: ${status}`,
     `shipyard_source_fingerprint: ${fingerprint}`,
     '---',
@@ -655,6 +751,7 @@ function renderVerification(phase, evidence, fingerprint, lastActivity) {
     '|---|---|---|',
     `| Every phase plan is accounted for | ${planEvidence} | ${planStatus} |`,
     `| Integration is coherent | ${evidence.integration.reason} | ${evidence.integration.status === 'passed' ? '✓ VERIFIED' : evidence.integration.status === 'needs-fix' ? '✗ FAILED' : '? UNCERTAIN'} |`,
+    `| Verification evidence is present | ${evidence.verification.reason} | ${evidence.verification.status === 'passed' ? '✓ VERIFIED' : evidence.verification.status === 'failed' ? '✗ FAILED' : '? UNCERTAIN'} |`,
     '',
     '## Plan Evidence',
     '',
@@ -801,7 +898,7 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
     const evidence = evidenceByPhase.get(phase.number);
     const dir = path.join(PHASES_DIR, phase.dirName);
     expected.set(path.join(dir, `${phase.dirName}-UAT.md`), renderUat(phase, evidence, fingerprint));
-    expected.set(path.join(dir, `${phase.dirName}-VERIFICATION.md`), renderVerification(phase, evidence, fingerprint, lastActivity));
+    expected.set(path.join(dir, `${phase.dirName}-VERIFICATION.md`), renderVerification(phase, evidence, fingerprint));
   }
   const generated = [...expected.entries()].map(([file, content]) => generatedFileContent(file, content, { adoptNative }));
   const obsolete = findObsoleteGeneratedFiles([...expected.keys()], { prune: focusPhase == null });
@@ -928,6 +1025,7 @@ module.exports = {
   parseArgs,
   parseRoadmap,
   integrationStatus,
+  verificationEvidence,
   canonicalTicket,
   sourceFingerprint,
   buildSnapshot,
