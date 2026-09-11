@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a38b48f43fb1f7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a90991e8483ab3ab2ab26f88bd2644d1e8379f29333e27291f6a1b42bf987780
 phase: 35
 status: passed
 result: passed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a38b48f43fb1f7
+shipyard_source_fingerprint: a90991e8483ab3ab2ab26f88bd2644d1e8379f29333e27291f6a1b42bf987780
 ---
 
 # Phase 35: Close the GSD and Shipyard workflow loop — UAT Projection

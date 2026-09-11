@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a38b48f43fb1f7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a90991e8483ab3ab2ab26f88bd2644d1e8379f29333e27291f6a1b42bf987780
 phase: 29-the-tracker-is-a-projection-and-a-projection-is-driven
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-10
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a38b48f43fb1f7
+shipyard_source_fingerprint: a90991e8483ab3ab2ab26f88bd2644d1e8379f29333e27291f6a1b42bf987780
 ---
 
 # Phase 29: The planner: three local files in, a work list out, no network — Delivery Projection

@@ -1,38 +1,45 @@
 {
-  "generated_at": "2026-09-11T20:56:37.487Z",
-  "observed_at": "2026-09-11T20:56:37.487Z",
-  "generation": 207,
+  "generated_at": "2026-09-11T22:50:07.376Z",
+  "observed_at": "2026-09-11T22:50:07.376Z",
+  "generation": 209,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-11T20:56:37.487Z",
+  "dispatches_applied_at": "2026-09-11T22:50:07.376Z",
   "actionable": {
     "execute": [
-      "T-30-04"
+      "T-30-05",
+      "T-30-08"
     ],
     "publish": [],
-    "fix": [
+    "fix": [],
+    "finalize": [
       "T-30-02",
+      "T-30-07",
       "T-30-01"
     ],
-    "finalize": [],
     "merge": []
   },
   "waiting": {
     "ci": [],
     "dispatched": [],
     "parent": [
-      "T-30-03"
+      "T-30-03",
+      "T-30-04"
     ],
     "merge_human": [],
     "human": []
   },
   "parked": {
     "blocked": [
-      "T-30-05",
       "T-30-06",
-      "T-30-07",
-      "T-30-08",
-      "T-30-09"
+      "T-30-09",
+      "T-31-01",
+      "T-31-02",
+      "T-31-03",
+      "T-31-04",
+      "T-31-05",
+      "T-31-06",
+      "T-31-07"
     ],
     "done": [
       "T-20-01",
@@ -125,35 +132,43 @@
     ]
   },
   "why": {
-    "T-30-01": "PR #109: 1 failing check(s)",
-    "T-30-02": "PR #110: 1 failing check(s)",
-    "T-30-03": "PR #111: stacked on T-30-02 (PR #110: 1 failing check(s)) — driving this one to green now buys a green the base move will undo. Drive the parent; this follows when it lands.",
-    "T-30-04": "ready — worktree + executor",
-    "T-30-05": "T-30-04 (parent has no branch yet (nothing to cascade from))",
+    "T-30-01": "PR #109: green and still a draft — threads, arch-review, conform gate",
+    "T-30-02": "PR #110: green and still a draft — threads, arch-review, conform gate",
+    "T-30-03": "PR #111: stacked on T-30-02 (PR #110: still a draft) — driving this one to green now buys a green the base move will undo. Drive the parent; this follows when it lands.",
+    "T-30-04": "PR #113: stacked on T-30-03 (PR #111: still a draft) — driving this one to green now buys a green the base move will undo. Drive the parent; this follows when it lands.",
+    "T-30-05": "ready — worktree + executor",
     "T-30-06": "T-30-05 (parent has no branch yet (nothing to cascade from))",
-    "T-30-07": "T-30-06 (parent has no branch yet (nothing to cascade from))",
-    "T-30-08": "T-30-07 (parent has no branch yet (nothing to cascade from))",
-    "T-30-09": "T-30-08 (parent has no branch yet (nothing to cascade from))"
+    "T-30-07": "PR #116: green and still a draft — threads, arch-review, conform gate",
+    "T-30-08": "ready — worktree + executor",
+    "T-30-09": "T-30-08 (parent has no branch yet (nothing to cascade from))",
+    "T-31-01": "T-30-09 (cross-phase parent must be MERGED and its phase 30 epic landed on main first (parent is pending))",
+    "T-31-02": "T-31-01 (parent has no branch yet (nothing to cascade from))",
+    "T-31-03": "T-31-02 (parent has no branch yet (nothing to cascade from))",
+    "T-31-04": "T-31-03 (parent has no branch yet (nothing to cascade from))",
+    "T-31-05": "T-31-04 (parent has no branch yet (nothing to cascade from))",
+    "T-31-06": "T-31-05 (parent has no branch yet (nothing to cascade from))",
+    "T-31-07": "T-31-06 (parent has no branch yet (nothing to cascade from))"
   },
   "counts": {
-    "execute": 1,
+    "execute": 2,
     "publish": 0,
-    "fix": 2,
-    "finalize": 0,
+    "fix": 0,
+    "finalize": 3,
     "merge": 0,
     "ci": 0,
     "dispatched": 0,
-    "parent": 1,
+    "parent": 2,
     "merge_human": 0,
     "human": 0,
-    "blocked": 5,
+    "blocked": 9,
     "done": 87
   },
   "parent_of": {
-    "T-30-03": "T-30-02"
+    "T-30-03": "T-30-02",
+    "T-30-04": "T-30-03"
   },
-  "actionable_count": 3,
-  "left_behind_count": 0,
+  "actionable_count": 5,
+  "left_behind_count": 5,
   "fixpoint": false,
   "capacity": {
     "max": 4,
@@ -163,11 +178,13 @@
   "sentinel": {
     "duty": [
       "T-30-02",
+      "T-30-07",
       "T-30-01"
     ],
     "waiting_ci": [],
     "waiting_parent": [
-      "T-30-03"
+      "T-30-03",
+      "T-30-04"
     ],
     "dispatched": [],
     "clear": false
