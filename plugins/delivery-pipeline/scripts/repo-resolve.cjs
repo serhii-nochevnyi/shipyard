@@ -15,6 +15,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { loadConfig, validateRepositoryDestination } = require('./pipeline-config.cjs');
 const { originRefName, resolveOriginRef } = require('./graph-dir.cjs');
+const { withLock, lockDirFor } = require('./lock.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
@@ -710,6 +711,20 @@ function cloneRepository(input, runner = spawnSync) {
   if (input.projectRoot !== undefined && typeof input.projectRoot !== 'string') {
     invalidArgument('projectRoot must be a string when provided');
   }
+  const projectRoot = path.resolve(input.projectRoot || process.cwd());
+  // The destination check and the clone are one critical section. A second
+  // resolver arriving after the first clone must see the completed checkout
+  // and adopt it, never race the first `git clone` or overwrite its path.
+  return withLock(lockDirFor(projectRoot), 'repo-resolve', () => (
+    cloneRepositoryUnlocked({ ...input, projectRoot }, runner)
+  ), { label: `repo-resolve clone ${input.repo}` });
+}
+
+function cloneRepositoryUnlocked(input, runner = spawnSync) {
+  validateArgs(input);
+  if (input.projectRoot !== undefined && typeof input.projectRoot !== 'string') {
+    invalidArgument('projectRoot must be a string when provided');
+  }
   if (input.base === undefined || input.base === null || String(input.base).trim() === '') {
     return cloneFailure(input, `clone for ${input.repo} requires a named base ref to verify origin refs`);
   }
@@ -745,8 +760,25 @@ function cloneRepository(input, runner = spawnSync) {
     });
   }
   if (fs.existsSync(destination)) {
+    const adopted = suppliedPathResult(input, destination);
+    if (adopted.executable) {
+      return {
+        ...adopted,
+        resolution: 'adopted',
+        decision: 'clone',
+        operator_choice: 'clone',
+        choice_source: 'operator',
+        adopted: true,
+        destination,
+        clone_root: root,
+        required_base: `origin/${baseName}`,
+        base_ref: null,
+        base_verified: false,
+        park_reason: null,
+      };
+    }
     return cloneFailure(input,
-      `clone destination "${destination}" already exists; use the existing-checkout adoption path`, {
+      `clone destination "${destination}" already exists and cannot be adopted: ${adopted.reason}`, {
         destination,
         clone_root: root,
         required_base: `origin/${baseName}`,

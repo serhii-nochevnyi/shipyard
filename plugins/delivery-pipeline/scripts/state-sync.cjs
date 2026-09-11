@@ -55,7 +55,7 @@ const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
-const { resolveConfiguredRepo } = require(path.join(__dirname, 'repo-resolve.cjs'));
+const { resolveRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
 const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
@@ -1061,7 +1061,10 @@ if (mode === 'epic-stacked') {
 for (const repo of REPO_IDS) {
   if (!repo) continue;
   const n = Object.values(tickets).filter((t) => repoOf(t) === repo).length;
-  const resolution = resolveConfiguredRepo({ repo, config: cfg });
+  // Configured paths still win. When there is no declaration, a unique
+  // origin-matching sibling checkout is executable too; resolution remains
+  // read-only here, while T-30-09 owns any durable config write-back.
+  const resolution = resolveRepository({ repo, config: cfg, projectRoot: ROOT });
   if (!resolution.executable) {
     console.log(`⚠ repo ${repo} holds ${n} ticket(s) but is track-only — ${resolution.reason}; without an executable checkout the conveyor can only TRACK them`);
   } else {

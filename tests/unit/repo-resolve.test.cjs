@@ -322,6 +322,56 @@ test('clone parks a checkout when the required origin base is missing', () => {
   assert.strictEqual(fs.existsSync(destination), true, 'verification must not hide the clone failure by deleting it');
 });
 
+test('a repeated clone adopts an existing matching checkout without invoking clone', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const destination = repoAt(path.join(parent, 'service'), 'git@github.com:acme/service.git');
+  let invoked = false;
+  const result = mod.cloneRepository({
+    ticket: 'T-30-08',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/base',
+    cloneUrl: '/a/source-that-must-not-be-used',
+  }, () => {
+    invoked = true;
+    throw new Error('matching checkout must be adopted before clone');
+  });
+
+  assert.strictEqual(result.executable, true, result.reason);
+  assert.strictEqual(result.resolution, 'adopted');
+  assert.strictEqual(result.adopted, true);
+  assert.strictEqual(result.repository_root, destination);
+  assert.strictEqual(invoked, false);
+});
+
+test('an existing non-git or mismatched destination is refused untouched', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  for (const [name, setup, expected] of [
+    ['plain-destination', (dir) => fs.mkdirSync(dir), /not a git repository/],
+    ['wrong-origin', (dir) => repoAt(dir, 'git@github.com:someone-else/service.git'), /origin.*acme\/service/],
+  ]) {
+    const destination = path.join(parent, name);
+    setup(destination);
+    const before = fs.readdirSync(destination).sort();
+    const result = mod.cloneRepository({
+      ticket: 'T-30-08',
+      repo: 'acme/service',
+      config: { repos: {}, repos_root: parent },
+      projectRoot: projectDir,
+      destination,
+      base: 'epic/base',
+      cloneUrl: '/a/source-that-must-not-be-used',
+    }, () => { throw new Error('existing destination must not be overwritten'); });
+    assert.strictEqual(result.executable, false);
+    assert.match(result.park_reason, expected);
+    assert.deepStrictEqual(fs.readdirSync(destination).sort(), before);
+  }
+});
+
 test('discovery matches origin rather than the directory basename and scans one level', () => {
   const parent = tempDir();
   const projectDir = path.join(parent, 'project');
@@ -586,11 +636,11 @@ test('clone records explicit intent and a validated destination without cloning 
   assert.match(rejected.park_reason, /outside pipeline\.repos_root/);
 });
 
-test('state-sync and deliver name the configured resolver caller', () => {
+test('state-sync and deliver name the repository resolver caller', () => {
   const stateSync = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'), 'utf8');
   const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
   assert.match(stateSync, /require\(path\.join\(__dirname, 'repo-resolve\.cjs'\)\)/);
-  assert.match(stateSync, /resolveConfiguredRepo\(\{ repo, config: cfg \}\)/);
+  assert.match(stateSync, /resolveRepository\(\{ repo, config: cfg, projectRoot: ROOT \}\)/);
   assert.match(deliver, /repo-resolve\.cjs resolve <owner\/name>/);
   assert.match(deliver, /repo-resolve\.cjs choose <owner\/name>/);
   assert.match(deliver, /escalation-record\.cjs mark <T-id>/);
