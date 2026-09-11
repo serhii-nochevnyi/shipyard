@@ -141,7 +141,6 @@ node "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" \
 # ── skills + bundle install LAST ───────────────────────────────────────────────
 # Keep both staged until agent/config/capability/AGENTS.md have succeeded, so a
 # failure in those earlier steps cannot leave a partially updated runtime bundle.
-ROLLBACK_ACTIVE=1
 
 # ── agents + non-destructive config.toml merge ───────────────────────────────
 #
@@ -162,6 +161,7 @@ ROLLBACK_ACTIVE=1
 AGENT_MANIFEST_NAME=".shipyard-manifest.json"
 if compgen -G "$OUT/agents/*.toml" >/dev/null; then
   echo "→ installing agents → $CODEX_HOME/agents"
+  ROLLBACK_ACTIVE=1
   AGENTS_DIR="$CODEX_HOME/agents"
   AGENTS_DIR_PREEXISTED=0
   [[ -d "$AGENTS_DIR" ]] && AGENTS_DIR_PREEXISTED=1
@@ -416,6 +416,7 @@ if [[ -f "$GSD_TUNE" ]]; then
   echo "→ GSD global defaults (~/.gsd/defaults.json)"
   node "$GSD_TUNE" --global --runtime codex --apply 2>&1 | sed 's/^/  /' || true
 fi
+ROLLBACK_ACTIVE=0
 
 # ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
 echo "→ installing skills → $AGENTS_SKILLS"
@@ -443,7 +444,6 @@ replace_dir "$OUT/bundle" "$BUNDLE_ROOT" "bundle payload" || {
   echo "error: could not install bundle payload" >&2
   exit "$status"
 }
-ROLLBACK_ACTIVE=0
 
 deliver_hint=""
 [[ "$PHASE" -ge 2 ]] && deliver_hint=' | $shipyard-deliver'
