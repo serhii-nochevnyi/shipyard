@@ -261,12 +261,22 @@ function selectDynamicExecutor(cfg, classification, signals, env = process.env, 
     };
   }
   const entry = ceiling ? entries[entries.length - 1] : entries[0];
+  const configuredCeiling = allEntries[allEntries.length - 1];
+  const ceilingFallback = Boolean(ceiling && configuredCeiling && entry !== configuredCeiling);
   return {
     ...common,
     model: entry.model,
     effort: lowerEffort(requestedEffort, entry.effort),
     model_source: 'codex_models',
-    ...(ceiling ? { palette_lane: 'ceiling' } : { palette_lane: 'floor' }),
+    ...(ceilingFallback
+      ? {
+        palette_lane: 'ceiling-fallback',
+        fallback: {
+          requested: configuredCeiling.model,
+          reason: `the configured ceiling is not usable on Codex CLI ${cliVersion || 'no version'}; using the highest usable palette entry ${entry.model}`,
+        },
+      }
+      : ceiling ? { palette_lane: 'ceiling' } : { palette_lane: 'floor' }),
   };
 }
 

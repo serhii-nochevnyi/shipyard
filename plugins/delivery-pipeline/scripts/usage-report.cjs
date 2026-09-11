@@ -263,7 +263,13 @@ function report(sources, options = {}) {
           effort: row.payload.effort || null,
         };
         const turnSession = row.payload.session_id || session;
-        if (turnSession) codexTurnMetadata.set(codexTurnKey(turnSession, sourceName, turnId), metadata);
+        if (turnSession) {
+          codexTurnMetadata.set(codexTurnKey(turnSession, sourceName, turnId), metadata);
+          // A resumed session can replay its turn_context in an earlier file
+          // than the token_usage_record. Keep a session-and-turn fallback that
+          // does not depend on the file where the metadata happened to land.
+          codexTurnMetadata.set(codexTurnKey(turnSession, null, turnId), metadata);
+        }
         if (sourceName) codexTurnMetadata.set(codexTurnKey(null, sourceName, turnId), metadata);
       }
       const msg = row.message;
@@ -483,9 +489,14 @@ function report(sources, options = {}) {
         const turn = response.turn_id
           ? codexTurnMetadata.get(codexTurnKey(sessionId, response.source, response.turn_id))
             || codexTurnMetadata.get(codexTurnKey(null, response.source, response.turn_id))
+            || codexTurnMetadata.get(codexTurnKey(sessionId, null, response.turn_id))
           : null;
         addObservation({
-          runtime: 'codex', kind: 'ordinary', sources: [...current.sources],
+          runtime: 'codex', kind: 'ordinary',
+          // A response belongs to one transcript file. Keeping the whole
+          // resumed session here makes two source-qualified ledger records
+          // compete for every response and turns valid joins into ambiguity.
+          sources: response.source ? [response.source] : [...current.sources],
           session_id: sessionId,
           request_ids: response.turn_id ? [response.turn_id] : [],
           message_ids: [response.response_id],

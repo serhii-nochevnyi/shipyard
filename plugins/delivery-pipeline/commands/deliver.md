@@ -101,7 +101,7 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role> --model <alias> --effort <level> --task-level <level> --runtime <runtime> --backend <backend> --agent-id <launch id>` — an agent
+- `dispatch-record.cjs mark <T> <role> --model <alias> --effort <level> --task-level <level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<resolver route>"` — an agent
   is working on it RIGHT NOW. The one fact here that is motion rather than a
   verdict, and the one the board could not see at all: nothing is pushed yet, so
   the live state still reads `execute`/`fix` and the stop gate refuses turns over

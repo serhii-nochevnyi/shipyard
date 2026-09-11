@@ -198,6 +198,24 @@ test('executor resolves the ceiling model dynamically for critical work', () => 
   assert.strictEqual(result.palette_lane, 'ceiling');
 });
 
+test('executor reports when an unavailable ceiling falls back to the highest usable palette entry', () => {
+  const f = fixture('adaptive', STANDARD_FILES, {
+    delivery_pipeline: { codex_models: [
+      { model: 'gpt-5.6-terra', effort: 'high' },
+      { model: 'gpt-6-astra', effort: 'high', min_cli: '0.999.0' },
+    ] },
+  });
+  const result = selectAgent('executor', {
+    cwd: f.project, agentDir: f.agentDir,
+    env: { SHIPYARD_CODEX_CLI_VERSION: '0.154.0' },
+    signals: { risk: 'high', files: 2 },
+  });
+  assert.strictEqual(result.model, 'gpt-5.6-terra');
+  assert.strictEqual(result.palette_lane, 'ceiling-fallback');
+  assert.strictEqual(result.fallback.requested, 'gpt-6-astra');
+  assert.match(result.fallback.reason, /highest usable palette entry/);
+});
+
 test('executor promotes an ordinary dispatch when the measured window ceiling fires', () => {
   const f = fixture('adaptive', STANDARD_FILES, {
     pipeline: { fable_window_tokens: 100 },

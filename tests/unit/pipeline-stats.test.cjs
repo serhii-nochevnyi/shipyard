@@ -367,6 +367,26 @@ test('human output names the project repository when its PR listing is unreachab
   assert.doesNotMatch(r.out, /could not list PRs for  —/);
 });
 
+test('routing coverage rejects a missing role and a malformed resolver route', () => {
+  const complete = {
+    ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor',
+    model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
+    task_level: 'complex', runtime: 'claude', backend: 'workflow', dispatch_id: 'dispatch-valid',
+  };
+  const noRole = { ...complete, ticket: 'T-01-02', dispatch_id: 'dispatch-no-role' };
+  delete noRole.role;
+  const malformed = { ...complete, ticket: 'T-01-03', dispatch_id: 'dispatch-bad-route', reason: 'role baseline' };
+  const { code, json } = asJson({
+    tickets: {},
+    journal: [JSON.stringify(complete), JSON.stringify(noRole), JSON.stringify(malformed)],
+    prs: [],
+  });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.ladder.requested_comparable, 1);
+  assert.strictEqual(json.ladder.missing_route, 1);
+  assert.deepStrictEqual(json.ladder.by_attribution_status, { incomplete: 2, requested_complete: 1 });
+});
+
 test('Codex agent-file coverage is required only when the runtime is known', () => {
   const complete = {
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'arch-review',

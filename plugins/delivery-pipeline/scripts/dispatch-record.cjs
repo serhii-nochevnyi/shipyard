@@ -898,11 +898,16 @@ function dispatchWhy(id, rec) {
  */
 function activeDispatches(cwd = process.cwd(), state = null) {
   const live = state || readState(cwd);
+  // Callers that already read delivery-state.json pass its full envelope; the
+  // disk reader above returns only `tickets` for the legacy map shape. Normalize
+  // both here so a merged ticket cannot keep consuming capacity until TTL.
+  const ticketState = live && typeof live === 'object' && live.tickets
+    && typeof live.tickets === 'object' ? live.tickets : live || {};
   const now = Date.now();
   const out = {};
   for (const [id, rec] of Object.entries(load(cwd).tickets || {})) {
     if (!rec) continue;
-    const s = live[id] || {};
+    const s = ticketState[id] || {};
     // A merged ticket is never suppressed, whoever was working on it: it landed.
     if (s.status === 'merged') continue;
     const at = Date.parse(rec.at || '');

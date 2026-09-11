@@ -102,6 +102,14 @@ test('mark records the role and activeDispatches reports it', () => {
   assert.equal(live['T-01-01'].role, 'executor');
 });
 
+test('activeDispatches accepts the full delivery-state envelope', () => {
+  const { project } = scratch({ 'T-01-01': { ...READY } });
+  assert.equal(run(['mark', 'T-01-01', 'executor'], project).status, 0);
+  const fullState = { tickets: { 'T-01-01': { status: 'merged' } }, generated_at: 'now' };
+  assert.deepStrictEqual(activeDispatches(project, fullState), {},
+    'a merged ticket in the state envelope must not consume capacity');
+});
+
 test('the guard\'s buckets are covered too, not just the executor\'s', () => {
   // The first sighting was an executor wave, but deliver.md tells the run to post
   // the guard and NOT wait for it — so fix/finalize/merge are dispatched by

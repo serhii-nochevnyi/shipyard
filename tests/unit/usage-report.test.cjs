@@ -67,6 +67,31 @@ test('current Codex format wins when legacy snapshots are in a resumed file',()=
  assert.equal(r.groups[0].output_tokens,30);
  assert.equal(r.observations.length,2);
 });
+test('resumed Codex responses use their source for joins and a session turn fallback', () => {
+ const session = 'resumed-session';
+ const first = { ...codexCurrent, payload: { ...codexCurrent.payload, session_id: session, response_id: 'resume-1' } };
+ const second = { ...codexCurrent2, payload: { ...codexCurrent2.payload, session_id: session, response_id: 'resume-2' } };
+ const a = { source: 'resume-a.jsonl', rows: [
+   { type: 'session_meta', payload: { id: session } },
+   { type: 'turn_context', payload: { turn_id: 'turn-1', model: 'gpt-5.6-terra', effort: 'high' } },
+   first,
+ ] };
+ const b = { source: 'resume-b.jsonl', rows: [second] };
+ const r = report([a, b], { attributions: [
+   { dispatch_id: 'dispatch-a', runtime: 'codex', provider: 'openai', source: 'resume-a.jsonl',
+     session_id: session, ticket: 'T-01-01', role: 'executor', task_level: 'complex', backend: 'codex-agent',
+     model: 'sonnet', effort: 'high', observed_model: 'gpt-5.6-terra', observed_effort: 'high' },
+   { dispatch_id: 'dispatch-b', runtime: 'codex', provider: 'openai', source: 'resume-b.jsonl',
+     session_id: session, ticket: 'T-01-02', role: 'executor', task_level: 'complex', backend: 'codex-agent',
+     model: 'sonnet', effort: 'high' },
+ ] });
+ assert.equal(r.observations.length, 2);
+ assert.deepEqual(r.observations.map((o) => [o.dispatch_id, o.attribution_status, o.model]), [
+   ['dispatch-a', 'session', 'gpt-5.6-terra'],
+   ['dispatch-b', 'session', 'gpt-5.6-terra'],
+ ]);
+});
+
 test('current Codex response usage must reconcile with the thread total',()=>{
  const mismatched={...codexCurrent2,payload:{...codexCurrent2.payload,usage:{...codexCurrent2.payload.usage,input_tokens:1}}};
  const r=report([{source:'current',rows:[meta,codexCurrent,mismatched]}]);

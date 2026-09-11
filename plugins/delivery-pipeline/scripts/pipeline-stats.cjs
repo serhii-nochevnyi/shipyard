@@ -24,7 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
-const { loadConfig, ROLES, EFFORTS } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { loadConfig, ROLES, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
@@ -292,11 +292,12 @@ const present = (event, field) =>
 const concreteEffort = (value) => Array.isArray(EFFORTS) && EFFORTS.includes(value);
 const staticCodexNeedsFile = (event) =>
   event.runtime === 'codex' && event.role !== 'executor' && !present(event, 'agent_file');
+const routeValid = (event) => present(event, 'reason') && Boolean(parseRoute(event.reason));
 const requestedMissing = (event) => [
-  'model', 'effort', 'reason', 'task_level', 'runtime', 'backend',
+  'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'role',
 ].filter((field) => !present(event, field));
 const requestedComparable = (event) =>
-  requestedMissing(event).length === 0 && !staticCodexNeedsFile(event);
+  requestedMissing(event).length === 0 && routeValid(event) && !staticCodexNeedsFile(event);
 const appliedComparable = (event) =>
   requestedComparable(event) && concreteEffort(event.effort_applied);
 const observedComparable = (event) =>
@@ -326,7 +327,7 @@ const ladder = {
   missing_model: ladderEvents.filter((e) => !e.model).length,
   missing_effort: ladderEvents.filter((e) => !e.effort).length,
   missing_effort_applied: ladderEvents.filter((e) => !concreteEffort(e.effort_applied)).length,
-  missing_route: ladderEvents.filter((e) => !e.reason).length,
+  missing_route: ladderEvents.filter((e) => !routeValid(e)).length,
   missing_task_level: ladderEvents.filter((e) => !e.task_level).length,
   missing_runtime: ladderEvents.filter((e) => !e.runtime).length,
   missing_backend: ladderEvents.filter((e) => !e.backend).length,
