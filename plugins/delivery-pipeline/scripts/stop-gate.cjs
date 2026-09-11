@@ -601,13 +601,18 @@ const agentsOut = () => (agesCache || (agesCache = dispatchAges(graphDir, dispat
 // anyway, so the reader must get the same line either way.
 const goneText = () => {
   const { suspect } = agentsOut();
+  const suspectId = suspect[0] && suspect[0].id;
+  const suspectDispatch = suspectId ? dispatched[suspectId] : null;
+  const suspectDispatchId = suspectDispatch && suspectDispatch.dispatch_id
+    ? suspectDispatch.dispatch_id
+    : '<dispatch_id>';
   return suspect.length
     ? '\nThe dispatch mark(s) on this board did NOT keep this quiet: ' +
       `${suspect.map((d) => `${d.id} → ${d.role}, marked ${d.mins}m ago`).join('; ')}.\n` +
       'A mark that old is not an agent at work — it is what a mark written before a launch that never\n' +
       'happened looks like. If that work really is out it will wake you; if it is gone, return the\n' +
       'ticket to the board with\n' +
-      `  \`dispatch-record.cjs clear ${suspect[0].id} ${dispatched[suspect[0].id] && dispatched[suspect[0].id].dispatch_id ? dispatched[suspect[0].id].dispatch_id : '<dispatch_id>'} --graph ${graphDir}\`\n` +
+      `  \`dispatch-record.cjs clear ${suspectId} ${suspectDispatchId} --graph ${graphDir}\`\n` +
       'The --graph is not optional: this hook\'s cwd is the SESSION\'s, and a clear run from the wrong\n' +
       'one reports "no dispatch recorded" and changes nothing.'
     : '';
