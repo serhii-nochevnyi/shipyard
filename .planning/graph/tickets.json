@@ -2463,6 +2463,7 @@
       "unreachable_paths": false,
       "missing_paths": true,
       "files": [
+        "capabilities/delivery-pipeline/capability.json",
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "plugins/delivery-pipeline/scripts/repo-resolve.cjs",
         "tests/unit/pipeline-config.test.cjs",
@@ -2551,6 +2552,7 @@
       "files": [
         "plugins/delivery-pipeline/scripts/repo-resolve.cjs",
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
         "tests/unit/repo-resolve.test.cjs",
         "tests/unit/record-stores.test.cjs"
       ],

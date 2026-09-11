@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a90991e8483ab3ab2ab26f88bd2644d1e8379f29333e27291f6a1b42bf987780
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 835f7541b7d2cb9c63d912f07fef4934e058db5e6c1df9027efd241137e8a711
 phase: 29-the-tracker-is-a-projection-and-a-projection-is-driven
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-10
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: a90991e8483ab3ab2ab26f88bd2644d1e8379f29333e27291f6a1b42bf987780
+shipyard_source_fingerprint: 835f7541b7d2cb9c63d912f07fef4934e058db5e6c1df9027efd241137e8a711
 ---
 
 # Phase 29: The recorder refuses a bare done, and the journal owns the event — Delivery Projection

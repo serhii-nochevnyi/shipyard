@@ -1346,7 +1346,7 @@ tickets:
     repo: null
     wave: 4
     depends_on: [T-30-04]
-    files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/repo-resolve.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/repo-resolve.test.cjs]
+    files: [capabilities/delivery-pipeline/capability.json, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/repo-resolve.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/repo-resolve.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false
@@ -1394,7 +1394,7 @@ tickets:
     repo: null
     wave: 7
     depends_on: [T-30-07]
-    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/repo-resolve.test.cjs, tests/unit/record-stores.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs, tests/unit/record-stores.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false
