@@ -28,6 +28,7 @@ const { activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DI
 // against. The per-role subject table below is checked against IT, not against a
 // second list written out here.
 const { ROLES } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
+const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
 
 // SHIPYARD_GRAPH_DIR is the other explicit channel for "which graph"; a value
 // inherited from the runner would decide these cases instead of the flag.
@@ -35,13 +36,35 @@ const run = (args, cwd, env = {}) => spawnSync('node', [DISPATCH, ...args], {
   cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '', ...env },
 });
 
+const DEFAULT_CODEX_AGENT_FILES = (() => {
+  const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => f.slice(0, -3));
+  const files = new Set();
+  for (const role of refs) {
+    files.add(`shipyard-${role}`);
+    if (gen.DEEP_ROLES.has(role)) files.add(`shipyard-${role}${gen.DEEP_SUFFIX}`);
+    if (gen.CRITICAL_ROLES.has(role)) files.add(`shipyard-${role}${gen.CRITICAL_SUFFIX}`);
+  }
+  return [...files].sort();
+})();
+
+function writeCodexAgents(dir, files = DEFAULT_CODEX_AGENT_FILES) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of files) {
+    fs.writeFileSync(path.join(dir, `${name}.toml`), `name = "${name}"\n`);
+  }
+  return dir;
+}
+
 // A project (has a ticket graph) and a worktree beside it (has none) — the two
 // cwds this command can find itself in, because the guard dispatches its fixers
 // from inside worktrees.
-function scratch(state) {
+function scratch(state, { codexFiles = DEFAULT_CODEX_AGENT_FILES } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-'));
   const project = path.join(dir, 'project');
   const worktree = path.join(dir, 'worktree');
+  const codexAgentDir = writeCodexAgents(path.join(dir, 'codex-agents'), codexFiles);
   const graph = path.join(project, '.planning', 'graph');
   fs.mkdirSync(graph, { recursive: true });
   fs.mkdirSync(worktree, { recursive: true });
@@ -49,7 +72,7 @@ function scratch(state) {
   for (const id of Object.keys(state)) tickets[id] = { phase: id.split('-')[1] };
   fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
-  return { dir, project, worktree, graph };
+  return { dir, project, worktree, graph, codexAgentDir };
 }
 
 const readState = (graph) => JSON.parse(fs.readFileSync(path.join(graph, 'delivery-state.json'), 'utf8'));
@@ -744,6 +767,14 @@ test('a known runtime cannot create an unmeasured model dispatch', () => {
   assert.deepStrictEqual(store(graph), {});
 });
 
+test('a known runtime refuses a tier that cannot run there', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor', '--runtime', 'codex', '--model', 'fable'], project);
+  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+  assert.match(r.stderr, /not available on runtime "codex"/);
+  assert.deepStrictEqual(store(graph), {});
+});
+
 test('observed model ids reject whitespace and controls but keep opaque ids flexible', () => {
   for (const bad of ['claude opus', 'claude\topus', 'claude\nopus']) {
     const { project, graph } = scratch({ 'T-01-01': { ...READY } });
@@ -820,8 +851,12 @@ test('--agent-file records the Codex file that ran, and refuses one nothing prod
   // On Codex the model lives IN the file, so the ordinary/-deep choice IS the
   // dispatch's decision. A name the generator does not produce is unverifiable,
   // and an unverifiable name is worse than none.
-  const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-  const ok = run(['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-deep'], project);
+  const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+  const ok = run(
+    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-deep'],
+    project,
+    { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+  );
   assert.equal(ok.status, 0, `must succeed (${ok.stderr})`);
   assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-deep', 'verbatim');
   assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-deep');
@@ -837,19 +872,18 @@ test('--agent-file records the Codex file that ran, and refuses one nothing prod
 
   for (const bad of ['shipyard-nope', 'arch-review', 'shipyard-integrator-deep']) {
     const s = scratch({ 'T-01-02': { ...OPEN_PR } });
-    const r = run(['mark', 'T-01-02', 'arch-review', '--agent-file', bad], s.project);
+    const r = run(
+      ['mark', 'T-01-02', 'arch-review', '--agent-file', bad],
+      s.project,
+      { SHIPYARD_CODEX_AGENT_DIR: s.codexAgentDir },
+    );
     assert.equal(r.status, 1, `"${bad}" must refuse (${r.stderr})`);
     assert.ok(r.stderr.includes(`"${bad}"`), 'and names it');
     assert.deepStrictEqual(store(s.graph), {}, 'nothing recorded');
   }
 });
 
-test('the accepted agent files ARE the ones the generator emits', () => {
-  // The recorder cannot require the generator — it lives in scripts/ at the repo
-  // root and never ships inside the bundle — so the deep set is a local copy. This
-  // is the test that stops the copy drifting, the same way DISPATCH_SUBJECT is
-  // checked against ROLES rather than against a second list.
-  const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
+test('the accepted agent files are read from the generated Codex agents directory', () => {
   const {
     codexAgentFiles, CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX,
     CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
@@ -865,9 +899,22 @@ test('the accepted agent files ARE the ones the generator emits', () => {
   // filter — so a reference added there is accepted here without an edit.
   const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
     .filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
-  const files = codexAgentFiles();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agents-'));
+  const files = codexAgentFiles(writeCodexAgents(dir));
   for (const role of refs) assert.ok(files.has(`shipyard-${role}`), `shipyard-${role} must be accepted`);
   assert.equal(files.size, refs.length + gen.DEEP_ROLES.size + gen.CRITICAL_ROLES.size, 'and nothing else is');
+});
+
+test('a stale critical file is refused when the installed Codex agents directory did not generate it', () => {
+  const s = scratch({ 'T-01-02': { ...OPEN_PR } }, { codexFiles: ['shipyard-arch-review'] });
+  const r = run(
+    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-critical'],
+    s.project,
+    { SHIPYARD_CODEX_AGENT_DIR: s.codexAgentDir },
+  );
+  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+  assert.match(r.stderr, /not an agent file the Codex generator produces/);
+  assert.deepStrictEqual(store(s.graph), {});
 });
 
 test('the front does not gain a field — the overlay is byte-identical', () => {
@@ -900,7 +947,7 @@ test('the front does not gain a field — the overlay is byte-identical', () => 
     'mark', 'T-01-01', 'ci-fix', '--model', 'opus', '--effort', 'high',
     '--effort-applied', 'high', '--route', ROUTE, '--agent-file', 'shipyard-ci-fix-deep',
     '--agent-id', 'agent_01FIXER',
-  ], rich.project).status, 0);
+  ], rich.project, { SHIPYARD_CODEX_AGENT_DIR: rich.codexAgentDir }).status, 0);
 
   const richRaw = fs.readFileSync(path.join(rich.graph, 'delivery-front.json'), 'utf8');
   assert.deepStrictEqual(
@@ -1037,8 +1084,12 @@ test('a KNOWN agent file belonging to another role is refused, and names both', 
     ['pr-sentinel', 'shipyard-arch-review'],
   ];
   for (const [role, file] of cases) {
-    const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-    const r = run(['mark', 'T-01-02', role, '--agent-file', file], project);
+    const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+    const r = run(
+      ['mark', 'T-01-02', role, '--agent-file', file],
+      project,
+      { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+    );
     assert.equal(r.status, 1, `${role} × ${file} must refuse (${r.stdout}${r.stderr})`);
     assert.ok(r.stderr.includes(`"${file}"`), `it names the file: ${r.stderr}`);
     assert.ok(r.stderr.includes(role), `and the role it was recorded against: ${r.stderr}`);
@@ -1055,7 +1106,8 @@ test('every role accepts its OWN files, and a role with none says so instead', (
   // `.toml` — so a check built on `shipyard-<role>` refused every legitimate
   // research mark and offered executors a file name that does not exist.
   const { agentFilesFor, codexAgentFiles } = require(DISPATCH);
-  const known = codexAgentFiles();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agentfiles-'));
+  const known = codexAgentFiles(writeCodexAgents(dir));
   let withFiles = 0;
   const claimed = new Set();
   for (const role of ROLES) {
@@ -1063,8 +1115,12 @@ test('every role accepts its OWN files, and a role with none says so instead', (
     if (!files.size) {
       // Any known file, to prove the refusal is about the ROLE having none rather
       // than about the file being unknown.
-      const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-      const r = run(['mark', 'T-01-02', role, '--agent-file', 'shipyard-ci-fix'], project);
+      const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+      const r = run(
+        ['mark', 'T-01-02', role, '--agent-file', 'shipyard-ci-fix'],
+        project,
+        { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+      );
       assert.equal(r.status, 1, `${role} has no agent file, so it must refuse (${r.stdout}${r.stderr})`);
       assert.ok(/no agent file/.test(r.stderr), `and say which fact refused it: ${r.stderr}`);
       assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
@@ -1073,8 +1129,12 @@ test('every role accepts its OWN files, and a role with none says so instead', (
     withFiles += 1;
     for (const file of files) {
       claimed.add(file);
-      const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-      const r = run(['mark', 'T-01-02', role, '--agent-file', file], project);
+      const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+      const r = run(
+        ['mark', 'T-01-02', role, '--agent-file', file],
+        project,
+        { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+      );
       assert.equal(r.status, 0, `${role} × ${file} must be accepted (${r.stderr})`);
       assert.equal(store(graph)['T-01-02'].agent_file, file);
     }

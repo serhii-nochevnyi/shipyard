@@ -454,6 +454,34 @@ cmp -s "$ATOMIC_AGENT_EXPECTED" "$ATOMIC_AGENT" \
 cp "$ATOMIC_CONFIG_BEFORE" "$CODEX_HOME/config.toml"
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 
+# A failure AFTER the agent/config transaction must still roll back the installer
+# owned skill and bundle artifacts, not just the agent/config pair. Force the
+# later AGENTS.md update to fail and prove every earlier artifact is byte-identical.
+ROLLBACK_SKILL="$SKILLS/shipyard-deliver/SKILL.md"
+ROLLBACK_BUNDLE="$CODEX_HOME/shipyard/scripts/state-sync.cjs"
+ROLLBACK_AGENT="$CODEX_HOME/agents/shipyard-arch-review.toml"
+ROLLBACK_CONFIG="$CODEX_HOME/config.toml"
+printf '\n<!-- operator rollback marker -->\n' >> "$ROLLBACK_SKILL"
+printf '\n// operator rollback marker\n' >> "$ROLLBACK_BUNDLE"
+printf '\n# operator rollback marker\n' >> "$ROLLBACK_AGENT"
+cp "$ROLLBACK_SKILL" "$WORK/rollback-skill-expected"
+cp "$ROLLBACK_BUNDLE" "$WORK/rollback-bundle-expected"
+cp "$ROLLBACK_AGENT" "$WORK/rollback-agent-expected"
+cp "$ROLLBACK_CONFIG" "$WORK/rollback-config-expected"
+mkdir -p "$WORK/broken-agents-md"
+if CODEX_AGENTS_MD="$WORK/broken-agents-md" bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/late-failure.log" 2>&1; then
+  echo "a late installer failure unexpectedly committed"; exit 1
+fi
+cmp -s "$WORK/rollback-skill-expected" "$ROLLBACK_SKILL" \
+  || { echo "a late installer failure changed the installed skill"; exit 1; }
+cmp -s "$WORK/rollback-bundle-expected" "$ROLLBACK_BUNDLE" \
+  || { echo "a late installer failure changed the installed bundle"; exit 1; }
+cmp -s "$WORK/rollback-agent-expected" "$ROLLBACK_AGENT" \
+  || { echo "a late installer failure changed the installed agent"; exit 1; }
+cmp -s "$WORK/rollback-config-expected" "$ROLLBACK_CONFIG" \
+  || { echo "a late installer failure changed config.toml"; exit 1; }
+bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+
 # ── an installer owns what it wrote (ADR-007 D5) ──────────────────────────────
 # The palette's ceiling entry declares the Codex CLI version that can first
 # CONFIGURE it, and below that version every role takes the floor — which leaves

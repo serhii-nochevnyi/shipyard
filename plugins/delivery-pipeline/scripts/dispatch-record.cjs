@@ -61,6 +61,7 @@
 // this safe to write from a loop that may not survive to clean up after itself.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
@@ -79,7 +80,7 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 // RESOLVER's, so it is validated against the resolver's own grammar rather than a
 // regex copied over here — the drift `CODEX_DEEP_ROLES` already paid for.
 const {
-  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute,
+  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime,
 } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
@@ -322,16 +323,21 @@ function agentFilesFor(role, known) {
   return new Set(candidates.filter((f) => known.has(f)));
 }
 
-function codexAgentFiles(dir = path.join(__dirname, '..', 'references')) {
+function codexAgentDir(env = process.env) {
+  return path.resolve(
+    env.SHIPYARD_CODEX_AGENT_DIR
+      || env.CODEX_HOME && path.join(env.CODEX_HOME, 'agents')
+      || path.join(os.homedir(), '.codex', 'agents')
+  );
+}
+
+function codexAgentFiles(dir = codexAgentDir()) {
   let refs;
   try { refs = fs.readdirSync(dir); } catch { return null; }
   const out = new Set();
   for (const f of refs) {
-    if (!f.endsWith('.md')) continue;
-    const role = f.slice(0, -3);
-    out.add(`${CODEX_AGENT_PREFIX}${role}`);
-    if (CODEX_DEEP_ROLES.has(role)) out.add(`${CODEX_AGENT_PREFIX}${role}${CODEX_DEEP_SUFFIX}`);
-    if (CODEX_CRITICAL_ROLES.has(role)) out.add(`${CODEX_AGENT_PREFIX}${role}${CODEX_CRITICAL_SUFFIX}`);
+    if (!f.endsWith('.toml') || !f.startsWith(CODEX_AGENT_PREFIX)) continue;
+    out.add(f.slice(0, -5));
   }
   return out;
 }
@@ -532,6 +538,14 @@ function parseMarkFlags(argv, role) {
     if (decided.effort === undefined) decided.effort = parsed.effort.effort;
     decided.reason = route;
   }
+  if (runtime !== undefined && decided.model !== undefined
+      && typeof tierAllowedForRuntime === 'function'
+      && !tierAllowedForRuntime(runtime, decided.model)) {
+    fail(
+      `"${decided.model}" is not available on runtime "${runtime}" — the dispatch recorder only accepts ` +
+      'runnable tier aliases for that runtime.'
+    );
+  }
   if (runtime !== undefined && decided.model === undefined) {
     fail(
       `a ${runtime} dispatch must carry the resolver's --model or --route — otherwise its model lane is unknown.\n` +
@@ -546,8 +560,8 @@ function parseMarkFlags(argv, role) {
     const known = codexAgentFiles();
     if (!known) {
       fail(
-        `--agent-file cannot be verified: no references/ directory beside ${__dirname}.\n` +
-        '  The point of the field is to record which agent file RAN, so an unverifiable name is worse than none.'
+        `--agent-file cannot be verified: no Codex agents directory exists at ${codexAgentDir()}.\n` +
+        '  The point of the field is to record which generated file RAN, so an unverifiable name is worse than none.'
       );
     }
     if (!known.has(agentFile)) {

@@ -41,8 +41,8 @@ function sourceMatches(record, context) {
 }
 
 function attributionShape(record, index) {
-  if (record.source !== undefined && typeof record.source !== 'string') {
-    return { error: `attribution ${index} source must be a string` };
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return { error: `attribution ${index} is not an object` };
   }
   const runtime = runtimeOf(record);
   if (!runtime || !RUNTIME_PROVIDER[runtime]) return { error: `attribution ${index} has an unknown runtime` };
@@ -56,6 +56,15 @@ function attributionShape(record, index) {
   if (!record.session_id && !record.request_id && !record.message_id) {
     return { error: `attribution ${index} has no transcript identity` };
   }
+  for (const [field, whitespace] of [
+    ['dispatch_id', true], ['project_id', false], ['run_id', false], ['ticket', false],
+    ['role', false], ['source', false], ['session_id', false], ['request_id', false],
+    ['message_id', false], ['pass_id', false], ['model', false], ['observed_model', false],
+  ]) {
+    if (record[field] === undefined) continue;
+    const issue = attributionRules.textIssue(record[field], field, { whitespace });
+    if (issue) return { error: `attribution ${index} ${issue}` };
+  }
   if (record.backend !== undefined && !attributionRules.BACKENDS.has(record.backend)) {
     return { error: `attribution ${index} has an unknown backend` };
   }
@@ -67,6 +76,10 @@ function attributionShape(record, index) {
   }
   if (record.model !== undefined && !pipeline.TIERS.includes(record.model)) {
     return { error: `attribution ${index} has an unknown requested model` };
+  }
+  if (record.model !== undefined && typeof pipeline.tierAllowedForRuntime === 'function'
+      && !pipeline.tierAllowedForRuntime(runtime, record.model)) {
+    return { error: `attribution ${index} requested model "${record.model}" is not available on runtime ${runtime}` };
   }
   for (const field of ['effort', 'effort_applied', 'observed_effort']) {
     if (record[field] !== undefined && !attributionRules.EFFORT_STATES.has(record[field])) {
@@ -553,16 +566,18 @@ function report(sources, options = {}) {
   );
   const efficiencyRows = [...new Map(observations
     .filter((o) => o.ticket && o.dispatch_id)
-    .map((o) => [JSON.stringify([o.ticket, o.dispatch_id, o.kind, o.model, o.observed_effort,
-      o.role, o.task_level, o.unit]), o])
+    .map((o) => [JSON.stringify([o.ticket, o.dispatch_id, o.provider, o.runtime, o.kind, o.model, o.observed_effort,
+      o.role, o.task_level, o.backend, o.unit]), o])
   ).values()].map((seed) => {
     const same = observations.filter((o) => o.ticket === seed.ticket && o.dispatch_id === seed.dispatch_id
+      && o.provider === seed.provider && o.runtime === seed.runtime
       && o.kind === seed.kind && o.model === seed.model && o.observed_effort === seed.observed_effort
-      && o.role === seed.role && o.task_level === seed.task_level && o.unit === seed.unit);
+      && o.role === seed.role && o.task_level === seed.task_level
+      && o.backend === seed.backend && o.unit === seed.unit);
     const row = {
       ticket: seed.ticket, dispatch_id: seed.dispatch_id, provider: seed.provider,
       runtime: seed.runtime, kind: seed.kind, model: seed.model,
-      observed_effort: seed.observed_effort, role: seed.role, task_level: seed.task_level,
+      observed_effort: seed.observed_effort, role: seed.role, task_level: seed.task_level, backend: seed.backend,
       observations: same.length,
       eligible: same.every(efficiencyEligible),
       exclusion_reasons: [...new Set(same.flatMap(efficiencyExclusionReasons))].sort(),

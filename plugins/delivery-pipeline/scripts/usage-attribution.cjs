@@ -162,6 +162,10 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
   if (record.model !== undefined && Array.isArray(pipeline.TIERS) && !pipeline.TIERS.includes(record.model)) {
     fail(`model "${record.model}" is not a requested tier alias — concrete ids belong in observed_model`);
   }
+  if (record.model !== undefined && typeof pipeline.tierAllowedForRuntime === 'function'
+      && !pipeline.tierAllowedForRuntime(runtime, record.model)) {
+    fail(`model "${record.model}" is not available on runtime "${runtime}"`);
+  }
   for (const key of ['effort', 'effort_applied', 'observed_effort']) {
     if (record[key] === undefined) continue;
     if (!EFFORT_STATES.has(record[key])) {
@@ -238,6 +242,7 @@ function sameRecord(a, b) {
 function recordBatch(graphDir, raw) {
   const input = Array.isArray(raw) ? raw : [raw];
   if (!input.length) return { recorded: [], skipped: 0 };
+  graphGuard(graphDir, true);
   // Validate all items before taking the lock or changing the file.
   const now = new Date().toISOString();
   const normalized = input.map((item) => normalizeRecord(item, now));
@@ -304,11 +309,13 @@ module.exports = {
   KINDS,
   COMPLETION_STATES,
   EFFORT_STATES,
+  graphGuard,
   normalizeRecord,
   parseLedger,
   readLedger,
   latestRecords,
   recordBatch,
+  textIssue,
 };
 
 if (require.main === module) {

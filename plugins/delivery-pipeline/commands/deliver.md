@@ -408,9 +408,10 @@ critical    risk=high or checkpoint; starts on the stronger lane
 recovery    repeat_exhausted or contested judgement; use the ceiling lane
 ```
 
-On Claude, routine work resolves to `sonnet`, complex work keeps `opus`, and
-critical work uses `opus` at `xhigh` effort. On Codex, routine/complex work uses
-the first palette entry and critical/recovery work uses the generated
+On the Workflow path, routine work resolves to `sonnet`, complex work keeps
+`opus`, and critical work uses `opus` at `xhigh` effort. On the Codex path,
+routine/complex work uses the first palette entry and critical/recovery work uses
+the generated
 `-critical`/`-deep` file at the last palette entry for roles that have those
 variants. The integrator remains on the ceiling in both modes and has no
 variant. Missing facts keep a task in the complex lane and produce a warning;
@@ -1328,12 +1329,13 @@ refused. `free: 0` means dispatch nothing this round — collect what is out, th
 recompute. When the cap prints `0 agents` the project config does not parse and nothing
 may be dispatched at all: fix the file.
 
-4. Launch the executor agent IN THE WORKTREE. For Claude, get its model from
-   `pipeline-config.cjs model executor --json --explain --risk <risk> --type <type>
-   --files <n> [--checkpoint]` and pass the returned `model`, `effort` and
-   `task_level` verbatim. For Codex, call
-   `codex-agent.cjs select executor --json --project-dir <project>` with the same
-   signals. Pass its concrete `model` and `effort` when the host supports those
+4. Launch the executor agent IN THE WORKTREE. On the Workflow path, get its
+   model from `pipeline-config.cjs model executor --json --explain --risk <risk>
+   --type <type> --files <n> [--checkpoint]` and pass the returned `model`,
+   `effort` and `task_level` verbatim. On the Codex path, call
+   `codex-agent.cjs select executor --json --project-dir <project> --risk <risk>
+   --type <type> --files <n> [--checkpoint]` with the same signals. Pass its
+   concrete `model` and `effort` when the host supports those
    overrides; when `model` is `null`, omit `--model` and let the Codex CLI default
    apply. In both runtimes keep the selector's `route`, `model_tier` and
    `task_level` for dispatch recording. On the Agent fallback, which has no

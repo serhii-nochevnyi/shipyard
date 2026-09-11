@@ -177,3 +177,47 @@ test('non-string attribution sources are skipped without aborting the report', (
  assert.ok(r.warnings.some((w) => w.includes('source must be a string')));
  assert.equal(r.observations[0].attribution_status, 'unattributed');
 });
+
+test('runtime-incompatible requested tiers are skipped from in-memory attributions', () => {
+ const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), {
+   attributions: [{
+     observation_id:'bad-runtime-tier', dispatch_id:'dispatch-1', runtime:'codex', provider:'openai', kind:'ordinary',
+     source:'fixture', session_id:'s1', request_id:'r1', message_id:'m1', ticket:'T-01-01',
+     role:'executor', task_level:'routine', backend:'workflow', model:'fable', effort:'high',
+     observed_model:'gpt-5.6-luna', observed_effort:'high',
+   }],
+ });
+ assert.ok(r.warnings.some((w) => w.includes('not available on runtime codex')));
+ assert.equal(r.observations[0].attribution_status, 'unattributed');
+});
+
+test('malformed observed_model values are skipped instead of entering efficiency rows', () => {
+ const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), {
+   attributions: [{
+     observation_id:'bad-observed-model', dispatch_id:'dispatch-1', runtime:'claude', provider:'anthropic', kind:'ordinary',
+     source:'fixture', session_id:'s1', request_id:'r1', message_id:'m1', ticket:'T-01-01', role:'executor',
+     task_level:'routine', backend:'workflow', model:'opus', effort:'high', observed_model:{id:'bad'},
+     observed_effort:'high',
+   }],
+ });
+ assert.ok(r.warnings.some((w) => w.includes('observed_model must be a string')));
+ assert.equal(r.efficiency.eligible_rows, 0);
+});
+
+test('efficiency rows stay separated by provider, runtime and backend', () => {
+ const attributed = {
+   observation_id:'shared-dispatch', dispatch_id:'dispatch-1', runtime:'claude', provider:'anthropic', kind:'ordinary',
+   source:'fixture', session_id:'s1', request_id:'r1', message_id:'m1', ticket:'T-01-01', role:'executor',
+   task_level:'routine', backend:'workflow', model:'opus', effort:'high', observed_model:'claude-opus-5',
+   observed_effort:'high',
+ };
+ const r = report(files(
+   claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'}),
+   {type:'assistant', requestId:'r2', sessionId:'s2', message:{id:'m2', model:'example-model', usage:{input_tokens:7,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:3}, stop_reason:'end_turn'}},
+ ), {attributions:[
+   attributed,
+   {...attributed, observation_id:'shared-dispatch-2', session_id:'s2', request_id:'r2', message_id:'m2', backend:'agent'},
+ ]});
+ assert.equal(r.efficiency.rows.length, 2);
+ assert.deepEqual(r.efficiency.rows.map((row) => row.backend).sort(), ['agent', 'workflow']);
+});

@@ -117,6 +117,27 @@ test('an explicit graph path must contain the project marker before writing', ()
   }
 });
 
+test('the write API refuses a graph directory without the project marker', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-uattr-api-missing-'));
+  const missing = path.join(dir, 'not-a-graph');
+  try {
+    assert.throws(
+      () => recordBatch(missing, base()),
+      /refusing to write an attribution ledger nobody will read/
+    );
+    assert.equal(fs.existsSync(missing), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Codex attributions reject Claude-only requested tiers', () => {
+  assert.throws(
+    () => normalizeRecord(base({ runtime: 'codex', provider: 'openai', model: 'fable' })),
+    /not available on runtime "codex"/
+  );
+});
+
 const claude = {
   type: 'assistant', sessionId: 'claude-session', requestId: 'claude-request',
   message: {

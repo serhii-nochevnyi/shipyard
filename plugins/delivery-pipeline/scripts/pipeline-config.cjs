@@ -1011,6 +1011,11 @@ function topTier(cfg) {
   const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
   return RUNTIMES_WITH_1M_TIER.has(runtime) ? 'fable' : 'opus';
 }
+function tierAllowedForRuntime(runtime, tier) {
+  if (!TIERS.includes(tier)) return false;
+  if (tier !== 'fable') return true;
+  return RUNTIMES_WITH_1M_TIER.has(runtime);
+}
 
 // A tier alias means the same STRENGTH everywhere but not the same ECONOMICS.
 // On Claude, `opus` is the ordinary choice for writing code. On Codex the top
@@ -1386,7 +1391,7 @@ module.exports = {
   normalizeJiraTransitions, TICKET_STATUSES,
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
   TASK_LEVELS, TASK_LEVEL_RANK, LADDER_MODES, taskLevelRoute,
-  DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS, NUMERIC_KNOBS,
+  DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS, NUMERIC_KNOBS, tierAllowedForRuntime,
 };
 
 // ── CLI ─────────────────────────────────────────────────────────────────────

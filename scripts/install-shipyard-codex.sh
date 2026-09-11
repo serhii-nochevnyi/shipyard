@@ -62,7 +62,73 @@ if [[ ! -f "$GSD_TOOLS" ]]; then
 fi
 
 STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
+ROLLBACK_ACTIVE=0
+cleanup() {
+  local status=$?
+  if [[ "$status" -ne 0 && "$ROLLBACK_ACTIVE" == 1 ]]; then
+    echo "error: install failed after mutating shipyard artifacts; restoring the previous set" >&2
+    restore_config 2>/dev/null || echo "warning: config rollback was incomplete; inspect ${CONFIG_TARGET:-$CODEX_HOME/config.toml}" >&2
+    restore_agents 2>/dev/null || echo "warning: agent rollback was incomplete; inspect ${AGENTS_DIR:-$CODEX_HOME/agents}" >&2
+    restore_bundle 2>/dev/null || echo "warning: bundle rollback was incomplete; inspect $BUNDLE_ROOT" >&2
+    restore_skills 2>/dev/null || echo "warning: skills rollback was incomplete; inspect $AGENTS_SKILLS" >&2
+  fi
+  rm -rf "$STAGE"
+  trap - EXIT
+  exit "$status"
+}
+restore_skills() {
+  local index="${SKILLS_BACKUP_INDEX:-}"
+  local backup="${SKILLS_BACKUP:-}"
+  local state name target restore_status=0
+  [[ -n "$index" && -f "$index" && -n "$backup" ]] || return 0
+  while IFS=$'\t' read -r state name; do
+    [[ -n "$name" ]] || continue
+    target="$AGENTS_SKILLS/$name"
+    rm -rf "$target" || restore_status=1
+    if [[ "$state" == present ]]; then
+      cp -a "$backup/$name" "$target" || restore_status=1
+    fi
+  done < "$index"
+  return "$restore_status"
+}
+restore_bundle() {
+  local restore_status=0
+  [[ -n "${BUNDLE_PREEXISTED:-}" ]] || return 0
+  rm -rf "${BUNDLE_ROOT:?}" || restore_status=1
+  if [[ "${BUNDLE_PREEXISTED:-0}" == 1 ]]; then
+    cp -a "$BUNDLE_BACKUP" "$BUNDLE_ROOT" || restore_status=1
+  fi
+  return "$restore_status"
+}
+restore_agents() {
+  local index="${AGENT_BACKUP_INDEX:-}"
+  local backup="${AGENT_BACKUP:-}"
+  local state name target restore_status=0
+  [[ -n "$index" && -f "$index" && -n "$backup" && -n "${AGENTS_DIR:-}" ]] || return 0
+  while IFS=$'\t' read -r state name; do
+    [[ -n "$name" ]] || continue
+    target="$AGENTS_DIR/$name"
+    rm -rf "$target" || restore_status=1
+    if [[ "$state" == present ]]; then
+      cp -a "$backup/$name" "$target" || restore_status=1
+    fi
+  done < "$index"
+  if [[ "${AGENTS_DIR_PREEXISTED:-0}" == 0 ]]; then
+    rmdir "$AGENTS_DIR" 2>/dev/null || true
+  fi
+  return "$restore_status"
+}
+restore_config() {
+  local restore_status=0
+  [[ -n "${CONFIG_PREEXISTED:-}" && -n "${CONFIG_TARGET:-}" ]] || return 0
+  if [[ "${CONFIG_PREEXISTED:-0}" == 1 ]]; then
+    cp -p "$CONFIG_BACKUP" "$CONFIG_TARGET" || restore_status=1
+  else
+    rm -f "$CONFIG_TARGET" || restore_status=1
+  fi
+  return "$restore_status"
+}
+trap cleanup EXIT
 OUT="$STAGE/bundle-out"
 
 # ── generate ─────────────────────────────────────────────────────────────────
@@ -75,6 +141,21 @@ node "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" \
 # ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
 echo "→ installing skills → $AGENTS_SKILLS"
 mkdir -p "$AGENTS_SKILLS"
+SKILLS_BACKUP="$STAGE/skills-before"
+SKILLS_BACKUP_INDEX="$STAGE/skills-before.tsv"
+mkdir -p "$SKILLS_BACKUP"
+: > "$SKILLS_BACKUP_INDEX"
+for d in "$OUT"/skills/*/; do
+  name="$(basename "$d")"
+  target="$AGENTS_SKILLS/$name"
+  if [[ -e "$target" || -L "$target" ]]; then
+    cp -a "$target" "$SKILLS_BACKUP/$name"
+    printf 'present\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
+  else
+    printf 'absent\t%s\n' "$name" >> "$SKILLS_BACKUP_INDEX"
+  fi
+done
+ROLLBACK_ACTIVE=1
 for d in "$OUT"/skills/*/; do
   name="$(basename "$d")"
   rm -rf "${AGENTS_SKILLS:?}/$name"
@@ -89,6 +170,13 @@ done
 # the old one silently callable. The bundle is wholly generated, so nothing
 # user-authored is at risk.
 echo "→ installing bundle payload → $BUNDLE_ROOT"
+if [[ -e "$BUNDLE_ROOT" || -L "$BUNDLE_ROOT" ]]; then
+  BUNDLE_BACKUP="$STAGE/bundle-before"
+  cp -a "$BUNDLE_ROOT" "$BUNDLE_BACKUP"
+  BUNDLE_PREEXISTED=1
+else
+  BUNDLE_PREEXISTED=0
+fi
 rm -rf "${BUNDLE_ROOT:?}"
 mkdir -p "$BUNDLE_ROOT"
 cp -R "$OUT"/bundle/. "$BUNDLE_ROOT/"
@@ -151,38 +239,11 @@ if compgen -G "$OUT/agents/*.toml" >/dev/null; then
     fi
   done
 
-  restore_agents() {
-    local state name target restore_status=0
-    while IFS=$'\t' read -r state name; do
-      [[ -n "$name" ]] || continue
-      target="$AGENTS_DIR/$name"
-      rm -rf "$target" || restore_status=1
-      if [[ "$state" == present ]]; then
-        cp -a "$AGENT_BACKUP/$name" "$target" || restore_status=1
-      fi
-    done < "$AGENT_BACKUP_INDEX"
-    if [[ "$AGENTS_DIR_PREEXISTED" == 0 ]]; then
-      rmdir "$AGENTS_DIR" 2>/dev/null || true
-    fi
-    return "$restore_status"
-  }
-
-  restore_config() {
-    local restore_status=0
-    if [[ "$CONFIG_PREEXISTED" == 1 ]]; then
-      cp -p "$CONFIG_BACKUP" "$CONFIG_TARGET" || restore_status=1
-    else
-      rm -f "$CONFIG_TARGET" || restore_status=1
-    fi
-    return "$restore_status"
-  }
-
   if cp "$OUT"/agents/*.toml "$AGENTS_DIR/"; then
     :
   else
     status=$?
     echo "error: could not install generated agent files; restoring the previous set" >&2
-    restore_agents || echo "warning: agent rollback was incomplete; inspect $AGENTS_DIR" >&2
     exit "$status"
   fi
 
@@ -193,8 +254,6 @@ if compgen -G "$OUT/agents/*.toml" >/dev/null; then
   else
     status=$?
     echo "error: config merge failed; restoring the previous agent and config set" >&2
-    restore_config || echo "warning: config rollback was incomplete; inspect $CONFIG_TARGET" >&2
-    restore_agents || echo "warning: agent rollback was incomplete; inspect $AGENTS_DIR" >&2
     exit "$status"
   fi
   # AFTER the merge, deliberately. Both halves are committed before this
@@ -402,3 +461,4 @@ deliver_hint=""
 echo "✓ shipyard installed for Codex."
 echo "  In Codex: \$shipyard-route | \$shipyard-investigate | \$shipyard-decompose${deliver_hint} | \$shipyard-bench"
 echo "  (auto-route is in $AGENTS_MD — describe the work and the router picks the entry)"
+ROLLBACK_ACTIVE=0
