@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a38b48f43fb1f7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a90991e8483ab3ab2ab26f88bd2644d1e8379f29333e27291f6a1b42bf987780
 phase: 30
 status: human_needed
-shipyard_source_fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a38b48f43fb1f7
+shipyard_source_fingerprint: a90991e8483ab3ab2ab26f88bd2644d1e8379f29333e27291f6a1b42bf987780
 ---
 
 # Phase 30: A ticket you cannot reach is not deliverable — Verification Projection
@@ -24,10 +24,10 @@ shipyard_source_fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a
 | T-30-01 | pr-open | ? UNCERTAIN |
 | T-30-02 | pr-open | ? UNCERTAIN |
 | T-30-03 | pr-open | ? UNCERTAIN |
-| T-30-04 | pending | ? UNCERTAIN |
+| T-30-04 | pr-open | ? UNCERTAIN |
 | T-30-05 | pending | ? UNCERTAIN |
 | T-30-06 | pending | ? UNCERTAIN |
-| T-30-07 | pending | ? UNCERTAIN |
+| T-30-07 | pr-open | ? UNCERTAIN |
 | T-30-08 | pending | ? UNCERTAIN |
 | T-30-09 | pending | ? UNCERTAIN |
 

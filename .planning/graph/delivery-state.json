@@ -855,12 +855,12 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/109",
     "pr_base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "pr_created_at": "2026-09-11T20:50:14Z",
-    "head_sha": "87df6eeac18fe647c7a507809a7671626dcef662",
-    "merge_state": "UNSTABLE",
+    "head_sha": "ada19eb5f4e3121faf677bf215e8c2c54ddccf3c",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
       "total": 1,
-      "failing": 1,
+      "failing": 0,
       "pending": 0,
       "none_reported": false,
       "unavailable": false
@@ -881,12 +881,12 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/110",
     "pr_base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "pr_created_at": "2026-09-11T20:50:28Z",
-    "head_sha": "3ef51165807f73beb74581dc5521c26b977c0627",
-    "merge_state": "UNSTABLE",
+    "head_sha": "53799f8b6d8e42343f2373361d77eff540447d02",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
       "total": 1,
-      "failing": 1,
+      "failing": 0,
       "pending": 0,
       "none_reported": false,
       "unavailable": false
@@ -907,13 +907,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/111",
     "pr_base": "ticket/T-30-02-resolve-configured-repositories-before-f",
     "pr_created_at": "2026-09-11T20:56:20Z",
-    "head_sha": "c0c7293894d3d7e4a55968672ac71defa6ea4b41",
-    "merge_state": "UNSTABLE",
+    "head_sha": "44caa8e68ef69fd438ef7637f43a1f9e924667fb",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -926,29 +926,40 @@
   },
   "T-30-04": {
     "branch": "ticket/T-30-04-require-an-explicit-operator-choice-befo",
-    "pr": null,
-    "status": "pending",
+    "pr": 113,
+    "status": "pr-open",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-30-04-require-an-explicit-operator-choice-before-cloning",
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/113",
+    "pr_base": "ticket/T-30-03-discover-repository-checkouts-by-declare",
+    "pr_created_at": "2026-09-11T21:38:06Z",
+    "head_sha": "e17ae87b17bcad8015e104ab21beb77907758c9c",
+    "merge_state": "CLEAN",
+    "behind_by": 0,
+    "checks": {
+      "total": 1,
+      "failing": 0,
+      "pending": 0,
+      "none_reported": false,
+      "unavailable": false
+    },
     "base": "ticket/T-30-03-discover-repository-checkouts-by-declare",
     "base_reason": "T-30-03 is pr-open — cascade off ticket/T-30-03-discover-repository-checkouts-by-declare; the sentinel retargets this PR onto epic/30-a-ticket-you-cannot-reach-is-not-deliverable when T-30-03 lands",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
-    "ready": true,
+    "merge_scope": "stacked",
     "reapable": false,
-    "since": "2026-09-11T20:34:55.968Z"
+    "since": "2026-09-11T22:49:43.397Z"
   },
   "T-30-05": {
     "branch": "ticket/T-30-05-validate-repository-destinations-with-th",
     "pr": null,
     "status": "pending",
-    "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
-    "base_reason": "T-30-04 has no branch on the remote yet (status pending) — ticket/T-30-04-require-an-explicit-operator-choice-befo is not a base that exists, so the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
+    "base": "ticket/T-30-04-require-an-explicit-operator-choice-befo",
+    "base_reason": "T-30-04 is pr-open — cascade off ticket/T-30-04-require-an-explicit-operator-choice-befo; the sentinel retargets this PR onto epic/30-a-ticket-you-cannot-reach-is-not-deliverable when T-30-04 lands",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
-    "ready": false,
-    "blocked_by": [
-      "T-30-04"
-    ],
-    "blocked_reasons": {
-      "T-30-04": "parent has no branch yet (nothing to cascade from)"
-    },
+    "ready": true,
     "reapable": false,
     "since": "2026-09-11T20:34:55.968Z"
   },
@@ -971,35 +982,38 @@
   },
   "T-30-07": {
     "branch": "ticket/T-30-07-use-a-full-clone-with-all-refs-required",
-    "pr": null,
-    "status": "pending",
+    "pr": 116,
+    "status": "pr-open",
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/116",
+    "pr_base": "ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones",
+    "pr_created_at": "2026-09-11T21:59:35Z",
+    "head_sha": "2f5e43ee837528c26e3517247f2ac2c95a2ecf92",
+    "merge_state": "CLEAN",
+    "behind_by": 0,
+    "checks": {
+      "total": 1,
+      "failing": 0,
+      "pending": 0,
+      "none_reported": false,
+      "unavailable": false
+    },
     "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "base_reason": "T-30-06 has no branch on the remote yet (status pending) — ticket/T-30-06-mirror-the-project-origin-protocol-for-r is not a base that exists, so the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
-    "ready": false,
-    "blocked_by": [
-      "T-30-06"
-    ],
-    "blocked_reasons": {
-      "T-30-06": "parent has no branch yet (nothing to cascade from)"
-    },
+    "merge_scope": "integration",
     "reapable": false,
-    "since": "2026-09-11T20:34:55.968Z"
+    "since": "2026-09-11T22:49:43.397Z"
   },
   "T-30-08": {
     "branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c",
     "pr": null,
     "status": "pending",
-    "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
-    "base_reason": "T-30-07 has no branch on the remote yet (status pending) — ticket/T-30-07-use-a-full-clone-with-all-refs-required is not a base that exists, so the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
+    "base": "ticket/T-30-07-use-a-full-clone-with-all-refs-required",
+    "base_reason": "T-30-07 is pr-open — cascade off ticket/T-30-07-use-a-full-clone-with-all-refs-required; the sentinel retargets this PR onto epic/30-a-ticket-you-cannot-reach-is-not-deliverable when T-30-07 lands",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
-    "ready": false,
-    "blocked_by": [
-      "T-30-07"
-    ],
-    "blocked_reasons": {
-      "T-30-07": "parent has no branch yet (nothing to cascade from)"
-    },
+    "ready": true,
     "reapable": false,
     "since": "2026-09-11T20:34:55.968Z"
   },
@@ -1019,6 +1033,125 @@
     },
     "reapable": false,
     "since": "2026-09-11T20:34:55.968Z"
+  },
+  "T-31-01": {
+    "branch": "ticket/T-31-01-remove-the-external-ticket-import-shortc",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/31-not-every-ticket-is-available-work",
+    "base_reason": "no primary parent — a root ticket PRs into epic/31-not-every-ticket-is-available-work",
+    "epic": "epic/31-not-every-ticket-is-available-work",
+    "ready": false,
+    "blocked_by": [
+      "T-30-09"
+    ],
+    "blocked_reasons": {
+      "T-30-09": "cross-phase parent must be MERGED and its phase 30 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-11T22:49:43.397Z"
+  },
+  "T-31-02": {
+    "branch": "ticket/T-31-02-declare-opt-in-jira-to-do-statuses",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/31-not-every-ticket-is-available-work",
+    "base_reason": "T-31-01 has no branch on the remote yet (status pending) — ticket/T-31-01-remove-the-external-ticket-import-shortc is not a base that exists, so the base is epic/31-not-every-ticket-is-available-work",
+    "epic": "epic/31-not-every-ticket-is-available-work",
+    "ready": false,
+    "blocked_by": [
+      "T-31-01"
+    ],
+    "blocked_reasons": {
+      "T-31-01": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-11T22:49:43.397Z"
+  },
+  "T-31-03": {
+    "branch": "ticket/T-31-03-define-status-and-assignee-eligibility-w",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/31-not-every-ticket-is-available-work",
+    "base_reason": "T-31-02 has no branch on the remote yet (status pending) — ticket/T-31-02-declare-opt-in-jira-to-do-statuses is not a base that exists, so the base is epic/31-not-every-ticket-is-available-work",
+    "epic": "epic/31-not-every-ticket-is-available-work",
+    "ready": false,
+    "blocked_by": [
+      "T-31-02"
+    ],
+    "blocked_reasons": {
+      "T-31-02": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-11T22:49:43.397Z"
+  },
+  "T-31-04": {
+    "branch": "ticket/T-31-04-persist-tracker-verdicts-and-fail-closed",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/31-not-every-ticket-is-available-work",
+    "base_reason": "T-31-03 has no branch on the remote yet (status pending) — ticket/T-31-03-define-status-and-assignee-eligibility-w is not a base that exists, so the base is epic/31-not-every-ticket-is-available-work",
+    "epic": "epic/31-not-every-ticket-is-available-work",
+    "ready": false,
+    "blocked_by": [
+      "T-31-03"
+    ],
+    "blocked_reasons": {
+      "T-31-03": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-11T22:49:43.397Z"
+  },
+  "T-31-05": {
+    "branch": "ticket/T-31-05-gate-only-the-execute-transition-on-trac",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/31-not-every-ticket-is-available-work",
+    "base_reason": "T-31-04 has no branch on the remote yet (status pending) — ticket/T-31-04-persist-tracker-verdicts-and-fail-closed is not a base that exists, so the base is epic/31-not-every-ticket-is-available-work",
+    "epic": "epic/31-not-every-ticket-is-available-work",
+    "ready": false,
+    "blocked_by": [
+      "T-31-04"
+    ],
+    "blocked_reasons": {
+      "T-31-04": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-11T22:49:43.397Z"
+  },
+  "T-31-06": {
+    "branch": "ticket/T-31-06-journal-direct-ticket-overrides",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/31-not-every-ticket-is-available-work",
+    "base_reason": "T-31-05 has no branch on the remote yet (status pending) — ticket/T-31-05-gate-only-the-execute-transition-on-trac is not a base that exists, so the base is epic/31-not-every-ticket-is-available-work",
+    "epic": "epic/31-not-every-ticket-is-available-work",
+    "ready": false,
+    "blocked_by": [
+      "T-31-05"
+    ],
+    "blocked_reasons": {
+      "T-31-05": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-11T22:49:43.397Z"
+  },
+  "T-31-07": {
+    "branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start-a",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/31-not-every-ticket-is-available-work",
+    "base_reason": "T-31-06 has no branch on the remote yet (status pending) — ticket/T-31-06-journal-direct-ticket-overrides is not a base that exists, so the base is epic/31-not-every-ticket-is-available-work",
+    "epic": "epic/31-not-every-ticket-is-available-work",
+    "ready": false,
+    "blocked_by": [
+      "T-31-06"
+    ],
+    "blocked_reasons": {
+      "T-31-06": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-11T22:49:43.397Z"
   },
   "T-32-01": {
     "branch": "ticket/T-32-01-collect-deduplicated-usage-from-explicit",
