@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { loadConfig } = require('./pipeline-config.cjs');
+const { loadConfig, validateRepositoryDestination } = require('./pipeline-config.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
@@ -24,10 +24,6 @@ function invalidArgument(message) {
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isStringArray(value) {
-  return Array.isArray(value) && value.every((entry) => typeof entry === 'string' && entry.length > 0);
 }
 
 function validateArgs(input) {
@@ -107,26 +103,6 @@ function gitRemoteOrigin(candidate) {
   return value || null;
 }
 
-// Resolve a path for policy checks without creating the path. realpathSync
-// cannot resolve a destination that a future clone would create, so walk up to
-// the nearest existing parent and resolve that part instead. This also makes a
-// symlinked parent obey the path's physical nesting boundary.
-function policyPath(value) {
-  let current = path.resolve(value);
-  const missing = [];
-  while (!fs.existsSync(current)) {
-    const parent = path.dirname(current);
-    if (parent === current) return path.resolve(value);
-    missing.unshift(path.basename(current));
-    current = parent;
-  }
-  try {
-    return path.join(fs.realpathSync(current), ...missing);
-  } catch {
-    return path.resolve(value);
-  }
-}
-
 // existsSync follows symbolic links, so it reports a dangling destination as
 // absent and would let the clone branch treat it as safe to create. lstat
 // keeps the decision fail-closed for every filesystem entry, including broken
@@ -138,36 +114,6 @@ function filesystemEntryExists(candidate) {
   } catch (error) {
     return error && error.code !== 'ENOENT';
   }
-}
-
-function subRepositories(config) {
-  if (!isRecord(config)) return [];
-  const nested = isRecord(config.planning) ? config.planning.sub_repos : undefined;
-  const value = config.sub_repos ?? nested;
-  return isStringArray(value) ? value : [];
-}
-
-function nestingViolation(candidate, projectRoot, config, label = 'checkout') {
-  const project = policyPath(projectRoot || process.cwd());
-  const target = policyPath(candidate);
-  const relative = path.relative(project, target);
-  if (relative === '') return `${label} "${target}" is the project root and cannot be adopted`;
-  const nested = relative
-    && !relative.startsWith(`..${path.sep}`)
-    && relative !== '..'
-    && !path.isAbsolute(relative);
-  if (!nested) return null;
-  const top = relative.split(path.sep)[0];
-  if (subRepositories(config).includes(top)) return null;
-  return `${label} "${target}" is nested inside project "${project}" without sub_repos declaration for "${top}"`;
-}
-
-function repositoryPathInsideRoot(candidate, root) {
-  const relative = path.relative(policyPath(root), policyPath(candidate));
-  return relative !== ''
-    && !relative.startsWith(`..${path.sep}`)
-    && relative !== '..'
-    && !path.isAbsolute(relative);
 }
 
 /**
@@ -189,6 +135,13 @@ function normalizeOrigin(value) {
 
 function configuredRepos(config) {
   return isRecord(config.repos) ? config.repos : {};
+}
+
+function invalidRepositoryPolicy(config) {
+  if (!Object.prototype.hasOwnProperty.call(config, 'repos_root')) return false;
+  return typeof config.repos_root !== 'string'
+    || config.repos_root.length === 0
+    || !path.isAbsolute(config.repos_root);
 }
 
 function hasConfiguredRepo(config, repo) {
@@ -256,6 +209,14 @@ function discoverRepository(input) {
   }
 
   const { ticket = null, repo, config } = input;
+  if (invalidRepositoryPolicy(config)) {
+    return trackOnly(
+      ticket,
+      repo,
+      'pipeline.repos_root is invalid; repository discovery is refused until the configured absolute path is fixed',
+      { resolution: 'invalid-policy', discovery_status: 'invalid' },
+    );
+  }
   const searchedRoots = discoveryRoots(config, input.projectRoot);
   const candidates = [];
   const seen = new Set();
@@ -400,9 +361,13 @@ function suppliedPathResult(input, suppliedPath) {
     );
   }
 
-  const nesting = nestingViolation(base.repository_root, input.projectRoot, config, 'existing checkout');
-  if (nesting) {
-    return trackOnly(ticket, repo, nesting, {
+  const nesting = validateRepositoryDestination(base.repository_root, {
+    projectRoot: input.projectRoot,
+    subRepos: config.sub_repos,
+    label: 'existing checkout',
+  });
+  if (!nesting.valid) {
+    return trackOnly(ticket, repo, nesting.reason, {
       resolution: 'supplied-invalid',
       discovery_status: 'not-run',
     });
@@ -448,34 +413,25 @@ function cloneChoiceResult(input, initial, destinationInfo) {
   }
 
   const { root, destination } = destinationInfo;
-  const nesting = nestingViolation(destination, input.projectRoot, input.config, 'clone destination');
-  if (nesting) {
+  const destinationValidation = validateRepositoryDestination(destination, {
+    projectRoot: input.projectRoot,
+    reposRoot: root,
+    subRepos: input.config.sub_repos,
+    requireInsideRoot: true,
+    label: 'clone destination',
+  });
+  if (!destinationValidation.valid) {
     return {
       ...initial,
       resolution: 'track-only',
       executable: false,
-      reason: nesting,
+      reason: destinationValidation.reason,
       decision: 'clone',
       operator_choice: 'clone',
       choice_source: 'operator',
       destination,
       clone_root: root,
-      park_reason: nesting,
-    };
-  }
-  if (!repositoryPathInsideRoot(destination, root)) {
-    const reason = `clone destination "${destination}" is outside pipeline.repos_root "${root}"`;
-    return {
-      ...initial,
-      resolution: 'track-only',
-      executable: false,
-      reason,
-      decision: 'clone',
-      operator_choice: 'clone',
-      choice_source: 'operator',
-      destination,
-      clone_root: root,
-      park_reason: reason,
+      park_reason: destinationValidation.reason,
     };
   }
 
@@ -708,22 +664,6 @@ function parseCli(argv) {
   return options;
 }
 
-function readProjectPolicy(projectDir) {
-  try {
-    const file = path.join(projectDir, '.planning', 'config.json');
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const pipeline = isRecord(raw.pipeline) ? raw.pipeline : {};
-    const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
-    const nested = raw.sub_repos ?? (isRecord(raw.planning) ? raw.planning.sub_repos : undefined);
-    return {
-      repos_root: declared.repos_root ?? pipeline.repos_root,
-      sub_repos: nested,
-    };
-  } catch {
-    return {};
-  }
-}
-
 async function readInteractiveChoice(repo, destination, suppliedPath = null) {
   const readline = require('readline');
   process.stderr.write(`${choicePrompt(repo, destination)}\n`);
@@ -762,8 +702,7 @@ if (require.main === module) {
     const options = parseCli(process.argv.slice(2));
     const projectDir = path.resolve(options.projectDir);
     const loaded = loadConfig(projectDir);
-    const policy = readProjectPolicy(projectDir);
-    const config = { ...loaded.config, ...policy };
+    const config = loaded.config;
     const input = {
       ticket: options.ticket,
       repo: options.repo,
@@ -779,10 +718,10 @@ if (require.main === module) {
       result = resolveRepository(input);
     } else {
       let choice = options.choice;
+      let existingPath = options.existingPath;
       const destinationInfo = options.destination
         ? { destination: path.resolve(options.destination) }
         : defaultCloneDestination(options.repo, projectDir, config);
-      let existingPath = options.existingPath;
       if (choice === null && !options.nonInteractive && process.stdin.isTTY && process.stdout.isTTY) {
         const selected = await readInteractiveChoice(
           options.repo,

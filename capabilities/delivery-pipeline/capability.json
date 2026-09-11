@@ -73,6 +73,11 @@
       "default": "",
       "description": "The status projection: our ticket status mapped to the TARGET STATUS NAME in the tracker, '<our status>:<their status>' per entry, comma separated - for example 'pr-open:In Progress, merged:Done'. The right-hand side is a status name, never the name of a transition: a workflow's transition names are not a stable schema and its status names are, so the performing half looks up whichever offered transition lands on that status. The left-hand side is one of the four statuses the delivery board actually writes - pending, branched, pr-open, merged - and anything else (the front's bucket names, for instance) is warned about and skipped. EMPTY IS OFF, and empty is the default: silence is not consent to write into someone's tracker. Declared as a string for the same reason codex_models is - GSD's capability config vocabulary is boolean|string|number|enum - and kept flat rather than nested under 'jira' because delivery_pipeline is merged over pipeline shallowly, so an object-valued key in one namespace replaces the other's wholesale."
     },
+    "delivery_pipeline.repos_root": {
+      "type": "string",
+      "default": "",
+      "description": "Absolute root for future foreign-repository checkouts. An absent value resolves to the project parent; an explicit relative or malformed value is rejected and cloning remains parked until it is fixed."
+    },
     "delivery_pipeline.fable": {
       "type": "string",
       "default": "off",

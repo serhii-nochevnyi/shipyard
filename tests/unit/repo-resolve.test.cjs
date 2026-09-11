@@ -126,6 +126,20 @@ test('an invalid configured path is trackable-only without filesystem mutation',
   assert.match(nonRepo.reason, /not a git repository/);
 });
 
+test('an invalid repository root refuses discovery instead of falling back to the project parent', () => {
+  const projectDir = isolatedProject({});
+  const result = mod.discoverRepository({
+    ticket: 'T-30-05',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: null },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'invalid-policy');
+  assert.strictEqual(result.discovery_status, 'invalid');
+  assert.match(result.reason, /repos_root is invalid/);
+});
+
 test('malformed repository arguments fail closed before any filesystem write', () => {
   const parent = tempDir();
   const before = fs.readdirSync(parent);
@@ -386,7 +400,7 @@ test('an existing path nested in the project is refused unless sub_repos declare
     existingPath: nested,
   });
   assert.strictEqual(rejected.executable, false);
-  assert.match(rejected.park_reason, /nested inside project/);
+  assert.match(rejected.park_reason, /nested inside (this )?project/);
 
   const allowed = mod.chooseRepository({
     ticket: 'T-30-04',

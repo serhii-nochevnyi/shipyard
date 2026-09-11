@@ -16,7 +16,8 @@ const {
   loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps,
   taskLevelRoute, routeOf,
   TIERS, EFFORTS, DEFAULTS, ROLES, SIGNATURE_STATES, DEFAULT_CODEX_MODELS, SONNET_ROLES,
-  NUMERIC_KNOBS, TICKET_STATUSES, TASK_LEVELS,
+  NUMERIC_KNOBS, TICKET_STATUSES, TASK_LEVELS, defaultRepositoryRoot,
+  validateRepositoryDestination,
 } = require(mod);
 const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
@@ -944,6 +945,74 @@ test('a key that is not owner/name cannot match delivery.repo, so it warns', () 
   const { config, warnings } = withConfig({ repos: { webapp: '/srv/webapp' } });
   assert.deepStrictEqual(config.repos, {});
   assert.ok(warnings.some((w) => /owner\/name/.test(w)));
+});
+
+test('repos_root defaults to the absolute project parent', () => {
+  const { dir, config, warnings } = withRawText(undefined);
+  assert.strictEqual(config.repos_root, defaultRepositoryRoot(dir));
+  assert.ok(path.isAbsolute(config.repos_root));
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('repos_root is declared in the capability so GSD tooling can set it', () => {
+  const cap = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'capabilities', 'delivery-pipeline', 'capability.json'), 'utf8'
+  ));
+  const declared = (cap.config || {})['delivery_pipeline.repos_root'];
+  assert.ok(declared, 'capability.json must declare delivery_pipeline.repos_root');
+  assert.strictEqual(declared.type, 'string');
+});
+
+test('an absolute repos_root is accepted and the declared namespace wins', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-root-'));
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  const root = path.join(dir, 'checkouts');
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({
+    pipeline: { repos_root: '/wrong/root' },
+    delivery_pipeline: { repos_root: root },
+  }, null, 2));
+  const { config, warnings } = loadConfig(dir);
+  assert.strictEqual(config.repos_root, root);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('the materialized empty repos_root default uses the project parent', () => {
+  const { dir, config, warnings } = withRawOptions({ pipeline: { repos_root: '' } }, {});
+  assert.strictEqual(config.repos_root, defaultRepositoryRoot(dir));
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('relative and malformed repos_root values are refused without creating a directory', () => {
+  for (const value of ['checkouts', null, {}, true]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-root-'));
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ pipeline: { repos_root: value } }));
+    const before = fs.readdirSync(dir).sort();
+    const { config, warnings } = loadConfig(dir);
+    assert.strictEqual(config.repos_root, null, JSON.stringify(value));
+    assert.ok(warnings.some((warning) => /repos_root.*absolute/.test(warning)), warnings.join('; '));
+    assert.deepStrictEqual(fs.readdirSync(dir).sort(), before, 'invalid policy must not create the root');
+  }
+});
+
+test('the shared destination helper gives the same nesting verdict to callers', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-root-'));
+  const nested = path.join(dir, 'vendor', 'service');
+  const rejected = validateRepositoryDestination(nested, {
+    projectRoot: dir,
+    subRepos: [],
+    label: 'checkout',
+  });
+  assert.strictEqual(rejected.valid, false);
+  assert.match(rejected.reason, /nested inside this project/);
+
+  const allowed = validateRepositoryDestination(nested, {
+    projectRoot: dir,
+    subRepos: ['vendor'],
+    label: 'checkout',
+  });
+  assert.strictEqual(allowed.valid, true);
+  assert.strictEqual(allowed.repos_root, null);
 });
 
 suite('sentinel + auto_merge — the knobs that decide whether PRs land by themselves');
