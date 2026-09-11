@@ -594,8 +594,8 @@ findings or turn a merged ticket count into a false phase pass.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `35ae4d2614bb94ef04e5d654c62e5ab00f7beab2096c7a9d2e2e496908ddb264`
-- Plans merged: 79/82
+- Source fingerprint: `fa5303a77ad014941811c8ab0889764b44d882ceb30140f4383311d66c09b7a2`
+- Plans merged: 80/82
 - Phases verified: 3/16
 - Current phase: 20
 
@@ -616,6 +616,6 @@ findings or turn a merged ticket count into a false phase pass.
 | 32 — Measure usage and make the backlog actionable | 2 | 2 | passed |
 | 33 — Reduce orchestration context and transfer sessions safely | 0 | 0 | pending |
 | 34 — Improve convergence and tune from measured outcomes | 0 | 0 | pending |
-| 35 — Close the GSD and Shipyard workflow loop | 3 | 0 | pending |
+| 35 — Close the GSD and Shipyard workflow loop | 3 | 1 | pending |
 
 <!-- shipyard:gsd-sync:end -->
