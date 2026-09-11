@@ -19,6 +19,12 @@ const { withLock, lockDirFor } = require('./lock.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
+// A clone is a potentially long-running write. The ordinary two-minute lock
+// TTL is a safety net for short state writes, but expiring it during a clone
+// would let a second resolver inspect and adopt a partial checkout. This
+// transaction therefore keeps ownership until the process releases it; a
+// crashed clone remains an explicit lock-recovery decision instead of a race.
+const CLONE_LOCK_TTL_MS = Number.MAX_SAFE_INTEGER;
 
 function invalidArgument(message) {
   const error = new TypeError(`repo-resolve: ${message}`);
@@ -717,7 +723,7 @@ function cloneRepository(input, runner = spawnSync) {
   // and adopt it, never race the first `git clone` or overwrite its path.
   return withLock(lockDirFor(projectRoot), 'repo-resolve', () => (
     cloneRepositoryUnlocked({ ...input, projectRoot }, runner)
-  ), { label: `repo-resolve clone ${input.repo}` });
+  ), { label: `repo-resolve clone ${input.repo}`, ttlMs: CLONE_LOCK_TTL_MS });
 }
 
 function cloneRepositoryUnlocked(input, runner = spawnSync) {
@@ -762,6 +768,16 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
   if (fs.existsSync(destination)) {
     const adopted = suppliedPathResult(input, destination);
     if (adopted.executable) {
+      const baseRef = resolveOriginRef(destination, baseName);
+      if (!baseRef) {
+        return cloneFailure(input,
+          `clone destination "${destination}" matches ${input.repo} but required ref origin/${baseName} is missing`, {
+            resolution: 'clone-unverified',
+            destination,
+            clone_root: root,
+            required_base: `origin/${baseName}`,
+          });
+      }
       return {
         ...adopted,
         resolution: 'adopted',
@@ -771,9 +787,9 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
         adopted: true,
         destination,
         clone_root: root,
-        required_base: `origin/${baseName}`,
-        base_ref: null,
-        base_verified: false,
+        required_base: baseRef,
+        base_ref: baseRef,
+        base_verified: true,
         park_reason: null,
       };
     }

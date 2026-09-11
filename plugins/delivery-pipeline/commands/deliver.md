@@ -707,11 +707,14 @@ Consequences you must honour:
   **A PR number alone is ambiguous across repos**: always pass
   `reviewers.cjs … --repo <owner/name>` for a foreign PR, or `reinit` posts
   "@coderabbitai full review" on whatever unrelated PR shares that number here.
-- **Tracking is free, EXECUTING needs a local checkout.** Configure it:
-  `pipeline.repos: {"pdffiller/jsfiller": "/abs/path/to/jsfiller"}` (absolute —
-  the run works from many worktrees). state-sync prints a `⚠ repo … has no local
-  checkout configured` line when it is missing: those tickets can be tracked but
-  not driven, and saying so is mandatory, not optional.
+- **Tracking is free, EXECUTING needs an executable local checkout.** Configure
+  it with `pipeline.repos: {"pdffiller/jsfiller": "/abs/path/to/jsfiller"}`
+  (absolute — the run works from many worktrees). On a cold start, state-sync
+  resolves configured paths first and then adopts one unique origin-matching
+  sibling checkout; it prints `repo …: … checkout …` when that result is
+  executable. Missing, invalid, or ambiguous resolution prints `⚠ repo … is
+  track-only — <reason>`: those tickets can be tracked but not driven, and the
+  reason is mandatory and durable.
 - **Cold-start resolution follows the configured then discovery branches.** For
   every foreign ticket before preparing its worktree, call:
   `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs resolve <owner/name> \
@@ -1345,9 +1348,10 @@ the branch exists and only the publish half is missing (skip straight to 5).
 1. `base` = `state[T].base` from `delivery-state.json` (state-sync already computed it:
    root → epic; dependent → the primary parent's branch; merged parent → epic).
    Do NOT construct the base by hand and don't take main directly in epic-stacked.
-   `state[T].repo` present → run every git/gh step of this ticket in THAT repo's
-   checkout (`pipeline.repos`), `gh … --repo <owner/name>`; no checkout configured
-   → the ticket can only be TRACKED: park it and say so.
+   `state[T].repo` present → use the executable checkout returned by the cold-start
+   resolver, with `gh … --repo <owner/name>` for the ticket's repository. When
+   resolution is track-only, the ticket can only be TRACKED: park it with the
+   resolver's reason and say so.
 2. Preflight (GSD 1.7): if gsd-tools is available —
    `node ~/.claude/gsd-core/bin/gsd-tools.cjs worktree base-check` —
    catches a divergence of HEAD from the fork-base before creating the worktree

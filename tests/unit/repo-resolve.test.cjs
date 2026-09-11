@@ -326,6 +326,12 @@ test('a repeated clone adopts an existing matching checkout without invoking clo
   const projectDir = isolatedProject({});
   const parent = path.dirname(projectDir);
   const destination = repoAt(path.join(parent, 'service'), 'git@github.com:acme/service.git');
+  git(destination, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(destination, ['config', 'user.name', 'Shipyard Tests']);
+  fs.writeFileSync(path.join(destination, 'README.md'), 'adopted\n');
+  git(destination, ['add', 'README.md']);
+  git(destination, ['commit', '-qm', 'seed']);
+  git(destination, ['update-ref', 'refs/remotes/origin/epic/base', 'HEAD']);
   let invoked = false;
   const result = mod.cloneRepository({
     ticket: 'T-30-08',
@@ -344,7 +350,30 @@ test('a repeated clone adopts an existing matching checkout without invoking clo
   assert.strictEqual(result.resolution, 'adopted');
   assert.strictEqual(result.adopted, true);
   assert.strictEqual(result.repository_root, destination);
+  assert.strictEqual(result.base_ref, 'origin/epic/base');
+  assert.strictEqual(result.base_verified, true);
   assert.strictEqual(invoked, false);
+});
+
+test('a matching checkout without the requested origin base remains unverified', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const destination = repoAt(path.join(parent, 'missing-base'), 'git@github.com:acme/service.git');
+  const result = mod.cloneRepository({
+    ticket: 'T-30-08',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/base',
+    cloneUrl: '/a/source-that-must-not-be-used',
+  }, () => { throw new Error('an unverified checkout must not invoke clone'); });
+
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'clone-unverified');
+  assert.strictEqual(result.base_verified, false);
+  assert.match(result.park_reason, /required ref origin\/epic\/base is missing/);
+  assert.strictEqual(fs.existsSync(destination), true);
 });
 
 test('an existing non-git or mismatched destination is refused untouched', () => {
