@@ -122,41 +122,45 @@ function configuredRepos(config) {
   return isRecord(config.repos) ? config.repos : {};
 }
 
-function repositoryRootFromFile(projectRoot) {
+function rawPipelineFields(projectRoot) {
   const file = path.join(path.resolve(projectRoot || process.cwd()), '.planning', 'config.json');
   let raw;
   try {
     raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return undefined;
+  } catch (error) {
+    return { fields: undefined, error };
   }
-  if (!isRecord(raw)) return undefined;
+  if (!isRecord(raw)) return { fields: undefined, error: null };
 
   // Keep the same shallow namespace precedence as pipeline-config.cjs. This
   // compatibility read exists only for the discovery ticket's CLI: older
   // pipeline-config readers do not yet expose repos_root, while silently
   // dropping an explicitly declared root makes discovery inspect the wrong
   // parent and report a false absence.
-  if (Object.prototype.hasOwnProperty.call(raw, 'delivery_pipeline')) {
-    if (!isRecord(raw.delivery_pipeline)) return null;
-    if (Object.prototype.hasOwnProperty.call(raw.delivery_pipeline, 'repos_root')) {
-      return raw.delivery_pipeline.repos_root;
-    }
-  }
-  if (isRecord(raw.pipeline) && Object.prototype.hasOwnProperty.call(raw.pipeline, 'repos_root')) {
-    return raw.pipeline.repos_root;
-  }
-  return undefined;
+  const legacy = isRecord(raw.pipeline) ? raw.pipeline : {};
+  const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
+  return { fields: { ...legacy, ...declared }, error: null };
 }
 
 function resolverConfig(loaded, projectRoot) {
   if (!loaded || !isRecord(loaded.config)) return loaded && loaded.config;
-  if (Object.prototype.hasOwnProperty.call(loaded.config, 'repos_root')) return loaded.config;
   if (loaded.valid === false) return loaded.config;
-  const declaredRoot = repositoryRootFromFile(projectRoot);
-  return declaredRoot === undefined
+  const raw = rawPipelineFields(projectRoot).fields;
+  const hasRoot = raw && Object.prototype.hasOwnProperty.call(raw, 'repos_root');
+  const hasRepos = raw && Object.prototype.hasOwnProperty.call(raw, 'repos');
+  if (!hasRoot && !hasRepos) return loaded.config;
+
+  const declaredRoot = hasRoot ? raw.repos_root : undefined;
+  const declaredRepos = hasRepos && isRecord(raw.repos) ? raw.repos : undefined;
+  return declaredRoot === undefined && declaredRepos === undefined
     ? loaded.config
-    : { ...loaded.config, repos_root: declaredRoot };
+    : {
+      ...loaded.config,
+      ...(declaredRoot === undefined ? {} : { repos_root: declaredRoot }),
+      ...(declaredRepos === undefined
+        ? {}
+        : { repos: { ...configuredRepos(loaded.config), ...declaredRepos } }),
+    };
 }
 
 function hasConfiguredRepo(config, repo) {
@@ -184,7 +188,8 @@ function immediateDirectories(root) {
   let entries;
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    void error;
     return [];
   }
   return entries

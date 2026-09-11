@@ -187,6 +187,42 @@ test('the discovery CLI passes an explicitly configured repository root to the r
   assert.ok(output.searched_roots.includes(configuredRoot));
 });
 
+test('the CLI keeps an invalid explicit checkout from falling through to discovery', () => {
+  const parent = tempDir('shipyard-invalid-configured-repo-');
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos: { 'acme/service': 'relative-checkout' }, repos_root: parent } }, null, 2) + '\n',
+  );
+  repoAt(path.join(parent, 'valid-discovery'), 'git@github.com:acme/service.git');
+
+  const result = run(['resolve', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'track-only');
+  assert.strictEqual(output.executable, false);
+  assert.match(output.reason, /relative/);
+});
+
+test('a non-object delivery namespace does not suppress the legacy discovery root', () => {
+  const configuredRoot = tempDir('shipyard-legacy-repos-root-');
+  const projectDir = path.join(configuredRoot, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos_root: configuredRoot }, delivery_pipeline: null }, null, 2) + '\n',
+  );
+  const checkout = repoAt(path.join(configuredRoot, 'legacy-root-checkout'), 'git@github.com:acme/service.git');
+
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'discovered');
+  assert.strictEqual(output.repository_root, checkout);
+  assert.ok(output.searched_roots.includes(configuredRoot));
+});
+
 test('origin normalization accepts GitHub SSH, HTTPS, and scp-like forms', () => {
   for (const origin of [
     'git@github.com:Acme/Service.git',
@@ -345,6 +381,9 @@ test('state-sync and deliver name the configured resolver caller', () => {
   assert.match(stateSync, /resolveConfiguredRepo\(\{ repo, config: cfg \}\)/);
   assert.match(deliver, /repo-resolve\.cjs resolve <owner\/name>/);
   assert.match(deliver, /resolution: "discovered"/);
+  assert.match(deliver, /Carry an executable result's[\s\S]*repository_root/);
+  assert.match(deliver, /do not re-read `pipeline\.repos`/);
+  assert.match(deliver, /resolved `repository_root` from the cold-start execution context/);
 });
 
 done();
