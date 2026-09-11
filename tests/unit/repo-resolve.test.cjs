@@ -386,7 +386,7 @@ test('an existing path nested in the project is refused unless sub_repos declare
     existingPath: nested,
   });
   assert.strictEqual(rejected.executable, false);
-  assert.match(rejected.park_reason, /nested inside project/);
+  assert.match(rejected.park_reason, /nested inside (this )?project/);
 
   const allowed = mod.chooseRepository({
     ticket: 'T-30-04',

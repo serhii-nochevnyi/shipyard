@@ -532,6 +532,10 @@ const DEFAULTS = {
   // the ticket; EXECUTING there needs a local checkout, because worktrees,
   // commits and pushes are local git operations.
   repos: {},
+  // The root where a future foreign-repository checkout may be placed. It is
+  // resolved per project by loadConfig; null is reserved for a malformed
+  // explicit value so a writer cannot mistake bad configuration for consent.
+  repos_root: null,
   jira: { enabled: true, project: null, issue_type: 'Task', epic_issue_type: 'Epic' },
   // Our ticket status → the tracker's TARGET STATUS NAME, for the projection
   // (ADR-008 D2). TOP-LEVEL and flat, deliberately NOT a member of `jira`:
@@ -640,6 +644,140 @@ const PROFILE_ALIASES = { budget: 'economy', quality: 'premium', adaptive: 'bala
 
 function configPath(root) {
   return path.join(root || process.cwd(), '.planning', 'config.json');
+}
+
+// Path policy shared by pipeline-config and repo-resolve. Keep the physical
+// resolution here: a second string-prefix implementation in the resolver would
+// eventually disagree on symlinks, missing clone destinations, or `sub_repos`.
+function policyPath(value) {
+  let current = path.resolve(value);
+  const missing = [];
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(value);
+    missing.unshift(path.basename(current));
+    current = parent;
+  }
+  try {
+    return path.join(fs.realpathSync(current), ...missing);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function defaultRepositoryRoot(projectRoot = process.cwd()) {
+  return path.resolve(path.dirname(path.resolve(projectRoot)));
+}
+
+function repositoryRootValue(value, projectRoot = process.cwd()) {
+  if (value === undefined) {
+    return { valid: true, path: defaultRepositoryRoot(projectRoot), reason: null };
+  }
+  if (typeof value !== 'string' || value.length === 0 || !path.isAbsolute(value)) {
+    return {
+      valid: false,
+      path: null,
+      reason: 'pipeline.repos_root must be a non-empty absolute path',
+    };
+  }
+  return { valid: true, path: path.resolve(value), reason: null };
+}
+
+function isWithin(root, candidate) {
+  const relative = path.relative(policyPath(root), policyPath(candidate));
+  return relative !== ''
+    && !relative.startsWith(`..${path.sep}`)
+    && relative !== '..'
+    && !path.isAbsolute(relative);
+}
+
+/**
+ * Validate a repository checkout or future clone destination.
+ *
+ * `requireInsideRoot` applies the configured clone root in addition to the
+ * project nesting rule. The helper does not require the candidate to exist and
+ * never creates or modifies a path.
+ *
+ * @param {string} candidate
+ * @param {{projectRoot?: string, reposRoot?: string|null, subRepos?: string[], requireInsideRoot?: boolean, label?: string}} options
+ * @returns {{valid: boolean, path: string|null, project_root: string, repos_root: string|null, reason: string|null}}
+ */
+function validateRepositoryDestination(candidate, options = {}) {
+  const {
+    projectRoot = process.cwd(),
+    reposRoot,
+    subRepos = [],
+    requireInsideRoot = false,
+    label = 'repository destination',
+  } = options;
+  const project = policyPath(projectRoot);
+  if (typeof candidate !== 'string' || candidate.length === 0 || !path.isAbsolute(candidate)) {
+    return {
+      valid: false,
+      path: null,
+      project_root: project,
+      repos_root: null,
+      reason: `${label} must be a non-empty absolute path`,
+    };
+  }
+  const target = policyPath(candidate);
+  const relative = path.relative(project, target);
+  if (relative === '') {
+    return {
+      valid: false,
+      path: target,
+      project_root: project,
+      repos_root: null,
+      reason: `${label} "${target}" is the project root and cannot be adopted`,
+    };
+  }
+  const nested = relative
+    && !relative.startsWith(`..${path.sep}`)
+    && relative !== '..'
+    && !path.isAbsolute(relative);
+  if (nested) {
+    const top = relative.split(path.sep)[0];
+    if (!Array.isArray(subRepos) || !subRepos.includes(top)) {
+      return {
+        valid: false,
+        path: target,
+        project_root: project,
+        repos_root: null,
+        reason: `${label} "${target}" is nested inside this project "${project}" without sub_repos declaration for "${top}"`,
+      };
+    }
+  }
+
+  let root = null;
+  if (requireInsideRoot) {
+    const rootResult = repositoryRootValue(reposRoot, projectRoot);
+    if (!rootResult.valid) {
+      return {
+        valid: false,
+        path: target,
+        project_root: project,
+        repos_root: null,
+        reason: rootResult.reason,
+      };
+    }
+    root = policyPath(rootResult.path);
+    if (!isWithin(root, target)) {
+      return {
+        valid: false,
+        path: target,
+        project_root: project,
+        repos_root: root,
+        reason: `${label} "${target}" is outside pipeline.repos_root "${root}"`,
+      };
+    }
+  }
+  return {
+    valid: true,
+    path: target,
+    project_root: project,
+    repos_root: root,
+    reason: null,
+  };
 }
 
 // A config file that EXISTS but cannot be read is not the same fact as one that
@@ -783,23 +921,16 @@ function loadConfig(root, options = {}) {
           warnings.push(`pipeline.repos."${slug}" = "${local}" is relative — the conveyor runs from several worktrees, so it must be an ABSOLUTE path`);
           continue;
         }
-        // A sibling checkout NESTED inside this project is the one layout where
-        // GSD's project-root resolution changed under us: since gsd-core 1.9.1
-        // (#2843) findProjectRoot refuses to cross a git-repo boundary, so any
-        // GSD tooling run inside that nested repo no longer sees THIS project's
-        // .planning/ — it resolves to the child repo, silently. GSD's own escape
-        // hatch is `sub_repos`, which is checked before the boundary guard, so
-        // declaring it there restores the crossing deliberately.
-        const rel = path.relative(base, local);
-        const nested = rel && !rel.startsWith('..') && !path.isAbsolute(rel);
-        if (nested && !subRepos.includes(rel.split(path.sep)[0])) {
-          warnings.push(
-            `pipeline.repos."${slug}" = "${local}" is nested inside this project. Since gsd-core 1.9.1, ` +
-            'GSD tooling run there resolves to that repo instead of this project (findProjectRoot no longer ' +
-            `crosses a git-repo boundary). Either check it out outside the project, or add "${rel.split(path.sep)[0]}" ` +
-            'to sub_repos in .planning/config.json so GSD keeps resolving here.'
-          );
-        }
+        // A sibling checkout nested inside this project is the one layout where
+        // GSD's project-root resolution changed under us. Keep this warning on
+        // the shared helper so resolver adoption and config loading cannot
+        // disagree about the same physical path.
+        const destination = validateRepositoryDestination(local, {
+          projectRoot: base,
+          subRepos,
+          label: `pipeline.repos."${slug}" = "${local}"`,
+        });
+        if (!destination.valid) warnings.push(destination.reason);
         cfg.repos[slug] = local;
       }
       continue;
@@ -846,6 +977,17 @@ function loadConfig(root, options = {}) {
     }
     cfg[key] = value;
   }
+
+  // Resolve the root after the namespace merge so delivery_pipeline.repos_root
+  // wins over the legacy spelling just like every other pipeline key. A bad
+  // explicit value becomes null rather than silently becoming the project
+  // parent; repo-resolve then refuses a clone until the policy is fixed.
+  const repositoryRoot = repositoryRootValue(merged.repos_root, base);
+  cfg.repos_root = repositoryRoot.path;
+  if (!repositoryRoot.valid) warnings.push(`${repositoryRoot.reason} — ignored; cloning is refused until it is fixed`);
+  // The resolver consumes this normalized declaration through the same config
+  // object and the same destination helper below.
+  cfg.sub_repos = subRepos;
 
   // Enum-ish knobs: a misspelling here decides whether PRs get merged at all, so
   // it is reported rather than silently coerced to the safe value.
@@ -1435,6 +1577,7 @@ module.exports = {
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
   TASK_LEVELS, TASK_LEVEL_RANK, LADDER_MODES, taskLevelRoute,
   DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS, NUMERIC_KNOBS, tierAllowedForRuntime,
+  defaultRepositoryRoot, repositoryRootValue, validateRepositoryDestination,
 };
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
