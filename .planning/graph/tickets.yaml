@@ -30,6 +30,9 @@ epics:
   '29':
     branch: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
     repos: [null]
+  '30':
+    branch: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    repos: [null]
   '32':
     branch: epic/32-measure-usage-and-make-the-backlog-actionable
     repos: [null]
@@ -1268,6 +1271,150 @@ tickets:
     epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
     primary_parent: T-29-07
     pr_base: ticket/T-29-07-wire-it-pin-the-wiring-and-keep-it-out-o
+    jira: null
+  T-30-01:
+    title: Make verification claims executable across delivery boundaries
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-01-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/skills/delivery-rules/SKILL.md, plugins/delivery-pipeline/references/arch-review.md, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/drift-check.md, plugins/delivery-pipeline/references/integrator.md, plugins/delivery-pipeline/references/inv-research.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/references/review-fix.md, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, tests/unit/source-contract.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-01-make-verification-claims-executable-acro
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: null
+    pr_base: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    jira: null
+  T-30-02:
+    title: Resolve configured repositories before fallback discovery
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-02-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-02-resolve-configured-repositories-before-f
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: null
+    pr_base: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    jira: null
+  T-30-03:
+    title: Discover repository checkouts by declared origin
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-03-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 2
+    depends_on: [T-30-02]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-03-discover-repository-checkouts-by-declare
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-02
+    pr_base: ticket/T-30-02-resolve-configured-repositories-before-f
+    jira: null
+  T-30-04:
+    title: Require an explicit operator choice before cloning
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-04-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 3
+    depends_on: [T-30-03]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs, tests/smoke/repo-resolve-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-30-04-require-an-explicit-operator-choice-befo
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-03
+    pr_base: ticket/T-30-03-discover-repository-checkouts-by-declare
+    jira: null
+  T-30-05:
+    title: Validate repository destinations with the existing nesting rule
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-05-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 4
+    depends_on: [T-30-04]
+    files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/repo-resolve.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/repo-resolve.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-05-validate-repository-destinations-with-th
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-04
+    pr_base: ticket/T-30-04-require-an-explicit-operator-choice-befo
+    jira: null
+  T-30-06:
+    title: Mirror the project origin protocol for repository clones
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-06-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 5
+    depends_on: [T-30-05]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-06-mirror-the-project-origin-protocol-for-r
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-05
+    pr_base: ticket/T-30-05-validate-repository-destinations-with-th
+    jira: null
+  T-30-07:
+    title: Use a full clone with all refs required for base resolution
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-07-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 6
+    depends_on: [T-30-06]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/graph-dir.cjs, tests/unit/repo-resolve.test.cjs, tests/smoke/repo-resolve-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-07-use-a-full-clone-with-all-refs-required
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-06
+    pr_base: ticket/T-30-06-mirror-the-project-origin-protocol-for-r
+    jira: null
+  T-30-08:
+    title: Adopt matching checkouts and refuse to clobber other paths
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-08-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 7
+    depends_on: [T-30-07]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/repo-resolve.test.cjs, tests/unit/record-stores.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-07
+    pr_base: ticket/T-30-07-use-a-full-clone-with-all-refs-required
+    jira: null
+  T-30-09:
+    title: Persist resolved checkouts and park unreachable work
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-09-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 8
+    depends_on: [T-30-08]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs, tests/unit/pipeline-config.test.cjs, docs/gsd_multilevel_delivery_pipeline.md]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-09-persist-resolved-checkouts-and-park-unre
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-08
+    pr_base: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c
     jira: null
   T-32-01:
     title: Collect deduplicated usage from explicit transcript files
