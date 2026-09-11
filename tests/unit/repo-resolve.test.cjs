@@ -177,6 +177,93 @@ test('origin normalization accepts GitHub SSH, HTTPS, and scp-like forms', () =>
   assert.strictEqual(mod.normalizeOrigin('acme/service'), null);
 });
 
+test('clone URL selection follows the project origin protocol', () => {
+  const ssh = mod.selectCloneUrl(
+    'git@github.com:serhii-nochevnyi/shipyard.git',
+    { sshUrl: 'git@github.com:Acme/Service.git', url: 'https://github.com/Acme/Service.git' },
+    'acme/service',
+  );
+  assert.deepStrictEqual(ssh, {
+    valid: true,
+    protocol: 'ssh',
+    field: 'sshUrl',
+    url: 'git@github.com:Acme/Service.git',
+    reason: null,
+  });
+
+  const https = mod.selectCloneUrl(
+    'https://github.com/serhii-nochevnyi/shipyard.git',
+    { sshUrl: 'git@github.com:Acme/Service.git', url: 'https://github.com/Acme/Service.git' },
+    'acme/service',
+  );
+  assert.strictEqual(https.valid, true);
+  assert.strictEqual(https.protocol, 'https');
+  assert.strictEqual(https.field, 'url');
+  assert.strictEqual(https.url, 'https://github.com/Acme/Service.git');
+
+  const http = mod.selectCloneUrl(
+    'http://github.com/serhii-nochevnyi/shipyard.git',
+    { sshUrl: 'git@github.com:Acme/Service.git', url: 'http://github.com/Acme/Service.git' },
+    'acme/service',
+  );
+  assert.strictEqual(http.valid, false);
+  assert.match(http.reason, /neither SSH nor HTTPS/);
+});
+
+test('clone URL selection refuses inconsistent metadata and credentials', () => {
+  const wrongProtocol = mod.selectCloneUrl(
+    'git@github.com:serhii-nochevnyi/shipyard.git',
+    { sshUrl: 'https://github.com/acme/service.git' },
+    'acme/service',
+  );
+  assert.strictEqual(wrongProtocol.valid, false);
+  assert.match(wrongProtocol.reason, /project origin protocol/);
+  assert.strictEqual(wrongProtocol.url, null);
+
+  const credential = mod.selectCloneUrl(
+    'https://github.com/serhii-nochevnyi/shipyard.git',
+    { url: 'https://token@github.com/acme/service.git' },
+    'acme/service',
+  );
+  assert.strictEqual(credential.valid, false);
+  assert.match(credential.reason, /credentials/);
+  assert.strictEqual(credential.url, null);
+  assert.ok(!JSON.stringify(credential).includes('token'));
+});
+
+test('gh metadata is read with the explicit repository and JSON fields', () => {
+  const calls = [];
+  const metadata = mod.readGhRepositoryMetadata('acme/service', '/project', (command, args, options) => {
+    calls.push({ command, args, options });
+    return {
+      status: 0,
+      stdout: JSON.stringify({ sshUrl: 'git@github.com:acme/service.git', url: 'https://github.com/acme/service.git' }),
+    };
+  });
+  assert.deepStrictEqual(metadata, {
+    valid: true,
+    metadata: { sshUrl: 'git@github.com:acme/service.git', url: 'https://github.com/acme/service.git' },
+    reason: null,
+  });
+  assert.deepStrictEqual(calls.map(({ command, args, options }) => ({ command, args, cwd: options.cwd })), [{
+    command: 'gh',
+    args: ['repo', 'view', 'acme/service', '--json', 'sshUrl,url'],
+    cwd: '/project',
+  }]);
+});
+
+test('clone preparation reports unavailable metadata without invoking git clone', () => {
+  const result = mod.resolveCloneUrl({
+    repo: 'acme/service',
+    projectRoot: '/project',
+    projectOrigin: 'https://github.com/serhii-nochevnyi/shipyard.git',
+    cloneMetadata: {},
+  });
+  assert.strictEqual(result.valid, false);
+  assert.match(result.reason, /no usable url/);
+  assert.strictEqual(result.url, null);
+});
+
 test('discovery matches origin rather than the directory basename and scans one level', () => {
   const parent = tempDir();
   const projectDir = path.join(parent, 'project');
@@ -411,12 +498,20 @@ test('clone records explicit intent and a validated destination without cloning 
     config: { repos: {}, repos_root: parent },
     projectRoot: projectDir,
     choice: 'clone',
+    projectOrigin: 'git@github.com:serhii-nochevnyi/shipyard.git',
+    cloneMetadata: {
+      sshUrl: 'git@github.com:acme/service.git',
+      url: 'https://github.com/acme/service.git',
+    },
   });
   assert.strictEqual(result.executable, false);
   assert.strictEqual(result.resolution, 'track-only');
   assert.strictEqual(result.decision, 'clone');
   assert.strictEqual(result.operator_choice, 'clone');
   assert.strictEqual(result.destination, destination);
+  assert.strictEqual(result.clone_url, 'git@github.com:acme/service.git');
+  assert.strictEqual(result.clone_protocol, 'ssh');
+  assert.strictEqual(result.clone_source, 'sshUrl');
   assert.match(result.park_reason, /clone.*pending/);
   assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, 'clone choice must not create a destination in T-30-04');
 

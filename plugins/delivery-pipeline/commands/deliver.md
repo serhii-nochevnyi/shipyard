@@ -729,8 +729,13 @@ Consequences you must honour:
   --ticket <T-id> --project-dir <project-root> --choice <clone|existing|skip> \
   [--path <existing-checkout>] --json`. The `existing` choice is executable only
   after the resolver confirms the path is a repository root with the requested
-  origin and an allowed nesting layout. A `clone` choice records a validated
-  destination and intent; it does not clone in this resolver step.
+  origin and an allowed nesting layout. A `clone` choice reads the project's
+  `git remote get-url origin`, calls `gh repo view <owner/name> --json sshUrl,url`,
+  and selects `sshUrl` for an SSH project origin or `url` for an HTTPS project
+  origin. It refuses missing, inconsistent, or credential-bearing metadata and
+  records the safe `clone_url`, protocol, validated destination, and intent; it
+  does not run `git clone` in this resolver step. Never let gh's global git
+  protocol preference choose the URL.
 - **Silence selects skip.** In a text-mode or unattended run, omit the choice
   and pass `--non-interactive`; the result is `resolution: "track-only"`,
   `decision: "skip"`, and a non-empty `park_reason`. Immediately make that
