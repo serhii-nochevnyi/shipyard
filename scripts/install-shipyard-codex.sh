@@ -437,16 +437,16 @@ done
 # the old one silently callable. The bundle is wholly generated, so nothing
 # user-authored is at risk.
 echo "→ installing bundle payload → $BUNDLE_ROOT"
+find "$OUT/bundle" -name '*.sh' -exec chmod +x {} +
 replace_dir "$OUT/bundle" "$BUNDLE_ROOT" "bundle payload" || {
   status=$?
   echo "error: could not install bundle payload" >&2
   exit "$status"
 }
-find "$BUNDLE_ROOT" -name '*.sh' -exec chmod +x {} +
+ROLLBACK_ACTIVE=0
 
 deliver_hint=""
 [[ "$PHASE" -ge 2 ]] && deliver_hint=' | $shipyard-deliver'
 echo "✓ shipyard installed for Codex."
 echo "  In Codex: \$shipyard-route | \$shipyard-investigate | \$shipyard-decompose${deliver_hint} | \$shipyard-bench"
 echo "  (auto-route is in $AGENTS_MD — describe the work and the router picks the entry)"
-ROLLBACK_ACTIVE=0
