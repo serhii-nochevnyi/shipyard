@@ -67,3 +67,60 @@ if [[ "$before" != "$after" ]]; then
 fi
 
 echo 'repo-resolve smoke: unattended choice parked without filesystem or network writes'
+
+# A clone is a separate explicit write step. Use a local source so this proof
+# does not depend on GitHub credentials or a network server, then hand the
+# resulting checkout to the same ticket-worktree base selector used by delivery.
+source_repo="$fixture/source"
+clone_project="$fixture/clone-project"
+clone_root="$fixture/checkouts"
+clone_destination="$clone_root/service"
+mkdir -p "$source_repo" "$clone_project/.planning" "$clone_root"
+git -C "$source_repo" init -q
+git -C "$source_repo" config user.email shipyard-tests@example.invalid
+git -C "$source_repo" config user.name 'Shipyard Tests'
+printf 'seed\n' > "$source_repo/README.md"
+git -C "$source_repo" add README.md
+git -C "$source_repo" commit -qm seed
+git -C "$source_repo" branch -M main
+git -C "$source_repo" branch epic/base
+
+node - "$resolver" "$source_repo" "$clone_project" "$clone_root" "$clone_destination" <<'NODE'
+const fs = require('fs');
+const [resolver, source, project, root, destination] = process.argv.slice(2);
+const mod = require(resolver);
+const result = mod.cloneRepository({
+  ticket: 'T-30-07',
+  repo: 'acme/service',
+  config: { repos: {}, repos_root: root },
+  projectRoot: project,
+  destination,
+  base: 'epic/base',
+  cloneUrl: source,
+});
+if (!result.executable) throw new Error(result.reason);
+if (result.base_ref !== 'origin/epic/base' || result.base_verified !== true) {
+  throw new Error(`base verification missing: ${JSON.stringify(result)}`);
+}
+if (!fs.existsSync(destination)) throw new Error('clone destination was not created');
+NODE
+
+if [[ "$(git -C "$clone_destination" rev-parse --is-shallow-repository)" != "false" ]]; then
+  echo 'repo-resolve smoke: clone must be full, not shallow' >&2
+  exit 1
+fi
+git -C "$clone_destination" rev-parse --verify --quiet 'refs/remotes/origin/epic/base^{commit}' >/dev/null
+
+worktree_root="$fixture/ticket-worktrees"
+worktree_path=$(cd "$clone_destination" && SHIPYARD_WORKTREE_ROOT="$worktree_root" bash \
+  "$repo_root/plugins/delivery-pipeline/scripts/ticket-worktree.sh" \
+  create T-30-07 ticket/T-30-07 epic/base 2>/dev/null)
+if [[ ! -d "$worktree_path" ]]; then
+  echo 'repo-resolve smoke: ticket-worktree could not use the verified origin base' >&2
+  exit 1
+fi
+if [[ "$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD)" != "ticket/T-30-07" ]]; then
+  echo 'repo-resolve smoke: ticket-worktree selected the wrong branch' >&2
+  exit 1
+fi
+echo 'repo-resolve smoke: full clone verified origin/epic/base and ticket-worktree compatibility'
