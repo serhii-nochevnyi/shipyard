@@ -140,9 +140,11 @@ write('.planning/phases/01-foundation/INTEGRATION.md', '# Integration\n\nVerdict
 write('.planning/graph/tickets.json', JSON.stringify({ tickets: { 'T-01-01': { phase: '1' } } }));
 write('.planning/graph/delivery-state.json', JSON.stringify({ 'T-01-01': { status: 'merged', since: '2026-09-10T10:00:00Z' } }));
 NODE
+SYNC_WRITE=""
 SYNC_WRITE="$(cd "$SYNC_FIXTURE" && node "$CODEX_HOME/shipyard/scripts/gsd-sync.cjs" --json)" \
   || { echo "bundled gsd-sync write failed: $SYNC_WRITE"; exit 1; }
 grep -q '"ok":true' <<<"$SYNC_WRITE" || { echo "bundled gsd-sync write was not successful: $SYNC_WRITE"; exit 1; }
+SYNC_CHECK=""
 SYNC_CHECK="$(cd "$SYNC_FIXTURE" && node "$CODEX_HOME/shipyard/scripts/gsd-sync.cjs" --check --json)" \
   || { echo "bundled gsd-sync check failed: $SYNC_CHECK"; exit 1; }
 grep -q '"ok":true' <<<"$SYNC_CHECK" || { echo "bundled gsd-sync check was not clean: $SYNC_CHECK"; exit 1; }

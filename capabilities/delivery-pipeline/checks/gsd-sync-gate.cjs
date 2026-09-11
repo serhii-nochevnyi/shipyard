@@ -31,8 +31,10 @@ if (fs.existsSync(configFile)) {
   let config;
   try {
     config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-  } catch (error) {
-    fail(`invalid .planning/config.json: ${error.message}`);
+  } catch {
+    // Config syntax is not an applicability signal. A globally installed gate
+    // must stay inert for an ordinary GSD project even when its config is
+    // malformed; a conveyor project will still fail closed in gsd-sync.
   }
   if (config && config.delivery_pipeline && config.delivery_pipeline.gsd_sync === false) {
     pass('delivery_pipeline.gsd_sync is false in .planning/config.json');
@@ -61,8 +63,24 @@ if (!hasDelivery) pass(`none of the ${plans.length} plan(s) carry a delivery: bl
 
 const candidates = [
   path.join(__dirname, 'gsd-sync.cjs'),
+  '/opt/delivery-pipeline/scripts/gsd-sync.cjs',
   path.join(__dirname, '..', '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'gsd-sync.cjs'),
 ];
+// Host installs may leave the capability launcher in the GSD installation while
+// the canonical script is supplied by the Shipyard plugin cache. Keep the scan
+// aligned with graph-gate: plugin name and version are installation details.
+const pluginCache = path.join(process.env.HOME || '', '.claude', 'plugins', 'cache', 'delivery-pipeline');
+if (fs.existsSync(pluginCache)) {
+  for (const plugin of fs.readdirSync(pluginCache).sort()) {
+    const pluginDir = path.join(pluginCache, plugin);
+    let stat;
+    try { stat = fs.statSync(pluginDir); } catch { continue; }
+    if (!stat.isDirectory()) continue;
+    for (const version of fs.readdirSync(pluginDir).sort().reverse()) {
+      candidates.push(path.join(pluginDir, version, 'scripts', 'gsd-sync.cjs'));
+    }
+  }
+}
 const script = candidates.find((file) => fs.existsSync(file));
 if (!script) fail('gsd-sync.cjs is missing beside the installed gate and in the source plugin; reinstall Shipyard');
 
