@@ -106,7 +106,17 @@ restore_runtime_paths() {
   local state kind name target restore_status=0 backup_path
   [[ -n "$index" && -f "$index" && -n "$backup" ]] || return 0
   while IFS=$'\t' read -r state kind name target; do
-    [[ -n "$kind" && -n "$name" && -n "$target" ]] || continue
+    [[ -n "$kind" && -n "$name" ]] || continue
+    if [[ -z "$target" ]]; then
+      case "$kind" in
+        bundle) target="$BUNDLE_ROOT" ;;
+        skill) target="$AGENTS_SKILLS/$name" ;;
+        capability) target="${CAPABILITY_TARGET:-${GSD_CAPABILITIES_ROOT:-$HOME/.gsd/capabilities}/$name}" ;;
+        agents-md) target="${AGENTS_MD:-$CODEX_HOME/AGENTS.md}" ;;
+        gsd-defaults) target="${GSD_DEFAULTS:-${GSD_DEFAULTS_PATH:-$HOME/.gsd/defaults.json}}" ;;
+        *) continue ;;
+      esac
+    fi
     backup_path="$backup/$kind-$(runtime_backup_key "$target")"
     rm -rf "$target" || restore_status=1
     if [[ "$state" == present ]]; then
