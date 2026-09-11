@@ -66,6 +66,7 @@ just derived.
 
 ## Output (final message, structured)
 - `verdict: fresh | drifted`
+- `evidence: ["exact command — relevant path — observed output or exit status"]` for every checkable claim; an assumption or unknown must name the next command instead
 - `recorded: yes | no (reason)` — for a `drifted` verdict, whether the mark
   above actually landed. "no" is a hand-off, not a footnote: the orchestrator
   must then record it before the run ends, or the finding evaporates.
