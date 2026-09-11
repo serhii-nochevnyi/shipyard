@@ -154,6 +154,12 @@ replace_dir() {
 snapshot_runtime_path() {
   local kind="$1" name="$2" target="$3"
   local state=absent backup_path="$RUNTIME_BACKUP/$kind-$name"
+  case "$target" in
+    *$'\t'* | *$'\n'*)
+      echo "error: refusing to snapshot a runtime path whose name cannot be recorded safely: $target" >&2
+      exit 1
+      ;;
+  esac
   if grep -Fqx $'present\t'"$kind"$'\t'"$name"$'\t'"$target" "$RUNTIME_BACKUP_INDEX" 2>/dev/null \
     || grep -Fqx $'absent\t'"$kind"$'\t'"$name"$'\t'"$target" "$RUNTIME_BACKUP_INDEX" 2>/dev/null; then
     return 0

@@ -164,6 +164,15 @@ grep -q 'pipeline-config.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "del
 grep -q 'shipyard-auto-route:begin' "$CODEX_HOME/AGENTS.md" \
   || { echo "auto-route block missing from \$CODEX_HOME/AGENTS.md"; exit 1; }
 
+# Runtime rollback snapshots are indexed in one file. Reject a target path whose
+# name would corrupt that record instead of silently recording it twice.
+BAD_AGENTS_MD="$(printf '%s' "$WORK")"$'\t'"agents.md"
+if CODEX_AGENTS_MD="$BAD_AGENTS_MD" bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/bad-agents-md.log" 2>&1; then
+  echo "installer accepted an AGENTS.md path it cannot snapshot safely"; exit 1
+fi
+grep -q 'refusing to snapshot a runtime path whose name cannot be recorded safely' "$WORK/bad-agents-md.log" \
+  || { echo "unsafe AGENTS.md path was not refused honestly"; cat "$WORK/bad-agents-md.log"; exit 1; }
+
 # agents present + registered; gsd agents intact. The active project policy is
 # adaptive, so there are fifteen files: seven base agents, four recovery files,
 # and four first-attempt critical files.
