@@ -240,7 +240,10 @@ function sameRecord(a, b) {
     delete copy.observed_at;
     return copy;
   };
-  return JSON.stringify(clean(a)) === JSON.stringify(clean(b));
+  const left = clean(a);
+  const right = clean(b);
+  const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
+  return keys.every((key) => Object.is(left[key], right[key]));
 }
 
 function recordBatch(graphDir, raw) {

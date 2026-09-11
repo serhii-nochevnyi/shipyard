@@ -607,16 +607,19 @@ const agentsOut = () => (agesCache || (agesCache = dispatchAges(graphDir, dispat
 const goneText = () => {
   const { suspect } = agentsOut();
   const suspectId = suspect[0] && suspect[0].id;
-  const suspectDispatchId = suspect[0] && suspect[0].dispatch_id
-    ? suspect[0].dispatch_id
-    : '<dispatch_id>';
+  const suspectDispatchId = suspect[0] && suspect[0].dispatch_id;
   return suspect.length
     ? '\nThe dispatch mark(s) on this board did NOT keep this quiet: ' +
       `${suspect.map((d) => `${d.id} → ${d.role}, marked ${d.mins}m ago`).join('; ')}.\n` +
       'A mark that old is not an agent at work — it is what a mark written before a launch that never\n' +
       'happened looks like. If that work really is out it will wake you; if it is gone, return the\n' +
-      'ticket to the board with\n' +
-      `  \`dispatch-record.cjs clear ${suspectId} ${suspectDispatchId} --graph ${graphDir}\`\n` +
+      (suspectDispatchId
+        ? 'ticket to the board with\n' +
+          `  \`dispatch-record.cjs clear ${suspectId} ${suspectDispatchId} --graph ${graphDir}\`\n`
+        : 'ticket to the board only after checking `.planning/graph/dispatches.json`: this record is\n' +
+          'missing `dispatch_id`, so no exact clear command can be suggested.\n' +
+          `  Once you have the recorded id, re-run \`dispatch-record.cjs clear\` for ticket ${suspectId} with that id and\n` +
+          `  \`--graph ${graphDir}\`.\n`) +
       'The --graph is not optional: this hook\'s cwd is the SESSION\'s, and a clear run from the wrong\n' +
       'one reports "no dispatch recorded" and changes nothing.'
     : '';

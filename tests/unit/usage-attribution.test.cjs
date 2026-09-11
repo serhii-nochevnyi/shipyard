@@ -95,6 +95,35 @@ test('recording is atomic, revisioned and idempotent', () => {
   }
 });
 
+test('record retries stay idempotent when only key order differs', () => {
+  const { graph } = project();
+  try {
+    assert.equal(recordBatch(graph, [base()]).recorded.length, 1);
+    const reordered = {
+      observed_model: 'claude-opus-5',
+      effort_applied: 'high',
+      model: 'opus',
+      ticket: 'T-01-01',
+      backend: 'workflow',
+      role: 'executor',
+      provider: 'anthropic',
+      task_level: 'routine',
+      event: 'model_attribution',
+      session_id: 'claude-session',
+      observed_effort: 'high',
+      dispatch_id: 'dispatch-1',
+      runtime: 'claude',
+      effort: 'high',
+      observation_id: 'obs-1',
+      schema_version: 1,
+    };
+    assert.equal(recordBatch(graph, [reordered]).recorded.length, 0,
+      'reordered keys describe the same latest fact and must not append a revision');
+  } finally {
+    fs.rmSync(path.resolve(graph, '..', '..'), { recursive: true, force: true });
+  }
+});
+
 test('the CLI records a batch and can list the latest revisions', () => {
   const { dir, graph } = project();
   try {

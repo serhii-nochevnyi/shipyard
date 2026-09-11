@@ -275,11 +275,17 @@ const unknownRoles = [...new Set(
 // lifetime facts. Missing fields are intentional findings: an old or inline
 // path that omits the resolver result cannot be used to tune the ladder.
 const ladderEvents = journal.filter((e) => e.event === 'dispatch' && withinWindow(e.ts));
-const countField = (field) => Object.fromEntries(
-  [...new Set(ladderEvents.map((e) => e[field]).filter((v) => v !== undefined && v !== null && v !== ''))]
-    .sort()
-    .map((value) => [value, ladderEvents.filter((e) => e[field] === value).length])
-);
+const countField = (field) => {
+  const counts = new Map();
+  for (const event of ladderEvents) {
+    const value = event[field];
+    if (value === undefined || value === null || value === '') continue;
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return Object.fromEntries(
+    [...counts.entries()].sort(([a], [b]) => String(a).localeCompare(String(b)))
+  );
+};
 // Coverage is three separate claims, not one boolean. A dispatch can carry the
 // resolver's requested policy while the spawn did not expose applied effort,
 // and it can carry both while the runtime still hid the concrete model. Folding

@@ -716,6 +716,15 @@ test('an hour-old dispatch does not, and the refusal names it', () => {
   assert.ok(/ci-wait\.cjs/.test(v.reason), 'while still naming the wait, which is the actual next move');
 });
 
+test('a suspect dispatch with no dispatch_id says so instead of printing a fake command', () => {
+  const dir = project(ciOnly(['T-01-02']));
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60) } });
+  const v = runIn(dir, { session_id: 'sess-disp-missing-id' });
+  assert.ok(v && v.decision === 'block');
+  assert.ok(/missing `dispatch_id`/.test(v.reason), 'the refusal explains why no exact clear command is shown');
+  assert.ok(!v.reason.includes('<dispatch_id>'), 'placeholder text must not look copy-paste-ready');
+});
+
 test('a dispatched ticket with no record keeps the hatch open', () => {
   // Unknown age is not proof the agent is gone, and the direction that traps a
   // session is the one this hook must never take. Positive evidence only.
