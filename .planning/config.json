@@ -98,17 +98,18 @@
       "gsd-code-reviewer": "xhigh"
     }
   },
-  "runtime": "codex",
+  "runtime": "claude",
   "model_overrides": {
     "gsd-planner": "opus",
     "gsd-code-reviewer": "opus"
   },
   "delivery_pipeline": {
     "max_concurrent_agents": 4,
-    "model_ladder": "adaptive",
+    "gsd_sync": true
+  },
+  "pipeline": {
     "jira": {
       "enabled": false
-    },
-    "gsd_sync": true
+    }
   }
 }
