@@ -124,7 +124,7 @@ replace_dir() {
       echo "warning: could not restore previous $label at $target" >&2
     fi
   elif [[ -e "$tmp" || -L "$tmp" ]]; then
-    mv "$tmp" "$target" 2>/dev/null || true
+    rm -rf "$tmp"
   fi
   return "$status"
 }
