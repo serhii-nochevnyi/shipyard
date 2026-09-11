@@ -116,9 +116,14 @@ replace_dir() {
     return 0
   fi
   status=$?
-  rm -rf "$tmp"
   if [[ "$had_target" == 1 ]]; then
-    mv "$backup" "$target" || echo "warning: could not restore previous $label at $target" >&2
+    if mv "$backup" "$target"; then
+      rm -rf "$tmp"
+    else
+      echo "warning: could not restore previous $label at $target" >&2
+    fi
+  elif [[ -e "$tmp" || -L "$tmp" ]]; then
+    mv "$tmp" "$target" 2>/dev/null || true
   fi
   return "$status"
 }
