@@ -433,6 +433,26 @@ test('clone records explicit intent and a validated destination without cloning 
   assert.match(rejected.park_reason, /outside pipeline\.repos_root/);
 });
 
+test('clone refuses a dangling destination symlink before recording an adoptable checkout', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const destination = path.join(parent, 'service');
+  fs.symlinkSync(path.join(parent, 'missing-service-target'), destination);
+
+  const result = mod.chooseRepository({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    choice: 'clone',
+  });
+
+  assert.strictEqual(result.executable, false);
+  assert.match(result.park_reason, /already exists and cannot be adopted/);
+  assert.match(result.park_reason, /not available/);
+  assert.ok(fs.lstatSync(destination).isSymbolicLink(), 'the dangling symlink must remain untouched');
+});
+
 test('state-sync and deliver name the configured resolver caller', () => {
   const stateSync = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'), 'utf8');
   const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
