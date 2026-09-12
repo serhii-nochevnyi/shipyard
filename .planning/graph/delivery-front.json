@@ -1,30 +1,29 @@
 {
-  "generated_at": "2026-09-12T20:32:10.580Z",
-  "observed_at": "2026-09-12T20:32:10.580Z",
-  "generation": 217,
+  "generated_at": "2026-09-12T20:36:34.731Z",
+  "observed_at": "2026-09-12T20:36:34.731Z",
+  "generation": 223,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-12T20:32:10.580Z",
+  "dispatches_applied_at": "2026-09-12T20:36:34.731Z",
   "actionable": {
-    "execute": [
-      "T-31-01"
-    ],
+    "execute": [],
     "publish": [],
     "fix": [],
     "finalize": [],
     "merge": []
   },
   "waiting": {
-    "ci": [],
-    "dispatched": [
+    "ci": [
       "T-36-01"
     ],
+    "dispatched": [],
     "parent": [],
     "merge_human": [],
     "human": []
   },
   "parked": {
     "blocked": [
+      "T-31-01",
       "T-31-02",
       "T-31-03",
       "T-31-04",
@@ -144,14 +143,14 @@
     ]
   },
   "why": {
-    "T-31-01": "ready — worktree + executor",
+    "T-31-01": "escalated — left behind after Phase 31 epic landed; outside current Phase 36 model-ladder scope; requires separate re-decomposition. It lifts by itself once the PR moves (a push, a review answer, undrafting); `escalation-record.cjs clear T-31-01` to take it back.",
     "T-31-02": "T-31-01 (parent has no branch yet (nothing to cascade from))",
     "T-31-03": "T-31-02 (parent has no branch yet (nothing to cascade from))",
     "T-31-04": "T-31-03 (parent has no branch yet (nothing to cascade from))",
     "T-31-05": "T-31-04 (parent has no branch yet (nothing to cascade from))",
     "T-31-06": "T-31-05 (parent has no branch yet (nothing to cascade from))",
     "T-31-07": "T-31-06 (parent has no branch yet (nothing to cascade from))",
-    "T-36-01": "dispatched to pr-sentinel 4m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (the PR merges, or its base moves) or after 90m; `dispatch-record.cjs clear T-36-01 <dispatch_id>` returns it now.",
+    "T-36-01": "PR #125: 1 check(s) still running",
     "T-36-02": "T-31-02 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending))",
     "T-36-03": "T-36-02 (parent has no branch yet (nothing to cascade from))",
     "T-36-04": "T-36-03 (parent has no branch yet (nothing to cascade from))",
@@ -165,35 +164,35 @@
     "T-36-12": "T-36-10 (parent has no branch yet (nothing to cascade from)); T-31-02 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending))"
   },
   "counts": {
-    "execute": 1,
+    "execute": 0,
     "publish": 0,
     "fix": 0,
     "finalize": 0,
     "merge": 0,
-    "ci": 0,
-    "dispatched": 1,
+    "ci": 1,
+    "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 17,
+    "blocked": 18,
     "done": 97
   },
   "parent_of": {},
-  "actionable_count": 1,
-  "left_behind_count": 1,
+  "actionable_count": 0,
+  "left_behind_count": 0,
   "fixpoint": false,
   "capacity": {
     "max": 4,
-    "in_flight": 1,
-    "free": 3
+    "in_flight": 0,
+    "free": 4
   },
   "sentinel": {
     "duty": [],
-    "waiting_ci": [],
-    "waiting_parent": [],
-    "dispatched": [
+    "waiting_ci": [
       "T-36-01"
     ],
+    "waiting_parent": [],
+    "dispatched": [],
     "clear": false
   },
   "roles": {
