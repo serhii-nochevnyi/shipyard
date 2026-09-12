@@ -633,10 +633,16 @@ test('gh metadata is read with the explicit repository and JSON fields', () => {
     metadata: { sshUrl: 'git@github.com:acme/service.git', url: 'https://github.com/acme/service.git' },
     reason: null,
   });
-  assert.deepStrictEqual(calls.map(({ command, args, options }) => ({ command, args, cwd: options.cwd })), [{
+  assert.deepStrictEqual(calls.map(({ command, args, options }) => ({
+    command,
+    args,
+    cwd: options.cwd,
+    promptDisabled: options.env.GH_PROMPT_DISABLED,
+  })), [{
     command: 'gh',
     args: ['repo', 'view', 'acme/service', '--json', 'sshUrl,url'],
     cwd: '/project',
+    promptDisabled: '1',
   }]);
 });
 
