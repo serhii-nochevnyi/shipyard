@@ -117,6 +117,10 @@ if [[ "$(git -C "$clone_destination" remote get-url origin)" != "git@github.com:
   echo 'repo-resolve smoke: clone origin identity was not preserved' >&2
   exit 1
 fi
+# The identity assertion above covers the production post-clone state. Restore
+# a local origin for the compatibility check so ticket-worktree's fetch cannot
+# contact GitHub from this no-network fixture.
+git -C "$clone_destination" remote set-url origin "$source_repo"
 
 worktree_root="$fixture/ticket-worktrees"
 worktree_path=$(cd "$clone_destination" && GIT_SSH_COMMAND=false SHIPYARD_WORKTREE_ROOT="$worktree_root" bash \

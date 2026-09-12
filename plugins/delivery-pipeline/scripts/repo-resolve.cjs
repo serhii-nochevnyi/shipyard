@@ -997,6 +997,27 @@ function cloneRepository(input, runner = spawnSync) {
       });
   }
 
+  const cloneParent = path.dirname(destination);
+  try {
+    fs.mkdirSync(cloneParent, { recursive: true });
+    if (!fs.statSync(cloneParent).isDirectory()) {
+      throw new Error('parent is not a directory');
+    }
+  } catch (error) {
+    return cloneFailure(
+      input,
+      `clone parent "${cloneParent}" could not be created: ${error && error.message ? error.message : String(error)}`,
+      {
+        destination,
+        clone_root: root,
+        clone_url: clone.url,
+        clone_protocol: clone.protocol || null,
+        clone_source: clone.field || null,
+        required_base: `origin/${baseName}`,
+      },
+    );
+  }
+
   const commandOptions = {
     cwd: projectRoot,
     encoding: 'utf8',

@@ -308,12 +308,13 @@ test('clone command is full and proves the requested origin base ref', () => {
   git(source, ['branch', 'epic/base']);
   git(source, ['update-ref', 'refs/remotes/origin/epic/base', git(source, ['rev-parse', 'refs/heads/epic/base'])]);
 
-  const destination = path.join(parent, 'service');
+  const reposRoot = path.join(parent, 'new-root');
+  const destination = path.join(reposRoot, 'nested', 'service');
   const calls = [];
   const result = mod.cloneRepository({
     ticket: 'T-30-07',
     repo: 'acme/service',
-    config: { repos: {}, repos_root: parent },
+    config: { repos: {}, repos_root: reposRoot },
     projectRoot: projectDir,
     destination,
     base: 'epic/base',
