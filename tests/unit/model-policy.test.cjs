@@ -236,4 +236,17 @@ test('resolution is immutable and exposes route, backend, mechanism, and reason 
   assert.match(result.signal_reasons.find((item) => item.signal === 'risk').reason, /inert|not a role-scoped/);
 });
 
+test('freezing a resolution does not freeze caller-owned prior receipt evidence', () => {
+  const priorApplied = {
+    model: 'gpt-5.6-luna',
+    effort: 'max',
+    dispatchId: 'luna-owned-by-caller',
+  };
+  const result = codex('ci-fix', { signatureState: 'repeat', priorApplied });
+  assert.ok(Object.isFrozen(result));
+  assert.equal(Object.isFrozen(priorApplied), false);
+  priorApplied.dispatchId = 'caller-can-still-update-its-evidence';
+  assert.equal(priorApplied.dispatchId, 'caller-can-still-update-its-evidence');
+});
+
 done();

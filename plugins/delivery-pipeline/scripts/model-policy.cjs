@@ -122,6 +122,14 @@ function canonicalValue(value) {
   return out;
 }
 
+function cloneValue(value) {
+  if (Array.isArray(value)) return value.map(cloneValue);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, child] of Object.entries(value)) out[key] = cloneValue(child);
+  return out;
+}
+
 function stableStringify(value) {
   return JSON.stringify(canonicalValue(value));
 }
@@ -281,7 +289,7 @@ function normalizeSignals(raw) {
   }
   if (hasOwn(signals, 'priorApplied')) {
     assertPlainObject(signals.priorApplied, 'signals.priorApplied');
-    out.priorApplied = signals.priorApplied;
+    out.priorApplied = cloneValue(signals.priorApplied);
   }
   return out;
 }
