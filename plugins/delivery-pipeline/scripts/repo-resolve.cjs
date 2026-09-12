@@ -716,8 +716,9 @@ function localCloneSourcePath(value) {
     const parsed = new URL(value);
     if (parsed.hostname && parsed.hostname !== 'localhost') return null;
     return fileURLToPath(parsed);
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof TypeError || error.code === 'ERR_INVALID_FILE_URL_PATH') return null;
+    throw error;
   }
 }
 
