@@ -261,6 +261,27 @@ test('a non-object delivery namespace does not suppress the legacy discovery roo
   assert.ok(output.searched_roots.includes(configuredRoot));
 });
 
+test('an explicit declared null root keeps precedence over a legacy root', () => {
+  const parent = tempDir('shipyard-declared-null-repos-root-');
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({
+      pipeline: { repos_root: parent },
+      delivery_pipeline: { repos_root: null },
+    }, null, 2) + '\n',
+  );
+  repoAt(path.join(parent, 'legacy-discovery'), 'git@github.com:acme/service.git');
+
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'invalid-policy');
+  assert.strictEqual(output.discovery_status, 'invalid');
+  assert.strictEqual(output.executable, false);
+});
+
 test('origin normalization accepts GitHub SSH, HTTPS, and scp-like forms', () => {
   for (const origin of [
     'git@github.com:Acme/Service.git',

@@ -748,13 +748,21 @@ function readProjectPolicy(projectDir) {
   try {
     const file = path.join(projectDir, '.planning', 'config.json');
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!isRecord(raw)) return {};
     const pipeline = isRecord(raw.pipeline) ? raw.pipeline : {};
     const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
-    const nested = raw.sub_repos ?? (isRecord(raw.planning) ? raw.planning.sub_repos : undefined);
-    return {
-      repos_root: declared.repos_root ?? pipeline.repos_root,
-      sub_repos: nested,
-    };
+    const policy = {};
+    if (Object.prototype.hasOwnProperty.call(declared, 'repos_root')) {
+      policy.repos_root = declared.repos_root;
+    } else if (Object.prototype.hasOwnProperty.call(pipeline, 'repos_root')) {
+      policy.repos_root = pipeline.repos_root;
+    }
+    if (Object.prototype.hasOwnProperty.call(raw, 'sub_repos')) {
+      policy.sub_repos = raw.sub_repos;
+    } else if (isRecord(raw.planning) && Object.prototype.hasOwnProperty.call(raw.planning, 'sub_repos')) {
+      policy.sub_repos = raw.planning.sub_repos;
+    }
+    return policy;
   } catch (error) {
     if (error && error.code === 'ENOENT') return {};
     throw error;
