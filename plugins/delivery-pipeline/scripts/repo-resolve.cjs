@@ -191,6 +191,46 @@ function configuredRepos(config) {
   return isRecord(config.repos) ? config.repos : {};
 }
 
+function rawPipelineFields(projectRoot) {
+  const file = path.join(path.resolve(projectRoot || process.cwd()), '.planning', 'config.json');
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    return { fields: undefined, error };
+  }
+  if (!isRecord(raw)) return { fields: undefined, error: null };
+
+  // Keep the same shallow namespace precedence as pipeline-config.cjs. The
+  // compatibility read preserves an explicitly declared repository path long
+  // enough for resolveRepository to refuse it instead of silently falling
+  // through to origin discovery after loadConfig filters malformed entries.
+  const legacy = isRecord(raw.pipeline) ? raw.pipeline : {};
+  const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
+  return { fields: { ...legacy, ...declared }, error: null };
+}
+
+function resolverConfig(loaded, projectRoot) {
+  if (!loaded || !isRecord(loaded.config)) return loaded && loaded.config;
+  if (loaded.valid === false) return loaded.config;
+  const raw = rawPipelineFields(projectRoot).fields;
+  const hasRoot = raw && Object.prototype.hasOwnProperty.call(raw, 'repos_root');
+  const hasRepos = raw && Object.prototype.hasOwnProperty.call(raw, 'repos');
+  if (!hasRoot && !hasRepos) return loaded.config;
+
+  const declaredRoot = hasRoot ? raw.repos_root : undefined;
+  const declaredRepos = hasRepos && isRecord(raw.repos) ? raw.repos : undefined;
+  return declaredRoot === undefined && declaredRepos === undefined
+    ? loaded.config
+    : {
+      ...loaded.config,
+      ...(declaredRoot === undefined ? {} : { repos_root: declaredRoot }),
+      ...(declaredRepos === undefined
+        ? {}
+        : { repos: { ...configuredRepos(loaded.config), ...declaredRepos } }),
+    };
+}
+
 function hasConfiguredRepo(config, repo) {
   return Object.prototype.hasOwnProperty.call(configuredRepos(config), repo);
 }
@@ -353,6 +393,13 @@ function resolveConfiguredRepo(input) {
   const repositoryRoot = gitRepositoryRoot(checkoutPath);
   if (!repositoryRoot) {
     return trackOnly(ticket, repo, `configured checkout "${configuredPath}" is not a git repository`);
+  }
+  if (path.resolve(repositoryRoot) !== path.resolve(checkoutPath)) {
+    return trackOnly(
+      ticket,
+      repo,
+      `configured checkout "${configuredPath}" is inside another git repository; supply its repository root`,
+    );
   }
   return resolved(ticket, repo, checkoutPath, repositoryRoot);
 }
@@ -763,7 +810,7 @@ if (require.main === module) {
     const projectDir = path.resolve(options.projectDir);
     const loaded = loadConfig(projectDir);
     const policy = readProjectPolicy(projectDir);
-    const config = { ...loaded.config, ...policy };
+    const config = { ...resolverConfig(loaded, projectDir), ...policy };
     const input = {
       ticket: options.ticket,
       repo: options.repo,

@@ -463,6 +463,18 @@ function stackDepth(id, seen = new Set()) {
   return 1 + stackDepth(parent, seen);
 }
 
+// The graph owns a deterministic branch slug; state-sync owns the branch GitHub
+// actually reported. A long ticket title can make those differ, and the latter
+// is the only name a live PR can target. Keep both identities, but only for the
+// same graph ticket — an observed branch is evidence of drift, not a new way to
+// enter another phase's stack.
+function observedBranchesOf(id, ticket) {
+  const observed = state[id] && state[id].pr_branch;
+  return [...new Set([ticket && ticket.branch, observed]
+    .filter((branch) => typeof branch === 'string' && branch.trim())
+    .map((branch) => branch.trim()))];
+}
+
 // The two parent rules, bound to this process's graph. Neither rule is this
 // file's any more — one predicate, two callers — so the duty chain, the merge
 // gate and the board cannot disagree about which children are landable or which
@@ -849,7 +861,7 @@ function mergeOne(id) {
   const myPhase = phaseOf(t);
   const samePhaseTicketBranches = Object.entries(tickets)
     .filter(([, o]) => (o.repo || null) === repo && phaseOf(o) === myPhase)
-    .map(([, o]) => o.branch);
+    .flatMap(([id, o]) => observedBranchesOf(id, o));
   const allowed = new Set([s.epic, t.epic, ...samePhaseTicketBranches].filter(Boolean));
   if (pr.baseRefName === integration) {
     return block(`PR targets the integration branch ${integration} — landing a phase there is a human's decision, never the sentinel's`);
@@ -875,7 +887,7 @@ function mergeOne(id) {
   // `parentIsMoving` is untouched on purpose — the checkpoint exception there is
   // right for driving a child to GREEN and wrong only for merging it.
   const baseTicket = Object.entries(tickets).find(
-    ([, o]) => (o.repo || null) === repo && o.branch === pr.baseRefName
+    ([baseId, o]) => (o.repo || null) === repo && observedBranchesOf(baseId, o).includes(pr.baseRefName)
   );
   if (baseTicket) {
     const [baseId, baseObj] = baseTicket;
@@ -898,7 +910,10 @@ function mergeOne(id) {
     // and the reason a cached BOARD read is sound here (`merged` is TERMINAL).
     // Shared with `dutyItems()` AND with `computeFront`, so neither the duty
     // chain nor the board can offer what this refuses.
-    const limbId = limbBaseOf(id, pr.baseRefName);
+    // `limbBaseOf` indexes canonical graph branches. Resolve the observed base
+    // to its ticket first, then ask the shared predicate about that ticket's
+    // canonical identity while keeping the live branch in the remedy.
+    const limbId = limbBaseOf(id, baseObj.branch || pr.baseRefName);
     if (limbId) return block(limbRemedy(id, pr.baseRefName, limbId));
   }
 
@@ -1050,25 +1065,47 @@ function mergeOne(id) {
     // half preserves what the old loop could already see (a child whose
     // `primary_parent` the graph does not record, but whose PR points here).
     const candidates = new Map();
+    const addCandidate = (childId, branches) => {
+      const current = candidates.get(childId) || [];
+      for (const branch of branches) {
+        if (branch && !current.includes(branch)) current.push(branch);
+      }
+      if (current.length) candidates.set(childId, current);
+    };
     for (const [childId, o] of Object.entries(tickets)) {
       if ((o.repo || null) !== repo) continue;
       if (o.primary_parent !== id) continue;
-      if (o.branch) candidates.set(childId, o.branch);
+      addCandidate(childId, observedBranchesOf(childId, o));
     }
     for (const [childId, childState] of Object.entries(state)) {
       if ((childState.repo || null) !== repo) continue;
       if (childState.pr_base !== pr.headRefName) continue;
-      if (childState.branch) candidates.set(childId, childState.branch);
+      addCandidate(childId, observedBranchesOf(childId, tickets[childId] || childState));
     }
-    for (const [childId, branch] of candidates) {
-      const live = gh(['pr', 'list', '--head', branch, ...repoArg(repo), '--state', 'open',
-        '--json', 'number,baseRefName'], { tolerate: true });
+    for (const [childId, branches] of candidates) {
       let rows = null;
-      if (typeof live === 'string') {
+      const queryErrors = [];
+      // Query the canonical name first for compatibility with old state, then
+      // the observed name when the canonical slug has no live PR. Stop at the
+      // first non-empty answer so a PR is never retargeted twice.
+      for (const branch of branches) {
+        const live = gh(['pr', 'list', '--head', branch, ...repoArg(repo), '--state', 'open',
+          '--json', 'number,baseRefName'], { tolerate: true });
+        if (typeof live !== 'string') {
+          queryErrors.push(`${branch}: ${live.error}`);
+          continue;
+        }
         try {
           const parsed = JSON.parse(live);
-          if (Array.isArray(parsed)) rows = parsed.map((r) => ({ ...r, from: 'live' }));
-        } catch { /* fall through to the cached answer below */ }
+          if (!Array.isArray(parsed)) {
+            queryErrors.push(`${branch}: unreadable output`);
+            continue;
+          }
+          rows = parsed.map((r) => ({ ...r, from: 'live' }));
+          if (rows.length) break;
+        } catch {
+          queryErrors.push(`${branch}: unreadable output`);
+        }
       }
       if (rows === null) {
         // gh could not answer. Fall back to the cached board — it is what we had
@@ -1080,7 +1117,7 @@ function mergeOne(id) {
           ? [{ number: cs.pr, baseRefName: cs.pr_base, from: 'cache' }]
           : [];
         (res.retarget_warnings = res.retarget_warnings || []).push(
-          `${childId}: could not list its open PRs (${typeof live === 'string' ? 'unreadable output' : live.error}) — ` +
+          `${childId}: could not list its open PRs (${queryErrors.join('; ') || 'unreadable output'}) — ` +
           `used the cached board instead${rows.length ? '' : ', which knows of no PR on this base'}`
         );
       }

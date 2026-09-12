@@ -38,7 +38,7 @@ export const meta = {
 //                        // instead of leaving it in a reply that dies with the run
 //     graphDir: "<project>/.planning/graph",  // where that record belongs
 //   }
-// returns: [ { id, verdict: 'fresh'|'drifted', moved: [string], reuse_candidates: [string] } ]
+// returns: [ { id, verdict: 'fresh'|'drifted', moved: [string], reuse_candidates: [string], evidence: [string], recorded?: string } ]
 //
 // `reuse_candidates` is ADVISORY and orthogonal to the verdict: a `fresh`
 // ticket carries it into the executor prompt so the implementation builds on
@@ -57,7 +57,7 @@ export const meta = {
 const VERDICT = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'verdict', 'moved', 'reuse_candidates'],
+  required: ['id', 'verdict', 'moved', 'reuse_candidates', 'evidence'],
   properties: {
     id: { type: 'string' },
     verdict: { enum: ['fresh', 'drifted'] },
@@ -70,6 +70,15 @@ const VERDICT = {
       type: 'array',
       items: { type: 'string' },
       description: 'Existing implementations this ticket should build on rather than reinvent, each as "file:line — what it already does, which part of the ticket it covers". Advisory, independent of the verdict; empty when there is none.',
+    },
+    evidence: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'For every checkable claim: the exact command followed by the relevant path, output, or exit status. Empty only when the judge made no checkable claim.',
+    },
+    recorded: {
+      type: 'string',
+      description: 'For a drifted verdict, whether drift-record.cjs persisted it: "yes" or "no (reason)".',
     },
   },
 }
@@ -109,7 +118,14 @@ phase('Drift')
 
 // fail-safe: a dead (null) OR throwing agent is treated as `drifted` so the
 // orchestrator never runs an unchecked ticket on a silent judge failure.
-const driftFallback = (id, why) => ({ id, verdict: 'drifted', moved: [why], reuse_candidates: [] })
+const driftFallback = (id, why) => ({
+  id,
+  verdict: 'drifted',
+  moved: [why],
+  reuse_candidates: [],
+  evidence: [],
+  recorded: `no (${why})`,
+})
 
 const results = await parallel(
   tickets.map((t) => () => {
@@ -122,6 +138,8 @@ const results = await parallel(
         `You are a drift-check judge. First read your full instructions and output contract from this file: ${refPath}.`,
         `Then read the ticket contract (plan file): ${t.planPath} — including every path it lists under Context reads and files_modified.`,
         `Judge ONLY ticket ${t.id}. Do NOT modify anything.`,
+        `Rule zero: every checkable claim about the codebase, a test, delivery state, or a completed action must name the exact command that checked it and the relevant path, output, or exit status. If a claim cannot be checked by a command, label it as an assumption or unknown and state the next check. A claim without command-backed evidence is not verification.`,
+        `For every checkable claim in your verdict, add one evidence entry in the evidence array with the exact command and the relevant path, output, or exit status.`,
         `"Has landed" means present on the integration base${baseRef ? ` (${baseRef})` : ''}, NOT present in the working tree. The checkout may sit on a branch cut before this work existed, where every path the ticket names is absent and that absence proves nothing — verify with \`git cat-file -e <base>:<path>\` / \`git ls-tree -r --name-only <base> -- <dir>\`.`,
         `Run the reuse scan (step 4) even when nothing has drifted — search by BEHAVIOR, not by the names the plan proposes. Existing code to build on is reported in reuse_candidates and leaves the verdict "fresh"; only work that is already done, or an implementation that invalidates the ticket's approach, is "drifted".`,
         ...(argv.recordCmd

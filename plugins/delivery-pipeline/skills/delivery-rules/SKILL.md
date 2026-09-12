@@ -13,6 +13,14 @@ these rules keep them machine-consumable by the conveyor's deterministic layer.
 written in English. When addressing the user directly, reply in the user's
 language; English is for the artifacts, the user's language is for conversation.
 
+## Rule zero: make claims executable
+
+Every checkable claim about the codebase, a test, delivery state, or a completed
+action must name the exact command that checked it and the relevant path,
+output, or exit status. If a claim cannot be checked by a command, label it as
+an assumption or unknown and state the next check. A claim without
+command-backed evidence is not verification.
+
 ## For planners (writing PLAN.md)
 
 1. **Full frontmatter, always**: `phase`, `plan`, `title`, `type`, `wave`,
