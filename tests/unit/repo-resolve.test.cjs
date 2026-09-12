@@ -465,6 +465,33 @@ test('a repeated clone adopts an existing matching checkout without invoking clo
   assert.strictEqual(invoked, false);
 });
 
+test('the clone CLI reports adoption instead of claiming it cloned', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const destination = repoAt(path.join(parent, 'service'), 'git@github.com:acme/service.git');
+  git(destination, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(destination, ['config', 'user.name', 'Shipyard Tests']);
+  fs.writeFileSync(path.join(destination, 'README.md'), 'adopted\n');
+  git(destination, ['add', 'README.md']);
+  git(destination, ['commit', '-qm', 'seed']);
+  git(destination, ['update-ref', 'refs/remotes/origin/epic/base', 'HEAD']);
+
+  const result = run([
+    'clone',
+    'acme/service',
+    '--project-dir', projectDir,
+    '--destination', destination,
+    '--base', 'epic/base',
+    '--clone-url', '/a/source-that-must-not-be-used',
+  ]);
+
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.strictEqual(
+    result.stdout.trim(),
+    `acme/service: adopted checkout ${destination}; verified origin/epic/base`,
+  );
+});
+
 test('a matching checkout without the requested origin base remains unverified', () => {
   const projectDir = isolatedProject({});
   const parent = path.dirname(projectDir);

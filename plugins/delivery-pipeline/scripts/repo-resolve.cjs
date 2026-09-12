@@ -24,18 +24,20 @@ const {
   originBaseLabel,
   resolveOriginRef,
   resolveLocalBranchRef,
+  repoRootOf,
 } = require('./graph-dir.cjs');
 const { withLock, lockDirFor } = require('./lock.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
 const QUARANTINE_FILE = '.shipyard-clone-unverified.json';
-// A clone is a potentially long-running write. The ordinary two-minute lock
-// TTL is a safety net for short state writes, but expiring it during a clone
-// would let a second resolver inspect and adopt a partial checkout. This
-// transaction therefore keeps ownership until the process releases it; a
-// crashed clone remains an explicit lock-recovery decision instead of a race.
-const CLONE_LOCK_TTL_MS = Number.MAX_SAFE_INTEGER;
+// A clone is a potentially long-running write. Bound the child process so the
+// lock can remain recoverable after a killed process while still covering the
+// longest normal clone. A contender waits through that same bounded window and
+// then re-enters the destination check, where it adopts a completed checkout.
+const CLONE_TIMEOUT_MS = 15 * 60 * 1000;
+const CLONE_LOCK_TTL_MS = CLONE_TIMEOUT_MS + 60 * 1000;
+const CLONE_LOCK_WAIT_MS = CLONE_TIMEOUT_MS + 60 * 1000;
 
 function invalidArgument(message) {
   const error = new TypeError(`repo-resolve: ${message}`);
@@ -967,12 +969,17 @@ function cloneRepository(input, runner = spawnSync) {
     invalidArgument('projectRoot must be a string when provided');
   }
   const projectRoot = path.resolve(input.projectRoot || process.cwd());
+  const lockRoot = repoRootOf(projectRoot) || projectRoot;
   // The destination check and the clone are one critical section. A second
   // resolver arriving after the first clone must see the completed checkout
   // and adopt it, never race the first git clone or overwrite its path.
-  return withLock(lockDirFor(projectRoot), 'repo-resolve', () => (
+  return withLock(lockDirFor(lockRoot), 'repo-resolve', () => (
     cloneRepositoryUnlocked({ ...input, projectRoot }, runner)
-  ), { label: `repo-resolve clone ${input.repo}`, ttlMs: CLONE_LOCK_TTL_MS });
+  ), {
+    label: `repo-resolve clone ${input.repo}`,
+    ttlMs: CLONE_LOCK_TTL_MS,
+    waitMs: CLONE_LOCK_WAIT_MS,
+  });
 }
 
 function cloneRepositoryUnlocked(input, runner = spawnSync) {
@@ -1114,6 +1121,8 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
     cwd: projectRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: CLONE_TIMEOUT_MS,
+    killSignal: 'SIGTERM',
     env: {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0',
@@ -1529,6 +1538,8 @@ if (require.main === module) {
     }
     if (options.json) {
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    } else if (result.executable && result.resolution === 'adopted' && result.base_verified) {
+      process.stdout.write(`${result.repo}: adopted checkout ${result.repository_root}; verified ${result.base_ref}\n`);
     } else if (result.executable && result.base_verified) {
       process.stdout.write(`${result.repo}: cloned checkout ${result.repository_root}; verified ${result.base_ref}\n`);
     } else if (result.executable) {
