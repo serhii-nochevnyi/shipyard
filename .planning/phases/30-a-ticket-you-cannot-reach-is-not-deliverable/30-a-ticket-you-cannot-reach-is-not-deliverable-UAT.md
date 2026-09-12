@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d5b36a17f3261dacc1253a90b206d1e6dd39bdfed272a9dece8be378ad796d83
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3c0cdf5c9a9701fde5fc5f99573ab8f65a27ab762ed984b06a6f288a5082ee01
 phase: 30
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: d5b36a17f3261dacc1253a90b206d1e6dd39bdfed272a9dece8be378ad796d83
+shipyard_source_fingerprint: 3c0cdf5c9a9701fde5fc5f99573ab8f65a27ab762ed984b06a6f288a5082ee01
 ---
 
 # Phase 30: A ticket you cannot reach is not deliverable — UAT Projection
@@ -14,7 +14,7 @@ This file is generated from the delivery graph and phase integration evidence.
 ### 1. Delivery plans are accounted for
 result: pending
 expected: all 10 phase plan(s) are merged
-actual: 3 merged
+actual: 9 merged
 
 ### 2. Integration evidence is explicit
 result: pending

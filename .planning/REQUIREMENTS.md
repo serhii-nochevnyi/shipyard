@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d5b36a17f3261dacc1253a90b206d1e6dd39bdfed272a9dece8be378ad796d83 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3c0cdf5c9a9701fde5fc5f99573ab8f65a27ab762ed984b06a6f288a5082ee01 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -111,7 +111,13 @@
 - [x] **REQ-101**: Planning, delivery, verification, and ship boundaries run a blocking synchronization/check gate for Shipyard projects and remain inert for ordinary GSD projects.
 - [x] **REQ-102**: Synchronization is local-only, atomic, idempotent, and checkable without mutation, with deterministic refusal on conflicting files or ambiguous plan/ticket identity.
 - [x] **REQ-103**: Claude and Codex consume the same canonical synchronizer through generated/bundled installer surfaces, with smoke coverage for both.
-- [ ] **REQ-104**: Sentinel stack guards accept the observed PR branch recorded for a validated ticket when GitHub's live branch name differs from the canonical graph slug, while preserving same-phase and checkpoint boundaries. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [ ] **REQ-104**: Sentinel stack guards accept the observed PR branch recorded for a validated ticket when GitHub's live branch name differs from the canonical graph slug, while preserving same-phase and checkpoint boundaries.
+- [ ] **REQ-105**: The delivery policy defines one versioned, role-scoped model ladder with explicit model, effort, and escalation signals for research, decomposition, execution, sentinel, integration, drift, architecture review, CI-fix, and review-fix.
+- [ ] **REQ-106**: Codex resolves the approved Terra/Sol/Luna/Astra concrete model IDs and efforts, generates/registers every required static variant, and fails closed on unavailable, stale, missing, or conflicting model configuration.
+- [ ] **REQ-107**: Claude Code consumes the canonical role/escalation decision via its existing palette without changing that palette, and both runtime adapters reject unsupported or implicit model/effort application.
+- [ ] **REQ-108**: Every routed dispatch, including decomposition and dynamic executor paths, passes through one mandatory resolve → validate → launch boundary; inline fallback, parent-session inheritance, and conflicting GSD or per-role overrides cannot bypass the selected model.
+- [ ] **REQ-109**: Repair escalation is evidence-backed (`Luna/max` → `Sol/medium` → `Astra/medium`), judgement escalation retains all fired signals, fixed Luna roles are not globally promoted, and missing prior application evidence prevents escalation.
+- [ ] **REQ-110**: Dispatch telemetry records policy fingerprint, logical rung, requested/applied/observed model and effort, runtime, backend, agent or launch identity, signals, and receipt; negative tests prove enforcement on both runtimes and preserve Claude palette files/configuration. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
 ## Out of Scope
 
@@ -228,10 +234,16 @@
 | REQ-102 | Phase 35 | Complete |
 | REQ-103 | Phase 35 | Complete |
 | REQ-104 | Phase 30 | In Progress |
+| REQ-105 | Phase 36 | In Progress |
+| REQ-106 | Phase 36 | In Progress |
+| REQ-107 | Phase 36 | In Progress |
+| REQ-108 | Phase 36 | In Progress |
+| REQ-109 | Phase 36 | In Progress |
+| REQ-110 | Phase 36 | In Progress |
 
 **Coverage:**
-- v1 requirements: 104 total
-- Mapped to phases: 102
+- v1 requirements: 110 total
+- Mapped to phases: 108
 - Unmapped: 2 ⚠️
 
 ---
