@@ -78,6 +78,13 @@
         null
       ]
     },
+    "31": {
+      "branch": "epic/31-not-every-ticket-is-available-work",
+      "base": null,
+      "repos": [
+        null
+      ]
+    },
     "32": {
       "branch": "epic/32-measure-usage-and-make-the-backlog-actionable",
       "base": null,
@@ -2456,6 +2463,7 @@
       "unreachable_paths": false,
       "missing_paths": true,
       "files": [
+        "capabilities/delivery-pipeline/capability.json",
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "plugins/delivery-pipeline/scripts/repo-resolve.cjs",
         "tests/unit/pipeline-config.test.cjs",
@@ -2544,6 +2552,7 @@
       "files": [
         "plugins/delivery-pipeline/scripts/repo-resolve.cjs",
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
         "tests/unit/repo-resolve.test.cjs",
         "tests/unit/record-stores.test.cjs"
       ],
@@ -2586,6 +2595,237 @@
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-08",
       "pr_base": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c",
+      "jira": null
+    },
+    "T-30-10": {
+      "title": "Make the sentinel honor observed ticket branches",
+      "plan": ".planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-10-PLAN.md",
+      "phase": "30",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-30-03"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/unit/sentinel.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-30-10-make-the-sentinel-honor-observed-ticket",
+      "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
+      "primary_parent": "T-30-03",
+      "pr_base": "ticket/T-30-03-discover-repository-checkouts-by-declare",
+      "jira": null
+    },
+    "T-31-01": {
+      "title": "Remove the external ticket import shortcut",
+      "plan": ".planning/phases/31-not-every-ticket-is-available-work/31-01-PLAN.md",
+      "phase": "31",
+      "repo": null,
+      "wave": 9,
+      "depends_on": [
+        "T-30-09"
+      ],
+      "cross_phase_deps": [
+        "T-30-09"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "tests/unit/delivery-cold-start-contract.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-31-01-remove-the-external-ticket-import-shortc",
+      "epic": "epic/31-not-every-ticket-is-available-work",
+      "primary_parent": null,
+      "pr_base": "epic/31-not-every-ticket-is-available-work",
+      "jira": null
+    },
+    "T-31-02": {
+      "title": "Declare opt-in Jira To Do statuses",
+      "plan": ".planning/phases/31-not-every-ticket-is-available-work/31-02-PLAN.md",
+      "phase": "31",
+      "repo": null,
+      "wave": 10,
+      "depends_on": [
+        "T-31-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "capabilities/delivery-pipeline/capability.json",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "README.md",
+        "tests/unit/pipeline-config.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-31-02-declare-opt-in-jira-to-do-statuses",
+      "epic": "epic/31-not-every-ticket-is-available-work",
+      "primary_parent": "T-31-01",
+      "pr_base": "ticket/T-31-01-remove-the-external-ticket-import-shortc",
+      "jira": null
+    },
+    "T-31-03": {
+      "title": "Define status and assignee eligibility without history",
+      "plan": ".planning/phases/31-not-every-ticket-is-available-work/31-03-PLAN.md",
+      "phase": "31",
+      "repo": null,
+      "wave": 11,
+      "depends_on": [
+        "T-31-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/tracker-eligibility.cjs",
+        "tests/unit/tracker-eligibility.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-31-03-define-status-and-assignee-eligibility-w",
+      "epic": "epic/31-not-every-ticket-is-available-work",
+      "primary_parent": "T-31-02",
+      "pr_base": "ticket/T-31-02-declare-opt-in-jira-to-do-statuses",
+      "jira": null
+    },
+    "T-31-04": {
+      "title": "Persist tracker verdicts and fail closed on unknown",
+      "plan": ".planning/phases/31-not-every-ticket-is-available-work/31-04-PLAN.md",
+      "phase": "31",
+      "repo": null,
+      "wave": 12,
+      "depends_on": [
+        "T-31-03"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/tracker-record.cjs",
+        "tests/unit/tracker-record.test.cjs",
+        "tests/unit/record-stores.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-31-04-persist-tracker-verdicts-and-fail-closed",
+      "epic": "epic/31-not-every-ticket-is-available-work",
+      "primary_parent": "T-31-03",
+      "pr_base": "ticket/T-31-03-define-status-and-assignee-eligibility-w",
+      "jira": null
+    },
+    "T-31-05": {
+      "title": "Gate only the execute transition on tracker eligibility",
+      "plan": ".planning/phases/31-not-every-ticket-is-available-work/31-05-PLAN.md",
+      "phase": "31",
+      "repo": null,
+      "wave": 13,
+      "depends_on": [
+        "T-31-04"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "tests/unit/front.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-31-05-gate-only-the-execute-transition-on-trac",
+      "epic": "epic/31-not-every-ticket-is-available-work",
+      "primary_parent": "T-31-04",
+      "pr_base": "ticket/T-31-04-persist-tracker-verdicts-and-fail-closed",
+      "jira": null
+    },
+    "T-31-06": {
+      "title": "Journal direct ticket overrides",
+      "plan": ".planning/phases/31-not-every-ticket-is-available-work/31-06-PLAN.md",
+      "phase": "31",
+      "repo": null,
+      "wave": 14,
+      "depends_on": [
+        "T-31-05"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/tracker-record.cjs",
+        "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "tests/unit/tracker-record.test.cjs",
+        "tests/unit/log-event.test.cjs",
+        "tests/unit/judgment-contract.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-31-06-journal-direct-ticket-overrides",
+      "epic": "epic/31-not-every-ticket-is-available-work",
+      "primary_parent": "T-31-05",
+      "pr_base": "ticket/T-31-05-gate-only-the-execute-transition-on-trac",
+      "jira": null
+    },
+    "T-31-07": {
+      "title": "Read tracker eligibility at cold start and consume the cache",
+      "plan": ".planning/phases/31-not-every-ticket-is-available-work/31-07-PLAN.md",
+      "phase": "31",
+      "repo": null,
+      "wave": 15,
+      "depends_on": [
+        "T-31-06"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "tests/unit/front.test.cjs",
+        "tests/unit/tracker-wiring-contract.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start-a",
+      "epic": "epic/31-not-every-ticket-is-available-work",
+      "primary_parent": "T-31-06",
+      "pr_base": "ticket/T-31-06-journal-direct-ticket-overrides",
       "jira": null
     },
     "T-32-01": {

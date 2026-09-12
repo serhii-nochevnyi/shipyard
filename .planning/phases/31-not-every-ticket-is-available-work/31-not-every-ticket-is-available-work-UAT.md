@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a38b48f43fb1f7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d5b36a17f3261dacc1253a90b206d1e6dd39bdfed272a9dece8be378ad796d83
 phase: 31
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 2c396045e792d1de8c19c099f3ad93164d8438f4b8e33658a6a38b48f43fb1f7
+shipyard_source_fingerprint: d5b36a17f3261dacc1253a90b206d1e6dd39bdfed272a9dece8be378ad796d83
 ---
 
 # Phase 31: Not every ticket is available work — UAT Projection
@@ -13,8 +13,8 @@ This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
 result: pending
-expected: at least one delivery PLAN.md is present
-actual: no delivery PLAN.md files; evidence is missing
+expected: all 7 phase plan(s) are merged
+actual: 0 merged
 
 ### 2. Integration evidence is explicit
 result: pending
