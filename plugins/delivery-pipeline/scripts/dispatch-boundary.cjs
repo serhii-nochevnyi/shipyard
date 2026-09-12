@@ -77,6 +77,10 @@ function invokeSync(fn, receiver, args, label) {
   return result;
 }
 
+function invokeLaunch(fn, receiver, args) {
+  return fn.apply(receiver, args);
+}
+
 function adapterObservationUnavailable(adapter) {
   return Boolean(
     adapter && (
@@ -262,7 +266,7 @@ function createDispatchBoundary(options = {}) {
         ? adapter.apply
         : null;
     if (!fn) refuse('MISSING_ADAPTER', `${resolution.runtime} dispatch adapter has no launch method`, { runtime: resolution.runtime });
-    return invokeSync(fn, adapter, [resolution, context], 'adapter.launch');
+    return invokeLaunch(fn, adapter, [resolution, context]);
   }
 
   function receipt(resolution, rawReceipt, receiptOptions = {}) {
@@ -279,13 +283,13 @@ function createDispatchBoundary(options = {}) {
     ];
     validateWithAdapter(resolution, adapter, policy);
     stages.push({ stage: 'validate', status: 'passed' });
-    const launchResult = launch(resolution, context, { adapter });
-    const rawReceipt = unwrapReceipt(launchResult);
-    const applicationReceipt = verifyApplicationReceipt(resolution, rawReceipt, { adapter });
-    stages.push({ stage: 'launch', status: 'passed', launch_id: applicationReceipt.launch_id });
-    stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
+    const finish = (launchResult) => {
+      const rawReceipt = unwrapReceipt(launchResult);
+      const applicationReceipt = verifyApplicationReceipt(resolution, rawReceipt, { adapter });
+      stages.push({ stage: 'launch', status: 'passed', launch_id: applicationReceipt.launch_id });
+      stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
 
-    const baseTrace = {
+      const baseTrace = {
       dispatch_id: resolution.dispatch_id,
       policy_version: resolution.policy_version,
       policy_hash: resolution.policy_hash,
@@ -307,19 +311,25 @@ function createDispatchBoundary(options = {}) {
       observed_model: applicationReceipt.observed_model,
       observed_effort: applicationReceipt.observed_effort,
       receipt: applicationReceipt,
-    };
-    const record = recorderFor(options, adapter);
-    if (record) {
-      const recordInput = deepFreeze(snapshot({ ...baseTrace, trace: [...stages] }));
-      const result = invokeSync(record, null, [recordInput], 'dispatch recorder');
-      if (result === false || result && result.recorded === false) {
-        refuse('RECORD_FAILED', 'dispatch receipt could not be recorded; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
+      };
+      const record = recorderFor(options, adapter);
+      if (record) {
+        const recordInput = deepFreeze(snapshot({ ...baseTrace, trace: [...stages] }));
+        const result = invokeSync(record, null, [recordInput], 'dispatch recorder');
+        if (result === false || result && result.recorded === false) {
+          refuse('RECORD_FAILED', 'dispatch receipt could not be recorded; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
+        }
+        stages.push({ stage: 'record', status: 'passed' });
+      } else {
+        stages.push({ stage: 'record', status: 'not-configured' });
       }
-      stages.push({ stage: 'record', status: 'passed' });
-    } else {
-      stages.push({ stage: 'record', status: 'not-configured' });
+      return deepFreeze(snapshot({ ...baseTrace, trace: stages }));
+    };
+    const launchResult = launch(resolution, context, { adapter });
+    if (launchResult && typeof launchResult.then === 'function') {
+      return launchResult.then(finish);
     }
-    return deepFreeze(snapshot({ ...baseTrace, trace: stages }));
+    return finish(launchResult);
   }
 
   return Object.freeze({ resolve, validate, launch, receipt, dispatch });
