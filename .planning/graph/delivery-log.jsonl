@@ -935,3 +935,11 @@
 {"ts":"2026-09-11T22:49:43.397Z","event":"status_change","ticket":"T-31-05","from":null,"to":"pending","pr":null}
 {"ts":"2026-09-11T22:49:43.397Z","event":"status_change","ticket":"T-31-06","from":null,"to":"pending","pr":null}
 {"ts":"2026-09-11T22:49:43.397Z","event":"status_change","ticket":"T-31-07","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-01","from":"pr-open","to":"merged","pr":109}
+{"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-02","from":"pr-open","to":"merged","pr":110}
+{"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-03","from":"pr-open","to":"merged","pr":111}
+{"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-05","from":"pending","to":"pr-open","pr":114}
+{"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-06","from":"pending","to":"pr-open","pr":115}
+{"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-08","from":"pending","to":"pr-open","pr":117}
+{"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-09","from":"pending","to":"pr-open","pr":118}
+{"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-10","from":null,"to":"pending","pr":null}

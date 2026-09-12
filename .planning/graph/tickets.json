@@ -2597,6 +2597,33 @@
       "pr_base": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c",
       "jira": null
     },
+    "T-30-10": {
+      "title": "Make the sentinel honor observed ticket branches",
+      "plan": ".planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-10-PLAN.md",
+      "phase": "30",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-30-03"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/unit/sentinel.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-30-10-make-the-sentinel-honor-observed-ticket",
+      "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
+      "primary_parent": "T-30-03",
+      "pr_base": "ticket/T-30-03-discover-repository-checkouts-by-declare",
+      "jira": null
+    },
     "T-31-01": {
       "title": "Remove the external ticket import shortcut",
       "plan": ".planning/phases/31-not-every-ticket-is-available-work/31-01-PLAN.md",

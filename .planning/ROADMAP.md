@@ -289,6 +289,9 @@ script — not in a prompt.** Every requirement below is an instance of it.
   or ambiguous plan/ticket identity.
 - **REQ-103** — Claude and Codex consume the same canonical synchronizer through
   generated/bundled installer surfaces, with smoke coverage for both.
+- **REQ-104** — Sentinel stack guards accept the observed PR branch recorded for
+  a validated ticket when GitHub's live branch name differs from the canonical
+  graph slug, while preserving same-phase and checkpoint boundaries.
 
 *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
 initial isolated tooling slice; subsequent packages remain subject to decomposition
@@ -482,7 +485,7 @@ so this repository ships a mechanism it cannot run, and the witnessed mutation
 is owed by the proving ground.
 
 ### Phase 30: A ticket you cannot reach is not deliverable
-**Requirements**: REQ-76, REQ-77, REQ-78, REQ-79, REQ-80, REQ-81, REQ-82, REQ-83, REQ-84
+**Requirements**: REQ-76, REQ-77, REQ-78, REQ-79, REQ-80, REQ-81, REQ-82, REQ-83, REQ-84, REQ-104
 
 Decomposed from ADR-010. Today a ticket whose files live in a sibling
 repository with no configured checkout is a dead end with a good error message:
@@ -516,7 +519,8 @@ criterion: a claim about an existing mechanism with no command named is a
 `violation`. It rides here because it is cross-cutting and blocks nothing, and
 it is delivered by the conveyor rather than hand-edited because a rule about
 verification that arrived unverified would be its own counter-example. Nine
-tickets in all; the phase cannot start until phase 29's epic lands, and it
+ADR-010 tickets plus T-30-10, which repairs the sentinel's observed branch identity;
+the phase cannot start until phase 29's epic lands, and it
 contests less than phase 31 does.
 
 ### Phase 31: Not every ticket is available work
@@ -594,8 +598,8 @@ findings or turn a merged ticket count into a false phase pass.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `835f7541b7d2cb9c63d912f07fef4934e058db5e6c1df9027efd241137e8a711`
-- Plans merged: 87/103
+- Source fingerprint: `d5b36a17f3261dacc1253a90b206d1e6dd39bdfed272a9dece8be378ad796d83`
+- Plans merged: 90/104
 - Phases verified: 4/16
 - Current phase: 20
 
@@ -611,7 +615,7 @@ findings or turn a merged ticket count into a false phase pass.
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
-| 30 — A ticket you cannot reach is not deliverable | 9 | 0 | pending |
+| 30 — A ticket you cannot reach is not deliverable | 10 | 3 | pending |
 | 31 — Not every ticket is available work | 7 | 0 | pending |
 | 32 — Measure usage and make the backlog actionable | 7 | 7 | passed |
 | 33 — Reduce orchestration context and transfer sessions safely | 0 | 0 | pending |
