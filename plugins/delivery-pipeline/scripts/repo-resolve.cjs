@@ -256,8 +256,9 @@ function immediateDirectories(root) {
   let entries;
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    return [];
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return [];
+    throw error;
   }
   return entries
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
@@ -766,8 +767,9 @@ function readProjectPolicy(projectDir) {
       repos_root: declared.repos_root ?? pipeline.repos_root,
       sub_repos: nested,
     };
-  } catch {
-    return {};
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return {};
+    throw error;
   }
 }
 

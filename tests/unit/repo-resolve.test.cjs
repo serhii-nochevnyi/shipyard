@@ -405,7 +405,10 @@ test('an unanswered choice becomes a durable park payload without filesystem mut
   assert.strictEqual(result.decision, 'skip');
   assert.strictEqual(result.operator_choice, 'skip');
   assert.strictEqual(result.choice_source, 'unattended');
-  assert.match(result.park_reason, /no operator choice.*skipped/);
+  assert.strictEqual(
+    result.park_reason,
+    'repository acme/service is not reachable; no operator choice was provided, so it was skipped',
+  );
   assert.strictEqual(result.reason, result.park_reason);
   assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, 'unanswered choice must not create a destination');
 });
@@ -438,7 +441,10 @@ test('an explicit existing path is adopted only when its origin and nesting are 
   });
   assert.strictEqual(rejected.executable, false);
   assert.strictEqual(rejected.decision, 'existing');
-  assert.match(rejected.park_reason, /origin.*acme\/service/);
+  assert.strictEqual(
+    rejected.park_reason,
+    `operator supplied a checkout for acme/service, but it was rejected: existing checkout "${wrongOrigin}" has an origin that does not resolve to acme/service`,
+  );
 });
 
 test('an existing path nested in the project is refused unless sub_repos declares it', () => {
@@ -484,7 +490,7 @@ test('clone records explicit intent and a validated destination without cloning 
   assert.strictEqual(result.decision, 'clone');
   assert.strictEqual(result.operator_choice, 'clone');
   assert.strictEqual(result.destination, destination);
-  assert.match(result.park_reason, /clone.*pending/);
+  assert.strictEqual(result.park_reason, 'operator chose clone for acme/service; clone is pending a delivery step');
   assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, 'clone choice must not create a destination in T-30-04');
 
   const outside = path.join(tempDir(), 'outside-service');
@@ -517,7 +523,7 @@ test('clone refuses a dangling destination symlink before recording an adoptable
   assert.strictEqual(result.executable, false);
   assert.match(result.park_reason, /already exists and cannot be adopted/);
   assert.match(result.park_reason, /not available/);
-  assert.ok(fs.lstatSync(destination).isSymbolicLink(), 'the dangling symlink must remain untouched');
+  assert.strictEqual(fs.lstatSync(destination).isSymbolicLink(), true, 'the dangling symlink must remain untouched');
 });
 
 test('state-sync and deliver name the configured resolver caller', () => {
