@@ -962,3 +962,6 @@
 {"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-11","from":null,"to":"pending","pr":null}
 {"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-12","from":null,"to":"pending","pr":null}
 {"ts":"2026-09-12T20:00:23.062Z","event":"reuse_scan","ticket":"T-36-01","hits":0,"verdict":"fresh"}
+{"ts":"2026-09-12T20:26:45.234Z","event":"status_change","ticket":"T-30-09","from":"pr-open","to":"merged","pr":118}
+{"ts":"2026-09-12T20:26:45.234Z","event":"status_change","ticket":"T-36-01","from":"pending","to":"pr-open","pr":125}
+{"ts":"2026-09-12T20:28:27.634Z","event":"dispatch","ticket":"T-36-01","role":"pr-sentinel","pr":125,"agent_id":"01a0974e-716a-7413-a275-221aa8ce92ad","dispatch_id":"dispatch-mtyu7yid-ac492dc7-1657-422e-8a47-a94110b76675","by":"dispatch-record"}

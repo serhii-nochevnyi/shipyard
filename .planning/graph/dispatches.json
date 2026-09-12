@@ -10,6 +10,15 @@
       "fingerprint": "93a2b624108dd7c5",
       "fingerprint_kind": "role",
       "pr": 90
+    },
+    "T-36-01": {
+      "role": "pr-sentinel",
+      "at": "2026-09-12T20:28:27.634Z",
+      "agent_id": "01a0974e-716a-7413-a275-221aa8ce92ad",
+      "dispatch_id": "dispatch-mtyu7yid-ac492dc7-1657-422e-8a47-a94110b76675",
+      "fingerprint": "8c687588a2fa7dc4",
+      "fingerprint_kind": "role",
+      "pr": 125
     }
   }
 }

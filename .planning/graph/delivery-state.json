@@ -945,30 +945,15 @@
   "T-30-09": {
     "branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unre",
     "pr": 118,
-    "status": "pr-open",
+    "status": "merged",
     "matched_by": "marker",
     "pr_branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable",
-    "draft": true,
-    "review_decision": null,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/118",
-    "pr_base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
-    "pr_created_at": "2026-09-11T22:28:15Z",
-    "head_sha": "12d324a6a78a986a4c73eb5fa555c3b37300b7f5",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false,
-      "unavailable": false
-    },
     "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "base_reason": "T-30-08 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-12T00:07:42.789Z"
+    "reapable": true,
+    "since": "2026-09-12T20:26:45.234Z"
   },
   "T-30-10": {
     "branch": "ticket/T-30-10-make-the-sentinel-honor-observed-ticket",
@@ -988,13 +973,7 @@
     "base": "epic/31-not-every-ticket-is-available-work",
     "base_reason": "no primary parent — a root ticket PRs into epic/31-not-every-ticket-is-available-work",
     "epic": "epic/31-not-every-ticket-is-available-work",
-    "ready": false,
-    "blocked_by": [
-      "T-30-09"
-    ],
-    "blocked_reasons": {
-      "T-30-09": "cross-phase parent must be MERGED and its phase 30 epic landed on main first (parent is pr-open)"
-    },
+    "ready": true,
     "reapable": false,
     "since": "2026-09-11T22:49:43.397Z"
   },
@@ -1214,31 +1193,42 @@
   },
   "T-36-01": {
     "branch": "ticket/T-36-01-canonical-runtime-neutral-policy-and-res",
-    "pr": null,
-    "status": "pending",
+    "pr": 125,
+    "status": "pr-open",
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/125",
+    "pr_base": "epic/36-enforce-the-runtime-model-ladder",
+    "pr_created_at": "2026-09-12T20:26:12Z",
+    "head_sha": "60783f7ab03714b78099cc07756a4d0efbb3b81a",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
+    "checks": {
+      "total": 1,
+      "failing": 1,
+      "pending": 0,
+      "none_reported": false,
+      "unavailable": false
+    },
     "base": "epic/36-enforce-the-runtime-model-ladder",
     "base_reason": "no primary parent — a root ticket PRs into epic/36-enforce-the-runtime-model-ladder",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "ready": true,
+    "merge_scope": "stacked",
     "reapable": false,
-    "since": "2026-09-12T19:57:33.322Z"
+    "since": "2026-09-12T20:26:45.234Z"
   },
   "T-36-02": {
     "branch": "ticket/T-36-02-authoritative-configuration-bridge-and-o",
     "pr": null,
     "status": "pending",
-    "base": "epic/36-enforce-the-runtime-model-ladder",
-    "base_reason": "T-36-01 has no branch on the remote yet (status pending) — ticket/T-36-01-canonical-runtime-neutral-policy-and-res is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "base": "ticket/T-36-01-canonical-runtime-neutral-policy-and-res",
+    "base_reason": "T-36-01 is pr-open — cascade off ticket/T-36-01-canonical-runtime-neutral-policy-and-res; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-01 lands",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
     "ready": false,
     "blocked_by": [
-      "T-36-01",
-      "T-30-05",
       "T-31-02"
     ],
     "blocked_reasons": {
-      "T-36-01": "parent has no branch yet (nothing to cascade from)",
-      "T-30-05": "cross-phase parent must land on main first (phase 30 epic still ahead)",
       "T-31-02": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)"
     },
     "reapable": false,
@@ -1322,10 +1312,6 @@
     "ready": false,
     "blocked_by": [
       "T-36-06",
-      "T-30-04",
-      "T-30-06",
-      "T-30-08",
-      "T-30-09",
       "T-31-01",
       "T-31-02",
       "T-31-06",
@@ -1333,10 +1319,6 @@
     ],
     "blocked_reasons": {
       "T-36-06": "parent has no branch yet (nothing to cascade from)",
-      "T-30-04": "cross-phase parent must land on main first (phase 30 epic still ahead)",
-      "T-30-06": "cross-phase parent must land on main first (phase 30 epic still ahead)",
-      "T-30-08": "cross-phase parent must land on main first (phase 30 epic still ahead)",
-      "T-30-09": "cross-phase parent must be MERGED and its phase 30 epic landed on main first (parent is pr-open)",
       "T-31-01": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)",
       "T-31-02": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)",
       "T-31-06": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)",
@@ -1423,12 +1405,10 @@
     "ready": false,
     "blocked_by": [
       "T-36-10",
-      "T-30-09",
       "T-31-02"
     ],
     "blocked_reasons": {
       "T-36-10": "parent has no branch yet (nothing to cascade from)",
-      "T-30-09": "cross-phase parent must be MERGED and its phase 30 epic landed on main first (parent is pr-open)",
       "T-31-02": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)"
     },
     "reapable": false,
