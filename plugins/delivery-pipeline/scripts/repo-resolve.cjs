@@ -3,9 +3,10 @@
 
 // Resolve the reachable repository branches of ADR-010 D1. An explicit
 // pipeline.repos entry wins; when it is absent, discovery searches only the
-// declared roots and matches git origin. Prompting and cloning are deliberately
-// absent from this module; a missing or ambiguous checkout is trackable-only
-// until a later resolver branch earns the right to do more.
+// declared roots and matches git origin. The choice branch is deliberately
+// separate from resolution: it can validate an operator's path and record a
+// clone decision without cloning anything. A missing or ambiguous checkout is
+// trackable-only until that explicit choice earns the right to do more.
 
 const fs = require('fs');
 const path = require('path');
@@ -13,6 +14,7 @@ const { spawnSync } = require('child_process');
 const { loadConfig } = require('./pipeline-config.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
 
 function invalidArgument(message) {
   const error = new TypeError(`repo-resolve: ${message}`);
@@ -22,6 +24,10 @@ function invalidArgument(message) {
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string' && entry.length > 0);
 }
 
 function validateArgs(input) {
@@ -101,6 +107,69 @@ function gitRemoteOrigin(candidate) {
   return value || null;
 }
 
+// Resolve a path for policy checks without creating the path. realpathSync
+// cannot resolve a destination that a future clone would create, so walk up to
+// the nearest existing parent and resolve that part instead. This also makes a
+// symlinked parent obey the path's physical nesting boundary.
+function policyPath(value) {
+  let current = path.resolve(value);
+  const missing = [];
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(value);
+    missing.unshift(path.basename(current));
+    current = parent;
+  }
+  try {
+    return path.join(fs.realpathSync(current), ...missing);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+// existsSync follows symbolic links, so it reports a dangling destination as
+// absent and would let the clone branch treat it as safe to create. lstat
+// keeps the decision fail-closed for every filesystem entry, including broken
+// links and entries whose metadata cannot be read.
+function filesystemEntryExists(candidate) {
+  try {
+    fs.lstatSync(candidate);
+    return true;
+  } catch (error) {
+    return error && error.code !== 'ENOENT';
+  }
+}
+
+function subRepositories(config) {
+  if (!isRecord(config)) return [];
+  const nested = isRecord(config.planning) ? config.planning.sub_repos : undefined;
+  const value = config.sub_repos ?? nested;
+  return isStringArray(value) ? value : [];
+}
+
+function nestingViolation(candidate, projectRoot, config, label = 'checkout') {
+  const project = policyPath(projectRoot || process.cwd());
+  const target = policyPath(candidate);
+  const relative = path.relative(project, target);
+  if (relative === '') return `${label} "${target}" is the project root and cannot be adopted`;
+  const nested = relative
+    && !relative.startsWith(`..${path.sep}`)
+    && relative !== '..'
+    && !path.isAbsolute(relative);
+  if (!nested) return null;
+  const top = relative.split(path.sep)[0];
+  if (subRepositories(config).includes(top)) return null;
+  return `${label} "${target}" is nested inside project "${project}" without sub_repos declaration for "${top}"`;
+}
+
+function repositoryPathInsideRoot(candidate, root) {
+  const relative = path.relative(policyPath(root), policyPath(candidate));
+  return relative !== ''
+    && !relative.startsWith(`..${path.sep}`)
+    && relative !== '..'
+    && !path.isAbsolute(relative);
+}
+
 /**
  * Normalize the GitHub URL forms a local git checkout commonly stores.
  *
@@ -132,11 +201,10 @@ function rawPipelineFields(projectRoot) {
   }
   if (!isRecord(raw)) return { fields: undefined, error: null };
 
-  // Keep the same shallow namespace precedence as pipeline-config.cjs. This
-  // compatibility read exists only for the discovery ticket's CLI: older
-  // pipeline-config readers do not yet expose repos_root, while silently
-  // dropping an explicitly declared root makes discovery inspect the wrong
-  // parent and report a false absence.
+  // Keep the same shallow namespace precedence as pipeline-config.cjs. The
+  // compatibility read preserves an explicitly declared repository path long
+  // enough for resolveRepository to refuse it instead of silently falling
+  // through to origin discovery after loadConfig filters malformed entries.
   const legacy = isRecord(raw.pipeline) ? raw.pipeline : {};
   const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
   return { fields: { ...legacy, ...declared }, error: null };
@@ -189,8 +257,8 @@ function immediateDirectories(root) {
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
   } catch (error) {
-    void error;
-    return [];
+    if (error && error.code === 'ENOENT') return [];
+    throw error;
   }
   return entries
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
@@ -337,6 +405,267 @@ function resolveConfiguredRepo(input) {
   return resolved(ticket, repo, checkoutPath, repositoryRoot);
 }
 
+function suppliedPathResult(input, suppliedPath) {
+  validateArgs(input);
+  const { ticket = null, repo, config } = input;
+  if (typeof suppliedPath !== 'string' || suppliedPath.length === 0) {
+    return trackOnly(ticket, repo, `an existing checkout path is required for ${repo}`, {
+      resolution: 'supplied-invalid',
+      discovery_status: 'not-run',
+    });
+  }
+
+  // Reuse the configured branch for the common path, directory and git checks.
+  // The temporary map is in memory only; adopting a path never writes config.
+  const configured = {
+    ...config,
+    repos: { ...configuredRepos(config), [repo]: suppliedPath },
+  };
+  const base = resolveConfiguredRepo({ ...input, config: configured });
+  if (!base.executable) {
+    return trackOnly(ticket, repo, base.reason, {
+      resolution: 'supplied-invalid',
+      discovery_status: 'not-run',
+    });
+  }
+
+  if (path.resolve(base.repository_root) !== path.resolve(base.configured_path)) {
+    return trackOnly(
+      ticket,
+      repo,
+      `existing checkout "${base.configured_path}" resolves inside another git repository; supply its repository root`,
+      { resolution: 'supplied-invalid', discovery_status: 'not-run' },
+    );
+  }
+
+  const normalized = normalizeOrigin(gitRemoteOrigin(base.repository_root));
+  if (normalized !== repo.toLowerCase()) {
+    return trackOnly(
+      ticket,
+      repo,
+      `existing checkout "${base.repository_root}" has an origin that does not resolve to ${repo}`,
+      { resolution: 'supplied-invalid', discovery_status: 'not-run' },
+    );
+  }
+
+  const nesting = nestingViolation(base.repository_root, input.projectRoot, config, 'existing checkout');
+  if (nesting) {
+    return trackOnly(ticket, repo, nesting, {
+      resolution: 'supplied-invalid',
+      discovery_status: 'not-run',
+    });
+  }
+
+  return resolved(ticket, repo, base.configured_path, base.repository_root, {
+    resolution: 'supplied',
+  });
+}
+
+function defaultCloneDestination(repo, projectRoot, config) {
+  const configuredRoot = config.repos_root;
+  let root;
+  if (configuredRoot !== undefined) {
+    if (typeof configuredRoot !== 'string' || !path.isAbsolute(configuredRoot)) {
+      return {
+        error: `pipeline.repos_root must be an absolute path before ${repo} can be cloned`,
+      };
+    }
+    root = path.resolve(configuredRoot);
+  } else {
+    root = path.dirname(path.resolve(projectRoot || process.cwd()));
+  }
+  return {
+    root,
+    destination: path.join(root, repo.split('/').slice(-1)[0]),
+  };
+}
+
+function cloneChoiceResult(input, initial, destinationInfo) {
+  const { repo } = input;
+  if (destinationInfo.error) {
+    return {
+      ...initial,
+      resolution: 'track-only',
+      executable: false,
+      reason: destinationInfo.error,
+      decision: 'clone',
+      operator_choice: 'clone',
+      choice_source: 'operator',
+      park_reason: destinationInfo.error,
+    };
+  }
+
+  const { root, destination } = destinationInfo;
+  const nesting = nestingViolation(destination, input.projectRoot, input.config, 'clone destination');
+  if (nesting) {
+    return {
+      ...initial,
+      resolution: 'track-only',
+      executable: false,
+      reason: nesting,
+      decision: 'clone',
+      operator_choice: 'clone',
+      choice_source: 'operator',
+      destination,
+      clone_root: root,
+      park_reason: nesting,
+    };
+  }
+  if (!repositoryPathInsideRoot(destination, root)) {
+    const reason = `clone destination "${destination}" is outside pipeline.repos_root "${root}"`;
+    return {
+      ...initial,
+      resolution: 'track-only',
+      executable: false,
+      reason,
+      decision: 'clone',
+      operator_choice: 'clone',
+      choice_source: 'operator',
+      destination,
+      clone_root: root,
+      park_reason: reason,
+    };
+  }
+
+  // D7: an existing destination with the right origin is adopted. An existing
+  // destination with anything else is refused; this branch never overwrites.
+  if (filesystemEntryExists(destination)) {
+    const adopted = suppliedPathResult(input, destination);
+    if (adopted.executable) {
+      return {
+        ...adopted,
+        decision: 'clone',
+        operator_choice: 'clone',
+        choice_source: 'operator',
+        adopted: true,
+        destination,
+        clone_root: root,
+      };
+    }
+    const reason = `clone destination "${destination}" already exists and cannot be adopted: ${adopted.reason}`;
+    return {
+      ...initial,
+      resolution: 'track-only',
+      executable: false,
+      reason,
+      decision: 'clone',
+      operator_choice: 'clone',
+      choice_source: 'operator',
+      destination,
+      clone_root: root,
+      park_reason: reason,
+    };
+  }
+
+  // T-30-04 records intent only. T-30-06 owns URL/protocol selection and a
+  // later delivery ticket owns the actual clone/write-back transaction.
+  const reason = `operator chose clone for ${repo}; clone is pending a delivery step`;
+  return {
+    ...initial,
+    resolution: 'track-only',
+    executable: false,
+    reason,
+    decision: 'clone',
+    operator_choice: 'clone',
+    destination,
+    clone_root: root,
+    park_reason: reason,
+  };
+}
+
+function choicePrompt(repo, destination) {
+  return `Repository ${repo} needs an explicit checkout decision. Choose one: clone to ${destination}, provide an existing checkout path, or skip for now (skip parks the ticket).`;
+}
+
+function parkedChoice(initial, choice, reason, extras = {}) {
+  return {
+    ...initial,
+    resolution: 'track-only',
+    executable: false,
+    reason,
+    decision: choice,
+    operator_choice: choice,
+    park_reason: reason,
+    ...extras,
+  };
+}
+
+function normalizeChoice(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const choice = String(value).trim().toLowerCase();
+  const aliases = { c: 'clone', e: 'existing', s: 'skip' };
+  const normalized = aliases[choice] || choice;
+  if (!OPERATOR_CHOICES.includes(normalized)) {
+    invalidArgument(`choice must be one of ${OPERATOR_CHOICES.join('|')}, got ${JSON.stringify(value)}`);
+  }
+  return normalized;
+}
+
+/**
+ * Apply D3 after configured resolution and origin discovery.
+ *
+ * This function never clones, creates a directory, or writes pipeline config.
+ * Its `park_reason` is the durable message the delivery caller must pass to
+ * escalation-record.cjs when the result is not executable.
+ *
+ * @param {{ticket?: string|null, repo: string, config: object, projectRoot?: string, choice?: string, existingPath?: string, destination?: string, resolutionResult?: object}} input
+ */
+function chooseRepository(input) {
+  validateArgs(input);
+  if (input.projectRoot !== undefined && typeof input.projectRoot !== 'string') {
+    invalidArgument('projectRoot must be a string when provided');
+  }
+
+  const initial = input.resolutionResult || resolveRepository(input);
+  if (initial.executable) return initial;
+  const choice = normalizeChoice(input.choice);
+  const destinationInfo = defaultCloneDestination(input.repo, input.projectRoot, input.config);
+  if (input.destination !== undefined && input.destination !== null) {
+    destinationInfo.destination = input.destination;
+  }
+
+  // A configured-but-invalid path is an explicit declaration, not permission to
+  // replace it with a user choice or a discovered checkout.
+  if (!['undiscovered', 'ambiguous'].includes(initial.resolution)) {
+    const reason = initial.reason || `repository ${input.repo} is trackable-only`;
+    return parkedChoice(initial, 'skip', reason, { choice_source: 'resolver' });
+  }
+
+  if (choice === null) {
+    const reason = `repository ${input.repo} is not reachable; no operator choice was provided, so it was skipped`;
+    return parkedChoice(initial, 'skip', reason, { choice_source: 'unattended' });
+  }
+  if (choice === 'skip') {
+    const reason = `operator chose skip for ${input.repo}; repository remains trackable-only`;
+    return parkedChoice(initial, 'skip', reason, { choice_source: 'operator' });
+  }
+  if (choice === 'existing') {
+    const supplied = suppliedPathResult(input, input.existingPath);
+    if (supplied.executable) {
+      return {
+        ...supplied,
+        decision: 'existing',
+        operator_choice: 'existing',
+        choice_source: 'operator',
+      };
+    }
+    const reason = `operator supplied a checkout for ${input.repo}, but it was rejected: ${supplied.reason}`;
+    return parkedChoice(initial, 'existing', reason, {
+      choice_source: 'operator',
+      supplied_path: input.existingPath || null,
+    });
+  }
+
+  if (input.destination !== undefined && input.destination !== null) {
+    if (typeof input.destination !== 'string' || !path.isAbsolute(input.destination)) {
+      destinationInfo.error = 'clone destination must be an absolute path';
+    } else {
+      destinationInfo.destination = path.resolve(input.destination);
+    }
+  }
+  return cloneChoiceResult(input, initial, destinationInfo);
+}
+
 /**
  * Resolve in ADR-010 D1 order: configured first, then origin discovery. An
  * invalid explicit entry is returned as track-only and is never silently
@@ -353,9 +682,15 @@ function resolveRepository(input) {
 const resolveConfigured = resolveConfiguredRepo;
 const discoverRepo = discoverRepository;
 const resolveRepo = resolveRepository;
+const resolveSupplied = suppliedPathResult;
+const chooseRepo = chooseRepository;
 
 module.exports = {
+  CHOICES: OPERATOR_CHOICES,
   REPO_SLUG,
+  choicePrompt,
+  chooseRepo,
+  chooseRepository,
   discoverRepo,
   discoverRepository,
   normalizeOrigin,
@@ -363,6 +698,8 @@ module.exports = {
   resolveConfiguredRepo,
   resolveRepo,
   resolveRepository,
+  resolveSupplied,
+  suppliedPathResult,
 };
 
 function cliError(message) {
@@ -371,7 +708,17 @@ function cliError(message) {
 }
 
 function parseCli(argv) {
-  const options = { command: argv.shift() || null, repo: null, ticket: null, projectDir: process.cwd(), json: false };
+  const options = {
+    command: argv.shift() || null,
+    repo: null,
+    ticket: null,
+    projectDir: process.cwd(),
+    json: false,
+    choice: null,
+    existingPath: null,
+    destination: null,
+    nonInteractive: false,
+  };
   const valueFor = (flag, value) => {
     if (value === undefined || value.startsWith('--')) {
       invalidArgument(`${flag} requires a value (got ${value === undefined ? 'nothing' : `the flag "${value}"`})`);
@@ -382,10 +729,18 @@ function parseCli(argv) {
     const arg = argv[i];
     if (arg === '--json') {
       options.json = true;
+    } else if (arg === '--non-interactive') {
+      options.nonInteractive = true;
     } else if (arg === '--ticket') {
       options.ticket = valueFor('--ticket', argv[++i]);
     } else if (arg === '--project-dir') {
       options.projectDir = valueFor('--project-dir', argv[++i]);
+    } else if (arg === '--choice') {
+      options.choice = normalizeChoice(valueFor('--choice', argv[++i]));
+    } else if (arg === '--path' || arg === '--existing-path') {
+      options.existingPath = valueFor(arg, argv[++i]);
+    } else if (arg === '--destination') {
+      options.destination = valueFor('--destination', argv[++i]);
     } else if (arg.startsWith('--')) {
       invalidArgument(`unknown option ${arg}`);
     } else if (options.repo === null) {
@@ -394,29 +749,104 @@ function parseCli(argv) {
       invalidArgument(`unexpected argument ${arg}`);
     }
   }
-  if (!['configured', 'discover', 'resolve'].includes(options.command)) {
-    invalidArgument('usage: repo-resolve.cjs <configured|discover|resolve> <owner/name> [--ticket <T-id>] [--project-dir <path>] [--json]');
+  if (!['configured', 'discover', 'resolve', 'choose'].includes(options.command)) {
+    invalidArgument('usage: repo-resolve.cjs <configured|discover|resolve|choose> <owner/name> [--ticket <T-id>] [--project-dir <path>] [--choice <clone|existing|skip>] [--path <checkout>] [--destination <path>] [--non-interactive] [--json]');
   }
   if (options.repo === null) invalidArgument('an owner/name repository slug is required');
   return options;
 }
 
-if (require.main === module) {
+function readProjectPolicy(projectDir) {
   try {
+    const file = path.join(projectDir, '.planning', 'config.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const pipeline = isRecord(raw.pipeline) ? raw.pipeline : {};
+    const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
+    const nested = raw.sub_repos ?? (isRecord(raw.planning) ? raw.planning.sub_repos : undefined);
+    return {
+      repos_root: declared.repos_root ?? pipeline.repos_root,
+      sub_repos: nested,
+    };
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return {};
+    throw error;
+  }
+}
+
+async function readInteractiveChoice(repo, destination, suppliedPath = null) {
+  const readline = require('readline');
+  process.stderr.write(`${choicePrompt(repo, destination)}\n`);
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stderr });
+  const answer = await new Promise((resolve) => prompt.question('> ', resolve));
+  let choice;
+  try {
+    choice = normalizeChoice(answer);
+  } catch {
+    prompt.close();
+    throw new Error('Unrecognized choice; choose clone, existing, or skip.');
+  }
+
+  if (choice !== 'existing') {
+    prompt.close();
+    return { choice, existingPath: null };
+  }
+
+  let existingPath = suppliedPath;
+  if (typeof existingPath !== 'string' || existingPath.trim().length === 0) {
+    existingPath = await new Promise((resolve) => prompt.question('Existing checkout path: ', resolve));
+  }
+  prompt.close();
+  return {
+    choice,
+    existingPath: typeof existingPath === 'string' && existingPath.trim().length > 0
+      ? existingPath.trim()
+      : null,
+  };
+}
+
+if (require.main === module) {
+  (async () => {
+    try {
     const options = parseCli(process.argv.slice(2));
     const projectDir = path.resolve(options.projectDir);
     const loaded = loadConfig(projectDir);
+    const policy = readProjectPolicy(projectDir);
+    const config = { ...resolverConfig(loaded, projectDir), ...policy };
     const input = {
       ticket: options.ticket,
       repo: options.repo,
-      config: resolverConfig(loaded, projectDir),
+      config,
       projectRoot: projectDir,
     };
-    const result = options.command === 'configured'
-      ? resolveConfiguredRepo(input)
-      : options.command === 'discover'
-        ? discoverRepository(input)
-        : resolveRepository(input);
+    let result;
+    if (options.command === 'configured') {
+      result = resolveConfiguredRepo(input);
+    } else if (options.command === 'discover') {
+      result = discoverRepository(input);
+    } else if (options.command === 'resolve') {
+      result = resolveRepository(input);
+    } else {
+      let choice = options.choice;
+      const destinationInfo = options.destination
+        ? { destination: path.resolve(options.destination) }
+        : defaultCloneDestination(options.repo, projectDir, config);
+      let existingPath = options.existingPath;
+      if (choice === null && !options.nonInteractive && process.stdin.isTTY && process.stdout.isTTY) {
+        const selected = await readInteractiveChoice(
+          options.repo,
+          destinationInfo.destination || '<validated destination>',
+          existingPath,
+        );
+        choice = selected.choice;
+        existingPath = selected.existingPath;
+      }
+      result = chooseRepository({
+        ...input,
+        choice,
+        existingPath,
+        destination: options.destination,
+      });
+    }
     if (options.json) {
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     } else if (result.executable) {
@@ -424,7 +854,8 @@ if (require.main === module) {
     } else {
       process.stdout.write(`${result.repo}: track-only — ${result.reason}\n`);
     }
-  } catch (error) {
-    cliError(error && error.message ? error.message : String(error));
-  }
+    } catch (error) {
+      cliError(error && error.message ? error.message : String(error));
+    }
+  })();
 }
