@@ -399,7 +399,7 @@ function stubGh() {
     // falls back to the cached board and says so.
     '  "pr list --head "*)',
     '    if [ -n "${STUB_CHILD_FAIL:-}" ]; then echo "gh: could not list" >&2; exit 1; fi',
-    '    echo "${STUB_CHILD_PRS:-[]}" ;;',
+    '    if [ -n "${STUB_CHILD_ONLY_HEAD:-}" ] && [ "$4" != "$STUB_CHILD_ONLY_HEAD" ]; then echo "[]"; else echo "${STUB_CHILD_PRS:-[]}"; fi ;;',
     '  "pr merge "*) echo "squash-merged" ;;',
     '  "pr edit "*) echo "retargeted" ;;',
     '  *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;',
@@ -1215,6 +1215,88 @@ test('...and a parent branch from its own phase is accepted (the control)', () =
   assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
 });
 
+const observedParent = 'ticket/T-OBS-P-canonical';
+const observedParentLive = 'ticket/T-OBS-P-live';
+const observedChild = 'ticket/T-OBS-C-canonical';
+const observedChildLive = 'ticket/T-OBS-C-live';
+const observedTickets = {
+  'T-OBS-P': { phase: 24, branch: observedParent, epic: 'epic/24-x' },
+  'T-OBS-C': { phase: 24, branch: observedChild, epic: 'epic/24-x', primary_parent: 'T-OBS-P' },
+};
+const observedRoot = ({ checkpoint = false, parentStatus = 'pr-open', base = observedParentLive } = {}) => project({
+  tickets: {
+    ...observedTickets,
+    'T-OBS-P': { ...observedTickets['T-OBS-P'], ...(checkpoint ? { human_checkpoint: true } : {}) },
+  },
+  state: {
+    'T-OBS-P': { ...openGreen(1, observedParent, 'epic/24-x'), status: parentStatus, pr_branch: observedParentLive },
+    'T-OBS-C': { ...openGreen(2, observedChild, base), pr_branch: observedChildLive },
+  },
+  config: epicConfig,
+});
+const observedMerge = (root, extra = {}) => JSON.parse(run(root, ['merge', 'T-OBS-C', '--json', '--dry-run'], {
+  env: onPath(stubGh(), {
+    STUB_BASE: extra.STUB_BASE || observedParentLive,
+    STUB_HEAD: extra.STUB_HEAD || observedChildLive,
+    STUB_PR: '2',
+    ...extra,
+  }),
+}).stdout).results[0];
+
+test('a same-phase parent PR is accepted through its observed branch identity', () => {
+  const r = observedMerge(observedRoot());
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+test('an observed branch of an open checkpoint parent remains a human hold', () => {
+  const r = observedMerge(observedRoot({ checkpoint: true }));
+  assert.strictEqual(r.would_merge, undefined);
+  assert.ok(r.blockers.some((b) => /base "ticket\/T-OBS-P-live" is T-OBS-P/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /human_checkpoint/.test(b)), r.blockers.join('; '));
+  assert.ok(!r.blockers.some((b) => /outside the stack/.test(b)), r.blockers.join('; '));
+});
+
+test('a merged parent observed branch is still protected as a limb', () => {
+  const r = observedMerge(observedRoot({ parentStatus: 'merged' }));
+  assert.strictEqual(r.would_merge, undefined);
+  assert.ok(r.blockers.some((b) => /base "ticket\/T-OBS-P-live" is T-OBS-P, whose ticket is already MERGED/.test(b)), r.blockers.join('; '));
+});
+
+test('an observed branch from another phase remains outside the stack', () => {
+  const root = project({
+    tickets: {
+      'T-OBS-C': observedTickets['T-OBS-C'],
+      'T-OTHER': { phase: 23, branch: 'ticket/T-OTHER-canonical', epic: 'epic/23-x' },
+    },
+    state: {
+      'T-OBS-C': { ...openGreen(2, observedChild, 'ticket/T-OTHER-live'), pr_branch: observedChildLive },
+      'T-OTHER': { ...openGreen(3, 'ticket/T-OTHER-canonical', 'epic/23-x'), pr_branch: 'ticket/T-OTHER-live' },
+    },
+    config: epicConfig,
+  });
+  const r = observedMerge(root, { STUB_BASE: 'ticket/T-OTHER-live' });
+  assert.strictEqual(r.would_merge, undefined);
+  assert.ok(r.blockers.some((b) => /outside the stack/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /ticket\/T-OTHER-live/.test(b)), r.blockers.join('; '));
+});
+
+test('an observed branch from another repository remains outside the stack', () => {
+  const root = project({
+    tickets: {
+      'T-OBS-C': observedTickets['T-OBS-C'],
+      'T-OTHER': { phase: 24, repo: 'acme/other', branch: 'ticket/T-OTHER-canonical', epic: 'epic/24-x' },
+    },
+    state: {
+      'T-OBS-C': { ...openGreen(2, observedChild, 'ticket/T-OTHER-live'), pr_branch: observedChildLive },
+      'T-OTHER': { ...openGreen(3, 'ticket/T-OTHER-canonical', 'epic/24-x'), repo: 'acme/other', pr_branch: 'ticket/T-OTHER-live' },
+    },
+    config: epicConfig,
+  });
+  const r = observedMerge(root, { STUB_BASE: 'ticket/T-OTHER-live' });
+  assert.strictEqual(r.would_merge, undefined);
+  assert.ok(r.blockers.some((b) => /outside the stack/.test(b)), r.blockers.join('; '));
+});
+
 suite('base freshness is measured in the ticket\'s OWN repository, and an unknown answer refuses');
 
 // External audit 2026-09-07, F06. `behindBy` ran `gh api repos/{owner}/{repo}/…
@@ -1274,7 +1356,7 @@ const cascadeRoot = (childState) => project({
 });
 const cascadeMerge = (root, log, env) => JSON.parse(run(root, ['merge', 'T-P', '--json'], {
   env: onPath(stubGh(), {
-    STUB_BASE: 'epic/24-x', STUB_HEAD: 'ticket/T-P', STUB_PR: '9', STUB_LOG: log, ...env,
+    STUB_BASE: 'epic/24-x', STUB_HEAD: env.STUB_PARENT_HEAD || 'ticket/T-P', STUB_PR: '9', STUB_LOG: log, ...env,
   }),
 }).stdout).results[0];
 
@@ -1306,6 +1388,31 @@ test('a child already pointed elsewhere is left alone', () => {
   );
   assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
   assert.deepStrictEqual(r.retargeted, [], 'it is already on the epic — retargeting is idempotent, not repeated');
+});
+
+test('a child PR under branch drift is found through its observed head branch', () => {
+  const log = logFile('cascade-observed-branch');
+  const r = cascadeMerge(
+    cascadeRoot({
+      status: 'pr-open', pr: 88, branch: 'ticket/T-C', pr_branch: 'ticket/T-C-live',
+      epic: 'epic/24-x', pr_base: 'ticket/T-P-live', draft: false,
+    }),
+    log,
+    {
+      STUB_PARENT_HEAD: 'ticket/T-P-live',
+      STUB_CHILD_ONLY_HEAD: 'ticket/T-C-live',
+      STUB_CHILD_PRS: JSON.stringify([{ number: 77, baseRefName: 'ticket/T-P-live' }]),
+    }
+  );
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.deepStrictEqual(
+    r.retargeted.map((x) => [x.ticket, x.pr, x.base, x.ok, x.from]),
+    [['T-C', 77, 'epic/24-x', true, 'live']]
+  );
+  const calls = callsIn(log).join('\n');
+  assert.ok(/pr list --head ticket\/T-C --state/.test(calls), calls);
+  assert.ok(/pr list --head ticket\/T-C-live/.test(calls), calls);
+  assert.ok(/pr edit 77 --base epic\/24-x/.test(calls), calls);
 });
 
 test('when the live query fails the cached board is used, and the result says so', () => {

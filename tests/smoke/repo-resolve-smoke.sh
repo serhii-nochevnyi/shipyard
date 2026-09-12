@@ -79,11 +79,14 @@ mkdir -p "$source_repo" "$clone_project/.planning" "$clone_root"
 git -C "$source_repo" init -q
 git -C "$source_repo" config user.email shipyard-tests@example.invalid
 git -C "$source_repo" config user.name 'Shipyard Tests'
+git -C "$source_repo" remote add origin git@github.com:acme/service.git
 printf 'seed\n' > "$source_repo/README.md"
 git -C "$source_repo" add README.md
 git -C "$source_repo" commit -qm seed
 git -C "$source_repo" branch -M main
 git -C "$source_repo" branch epic/base
+base_sha=$(git -C "$source_repo" rev-parse refs/heads/epic/base)
+git -C "$source_repo" update-ref refs/remotes/origin/epic/base "$base_sha"
 
 node - "$resolver" "$source_repo" "$clone_project" "$clone_root" "$clone_destination" <<'NODE'
 const fs = require('fs');
@@ -110,9 +113,17 @@ if [[ "$(git -C "$clone_destination" rev-parse --is-shallow-repository)" != "fal
   exit 1
 fi
 git -C "$clone_destination" rev-parse --verify --quiet 'refs/remotes/origin/epic/base^{commit}' >/dev/null
+if [[ "$(git -C "$clone_destination" remote get-url origin)" != "git@github.com:acme/service.git" ]]; then
+  echo 'repo-resolve smoke: clone origin identity was not preserved' >&2
+  exit 1
+fi
+# The identity assertion above covers the production post-clone state. Restore
+# a local origin for the compatibility check so ticket-worktree's fetch cannot
+# contact GitHub from this no-network fixture.
+git -C "$clone_destination" remote set-url origin "$source_repo"
 
 worktree_root="$fixture/ticket-worktrees"
-worktree_path=$(cd "$clone_destination" && SHIPYARD_WORKTREE_ROOT="$worktree_root" bash \
+worktree_path=$(cd "$clone_destination" && GIT_SSH_COMMAND=false SHIPYARD_WORKTREE_ROOT="$worktree_root" bash \
   "$repo_root/plugins/delivery-pipeline/scripts/ticket-worktree.sh" \
   create T-30-07 ticket/T-30-07 epic/base 2>/dev/null)
 if [[ ! -d "$worktree_path" ]]; then
