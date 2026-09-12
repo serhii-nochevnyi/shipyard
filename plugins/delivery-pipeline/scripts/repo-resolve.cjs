@@ -19,7 +19,12 @@ const {
   repositoryRootValue,
   validateRepositoryDestination,
 } = require('./pipeline-config.cjs');
-const { originRefName, resolveOriginRef } = require('./graph-dir.cjs');
+const {
+  originRefName,
+  originBaseLabel,
+  resolveOriginRef,
+  resolveLocalBranchRef,
+} = require('./graph-dir.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
@@ -276,29 +281,36 @@ function quarantineMarkerPath(candidate) {
   return path.join(candidate, QUARANTINE_FILE);
 }
 
+function quarantineMarkerPaths(candidate) {
+  return [quarantineMarkerPath(candidate), `${candidate}${QUARANTINE_FILE}`];
+}
+
 function quarantineStatus(candidate, repo) {
-  let marker;
-  try {
-    marker = JSON.parse(fs.readFileSync(quarantineMarkerPath(candidate), 'utf8'));
-  } catch (error) {
-    if (error && error.code === 'ENOENT') return null;
+  for (const markerPath of quarantineMarkerPaths(candidate)) {
+    let marker;
+    try {
+      marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+    } catch (error) {
+      if (error && error.code === 'ENOENT') continue;
+      return {
+        reason: `checkout "${candidate}" has an unreadable Shipyard quarantine marker; it is not executable`,
+      };
+    }
+    if (!isRecord(marker)
+        || marker.kind !== 'shipyard-clone-unverified'
+        || typeof marker.repo !== 'string'
+        || marker.repo.toLowerCase() !== repo.toLowerCase()
+        || typeof marker.required_base !== 'string'
+        || marker.required_base.length === 0) {
+      return {
+        reason: `checkout "${candidate}" has an invalid Shipyard quarantine marker; it is not executable`,
+      };
+    }
     return {
-      reason: `checkout "${candidate}" has an unreadable Shipyard quarantine marker; it is not executable`,
+      reason: `checkout "${candidate}" is quarantined after an unverified clone; required ref ${marker.required_base} is not proven`,
     };
   }
-  if (!isRecord(marker)
-      || marker.kind !== 'shipyard-clone-unverified'
-      || typeof marker.repo !== 'string'
-      || marker.repo.toLowerCase() !== repo.toLowerCase()
-      || typeof marker.required_base !== 'string'
-      || marker.required_base.length === 0) {
-    return {
-      reason: `checkout "${candidate}" has an invalid Shipyard quarantine marker; it is not executable`,
-    };
-  }
-  return {
-    reason: `checkout "${candidate}" is quarantined after an unverified clone; required ref ${marker.required_base} is not proven`,
-  };
+  return null;
 }
 
 function writeQuarantineMarker(candidate, repo, requiredBase) {
@@ -308,16 +320,45 @@ function writeQuarantineMarker(candidate, repo, requiredBase) {
     repo,
     required_base: requiredBase,
   };
-  try {
-    fs.writeFileSync(
-      quarantineMarkerPath(candidate),
-      `${JSON.stringify(marker, null, 2)}\n`,
-      { encoding: 'utf8', flag: 'wx' },
-    );
-    return null;
-  } catch (error) {
-    return error && error.message ? error.message : String(error);
+  const failures = [];
+  for (const markerPath of quarantineMarkerPaths(candidate)) {
+    try {
+      fs.writeFileSync(
+        markerPath,
+        `${JSON.stringify(marker, null, 2)}\n`,
+        { encoding: 'utf8', flag: 'wx' },
+      );
+      return { path: markerPath, error: null };
+    } catch (error) {
+      failures.push(`${markerPath}: ${error && error.message ? error.message : String(error)}`);
+    }
   }
+  return { path: null, error: failures.join('; ') };
+}
+
+// Every failure after git clone is a failed proof, not an ordinary retry. Keep
+// the checkout for inspection but make the failure durable. The in-checkout
+// marker is preferred; the adjacent sidecar covers a clone whose .git tree is
+// writable but whose root is not. If both writes are blocked, removing origin
+// is the last fail-closed fallback so origin-based discovery cannot adopt it.
+function quarantineCloneDestination(candidate, repo, requiredBase, runner, commandOptions) {
+  if (!filesystemEntryExists(candidate)) return '';
+  const marker = writeQuarantineMarker(candidate, repo, requiredBase);
+  if (!marker.error) return `; checkout quarantined at ${marker.path}`;
+
+  let detached;
+  try {
+    detached = runner('git', ['-C', candidate, 'remote', 'remove', 'origin'], commandOptions);
+  } catch (error) {
+    detached = { status: null, error };
+  }
+  if (detached && detached.status === 0) {
+    return `; quarantine marker could not be written: ${marker.error}; origin was removed so the checkout is not discoverable`;
+  }
+  const detachError = detached && detached.error && detached.error.message
+    ? detached.error.message
+    : `exit ${detached && detached.status !== undefined ? detached.status : 'unknown'}`;
+  return `; quarantine marker could not be written: ${marker.error}; origin removal also failed (${detachError}) and the checkout requires manual quarantine`;
 }
 
 /**
@@ -922,7 +963,8 @@ function cloneRepository(input, runner = spawnSync) {
     return cloneFailure(input, `clone for ${input.repo} requires a named base ref to verify origin refs`);
   }
   const baseName = originRefName(input.base);
-  if (!baseName) {
+  const requiredBase = originBaseLabel(input.base);
+  if (!baseName || !requiredBase) {
     return cloneFailure(input, `clone for ${input.repo} received an invalid base ref ${JSON.stringify(input.base)}`,
       { required_base: String(input.base) });
   }
@@ -949,7 +991,7 @@ function cloneRepository(input, runner = spawnSync) {
     return cloneFailure(input, destinationValidation.reason, {
       destination,
       clone_root: root,
-      required_base: `origin/${baseName}`,
+      required_base: requiredBase,
     });
   }
   const existingQuarantine = quarantineStatus(destination, input.repo);
@@ -958,7 +1000,7 @@ function cloneRepository(input, runner = spawnSync) {
       resolution: 'clone-unverified',
       destination,
       clone_root: root,
-      required_base: `origin/${baseName}`,
+      required_base: requiredBase,
     });
   }
   if (filesystemEntryExists(destination)) {
@@ -966,7 +1008,7 @@ function cloneRepository(input, runner = spawnSync) {
       `clone destination "${destination}" already exists; use the existing-checkout adoption path`, {
         destination,
         clone_root: root,
-        required_base: `origin/${baseName}`,
+        required_base: requiredBase,
       });
   }
 
@@ -980,20 +1022,22 @@ function cloneRepository(input, runner = spawnSync) {
     return cloneFailure(input, `clone for ${input.repo} was refused: ${clone.reason}`, {
       destination,
       clone_root: root,
-      required_base: `origin/${baseName}`,
+      required_base: requiredBase,
     });
   }
 
-  if (clone.source_repository_root && !resolveOriginRef(clone.source_repository_root, baseName)) {
+  if (clone.source_repository_root
+      && !resolveOriginRef(clone.source_repository_root, input.base)
+      && !resolveLocalBranchRef(clone.source_repository_root, input.base)) {
     return cloneFailure(input,
-      `local clone source for ${input.repo} does not prove required ref origin/${baseName}`,
+      `local clone source for ${input.repo} does not prove required ref ${requiredBase}`,
       {
         destination,
         clone_root: root,
         clone_url: clone.url,
         clone_protocol: clone.protocol || null,
         clone_source: clone.field || null,
-        required_base: `origin/${baseName}`,
+        required_base: requiredBase,
       });
   }
 
@@ -1013,7 +1057,7 @@ function cloneRepository(input, runner = spawnSync) {
         clone_url: clone.url,
         clone_protocol: clone.protocol || null,
         clone_source: clone.field || null,
-        required_base: `origin/${baseName}`,
+        required_base: requiredBase,
       },
     );
   }
@@ -1030,13 +1074,19 @@ function cloneRepository(input, runner = spawnSync) {
   const result = runner('git', cloneCommand(clone.url, destination), commandOptions);
   if (!result || result.status !== 0) {
     const exit = result && result.status !== undefined ? result.status : 'unknown';
-    return cloneFailure(input, `git clone for ${input.repo} failed (exit ${exit}); the checkout remains unverified`, {
+    return cloneFailure(input, `git clone for ${input.repo} failed (exit ${exit}); the checkout remains unverified${quarantineCloneDestination(
+      destination,
+      input.repo,
+      requiredBase,
+      runner,
+      commandOptions,
+    )}`, {
       destination,
       clone_root: root,
       clone_url: clone.url,
       clone_protocol: clone.protocol || null,
       clone_source: clone.field || null,
-      required_base: `origin/${baseName}`,
+      required_base: requiredBase,
     });
   }
 
@@ -1049,14 +1099,20 @@ function cloneRepository(input, runner = spawnSync) {
     if (!originResult || originResult.status !== 0) {
       const exit = originResult && originResult.status !== undefined ? originResult.status : 'unknown';
       return cloneFailure(input,
-        `clone for ${input.repo} completed at "${destination}" but its origin could not be set safely (exit ${exit})`, {
+        `clone for ${input.repo} completed at "${destination}" but its origin could not be set safely (exit ${exit})${quarantineCloneDestination(
+          destination,
+          input.repo,
+          requiredBase,
+          runner,
+          commandOptions,
+        )}`, {
           resolution: 'clone-unverified',
           destination,
           clone_root: root,
           clone_url: clone.url,
           clone_protocol: clone.protocol || null,
           clone_source: clone.field || null,
-          required_base: `origin/${baseName}`,
+          required_base: requiredBase,
         });
     }
   }
@@ -1064,33 +1120,40 @@ function cloneRepository(input, runner = spawnSync) {
   const destinationOrigin = normalizeOrigin(gitRemoteOrigin(destination));
   if (destinationOrigin !== input.repo.toLowerCase()) {
     return cloneFailure(input,
-      `clone for ${input.repo} completed at "${destination}" but its origin does not resolve to ${input.repo}`, {
+      `clone for ${input.repo} completed at "${destination}" but its origin does not resolve to ${input.repo}${quarantineCloneDestination(
+        destination,
+        input.repo,
+        requiredBase,
+        runner,
+        commandOptions,
+      )}`, {
         resolution: 'clone-unverified',
         destination,
         clone_root: root,
         clone_url: clone.url,
         clone_protocol: clone.protocol || null,
         clone_source: clone.field || null,
-        required_base: `origin/${baseName}`,
+        required_base: requiredBase,
       });
   }
 
-  const baseRef = resolveOriginRef(destination, baseName);
+  const baseRef = resolveOriginRef(destination, input.base);
   if (!baseRef) {
-    const requiredBase = `origin/${baseName}`;
-    const markerError = writeQuarantineMarker(destination, input.repo, requiredBase);
-    const quarantineNote = markerError
-      ? `; quarantine marker could not be written: ${markerError}`
-      : `; checkout quarantined at ${QUARANTINE_FILE}`;
     return cloneFailure(input,
-      `clone for ${input.repo} completed at "${destination}" but required ref ${requiredBase} is missing${quarantineNote}`, {
+      `clone for ${input.repo} completed at "${destination}" but required ref ${requiredBase} is missing${quarantineCloneDestination(
+        destination,
+        input.repo,
+        requiredBase,
+        runner,
+        commandOptions,
+      )}`, {
         resolution: 'clone-unverified',
         destination,
         clone_root: root,
         clone_url: clone.url,
         clone_protocol: clone.protocol || null,
         clone_source: clone.field || null,
-        required_base: `origin/${baseName}`,
+        required_base: requiredBase,
       });
   }
 
