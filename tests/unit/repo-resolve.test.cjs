@@ -140,6 +140,22 @@ test('an invalid repository root refuses discovery instead of falling back to th
   assert.match(result.reason, /repos_root is invalid/);
 });
 
+test('a repository root that is an existing file refuses discovery', () => {
+  const projectDir = isolatedProject({});
+  const rootFile = path.join(path.dirname(projectDir), 'repos-root-file');
+  fs.writeFileSync(rootFile, 'occupied\n');
+  const result = mod.discoverRepository({
+    ticket: 'T-30-05',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: rootFile },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'invalid-policy');
+  assert.strictEqual(result.discovery_status, 'invalid');
+  assert.match(result.reason, /repos_root is invalid/);
+});
+
 test('a configured directory inside another git checkout is trackable-only', () => {
   const parent = gitRepo();
   const nested = path.join(parent, 'nested-directory');

@@ -11,7 +11,11 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { loadConfig, validateRepositoryDestination } = require('./pipeline-config.cjs');
+const {
+  loadConfig,
+  repositoryRootValue,
+  validateRepositoryDestination,
+} = require('./pipeline-config.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
@@ -176,11 +180,9 @@ function resolverConfig(loaded, projectRoot) {
     };
 }
 
-function invalidRepositoryPolicy(config) {
+function invalidRepositoryPolicy(config, projectRoot) {
   if (!Object.prototype.hasOwnProperty.call(config, 'repos_root')) return false;
-  return typeof config.repos_root !== 'string'
-    || config.repos_root.length === 0
-    || !path.isAbsolute(config.repos_root);
+  return !repositoryRootValue(config.repos_root, projectRoot).valid;
 }
 
 function hasConfiguredRepo(config, repo) {
@@ -249,7 +251,7 @@ function discoverRepository(input) {
   }
 
   const { ticket = null, repo, config } = input;
-  if (invalidRepositoryPolicy(config)) {
+  if (invalidRepositoryPolicy(config, input.projectRoot)) {
     return trackOnly(
       ticket,
       repo,

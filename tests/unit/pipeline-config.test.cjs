@@ -995,6 +995,18 @@ test('relative and malformed repos_root values are refused without creating a di
   }
 });
 
+test('an existing file is not accepted as a future repository root', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-root-'));
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  const file = path.join(dir, 'root-file');
+  fs.writeFileSync(file, 'occupied\n');
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ pipeline: { repos_root: file } }));
+
+  const { config, warnings } = loadConfig(dir);
+  assert.strictEqual(config.repos_root, null);
+  assert.ok(warnings.some((warning) => /repos_root.*directory/.test(warning)), warnings.join('; '));
+});
+
 test('the shared destination helper gives the same nesting verdict to callers', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-root-'));
   const nested = path.join(dir, 'vendor', 'service');
