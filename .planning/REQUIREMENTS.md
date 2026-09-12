@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 835f7541b7d2cb9c63d912f07fef4934e058db5e6c1df9027efd241137e8a711 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d5b36a17f3261dacc1253a90b206d1e6dd39bdfed272a9dece8be378ad796d83 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -110,7 +110,8 @@
 - [x] **REQ-100**: A plan or phase is marked complete only from positive delivery, integration, and verification evidence; missing evidence remains visible and non-green.
 - [x] **REQ-101**: Planning, delivery, verification, and ship boundaries run a blocking synchronization/check gate for Shipyard projects and remain inert for ordinary GSD projects.
 - [x] **REQ-102**: Synchronization is local-only, atomic, idempotent, and checkable without mutation, with deterministic refusal on conflicting files or ambiguous plan/ticket identity.
-- [x] **REQ-103**: Claude and Codex consume the same canonical synchronizer through generated/bundled installer surfaces, with smoke coverage for both. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [x] **REQ-103**: Claude and Codex consume the same canonical synchronizer through generated/bundled installer surfaces, with smoke coverage for both.
+- [ ] **REQ-104**: Sentinel stack guards accept the observed PR branch recorded for a validated ticket when GitHub's live branch name differs from the canonical graph slug, while preserving same-phase and checkpoint boundaries. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
 ## Out of Scope
 
@@ -226,10 +227,11 @@
 | REQ-101 | Phase 35 | Complete |
 | REQ-102 | Phase 35 | Complete |
 | REQ-103 | Phase 35 | Complete |
+| REQ-104 | Phase 30 | In Progress |
 
 **Coverage:**
-- v1 requirements: 103 total
-- Mapped to phases: 101
+- v1 requirements: 104 total
+- Mapped to phases: 102
 - Unmapped: 2 ⚠️
 
 ---
