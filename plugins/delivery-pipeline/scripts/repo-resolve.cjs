@@ -11,7 +11,11 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { loadConfig, validateRepositoryDestination } = require('./pipeline-config.cjs');
+const {
+  loadConfig,
+  repositoryRootValue,
+  validateRepositoryDestination,
+} = require('./pipeline-config.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
@@ -113,40 +117,49 @@ function originProtocol(value) {
 
 function safeCloneUrl(value, protocol, repo) {
   if (typeof value !== 'string' || value.trim() === '') {
-    return { valid: false, reason: `gh metadata has no usable ${protocol === 'ssh' ? 'sshUrl' : 'url'} for ${repo}` };
+    return {
+      valid: false,
+      reason: `gh metadata has no usable ${protocol === 'ssh' ? 'sshUrl' : 'url'} for ${repo}`,
+    };
   }
   const url = value.trim();
   if (originProtocol(url) !== protocol) {
-    return { valid: false, reason: `gh metadata URL for ${repo} does not use the project origin protocol (${protocol})` };
+    return {
+      valid: false,
+      reason: `gh metadata URL for ${repo} does not use the project origin protocol (${protocol})`,
+    };
   }
   if (normalizeOrigin(url) !== repo.toLowerCase()) {
-    return { valid: false, reason: `gh metadata URL does not identify ${repo}` };
+    return {
+      valid: false,
+      reason: `gh metadata URL does not identify ${repo}`,
+    };
   }
   if (/^(?:https?|ssh):\/\//i.test(url)) {
     try {
       const parsed = new URL(url);
       if (parsed.password || (parsed.username && (protocol === 'https' || parsed.username !== 'git'))) {
-        return { valid: false, reason: `gh metadata URL for ${repo} contains credentials and was refused` };
+        return {
+          valid: false,
+          reason: `gh metadata URL for ${repo} contains credentials and was refused`,
+        };
       }
       if (parsed.search || parsed.hash) {
-        return { valid: false, reason: `gh metadata URL for ${repo} contains query or fragment data and was refused` };
+        return {
+          valid: false,
+          reason: `gh metadata URL for ${repo} contains query or fragment data and was refused`,
+        };
       }
     } catch {
-      return { valid: false, reason: `gh metadata URL for ${repo} is not a valid ${protocol} URL` };
+      return {
+        valid: false,
+        reason: `gh metadata URL for ${repo} is not a valid ${protocol} URL`,
+      };
     }
   }
   return { valid: true, url };
 }
 
-/**
- * Choose the clone URL from the project's origin protocol. This pure decision
- * keeps gh's global git protocol preference out of the conveyor's policy.
- *
- * @param {string} projectOrigin
- * @param {{sshUrl?: string, url?: string}} metadata
- * @param {string} repo
- * @returns {{valid: boolean, protocol: string|null, field: string|null, url: string|null, reason: string|null}}
- */
 function selectCloneUrl(projectOrigin, metadata, repo) {
   const protocol = originProtocol(projectOrigin);
   if (!protocol) {
@@ -241,6 +254,19 @@ function resolveCloneUrl(input) {
   return selectCloneUrl(projectOrigin, metadataResult.metadata, repo);
 }
 
+// existsSync follows symbolic links, so it reports a dangling destination as
+// absent and would let the clone branch treat it as safe to create. lstat
+// keeps the decision fail-closed for every filesystem entry, including broken
+// links and entries whose metadata cannot be read.
+function filesystemEntryExists(candidate) {
+  try {
+    fs.lstatSync(candidate);
+    return true;
+  } catch (error) {
+    return error && error.code !== 'ENOENT';
+  }
+}
+
 /**
  * Normalize the GitHub URL forms a local git checkout commonly stores.
  *
@@ -260,6 +286,50 @@ function normalizeOrigin(value) {
 
 function configuredRepos(config) {
   return isRecord(config.repos) ? config.repos : {};
+}
+
+function rawPipelineFields(projectRoot) {
+  const file = path.join(path.resolve(projectRoot || process.cwd()), '.planning', 'config.json');
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    return { fields: undefined, error };
+  }
+  if (!isRecord(raw)) return { fields: undefined, error: null };
+
+  // Preserve explicitly declared repository fields long enough for the resolver
+  // to refuse malformed values instead of letting loadConfig filter them and
+  // silently fall through to origin discovery.
+  const legacy = isRecord(raw.pipeline) ? raw.pipeline : {};
+  const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
+  return { fields: { ...legacy, ...declared }, error: null };
+}
+
+function resolverConfig(loaded, projectRoot) {
+  if (!loaded || !isRecord(loaded.config)) return loaded && loaded.config;
+  if (loaded.valid === false) return loaded.config;
+  const raw = rawPipelineFields(projectRoot).fields;
+  const hasRoot = raw && Object.prototype.hasOwnProperty.call(raw, 'repos_root');
+  const hasRepos = raw && Object.prototype.hasOwnProperty.call(raw, 'repos');
+  if (!hasRoot && !hasRepos) return loaded.config;
+
+  const declaredRoot = hasRoot ? raw.repos_root : undefined;
+  const declaredRepos = hasRepos && isRecord(raw.repos) ? raw.repos : undefined;
+  return declaredRoot === undefined && declaredRepos === undefined
+    ? loaded.config
+    : {
+      ...loaded.config,
+      ...(declaredRoot === undefined ? {} : { repos_root: declaredRoot }),
+      ...(declaredRepos === undefined
+        ? {}
+        : { repos: { ...configuredRepos(loaded.config), ...declaredRepos } }),
+    };
+}
+
+function invalidRepositoryPolicy(config, projectRoot) {
+  if (!Object.prototype.hasOwnProperty.call(config, 'repos_root')) return false;
+  return !repositoryRootValue(config.repos_root, projectRoot).valid;
 }
 
 function hasConfiguredRepo(config, repo) {
@@ -287,8 +357,9 @@ function immediateDirectories(root) {
   let entries;
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    return [];
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return [];
+    throw error;
   }
   return entries
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
@@ -327,6 +398,14 @@ function discoverRepository(input) {
   }
 
   const { ticket = null, repo, config } = input;
+  if (invalidRepositoryPolicy(config, input.projectRoot)) {
+    return trackOnly(
+      ticket,
+      repo,
+      'pipeline.repos_root is invalid; repository discovery is refused until the configured absolute path is fixed',
+      { resolution: 'invalid-policy', discovery_status: 'invalid' },
+    );
+  }
   const searchedRoots = discoveryRoots(config, input.projectRoot);
   const candidates = [];
   const seen = new Set();
@@ -424,6 +503,13 @@ function resolveConfiguredRepo(input) {
   const repositoryRoot = gitRepositoryRoot(checkoutPath);
   if (!repositoryRoot) {
     return trackOnly(ticket, repo, `configured checkout "${configuredPath}" is not a git repository`);
+  }
+  if (path.resolve(repositoryRoot) !== path.resolve(checkoutPath)) {
+    return trackOnly(
+      ticket,
+      repo,
+      `configured checkout "${configuredPath}" is inside another git repository; supply its repository root`,
+    );
   }
   return resolved(ticket, repo, checkoutPath, repositoryRoot);
 }
@@ -547,7 +633,7 @@ function cloneChoiceResult(input, initial, destinationInfo) {
 
   // D7: an existing destination with the right origin is adopted. An existing
   // destination with anything else is refused; this branch never overwrites.
-  if (fs.existsSync(destination)) {
+  if (filesystemEntryExists(destination)) {
     const adopted = suppliedPathResult(input, destination);
     if (adopted.executable) {
       return {
@@ -602,7 +688,6 @@ function cloneChoiceResult(input, initial, destinationInfo) {
     reason,
     decision: 'clone',
     operator_choice: 'clone',
-    choice_source: 'operator',
     destination,
     clone_root: root,
     clone_url: clone.url,
@@ -613,7 +698,7 @@ function cloneChoiceResult(input, initial, destinationInfo) {
 }
 
 function choicePrompt(repo, destination) {
-  return `Repository ${repo} is not reachable. Choose one: clone to ${destination}, provide an existing checkout path, or skip for now (skip parks the ticket).`;
+  return `Repository ${repo} needs an explicit checkout decision. Choose one: clone to ${destination}, provide an existing checkout path, or skip for now (skip parks the ticket).`;
 }
 
 function parkedChoice(initial, choice, reason, extras = {}) {
@@ -732,8 +817,8 @@ module.exports = {
   chooseRepository,
   discoverRepo,
   discoverRepository,
-  normalizeOrigin,
   originProtocol,
+  normalizeOrigin,
   readGhRepositoryMetadata,
   resolveConfigured,
   resolveConfiguredRepo,
@@ -741,6 +826,7 @@ module.exports = {
   resolveRepo,
   resolveRepository,
   resolveSupplied,
+  safeCloneUrl,
   selectCloneUrl,
   suppliedPathResult,
 };
@@ -799,17 +885,59 @@ function parseCli(argv) {
   return options;
 }
 
-async function readInteractiveChoice(repo, destination) {
+async function readInteractiveChoice(repo, destination, suppliedPath = null) {
   const readline = require('readline');
   process.stderr.write(`${choicePrompt(repo, destination)}\n`);
   const prompt = readline.createInterface({ input: process.stdin, output: process.stderr });
   const answer = await new Promise((resolve) => prompt.question('> ', resolve));
-  prompt.close();
+  let choice;
   try {
-    return normalizeChoice(answer);
+    choice = normalizeChoice(answer);
   } catch {
-    process.stderr.write('Unrecognized choice; treating it as unanswered and parking the ticket.\n');
-    return null;
+    prompt.close();
+    throw new Error('Unrecognized choice; choose clone, existing, or skip.');
+  }
+
+  if (choice !== 'existing') {
+    prompt.close();
+    return { choice, existingPath: null };
+  }
+
+  let existingPath = suppliedPath;
+  if (typeof existingPath !== 'string' || existingPath.trim().length === 0) {
+    existingPath = await new Promise((resolve) => prompt.question('Existing checkout path: ', resolve));
+  }
+  prompt.close();
+  return {
+    choice,
+    existingPath: typeof existingPath === 'string' && existingPath.trim().length > 0
+      ? existingPath.trim()
+      : null,
+  };
+}
+
+function readProjectPolicy(projectDir) {
+  try {
+    const file = path.join(projectDir, '.planning', 'config.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!isRecord(raw)) return {};
+    const pipeline = isRecord(raw.pipeline) ? raw.pipeline : {};
+    const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
+    const policy = {};
+    if (Object.prototype.hasOwnProperty.call(declared, 'repos_root')) {
+      policy.repos_root = declared.repos_root;
+    } else if (Object.prototype.hasOwnProperty.call(pipeline, 'repos_root')) {
+      policy.repos_root = pipeline.repos_root;
+    }
+    if (Object.prototype.hasOwnProperty.call(raw, 'sub_repos')) {
+      policy.sub_repos = raw.sub_repos;
+    } else if (isRecord(raw.planning) && Object.prototype.hasOwnProperty.call(raw.planning, 'sub_repos')) {
+      policy.sub_repos = raw.planning.sub_repos;
+    }
+    return policy;
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return {};
+    throw error;
   }
 }
 
@@ -819,7 +947,8 @@ if (require.main === module) {
     const options = parseCli(process.argv.slice(2));
     const projectDir = path.resolve(options.projectDir);
     const loaded = loadConfig(projectDir);
-    const config = loaded.config;
+    const policy = readProjectPolicy(projectDir);
+    const config = { ...resolverConfig(loaded, projectDir), ...policy };
     const input = {
       ticket: options.ticket,
       repo: options.repo,
@@ -835,16 +964,23 @@ if (require.main === module) {
       result = resolveRepository(input);
     } else {
       let choice = options.choice;
+      let existingPath = options.existingPath;
       const destinationInfo = options.destination
         ? { destination: path.resolve(options.destination) }
         : defaultCloneDestination(options.repo, projectDir, config);
       if (choice === null && !options.nonInteractive && process.stdin.isTTY && process.stdout.isTTY) {
-        choice = await readInteractiveChoice(options.repo, destinationInfo.destination || '<validated destination>');
+        const selected = await readInteractiveChoice(
+          options.repo,
+          destinationInfo.destination || '<validated destination>',
+          existingPath,
+        );
+        choice = selected.choice;
+        existingPath = selected.existingPath;
       }
       result = chooseRepository({
         ...input,
         choice,
-        existingPath: options.existingPath,
+        existingPath,
         destination: options.destination,
       });
     }

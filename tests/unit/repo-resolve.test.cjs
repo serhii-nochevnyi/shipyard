@@ -126,6 +126,50 @@ test('an invalid configured path is trackable-only without filesystem mutation',
   assert.match(nonRepo.reason, /not a git repository/);
 });
 
+test('an invalid repository root refuses discovery instead of falling back to the project parent', () => {
+  const projectDir = isolatedProject({});
+  const result = mod.discoverRepository({
+    ticket: 'T-30-05',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: null },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'invalid-policy');
+  assert.strictEqual(result.discovery_status, 'invalid');
+  assert.match(result.reason, /repos_root is invalid/);
+});
+
+test('a repository root that is an existing file refuses discovery', () => {
+  const projectDir = isolatedProject({});
+  const rootFile = path.join(path.dirname(projectDir), 'repos-root-file');
+  fs.writeFileSync(rootFile, 'occupied\n');
+  const result = mod.discoverRepository({
+    ticket: 'T-30-05',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: rootFile },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'invalid-policy');
+  assert.strictEqual(result.discovery_status, 'invalid');
+  assert.match(result.reason, /repos_root is invalid/);
+});
+
+test('a configured directory inside another git checkout is trackable-only', () => {
+  const parent = gitRepo();
+  const nested = path.join(parent, 'nested-directory');
+  fs.mkdirSync(nested);
+  const result = mod.resolveConfiguredRepo({
+    ticket: 'T-30-02',
+    repo: 'acme/service',
+    config: { repos: { 'acme/service': nested } },
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'track-only');
+  assert.match(result.reason, /inside another git repository.*repository root/);
+});
+
 test('malformed repository arguments fail closed before any filesystem write', () => {
   const parent = tempDir();
   const before = fs.readdirSync(parent);
@@ -164,6 +208,80 @@ function repoAt(dir, origin) {
   return fs.realpathSync(dir);
 }
 
+test('the discovery CLI passes an explicitly configured repository root to the resolver', () => {
+  const configuredRoot = tempDir('shipyard-configured-repos-root-');
+  const projectDir = path.join(configuredRoot, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos_root: configuredRoot } }, null, 2) + '\n',
+  );
+  const checkout = repoAt(path.join(configuredRoot, 'checkout-found-only-under-configured-root'), 'git@github.com:acme/service.git');
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'discovered');
+  assert.strictEqual(output.repository_root, checkout);
+  assert.ok(output.searched_roots.includes(configuredRoot));
+});
+
+test('the CLI keeps an invalid explicit checkout from falling through to discovery', () => {
+  const parent = tempDir('shipyard-invalid-configured-repo-');
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos: { 'acme/service': 'relative-checkout' }, repos_root: parent } }, null, 2) + '\n',
+  );
+  repoAt(path.join(parent, 'valid-discovery'), 'git@github.com:acme/service.git');
+
+  const result = run(['resolve', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'track-only');
+  assert.strictEqual(output.executable, false);
+  assert.match(output.reason, /relative/);
+});
+
+test('a non-object delivery namespace does not suppress the legacy discovery root', () => {
+  const configuredRoot = tempDir('shipyard-legacy-repos-root-');
+  const projectDir = path.join(configuredRoot, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos_root: configuredRoot }, delivery_pipeline: null }, null, 2) + '\n',
+  );
+  const checkout = repoAt(path.join(configuredRoot, 'legacy-root-checkout'), 'git@github.com:acme/service.git');
+
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'discovered');
+  assert.strictEqual(output.repository_root, checkout);
+  assert.ok(output.searched_roots.includes(configuredRoot));
+});
+
+test('an explicit declared null root keeps precedence over a legacy root', () => {
+  const parent = tempDir('shipyard-declared-null-repos-root-');
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({
+      pipeline: { repos_root: parent },
+      delivery_pipeline: { repos_root: null },
+    }, null, 2) + '\n',
+  );
+  repoAt(path.join(parent, 'legacy-discovery'), 'git@github.com:acme/service.git');
+
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'invalid-policy');
+  assert.strictEqual(output.discovery_status, 'invalid');
+  assert.strictEqual(output.executable, false);
+});
+
 test('origin normalization accepts GitHub SSH, HTTPS, and scp-like forms', () => {
   for (const origin of [
     'git@github.com:Acme/Service.git',
@@ -175,93 +293,6 @@ test('origin normalization accepts GitHub SSH, HTTPS, and scp-like forms', () =>
   }
   assert.strictEqual(mod.normalizeOrigin('https://gitlab.com/acme/service.git'), null);
   assert.strictEqual(mod.normalizeOrigin('acme/service'), null);
-});
-
-test('clone URL selection follows the project origin protocol', () => {
-  const ssh = mod.selectCloneUrl(
-    'git@github.com:serhii-nochevnyi/shipyard.git',
-    { sshUrl: 'git@github.com:Acme/Service.git', url: 'https://github.com/Acme/Service.git' },
-    'acme/service',
-  );
-  assert.deepStrictEqual(ssh, {
-    valid: true,
-    protocol: 'ssh',
-    field: 'sshUrl',
-    url: 'git@github.com:Acme/Service.git',
-    reason: null,
-  });
-
-  const https = mod.selectCloneUrl(
-    'https://github.com/serhii-nochevnyi/shipyard.git',
-    { sshUrl: 'git@github.com:Acme/Service.git', url: 'https://github.com/Acme/Service.git' },
-    'acme/service',
-  );
-  assert.strictEqual(https.valid, true);
-  assert.strictEqual(https.protocol, 'https');
-  assert.strictEqual(https.field, 'url');
-  assert.strictEqual(https.url, 'https://github.com/Acme/Service.git');
-
-  const http = mod.selectCloneUrl(
-    'http://github.com/serhii-nochevnyi/shipyard.git',
-    { sshUrl: 'git@github.com:Acme/Service.git', url: 'http://github.com/Acme/Service.git' },
-    'acme/service',
-  );
-  assert.strictEqual(http.valid, false);
-  assert.match(http.reason, /neither SSH nor HTTPS/);
-});
-
-test('clone URL selection refuses inconsistent metadata and credentials', () => {
-  const wrongProtocol = mod.selectCloneUrl(
-    'git@github.com:serhii-nochevnyi/shipyard.git',
-    { sshUrl: 'https://github.com/acme/service.git' },
-    'acme/service',
-  );
-  assert.strictEqual(wrongProtocol.valid, false);
-  assert.match(wrongProtocol.reason, /project origin protocol/);
-  assert.strictEqual(wrongProtocol.url, null);
-
-  const credential = mod.selectCloneUrl(
-    'https://github.com/serhii-nochevnyi/shipyard.git',
-    { url: 'https://token@github.com/acme/service.git' },
-    'acme/service',
-  );
-  assert.strictEqual(credential.valid, false);
-  assert.match(credential.reason, /credentials/);
-  assert.strictEqual(credential.url, null);
-  assert.ok(!JSON.stringify(credential).includes('token'));
-});
-
-test('gh metadata is read with the explicit repository and JSON fields', () => {
-  const calls = [];
-  const metadata = mod.readGhRepositoryMetadata('acme/service', '/project', (command, args, options) => {
-    calls.push({ command, args, options });
-    return {
-      status: 0,
-      stdout: JSON.stringify({ sshUrl: 'git@github.com:acme/service.git', url: 'https://github.com/acme/service.git' }),
-    };
-  });
-  assert.deepStrictEqual(metadata, {
-    valid: true,
-    metadata: { sshUrl: 'git@github.com:acme/service.git', url: 'https://github.com/acme/service.git' },
-    reason: null,
-  });
-  assert.deepStrictEqual(calls.map(({ command, args, options }) => ({ command, args, cwd: options.cwd })), [{
-    command: 'gh',
-    args: ['repo', 'view', 'acme/service', '--json', 'sshUrl,url'],
-    cwd: '/project',
-  }]);
-});
-
-test('clone preparation reports unavailable metadata without invoking git clone', () => {
-  const result = mod.resolveCloneUrl({
-    repo: 'acme/service',
-    projectRoot: '/project',
-    projectOrigin: 'https://github.com/serhii-nochevnyi/shipyard.git',
-    cloneMetadata: {},
-  });
-  assert.strictEqual(result.valid, false);
-  assert.match(result.reason, /no usable url/);
-  assert.strictEqual(result.url, null);
 });
 
 test('discovery matches origin rather than the directory basename and scans one level', () => {
@@ -404,10 +435,10 @@ test('human-readable discovery output names the selected resolution', () => {
 
 test('the operator prompt names the repository and all three D3 choices', () => {
   const prompt = mod.choicePrompt('acme/service', '/work/service');
-  assert.match(prompt, /acme\/service/);
-  assert.match(prompt, /clone to \/work\/service/);
-  assert.match(prompt, /existing checkout path/);
-  assert.match(prompt, /skip/);
+  assert.strictEqual(
+    prompt,
+    'Repository acme/service needs an explicit checkout decision. Choose one: clone to /work/service, provide an existing checkout path, or skip for now (skip parks the ticket).',
+  );
 });
 
 test('an unanswered choice becomes a durable park payload without filesystem mutation', () => {
@@ -425,7 +456,10 @@ test('an unanswered choice becomes a durable park payload without filesystem mut
   assert.strictEqual(result.decision, 'skip');
   assert.strictEqual(result.operator_choice, 'skip');
   assert.strictEqual(result.choice_source, 'unattended');
-  assert.match(result.park_reason, /no operator choice.*skipped/);
+  assert.strictEqual(
+    result.park_reason,
+    'repository acme/service is not reachable; no operator choice was provided, so it was skipped',
+  );
   assert.strictEqual(result.reason, result.park_reason);
   assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, 'unanswered choice must not create a destination');
 });
@@ -458,7 +492,10 @@ test('an explicit existing path is adopted only when its origin and nesting are 
   });
   assert.strictEqual(rejected.executable, false);
   assert.strictEqual(rejected.decision, 'existing');
-  assert.match(rejected.park_reason, /origin.*acme\/service/);
+  assert.strictEqual(
+    rejected.park_reason,
+    `operator supplied a checkout for acme/service, but it was rejected: existing checkout "${wrongOrigin}" has an origin that does not resolve to acme/service`,
+  );
 });
 
 test('an existing path nested in the project is refused unless sub_repos declares it', () => {
@@ -473,7 +510,7 @@ test('an existing path nested in the project is refused unless sub_repos declare
     existingPath: nested,
   });
   assert.strictEqual(rejected.executable, false);
-  assert.match(rejected.park_reason, /nested inside (this )?project/);
+  assert.match(rejected.park_reason, /nested inside this project/);
 
   const allowed = mod.chooseRepository({
     ticket: 'T-30-04',
@@ -512,7 +549,7 @@ test('clone records explicit intent and a validated destination without cloning 
   assert.strictEqual(result.clone_url, 'git@github.com:acme/service.git');
   assert.strictEqual(result.clone_protocol, 'ssh');
   assert.strictEqual(result.clone_source, 'sshUrl');
-  assert.match(result.park_reason, /clone.*pending/);
+  assert.strictEqual(result.park_reason, 'operator chose clone for acme/service; clone is pending a delivery step');
   assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, 'clone choice must not create a destination in T-30-04');
 
   const outside = path.join(tempDir(), 'outside-service');
@@ -526,6 +563,113 @@ test('clone records explicit intent and a validated destination without cloning 
   });
   assert.strictEqual(rejected.executable, false);
   assert.match(rejected.park_reason, /outside pipeline\.repos_root/);
+});
+
+test('clone URL selection follows the project origin protocol', () => {
+  const ssh = mod.selectCloneUrl(
+    'git@github.com:serhii-nochevnyi/shipyard.git',
+    { sshUrl: 'git@github.com:Acme/Service.git', url: 'https://github.com/Acme/Service.git' },
+    'acme/service',
+  );
+  assert.deepStrictEqual(ssh, {
+    valid: true,
+    protocol: 'ssh',
+    field: 'sshUrl',
+    url: 'git@github.com:Acme/Service.git',
+    reason: null,
+  });
+
+  const https = mod.selectCloneUrl(
+    'https://github.com/serhii-nochevnyi/shipyard.git',
+    { sshUrl: 'git@github.com:Acme/Service.git', url: 'https://github.com/Acme/Service.git' },
+    'acme/service',
+  );
+  assert.strictEqual(https.valid, true);
+  assert.strictEqual(https.protocol, 'https');
+  assert.strictEqual(https.field, 'url');
+  assert.strictEqual(https.url, 'https://github.com/Acme/Service.git');
+
+  const http = mod.selectCloneUrl(
+    'http://github.com/serhii-nochevnyi/shipyard.git',
+    { sshUrl: 'git@github.com:Acme/Service.git', url: 'http://github.com/Acme/Service.git' },
+    'acme/service',
+  );
+  assert.strictEqual(http.valid, false);
+  assert.match(http.reason, /neither SSH nor HTTPS/);
+});
+
+test('clone URL selection refuses inconsistent metadata and credentials', () => {
+  const wrongProtocol = mod.selectCloneUrl(
+    'git@github.com:serhii-nochevnyi/shipyard.git',
+    { sshUrl: 'https://github.com/acme/service.git' },
+    'acme/service',
+  );
+  assert.strictEqual(wrongProtocol.valid, false);
+  assert.match(wrongProtocol.reason, /project origin protocol/);
+  assert.strictEqual(wrongProtocol.url, null);
+
+  const credential = mod.selectCloneUrl(
+    'https://github.com/serhii-nochevnyi/shipyard.git',
+    { url: 'https://token@github.com/acme/service.git' },
+    'acme/service',
+  );
+  assert.strictEqual(credential.valid, false);
+  assert.match(credential.reason, /credentials/);
+  assert.strictEqual(credential.url, null);
+  assert.ok(!JSON.stringify(credential).includes('token'));
+});
+
+test('gh metadata is read with the explicit repository and JSON fields', () => {
+  const calls = [];
+  const metadata = mod.readGhRepositoryMetadata('acme/service', '/project', (command, args, options) => {
+    calls.push({ command, args, options });
+    return {
+      status: 0,
+      stdout: JSON.stringify({ sshUrl: 'git@github.com:acme/service.git', url: 'https://github.com/acme/service.git' }),
+    };
+  });
+  assert.deepStrictEqual(metadata, {
+    valid: true,
+    metadata: { sshUrl: 'git@github.com:acme/service.git', url: 'https://github.com/acme/service.git' },
+    reason: null,
+  });
+  assert.deepStrictEqual(calls.map(({ command, args, options }) => ({ command, args, cwd: options.cwd })), [{
+    command: 'gh',
+    args: ['repo', 'view', 'acme/service', '--json', 'sshUrl,url'],
+    cwd: '/project',
+  }]);
+});
+
+test('clone preparation reports unavailable metadata without invoking git clone', () => {
+  const result = mod.resolveCloneUrl({
+    repo: 'acme/service',
+    projectRoot: '/project',
+    projectOrigin: 'https://github.com/serhii-nochevnyi/shipyard.git',
+    cloneMetadata: {},
+  });
+  assert.strictEqual(result.valid, false);
+  assert.match(result.reason, /no usable url/);
+  assert.strictEqual(result.url, null);
+});
+
+test('clone refuses a dangling destination symlink before recording an adoptable checkout', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const destination = path.join(parent, 'service');
+  fs.symlinkSync(path.join(parent, 'missing-service-target'), destination);
+
+  const result = mod.chooseRepository({
+    ticket: 'T-30-04',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    choice: 'clone',
+  });
+
+  assert.strictEqual(result.executable, false);
+  assert.match(result.park_reason, /already exists and cannot be adopted/);
+  assert.match(result.park_reason, /not available/);
+  assert.strictEqual(fs.lstatSync(destination).isSymbolicLink(), true, 'the dangling symlink must remain untouched');
 });
 
 test('state-sync and deliver name the configured resolver caller', () => {
