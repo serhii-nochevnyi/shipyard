@@ -208,8 +208,9 @@ function immediateDirectories(root) {
   let entries;
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    return [];
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return [];
+    throw error;
   }
   return entries
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
