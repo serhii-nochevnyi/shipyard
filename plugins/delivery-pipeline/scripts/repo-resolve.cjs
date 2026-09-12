@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { fileURLToPath } = require('url');
 const {
@@ -25,10 +26,29 @@ const {
   resolveOriginRef,
   resolveLocalBranchRef,
 } = require('./graph-dir.cjs');
+const { withLock, lockDirFor } = require('./lock.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
 const QUARANTINE_FILE = '.shipyard-clone-unverified.json';
+// A clone is a potentially long-running write. Bound the child process so the
+// lock can remain recoverable after a killed process while still covering the
+// longest normal clone. A contender waits through that same bounded window and
+// then re-enters the destination check, where it adopts a completed checkout.
+const CLONE_TIMEOUT_MS = 15 * 60 * 1000;
+const RESOLUTION_TIMEOUT_MS = 30 * 1000;
+const CLONE_LOCK_TTL_MS = CLONE_TIMEOUT_MS + (RESOLUTION_TIMEOUT_MS * 4) + 60 * 1000;
+const CLONE_LOCK_WAIT_MS = CLONE_LOCK_TTL_MS;
+
+function boundedResolutionOptions(env = {}) {
+  return {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: RESOLUTION_TIMEOUT_MS,
+    killSignal: 'SIGTERM',
+    env: { ...process.env, ...env },
+  };
+}
 
 function invalidArgument(message) {
   const error = new TypeError(`repo-resolve: ${message}`);
@@ -85,14 +105,7 @@ function gitRepositoryRoot(candidate) {
   const result = spawnSync(
     'git',
     ['-C', candidate, 'rev-parse', '--show-toplevel'],
-    {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-      },
-    },
+    boundedResolutionOptions({ GIT_TERMINAL_PROMPT: '0' }),
   );
   if (result.status !== 0) return null;
   const value = String(result.stdout || '').trim();
@@ -103,14 +116,7 @@ function gitRemoteOrigin(candidate) {
   const result = spawnSync(
     'git',
     ['-C', candidate, 'remote', 'get-url', 'origin'],
-    {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-      },
-    },
+    boundedResolutionOptions({ GIT_TERMINAL_PROMPT: '0' }),
   );
   if (result.status !== 0) return null;
   const value = String(result.stdout || '').trim();
@@ -205,15 +211,7 @@ function readGhRepositoryMetadata(repo, projectRoot, runner = spawnSync) {
   const result = runner(
     'gh',
     ['repo', 'view', repo, '--json', 'sshUrl,url'],
-    {
-      cwd: projectRoot || process.cwd(),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GH_PROMPT_DISABLED: '1',
-      },
-    },
+    { cwd: projectRoot || process.cwd(), ...boundedResolutionOptions({ GH_PROMPT_DISABLED: '1' }) },
   );
   if (!result || result.status !== 0) {
     return {
@@ -708,6 +706,38 @@ function defaultCloneDestination(repo, projectRoot, config) {
   };
 }
 
+// Derive the transaction lock from the path that can be shared by separate
+// project checkouts. A project-root lock protects linked worktrees of one
+// project, but two projects may intentionally point at the same repos_root.
+// Validate before creating the lock directory so a rejected path causes no
+// filesystem write. The name hash lets unrelated destinations under one root
+// proceed independently while the exact destination still has one lock.
+function cloneLockContext(input, projectRoot) {
+  const destinationInfo = defaultCloneDestination(input.repo, projectRoot, input.config);
+  if (destinationInfo.error) return null;
+  let destination = destinationInfo.destination;
+  if (input.destination !== undefined && input.destination !== null) {
+    if (typeof input.destination !== 'string' || !path.isAbsolute(input.destination)) return null;
+    destination = path.resolve(input.destination);
+  }
+  const validation = validateRepositoryDestination(destination, {
+    projectRoot,
+    reposRoot: destinationInfo.root,
+    subRepos: input.config.sub_repos,
+    requireInsideRoot: true,
+    label: 'clone destination',
+  });
+  if (!validation.valid) return null;
+
+  // `validateRepositoryDestination` applies policyPath, which resolves every
+  // existing symlink component. Hash that canonical path so aliases such as a
+  // symlinked shared root cannot enter separate clone transactions.
+  const canonicalDestination = validation.path;
+  const lockRoot = path.dirname(canonicalDestination);
+  const key = crypto.createHash('sha256').update(canonicalDestination).digest('hex').slice(0, 32);
+  return { root: lockRoot, name: `repo-resolve-${key}` };
+}
+
 function cloneChoiceResult(input, initial, destinationInfo) {
   const { repo } = input;
   if (destinationInfo.error) {
@@ -943,6 +973,19 @@ function cloneFailure(input, reason, fields = {}) {
   };
 }
 
+function commandFailure(result, label, timeoutMs) {
+  if (result && result.error && result.error.code === 'ETIMEDOUT') {
+    return `${label} timed out after ${timeoutMs}ms`;
+  }
+  if (result && result.signal) {
+    return `${label} was terminated by ${result.signal}`;
+  }
+  const exit = result && result.status !== undefined && result.status !== null
+    ? result.status
+    : 'unknown';
+  return `${label} failed (exit ${exit})`;
+}
+
 /**
  * Execute the explicit clone transaction prepared by the D3 choice.
  *
@@ -955,6 +998,26 @@ function cloneFailure(input, reason, fields = {}) {
  * @param {Function} runner
  */
 function cloneRepository(input, runner = spawnSync) {
+  validateArgs(input);
+  if (input.projectRoot !== undefined && typeof input.projectRoot !== 'string') {
+    invalidArgument('projectRoot must be a string when provided');
+  }
+  const projectRoot = path.resolve(input.projectRoot || process.cwd());
+  const lockContext = cloneLockContext({ ...input, projectRoot }, projectRoot);
+  if (!lockContext) return cloneRepositoryUnlocked({ ...input, projectRoot }, runner);
+  // The destination check and the clone are one critical section. A second
+  // resolver arriving after the first clone must see the completed checkout
+  // and adopt it, never race the first git clone or overwrite its path.
+  return withLock(lockDirFor(lockContext.root), lockContext.name, () => (
+    cloneRepositoryUnlocked({ ...input, projectRoot }, runner)
+  ), {
+    label: `repo-resolve clone ${input.repo}`,
+    ttlMs: CLONE_LOCK_TTL_MS,
+    waitMs: CLONE_LOCK_WAIT_MS,
+  });
+}
+
+function cloneRepositoryUnlocked(input, runner = spawnSync) {
   validateArgs(input);
   if (input.projectRoot !== undefined && typeof input.projectRoot !== 'string') {
     invalidArgument('projectRoot must be a string when provided');
@@ -1004,8 +1067,35 @@ function cloneRepository(input, runner = spawnSync) {
     });
   }
   if (filesystemEntryExists(destination)) {
+    const adopted = suppliedPathResult(input, destination);
+    if (adopted.executable) {
+      const baseRef = resolveOriginRef(destination, input.base);
+      if (!baseRef) {
+        return cloneFailure(input,
+          `clone destination "${destination}" matches ${input.repo} but required ref ${requiredBase} is missing`, {
+            resolution: 'clone-unverified',
+            destination,
+            clone_root: root,
+            required_base: requiredBase,
+          });
+      }
+      return {
+        ...adopted,
+        resolution: 'adopted',
+        decision: 'clone',
+        operator_choice: 'clone',
+        choice_source: 'operator',
+        adopted: true,
+        destination,
+        clone_root: root,
+        required_base: baseRef,
+        base_ref: baseRef,
+        base_verified: true,
+        park_reason: null,
+      };
+    }
     return cloneFailure(input,
-      `clone destination "${destination}" already exists; use the existing-checkout adoption path`, {
+      `clone destination "${destination}" already exists and cannot be adopted: ${adopted.reason}`, {
         destination,
         clone_root: root,
         required_base: requiredBase,
@@ -1066,6 +1156,8 @@ function cloneRepository(input, runner = spawnSync) {
     cwd: projectRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: CLONE_TIMEOUT_MS,
+    killSignal: 'SIGTERM',
     env: {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0',
@@ -1073,8 +1165,8 @@ function cloneRepository(input, runner = spawnSync) {
   };
   const result = runner('git', cloneCommand(clone.url, destination), commandOptions);
   if (!result || result.status !== 0) {
-    const exit = result && result.status !== undefined ? result.status : 'unknown';
-    return cloneFailure(input, `git clone for ${input.repo} failed (exit ${exit}); the checkout remains unverified${quarantineCloneDestination(
+    const failure = commandFailure(result, `git clone for ${input.repo}`, CLONE_TIMEOUT_MS);
+    return cloneFailure(input, `${failure}; the checkout remains unverified${quarantineCloneDestination(
       destination,
       input.repo,
       requiredBase,
@@ -1481,6 +1573,8 @@ if (require.main === module) {
     }
     if (options.json) {
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    } else if (result.executable && result.resolution === 'adopted' && result.base_verified) {
+      process.stdout.write(`${result.repo}: adopted checkout ${result.repository_root}; verified ${result.base_ref}\n`);
     } else if (result.executable && result.base_verified) {
       process.stdout.write(`${result.repo}: cloned checkout ${result.repository_root}; verified ${result.base_ref}\n`);
     } else if (result.executable) {

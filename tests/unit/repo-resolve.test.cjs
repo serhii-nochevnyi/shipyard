@@ -3,7 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const SCRIPT = path.join(
@@ -357,6 +357,43 @@ test('clone command is full and proves the requested origin base ref', () => {
   assert.strictEqual(git(destination, ['rev-parse', '--verify', 'refs/remotes/origin/epic/base^{commit}']).length, 40);
 });
 
+test('clone timeout is reported as a timeout and leaves the checkout unverified', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const source = gitRepo();
+  git(source, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(source, ['config', 'user.name', 'Shipyard Tests']);
+  git(source, ['remote', 'add', 'origin', 'git@github.com:acme/service.git']);
+  fs.writeFileSync(path.join(source, 'README.md'), 'seed\n');
+  git(source, ['add', 'README.md']);
+  git(source, ['commit', '-qm', 'seed']);
+  git(source, ['branch', 'epic/timeout']);
+  const destination = path.join(parent, 'timeout-service');
+
+  const result = mod.cloneRepository({
+    ticket: 'T-30-08',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/timeout',
+    projectOrigin: 'git@github.com:serhii-nochevnyi/shipyard.git',
+    cloneUrl: source,
+  }, (command, args, options) => {
+    if (command === 'git' && args[0] === 'clone') {
+      assert.strictEqual(options.timeout, 15 * 60 * 1000);
+      return { status: null, signal: 'SIGTERM', error: { code: 'ETIMEDOUT' } };
+    }
+    return spawnSync(command, args, options);
+  });
+
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'clone-failed');
+  assert.match(result.reason, /git clone for acme\/service timed out after 900000ms/);
+  assert.doesNotMatch(result.reason, /exit null/);
+  assert.strictEqual(fs.existsSync(destination), false);
+});
+
 test('clone accepts a local source branch when its remote-tracking ref is stale or absent', () => {
   const projectDir = isolatedProject({});
   const parent = path.dirname(projectDir);
@@ -430,6 +467,180 @@ test('clone parks a checkout when the required origin base is missing', () => {
     repo: 'acme/service',
     required_base: 'origin/epic/does-not-exist',
   });
+});
+
+test('a repeated clone adopts an existing matching checkout without invoking clone', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const destination = repoAt(path.join(parent, 'service'), 'git@github.com:acme/service.git');
+  git(destination, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(destination, ['config', 'user.name', 'Shipyard Tests']);
+  fs.writeFileSync(path.join(destination, 'README.md'), 'adopted\n');
+  git(destination, ['add', 'README.md']);
+  git(destination, ['commit', '-qm', 'seed']);
+  git(destination, ['update-ref', 'refs/remotes/origin/epic/base', 'HEAD']);
+  let invoked = false;
+  const result = mod.cloneRepository({
+    ticket: 'T-30-08',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/base',
+    cloneUrl: '/a/source-that-must-not-be-used',
+  }, () => {
+    invoked = true;
+    throw new Error('matching checkout must be adopted before clone');
+  });
+
+  assert.strictEqual(result.executable, true, result.reason);
+  assert.strictEqual(result.resolution, 'adopted');
+  assert.strictEqual(result.adopted, true);
+  assert.strictEqual(result.repository_root, destination);
+  assert.strictEqual(result.base_ref, 'origin/epic/base');
+  assert.strictEqual(result.base_verified, true);
+  assert.strictEqual(invoked, false);
+});
+
+test('the clone CLI reports adoption instead of claiming it cloned', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const destination = repoAt(path.join(parent, 'service'), 'git@github.com:acme/service.git');
+  git(destination, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(destination, ['config', 'user.name', 'Shipyard Tests']);
+  fs.writeFileSync(path.join(destination, 'README.md'), 'adopted\n');
+  git(destination, ['add', 'README.md']);
+  git(destination, ['commit', '-qm', 'seed']);
+  git(destination, ['update-ref', 'refs/remotes/origin/epic/base', 'HEAD']);
+
+  const result = run([
+    'clone',
+    'acme/service',
+    '--project-dir', projectDir,
+    '--destination', destination,
+    '--base', 'epic/base',
+    '--clone-url', '/a/source-that-must-not-be-used',
+  ]);
+
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.strictEqual(
+    result.stdout.trim(),
+    `acme/service: adopted checkout ${destination}; verified origin/epic/base`,
+  );
+});
+
+test('concurrent clone processes run one clone and then adopt its checkout', async () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const source = gitRepo();
+  git(source, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(source, ['config', 'user.name', 'Shipyard Tests']);
+  git(source, ['remote', 'add', 'origin', 'git@github.com:acme/service.git']);
+  fs.writeFileSync(path.join(source, 'README.md'), 'seed\n');
+  git(source, ['add', 'README.md']);
+  git(source, ['commit', '-qm', 'seed']);
+  git(source, ['branch', 'epic/base']);
+  const destination = path.join(parent, 'concurrent-service');
+  const log = path.join(parent, 'clone-calls.log');
+  const worker = [
+    "'use strict';",
+    "const fs = require('fs');",
+    "const { spawnSync } = require('child_process');",
+    "const mod = require(process.argv[1]);",
+    "const [projectRoot, destination, source, log] = process.argv.slice(2);",
+    "function runner(command, args, options) {",
+    "  if (command === 'git' && args[0] === 'clone') {",
+    "    fs.appendFileSync(log, 'clone\\n');",
+    "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 700);",
+    "  }",
+    "  return spawnSync(command, args, options);",
+    "}",
+    "const result = mod.cloneRepository({",
+    "  ticket: 'T-30-08', repo: 'acme/service',",
+    "  config: { repos: {}, repos_root: path.dirname(destination) },",
+    "  projectRoot, destination, base: 'epic/base', cloneUrl: source,",
+    "}, runner);",
+    "process.stdout.write(JSON.stringify(result));",
+  ].join('\n').replace("const fs = require('fs');", "const fs = require('fs');\nconst path = require('path');");
+
+  const launch = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', worker, SCRIPT, projectDir, destination, source, log], {
+      cwd: projectDir,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+
+  const first = launch();
+  await new Promise((resolve, reject) => {
+    const deadline = Date.now() + 3000;
+    const poll = () => {
+      if (fs.existsSync(log)) return resolve();
+      if (Date.now() >= deadline) return reject(new Error('first clone worker did not acquire the transaction lock'));
+      setTimeout(poll, 10);
+    };
+    poll();
+  });
+  const second = launch();
+  const [firstRun, secondRun] = await Promise.all([first, second]);
+  assert.strictEqual(firstRun.code, 0, firstRun.stderr);
+  assert.strictEqual(secondRun.code, 0, secondRun.stderr);
+  const firstResult = JSON.parse(firstRun.stdout);
+  const secondResult = JSON.parse(secondRun.stdout);
+  assert.strictEqual(firstResult.resolution, 'cloned', firstRun.stdout);
+  assert.strictEqual(secondResult.resolution, 'adopted', secondRun.stdout);
+  assert.strictEqual(fs.readFileSync(log, 'utf8').trim().split('\n').length, 1);
+});
+
+test('a matching checkout without the requested origin base remains unverified', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const destination = repoAt(path.join(parent, 'missing-base'), 'git@github.com:acme/service.git');
+  const result = mod.cloneRepository({
+    ticket: 'T-30-08',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/base',
+    cloneUrl: '/a/source-that-must-not-be-used',
+  }, () => { throw new Error('an unverified checkout must not invoke clone'); });
+
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'clone-unverified');
+  assert.strictEqual(result.base_verified, false);
+  assert.match(result.park_reason, /required ref origin\/epic\/base is missing/);
+  assert.strictEqual(fs.existsSync(destination), true);
+});
+
+test('an existing non-git or mismatched destination is refused untouched', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  for (const [name, setup, expected] of [
+    ['plain-destination', (dir) => fs.mkdirSync(dir), /not a git repository/],
+    ['wrong-origin', (dir) => repoAt(dir, 'git@github.com:someone-else/service.git'), /origin.*acme\/service/],
+  ]) {
+    const destination = path.join(parent, name);
+    setup(destination);
+    const before = fs.readdirSync(destination).sort();
+    const result = mod.cloneRepository({
+      ticket: 'T-30-08',
+      repo: 'acme/service',
+      config: { repos: {}, repos_root: parent },
+      projectRoot: projectDir,
+      destination,
+      base: 'epic/base',
+      cloneUrl: '/a/source-that-must-not-be-used',
+    }, () => { throw new Error('existing destination must not be overwritten'); });
+    assert.strictEqual(result.executable, false);
+    assert.match(result.park_reason, expected);
+    assert.deepStrictEqual(fs.readdirSync(destination).sort(), before);
+  }
 });
 
 test('clone removes origin when quarantine marker writes are unavailable', () => {
@@ -925,7 +1136,7 @@ test('state-sync and deliver name the configured resolver caller', () => {
   const stateSync = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'), 'utf8');
   const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
   assert.match(stateSync, /require\(path\.join\(__dirname, 'repo-resolve\.cjs'\)\)/);
-  assert.match(stateSync, /resolveConfiguredRepo\(\{ repo, config: cfg \}\)/);
+  assert.match(stateSync, /resolveRepository\(\{ repo, config: cfg, projectRoot: ROOT \}\)/);
   assert.match(deliver, /repo-resolve\.cjs resolve <owner\/name>/);
   assert.match(deliver, /repo-resolve\.cjs choose <owner\/name>/);
   assert.match(deliver, /escalation-record\.cjs mark <T-id>/);
