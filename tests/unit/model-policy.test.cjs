@@ -105,7 +105,7 @@ test('decomposition uses only explicit critical/checkpoint evidence, not global 
   assert.ok(result.signal_reasons.some((item) => item.signal === 'risk' && item.applies === false));
 });
 
-test('judgement roles promote on their scoped signals and preserve all fired reasons', () => {
+test('judgement roles promote only on ADR-014 scoped signals and preserve all fired reasons', () => {
   for (const role of ['integrator', 'arch-review']) {
     for (const signals of [
       { contested: true },
@@ -113,14 +113,16 @@ test('judgement roles promote on their scoped signals and preserve all fired rea
       { critical: true },
       { checkpoint: true },
       { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 },
-      { windowExceeded: true },
-      { risk: 'high' },
     ]) {
       const result = codex(role, signals);
       assert.equal(result.logical_rung, 'critical', `${role}/${JSON.stringify(signals)}`);
       assert.equal(result.model, 'gpt-6-astra');
       assert.equal(result.effort, 'medium');
     }
+    const riskOnly = codex(role, { risk: 'high' });
+    assert.equal(riskOnly.logical_rung, 'base', `${role}/risk`);
+    assert.equal(riskOnly.model, 'gpt-5.6-sol');
+    assert.ok(riskOnly.signal_reasons.some((item) => item.signal === 'risk' && item.applies === false));
     const combined = codex(role, {
       risk: 'high',
       checkpoint: true,
@@ -132,7 +134,28 @@ test('judgement roles promote on their scoped signals and preserve all fired rea
     assert.ok(combined.signals_fired.includes('contested'));
     assert.ok(combined.signals_fired.includes('window'));
     assert.equal(combined.signal_reasons.length, 4);
+    assert.ok(combined.signal_reasons.some((item) => item.signal === 'risk' && item.applies === false));
+    assert.equal(combined.selected_signals.some((item) => item.signal === 'risk'), false);
   }
+});
+
+test('window escalation uses only measured input against the fingerprinted threshold', () => {
+  const threshold = policy.WINDOW_THRESHOLD_TOKENS;
+  assert.equal(policy.POLICY.window_threshold_tokens, threshold);
+  assert.equal(codex('integrator', { inputTokens: threshold }).logical_rung, 'base');
+  assert.equal(codex('integrator', { inputTokens: threshold + 1 }).logical_rung, 'critical');
+  assert.throws(
+    () => codex('integrator', { inputTokens: 1, windowThresholdTokens: 0 }),
+    (error) => error.code === 'UNSUPPORTED_SIGNAL',
+  );
+  assert.throws(
+    () => policy.evaluateSignals('integrator', { inputTokens: 1 }, { windowThresholdTokens: 0 }),
+    (error) => error.code === 'UNSUPPORTED_SELECTION',
+  );
+  assert.throws(
+    () => codex('integrator', { windowExceeded: true }),
+    (error) => error.code === 'UNSUPPORTED_SIGNAL',
+  );
 });
 
 test('fixed Luna roles ignore global risk, checkpoint, and window promotion', () => {

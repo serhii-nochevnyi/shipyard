@@ -22,10 +22,8 @@ const SIGNATURE_STATES = Object.freeze([
   'plan_defect',
 ]);
 
-// The threshold is deliberately a measured input signal, not a role default.
-// Callers may provide a different measured threshold for a host/runtime fixture,
-// but the policy has a stable default so an absent configuration cannot silently
-// turn a judgement into a premium dispatch.
+// The threshold is deliberately part of the versioned policy. A dispatch may
+// report measured input, but cannot tune the threshold outside this fingerprint.
 const WINDOW_THRESHOLD_TOKENS = 250000;
 
 const ROLES = Object.freeze([
@@ -167,8 +165,6 @@ const SIGNAL_KEYS = new Set([
   ...SIGNAL_ORDER,
   'alternatives',
   'veryComplex',
-  'windowExceeded',
-  'windowThresholdTokens',
 ]);
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
@@ -264,7 +260,7 @@ function normalizeSignals(raw) {
     }
     out.complexity = signals.complexity;
   }
-  for (const name of ['critical', 'checkpoint', 'contested', 'alternatives', 'veryComplex', 'windowExceeded']) {
+  for (const name of ['critical', 'checkpoint', 'contested', 'alternatives', 'veryComplex']) {
     if (hasOwn(signals, name)) out[name] = booleanSignal(signals[name], name);
   }
   if (hasOwn(signals, 'risk')) {
@@ -274,9 +270,6 @@ function normalizeSignals(raw) {
     out.risk = signals.risk;
   }
   if (hasOwn(signals, 'inputTokens')) out.inputTokens = integerSignal(signals.inputTokens, 'inputTokens');
-  if (hasOwn(signals, 'windowThresholdTokens')) {
-    out.windowThresholdTokens = integerSignal(signals.windowThresholdTokens, 'windowThresholdTokens');
-  }
   if (hasOwn(signals, 'signatureState')) {
     if (!SIGNATURE_STATES.includes(signals.signatureState)) {
       refuse(
@@ -308,11 +301,17 @@ function activeSignal(value) {
 function evaluateSignals(role, rawSignals = {}, options = {}) {
   const normalizedRole = normalizeRole(role);
   const signals = normalizeSignals(rawSignals);
-  const threshold = options.windowThresholdTokens === undefined
-    ? signals.windowThresholdTokens === undefined
-      ? WINDOW_THRESHOLD_TOKENS
-      : signals.windowThresholdTokens
-    : integerSignal(options.windowThresholdTokens, 'windowThresholdTokens');
+  if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options))) {
+    refuse('INVALID_INPUT', 'evaluation options must be an object');
+  }
+  if (hasOwn(options, 'windowThresholdTokens')) {
+    refuse(
+      'UNSUPPORTED_SELECTION',
+      'windowThresholdTokens is fixed by the active ADR-014 policy fingerprint and cannot be set per dispatch',
+      { windowThresholdTokens: options.windowThresholdTokens },
+    );
+  }
+  const threshold = WINDOW_THRESHOLD_TOKENS;
   const reasons = [];
   const selected = [];
 
@@ -396,20 +395,16 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
   }
 
   if (hasOwn(signals, 'risk')) {
-    const promotesJudgement = signals.risk === 'high' && JUDGEMENT_ROLES.has(normalizedRole);
     add(
       'risk',
       'signals.risk',
       signals.risk,
-      promotesJudgement,
-      promotesJudgement ? 'critical' : null,
-      promotesJudgement
-        ? 'signals.risk=high is explicit quality evidence for a judgement rerun'
-        : FIXED_LUNA_ROLES.has(normalizedRole)
-          ? 'global risk is intentionally inert for a fixed Luna role'
-          : 'global risk is not a role-scoped escalation signal for this role',
+      false,
+      null,
+      FIXED_LUNA_ROLES.has(normalizedRole)
+        ? 'global risk is intentionally inert for a fixed Luna role'
+        : 'risk is recorded context, not a role-scoped escalation signal',
     );
-    if (promotesJudgement) selected.push({ signal: 'risk', rung: 'critical', reason: 'signals.risk=high is explicit quality evidence for a judgement rerun' });
   }
   if (signals.checkpoint === true) {
     const applies = normalizedRole === 'decomposition' || JUDGEMENT_ROLES.has(normalizedRole);
@@ -430,19 +425,16 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     if (applies) selected.push({ signal: 'contested', rung: 'critical', reason });
   }
 
-  const measuredWindow = signals.windowExceeded === true
-    || (signals.inputTokens !== undefined && signals.inputTokens > threshold);
-  if (hasOwn(signals, 'inputTokens') || hasOwn(signals, 'windowExceeded')) {
+  const measuredWindow = signals.inputTokens !== undefined && signals.inputTokens > threshold;
+  if (hasOwn(signals, 'inputTokens')) {
     const reason = measuredWindow
-      ? signals.windowExceeded === true
-        ? 'signals.windowExceeded=true is measured window pressure'
-        : `signals.inputTokens=${signals.inputTokens} exceeds window threshold ${threshold}`
+      ? `signals.inputTokens=${signals.inputTokens} exceeds window threshold ${threshold}`
       : `measured input is at or below window threshold ${threshold}`;
     const applies = measuredWindow && JUDGEMENT_ROLES.has(normalizedRole);
     add(
       'window',
-      signals.windowExceeded === true ? 'signals.windowExceeded' : 'signals.inputTokens',
-      signals.windowExceeded === true ? true : signals.inputTokens,
+      'signals.inputTokens',
+      signals.inputTokens,
       applies,
       applies ? 'critical' : null,
       applies
