@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { fileURLToPath } = require('url');
 const {
@@ -24,7 +25,6 @@ const {
   originBaseLabel,
   resolveOriginRef,
   resolveLocalBranchRef,
-  repoRootOf,
 } = require('./graph-dir.cjs');
 const { withLock, lockDirFor } = require('./lock.cjs');
 
@@ -717,6 +717,35 @@ function defaultCloneDestination(repo, projectRoot, config) {
   };
 }
 
+// Derive the transaction lock from the path that can be shared by separate
+// project checkouts. A project-root lock protects linked worktrees of one
+// project, but two projects may intentionally point at the same repos_root.
+// Validate before creating the lock directory so a rejected path causes no
+// filesystem write. The name hash lets unrelated destinations under one root
+// proceed independently while the exact destination still has one lock.
+function cloneLockContext(input, projectRoot) {
+  const destinationInfo = defaultCloneDestination(input.repo, projectRoot, input.config);
+  if (destinationInfo.error) return null;
+  let destination = destinationInfo.destination;
+  if (input.destination !== undefined && input.destination !== null) {
+    if (typeof input.destination !== 'string' || !path.isAbsolute(input.destination)) return null;
+    destination = path.resolve(input.destination);
+  }
+  const validation = validateRepositoryDestination(destination, {
+    projectRoot,
+    reposRoot: destinationInfo.root,
+    subRepos: input.config.sub_repos,
+    requireInsideRoot: true,
+    label: 'clone destination',
+  });
+  if (!validation.valid) return null;
+
+  let lockRoot = path.dirname(destination);
+  try { lockRoot = fs.realpathSync(lockRoot); } catch { /* a new root is resolved by path */ }
+  const key = crypto.createHash('sha256').update(destination).digest('hex').slice(0, 32);
+  return { root: lockRoot, name: `repo-resolve-${key}` };
+}
+
 function cloneChoiceResult(input, initial, destinationInfo) {
   const { repo } = input;
   if (destinationInfo.error) {
@@ -969,11 +998,12 @@ function cloneRepository(input, runner = spawnSync) {
     invalidArgument('projectRoot must be a string when provided');
   }
   const projectRoot = path.resolve(input.projectRoot || process.cwd());
-  const lockRoot = repoRootOf(projectRoot) || projectRoot;
+  const lockContext = cloneLockContext({ ...input, projectRoot }, projectRoot);
+  if (!lockContext) return cloneRepositoryUnlocked({ ...input, projectRoot }, runner);
   // The destination check and the clone are one critical section. A second
   // resolver arriving after the first clone must see the completed checkout
   // and adopt it, never race the first git clone or overwrite its path.
-  return withLock(lockDirFor(lockRoot), 'repo-resolve', () => (
+  return withLock(lockDirFor(lockContext.root), lockContext.name, () => (
     cloneRepositoryUnlocked({ ...input, projectRoot }, runner)
   ), {
     label: `repo-resolve clone ${input.repo}`,

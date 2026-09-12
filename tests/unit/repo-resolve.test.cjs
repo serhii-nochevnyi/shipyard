@@ -3,7 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const SCRIPT = path.join(
@@ -490,6 +490,74 @@ test('the clone CLI reports adoption instead of claiming it cloned', () => {
     result.stdout.trim(),
     `acme/service: adopted checkout ${destination}; verified origin/epic/base`,
   );
+});
+
+test('concurrent clone processes run one clone and then adopt its checkout', async () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const source = gitRepo();
+  git(source, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(source, ['config', 'user.name', 'Shipyard Tests']);
+  git(source, ['remote', 'add', 'origin', 'git@github.com:acme/service.git']);
+  fs.writeFileSync(path.join(source, 'README.md'), 'seed\n');
+  git(source, ['add', 'README.md']);
+  git(source, ['commit', '-qm', 'seed']);
+  git(source, ['branch', 'epic/base']);
+  const destination = path.join(parent, 'concurrent-service');
+  const log = path.join(parent, 'clone-calls.log');
+  const worker = [
+    "'use strict';",
+    "const fs = require('fs');",
+    "const { spawnSync } = require('child_process');",
+    "const mod = require(process.argv[1]);",
+    "const [projectRoot, destination, source, log] = process.argv.slice(2);",
+    "function runner(command, args, options) {",
+    "  if (command === 'git' && args[0] === 'clone') {",
+    "    fs.appendFileSync(log, 'clone\\n');",
+    "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 700);",
+    "  }",
+    "  return spawnSync(command, args, options);",
+    "}",
+    "const result = mod.cloneRepository({",
+    "  ticket: 'T-30-08', repo: 'acme/service',",
+    "  config: { repos: {}, repos_root: path.dirname(destination) },",
+    "  projectRoot, destination, base: 'epic/base', cloneUrl: source,",
+    "}, runner);",
+    "process.stdout.write(JSON.stringify(result));",
+  ].join('\n').replace("const fs = require('fs');", "const fs = require('fs');\nconst path = require('path');");
+
+  const launch = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', worker, SCRIPT, projectDir, destination, source, log], {
+      cwd: projectDir,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+
+  const first = launch();
+  await new Promise((resolve, reject) => {
+    const deadline = Date.now() + 3000;
+    const poll = () => {
+      if (fs.existsSync(log)) return resolve();
+      if (Date.now() >= deadline) return reject(new Error('first clone worker did not acquire the transaction lock'));
+      setTimeout(poll, 10);
+    };
+    poll();
+  });
+  const second = launch();
+  const [firstRun, secondRun] = await Promise.all([first, second]);
+  assert.strictEqual(firstRun.code, 0, firstRun.stderr);
+  assert.strictEqual(secondRun.code, 0, secondRun.stderr);
+  const firstResult = JSON.parse(firstRun.stdout);
+  const secondResult = JSON.parse(secondRun.stdout);
+  assert.strictEqual(firstResult.resolution, 'cloned', firstRun.stdout);
+  assert.strictEqual(secondResult.resolution, 'adopted', secondRun.stdout);
+  assert.strictEqual(fs.readFileSync(log, 'utf8').trim().split('\n').length, 1);
 });
 
 test('a matching checkout without the requested origin base remains unverified', () => {
