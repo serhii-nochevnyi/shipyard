@@ -137,6 +137,45 @@ function configuredRepos(config) {
   return isRecord(config.repos) ? config.repos : {};
 }
 
+function rawPipelineFields(projectRoot) {
+  const file = path.join(path.resolve(projectRoot || process.cwd()), '.planning', 'config.json');
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    return { fields: undefined, error };
+  }
+  if (!isRecord(raw)) return { fields: undefined, error: null };
+
+  // Preserve explicitly declared repository fields long enough for the resolver
+  // to refuse malformed values instead of letting loadConfig filter them and
+  // silently fall through to origin discovery.
+  const legacy = isRecord(raw.pipeline) ? raw.pipeline : {};
+  const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
+  return { fields: { ...legacy, ...declared }, error: null };
+}
+
+function resolverConfig(loaded, projectRoot) {
+  if (!loaded || !isRecord(loaded.config)) return loaded && loaded.config;
+  if (loaded.valid === false) return loaded.config;
+  const raw = rawPipelineFields(projectRoot).fields;
+  const hasRoot = raw && Object.prototype.hasOwnProperty.call(raw, 'repos_root');
+  const hasRepos = raw && Object.prototype.hasOwnProperty.call(raw, 'repos');
+  if (!hasRoot && !hasRepos) return loaded.config;
+
+  const declaredRoot = hasRoot ? raw.repos_root : undefined;
+  const declaredRepos = hasRepos && isRecord(raw.repos) ? raw.repos : undefined;
+  return declaredRoot === undefined && declaredRepos === undefined
+    ? loaded.config
+    : {
+      ...loaded.config,
+      ...(declaredRoot === undefined ? {} : { repos_root: declaredRoot }),
+      ...(declaredRepos === undefined
+        ? {}
+        : { repos: { ...configuredRepos(loaded.config), ...declaredRepos } }),
+    };
+}
+
 function invalidRepositoryPolicy(config) {
   if (!Object.prototype.hasOwnProperty.call(config, 'repos_root')) return false;
   return typeof config.repos_root !== 'string'
@@ -315,6 +354,13 @@ function resolveConfiguredRepo(input) {
   if (!repositoryRoot) {
     return trackOnly(ticket, repo, `configured checkout "${configuredPath}" is not a git repository`);
   }
+  if (path.resolve(repositoryRoot) !== path.resolve(checkoutPath)) {
+    return trackOnly(
+      ticket,
+      repo,
+      `configured checkout "${configuredPath}" is inside another git repository; supply its repository root`,
+    );
+  }
   return resolved(ticket, repo, checkoutPath, repositoryRoot);
 }
 
@@ -482,7 +528,7 @@ function cloneChoiceResult(input, initial, destinationInfo) {
 }
 
 function choicePrompt(repo, destination) {
-  return `Repository ${repo} is not reachable. Choose one: clone to ${destination}, provide an existing checkout path, or skip for now (skip parks the ticket).`;
+  return `Repository ${repo} needs an explicit checkout decision. Choose one: clone to ${destination}, provide an existing checkout path, or skip for now (skip parks the ticket).`;
 }
 
 function parkedChoice(initial, choice, reason, extras = {}) {
@@ -673,9 +719,8 @@ async function readInteractiveChoice(repo, destination, suppliedPath = null) {
   try {
     choice = normalizeChoice(answer);
   } catch {
-    process.stderr.write('Unrecognized choice; treating it as unanswered and parking the ticket.\n');
     prompt.close();
-    return { choice: null, existingPath: null };
+    throw new Error('Unrecognized choice; choose clone, existing, or skip.');
   }
 
   if (choice !== 'existing') {
@@ -696,13 +741,31 @@ async function readInteractiveChoice(repo, destination, suppliedPath = null) {
   };
 }
 
+function readProjectPolicy(projectDir) {
+  try {
+    const file = path.join(projectDir, '.planning', 'config.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const pipeline = isRecord(raw.pipeline) ? raw.pipeline : {};
+    const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
+    const nested = raw.sub_repos ?? (isRecord(raw.planning) ? raw.planning.sub_repos : undefined);
+    return {
+      repos_root: declared.repos_root ?? pipeline.repos_root,
+      sub_repos: nested,
+    };
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return {};
+    throw error;
+  }
+}
+
 if (require.main === module) {
   (async () => {
     try {
     const options = parseCli(process.argv.slice(2));
     const projectDir = path.resolve(options.projectDir);
     const loaded = loadConfig(projectDir);
-    const config = loaded.config;
+    const policy = readProjectPolicy(projectDir);
+    const config = { ...resolverConfig(loaded, projectDir), ...policy };
     const input = {
       ticket: options.ticket,
       repo: options.repo,

@@ -140,6 +140,20 @@ test('an invalid repository root refuses discovery instead of falling back to th
   assert.match(result.reason, /repos_root is invalid/);
 });
 
+test('a configured directory inside another git checkout is trackable-only', () => {
+  const parent = gitRepo();
+  const nested = path.join(parent, 'nested-directory');
+  fs.mkdirSync(nested);
+  const result = mod.resolveConfiguredRepo({
+    ticket: 'T-30-02',
+    repo: 'acme/service',
+    config: { repos: { 'acme/service': nested } },
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'track-only');
+  assert.match(result.reason, /inside another git repository.*repository root/);
+});
+
 test('malformed repository arguments fail closed before any filesystem write', () => {
   const parent = tempDir();
   const before = fs.readdirSync(parent);
@@ -177,6 +191,59 @@ function repoAt(dir, origin) {
   git(dir, ['remote', 'add', 'origin', origin]);
   return fs.realpathSync(dir);
 }
+
+test('the discovery CLI passes an explicitly configured repository root to the resolver', () => {
+  const configuredRoot = tempDir('shipyard-configured-repos-root-');
+  const projectDir = path.join(configuredRoot, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos_root: configuredRoot } }, null, 2) + '\n',
+  );
+  const checkout = repoAt(path.join(configuredRoot, 'checkout-found-only-under-configured-root'), 'git@github.com:acme/service.git');
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'discovered');
+  assert.strictEqual(output.repository_root, checkout);
+  assert.ok(output.searched_roots.includes(configuredRoot));
+});
+
+test('the CLI keeps an invalid explicit checkout from falling through to discovery', () => {
+  const parent = tempDir('shipyard-invalid-configured-repo-');
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos: { 'acme/service': 'relative-checkout' }, repos_root: parent } }, null, 2) + '\n',
+  );
+  repoAt(path.join(parent, 'valid-discovery'), 'git@github.com:acme/service.git');
+
+  const result = run(['resolve', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'track-only');
+  assert.strictEqual(output.executable, false);
+  assert.match(output.reason, /relative/);
+});
+
+test('a non-object delivery namespace does not suppress the legacy discovery root', () => {
+  const configuredRoot = tempDir('shipyard-legacy-repos-root-');
+  const projectDir = path.join(configuredRoot, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos_root: configuredRoot }, delivery_pipeline: null }, null, 2) + '\n',
+  );
+  const checkout = repoAt(path.join(configuredRoot, 'legacy-root-checkout'), 'git@github.com:acme/service.git');
+
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'discovered');
+  assert.strictEqual(output.repository_root, checkout);
+  assert.ok(output.searched_roots.includes(configuredRoot));
+});
 
 test('origin normalization accepts GitHub SSH, HTTPS, and scp-like forms', () => {
   for (const origin of [
@@ -331,10 +398,10 @@ test('human-readable discovery output names the selected resolution', () => {
 
 test('the operator prompt names the repository and all three D3 choices', () => {
   const prompt = mod.choicePrompt('acme/service', '/work/service');
-  assert.match(prompt, /acme\/service/);
-  assert.match(prompt, /clone to \/work\/service/);
-  assert.match(prompt, /existing checkout path/);
-  assert.match(prompt, /skip/);
+  assert.strictEqual(
+    prompt,
+    'Repository acme/service needs an explicit checkout decision. Choose one: clone to /work/service, provide an existing checkout path, or skip for now (skip parks the ticket).',
+  );
 });
 
 test('an unanswered choice becomes a durable park payload without filesystem mutation', () => {
@@ -352,7 +419,10 @@ test('an unanswered choice becomes a durable park payload without filesystem mut
   assert.strictEqual(result.decision, 'skip');
   assert.strictEqual(result.operator_choice, 'skip');
   assert.strictEqual(result.choice_source, 'unattended');
-  assert.match(result.park_reason, /no operator choice.*skipped/);
+  assert.strictEqual(
+    result.park_reason,
+    'repository acme/service is not reachable; no operator choice was provided, so it was skipped',
+  );
   assert.strictEqual(result.reason, result.park_reason);
   assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, 'unanswered choice must not create a destination');
 });
@@ -385,7 +455,10 @@ test('an explicit existing path is adopted only when its origin and nesting are 
   });
   assert.strictEqual(rejected.executable, false);
   assert.strictEqual(rejected.decision, 'existing');
-  assert.match(rejected.park_reason, /origin.*acme\/service/);
+  assert.strictEqual(
+    rejected.park_reason,
+    `operator supplied a checkout for acme/service, but it was rejected: existing checkout "${wrongOrigin}" has an origin that does not resolve to acme/service`,
+  );
 });
 
 test('an existing path nested in the project is refused unless sub_repos declares it', () => {
@@ -400,7 +473,7 @@ test('an existing path nested in the project is refused unless sub_repos declare
     existingPath: nested,
   });
   assert.strictEqual(rejected.executable, false);
-  assert.match(rejected.park_reason, /nested inside (this )?project/);
+  assert.match(rejected.park_reason, /nested inside this project/);
 
   const allowed = mod.chooseRepository({
     ticket: 'T-30-04',
@@ -431,7 +504,7 @@ test('clone records explicit intent and a validated destination without cloning 
   assert.strictEqual(result.decision, 'clone');
   assert.strictEqual(result.operator_choice, 'clone');
   assert.strictEqual(result.destination, destination);
-  assert.match(result.park_reason, /clone.*pending/);
+  assert.strictEqual(result.park_reason, 'operator chose clone for acme/service; clone is pending a delivery step');
   assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, 'clone choice must not create a destination in T-30-04');
 
   const outside = path.join(tempDir(), 'outside-service');
@@ -464,7 +537,7 @@ test('clone refuses a dangling destination symlink before recording an adoptable
   assert.strictEqual(result.executable, false);
   assert.match(result.park_reason, /already exists and cannot be adopted/);
   assert.match(result.park_reason, /not available/);
-  assert.ok(fs.lstatSync(destination).isSymbolicLink(), 'the dangling symlink must remain untouched');
+  assert.strictEqual(fs.lstatSync(destination).isSymbolicLink(), true, 'the dangling symlink must remain untouched');
 });
 
 test('state-sync and deliver name the configured resolver caller', () => {

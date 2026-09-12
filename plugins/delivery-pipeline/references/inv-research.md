@@ -4,6 +4,14 @@ Four parallel research lines launched by /shipyard:investigate at INV start.
 Each agent gets the problem statement + this brief and drafts its artifact
 sections. Drafts are inputs to the human dialog, not final documents.
 
+## Verification contract
+
+Every checkable claim about the codebase, a test, delivery state, or a completed
+action must name the exact command that checked it and the relevant path,
+output, or exit status. If a claim cannot be checked by a command, label it as
+an assumption or unknown and state the next check. A claim without
+command-backed evidence is not verification.
+
 ## Line 1 — system state (→ RESEARCH.md "Current system state")
 Map how the affected part of the system works TODAY: entry points, data flow,
 key modules, existing tests, known warts. Cite file paths. Use
