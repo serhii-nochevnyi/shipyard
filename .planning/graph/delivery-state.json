@@ -1200,13 +1200,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/125",
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-12T20:26:12Z",
-    "head_sha": "60783f7ab03714b78099cc07756a4d0efbb3b81a",
+    "head_sha": "a53d4413c56b69cd0e851fc01810377d49e0e367",
     "merge_state": "UNSTABLE",
     "behind_by": 0,
     "checks": {
       "total": 1,
-      "failing": 1,
-      "pending": 0,
+      "failing": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
