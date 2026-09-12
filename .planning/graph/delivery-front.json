@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-09-12T20:29:22.711Z",
-  "observed_at": "2026-09-12T20:29:22.711Z",
-  "generation": 215,
+  "generated_at": "2026-09-12T20:32:10.580Z",
+  "observed_at": "2026-09-12T20:32:10.580Z",
+  "generation": 217,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-12T20:29:22.711Z",
+  "dispatches_applied_at": "2026-09-12T20:32:10.580Z",
   "actionable": {
     "execute": [
       "T-31-01"
@@ -151,7 +151,7 @@
     "T-31-05": "T-31-04 (parent has no branch yet (nothing to cascade from))",
     "T-31-06": "T-31-05 (parent has no branch yet (nothing to cascade from))",
     "T-31-07": "T-31-06 (parent has no branch yet (nothing to cascade from))",
-    "T-36-01": "dispatched to pr-sentinel 1m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (the PR merges, or its base moves) or after 90m; `dispatch-record.cjs clear T-36-01 <dispatch_id>` returns it now.",
+    "T-36-01": "dispatched to pr-sentinel 4m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (the PR merges, or its base moves) or after 90m; `dispatch-record.cjs clear T-36-01 <dispatch_id>` returns it now.",
     "T-36-02": "T-31-02 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending))",
     "T-36-03": "T-36-02 (parent has no branch yet (nothing to cascade from))",
     "T-36-04": "T-36-03 (parent has no branch yet (nothing to cascade from))",

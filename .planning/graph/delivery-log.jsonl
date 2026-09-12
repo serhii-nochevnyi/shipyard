@@ -966,3 +966,5 @@
 {"ts":"2026-09-12T20:26:45.234Z","event":"status_change","ticket":"T-36-01","from":"pending","to":"pr-open","pr":125}
 {"ts":"2026-09-12T20:28:27.634Z","event":"dispatch","ticket":"T-36-01","role":"pr-sentinel","pr":125,"agent_id":"01a0974e-716a-7413-a275-221aa8ce92ad","dispatch_id":"dispatch-mtyu7yid-ac492dc7-1657-422e-8a47-a94110b76675","by":"dispatch-record"}
 {"ts":"2026-09-12T20:29:20.616Z","event":"base_merge","ticket":"T-36-01","pr":125,"base":"epic/36-enforce-the-runtime-model-ladder","head":"a53d4413c56b69cd0e851fc01810377d49e0e367"}
+{"ts":"2026-09-12T20:31:49.293Z","event":"attempt","ticket":"T-36-01","pr":125,"n":1,"role":"ci-fix","model":"opus","effort_applied":"unknown","outcome":"pushed","signature":"2570b45482b75a7e","head":"4ba6331ffc9d9c86c7ce8b94f21b78c4f1bc89e7","hypothesis":"The failure was caused by concrete model IDs in model-policy.cjs being visible outside the configured palette to the generated-source scan."}
+{"ts":"2026-09-12T20:32:18.386Z","event":"base_merge","ticket":"T-36-01","pr":125,"base":"epic/36-enforce-the-runtime-model-ladder","head":"e2b02034faa3c0f94be9ef47ca60708b352cd7e9"}
