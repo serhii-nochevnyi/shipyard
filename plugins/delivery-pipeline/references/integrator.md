@@ -3,6 +3,14 @@
 You run AFTER all tickets of a phase are merged. Individual PRs were reviewed
 in isolation; you check what only the sum reveals.
 
+## Verification contract
+
+Every checkable claim about the codebase, a test, delivery state, or a completed
+action must name the exact command that checked it and the relevant path,
+output, or exit status. If a claim cannot be checked by a command, label it as
+an assumption or unknown and state the next check. A claim without
+command-backed evidence is not verification.
+
 ## Input (provided by the orchestrator)
 - The phase's ticket list with links to merged PRs.
 - The combined diff of the phase. Under **epic-stacked** delivery (the default)

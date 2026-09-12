@@ -12,13 +12,43 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
-const { loadConfig, validateRepositoryDestination } = require('./pipeline-config.cjs');
-const { originRefName, resolveOriginRef } = require('./graph-dir.cjs');
+const { fileURLToPath } = require('url');
+const {
+  loadConfig,
+  repositoryRootValue,
+  validateRepositoryDestination,
+} = require('./pipeline-config.cjs');
+const {
+  originRefName,
+  originBaseLabel,
+  resolveOriginRef,
+  resolveLocalBranchRef,
+} = require('./graph-dir.cjs');
 const { withLock, writeAtomic, lockDirFor } = require('./lock.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
+const QUARANTINE_FILE = '.shipyard-clone-unverified.json';
+// A clone is a potentially long-running write. Bound the child process so the
+// lock can remain recoverable after a killed process while still covering the
+// longest normal clone. A contender waits through that same bounded window and
+// then re-enters the destination check, where it adopts a completed checkout.
+const CLONE_TIMEOUT_MS = 15 * 60 * 1000;
+const RESOLUTION_TIMEOUT_MS = 30 * 1000;
+const CLONE_LOCK_TTL_MS = CLONE_TIMEOUT_MS + (RESOLUTION_TIMEOUT_MS * 4) + 60 * 1000;
+const CLONE_LOCK_WAIT_MS = CLONE_LOCK_TTL_MS;
+
+function boundedResolutionOptions(env = {}) {
+  return {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: RESOLUTION_TIMEOUT_MS,
+    killSignal: 'SIGTERM',
+    env: { ...process.env, ...env },
+  };
+}
 
 function invalidArgument(message) {
   const error = new TypeError(`repo-resolve: ${message}`);
@@ -75,14 +105,7 @@ function gitRepositoryRoot(candidate) {
   const result = spawnSync(
     'git',
     ['-C', candidate, 'rev-parse', '--show-toplevel'],
-    {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-      },
-    },
+    boundedResolutionOptions({ GIT_TERMINAL_PROMPT: '0' }),
   );
   if (result.status !== 0) return null;
   const value = String(result.stdout || '').trim();
@@ -93,14 +116,7 @@ function gitRemoteOrigin(candidate) {
   const result = spawnSync(
     'git',
     ['-C', candidate, 'remote', 'get-url', 'origin'],
-    {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-      },
-    },
+    boundedResolutionOptions({ GIT_TERMINAL_PROMPT: '0' }),
   );
   if (result.status !== 0) return null;
   const value = String(result.stdout || '').trim();
@@ -111,46 +127,55 @@ function originProtocol(value) {
   if (typeof value !== 'string') return null;
   const origin = value.trim();
   if (/^(?:git@[^/:]+:|ssh:\/\/)/i.test(origin)) return 'ssh';
-  if (/^https?:\/\//i.test(origin)) return 'https';
+  if (/^https:\/\//i.test(origin)) return 'https';
   return null;
 }
 
 function safeCloneUrl(value, protocol, repo) {
   if (typeof value !== 'string' || value.trim() === '') {
-    return { valid: false, reason: `gh metadata has no usable ${protocol === 'ssh' ? 'sshUrl' : 'url'} for ${repo}` };
+    return {
+      valid: false,
+      reason: `gh metadata has no usable ${protocol === 'ssh' ? 'sshUrl' : 'url'} for ${repo}`,
+    };
   }
   const url = value.trim();
   if (originProtocol(url) !== protocol) {
-    return { valid: false, reason: `gh metadata URL for ${repo} does not use the project origin protocol (${protocol})` };
-  }
-  if (normalizeOrigin(url) !== repo.toLowerCase()) {
-    return { valid: false, reason: `gh metadata URL does not identify ${repo}` };
+    return {
+      valid: false,
+      reason: `gh metadata URL for ${repo} does not use the project origin protocol (${protocol})`,
+    };
   }
   if (/^(?:https?|ssh):\/\//i.test(url)) {
     try {
       const parsed = new URL(url);
       if (parsed.password || (parsed.username && (protocol === 'https' || parsed.username !== 'git'))) {
-        return { valid: false, reason: `gh metadata URL for ${repo} contains credentials and was refused` };
+        return {
+          valid: false,
+          reason: `gh metadata URL for ${repo} contains credentials and was refused`,
+        };
       }
       if (parsed.search || parsed.hash) {
-        return { valid: false, reason: `gh metadata URL for ${repo} contains query or fragment data and was refused` };
+        return {
+          valid: false,
+          reason: `gh metadata URL for ${repo} contains query or fragment data and was refused`,
+        };
       }
     } catch {
-      return { valid: false, reason: `gh metadata URL for ${repo} is not a valid ${protocol} URL` };
+      return {
+        valid: false,
+        reason: `gh metadata URL for ${repo} is not a valid ${protocol} URL`,
+      };
     }
+  }
+  if (normalizeOrigin(url) !== repo.toLowerCase()) {
+    return {
+      valid: false,
+      reason: `gh metadata URL does not identify ${repo}`,
+    };
   }
   return { valid: true, url };
 }
 
-/**
- * Choose the clone URL from the project's origin protocol. This pure decision
- * keeps gh's global git protocol preference out of the conveyor's policy.
- *
- * @param {string} projectOrigin
- * @param {{sshUrl?: string, url?: string}} metadata
- * @param {string} repo
- * @returns {{valid: boolean, protocol: string|null, field: string|null, url: string|null, reason: string|null}}
- */
 function selectCloneUrl(projectOrigin, metadata, repo) {
   const protocol = originProtocol(projectOrigin);
   if (!protocol) {
@@ -186,15 +211,7 @@ function readGhRepositoryMetadata(repo, projectRoot, runner = spawnSync) {
   const result = runner(
     'gh',
     ['repo', 'view', repo, '--json', 'sshUrl,url'],
-    {
-      cwd: projectRoot || process.cwd(),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GH_PROMPT_DISABLED: '1',
-      },
-    },
+    { cwd: projectRoot || process.cwd(), ...boundedResolutionOptions({ GH_PROMPT_DISABLED: '1' }) },
   );
   if (!result || result.status !== 0) {
     return {
@@ -245,6 +262,103 @@ function resolveCloneUrl(input) {
   return selectCloneUrl(projectOrigin, metadataResult.metadata, repo);
 }
 
+// existsSync follows symbolic links, so it reports a dangling destination as
+// absent and would let the clone branch treat it as safe to create. lstat
+// keeps the decision fail-closed for every filesystem entry, including broken
+// links and entries whose metadata cannot be read.
+function filesystemEntryExists(candidate) {
+  try {
+    fs.lstatSync(candidate);
+    return true;
+  } catch (error) {
+    return error && error.code !== 'ENOENT';
+  }
+}
+
+function quarantineMarkerPath(candidate) {
+  return path.join(candidate, QUARANTINE_FILE);
+}
+
+function quarantineMarkerPaths(candidate) {
+  return [quarantineMarkerPath(candidate), `${candidate}${QUARANTINE_FILE}`];
+}
+
+function quarantineStatus(candidate, repo) {
+  for (const markerPath of quarantineMarkerPaths(candidate)) {
+    let marker;
+    try {
+      marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+    } catch (error) {
+      if (error && error.code === 'ENOENT') continue;
+      return {
+        reason: `checkout "${candidate}" has an unreadable Shipyard quarantine marker; it is not executable`,
+      };
+    }
+    if (!isRecord(marker)
+        || marker.kind !== 'shipyard-clone-unverified'
+        || typeof marker.repo !== 'string'
+        || marker.repo.toLowerCase() !== repo.toLowerCase()
+        || typeof marker.required_base !== 'string'
+        || marker.required_base.length === 0) {
+      return {
+        reason: `checkout "${candidate}" has an invalid Shipyard quarantine marker; it is not executable`,
+      };
+    }
+    return {
+      reason: `checkout "${candidate}" is quarantined after an unverified clone; required ref ${marker.required_base} is not proven`,
+    };
+  }
+  return null;
+}
+
+function writeQuarantineMarker(candidate, repo, requiredBase) {
+  const marker = {
+    version: 1,
+    kind: 'shipyard-clone-unverified',
+    repo,
+    required_base: requiredBase,
+  };
+  const failures = [];
+  for (const markerPath of quarantineMarkerPaths(candidate)) {
+    try {
+      fs.writeFileSync(
+        markerPath,
+        `${JSON.stringify(marker, null, 2)}\n`,
+        { encoding: 'utf8', flag: 'wx' },
+      );
+      return { path: markerPath, error: null };
+    } catch (error) {
+      failures.push(`${markerPath}: ${error && error.message ? error.message : String(error)}`);
+    }
+  }
+  return { path: null, error: failures.join('; ') };
+}
+
+// Every failure after git clone is a failed proof, not an ordinary retry. Keep
+// the checkout for inspection but make the failure durable. The in-checkout
+// marker is preferred; the adjacent sidecar covers a clone whose .git tree is
+// writable but whose root is not. If both writes are blocked, removing origin
+// is the last fail-closed fallback so origin-based discovery cannot adopt it.
+function quarantineCloneDestination(candidate, repo, requiredBase, runner, commandOptions) {
+  if (!filesystemEntryExists(candidate)) return '';
+  const marker = writeQuarantineMarker(candidate, repo, requiredBase);
+  if (!marker.error) return `; checkout quarantined at ${marker.path}`;
+
+  let detached;
+  try {
+    detached = runner('git', ['-C', candidate, 'remote', 'remove', 'origin'], commandOptions);
+  } catch (error) {
+    detached = { status: null, error };
+  }
+  if (detached && detached.status === 0) {
+    return `; quarantine marker could not be written: ${marker.error}; origin was removed so the checkout is not discoverable`;
+  }
+  const detachError = detached && detached.error && detached.error.message
+    ? detached.error.message
+    : `exit ${detached && detached.status !== undefined ? detached.status : 'unknown'}`;
+  return `; quarantine marker could not be written: ${marker.error}; origin removal also failed (${detachError}) and the checkout requires manual quarantine`;
+}
+
 /**
  * Normalize the GitHub URL forms a local git checkout commonly stores.
  *
@@ -266,9 +380,48 @@ function configuredRepos(config) {
   return isRecord(config.repos) ? config.repos : {};
 }
 
-function invalidRepositoryPolicy(config) {
-  return Object.prototype.hasOwnProperty.call(config, 'repos_root')
-    && config.repos_root === null;
+function rawPipelineFields(projectRoot) {
+  const file = path.join(path.resolve(projectRoot || process.cwd()), '.planning', 'config.json');
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    return { fields: undefined, error };
+  }
+  if (!isRecord(raw)) return { fields: undefined, error: null };
+
+  // Preserve explicitly declared repository fields long enough for the resolver
+  // to refuse malformed values instead of letting loadConfig filter them and
+  // silently fall through to origin discovery.
+  const legacy = isRecord(raw.pipeline) ? raw.pipeline : {};
+  const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
+  return { fields: { ...legacy, ...declared }, error: null };
+}
+
+function resolverConfig(loaded, projectRoot) {
+  if (!loaded || !isRecord(loaded.config)) return loaded && loaded.config;
+  if (loaded.valid === false) return loaded.config;
+  const raw = rawPipelineFields(projectRoot).fields;
+  const hasRoot = raw && Object.prototype.hasOwnProperty.call(raw, 'repos_root');
+  const hasRepos = raw && Object.prototype.hasOwnProperty.call(raw, 'repos');
+  if (!hasRoot && !hasRepos) return loaded.config;
+
+  const declaredRoot = hasRoot ? raw.repos_root : undefined;
+  const declaredRepos = hasRepos && isRecord(raw.repos) ? raw.repos : undefined;
+  return declaredRoot === undefined && declaredRepos === undefined
+    ? loaded.config
+    : {
+      ...loaded.config,
+      ...(declaredRoot === undefined ? {} : { repos_root: declaredRoot }),
+      ...(declaredRepos === undefined
+        ? {}
+        : { repos: { ...configuredRepos(loaded.config), ...declaredRepos } }),
+    };
+}
+
+function invalidRepositoryPolicy(config, projectRoot) {
+  if (!Object.prototype.hasOwnProperty.call(config, 'repos_root')) return false;
+  return !repositoryRootValue(config.repos_root, projectRoot).valid;
 }
 
 function configFile(projectRoot) {
@@ -444,8 +597,9 @@ function immediateDirectories(root) {
   let entries;
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    return [];
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return [];
+    throw error;
   }
   return entries
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
@@ -484,7 +638,7 @@ function discoverRepository(input) {
   }
 
   const { ticket = null, repo, config } = input;
-  if (invalidRepositoryPolicy(config)) {
+  if (invalidRepositoryPolicy(config, input.projectRoot)) {
     return trackOnly(
       ticket,
       repo,
@@ -494,6 +648,7 @@ function discoverRepository(input) {
   }
   const searchedRoots = discoveryRoots(config, input.projectRoot);
   const candidates = [];
+  const quarantined = [];
   const seen = new Set();
   for (const root of searchedRoots) {
     let canonicalRoot;
@@ -517,6 +672,11 @@ function discoverRepository(input) {
       if (!isDirectChild(canonicalRoot, candidatePath)) continue;
       if (seen.has(candidatePath)) continue;
       seen.add(candidatePath);
+      const quarantine = quarantineStatus(candidatePath, repo);
+      if (quarantine) {
+        quarantined.push({ path: candidatePath, reason: quarantine.reason });
+        continue;
+      }
       const repositoryRoot = gitRepositoryRoot(candidatePath);
       // `git -C` walks upward. A plain directory inside a larger repository is
       // not a checkout discovered at this scan depth.
@@ -540,6 +700,14 @@ function discoverRepository(input) {
       repo,
       `multiple checkouts for ${repo} were found in declared roots; choose one explicitly`,
       { resolution: 'ambiguous', discovery_status: 'ambiguous', candidates, searched_roots: searchedRoots },
+    );
+  }
+  if (quarantined.length) {
+    return trackOnly(
+      ticket,
+      repo,
+      quarantined.map((entry) => entry.reason).join('; '),
+      { resolution: 'quarantined', discovery_status: 'quarantined', candidates: quarantined, searched_roots: searchedRoots },
     );
   }
   return trackOnly(
@@ -589,6 +757,20 @@ function resolveConfiguredRepo(input) {
   const repositoryRoot = gitRepositoryRoot(checkoutPath);
   if (!repositoryRoot) {
     return trackOnly(ticket, repo, `configured checkout "${configuredPath}" is not a git repository`);
+  }
+  if (path.resolve(repositoryRoot) !== path.resolve(checkoutPath)) {
+    return trackOnly(
+      ticket,
+      repo,
+      `configured checkout "${configuredPath}" is inside another git repository; supply its repository root`,
+    );
+  }
+  const quarantine = quarantineStatus(repositoryRoot, repo);
+  if (quarantine) {
+    return trackOnly(ticket, repo, quarantine.reason, {
+      resolution: 'quarantined',
+      discovery_status: 'quarantined',
+    });
   }
   return resolved(ticket, repo, checkoutPath, repositoryRoot);
 }
@@ -672,6 +854,38 @@ function defaultCloneDestination(repo, projectRoot, config) {
   };
 }
 
+// Derive the transaction lock from the path that can be shared by separate
+// project checkouts. A project-root lock protects linked worktrees of one
+// project, but two projects may intentionally point at the same repos_root.
+// Validate before creating the lock directory so a rejected path causes no
+// filesystem write. The name hash lets unrelated destinations under one root
+// proceed independently while the exact destination still has one lock.
+function cloneLockContext(input, projectRoot) {
+  const destinationInfo = defaultCloneDestination(input.repo, projectRoot, input.config);
+  if (destinationInfo.error) return null;
+  let destination = destinationInfo.destination;
+  if (input.destination !== undefined && input.destination !== null) {
+    if (typeof input.destination !== 'string' || !path.isAbsolute(input.destination)) return null;
+    destination = path.resolve(input.destination);
+  }
+  const validation = validateRepositoryDestination(destination, {
+    projectRoot,
+    reposRoot: destinationInfo.root,
+    subRepos: input.config.sub_repos,
+    requireInsideRoot: true,
+    label: 'clone destination',
+  });
+  if (!validation.valid) return null;
+
+  // `validateRepositoryDestination` applies policyPath, which resolves every
+  // existing symlink component. Hash that canonical path so aliases such as a
+  // symlinked shared root cannot enter separate clone transactions.
+  const canonicalDestination = validation.path;
+  const lockRoot = path.dirname(canonicalDestination);
+  const key = crypto.createHash('sha256').update(canonicalDestination).digest('hex').slice(0, 32);
+  return { root: lockRoot, name: `repo-resolve-${key}` };
+}
+
 function cloneChoiceResult(input, initial, destinationInfo) {
   const { repo } = input;
   if (destinationInfo.error) {
@@ -712,7 +926,7 @@ function cloneChoiceResult(input, initial, destinationInfo) {
 
   // D7: an existing destination with the right origin is adopted. An existing
   // destination with anything else is refused; this branch never overwrites.
-  if (fs.existsSync(destination)) {
+  if (filesystemEntryExists(destination)) {
     const adopted = suppliedPathResult(input, destination);
     if (adopted.executable) {
       return persistExecutableResult(input, {
@@ -767,7 +981,6 @@ function cloneChoiceResult(input, initial, destinationInfo) {
     reason,
     decision: 'clone',
     operator_choice: 'clone',
-    choice_source: 'operator',
     destination,
     clone_root: root,
     clone_url: clone.url,
@@ -782,7 +995,41 @@ function cloneCommand(cloneUrl, destination) {
   // graph resolution and ticket-worktree both need origin/<base>, so adding a
   // depth, filter, or single-branch flag here would create a clone that lies
   // about the branch set it can execute against.
-  return ['clone', cloneUrl, destination];
+  return ['clone', '--origin', 'origin', cloneUrl, destination];
+}
+
+function localCloneSourcePath(value) {
+  if (path.isAbsolute(value)) return value;
+  if (!/^file:\/\//i.test(value)) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.hostname && parsed.hostname !== 'localhost') return null;
+    return fileURLToPath(parsed);
+  } catch (error) {
+    if (error instanceof TypeError || error.code === 'ERR_INVALID_FILE_URL_PATH') return null;
+    throw error;
+  }
+}
+
+function localCloneSourceInfo(value, repo) {
+  const sourcePath = localCloneSourcePath(value);
+  if (!sourcePath) {
+    return { valid: false, origin: null, reason: `local clone source for ${repo} is not a usable checkout path` };
+  }
+  const repositoryRoot = gitRepositoryRoot(sourcePath);
+  if (!repositoryRoot) {
+    return { valid: false, origin: null, reason: `local clone source for ${repo} is not a git repository` };
+  }
+  const rawOrigin = gitRemoteOrigin(repositoryRoot);
+  const protocol = originProtocol(rawOrigin);
+  if (!protocol) {
+    return { valid: false, origin: null, reason: `local clone source for ${repo} has no supported GitHub origin` };
+  }
+  const safe = safeCloneUrl(rawOrigin, protocol, repo);
+  if (!safe.valid) {
+    return { valid: false, origin: null, reason: `local clone source for ${repo} was refused: ${safe.reason}` };
+  }
+  return { valid: true, origin: safe.url, repository_root: repositoryRoot, reason: null };
 }
 
 function safeExecutionCloneUrl(value, repo, projectOrigin) {
@@ -792,17 +1039,24 @@ function safeExecutionCloneUrl(value, repo, projectOrigin) {
   const url = value.trim();
   const protocol = originProtocol(url);
   if (protocol) {
-    if (projectOrigin) {
-      const expectedProtocol = originProtocol(projectOrigin);
-      if (expectedProtocol && protocol !== expectedProtocol) {
-        return {
-          valid: false,
-          url: null,
-          protocol,
-          field: null,
-          reason: `clone URL for ${repo} does not use the project origin protocol (${expectedProtocol})`,
-        };
-      }
+    const expectedProtocol = originProtocol(projectOrigin);
+    if (!expectedProtocol) {
+      return {
+        valid: false,
+        url: null,
+        protocol,
+        field: null,
+        reason: `project origin for ${repo} is unavailable or unsupported; remote clone URL is refused`,
+      };
+    }
+    if (protocol !== expectedProtocol) {
+      return {
+        valid: false,
+        url: null,
+        protocol,
+        field: null,
+        reason: `clone URL for ${repo} does not use the project origin protocol (${expectedProtocol})`,
+      };
     }
     const safe = safeCloneUrl(url, protocol, repo);
     return safe.valid
@@ -814,10 +1068,11 @@ function safeExecutionCloneUrl(value, repo, projectOrigin) {
   if (url.startsWith('-') || url.includes('\0')) {
     return { valid: false, url: null, protocol: null, field: null, reason: `clone URL for ${repo} is malformed` };
   }
-  if (url.startsWith('file://')) {
+  if (/^file:\/\//i.test(url)) {
     try {
       const parsed = new URL(url);
-      if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+      if (parsed.hostname && parsed.hostname !== 'localhost'
+          || parsed.username || parsed.password || parsed.search || parsed.hash) {
         return { valid: false, url: null, protocol: null, field: null, reason: `clone URL for ${repo} contains credentials or query data and was refused` };
       }
     } catch {
@@ -826,7 +1081,17 @@ function safeExecutionCloneUrl(value, repo, projectOrigin) {
   } else if (!path.isAbsolute(url)) {
     return { valid: false, url: null, protocol: null, field: null, reason: `clone URL for ${repo} is not an absolute local path or supported remote URL` };
   }
-  return { valid: true, url, protocol: null, field: null, reason: null };
+  const local = localCloneSourceInfo(url, repo);
+  if (!local.valid) return { valid: false, url: null, protocol: null, field: null, reason: local.reason };
+  return {
+    valid: true,
+    url,
+    protocol: null,
+    field: null,
+    source_origin: local.origin,
+    source_repository_root: local.repository_root,
+    reason: null,
+  };
 }
 
 function cloneFailure(input, reason, fields = {}) {
@@ -856,6 +1121,19 @@ function cloneFailure(input, reason, fields = {}) {
   };
 }
 
+function commandFailure(result, label, timeoutMs) {
+  if (result && result.error && result.error.code === 'ETIMEDOUT') {
+    return `${label} timed out after ${timeoutMs}ms`;
+  }
+  if (result && result.signal) {
+    return `${label} was terminated by ${result.signal}`;
+  }
+  const exit = result && result.status !== undefined && result.status !== null
+    ? result.status
+    : 'unknown';
+  return `${label} failed (exit ${exit})`;
+}
+
 /**
  * Execute the explicit clone transaction prepared by the D3 choice.
  *
@@ -873,12 +1151,18 @@ function cloneRepository(input, runner = spawnSync) {
     invalidArgument('projectRoot must be a string when provided');
   }
   const projectRoot = path.resolve(input.projectRoot || process.cwd());
+  const lockContext = cloneLockContext({ ...input, projectRoot }, projectRoot);
+  if (!lockContext) return cloneRepositoryUnlocked({ ...input, projectRoot }, runner);
   // The destination check and the clone are one critical section. A second
   // resolver arriving after the first clone must see the completed checkout
-  // and adopt it, never race the first `git clone` or overwrite its path.
-  return withLock(lockDirFor(projectRoot), 'repo-resolve', () => (
+  // and adopt it, never race the first git clone or overwrite its path.
+  return withLock(lockDirFor(lockContext.root), lockContext.name, () => (
     cloneRepositoryUnlocked({ ...input, projectRoot }, runner)
-  ), { label: `repo-resolve clone ${input.repo}` });
+  ), {
+    label: `repo-resolve clone ${input.repo}`,
+    ttlMs: CLONE_LOCK_TTL_MS,
+    waitMs: CLONE_LOCK_WAIT_MS,
+  });
 }
 
 function cloneRepositoryUnlocked(input, runner = spawnSync) {
@@ -896,7 +1180,8 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
     return cloneFailure(input, `clone for ${input.repo} requires a named base ref to verify origin refs`);
   }
   const baseName = originRefName(input.base);
-  if (!baseName) {
+  const requiredBase = originBaseLabel(input.base);
+  if (!baseName || !requiredBase) {
     return cloneFailure(input, `clone for ${input.repo} received an invalid base ref ${JSON.stringify(input.base)}`,
       { required_base: String(input.base) });
   }
@@ -923,20 +1208,29 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
     return cloneFailure(input, destinationValidation.reason, {
       destination,
       clone_root: root,
-      required_base: `origin/${baseName}`,
+      required_base: requiredBase,
     });
   }
-  if (fs.existsSync(destination)) {
+  const existingQuarantine = quarantineStatus(destination, input.repo);
+  if (existingQuarantine) {
+    return cloneFailure(input, existingQuarantine.reason, {
+      resolution: 'clone-unverified',
+      destination,
+      clone_root: root,
+      required_base: requiredBase,
+    });
+  }
+  if (filesystemEntryExists(destination)) {
     const adopted = suppliedPathResult(input, destination);
     if (adopted.executable) {
-      const baseRef = resolveOriginRef(destination, baseName);
+      const baseRef = resolveOriginRef(destination, input.base);
       if (!baseRef) {
         return cloneFailure(input,
-          `clone destination "${destination}" matches ${input.repo} but required ref origin/${baseName} is missing`, {
+          `clone destination "${destination}" matches ${input.repo} but required ref ${requiredBase} is missing`, {
             resolution: 'clone-unverified',
             destination,
             clone_root: root,
-            required_base: `origin/${baseName}`,
+            required_base: requiredBase,
           });
       }
       return persistExecutableResult(input, {
@@ -948,7 +1242,7 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
         adopted: true,
         destination,
         clone_root: root,
-        required_base: `origin/${baseName}`,
+        required_base: baseRef,
         base_ref: baseRef,
         base_verified: true,
         park_reason: null,
@@ -958,7 +1252,7 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
       `clone destination "${destination}" already exists and cannot be adopted: ${adopted.reason}`, {
         destination,
         clone_root: root,
-        required_base: `origin/${baseName}`,
+        required_base: requiredBase,
       });
   }
 
@@ -972,42 +1266,140 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
     return cloneFailure(input, `clone for ${input.repo} was refused: ${clone.reason}`, {
       destination,
       clone_root: root,
-      required_base: `origin/${baseName}`,
+      required_base: requiredBase,
     });
   }
 
-  const result = runner('git', cloneCommand(clone.url, destination), {
+  if (clone.source_repository_root
+      && !resolveOriginRef(clone.source_repository_root, input.base)
+      && !resolveLocalBranchRef(clone.source_repository_root, input.base)) {
+    return cloneFailure(input,
+      `local clone source for ${input.repo} does not prove required ref ${requiredBase}`,
+      {
+        destination,
+        clone_root: root,
+        clone_url: clone.url,
+        clone_protocol: clone.protocol || null,
+        clone_source: clone.field || null,
+        required_base: requiredBase,
+      });
+  }
+
+  const cloneParent = path.dirname(destination);
+  try {
+    fs.mkdirSync(cloneParent, { recursive: true });
+    if (!fs.statSync(cloneParent).isDirectory()) {
+      throw new Error('parent is not a directory');
+    }
+  } catch (error) {
+    return cloneFailure(
+      input,
+      `clone parent "${cloneParent}" could not be created: ${error && error.message ? error.message : String(error)}`,
+      {
+        destination,
+        clone_root: root,
+        clone_url: clone.url,
+        clone_protocol: clone.protocol || null,
+        clone_source: clone.field || null,
+        required_base: requiredBase,
+      },
+    );
+  }
+
+  const commandOptions = {
     cwd: projectRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: CLONE_TIMEOUT_MS,
+    killSignal: 'SIGTERM',
     env: {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0',
     },
-  });
+  };
+  const result = runner('git', cloneCommand(clone.url, destination), commandOptions);
   if (!result || result.status !== 0) {
-    const exit = result && result.status !== undefined ? result.status : 'unknown';
-    return cloneFailure(input, `git clone for ${input.repo} failed (exit ${exit}); the checkout remains unverified`, {
+    const failure = commandFailure(result, `git clone for ${input.repo}`, CLONE_TIMEOUT_MS);
+    return cloneFailure(input, `${failure}; the checkout remains unverified${quarantineCloneDestination(
+      destination,
+      input.repo,
+      requiredBase,
+      runner,
+      commandOptions,
+    )}`, {
       destination,
       clone_root: root,
       clone_url: clone.url,
       clone_protocol: clone.protocol || null,
       clone_source: clone.field || null,
-      required_base: `origin/${baseName}`,
+      required_base: requiredBase,
     });
   }
 
-  const baseRef = resolveOriginRef(destination, baseName);
-  if (!baseRef) {
+  // A local/file source is validated by its own GitHub origin, but git clone
+  // records the filesystem path as the destination's origin. Restore the
+  // validated origin before checking the checkout so local test fixtures and
+  // any explicitly supported local source cannot bypass repository identity.
+  if (clone.source_origin) {
+    const originResult = runner('git', ['-C', destination, 'remote', 'set-url', 'origin', clone.source_origin], commandOptions);
+    if (!originResult || originResult.status !== 0) {
+      const exit = originResult && originResult.status !== undefined ? originResult.status : 'unknown';
+      return cloneFailure(input,
+        `clone for ${input.repo} completed at "${destination}" but its origin could not be set safely (exit ${exit})${quarantineCloneDestination(
+          destination,
+          input.repo,
+          requiredBase,
+          runner,
+          commandOptions,
+        )}`, {
+          resolution: 'clone-unverified',
+          destination,
+          clone_root: root,
+          clone_url: clone.url,
+          clone_protocol: clone.protocol || null,
+          clone_source: clone.field || null,
+          required_base: requiredBase,
+        });
+    }
+  }
+
+  const destinationOrigin = normalizeOrigin(gitRemoteOrigin(destination));
+  if (destinationOrigin !== input.repo.toLowerCase()) {
     return cloneFailure(input,
-      `clone for ${input.repo} completed at "${destination}" but required ref origin/${baseName} is missing`, {
+      `clone for ${input.repo} completed at "${destination}" but its origin does not resolve to ${input.repo}${quarantineCloneDestination(
+        destination,
+        input.repo,
+        requiredBase,
+        runner,
+        commandOptions,
+      )}`, {
         resolution: 'clone-unverified',
         destination,
         clone_root: root,
         clone_url: clone.url,
         clone_protocol: clone.protocol || null,
         clone_source: clone.field || null,
-        required_base: `origin/${baseName}`,
+        required_base: requiredBase,
+      });
+  }
+
+  const baseRef = resolveOriginRef(destination, input.base);
+  if (!baseRef) {
+    return cloneFailure(input,
+      `clone for ${input.repo} completed at "${destination}" but required ref ${requiredBase} is missing${quarantineCloneDestination(
+        destination,
+        input.repo,
+        requiredBase,
+        runner,
+        commandOptions,
+      )}`, {
+        resolution: 'clone-unverified',
+        destination,
+        clone_root: root,
+        clone_url: clone.url,
+        clone_protocol: clone.protocol || null,
+        clone_source: clone.field || null,
+        required_base: requiredBase,
       });
   }
 
@@ -1032,7 +1424,7 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
 }
 
 function choicePrompt(repo, destination) {
-  return `Repository ${repo} is not reachable. Choose one: clone to ${destination}, provide an existing checkout path, or skip for now (skip parks the ticket).`;
+  return `Repository ${repo} needs an explicit checkout decision. Choose one: clone to ${destination}, provide an existing checkout path, or skip for now (skip parks the ticket).`;
 }
 
 function parkedChoice(initial, choice, reason, extras = {}) {
@@ -1175,8 +1567,8 @@ module.exports = {
   chooseRepository,
   discoverRepo,
   discoverRepository,
-  normalizeOrigin,
   originProtocol,
+  normalizeOrigin,
   readGhRepositoryMetadata,
   resolveConfigured,
   resolveConfiguredRepo,
@@ -1185,6 +1577,7 @@ module.exports = {
   resolveRepo,
   resolveRepository,
   resolveSupplied,
+  safeCloneUrl,
   selectCloneUrl,
   persistResolvedRepository,
   suppliedPathResult,
@@ -1250,17 +1643,59 @@ function parseCli(argv) {
   return options;
 }
 
-async function readInteractiveChoice(repo, destination) {
+async function readInteractiveChoice(repo, destination, suppliedPath = null) {
   const readline = require('readline');
   process.stderr.write(`${choicePrompt(repo, destination)}\n`);
   const prompt = readline.createInterface({ input: process.stdin, output: process.stderr });
   const answer = await new Promise((resolve) => prompt.question('> ', resolve));
-  prompt.close();
+  let choice;
   try {
-    return normalizeChoice(answer);
+    choice = normalizeChoice(answer);
   } catch {
-    process.stderr.write('Unrecognized choice; treating it as unanswered and parking the ticket.\n');
-    return null;
+    prompt.close();
+    throw new Error('Unrecognized choice; choose clone, existing, or skip.');
+  }
+
+  if (choice !== 'existing') {
+    prompt.close();
+    return { choice, existingPath: null };
+  }
+
+  let existingPath = suppliedPath;
+  if (typeof existingPath !== 'string' || existingPath.trim().length === 0) {
+    existingPath = await new Promise((resolve) => prompt.question('Existing checkout path: ', resolve));
+  }
+  prompt.close();
+  return {
+    choice,
+    existingPath: typeof existingPath === 'string' && existingPath.trim().length > 0
+      ? existingPath.trim()
+      : null,
+  };
+}
+
+function readProjectPolicy(projectDir) {
+  try {
+    const file = path.join(projectDir, '.planning', 'config.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!isRecord(raw)) return {};
+    const pipeline = isRecord(raw.pipeline) ? raw.pipeline : {};
+    const declared = isRecord(raw.delivery_pipeline) ? raw.delivery_pipeline : {};
+    const policy = {};
+    if (Object.prototype.hasOwnProperty.call(declared, 'repos_root')) {
+      policy.repos_root = declared.repos_root;
+    } else if (Object.prototype.hasOwnProperty.call(pipeline, 'repos_root')) {
+      policy.repos_root = pipeline.repos_root;
+    }
+    if (Object.prototype.hasOwnProperty.call(raw, 'sub_repos')) {
+      policy.sub_repos = raw.sub_repos;
+    } else if (isRecord(raw.planning) && Object.prototype.hasOwnProperty.call(raw.planning, 'sub_repos')) {
+      policy.sub_repos = raw.planning.sub_repos;
+    }
+    return policy;
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return {};
+    throw error;
   }
 }
 
@@ -1270,7 +1705,8 @@ if (require.main === module) {
     const options = parseCli(process.argv.slice(2));
     const projectDir = path.resolve(options.projectDir);
     const loaded = loadConfig(projectDir);
-    const config = loaded.config;
+    const policy = readProjectPolicy(projectDir);
+    const config = { ...resolverConfig(loaded, projectDir), ...policy };
     const input = {
       ticket: options.ticket,
       repo: options.repo,
@@ -1294,21 +1730,30 @@ if (require.main === module) {
       });
     } else {
       let choice = options.choice;
+      let existingPath = options.existingPath;
       const destinationInfo = options.destination
         ? { destination: path.resolve(options.destination) }
         : defaultCloneDestination(options.repo, projectDir, config);
       if (choice === null && !options.nonInteractive && process.stdin.isTTY && process.stdout.isTTY) {
-        choice = await readInteractiveChoice(options.repo, destinationInfo.destination || '<validated destination>');
+        const selected = await readInteractiveChoice(
+          options.repo,
+          destinationInfo.destination || '<validated destination>',
+          existingPath,
+        );
+        choice = selected.choice;
+        existingPath = selected.existingPath;
       }
       result = chooseRepository({
         ...input,
         choice,
-        existingPath: options.existingPath,
+        existingPath,
         destination: options.destination,
       });
     }
     if (options.json) {
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    } else if (result.executable && result.resolution === 'adopted' && result.base_verified) {
+      process.stdout.write(`${result.repo}: adopted checkout ${result.repository_root}; verified ${result.base_ref}\n`);
     } else if (result.executable && result.base_verified) {
       process.stdout.write(`${result.repo}: cloned checkout ${result.repository_root}; verified ${result.base_ref}\n`);
     } else if (result.executable) {

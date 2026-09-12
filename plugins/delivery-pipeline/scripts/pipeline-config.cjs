@@ -670,7 +670,10 @@ function defaultRepositoryRoot(projectRoot = process.cwd()) {
 }
 
 function repositoryRootValue(value, projectRoot = process.cwd()) {
-  if (value === undefined) {
+  // GSD materializes string capability defaults into config.json. The declared
+  // empty string is therefore the persisted spelling of an omitted root, not a
+  // malformed operator policy; keep it on the documented project-parent path.
+  if (value === undefined || value === '') {
     return { valid: true, path: defaultRepositoryRoot(projectRoot), reason: null };
   }
   if (typeof value !== 'string' || value.length === 0 || !path.isAbsolute(value)) {
@@ -680,7 +683,44 @@ function repositoryRootValue(value, projectRoot = process.cwd()) {
       reason: 'pipeline.repos_root must be a non-empty absolute path',
     };
   }
-  return { valid: true, path: path.resolve(value), reason: null };
+  const resolved = path.resolve(value);
+  try {
+    if (!fs.statSync(resolved).isDirectory()) {
+      return {
+        valid: false,
+        path: null,
+        reason: 'pipeline.repos_root must name a directory or a path that does not exist yet',
+      };
+    }
+  } catch (error) {
+    if (error && error.code !== 'ENOENT') {
+      return {
+        valid: false,
+        path: null,
+        reason: `pipeline.repos_root cannot be inspected (${error.code || error.message})`,
+      };
+    }
+    // stat follows symlinks and reports a dangling link as ENOENT. lstat keeps
+    // that occupied destination fail-closed while still allowing a genuinely
+    // absent root, which a later clone may create.
+    try {
+      fs.lstatSync(resolved);
+      return {
+        valid: false,
+        path: null,
+        reason: 'pipeline.repos_root must name a directory or a path that does not exist yet',
+      };
+    } catch (entryError) {
+      if (entryError && entryError.code !== 'ENOENT') {
+        return {
+          valid: false,
+          path: null,
+          reason: `pipeline.repos_root cannot be inspected (${entryError.code || entryError.message})`,
+        };
+      }
+    }
+  }
+  return { valid: true, path: resolved, reason: null };
 }
 
 function isWithin(root, candidate) {
