@@ -74,6 +74,9 @@ test('an existing configured git checkout resolves to its repository root', () =
     configured_path: canonicalCheckout,
     repository_root: canonicalCheckout,
     reason: null,
+    discovery_status: 'not-run',
+    candidates: [],
+    searched_roots: [],
   });
 });
 
@@ -88,6 +91,7 @@ test('a missing entry is trackable-only and keeps the ticket and reason', () => 
   assert.strictEqual(result.ticket, 'T-30-03');
   assert.strictEqual(result.repo, 'acme/service');
   assert.match(result.reason, /pipeline\.repos/);
+  assert.strictEqual(result.discovery_status, 'not-run');
 });
 
 test('an invalid configured path is trackable-only without filesystem mutation', () => {
@@ -158,6 +162,190 @@ test('the CLI uses the same configured branch and returns machine-readable resol
   assert.strictEqual(output.repository_root, canonicalCheckout);
 });
 
+function repoAt(dir, origin) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'gitconfig'), '');
+  git(dir, ['init', '-q']);
+  git(dir, ['remote', 'add', 'origin', origin]);
+  return fs.realpathSync(dir);
+}
+
+test('the discovery CLI passes an explicitly configured repository root to the resolver', () => {
+  const configuredRoot = tempDir('shipyard-configured-repos-root-');
+  const projectDir = path.join(configuredRoot, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos_root: configuredRoot } }, null, 2) + '\n',
+  );
+  const checkout = repoAt(path.join(configuredRoot, 'checkout-found-only-under-configured-root'), 'git@github.com:acme/service.git');
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'discovered');
+  assert.strictEqual(output.repository_root, checkout);
+  assert.ok(output.searched_roots.includes(configuredRoot));
+});
+
+test('the CLI keeps an invalid explicit checkout from falling through to discovery', () => {
+  const parent = tempDir('shipyard-invalid-configured-repo-');
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos: { 'acme/service': 'relative-checkout' }, repos_root: parent } }, null, 2) + '\n',
+  );
+  repoAt(path.join(parent, 'valid-discovery'), 'git@github.com:acme/service.git');
+
+  const result = run(['resolve', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'track-only');
+  assert.strictEqual(output.executable, false);
+  assert.match(output.reason, /relative/);
+});
+
+test('a non-object delivery namespace does not suppress the legacy discovery root', () => {
+  const configuredRoot = tempDir('shipyard-legacy-repos-root-');
+  const projectDir = path.join(configuredRoot, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { repos_root: configuredRoot }, delivery_pipeline: null }, null, 2) + '\n',
+  );
+  const checkout = repoAt(path.join(configuredRoot, 'legacy-root-checkout'), 'git@github.com:acme/service.git');
+
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'discovered');
+  assert.strictEqual(output.repository_root, checkout);
+  assert.ok(output.searched_roots.includes(configuredRoot));
+});
+
+test('origin normalization accepts GitHub SSH, HTTPS, and scp-like forms', () => {
+  for (const origin of [
+    'git@github.com:Acme/Service.git',
+    'ssh://git@github.com/Acme/Service.git',
+    'https://github.com/Acme/Service.git/',
+    'https://token@github.com/Acme/Service',
+  ]) {
+    assert.strictEqual(mod.normalizeOrigin(origin), 'acme/service', origin);
+  }
+  assert.strictEqual(mod.normalizeOrigin('https://gitlab.com/acme/service.git'), null);
+  assert.strictEqual(mod.normalizeOrigin('acme/service'), null);
+});
+
+test('discovery matches origin rather than the directory basename and scans one level', () => {
+  const parent = tempDir();
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(projectDir);
+  const matching = repoAt(path.join(parent, 'unrelated-directory-name'), 'git@github.com:Acme/Service.git');
+  repoAt(path.join(parent, 'service'), 'git@github.com:someone-else/Service.git');
+  const nested = path.join(parent, 'nested-root', 'service');
+  repoAt(nested, 'git@github.com:acme/service.git');
+
+  const result = mod.discoverRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.resolution, 'discovered');
+  assert.strictEqual(result.discovery_status, 'unique');
+  assert.strictEqual(result.executable, true);
+  assert.strictEqual(result.repository_root, matching);
+  assert.deepStrictEqual(result.candidates.map((candidate) => candidate.path), [matching]);
+  assert.ok(result.searched_roots.includes(fs.realpathSync(parent)) || result.searched_roots.includes(parent));
+});
+
+test('zero discovery candidates are distinct from an ambiguous result', () => {
+  const parent = tempDir();
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(projectDir);
+  const none = mod.discoverRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(none.resolution, 'undiscovered');
+  assert.strictEqual(none.discovery_status, 'none');
+  assert.deepStrictEqual(none.candidates, []);
+  assert.strictEqual(none.executable, false);
+
+  repoAt(path.join(parent, 'first'), 'https://github.com/acme/service.git');
+  repoAt(path.join(parent, 'second'), 'git@github.com:acme/service.git');
+  const ambiguous = mod.discoverRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(ambiguous.resolution, 'ambiguous');
+  assert.strictEqual(ambiguous.discovery_status, 'ambiguous');
+  assert.strictEqual(ambiguous.executable, false);
+  assert.strictEqual(ambiguous.candidates.length, 2);
+  assert.match(ambiguous.reason, /multiple checkouts/);
+  assert.deepStrictEqual(
+    ambiguous.candidates.map((candidate) => candidate.origin),
+    ['acme/service', 'acme/service'],
+    'candidate output must expose only the normalized origin identity'
+  );
+});
+
+test('discovery ignores symlinks that escape the searched root and directories inside a parent repository', () => {
+  const parent = tempDir();
+  const root = path.join(parent, 'root');
+  const projectDir = path.join(root, 'project');
+  const outside = path.join(parent, 'outside');
+  fs.mkdirSync(root);
+  fs.mkdirSync(projectDir);
+  const escaped = repoAt(outside, 'git@github.com:acme/service.git');
+  fs.symlinkSync(escaped, path.join(root, 'linked-checkout'), 'dir');
+
+  const parentRepo = repoAt(path.join(parent, 'parent-repo'), 'git@github.com:acme/service.git');
+  fs.mkdirSync(path.join(parentRepo, 'nested-directory'));
+  const result = mod.discoverRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: root },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.resolution, 'undiscovered');
+  assert.deepStrictEqual(result.candidates, []);
+
+  const nestedResult = mod.discoverRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: path.dirname(parentRepo) },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(nestedResult.resolution, 'ambiguous');
+  assert.deepStrictEqual(
+    nestedResult.candidates.map((candidate) => candidate.path),
+    [escaped, parentRepo].sort(),
+    'only real direct child checkouts may be candidates'
+  );
+});
+
+test('resolveRepository keeps a valid configured checkout ahead of discovery', () => {
+  const parent = tempDir();
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(projectDir);
+  const configured = repoAt(path.join(parent, 'configured'), 'git@github.com:acme/service.git');
+  repoAt(path.join(parent, 'discovered'), 'git@github.com:acme/service.git');
+  const result = mod.resolveRepository({
+    ticket: 'T-30-03',
+    repo: 'acme/service',
+    config: { repos: { 'acme/service': configured }, repos_root: parent },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.resolution, 'configured');
+  assert.strictEqual(result.repository_root, configured);
+  assert.strictEqual(result.discovery_status, 'not-run');
+});
+
 test('the CLI rejects an unknown slug instead of treating it as a checkout request', () => {
   const result = run(['configured', 'not-a-slug', '--json']);
   assert.strictEqual(result.status, 2);
@@ -169,11 +357,21 @@ test('the CLI rejects option-like values for value-taking flags', () => {
     ['--ticket', '--json'],
     ['--project-dir', '--json'],
   ]) {
-    const result = run(['configured', 'acme/service', ...flags]);
+    const result = run(['resolve', 'acme/service', ...flags]);
     assert.strictEqual(result.status, 2, `${flags[0]} must not consume ${flags[1]} as its value`);
     assert.match(result.stderr, new RegExp(`${flags[0]} requires a value`));
     assert.match(result.stderr, /the flag "--json"/);
   }
+});
+
+test('human-readable discovery output names the selected resolution', () => {
+  const parent = tempDir();
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(projectDir);
+  repoAt(path.join(parent, 'checkout-with-an-unrelated-name'), 'git@github.com:acme/service.git');
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir]);
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.match(result.stdout, /acme\/service: discovered checkout /);
 });
 
 test('state-sync and deliver name the configured resolver caller', () => {
@@ -181,8 +379,11 @@ test('state-sync and deliver name the configured resolver caller', () => {
   const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
   assert.match(stateSync, /require\(path\.join\(__dirname, 'repo-resolve\.cjs'\)\)/);
   assert.match(stateSync, /resolveConfiguredRepo\(\{ repo, config: cfg \}\)/);
-  assert.match(deliver, /repo-resolve\.cjs configured <owner\/name>/);
-  assert.match(deliver, /resolution: "configured"/);
+  assert.match(deliver, /repo-resolve\.cjs resolve <owner\/name>/);
+  assert.match(deliver, /resolution: "discovered"/);
+  assert.match(deliver, /Carry an executable result's\n  `repository_root` in the ticket's per-repo execution context/);
+  assert.match(deliver, /do not re-read `pipeline\.repos`/);
+  assert.match(deliver, /resolved `repository_root` from the cold-start execution context/);
 });
 
 done();
