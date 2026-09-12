@@ -126,6 +126,36 @@ test('an invalid configured path is trackable-only without filesystem mutation',
   assert.match(nonRepo.reason, /not a git repository/);
 });
 
+test('an invalid repository root refuses discovery instead of falling back to the project parent', () => {
+  const projectDir = isolatedProject({});
+  const result = mod.discoverRepository({
+    ticket: 'T-30-05',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: null },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'invalid-policy');
+  assert.strictEqual(result.discovery_status, 'invalid');
+  assert.match(result.reason, /repos_root is invalid/);
+});
+
+test('a repository root that is an existing file refuses discovery', () => {
+  const projectDir = isolatedProject({});
+  const rootFile = path.join(path.dirname(projectDir), 'repos-root-file');
+  fs.writeFileSync(rootFile, 'occupied\n');
+  const result = mod.discoverRepository({
+    ticket: 'T-30-05',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: rootFile },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'invalid-policy');
+  assert.strictEqual(result.discovery_status, 'invalid');
+  assert.match(result.reason, /repos_root is invalid/);
+});
+
 test('a configured directory inside another git checkout is trackable-only', () => {
   const parent = gitRepo();
   const nested = path.join(parent, 'nested-directory');
@@ -229,6 +259,27 @@ test('a non-object delivery namespace does not suppress the legacy discovery roo
   assert.strictEqual(output.resolution, 'discovered');
   assert.strictEqual(output.repository_root, checkout);
   assert.ok(output.searched_roots.includes(configuredRoot));
+});
+
+test('an explicit declared null root keeps precedence over a legacy root', () => {
+  const parent = tempDir('shipyard-declared-null-repos-root-');
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'config.json'),
+    JSON.stringify({
+      pipeline: { repos_root: parent },
+      delivery_pipeline: { repos_root: null },
+    }, null, 2) + '\n',
+  );
+  repoAt(path.join(parent, 'legacy-discovery'), 'git@github.com:acme/service.git');
+
+  const result = run(['discover', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'invalid-policy');
+  assert.strictEqual(output.discovery_status, 'invalid');
+  assert.strictEqual(output.executable, false);
 });
 
 test('origin normalization accepts GitHub SSH, HTTPS, and scp-like forms', () => {
@@ -459,7 +510,7 @@ test('an existing path nested in the project is refused unless sub_repos declare
     existingPath: nested,
   });
   assert.strictEqual(rejected.executable, false);
-  assert.match(rejected.park_reason, /nested inside project/);
+  assert.match(rejected.park_reason, /nested inside this project/);
 
   const allowed = mod.chooseRepository({
     ticket: 'T-30-04',
