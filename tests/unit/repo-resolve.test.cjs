@@ -384,10 +384,10 @@ test('human-readable discovery output names the selected resolution', () => {
 
 test('the operator prompt names the repository and all three D3 choices', () => {
   const prompt = mod.choicePrompt('acme/service', '/work/service');
-  assert.match(prompt, /acme\/service/);
-  assert.match(prompt, /clone to \/work\/service/);
-  assert.match(prompt, /existing checkout path/);
-  assert.match(prompt, /skip/);
+  assert.strictEqual(
+    prompt,
+    'Repository acme/service needs an explicit checkout decision. Choose one: clone to /work/service, provide an existing checkout path, or skip for now (skip parks the ticket).',
+  );
 });
 
 test('an unanswered choice becomes a durable park payload without filesystem mutation', () => {

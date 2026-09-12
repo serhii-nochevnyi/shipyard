@@ -574,7 +574,7 @@ function cloneChoiceResult(input, initial, destinationInfo) {
 }
 
 function choicePrompt(repo, destination) {
-  return `Repository ${repo} is not reachable. Choose one: clone to ${destination}, provide an existing checkout path, or skip for now (skip parks the ticket).`;
+  return `Repository ${repo} needs an explicit checkout decision. Choose one: clone to ${destination}, provide an existing checkout path, or skip for now (skip parks the ticket).`;
 }
 
 function parkedChoice(initial, choice, reason, extras = {}) {
@@ -782,9 +782,8 @@ async function readInteractiveChoice(repo, destination, suppliedPath = null) {
   try {
     choice = normalizeChoice(answer);
   } catch {
-    process.stderr.write('Unrecognized choice; treating it as unanswered and parking the ticket.\n');
     prompt.close();
-    return { choice: null, existingPath: null };
+    throw new Error('Unrecognized choice; choose clone, existing, or skip.');
   }
 
   if (choice !== 'existing') {
