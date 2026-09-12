@@ -727,6 +727,24 @@ Consequences you must honour:
   value for the worktree, git and gh calls below; do not re-read `pipeline.repos`
   after resolution, because a unique discovered checkout is executable before
   the later write-back step.
+- **An unresolved checkout requires an explicit D3 choice.** For an
+  `undiscovered` or `ambiguous` result, ask one question naming the repository
+  slug and present exactly: clone to the validated default destination, provide
+  an existing checkout path, or skip for now. Apply the answer with:
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs choose <owner/name> \
+  --ticket <T-id> --project-dir <project-root> --choice <clone|existing|skip> \
+  [--path <existing-checkout>] --json`. The `existing` choice is executable only
+  after the resolver confirms the path is a repository root with the requested
+  origin and an allowed nesting layout. A `clone` choice records a validated
+  destination and intent; it does not clone in this resolver step.
+- **Silence selects skip.** In a text-mode or unattended run, omit the choice
+  and pass `--non-interactive`; the result is `resolution: "track-only"`,
+  `decision: "skip"`, and a non-empty `park_reason`. Immediately make that
+  reason durable from the project directory with:
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/escalation-record.cjs mark <T-id> \
+  <park_reason> --graph <project-root>/.planning/graph`. Do not carry this only
+  through `state-sync --parked`: the escalation record is the durable park and
+  the front must continue with the rest of the graph.
 - **`.planning/` stays in the project repo only.** State, plans and the log never
   get copied into the sibling checkout.
 - A plan whose `files_modified` uses `../other-repo/...` paths is a broken plan,
