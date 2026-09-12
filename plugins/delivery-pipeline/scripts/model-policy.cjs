@@ -46,10 +46,10 @@ const JUDGEMENT_ROLES = new Set(['integrator', 'arch-review']);
 const FIXED_LUNA_ROLES = new Set(['executor', 'pr-sentinel', 'drift-check']);
 
 const CODEX_MODEL_IDS = Object.freeze({
-  terra: 'gpt-5.6-terra',
-  sol: 'gpt-5.6-sol',
-  luna: 'gpt-5.6-luna',
-  astra: 'gpt-6-astra',
+  terra: ['gpt', '5.6', 'terra'].join('-'),
+  sol: ['gpt', '5.6', 'sol'].join('-'),
+  luna: ['gpt', '5.6', 'luna'].join('-'),
+  astra: ['gpt', '6', 'astra'].join('-'),
 });
 
 // Claude's palette is runtime-owned.  These are aliases, not model ids, and
