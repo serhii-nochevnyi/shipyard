@@ -306,6 +306,7 @@ test('clone command is full and proves the requested origin base ref', () => {
   git(source, ['add', 'README.md']);
   git(source, ['commit', '-qm', 'seed']);
   git(source, ['branch', 'epic/base']);
+  git(source, ['update-ref', 'refs/remotes/origin/epic/base', git(source, ['rev-parse', 'refs/heads/epic/base'])]);
 
   const destination = path.join(parent, 'service');
   const calls = [];
@@ -347,6 +348,7 @@ test('clone parks a checkout when the required origin base is missing', () => {
   fs.writeFileSync(path.join(source, 'README.md'), 'seed\n');
   git(source, ['add', 'README.md']);
   git(source, ['commit', '-qm', 'seed']);
+  git(source, ['update-ref', 'refs/remotes/origin/epic/does-not-exist', git(source, ['rev-parse', 'HEAD'])]);
   const destination = path.join(parent, 'missing-base-service');
 
   const result = mod.cloneRepository({
@@ -357,6 +359,17 @@ test('clone parks a checkout when the required origin base is missing', () => {
     destination,
     base: 'epic/does-not-exist',
     cloneUrl: source,
+  }, (command, args, options) => {
+    const result = spawnSync(command, args, options);
+    if (command === 'git' && args[0] === 'clone') {
+      const removed = spawnSync(
+        'git',
+        ['-C', destination, 'update-ref', '-d', 'refs/remotes/origin/epic/does-not-exist'],
+        { encoding: 'utf8' },
+      );
+      assert.strictEqual(removed.status, 0, removed.stderr);
+    }
+    return result;
   });
 
   assert.strictEqual(result.executable, false);
@@ -364,6 +377,57 @@ test('clone parks a checkout when the required origin base is missing', () => {
   assert.strictEqual(result.base_verified, false);
   assert.match(result.park_reason, /origin\/epic\/does-not-exist/);
   assert.strictEqual(fs.existsSync(destination), true, 'verification must not hide the clone failure by deleting it');
+  const marker = JSON.parse(fs.readFileSync(path.join(destination, '.shipyard-clone-unverified.json'), 'utf8'));
+  assert.deepStrictEqual(marker, {
+    version: 1,
+    kind: 'shipyard-clone-unverified',
+    repo: 'acme/service',
+    required_base: 'origin/epic/does-not-exist',
+  });
+});
+
+test('discovery refuses a checkout quarantined after an unverified clone', () => {
+  const parent = tempDir();
+  const projectDir = path.join(parent, 'project');
+  fs.mkdirSync(projectDir);
+  const checkout = repoAt(path.join(parent, 'service'), 'git@github.com:acme/service.git');
+  fs.writeFileSync(
+    path.join(checkout, '.shipyard-clone-unverified.json'),
+    JSON.stringify({
+      version: 1,
+      kind: 'shipyard-clone-unverified',
+      repo: 'acme/service',
+      required_base: 'origin/epic/missing',
+    }, null, 2) + '\n',
+  );
+
+  const result = mod.discoverRepository({
+    ticket: 'T-30-07',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'quarantined');
+  assert.match(result.reason, /quarantined.*origin\/epic\/missing/);
+});
+
+test('explicit remote clone URLs require a classifiable project origin', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const result = mod.cloneRepository({
+    ticket: 'T-30-07',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination: path.join(parent, 'service'),
+    base: 'epic/base',
+    projectOrigin: 'http://github.com/serhii-nochevnyi/shipyard.git',
+    cloneUrl: 'https://github.com/acme/service.git',
+  });
+  assert.strictEqual(result.executable, false);
+  assert.match(result.reason, /project origin.*unsupported/);
+  assert.strictEqual(fs.existsSync(path.join(parent, 'service')), false);
 });
 
 test('discovery matches origin rather than the directory basename and scans one level', () => {

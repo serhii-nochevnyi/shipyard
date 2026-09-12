@@ -85,6 +85,8 @@ git -C "$source_repo" add README.md
 git -C "$source_repo" commit -qm seed
 git -C "$source_repo" branch -M main
 git -C "$source_repo" branch epic/base
+base_sha=$(git -C "$source_repo" rev-parse refs/heads/epic/base)
+git -C "$source_repo" update-ref refs/remotes/origin/epic/base "$base_sha"
 
 node - "$resolver" "$source_repo" "$clone_project" "$clone_root" "$clone_destination" <<'NODE'
 const fs = require('fs');
@@ -117,7 +119,7 @@ if [[ "$(git -C "$clone_destination" remote get-url origin)" != "git@github.com:
 fi
 
 worktree_root="$fixture/ticket-worktrees"
-worktree_path=$(cd "$clone_destination" && SHIPYARD_WORKTREE_ROOT="$worktree_root" bash \
+worktree_path=$(cd "$clone_destination" && GIT_SSH_COMMAND=false SHIPYARD_WORKTREE_ROOT="$worktree_root" bash \
   "$repo_root/plugins/delivery-pipeline/scripts/ticket-worktree.sh" \
   create T-30-07 ticket/T-30-07 epic/base 2>/dev/null)
 if [[ ! -d "$worktree_path" ]]; then

@@ -23,6 +23,7 @@ const { originRefName, resolveOriginRef } = require('./graph-dir.cjs');
 
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const OPERATOR_CHOICES = ['clone', 'existing', 'skip'];
+const QUARANTINE_FILE = '.shipyard-clone-unverified.json';
 
 function invalidArgument(message) {
   const error = new TypeError(`repo-resolve: ${message}`);
@@ -271,6 +272,54 @@ function filesystemEntryExists(candidate) {
   }
 }
 
+function quarantineMarkerPath(candidate) {
+  return path.join(candidate, QUARANTINE_FILE);
+}
+
+function quarantineStatus(candidate, repo) {
+  let marker;
+  try {
+    marker = JSON.parse(fs.readFileSync(quarantineMarkerPath(candidate), 'utf8'));
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return null;
+    return {
+      reason: `checkout "${candidate}" has an unreadable Shipyard quarantine marker; it is not executable`,
+    };
+  }
+  if (!isRecord(marker)
+      || marker.kind !== 'shipyard-clone-unverified'
+      || typeof marker.repo !== 'string'
+      || marker.repo.toLowerCase() !== repo.toLowerCase()
+      || typeof marker.required_base !== 'string'
+      || marker.required_base.length === 0) {
+    return {
+      reason: `checkout "${candidate}" has an invalid Shipyard quarantine marker; it is not executable`,
+    };
+  }
+  return {
+    reason: `checkout "${candidate}" is quarantined after an unverified clone; required ref ${marker.required_base} is not proven`,
+  };
+}
+
+function writeQuarantineMarker(candidate, repo, requiredBase) {
+  const marker = {
+    version: 1,
+    kind: 'shipyard-clone-unverified',
+    repo,
+    required_base: requiredBase,
+  };
+  try {
+    fs.writeFileSync(
+      quarantineMarkerPath(candidate),
+      `${JSON.stringify(marker, null, 2)}\n`,
+      { encoding: 'utf8', flag: 'wx' },
+    );
+    return null;
+  } catch (error) {
+    return error && error.message ? error.message : String(error);
+  }
+}
+
 /**
  * Normalize the GitHub URL forms a local git checkout commonly stores.
  *
@@ -412,6 +461,7 @@ function discoverRepository(input) {
   }
   const searchedRoots = discoveryRoots(config, input.projectRoot);
   const candidates = [];
+  const quarantined = [];
   const seen = new Set();
   for (const root of searchedRoots) {
     let canonicalRoot;
@@ -435,6 +485,11 @@ function discoverRepository(input) {
       if (!isDirectChild(canonicalRoot, candidatePath)) continue;
       if (seen.has(candidatePath)) continue;
       seen.add(candidatePath);
+      const quarantine = quarantineStatus(candidatePath, repo);
+      if (quarantine) {
+        quarantined.push({ path: candidatePath, reason: quarantine.reason });
+        continue;
+      }
       const repositoryRoot = gitRepositoryRoot(candidatePath);
       // `git -C` walks upward. A plain directory inside a larger repository is
       // not a checkout discovered at this scan depth.
@@ -458,6 +513,14 @@ function discoverRepository(input) {
       repo,
       `multiple checkouts for ${repo} were found in declared roots; choose one explicitly`,
       { resolution: 'ambiguous', discovery_status: 'ambiguous', candidates, searched_roots: searchedRoots },
+    );
+  }
+  if (quarantined.length) {
+    return trackOnly(
+      ticket,
+      repo,
+      quarantined.map((entry) => entry.reason).join('; '),
+      { resolution: 'quarantined', discovery_status: 'quarantined', candidates: quarantined, searched_roots: searchedRoots },
     );
   }
   return trackOnly(
@@ -514,6 +577,13 @@ function resolveConfiguredRepo(input) {
       repo,
       `configured checkout "${configuredPath}" is inside another git repository; supply its repository root`,
     );
+  }
+  const quarantine = quarantineStatus(repositoryRoot, repo);
+  if (quarantine) {
+    return trackOnly(ticket, repo, quarantine.reason, {
+      resolution: 'quarantined',
+      discovery_status: 'quarantined',
+    });
   }
   return resolved(ticket, repo, checkoutPath, repositoryRoot);
 }
@@ -740,7 +810,7 @@ function localCloneSourceInfo(value, repo) {
   if (!safe.valid) {
     return { valid: false, origin: null, reason: `local clone source for ${repo} was refused: ${safe.reason}` };
   }
-  return { valid: true, origin: safe.url, reason: null };
+  return { valid: true, origin: safe.url, repository_root: repositoryRoot, reason: null };
 }
 
 function safeExecutionCloneUrl(value, repo, projectOrigin) {
@@ -750,17 +820,24 @@ function safeExecutionCloneUrl(value, repo, projectOrigin) {
   const url = value.trim();
   const protocol = originProtocol(url);
   if (protocol) {
-    if (projectOrigin) {
-      const expectedProtocol = originProtocol(projectOrigin);
-      if (expectedProtocol && protocol !== expectedProtocol) {
-        return {
-          valid: false,
-          url: null,
-          protocol,
-          field: null,
-          reason: `clone URL for ${repo} does not use the project origin protocol (${expectedProtocol})`,
-        };
-      }
+    const expectedProtocol = originProtocol(projectOrigin);
+    if (!expectedProtocol) {
+      return {
+        valid: false,
+        url: null,
+        protocol,
+        field: null,
+        reason: `project origin for ${repo} is unavailable or unsupported; remote clone URL is refused`,
+      };
+    }
+    if (protocol !== expectedProtocol) {
+      return {
+        valid: false,
+        url: null,
+        protocol,
+        field: null,
+        reason: `clone URL for ${repo} does not use the project origin protocol (${expectedProtocol})`,
+      };
     }
     const safe = safeCloneUrl(url, protocol, repo);
     return safe.valid
@@ -793,6 +870,7 @@ function safeExecutionCloneUrl(value, repo, projectOrigin) {
     protocol: null,
     field: null,
     source_origin: local.origin,
+    source_repository_root: local.repository_root,
     reason: null,
   };
 }
@@ -874,7 +952,16 @@ function cloneRepository(input, runner = spawnSync) {
       required_base: `origin/${baseName}`,
     });
   }
-  if (fs.existsSync(destination)) {
+  const existingQuarantine = quarantineStatus(destination, input.repo);
+  if (existingQuarantine) {
+    return cloneFailure(input, existingQuarantine.reason, {
+      resolution: 'clone-unverified',
+      destination,
+      clone_root: root,
+      required_base: `origin/${baseName}`,
+    });
+  }
+  if (filesystemEntryExists(destination)) {
     return cloneFailure(input,
       `clone destination "${destination}" already exists; use the existing-checkout adoption path`, {
         destination,
@@ -895,6 +982,19 @@ function cloneRepository(input, runner = spawnSync) {
       clone_root: root,
       required_base: `origin/${baseName}`,
     });
+  }
+
+  if (clone.source_repository_root && !resolveOriginRef(clone.source_repository_root, baseName)) {
+    return cloneFailure(input,
+      `local clone source for ${input.repo} does not prove required ref origin/${baseName}`,
+      {
+        destination,
+        clone_root: root,
+        clone_url: clone.url,
+        clone_protocol: clone.protocol || null,
+        clone_source: clone.field || null,
+        required_base: `origin/${baseName}`,
+      });
   }
 
   const commandOptions = {
@@ -956,8 +1056,13 @@ function cloneRepository(input, runner = spawnSync) {
 
   const baseRef = resolveOriginRef(destination, baseName);
   if (!baseRef) {
+    const requiredBase = `origin/${baseName}`;
+    const markerError = writeQuarantineMarker(destination, input.repo, requiredBase);
+    const quarantineNote = markerError
+      ? `; quarantine marker could not be written: ${markerError}`
+      : `; checkout quarantined at ${QUARANTINE_FILE}`;
     return cloneFailure(input,
-      `clone for ${input.repo} completed at "${destination}" but required ref origin/${baseName} is missing`, {
+      `clone for ${input.repo} completed at "${destination}" but required ref ${requiredBase} is missing${quarantineNote}`, {
         resolution: 'clone-unverified',
         destination,
         clone_root: root,
