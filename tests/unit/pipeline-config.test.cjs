@@ -954,6 +954,15 @@ test('repos_root defaults to the absolute project parent', () => {
   assert.deepStrictEqual(warnings, []);
 });
 
+test('repos_root is declared in the capability so GSD tooling can set it', () => {
+  const cap = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'capabilities', 'delivery-pipeline', 'capability.json'), 'utf8'
+  ));
+  const declared = (cap.config || {})['delivery_pipeline.repos_root'];
+  assert.ok(declared, 'capability.json must declare delivery_pipeline.repos_root');
+  assert.strictEqual(declared.type, 'string');
+});
+
 test('an absolute repos_root is accepted and the declared namespace wins', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-root-'));
   fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
@@ -967,8 +976,14 @@ test('an absolute repos_root is accepted and the declared namespace wins', () =>
   assert.deepStrictEqual(warnings, []);
 });
 
+test('the materialized empty repos_root default uses the project parent', () => {
+  const { dir, config, warnings } = withRawOptions({ pipeline: { repos_root: '' } }, {});
+  assert.strictEqual(config.repos_root, defaultRepositoryRoot(dir));
+  assert.deepStrictEqual(warnings, []);
+});
+
 test('relative and malformed repos_root values are refused without creating a directory', () => {
-  for (const value of ['checkouts', '', null, {}, true]) {
+  for (const value of ['checkouts', null, {}, true]) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-root-'));
     fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ pipeline: { repos_root: value } }));
@@ -978,6 +993,18 @@ test('relative and malformed repos_root values are refused without creating a di
     assert.ok(warnings.some((warning) => /repos_root.*absolute/.test(warning)), warnings.join('; '));
     assert.deepStrictEqual(fs.readdirSync(dir).sort(), before, 'invalid policy must not create the root');
   }
+});
+
+test('an existing file is not accepted as a future repository root', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-repos-root-'));
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  const file = path.join(dir, 'root-file');
+  fs.writeFileSync(file, 'occupied\n');
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ pipeline: { repos_root: file } }));
+
+  const { config, warnings } = loadConfig(dir);
+  assert.strictEqual(config.repos_root, null);
+  assert.ok(warnings.some((warning) => /repos_root.*directory/.test(warning)), warnings.join('; '));
 });
 
 test('the shared destination helper gives the same nesting verdict to callers', () => {

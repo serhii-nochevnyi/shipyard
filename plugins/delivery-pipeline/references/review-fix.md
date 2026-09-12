@@ -13,6 +13,14 @@ reason to wait: reviewers answer in a minute where CI takes tens of them, and a
 fix pushes anyway, restarting the run. Servicing threads first means the run you
 eventually wait for is the one that validates the final code.
 
+## Verification contract
+
+Every checkable claim about the codebase, a test, delivery state, or a completed
+action must name the exact command that checked it and the relevant path,
+output, or exit status. If a claim cannot be checked by a command, label it as
+an assumption or unknown and state the next check. A claim without
+command-backed evidence is not verification.
+
 ## Input (provided by the orchestrator)
 - Ticket contract (plan file) with Scope / Out of scope.
 - Worktree path and branch.

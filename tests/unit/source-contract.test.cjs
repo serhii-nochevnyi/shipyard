@@ -423,6 +423,97 @@ test('`transitionName` appears in no script and no prompt we ship', () => {
   );
 });
 
+const VERIFICATION_RULE = 'Every checkable claim about the codebase, a test, delivery state, or a completed action must name the exact command that checked it and the relevant path, output, or exit status';
+const VERIFICATION_EVIDENCE = 'A claim without command-backed evidence is not verification';
+const ROLE_REFERENCES = [
+  'plugins/delivery-pipeline/references/arch-review.md',
+  'plugins/delivery-pipeline/references/ci-fix.md',
+  'plugins/delivery-pipeline/references/drift-check.md',
+  'plugins/delivery-pipeline/references/integrator.md',
+  'plugins/delivery-pipeline/references/inv-research.md',
+  'plugins/delivery-pipeline/references/pr-sentinel.md',
+  'plugins/delivery-pipeline/references/review-fix.md',
+];
+const PROMPT_BUILDERS = [
+  'plugins/delivery-pipeline/workflows/executors.mjs',
+  'plugins/delivery-pipeline/workflows/drift-gate.mjs',
+  'plugins/delivery-pipeline/workflows/fix-round.mjs',
+];
+const normalized = (src) => src.replace(/\s+/g, ' ').toLowerCase();
+
+test('command-backed verification rule reaches every delivery boundary', () => {
+  const canonical = readRepo('plugins/delivery-pipeline/skills/delivery-rules/SKILL.md');
+  assert.ok(canonical.includes('## Rule zero: make claims executable'), 'the canonical delivery rules must define rule zero');
+  assert.ok(normalized(canonical).includes(normalized(VERIFICATION_RULE)), 'the canonical delivery rules must state the exact-command requirement');
+  assert.ok(normalized(canonical).includes(normalized(VERIFICATION_EVIDENCE)), 'the canonical delivery rules must reject claims without evidence');
+
+  for (const rel of ROLE_REFERENCES) {
+    const src = readRepo(rel);
+    assert.ok(src.includes('## Verification contract'), `${rel} must carry the verification contract for direct role dispatch`);
+    assert.ok(normalized(src).includes(normalized(VERIFICATION_RULE)), `${rel} must require the exact command for every checkable claim`);
+    assert.ok(normalized(src).includes(normalized(VERIFICATION_EVIDENCE)), `${rel} must reject claims without command-backed evidence`);
+  }
+
+  for (const rel of PROMPT_BUILDERS) {
+    const src = readRepo(rel);
+    assert.ok(src.includes('agent('), `${rel} must retain its agent dispatch caller`);
+    assert.ok(src.includes('Rule zero:'), `${rel} must repeat rule zero because its prompt bypasses the role document`);
+    assert.ok(normalized(src).includes(normalized(VERIFICATION_RULE)), `${rel} must pass the exact-command requirement into its prompt`);
+    assert.ok(normalized(src).includes(normalized(VERIFICATION_EVIDENCE)), `${rel} must pass the evidence requirement into its prompt`);
+  }
+
+  const arch = readRepo('plugins/delivery-pipeline/references/arch-review.md');
+  assert.ok(/unverified checkable claim as a `violation`/.test(arch), 'arch-review must turn an unverified claim into a violation');
+  assert.ok(/missing command:/.test(arch), 'arch-review violations must name the missing command');
+
+  const drift = readRepo('plugins/delivery-pipeline/workflows/drift-gate.mjs');
+  assert.ok(/required: \['id', 'verdict', 'moved', 'reuse_candidates', 'evidence'\]/.test(drift), 'drift-gate must require its evidence channel');
+  assert.ok(/evidence:\s*\{/.test(drift), 'drift-gate must expose evidence in the result schema');
+  assert.ok(/recorded:\s*\{/.test(drift), 'drift-gate must accept the recorded result field from drift-check');
+});
+
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const workflowArgs = {
+  executors: {
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01' }],
+  },
+  'drift-gate': {
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30' }],
+    driftRefPath: '/p/drift-check.md',
+  },
+  'fix-round': {
+    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false }],
+    ciFixRefPath: '/p/ci-fix.md',
+    reviewFixRefPath: '/p/review-fix.md',
+    reinitScript: '/p/reviewers.cjs',
+  },
+};
+
+async function renderedPrompt(name) {
+  const source = readRepo(`plugins/delivery-pipeline/workflows/${name}.mjs`)
+    .replace(/^export const meta/m, 'const meta');
+  const calls = [];
+  const agent = async (prompt) => {
+    calls.push(prompt);
+    if (name === 'executors') return { id: 'T-30-01', status: 'blocked', summary: 'test' };
+    if (name === 'drift-gate') return { id: 'T-30-01', verdict: 'fresh', moved: [], reuse_candidates: [], evidence: ['git status --short — /repo — exit 0'] };
+    return { id: 'T-30-01', pr: 109, pushed: false, status: 'no-op', notes: '', hypothesis: 'none' };
+  };
+  const parallel = async (thunks) => Promise.all(thunks.map((thunk) => thunk()));
+  await new AsyncFunction('agent', 'parallel', 'phase', 'log', 'args', source)(agent, parallel, () => {}, () => {}, workflowArgs[name]);
+  assert.strictEqual(calls.length, 1, `${name} must dispatch one prompt in the rendered-contract fixture`);
+  return calls[0];
+}
+
+test('the runtime-rendered prompt carries command-backed evidence requirements', async () => {
+  for (const name of PROMPT_BUILDERS) {
+    const workflow = name.split('/').pop().replace(/\.mjs$/, '');
+    const prompt = await renderedPrompt(workflow);
+    assert.ok(normalized(prompt).includes(normalized(VERIFICATION_RULE)), `${workflow} runtime prompt must carry the complete command/evidence rule`);
+    assert.ok(normalized(prompt).includes(normalized(VERIFICATION_EVIDENCE)), `${workflow} runtime prompt must carry the no-evidence prohibition`);
+  }
+});
+
 test('the comment exemption is per file type — and markdown gets none', () => {
   const dir = fixture('code.cjs', [
     "// transitionName is what this file must never call — naming it is fine",
