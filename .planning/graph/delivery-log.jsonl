@@ -965,3 +965,4 @@
 {"ts":"2026-09-12T20:26:45.234Z","event":"status_change","ticket":"T-30-09","from":"pr-open","to":"merged","pr":118}
 {"ts":"2026-09-12T20:26:45.234Z","event":"status_change","ticket":"T-36-01","from":"pending","to":"pr-open","pr":125}
 {"ts":"2026-09-12T20:28:27.634Z","event":"dispatch","ticket":"T-36-01","role":"pr-sentinel","pr":125,"agent_id":"01a0974e-716a-7413-a275-221aa8ce92ad","dispatch_id":"dispatch-mtyu7yid-ac492dc7-1657-422e-8a47-a94110b76675","by":"dispatch-record"}
+{"ts":"2026-09-12T20:29:20.616Z","event":"base_merge","ticket":"T-36-01","pr":125,"base":"epic/36-enforce-the-runtime-model-ladder","head":"a53d4413c56b69cd0e851fc01810377d49e0e367"}
