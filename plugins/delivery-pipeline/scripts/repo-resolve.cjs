@@ -36,8 +36,19 @@ const QUARANTINE_FILE = '.shipyard-clone-unverified.json';
 // longest normal clone. A contender waits through that same bounded window and
 // then re-enters the destination check, where it adopts a completed checkout.
 const CLONE_TIMEOUT_MS = 15 * 60 * 1000;
-const CLONE_LOCK_TTL_MS = CLONE_TIMEOUT_MS + 60 * 1000;
-const CLONE_LOCK_WAIT_MS = CLONE_TIMEOUT_MS + 60 * 1000;
+const RESOLUTION_TIMEOUT_MS = 30 * 1000;
+const CLONE_LOCK_TTL_MS = CLONE_TIMEOUT_MS + (RESOLUTION_TIMEOUT_MS * 4) + 60 * 1000;
+const CLONE_LOCK_WAIT_MS = CLONE_LOCK_TTL_MS;
+
+function boundedResolutionOptions(env = {}) {
+  return {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: RESOLUTION_TIMEOUT_MS,
+    killSignal: 'SIGTERM',
+    env: { ...process.env, ...env },
+  };
+}
 
 function invalidArgument(message) {
   const error = new TypeError(`repo-resolve: ${message}`);
@@ -94,14 +105,7 @@ function gitRepositoryRoot(candidate) {
   const result = spawnSync(
     'git',
     ['-C', candidate, 'rev-parse', '--show-toplevel'],
-    {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-      },
-    },
+    boundedResolutionOptions({ GIT_TERMINAL_PROMPT: '0' }),
   );
   if (result.status !== 0) return null;
   const value = String(result.stdout || '').trim();
@@ -112,14 +116,7 @@ function gitRemoteOrigin(candidate) {
   const result = spawnSync(
     'git',
     ['-C', candidate, 'remote', 'get-url', 'origin'],
-    {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-      },
-    },
+    boundedResolutionOptions({ GIT_TERMINAL_PROMPT: '0' }),
   );
   if (result.status !== 0) return null;
   const value = String(result.stdout || '').trim();
@@ -214,15 +211,7 @@ function readGhRepositoryMetadata(repo, projectRoot, runner = spawnSync) {
   const result = runner(
     'gh',
     ['repo', 'view', repo, '--json', 'sshUrl,url'],
-    {
-      cwd: projectRoot || process.cwd(),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GH_PROMPT_DISABLED: '1',
-      },
-    },
+    { cwd: projectRoot || process.cwd(), ...boundedResolutionOptions({ GH_PROMPT_DISABLED: '1' }) },
   );
   if (!result || result.status !== 0) {
     return {
@@ -740,9 +729,12 @@ function cloneLockContext(input, projectRoot) {
   });
   if (!validation.valid) return null;
 
-  let lockRoot = path.dirname(destination);
-  try { lockRoot = fs.realpathSync(lockRoot); } catch { /* a new root is resolved by path */ }
-  const key = crypto.createHash('sha256').update(destination).digest('hex').slice(0, 32);
+  // `validateRepositoryDestination` applies policyPath, which resolves every
+  // existing symlink component. Hash that canonical path so aliases such as a
+  // symlinked shared root cannot enter separate clone transactions.
+  const canonicalDestination = validation.path;
+  const lockRoot = path.dirname(canonicalDestination);
+  const key = crypto.createHash('sha256').update(canonicalDestination).digest('hex').slice(0, 32);
   return { root: lockRoot, name: `repo-resolve-${key}` };
 }
 
@@ -981,6 +973,19 @@ function cloneFailure(input, reason, fields = {}) {
   };
 }
 
+function commandFailure(result, label, timeoutMs) {
+  if (result && result.error && result.error.code === 'ETIMEDOUT') {
+    return `${label} timed out after ${timeoutMs}ms`;
+  }
+  if (result && result.signal) {
+    return `${label} was terminated by ${result.signal}`;
+  }
+  const exit = result && result.status !== undefined && result.status !== null
+    ? result.status
+    : 'unknown';
+  return `${label} failed (exit ${exit})`;
+}
+
 /**
  * Execute the explicit clone transaction prepared by the D3 choice.
  *
@@ -1160,8 +1165,8 @@ function cloneRepositoryUnlocked(input, runner = spawnSync) {
   };
   const result = runner('git', cloneCommand(clone.url, destination), commandOptions);
   if (!result || result.status !== 0) {
-    const exit = result && result.status !== undefined ? result.status : 'unknown';
-    return cloneFailure(input, `git clone for ${input.repo} failed (exit ${exit}); the checkout remains unverified${quarantineCloneDestination(
+    const failure = commandFailure(result, `git clone for ${input.repo}`, CLONE_TIMEOUT_MS);
+    return cloneFailure(input, `${failure}; the checkout remains unverified${quarantineCloneDestination(
       destination,
       input.repo,
       requiredBase,

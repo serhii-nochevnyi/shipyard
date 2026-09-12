@@ -357,6 +357,43 @@ test('clone command is full and proves the requested origin base ref', () => {
   assert.strictEqual(git(destination, ['rev-parse', '--verify', 'refs/remotes/origin/epic/base^{commit}']).length, 40);
 });
 
+test('clone timeout is reported as a timeout and leaves the checkout unverified', () => {
+  const projectDir = isolatedProject({});
+  const parent = path.dirname(projectDir);
+  const source = gitRepo();
+  git(source, ['config', 'user.email', 'shipyard-tests@example.invalid']);
+  git(source, ['config', 'user.name', 'Shipyard Tests']);
+  git(source, ['remote', 'add', 'origin', 'git@github.com:acme/service.git']);
+  fs.writeFileSync(path.join(source, 'README.md'), 'seed\n');
+  git(source, ['add', 'README.md']);
+  git(source, ['commit', '-qm', 'seed']);
+  git(source, ['branch', 'epic/timeout']);
+  const destination = path.join(parent, 'timeout-service');
+
+  const result = mod.cloneRepository({
+    ticket: 'T-30-08',
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: parent },
+    projectRoot: projectDir,
+    destination,
+    base: 'epic/timeout',
+    projectOrigin: 'git@github.com:serhii-nochevnyi/shipyard.git',
+    cloneUrl: source,
+  }, (command, args, options) => {
+    if (command === 'git' && args[0] === 'clone') {
+      assert.strictEqual(options.timeout, 15 * 60 * 1000);
+      return { status: null, signal: 'SIGTERM', error: { code: 'ETIMEDOUT' } };
+    }
+    return spawnSync(command, args, options);
+  });
+
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'clone-failed');
+  assert.match(result.reason, /git clone for acme\/service timed out after 900000ms/);
+  assert.doesNotMatch(result.reason, /exit null/);
+  assert.strictEqual(fs.existsSync(destination), false);
+});
+
 test('clone accepts a local source branch when its remote-tracking ref is stale or absent', () => {
   const projectDir = isolatedProject({});
   const parent = path.dirname(projectDir);
