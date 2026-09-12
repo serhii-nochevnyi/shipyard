@@ -9,6 +9,9 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 const SCRIPT = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'repo-resolve.cjs'
 );
+const STATE_SYNC = path.join(
+  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'
+);
 const mod = require(SCRIPT);
 const graph = require(path.join(path.dirname(SCRIPT), 'graph-dir.cjs'));
 
@@ -344,6 +347,7 @@ test('clone command is full and proves the requested origin base ref', () => {
 
   assert.strictEqual(result.executable, true, result.reason);
   assert.strictEqual(result.resolution, 'cloned');
+  assert.strictEqual(result.config_written, true);
   assert.strictEqual(result.base_ref, 'origin/epic/base');
   assert.strictEqual(result.base_verified, true);
   assert.strictEqual(result.repository_root, fs.realpathSync(destination));
@@ -355,6 +359,8 @@ test('clone command is full and proves the requested origin base ref', () => {
     args: ['-C', destination, 'remote', 'set-url', 'origin', 'git@github.com:acme/service.git'],
   }]);
   assert.strictEqual(git(destination, ['rev-parse', '--verify', 'refs/remotes/origin/epic/base^{commit}']).length, 40);
+  const persisted = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf8'));
+  assert.strictEqual(persisted.pipeline.repos['acme/service'], fs.realpathSync(destination));
 });
 
 test('clone timeout is reported as a timeout and leaves the checkout unverified', () => {
@@ -728,6 +734,170 @@ test('explicit remote clone URLs require a classifiable project origin', () => {
   assert.strictEqual(result.executable, false);
   assert.match(result.reason, /project origin.*unsupported/);
   assert.strictEqual(fs.existsSync(path.join(parent, 'service')), false);
+});
+
+test('successful resolution writes one canonical path and the next cold start uses it', () => {
+  const projectDir = isolatedProject({ custom_setting: 'keep-me' });
+  const parent = path.dirname(projectDir);
+  const checkout = repoAt(path.join(parent, 'service-with-an-unrelated-name'), 'git@github.com:acme/service.git');
+  const first = mod.resolveAndPersistRepository({
+    repo: 'acme/service',
+    config: { repos: {} },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(first.resolution, 'discovered');
+  assert.strictEqual(first.executable, true, first.reason);
+  assert.strictEqual(first.config_written, true);
+
+  const file = path.join(projectDir, '.planning', 'config.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(raw.pipeline.custom_setting, 'keep-me');
+  assert.strictEqual(raw.pipeline.repos['acme/service'], checkout);
+
+  const loaded = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'));
+  const second = mod.resolveAndPersistRepository({
+    repo: 'acme/service',
+    config: loaded.loadConfig(projectDir).config,
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(second.resolution, 'configured');
+  assert.strictEqual(second.executable, true);
+  assert.strictEqual(second.repository_root, checkout);
+});
+
+test('write-back prefers delivery_pipeline and preserves the legacy namespace', () => {
+  const projectDir = isolatedProject({});
+  const file = path.join(projectDir, '.planning', 'config.json');
+  const checkout = repoAt(path.join(path.dirname(projectDir), 'preferred-service'), 'git@github.com:acme/service.git');
+  fs.writeFileSync(file, JSON.stringify({
+    keep: { owner: 'operator' },
+    pipeline: { repos: { 'legacy/keep': '/legacy/path' }, old_key: true },
+    delivery_pipeline: {
+      models: { executor: 'opus' },
+      repos: { 'legacy/preferred': '/preferred/path' },
+    },
+  }, null, 2) + '\n');
+
+  const result = mod.persistResolvedRepository(projectDir, 'acme/service', checkout);
+  assert.strictEqual(result.valid, true);
+  assert.strictEqual(result.written, true);
+  assert.strictEqual(result.namespace, 'delivery_pipeline');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepStrictEqual(raw.keep, { owner: 'operator' });
+  assert.deepStrictEqual(raw.pipeline, { repos: { 'legacy/keep': '/legacy/path' }, old_key: true });
+  assert.strictEqual(raw.delivery_pipeline.models.executor, 'opus');
+  assert.strictEqual(raw.delivery_pipeline.repos['legacy/preferred'], '/preferred/path');
+  assert.strictEqual(raw.delivery_pipeline.repos['acme/service'], checkout);
+
+  const before = fs.readFileSync(file, 'utf8');
+  const repeated = mod.persistResolvedRepository(projectDir, 'acme/service', checkout);
+  assert.strictEqual(repeated.valid, true);
+  assert.strictEqual(repeated.written, false);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), before, 'an unchanged path must not rewrite config');
+});
+
+test('write-back refuses malformed namespaces instead of falling back silently', () => {
+  const projectDir = isolatedProject({});
+  const file = path.join(projectDir, '.planning', 'config.json');
+  const checkout = repoAt(path.join(path.dirname(projectDir), 'malformed-namespace-service'), 'git@github.com:acme/service.git');
+  for (const raw of [
+    { pipeline: { repos: {} }, delivery_pipeline: [] },
+    { pipeline: { repos: {} }, delivery_pipeline: null },
+    { pipeline: [], delivery_pipeline: {} },
+    { pipeline: 'legacy', delivery_pipeline: { repos: {} } },
+  ]) {
+    fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n');
+    const before = fs.readFileSync(file, 'utf8');
+    const result = mod.persistResolvedRepository(projectDir, 'acme/service', checkout);
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(result.written, false);
+    assert.match(result.reason, /config write-back refused: (pipeline|delivery_pipeline) must be a JSON object/);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), before);
+  }
+});
+
+test('unparseable or malformed config is refused without changing the file', () => {
+  const projectDir = isolatedProject({});
+  const file = path.join(projectDir, '.planning', 'config.json');
+  const checkout = repoAt(path.join(path.dirname(projectDir), 'unparseable-service'), 'git@github.com:acme/service.git');
+  for (const contents of ['{broken\n', JSON.stringify({ pipeline: { repos: [] } }, null, 2) + '\n']) {
+    fs.writeFileSync(file, contents);
+    const before = fs.readFileSync(file, 'utf8');
+    const result = mod.persistResolvedRepository(projectDir, 'acme/service', checkout);
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(result.written, false);
+    assert.match(result.reason, /write-back refused/);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), before);
+  }
+});
+
+test('write-back refuses a malformed existing repository declaration', () => {
+  const declarations = [
+    ['pipeline', { pipeline: { repos: { 'acme/service': 'relative-checkout' } } }],
+    ['delivery_pipeline', { delivery_pipeline: { repos: { 'acme/service': null } } }],
+    ['pipeline', { pipeline: { repos: { 'acme/service': 42 } } }],
+  ];
+  declarations.forEach(([namespace, declaration], index) => {
+    const projectDir = isolatedProject({});
+    const file = path.join(projectDir, '.planning', 'config.json');
+    const parent = path.dirname(projectDir);
+    const checkout = repoAt(path.join(parent, `malformed-declaration-${namespace}-${index}`), 'git@github.com:acme/service.git');
+    fs.writeFileSync(file, JSON.stringify(declaration, null, 2) + '\n');
+    const before = fs.readFileSync(file, 'utf8');
+    const result = mod.resolveAndPersistRepository({
+      repo: 'acme/service',
+      config: { repos: {}, repos_root: parent },
+      projectRoot: projectDir,
+    });
+    assert.strictEqual(result.resolution, 'config-write-failed');
+    assert.strictEqual(result.executable, false);
+    assert.match(result.reason, new RegExp(`${namespace}\\.repos\\["acme/service"\\].*absolute checkout path`));
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), before, 'a malformed declaration must not be overwritten');
+    assert.strictEqual(fs.realpathSync(checkout), checkout);
+  });
+});
+
+test('the resolve CLI returns a structured refusal for invalid JSON without reparsing it', () => {
+  const projectDir = isolatedProject({});
+  const file = path.join(projectDir, '.planning', 'config.json');
+  fs.writeFileSync(file, '{broken\n');
+  const before = fs.readFileSync(file, 'utf8');
+  const result = run(['resolve', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'config-invalid');
+  assert.strictEqual(output.executable, false);
+  assert.match(output.reason, /config\.json is invalid/);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), before);
+});
+
+test('a config write failure parks only the resolved repository with its reason', () => {
+  const projectDir = isolatedProject({});
+  const file = path.join(projectDir, '.planning', 'config.json');
+  fs.writeFileSync(file, '{broken\n');
+  const checkout = repoAt(path.join(path.dirname(projectDir), 'parked-service'), 'git@github.com:acme/service.git');
+  const result = mod.resolveAndPersistRepository({
+    repo: 'acme/service',
+    config: { repos: {} },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.resolution, 'config-write-failed');
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolved_repository_root, checkout);
+  assert.match(result.park_reason, /config write-back was refused/);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken\n');
+});
+
+test('an invalid repository root refuses discovery instead of falling back to the project parent', () => {
+  const projectDir = isolatedProject({});
+  const result = mod.resolveRepository({
+    repo: 'acme/service',
+    config: { repos: {}, repos_root: null },
+    projectRoot: projectDir,
+  });
+  assert.strictEqual(result.executable, false);
+  assert.strictEqual(result.resolution, 'invalid-policy');
+  assert.match(result.reason, /repos_root is invalid/);
 });
 
 test('discovery matches origin rather than the directory basename and scans one level', () => {
@@ -1136,11 +1306,99 @@ test('state-sync and deliver name the configured resolver caller', () => {
   const stateSync = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs'), 'utf8');
   const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
   assert.match(stateSync, /require\(path\.join\(__dirname, 'repo-resolve\.cjs'\)\)/);
-  assert.match(stateSync, /resolveRepository\(\{ repo, config: cfg, projectRoot: ROOT \}\)/);
+  assert.match(stateSync, /resolveAndPersistRepository\(\{/);
+  assert.match(stateSync, /configValid: CFG_VALID/);
+  assert.match(stateSync, /repo_resolution/);
   assert.match(deliver, /repo-resolve\.cjs resolve <owner\/name>/);
   assert.match(deliver, /repo-resolve\.cjs choose <owner\/name>/);
   assert.match(deliver, /escalation-record\.cjs mark <T-id>/);
+  assert.match(deliver, /repo-resolve\.cjs clone <owner\/name>/);
+  assert.match(deliver, /atomically|atomic/i);
+  assert.match(deliver, /inaccessible or\s+nonexistent/);
   assert.match(deliver, /resolution: "discovered"/);
+});
+
+test('state-sync persists discovered checkouts, copies resolution per ticket, and keeps other repos actionable', () => {
+  const workspace = tempDir('shipyard-state-sync-repos-');
+  const projectDir = path.join(workspace, 'project');
+  const graphDir = path.join(projectDir, '.planning', 'graph');
+  const phaseDir = path.join(projectDir, '.planning', 'phases', '30-reachability');
+  fs.mkdirSync(graphDir, { recursive: true });
+  fs.mkdirSync(phaseDir, { recursive: true });
+
+  const acmeCheckout = repoAt(path.join(workspace, 'service-checkout'), 'git@github.com:acme/service.git');
+  const betaCheckout = repoAt(path.join(workspace, 'other-checkout'), 'git@github.com:beta/other.git');
+  fs.writeFileSync(path.join(projectDir, '.planning', 'config.json'), JSON.stringify({
+    pipeline: { repos_root: workspace, auto_merge: 'off', sentinel: 'off' },
+  }, null, 2) + '\n');
+  fs.writeFileSync(path.join(projectDir, '.planning', 'PROJECT.md'), '# shipyard\n\n## Core Value\nKeep delivery observable.\n');
+  fs.writeFileSync(path.join(projectDir, '.planning', 'ROADMAP.md'), [
+    '# Roadmap: shipyard', '', '## Requirements', '',
+    '- **REQ-30** — Reachable work remains executable.', '',
+    '## Phases', '', '### Phase 30: Reachability',
+    '**Requirements**: REQ-30', '',
+  ].join('\n'));
+
+  const tickets = {
+    'T-30-10': { phase: '30', title: 'First service ticket', branch: 'ticket/T-30-10', files: ['src/service.js'], repo: 'acme/service' },
+    'T-30-11': { phase: '30', title: 'Second service ticket', branch: 'ticket/T-30-11', files: ['src/other-service.js'], repo: 'acme/service' },
+    'T-30-12': { phase: '30', title: 'Other repository ticket', branch: 'ticket/T-30-12', files: ['src/other.js'], repo: 'beta/other' },
+    'T-30-13': { phase: '30', title: 'Unreachable repository ticket', branch: 'ticket/T-30-13', files: ['src/missing.js'], repo: 'missing/repo' },
+  };
+  fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets }, null, 2) + '\n');
+  fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), '{}\n');
+  for (const [ticket, entry] of Object.entries(tickets)) {
+    const plan = ticket.slice(2).toLowerCase();
+    fs.writeFileSync(path.join(phaseDir, `${plan}-PLAN.md`), [
+      '---', 'phase: 30', `plan: ${ticket.slice(-2)}`, `title: "${entry.title}"`,
+      `files_modified: [${entry.files.join(', ')}]`, 'requirements: [REQ-30]',
+      'delivery:', `  ticket: ${ticket}`, '  risk: low', '  human_checkpoint: false', '---', '',
+      `## Goal\n\n${entry.title}.`,
+    ].join('\n'));
+  }
+
+  const bin = path.join(workspace, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const gh = path.join(bin, 'gh');
+  fs.writeFileSync(gh, [
+    '#!/bin/sh',
+    'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then printf "[]\\n"; exit 0; fi',
+    'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then printf "main\\n"; exit 0; fi',
+    'if [ "$1" = "api" ]; then printf "main\\n"; exit 0; fi',
+    'echo "unhandled gh call: $*" >&2; exit 1',
+    '',
+  ].join('\n'));
+  fs.chmodSync(gh, 0o755);
+
+  const env = { ...process.env, HOME: path.join(workspace, 'home'), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  for (const key of Object.keys(env)) {
+    if (/^(?:SHIPYARD_|GSD_|CLAUDE_|CODEX_)/.test(key)
+        || key === 'NODE_OPTIONS' || key === 'NODE_PATH') delete env[key];
+  }
+  fs.mkdirSync(env.HOME, { recursive: true });
+  const result = spawnSync(process.execPath, [STATE_SYNC], {
+    cwd: projectDir,
+    encoding: 'utf8',
+    env,
+  });
+  assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+
+  const raw = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf8'));
+  assert.strictEqual(raw.pipeline.repos['acme/service'], acmeCheckout);
+  assert.strictEqual(raw.pipeline.repos['beta/other'], betaCheckout);
+
+  const state = JSON.parse(fs.readFileSync(path.join(graphDir, 'delivery-state.json'), 'utf8'));
+  for (const ticket of ['T-30-10', 'T-30-11']) {
+    assert.deepStrictEqual(state[ticket].repo_resolution, {
+      resolution: 'discovered', executable: true, repository_root: acmeCheckout, reason: null,
+    });
+  }
+  assert.deepStrictEqual(state['T-30-12'].repo_resolution, {
+    resolution: 'discovered', executable: true, repository_root: betaCheckout, reason: null,
+  });
+  assert.strictEqual(state['T-30-12'].ready, true, 'a healthy sibling repo must remain actionable');
+  assert.strictEqual(state['T-30-13'].ready, false, 'only the unreachable repo should be parked');
+  assert.deepStrictEqual(state['T-30-13'].blocked_by, ['repo']);
 });
 
 done();
