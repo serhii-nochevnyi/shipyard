@@ -129,12 +129,6 @@ function safeCloneUrl(value, protocol, repo) {
       reason: `gh metadata URL for ${repo} does not use the project origin protocol (${protocol})`,
     };
   }
-  if (normalizeOrigin(url) !== repo.toLowerCase()) {
-    return {
-      valid: false,
-      reason: `gh metadata URL does not identify ${repo}`,
-    };
-  }
   if (/^(?:https?|ssh):\/\//i.test(url)) {
     try {
       const parsed = new URL(url);
@@ -156,6 +150,12 @@ function safeCloneUrl(value, protocol, repo) {
         reason: `gh metadata URL for ${repo} is not a valid ${protocol} URL`,
       };
     }
+  }
+  if (normalizeOrigin(url) !== repo.toLowerCase()) {
+    return {
+      valid: false,
+      reason: `gh metadata URL does not identify ${repo}`,
+    };
   }
   return { valid: true, url };
 }

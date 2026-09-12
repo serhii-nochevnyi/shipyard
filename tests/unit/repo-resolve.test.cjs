@@ -617,6 +617,24 @@ test('clone URL selection refuses inconsistent metadata and credentials', () => 
   assert.match(credential.reason, /credentials/);
   assert.strictEqual(credential.url, null);
   assert.ok(!JSON.stringify(credential).includes('token'));
+
+  const query = mod.selectCloneUrl(
+    'https://github.com/serhii-nochevnyi/shipyard.git',
+    { url: 'https://github.com/acme/service.git?ref=release' },
+    'acme/service',
+  );
+  assert.strictEqual(query.valid, false);
+  assert.strictEqual(query.reason, 'gh metadata URL for acme/service contains query or fragment data and was refused');
+  assert.strictEqual(query.url, null);
+
+  const fragment = mod.selectCloneUrl(
+    'https://github.com/serhii-nochevnyi/shipyard.git',
+    { url: 'https://github.com/acme/service.git#release' },
+    'acme/service',
+  );
+  assert.strictEqual(fragment.valid, false);
+  assert.strictEqual(fragment.reason, 'gh metadata URL for acme/service contains query or fragment data and was refused');
+  assert.strictEqual(fragment.url, null);
 });
 
 test('gh metadata is read with the explicit repository and JSON fields', () => {
@@ -644,6 +662,7 @@ test('gh metadata is read with the explicit repository and JSON fields', () => {
     cwd: '/project',
     promptDisabled: '1',
   }]);
+  assert.strictEqual(calls[0].options.env.GH_PROMPT_DISABLED, '1');
 });
 
 test('clone preparation reports unavailable metadata without invoking git clone', () => {
