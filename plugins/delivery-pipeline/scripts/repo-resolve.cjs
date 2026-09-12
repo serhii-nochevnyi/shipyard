@@ -514,6 +514,18 @@ function persistResolvedRepository(projectRoot, repo, repositoryPath) {
         return configWriteFailure(repo, canonical, file, `config write-back refused: ${namespace}.repos must be a JSON object`);
       }
       const repos = isRecord(section.repos) ? section.repos : {};
+      if (Object.prototype.hasOwnProperty.call(repos, repo)) {
+        const existing = repos[repo];
+        if (typeof existing !== 'string' || existing.length === 0 || !path.isAbsolute(existing)) {
+          const shape = existing === null ? 'null' : Array.isArray(existing) ? 'an array' : typeof existing;
+          return configWriteFailure(
+            repo,
+            canonical,
+            file,
+            `config write-back refused: ${namespace}.repos["${repo}"] must be an absolute checkout path (got ${shape})`,
+          );
+        }
+      }
       if (repos[repo] === canonical) {
         return {
           valid: true,
@@ -1705,7 +1717,7 @@ if (require.main === module) {
     const options = parseCli(process.argv.slice(2));
     const projectDir = path.resolve(options.projectDir);
     const loaded = loadConfig(projectDir);
-    const policy = readProjectPolicy(projectDir);
+    const policy = loaded.valid ? readProjectPolicy(projectDir) : {};
     const config = { ...resolverConfig(loaded, projectDir), ...policy };
     const input = {
       ticket: options.ticket,

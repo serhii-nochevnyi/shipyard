@@ -831,6 +831,46 @@ test('unparseable or malformed config is refused without changing the file', () 
   }
 });
 
+test('write-back refuses a malformed existing repository declaration', () => {
+  const declarations = [
+    ['pipeline', { pipeline: { repos: { 'acme/service': 'relative-checkout' } } }],
+    ['delivery_pipeline', { delivery_pipeline: { repos: { 'acme/service': null } } }],
+    ['pipeline', { pipeline: { repos: { 'acme/service': 42 } } }],
+  ];
+  declarations.forEach(([namespace, declaration], index) => {
+    const projectDir = isolatedProject({});
+    const file = path.join(projectDir, '.planning', 'config.json');
+    const parent = path.dirname(projectDir);
+    const checkout = repoAt(path.join(parent, `malformed-declaration-${namespace}-${index}`), 'git@github.com:acme/service.git');
+    fs.writeFileSync(file, JSON.stringify(declaration, null, 2) + '\n');
+    const before = fs.readFileSync(file, 'utf8');
+    const result = mod.resolveAndPersistRepository({
+      repo: 'acme/service',
+      config: { repos: {}, repos_root: parent },
+      projectRoot: projectDir,
+    });
+    assert.strictEqual(result.resolution, 'config-write-failed');
+    assert.strictEqual(result.executable, false);
+    assert.match(result.reason, new RegExp(`${namespace}\\.repos\\["acme/service"\\].*absolute checkout path`));
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), before, 'a malformed declaration must not be overwritten');
+    assert.strictEqual(fs.realpathSync(checkout), checkout);
+  });
+});
+
+test('the resolve CLI returns a structured refusal for invalid JSON without reparsing it', () => {
+  const projectDir = isolatedProject({});
+  const file = path.join(projectDir, '.planning', 'config.json');
+  fs.writeFileSync(file, '{broken\n');
+  const before = fs.readFileSync(file, 'utf8');
+  const result = run(['resolve', 'acme/service', '--project-dir', projectDir, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.resolution, 'config-invalid');
+  assert.strictEqual(output.executable, false);
+  assert.match(output.reason, /config\.json is invalid/);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), before);
+});
+
 test('a config write failure parks only the resolved repository with its reason', () => {
   const projectDir = isolatedProject({});
   const file = path.join(projectDir, '.planning', 'config.json');
