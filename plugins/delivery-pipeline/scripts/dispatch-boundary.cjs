@@ -706,16 +706,6 @@ function recorderStoredRecord(recorder, dispatchId) {
   return result || null;
 }
 
-function recorderLatestRecord(recorder, runtime, role) {
-  const state = sharedRecorderState(recorder);
-  const key = `${runtime}:${role}`;
-  if (state && state.latest.has(key)) return state.latest.get(key);
-  const target = recorderMethod(recorder, ['getLatestReceipt', 'readLatestReceipt', 'getLatestRecord', 'readLatest']);
-  if (!target) return null;
-  const result = invokeSync(target.fn, target.receiver, [runtime, role], target.name);
-  return result || null;
-}
-
 function recorderConsume(recorder, dispatchId, consumerId) {
   const target = recorderMethod(recorder, ['consume', 'consumeReceipt']);
   if (target) {
@@ -766,13 +756,8 @@ function createDispatchBoundary(options = {}) {
   const adapters = options.adapters || {};
   const trustedReceipts = new Map();
   const trustedResolutions = new Map();
-  const latestReceiptByTuple = new Map();
   const consumedReceiptIds = new Set();
   const reservedDispatchIds = new Set();
-
-  function receiptTupleKey(runtime, role) {
-    return `${runtime}:${role}`;
-  }
 
   function stableReceipt(receipt) {
     return canonicalStableStringify(receipt);
@@ -787,7 +772,7 @@ function createDispatchBoundary(options = {}) {
   }
 
   function repairPrerequisiteFor(input) {
-    const role = input && input.role;
+    const role = input && typeof input.role === 'string' ? input.role.trim() : input && input.role;
     const signals = input && input.signals;
     const state = signals && signals.signatureState;
     return canonicalPolicy.REPAIR_PREREQUISITES[role]
@@ -871,11 +856,6 @@ function createDispatchBoundary(options = {}) {
         { expected: { model: expectedModel, effort: prerequisite.effort }, actual: { model: trusted.receipt.applied_model, effort: trusted.receipt.applied_effort } },
       );
     }
-    const latest = recorderLatestRecord(recorder, runtime, prerequisite.role);
-    const latestReceipt = recordReceipt(latest);
-    if (!latestReceipt || latestReceipt.dispatch_id !== previousDispatchId) {
-      refuse('UNVERIFIED_RECEIPT', 'the preceding receipt is not the latest durable receipt for this repair role', { dispatch_id: previousDispatchId });
-    }
     if (consumedReceiptIds.has(previousDispatchId)) {
       refuse('UNVERIFIED_RECEIPT', 'the preceding receipt was already consumed by another repair dispatch', { dispatch_id: previousDispatchId });
     }
@@ -896,7 +876,6 @@ function createDispatchBoundary(options = {}) {
     }
     trustedReceipts.set(stored.dispatch_id, stored);
     trustedResolutions.set(stored.dispatch_id, deepFreeze(snapshot(resolution)));
-    latestReceiptByTuple.set(receiptTupleKey(stored.runtime, stored.role), stored.dispatch_id);
     recorderRecordRemember(recorder, recordInput);
     return stored;
   }

@@ -247,6 +247,14 @@ test('repair escalations require the boundary receipt chain and consume each pre
     adapters: { codex: fakeAdapter() },
     recorder: () => true,
   });
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'codex',
+      role: ' ci-fix ',
+      signals: { signatureState: 'repeat' },
+    }),
+    (error) => error.code === 'MISSING_RECEIPT',
+  );
   const base = boundary.dispatch({
     runtime: 'codex',
     role: 'ci-fix',
@@ -695,6 +703,42 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
     }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
+});
+
+test('independent repair chains do not share a global latest receipt lane', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-parallel-repair-'));
+  const makeBoundary = () => boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  const baseA = makeBoundary().dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'parallel-base-a',
+  });
+  const baseB = makeBoundary().dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'parallel-base-b',
+  });
+  const repeatA = makeBoundary().dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: baseA.receipt },
+    previous_dispatch_id: baseA.dispatch_id,
+    dispatch_id: 'parallel-repeat-a',
+  });
+  const repeatB = makeBoundary().dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: baseB.receipt },
+    previous_dispatch_id: baseB.dispatch_id,
+    dispatch_id: 'parallel-repeat-b',
+  });
+  assert.equal(repeatA.resolution.prior_applied.dispatch_id, baseA.dispatch_id);
+  assert.equal(repeatB.resolution.prior_applied.dispatch_id, baseB.dispatch_id);
 });
 
 test('top-level dispatch continues a repair chain with the same durable recorder', () => {

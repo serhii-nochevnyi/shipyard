@@ -243,6 +243,10 @@ test('direct policy repair resolution fails closed without boundary provenance',
     (error) => error.code === 'MISSING_RECEIPT' && /preceding/.test(error.message),
   );
   assert.throws(
+    () => policy.resolveDispatch({ runtime: 'codex', role: ' ci-fix ', signals: { signatureState: 'repeat' } }),
+    (error) => error.code === 'MISSING_RECEIPT' && /preceding/.test(error.message),
+  );
+  assert.throws(
     () => codex('ci-fix', {
       signatureState: 'repeat_exhausted',
       priorApplied: luna,
