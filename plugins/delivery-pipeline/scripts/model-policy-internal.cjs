@@ -187,23 +187,6 @@ const POLICY = deepFreeze({
 
 const POLICY_HASH = fingerprintPolicy(POLICY);
 
-const APPLICATION_RECEIPT_FIELDS = Object.freeze([
-  'receipt_type',
-  'runtime',
-  'role',
-  'dispatch_id',
-  'launch_id',
-  'requested_model',
-  'requested_effort',
-  'applied_model',
-  'applied_effort',
-  'observed_model',
-  'observed_effort',
-  'policy_hash',
-  'compliance',
-  'compliance_proof',
-]);
-
 const SIGNAL_ORDER = Object.freeze([
   'type',
   'complexity',
@@ -555,114 +538,6 @@ function opaqueId(value, label) {
   return id;
 }
 
-function previousReceiptFor(input, signals) {
-  const value = signals.priorApplied !== undefined
-    ? signals.priorApplied
-    : input.priorApplied !== undefined
-      ? input.priorApplied
-      : input.priorReceipt;
-  return value;
-}
-
-function receiptCandidate(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  if (raw.application_receipt && typeof raw.application_receipt === 'object' && !Array.isArray(raw.application_receipt)) {
-    return raw.application_receipt;
-  }
-  if (raw.receipt && typeof raw.receipt === 'object' && !Array.isArray(raw.receipt)) {
-    return raw.receipt;
-  }
-  return raw;
-}
-
-function validateApplicationReceiptShape(raw, { requireRole = true } = {}) {
-  const receipt = receiptCandidate(raw);
-  if (!receipt) refuse('MISSING_RECEIPT', 'application receipt must be an object');
-  for (const field of APPLICATION_RECEIPT_FIELDS) {
-    if (!hasOwn(receipt, field)) refuse('MISSING_RECEIPT', `application receipt is missing ${field}`, { field });
-  }
-  if (receipt.receipt_type !== 'adr-014.application') {
-    refuse('NONCOMPLIANT_RECEIPT', 'application receipt has an unknown receipt_type');
-  }
-  opaqueId(receipt.runtime, 'runtime');
-  if (requireRole) normalizeRole(receipt.role);
-  opaqueId(receipt.dispatch_id, 'dispatch_id');
-  opaqueId(receipt.launch_id, 'launch_id');
-  opaqueId(receipt.policy_hash, 'policy_hash');
-  if (receipt.policy_hash !== POLICY_HASH) {
-    refuse('STALE_POLICY_RECEIPT', 'application receipt has a stale policy fingerprint', { expected: POLICY_HASH, actual: receipt.policy_hash });
-  }
-  if (receipt.compliance !== 'verified' || !receipt.compliance_proof || typeof receipt.compliance_proof !== 'object' || Array.isArray(receipt.compliance_proof)) {
-    refuse('NONCOMPLIANT_RECEIPT', 'application receipt lacks the boundary compliance proof');
-  }
-  const proof = receipt.compliance_proof;
-  if (proof.status !== 'verified' || proof.boundary !== 'adr-014.dispatch-boundary' || proof.policy_hash !== receipt.policy_hash || proof.dispatch_id !== receipt.dispatch_id || proof.launch_id !== receipt.launch_id) {
-    refuse('NONCOMPLIANT_RECEIPT', 'application receipt compliance proof is incomplete or contradictory');
-  }
-  for (const field of ['requested_model', 'requested_effort', 'applied_model', 'applied_effort', 'observed_model', 'observed_effort']) {
-    if (receipt[field] !== 'unknown' && !nonEmptyString(receipt[field])) {
-      refuse('INVALID_RECEIPT', `application receipt ${field} must be concrete or unknown`, { field });
-    }
-  }
-  return receipt;
-}
-
-function validatePriorReceipt({ input, signals, runtime, role, requiredLogicalModel, requiredEffort, receiptVerifier }) {
-  const raw = previousReceiptFor(input, signals);
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    refuse(
-      'MISSING_RECEIPT',
-      `${role} ${signals.signatureState} escalation requires the immediately preceding compliant applied receipt`,
-      { role, signatureState: signals.signatureState },
-    );
-  }
-  const receipt = validateApplicationReceiptShape(raw);
-  const previousDispatchId = input.previous_dispatch_id;
-  if (!nonEmptyString(previousDispatchId) || previousDispatchId !== receipt.dispatch_id) {
-    refuse('MISSING_RECEIPT', `${role} ${signals.signatureState} escalation must identify its immediately preceding dispatch_id`, { expected: receipt.dispatch_id, actual: previousDispatchId });
-  }
-  const expectedModel = logicalModelFor(runtime, requiredLogicalModel);
-  if (typeof receiptVerifier !== 'function') {
-    refuse('UNVERIFIED_RECEIPT', `${role} ${signals.signatureState} escalation requires a receipt verified by the dispatch boundary`, { dispatch_id: receipt.dispatch_id });
-  }
-  const trusted = receiptVerifier(receipt, {
-    runtime,
-    role,
-    previousDispatchId,
-    expectedModel,
-    expectedEffort: requiredEffort,
-  });
-  if (!trusted || typeof trusted !== 'object' || Array.isArray(trusted) || stableStringify(trusted) !== stableStringify(receipt)) {
-    refuse('UNVERIFIED_RECEIPT', `${role} ${signals.signatureState} escalation requires a receipt verified by the dispatch boundary`, { dispatch_id: receipt.dispatch_id });
-  }
-  const appliedModel = receipt.applied_model;
-  const appliedEffort = receipt.applied_effort;
-  if (appliedModel !== expectedModel || appliedEffort !== requiredEffort) {
-    refuse(
-      'NONCOMPLIANT_RECEIPT',
-      `${role} ${signals.signatureState} requires a preceding ${requiredLogicalModel}/${requiredEffort} receipt on ${runtime}; got ${appliedModel}/${appliedEffort}`,
-      { role, signatureState: signals.signatureState, expected: { model: expectedModel, effort: requiredEffort }, actual: { model: appliedModel, effort: appliedEffort } },
-    );
-  }
-  if (receipt.runtime !== runtime) {
-    refuse('NONCOMPLIANT_RECEIPT', `prior receipt runtime ${JSON.stringify(receipt.runtime)} does not match ${runtime}`, { runtime, prior: receipt.runtime });
-  }
-  if (receipt.role !== role) {
-    refuse('NONCOMPLIANT_RECEIPT', `prior receipt role ${JSON.stringify(receipt.role)} does not match ${role}`, { role, prior: receipt.role });
-  }
-  if (receipt.requested_model !== expectedModel) {
-    refuse('NONCOMPLIANT_RECEIPT', 'prior receipt requested model does not match its applied model', { expected: expectedModel, actual: receipt.requested_model });
-  }
-  if (receipt.requested_effort !== requiredEffort) {
-    refuse('NONCOMPLIANT_RECEIPT', 'prior receipt requested effort does not match its applied effort', { expected: requiredEffort, actual: receipt.requested_effort });
-  }
-  return {
-    dispatch_id: nonEmptyString(receipt.dispatch_id),
-    model: nonEmptyString(appliedModel),
-    effort: nonEmptyString(appliedEffort),
-  };
-}
-
 function variantSuffix(role, rung) {
   if (rung === 'base') return '';
   if (role === 'research' && rung === 'alternatives') return '-alternatives';
@@ -717,11 +592,11 @@ function overrideSources(input, role) {
     ['per_role_override', 'perRoleOverride'],
     ['config_override', 'configOverride'],
   ]) add(name, input[key]);
-  if (hasOwn(input, 'model') || hasOwn(input, 'requested_model')) {
-    add('input.model', { model: hasOwn(input, 'model') ? input.model : input.requested_model });
+  for (const field of ['model', 'requested_model', 'applied_model']) {
+    if (hasOwn(input, field)) add(`input.${field}`, { model: input[field] });
   }
-  if (hasOwn(input, 'effort') || hasOwn(input, 'requested_effort')) {
-    add('input.effort', { effort: hasOwn(input, 'effort') ? input.effort : input.requested_effort });
+  for (const field of ['effort', 'requested_effort', 'applied_effort', 'reasoning_effort']) {
+    if (hasOwn(input, field)) add(`input.${field}`, { effort: input[field] });
   }
   if (hasOwn(input, 'backend')) add('input.backend', { backend: input.backend });
   if (hasOwn(input, 'mechanism')) add('input.mechanism', { mechanism: input.mechanism });
@@ -800,6 +675,35 @@ function validateResolution(resolution, options = {}) {
   const runtime = normalizeRuntime(resolution.runtime);
   const role = normalizeRole(resolution.role);
   const rungs = ROLE_RUNG_DEFINITIONS[role];
+  const evaluation = evaluateSignals(role, resolution.signals);
+  let expectedRung = rungs[0];
+  const selectedNames = new Set(evaluation.selected.map((entry) => entry.rung));
+  for (const candidate of rungs) {
+    if (selectedNames.has(candidate.name)) expectedRung = candidate;
+  }
+  if (resolution.rung !== expectedRung.name || resolution.logical_rung !== expectedRung.name) {
+    refuse('INVALID_RESOLUTION', `resolution rung ${JSON.stringify(resolution.rung)} is not authorized by its canonical signals for ${role}`, {
+      expected: expectedRung.name,
+      actual: resolution.rung,
+    });
+  }
+  const firedNames = [];
+  for (const reason of evaluation.reasons) {
+    if (!firedNames.includes(reason.signal)) firedNames.push(reason.signal);
+  }
+  const selectedReasons = evaluation.selected.map((entry) => ({ ...entry }));
+  const selectedRoute = selectedReasons.length
+    ? selectedReasons.map((entry) => `${entry.signal}->${entry.rung}`).join('+')
+    : 'base';
+  const expectedRoute = `role=${role} rung=${expectedRung.name} model=${expectedRung.logical_model} signals=${selectedRoute}`;
+  if (resolution.route !== expectedRoute
+      || stableStringify(resolution.signals_fired) !== stableStringify(firedNames)
+      || stableStringify(resolution.selected_signals) !== stableStringify(selectedReasons)) {
+    refuse('INVALID_RESOLUTION', 'resolution signal provenance does not match the canonical policy evaluation', {
+      expected: { route: expectedRoute, signals_fired: firedNames, selected_signals: selectedReasons },
+      actual: { route: resolution.route, signals_fired: resolution.signals_fired, selected_signals: resolution.selected_signals },
+    });
+  }
   const rung = rungs.find((entry) => entry.name === resolution.rung);
   if (!rung || resolution.logical_rung !== resolution.rung) refuse('INVALID_RESOLUTION', `resolution rung ${JSON.stringify(resolution.rung)} is not valid for ${role}`);
   const expectedModel = logicalModelFor(runtime, rung.logical_model);
@@ -832,10 +736,10 @@ function validateResolution(resolution, options = {}) {
   return true;
 }
 
-function resolveDispatch(input, receiptVerifier) {
+function resolveDispatch(input) {
   assertPlainObject(input, 'dispatch input');
-  if (receiptVerifier !== undefined && typeof receiptVerifier !== 'function') {
-    refuse('UNVERIFIED_RECEIPT', 'receipt verification options are private to the canonical dispatch boundary');
+  if (arguments.length > 1) {
+    refuse('UNVERIFIED_RECEIPT', 'receipt verification authority is private to the dispatch boundary');
   }
   const runtime = normalizeRuntime(input.runtime);
   const role = normalizeRole(input.role);
@@ -843,7 +747,6 @@ function resolveDispatch(input, receiptVerifier) {
   const evaluation = evaluateSignals(role, signals);
   const rungs = ROLE_RUNG_DEFINITIONS[role];
   let rung = rungs[0];
-  let priorReceipt = null;
 
   const selectedNames = new Set(evaluation.selected.map((entry) => entry.rung));
   // Highest rung wins when several signals fire; the policy retains all of them
@@ -851,19 +754,6 @@ function resolveDispatch(input, receiptVerifier) {
   // first match.
   for (const candidate of rungs) {
     if (selectedNames.has(candidate.name)) rung = candidate;
-  }
-
-  const repairPrerequisite = REPAIR_PREREQUISITES[role] && REPAIR_PREREQUISITES[role][signals.signatureState];
-  if (repairPrerequisite) {
-    priorReceipt = validatePriorReceipt({
-      input,
-      signals,
-      runtime,
-      role,
-      requiredLogicalModel: repairPrerequisite.logical_model,
-      requiredEffort: repairPrerequisite.effort,
-      receiptVerifier,
-    });
   }
 
   const model = logicalModelFor(runtime, rung.logical_model);
@@ -901,7 +791,6 @@ function resolveDispatch(input, receiptVerifier) {
     ...(input.dispatch_id !== undefined || input.dispatchId !== undefined
       ? { dispatch_id: opaqueId(input.dispatch_id !== undefined ? input.dispatch_id : input.dispatchId, 'dispatch_id') }
       : {}),
-    ...(priorReceipt ? { prior_applied: priorReceipt } : {}),
   };
   assertNoConflictingOverrides(input, resolution);
   validateResolution(resolution);
@@ -935,7 +824,6 @@ module.exports = Object.freeze({
   fingerprintPolicy,
   normalizeSignals,
   evaluateSignals,
-  validateApplicationReceiptShape,
   validateResolution,
   resolveDispatch,
   codexAgentFile,

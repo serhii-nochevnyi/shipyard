@@ -1,5 +1,9 @@
 'use strict';
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -52,6 +56,25 @@ function fakeAdapter({ receipt = receiptFor, extra = {}, onLaunch, validateGener
   };
 }
 
+function writeStaticAgent(agentsDir, resolution) {
+  const name = resolution.agent_file.replace(/\.toml$/, '');
+  const text = [
+    `# shipyard-policy-id = "${policy.POLICY.id}"`,
+    `# shipyard-policy-version = "${resolution.policy_version}"`,
+    `# shipyard-policy-hash = "${resolution.policy_hash}"`,
+    '# shipyard-policy-runtime = "codex"',
+    `# shipyard-policy-role = "${resolution.role}"`,
+    `# shipyard-policy-rung = "${resolution.rung}"`,
+    `name = "${name}"`,
+    `model = "${resolution.model}"`,
+    `model_reasoning_effort = "${resolution.effort}"`,
+    "developer_instructions = '''\nagent\n'''",
+    '',
+  ].join('\n');
+  fs.mkdirSync(agentsDir, { recursive: true });
+  fs.writeFileSync(path.join(agentsDir, resolution.agent_file), text);
+}
+
 suite('mandatory resolve → validate → launch → receipt boundary');
 
 test('dynamic Codex execution receives explicit model and reasoning effort and returns an immutable trace', () => {
@@ -79,7 +102,9 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'record', 'receipt']);
   assert.equal(result.trace.at(-1).status, 'passed');
   assert.equal(recorded.length, 1);
-  assert.equal(recorded[0].receipt.compliance, undefined);
+  assert.equal(recorded[0].receipt.compliance, 'verified');
+  assert.deepStrictEqual(recorded[0].receipt, result.receipt);
+  assert.equal(recorded[0].receipt.compliance_proof.boundary, 'adr-014.dispatch-boundary');
   assert.equal(result.receipt.compliance, 'verified');
   assert.ok(Object.isFrozen(result));
   assert.ok(Object.isFrozen(result.resolution));
@@ -516,30 +541,189 @@ test('inline, inherited, stale, and malformed resolutions cannot bypass validati
     () => boundary.validate(stale),
     (error) => error.code === 'STALE_POLICY',
   );
+  const critical = policy.resolveDispatch({
+    runtime: 'codex', role: 'arch-review', signals: { critical: true }, dispatch_id: 'forged-critical',
+  });
+  const forged = {
+    ...critical,
+    signals: {},
+    signals_fired: [],
+    signal_reasons: [],
+    selected_signals: [],
+    route: 'role=arch-review rung=base model=sol signals=base',
+  };
+  assert.throws(
+    () => boundary.validate(forged),
+    (error) => error.code === 'INVALID_RESOLUTION',
+  );
 });
 
-test('standalone receipt verification and injected recorder are available as boundary primitives', () => {
+test('receipt parsing cannot mint boundary trust, while validation remains available', () => {
   const resolution = policy.resolveDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-primitive' });
   const receipt = receiptFor(resolution);
-  const verified = boundaryModule.verifyApplicationReceipt(resolution, receipt);
-  assert.equal(verified.applied_model, 'gpt-5.6-luna');
-  assert.ok(Object.isFrozen(verified));
+  assert.equal(boundaryModule.verifyApplicationReceipt, undefined);
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+  });
+  const evidence = boundary.receipt(resolution, receipt);
+  assert.equal(evidence.applied_model, 'gpt-5.6-luna');
+  assert.equal(evidence.compliance, undefined);
+  assert.equal(evidence.compliance_proof, undefined);
+  assert.ok(Object.isFrozen(evidence));
   assert.throws(
-    () => boundaryModule.verifyApplicationReceipt(resolution, { ...receipt, observed_model: 'other' }),
+    () => boundary.receipt(resolution, { ...receipt, observed_model: 'other' }),
     (error) => error.code === 'NONCOMPLIANT_RECEIPT',
   );
   assert.throws(
-    () => boundaryModule.verifyApplicationReceipt(
+    () => boundary.receipt(
       resolution,
       { ...receipt, observed_model: 'unknown', observed_effort: 'unknown' },
-      { adapter: { observationUnavailable: true } },
     ),
-    (error) => error.code === 'UNSUPPORTED_SELECTION' && /boundary-owned/.test(error.message),
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT',
   );
-  const direct = boundaryModule.createDispatchBoundary({
-    adapters: { codex: fakeAdapter() },
+  assert.equal(boundary.validate(resolution), true);
+});
+
+test('the boundary validates the actual generated Codex file before launch', () => {
+  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-agents-'));
+  let validatorCalled = false;
+  const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'actual-agent-file' });
+  writeStaticAgent(agentsDir, base);
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        agentsDir,
+        validateGeneratedAgent: () => {
+          validatorCalled = true;
+          throw new Error('the injected validator must not replace file inspection');
+        },
+      }),
+    },
+    recorder: () => true,
   });
-  assert.equal(direct.validate(resolution), true);
+  const result = boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'actual-agent-file' });
+  assert.equal(result.receipt.agent_file, 'shipyard-inv-research.toml');
+  assert.match(result.receipt.agent_file_digest, /^[a-f0-9]{64}$/);
+  assert.equal(validatorCalled, false);
+});
+
+test('separate boundary instances share durable reservation and finalized receipt state', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-store-'));
+  const recorderA = boundaryModule.createDurableRecorder(storeDir);
+  const recorderB = boundaryModule.createDurableRecorder(storeDir);
+  let launches = 0;
+  const makeBoundary = (recorder) => boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter({ onLaunch: () => { launches++; } }) },
+    recorder,
+  });
+  const first = makeBoundary(recorderA).dispatch({
+    runtime: 'codex', role: 'executor', dispatch_id: 'cross-boundary-id',
+  });
+  const stored = recorderB.getReceipt('cross-boundary-id');
+  assert.equal(stored.receipt.compliance, 'verified');
+  assert.deepStrictEqual(stored.receipt, first.receipt);
+  assert.throws(
+    () => makeBoundary(recorderB).dispatch({
+      runtime: 'codex', role: 'executor', dispatch_id: 'cross-boundary-id',
+    }),
+    (error) => error.code === 'DUPLICATE_DISPATCH_ID',
+  );
+  assert.equal(launches, 1);
+});
+
+test('durable receipt repair survives a fresh boundary instance and consumes once', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-repair-'));
+  const firstBoundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  const base = firstBoundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'durable-repair-base',
+  });
+  const makeFreshBoundary = () => boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  const repeat = makeFreshBoundary().dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'durable-repair-repeat',
+  });
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
+  assert.throws(
+    () => makeFreshBoundary().dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'durable-repair-repeat-again',
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+});
+
+test('a failed repair launch releases its predecessor claim for a later attempt', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-retry-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const baseBoundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder,
+  });
+  const base = baseBoundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'retry-base',
+  });
+  const failing = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({ onLaunch: () => { throw new Error('launch failed'); } }),
+    },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  assert.throws(
+    () => failing.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'retry-failed',
+    }),
+    /launch failed/,
+  );
+  const retry = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  }).dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'retry-success',
+  });
+  assert.equal(retry.applied_model, 'gpt-5.6-sol');
+});
+
+test('file-backed reservation is atomic across Node processes', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-'));
+  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  const script = [
+    'const b = require(process.argv[1]);',
+    'const r = b.createDurableRecorder(process.argv[2]);',
+    'process.stdout.write(JSON.stringify(r.reserve(process.argv[3])));',
+  ].join('\n');
+  const first = spawnSync(process.execPath, ['-e', script, modulePath, storeDir, 'atomic-id'], { encoding: 'utf8' });
+  const second = spawnSync(process.execPath, ['-e', script, modulePath, storeDir, 'atomic-id'], { encoding: 'utf8' });
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(second.status, 0, second.stderr);
+  assert.deepStrictEqual(JSON.parse(first.stdout), { reserved: true });
+  assert.deepStrictEqual(JSON.parse(second.stdout), { reserved: false });
 });
 
 done();

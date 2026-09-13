@@ -264,6 +264,24 @@ test('matching overrides are harmless but conflicting or unsupported selections 
     (error) => error.code === 'CONFLICTING_OVERRIDE' || error.code === 'UNSUPPORTED_SELECTION',
   );
   assert.throws(
+    () => policy.resolveDispatch({
+      runtime: 'codex',
+      role: 'executor',
+      model: 'gpt-5.6-luna',
+      requested_model: 'gpt-5.6-terra',
+    }),
+    (error) => error.code === 'CONFLICTING_OVERRIDE',
+  );
+  assert.throws(
+    () => policy.resolveDispatch({
+      runtime: 'codex',
+      role: 'executor',
+      effort: 'max',
+      requested_effort: 'low',
+    }),
+    (error) => error.code === 'CONFLICTING_OVERRIDE',
+  );
+  assert.throws(
     () => policy.resolveDispatch({ runtime: 'codex', role: 'executor', override: { runtime: 'claude' } }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
