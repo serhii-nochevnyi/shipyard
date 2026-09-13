@@ -763,6 +763,37 @@ test('a failed repair launch releases its predecessor claim for a later attempt'
   assert.equal(retry.applied_model, 'gpt-5.6-sol');
 });
 
+test('durable recorder writes require boundary authority', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-authority-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  recorder.reserve('caller-reserved');
+  assert.deepStrictEqual(
+    recorder.record({
+      dispatch_id: 'caller-reserved',
+      receipt: { dispatch_id: 'caller-reserved', compliance: 'verified' },
+    }),
+    { recorded: false },
+  );
+  assert.equal(recorder.getReceipt('caller-reserved'), null);
+});
+
+test('stale durable claims recover, while consumed predecessors cannot be reclaimed', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-claims-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  assert.deepStrictEqual(recorder.claim('claim-id', 'active-owner'), { claimed: true });
+  assert.deepStrictEqual(recorder.claim('claim-id', 'other-owner'), { claimed: false });
+
+  const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
+  const claimPath = path.join(storeDir, claimName);
+  const claim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+  claim.claimed_at = new Date(Date.now() - (2 * 60 * 60 * 1000)).toISOString();
+  fs.writeFileSync(claimPath, JSON.stringify(claim) + '\n');
+
+  assert.deepStrictEqual(recorder.claim('claim-id', 'recovered-owner'), { claimed: true });
+  assert.deepStrictEqual(recorder.consume('claim-id', 'recovered-owner'), { consumed: true });
+  assert.deepStrictEqual(recorder.claim('claim-id', 'late-owner'), { claimed: false });
+});
+
 test('file-backed reservation is atomic across Node processes', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-'));
   const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');

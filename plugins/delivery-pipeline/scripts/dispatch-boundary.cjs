@@ -16,6 +16,9 @@ const canonicalValidateResolution = canonicalPolicy.validateResolution;
 const canonicalStableStringify = canonicalPolicy.stableStringify;
 
 const OBSERVATION_UNKNOWN = 'unknown';
+const CLAIM_TTL_MS = 60 * 60 * 1000;
+const RECORDER_AUTHORITY = Symbol('adr-014-dispatch-boundary-recorder-authority');
+const DURABLE_RECORDERS = new WeakSet();
 
 // A recorder is the durable owner of dispatch identity.  Function recorders
 // remain supported for small in-process callers, so this table supplies the
@@ -103,7 +106,10 @@ function atomicReplaceJson(file, value) {
 // provenance across boundary instances or Node processes.  Reservation files
 // use O_EXCL (`wx`), so two processes cannot both win the same dispatch id.
 // Records and latest-by-role pointers are written atomically and contain the
-// finalized boundary receipt, never pre-proof application evidence.
+// finalized boundary receipt, never pre-proof application evidence. Trusted
+// record writes require a module-private boundary capability. Receipt claims
+// are leases with bounded stale-owner recovery, so a crashed repair cannot burn
+// a predecessor forever while two live contenders still cannot take it twice.
 function createDurableRecorder(storeDir) {
   if (typeof storeDir !== 'string' || storeDir.trim() === '') {
     throw boundaryError('INVALID_INPUT', 'durable recorder storeDir must be a non-empty path');
@@ -116,8 +122,23 @@ function createDurableRecorder(storeDir) {
   const latestFile = (runtime, role) => file('latest', `${runtime}:${role}`);
   const consumedFile = (dispatchId) => file('consumed', dispatchId);
   const claimFile = (dispatchId) => file('claim', dispatchId);
+  const claimLockFile = (dispatchId) => file('claim-recovery', dispatchId);
+  const claimPayload = (dispatchId, consumerId) => ({
+    dispatch_id: dispatchId,
+    consumer_id: consumerId,
+    claimed_at: new Date().toISOString(),
+  });
+  const claimIsStale = (claim) => {
+    const claimedAt = claim && typeof claim.claimed_at === 'string' ? Date.parse(claim.claimed_at) : NaN;
+    return Number.isFinite(claimedAt) && Date.now() - claimedAt >= CLAIM_TTL_MS;
+  };
+  const releaseClaimFile = (filePath) => {
+    try { fs.unlinkSync(filePath); } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+  };
 
-  return Object.freeze({
+  const recorder = Object.freeze({
     storeDir: root,
     reserve(dispatchId) {
       try {
@@ -131,7 +152,8 @@ function createDurableRecorder(storeDir) {
         throw boundaryError('RECORD_FAILED', `durable dispatch reservation failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
-    record(recordInput) {
+    record(recordInput, authority) {
+      if (authority !== RECORDER_AUTHORITY) return { recorded: false };
       const receipt = recordInput && recordInput.receipt;
       const dispatchId = recordInput && recordInput.dispatch_id;
       if (!isObject(receipt) || typeof dispatchId !== 'string' || receipt.dispatch_id !== dispatchId || receipt.compliance !== 'verified') {
@@ -156,13 +178,32 @@ function createDurableRecorder(storeDir) {
     },
     claim(dispatchId, consumerId) {
       try {
-        return atomicCreateJson(claimFile(dispatchId), {
+        const candidate = claimPayload(dispatchId, consumerId);
+        if (fs.existsSync(consumedFile(dispatchId))) return { claimed: false };
+        if (atomicCreateJson(claimFile(dispatchId), candidate)) return { claimed: true };
+        let current = readJsonFile(claimFile(dispatchId));
+        if (current && current.consumer_id === consumerId) return { claimed: true };
+        if (!claimIsStale(current)) return { claimed: false };
+
+        // A stale claim is recoverable, but takeover itself is serialized by a
+        // second O_EXCL marker. Every contender either owns that marker or
+        // backs off; no process may unlink a fresh owner's claim blindly.
+        if (!atomicCreateJson(claimLockFile(dispatchId), {
           dispatch_id: dispatchId,
-          consumer_id: consumerId,
-          claimed_at: new Date().toISOString(),
-        })
-          ? { claimed: true }
-          : { claimed: false };
+          recovery_started_at: new Date().toISOString(),
+        })) return { claimed: false };
+        try {
+          if (fs.existsSync(consumedFile(dispatchId))) return { claimed: false };
+          current = readJsonFile(claimFile(dispatchId));
+          if (current && current.consumer_id === consumerId) return { claimed: true };
+          if (!claimIsStale(current)) return { claimed: false };
+          if (current) releaseClaimFile(claimFile(dispatchId));
+          return atomicCreateJson(claimFile(dispatchId), candidate)
+            ? { claimed: true }
+            : { claimed: false };
+        } finally {
+          releaseClaimFile(claimLockFile(dispatchId));
+        }
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable receipt claim failed: ${error.message}`, { dispatch_id: dispatchId });
       }
@@ -181,24 +222,22 @@ function createDurableRecorder(storeDir) {
     consume(dispatchId, consumerId) {
       try {
         const claim = readJsonFile(claimFile(dispatchId));
-        if (claim && claim.consumer_id !== consumerId) return { consumed: false };
-        return atomicCreateJson(consumedFile(dispatchId), {
+        if (!claim || claim.consumer_id !== consumerId) return { consumed: false };
+        const consumed = atomicCreateJson(consumedFile(dispatchId), {
           dispatch_id: dispatchId,
           consumer_id: consumerId,
           consumed_at: new Date().toISOString(),
-        })
-          ? (claim && (() => {
-            try { fs.unlinkSync(claimFile(dispatchId)); } catch (error) {
-              if (!error || error.code !== 'ENOENT') throw error;
-            }
-            return { consumed: true };
-          })())
-            : { consumed: false };
+        });
+        if (!consumed) return { consumed: false };
+        releaseClaimFile(claimFile(dispatchId));
+        return { consumed: true };
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable receipt consumption failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
   });
+  DURABLE_RECORDERS.add(recorder);
+  return recorder;
 }
 
 function boundaryError(code, message, details = {}) {
@@ -576,7 +615,10 @@ function recorderRecord(recorder, recordInput) {
     ? { fn: recorder, receiver: null, name: 'dispatch recorder' }
     : recorderMethod(recorder, ['record']);
   if (!target) refuse('RECORD_UNAVAILABLE', 'durable dispatch recorder has no record method');
-  return invokeSync(target.fn, target.receiver, [recordInput], target.name);
+  const args = DURABLE_RECORDERS.has(recorder)
+    ? [recordInput, RECORDER_AUTHORITY]
+    : [recordInput];
+  return invokeSync(target.fn, target.receiver, args, target.name);
 }
 
 function recorderReserve(recorder, dispatchId, reservation) {

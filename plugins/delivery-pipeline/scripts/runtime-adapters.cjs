@@ -20,7 +20,7 @@ const CLAUDE_MODEL_ALIASES = Object.freeze({
 
 function modelFor(runtime, logicalModel) {
   const map = runtime === 'codex' ? CODEX_MODEL_IDS : runtime === 'claude' ? CLAUDE_MODEL_ALIASES : null;
-  return map && map[logicalModel];
+  return map && Object.prototype.hasOwnProperty.call(map, logicalModel) ? map[logicalModel] : undefined;
 }
 
 const RUNTIME_ADAPTERS = Object.freeze({
@@ -37,7 +37,9 @@ const RUNTIME_ADAPTERS = Object.freeze({
 });
 
 function adapterForRuntime(runtime) {
-  return RUNTIME_ADAPTERS[runtime] || null;
+  return Object.prototype.hasOwnProperty.call(RUNTIME_ADAPTERS, runtime)
+    ? RUNTIME_ADAPTERS[runtime]
+    : null;
 }
 
 // Export the adapter catalog as read-only compatibility data. Canonical policy

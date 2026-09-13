@@ -1,5 +1,7 @@
 'use strict';
 
+const path = require('path');
+const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const runtimeAdapters = require('../../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
@@ -174,6 +176,18 @@ test('judgement roles promote only on ADR-014 scoped signals and preserve all fi
   }
 });
 
+test('signal provenance does not leak one critical condition into another signal', () => {
+  const result = codex('decomposition', {
+    checkpoint: true,
+    contested: true,
+    inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
+  });
+  assert.equal(result.logical_rung, 'critical');
+  assert.deepStrictEqual(result.selected_signals.map((item) => item.signal), ['checkpoint']);
+  assert.ok(result.signal_reasons.some((item) => item.signal === 'contested' && item.applies === false));
+  assert.ok(result.signal_reasons.some((item) => item.signal === 'window' && item.applies === false));
+});
+
 test('window escalation uses only measured input against the fingerprinted threshold', () => {
   const threshold = policy.WINDOW_THRESHOLD_TOKENS;
   assert.equal(policy.POLICY.window_threshold_tokens, threshold);
@@ -326,6 +340,21 @@ test('resolution is immutable and exposes route, backend, mechanism, and reason 
   assert.match(result.signal_reasons.find((item) => item.signal === 'risk').reason, /inert|not a role-scoped/);
 });
 
+test('resolution validation covers rung index and every signal-reason field', () => {
+  const valid = codex('integrator', { critical: true }, { dispatch_id: 'validation-contract' });
+  assert.throws(
+    () => policy.validateResolution({ ...valid, rung_index: 0 }),
+    (error) => error.code === 'INVALID_RESOLUTION',
+  );
+  const forgedReasons = valid.signal_reasons.map((reason, index) => (
+    index === 0 ? { ...reason, applies: !reason.applies } : { ...reason }
+  ));
+  assert.throws(
+    () => policy.validateResolution({ ...valid, signal_reasons: forgedReasons }),
+    (error) => error.code === 'INVALID_RESOLUTION',
+  );
+});
+
 test('direct repair resolution does not accept caller-owned receipt evidence', () => {
   const priorApplied = priorReceipt('ci-fix', 'gpt-5.6-luna', 'max', 'luna-owned-by-caller');
   assert.equal(Object.isFrozen(priorApplied), false);
@@ -357,6 +386,19 @@ test('public resolver rejects caller-supplied receipt verifiers', () => {
   );
   assert.equal(verifierCalled, false);
   assert.equal(policy.validatePriorReceipt, undefined);
+});
+
+test('runtime catalog and internal CLI reject inherited or receipt-free selections', () => {
+  assert.equal(runtimeAdapters.modelFor('codex', 'toString'), undefined);
+  assert.equal(runtimeAdapters.adapterForRuntime('toString'), null);
+  const internalPolicy = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'model-policy-internal.cjs');
+  const repair = spawnSync(process.execPath, [
+    internalPolicy,
+    'resolve',
+    JSON.stringify({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'repeat' } }),
+  ], { encoding: 'utf8' });
+  assert.notEqual(repair.status, 0);
+  assert.match(repair.stderr, /usage/);
 });
 
 test('canonical policy ignores caller mutation attempts against runtime adapter exports', () => {

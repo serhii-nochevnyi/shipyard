@@ -342,6 +342,12 @@ function ruleMatches(rule, signals, threshold) {
   }));
 }
 
+function ruleMatchesSignal(rule, signals, signal, threshold) {
+  if (!rule || !Array.isArray(rule.any)) return false;
+  return rule.any.some((condition) => hasOwn(condition, signal)
+    && ruleMatches({ any: [condition] }, signals, threshold));
+}
+
 function evaluateSignals(role, rawSignals = {}, options = {}) {
   const normalizedRole = normalizeRole(role);
   const signals = normalizeSignals(rawSignals);
@@ -428,7 +434,7 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     );
   }
   if (signals.critical === true) {
-    const applies = ruleMatches(roleRules.critical, signals, threshold);
+    const applies = ruleMatchesSignal(roleRules.critical, signals, 'critical', threshold);
     const reason = applies
       ? `signals.critical=true selects the ${normalizedRole} critical rung`
       : FIXED_LUNA_ROLES.has(normalizedRole)
@@ -438,7 +444,7 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     if (applies) selected.push({ signal: 'critical', rung: 'critical', reason });
   }
   if (signals.checkpoint === true) {
-    const applies = ruleMatches(roleRules.critical, signals, threshold);
+    const applies = ruleMatchesSignal(roleRules.critical, signals, 'checkpoint', threshold);
     const reason = applies
       ? `signals.checkpoint=true selects the ${normalizedRole} critical rung`
       : FIXED_LUNA_ROLES.has(normalizedRole)
@@ -448,7 +454,7 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     if (applies) selected.push({ signal: 'checkpoint', rung: 'critical', reason });
   }
   if (signals.contested === true) {
-    const applies = ruleMatches(roleRules.critical, signals, threshold);
+    const applies = ruleMatchesSignal(roleRules.critical, signals, 'contested', threshold);
     const reason = applies
       ? 'signals.contested=true selects the judgement critical rung'
       : `contested judgement evidence does not promote ${normalizedRole}`;
@@ -461,7 +467,7 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     const reason = measuredWindow
       ? `signals.inputTokens=${signals.inputTokens} exceeds window threshold ${threshold}`
       : `measured input is at or below window threshold ${threshold}`;
-    const applies = measuredWindow && ruleMatches(roleRules.critical, signals, threshold);
+    const applies = measuredWindow && ruleMatchesSignal(roleRules.critical, signals, 'inputTokens', threshold);
     add(
       'window',
       'signals.inputTokens',
@@ -681,7 +687,9 @@ function validateResolution(resolution, options = {}) {
   for (const candidate of rungs) {
     if (selectedNames.has(candidate.name)) expectedRung = candidate;
   }
-  if (resolution.rung !== expectedRung.name || resolution.logical_rung !== expectedRung.name) {
+  if (resolution.rung !== expectedRung.name
+      || resolution.logical_rung !== expectedRung.name
+      || resolution.rung_index !== rungs.indexOf(expectedRung)) {
     refuse('INVALID_RESOLUTION', `resolution rung ${JSON.stringify(resolution.rung)} is not authorized by its canonical signals for ${role}`, {
       expected: expectedRung.name,
       actual: resolution.rung,
@@ -698,10 +706,11 @@ function validateResolution(resolution, options = {}) {
   const expectedRoute = `role=${role} rung=${expectedRung.name} model=${expectedRung.logical_model} signals=${selectedRoute}`;
   if (resolution.route !== expectedRoute
       || stableStringify(resolution.signals_fired) !== stableStringify(firedNames)
+      || stableStringify(resolution.signal_reasons) !== stableStringify(evaluation.reasons)
       || stableStringify(resolution.selected_signals) !== stableStringify(selectedReasons)) {
     refuse('INVALID_RESOLUTION', 'resolution signal provenance does not match the canonical policy evaluation', {
-      expected: { route: expectedRoute, signals_fired: firedNames, selected_signals: selectedReasons },
-      actual: { route: resolution.route, signals_fired: resolution.signals_fired, selected_signals: resolution.selected_signals },
+      expected: { route: expectedRoute, signals_fired: firedNames, signal_reasons: evaluation.reasons, selected_signals: selectedReasons },
+      actual: { route: resolution.route, signals_fired: resolution.signals_fired, signal_reasons: resolution.signal_reasons, selected_signals: resolution.selected_signals },
     });
   }
   const rung = rungs.find((entry) => entry.name === resolution.rung);
@@ -836,12 +845,8 @@ if (require.main === module) {
     const command = process.argv[2];
     if (command === 'fingerprint') {
       process.stdout.write(`${JSON.stringify({ policy_version: POLICY_VERSION, policy_hash: POLICY_HASH })}\n`);
-    } else if (command === 'resolve') {
-      const raw = process.argv[3];
-      const input = raw ? JSON.parse(raw) : JSON.parse(require('fs').readFileSync(0, 'utf8'));
-      process.stdout.write(`${JSON.stringify(resolveDispatch(input))}\n`);
     } else {
-      throw policyError('USAGE', 'usage: model-policy.cjs fingerprint | resolve <json>');
+      throw policyError('USAGE', 'usage: model-policy-internal.cjs fingerprint');
     }
   } catch (error) {
     process.stderr.write(`model-policy: ${error.message}\n`);
