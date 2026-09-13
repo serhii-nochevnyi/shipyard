@@ -8,6 +8,33 @@ const codex = (role, signals = {}, extra = {}) =>
 const claude = (role, signals = {}, extra = {}) =>
   policy.resolveDispatch({ runtime: 'claude', role, signals, ...extra });
 
+function priorReceipt(role, model, effort, dispatchId) {
+  const receipt = {
+    receipt_type: 'adr-014.application',
+    runtime: 'codex',
+    role,
+    dispatch_id: dispatchId,
+    launch_id: `launch-${dispatchId}`,
+    requested_model: model,
+    requested_effort: effort,
+    applied_model: model,
+    applied_effort: effort,
+    observed_model: model,
+    observed_effort: effort,
+    policy_hash: policy.POLICY_HASH,
+    compliance: 'verified',
+    compliance_proof: {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: policy.POLICY_HASH,
+      dispatch_id: dispatchId,
+      launch_id: `launch-${dispatchId}`,
+    },
+  };
+  policy.registerApplicationReceipt(receipt);
+  return receipt;
+}
+
 const CODEx_BASE = {
   research: ['terra', 'gpt-5.6-terra', 'high'],
   decomposition: ['sol', 'gpt-5.6-sol', 'medium'],
@@ -33,6 +60,15 @@ test('exposes exactly the nine routed roles and the concrete Codex palette', () 
   assert.equal(policy.POLICY.version, policy.POLICY_VERSION);
   assert.equal(policy.POLICY_HASH, policy.fingerprintPolicy(policy.POLICY));
   assert.match(policy.POLICY_HASH, /^[0-9a-f]{64}$/);
+});
+
+test('fingerprint covers escalation rules and repair prerequisites', () => {
+  const altered = JSON.parse(JSON.stringify(policy.POLICY));
+  altered.signal_rules.integrator.critical.any.push({ risk: 'high' });
+  assert.notEqual(policy.fingerprintPolicy(altered), policy.POLICY_HASH);
+  const alteredRepair = JSON.parse(JSON.stringify(policy.POLICY));
+  alteredRepair.repair_prerequisites['ci-fix'].repeat.effort = 'medium';
+  assert.notEqual(policy.fingerprintPolicy(alteredRepair), policy.POLICY_HASH);
 });
 
 test('resolves every base role to the ADR-014 logical and concrete tuple on Codex', () => {
@@ -93,10 +129,8 @@ test('research promotes alternatives and explicit very-complex, retaining both r
   assert.ok(result.signal_reasons.every((item) => item.applies === true));
 });
 
-test('decomposition uses only explicit critical/checkpoint evidence, not global risk', () => {
+test('decomposition uses only explicit checkpoint evidence, not global risk', () => {
   assert.equal(codex('decomposition', { risk: 'high' }).logical_rung, 'base');
-  assert.equal(codex('decomposition', { complexity: 'critical' }).logical_rung, 'critical');
-  assert.equal(codex('decomposition', { critical: true }).logical_rung, 'critical');
   assert.equal(codex('decomposition', { checkpoint: true }).logical_rung, 'critical');
   const result = codex('decomposition', { risk: 'high', checkpoint: true });
   assert.equal(result.logical_rung, 'critical');
@@ -109,8 +143,6 @@ test('judgement roles promote only on ADR-014 scoped signals and preserve all fi
   for (const role of ['integrator', 'arch-review']) {
     for (const signals of [
       { contested: true },
-      { complexity: 'critical' },
-      { critical: true },
       { checkpoint: true },
       { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 },
     ]) {
@@ -178,18 +210,17 @@ test('fixed Luna roles ignore global risk, checkpoint, and window promotion', ()
 test('repair escalation is ordered and requires the immediately preceding applied tuple', () => {
   assert.equal(codex('ci-fix', { signatureState: 'first' }).logical_rung, 'base');
   assert.equal(codex('review-fix', { signatureState: 'progress' }).logical_rung, 'base');
+  const luna = priorReceipt('ci-fix', 'gpt-5.6-luna', 'max', 'luna-1');
   assert.equal(codex('ci-fix', {
     signatureState: 'repeat',
-    priorApplied: { model: 'gpt-5.6-luna', effort: 'max', dispatchId: 'luna-1' },
-  }).logical_rung, 'repeat');
+    priorApplied: luna,
+  }, { previous_dispatch_id: 'luna-1' }).logical_rung, 'repeat');
+  const sol = priorReceipt('review-fix', 'gpt-5.6-sol', 'medium', 'sol-1');
   assert.equal(codex('review-fix', {
     signatureState: 'repeat_exhausted',
-    priorApplied: { model: 'gpt-5.6-sol', effort: 'medium', dispatchId: 'sol-1' },
-  }).logical_rung, 'repeat_exhausted');
-  assert.equal(codex('review-fix', {
-    signatureState: 'flake',
-    priorApplied: { model: 'gpt-5.6-luna', effort: 'max', dispatchId: 'luna-2' },
-  }).logical_rung, 'base');
+    priorApplied: sol,
+  }, { previous_dispatch_id: 'sol-1' }).logical_rung, 'repeat_exhausted');
+  assert.equal(codex('review-fix', { signatureState: 'flake' }).logical_rung, 'base');
   assert.throws(
     () => codex('ci-fix', { signatureState: 'repeat' }),
     (error) => error.code === 'MISSING_RECEIPT' && /preceding/.test(error.message),
@@ -197,9 +228,16 @@ test('repair escalation is ordered and requires the immediately preceding applie
   assert.throws(
     () => codex('ci-fix', {
       signatureState: 'repeat_exhausted',
-      priorApplied: { model: 'gpt-5.6-luna', effort: 'max', dispatchId: 'luna-3' },
-    }),
+      priorApplied: luna,
+    }, { previous_dispatch_id: 'luna-1' }),
     (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+  );
+  assert.throws(
+    () => codex('ci-fix', {
+      signatureState: 'repeat',
+      priorApplied: { model: 'gpt-5.6-luna', effort: 'max', dispatchId: 'forged' },
+    }, { previous_dispatch_id: 'forged' }),
+    (error) => error.code === 'MISSING_RECEIPT' || error.code === 'UNVERIFIED_RECEIPT',
   );
 });
 
@@ -245,6 +283,13 @@ test('unknown runtime, malformed signals, and unsupported signal names fail clos
     () => policy.resolveDispatch({ runtime: 'codex', role: 'executor', signals: { mystery: true } }),
     (error) => error.code === 'UNSUPPORTED_SIGNAL',
   );
+  for (const signals of [{ critical: true }, { alternatives: true }, { veryComplex: true }, { complexity: 'critical' }]) {
+    assert.throws(
+      () => policy.resolveDispatch({ runtime: 'codex', role: 'executor', signals }),
+      (error) => error.code === 'UNSUPPORTED_SIGNAL',
+      JSON.stringify(signals),
+    );
+  }
 });
 
 test('resolution is immutable and exposes route, backend, mechanism, and reason provenance', () => {
@@ -260,16 +305,12 @@ test('resolution is immutable and exposes route, backend, mechanism, and reason 
 });
 
 test('freezing a resolution does not freeze caller-owned prior receipt evidence', () => {
-  const priorApplied = {
-    model: 'gpt-5.6-luna',
-    effort: 'max',
-    dispatchId: 'luna-owned-by-caller',
-  };
-  const result = codex('ci-fix', { signatureState: 'repeat', priorApplied });
+  const priorApplied = priorReceipt('ci-fix', 'gpt-5.6-luna', 'max', 'luna-owned-by-caller');
+  const result = codex('ci-fix', { signatureState: 'repeat', priorApplied, }, { previous_dispatch_id: 'luna-owned-by-caller' });
   assert.ok(Object.isFrozen(result));
   assert.equal(Object.isFrozen(priorApplied), false);
-  priorApplied.dispatchId = 'caller-can-still-update-its-evidence';
-  assert.equal(priorApplied.dispatchId, 'caller-can-still-update-its-evidence');
+  priorApplied.applied_model = 'caller-can-still-update-its-evidence';
+  assert.equal(priorApplied.applied_model, 'caller-can-still-update-its-evidence');
 });
 
 done();

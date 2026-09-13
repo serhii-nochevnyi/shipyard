@@ -9,6 +9,8 @@
 // runtime adapter to apply and later prove.
 
 const crypto = require('crypto');
+const runtimeAdapters = require('./runtime-adapters.cjs');
+const { CODEX_MODEL_IDS, CLAUDE_MODEL_ALIASES } = runtimeAdapters;
 
 const POLICY_VERSION = 'adr-014.v1';
 const SUPPORTED_RUNTIMES = Object.freeze(['codex', 'claude']);
@@ -38,28 +40,17 @@ const ROLES = Object.freeze([
   'review-fix',
 ]);
 
-const DYNAMIC_ROLES = new Set(['executor', 'decomposition']);
-const REPAIR_ROLES = new Set(['ci-fix', 'review-fix']);
-const JUDGEMENT_ROLES = new Set(['integrator', 'arch-review']);
-const FIXED_LUNA_ROLES = new Set(['executor', 'pr-sentinel', 'drift-check']);
-
-const CODEX_MODEL_IDS = Object.freeze({
-  terra: ['gpt', '5.6', 'terra'].join('-'),
-  sol: ['gpt', '5.6', 'sol'].join('-'),
-  luna: ['gpt', '5.6', 'luna'].join('-'),
-  astra: ['gpt', '6', 'astra'].join('-'),
+const ROLE_CLASSES = Object.freeze({
+  dynamic: Object.freeze(['executor', 'decomposition']),
+  repair: Object.freeze(['ci-fix', 'review-fix']),
+  judgement: Object.freeze(['integrator', 'arch-review']),
+  fixed_luna: Object.freeze(['executor', 'pr-sentinel', 'drift-check']),
 });
 
-// Claude's palette is runtime-owned.  These are aliases, not model ids, and
-// are kept here only to make the canonical result concrete on that runtime.
-// The Claude adapter is responsible for proving that the selected alias and
-// effort can actually be applied by its host.
-const CLAUDE_MODEL_ALIASES = Object.freeze({
-  terra: 'sonnet',
-  sol: 'opus',
-  luna: 'opus',
-  astra: 'fable',
-});
+const DYNAMIC_ROLES = new Set(ROLE_CLASSES.dynamic);
+const REPAIR_ROLES = new Set(ROLE_CLASSES.repair);
+const JUDGEMENT_ROLES = new Set(ROLE_CLASSES.judgement);
+const FIXED_LUNA_ROLES = new Set(ROLE_CLASSES.fixed_luna);
 
 const ROLE_RUNG_DEFINITIONS = Object.freeze({
   research: Object.freeze([
@@ -98,6 +89,41 @@ const ROLE_RUNG_DEFINITIONS = Object.freeze({
     Object.freeze({ name: 'repeat', logical_model: 'sol', effort: 'medium' }),
     Object.freeze({ name: 'repeat_exhausted', logical_model: 'astra', effort: 'medium' }),
   ]),
+});
+
+// Escalation semantics are data, not an un-fingerprinted collection of
+// conditionals.  The evaluator below reads this table, so changing a signal,
+// role classification, or repair prerequisite changes POLICY_HASH as well.
+const ROLE_SIGNAL_RULES = Object.freeze({
+  research: Object.freeze({
+    alternatives: Object.freeze({ rung: 'alternatives', any: Object.freeze([{ type: 'alternatives' }]) }),
+    'very-complex': Object.freeze({ rung: 'very-complex', any: Object.freeze([{ complexity: 'very-complex' }]) }),
+  }),
+  decomposition: Object.freeze({
+    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ checkpoint: true }]) }),
+  }),
+  integrator: Object.freeze({
+    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }]) }),
+  }),
+  'arch-review': Object.freeze({
+    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }]) }),
+  }),
+  'ci-fix': Object.freeze({
+    repeat: Object.freeze({ rung: 'repeat', any: Object.freeze([{ signatureState: 'repeat' }]), prerequisite: 'luna/max' }),
+    repeat_exhausted: Object.freeze({ rung: 'repeat_exhausted', any: Object.freeze([{ signatureState: 'repeat_exhausted' }]), prerequisite: 'sol/medium' }),
+  }),
+  'review-fix': Object.freeze({
+    repeat: Object.freeze({ rung: 'repeat', any: Object.freeze([{ signatureState: 'repeat' }]), prerequisite: 'luna/max' }),
+    repeat_exhausted: Object.freeze({ rung: 'repeat_exhausted', any: Object.freeze([{ signatureState: 'repeat_exhausted' }]), prerequisite: 'sol/medium' }),
+  }),
+  'pr-sentinel': Object.freeze({}),
+  executor: Object.freeze({}),
+  'drift-check': Object.freeze({}),
+});
+
+const REPAIR_PREREQUISITES = Object.freeze({
+  'ci-fix': Object.freeze({ repeat: Object.freeze({ logical_model: 'luna', effort: 'max' }), repeat_exhausted: Object.freeze({ logical_model: 'sol', effort: 'medium' }) }),
+  'review-fix': Object.freeze({ repeat: Object.freeze({ logical_model: 'luna', effort: 'max' }), repeat_exhausted: Object.freeze({ logical_model: 'sol', effort: 'medium' }) }),
 });
 
 // Static Codex roles are represented by generated files.  Dynamic roles must
@@ -141,18 +167,38 @@ const POLICY = deepFreeze({
   version: POLICY_VERSION,
   window_threshold_tokens: WINDOW_THRESHOLD_TOKENS,
   runtimes: {
-    codex: { models: CODEX_MODEL_IDS },
-    claude: { models: CLAUDE_MODEL_ALIASES },
+    codex: { adapter: 'codex' },
+    claude: { adapter: 'claude' },
   },
   roles: ROLE_RUNG_DEFINITIONS,
+  role_classes: ROLE_CLASSES,
+  signal_rules: ROLE_SIGNAL_RULES,
+  repair_prerequisites: REPAIR_PREREQUISITES,
 });
 
 const POLICY_HASH = fingerprintPolicy(POLICY);
+const TRUSTED_RECEIPTS = new Map();
+
+const APPLICATION_RECEIPT_FIELDS = Object.freeze([
+  'receipt_type',
+  'runtime',
+  'role',
+  'dispatch_id',
+  'launch_id',
+  'requested_model',
+  'requested_effort',
+  'applied_model',
+  'applied_effort',
+  'observed_model',
+  'observed_effort',
+  'policy_hash',
+  'compliance',
+  'compliance_proof',
+]);
 
 const SIGNAL_ORDER = Object.freeze([
   'type',
   'complexity',
-  'critical',
   'risk',
   'checkpoint',
   'contested',
@@ -161,11 +207,7 @@ const SIGNAL_ORDER = Object.freeze([
   'priorApplied',
 ]);
 
-const SIGNAL_KEYS = new Set([
-  ...SIGNAL_ORDER,
-  'alternatives',
-  'veryComplex',
-]);
+const SIGNAL_KEYS = new Set(SIGNAL_ORDER);
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
@@ -251,16 +293,16 @@ function normalizeSignals(raw) {
     out.type = signals.type;
   }
   if (hasOwn(signals, 'complexity')) {
-    if (!['normal', 'very-complex', 'critical'].includes(signals.complexity)) {
+    if (!['normal', 'very-complex'].includes(signals.complexity)) {
       refuse(
         'UNSUPPORTED_SIGNAL',
-        `signals.complexity ${JSON.stringify(signals.complexity)} is not normal, very-complex, or critical`,
+        `signals.complexity ${JSON.stringify(signals.complexity)} is not normal or very-complex`,
         { signal: 'complexity' },
       );
     }
     out.complexity = signals.complexity;
   }
-  for (const name of ['critical', 'checkpoint', 'contested', 'alternatives', 'veryComplex']) {
+  for (const name of ['checkpoint', 'contested']) {
     if (hasOwn(signals, name)) out[name] = booleanSignal(signals[name], name);
   }
   if (hasOwn(signals, 'risk')) {
@@ -288,14 +330,25 @@ function normalizeSignals(raw) {
 }
 
 function logicalModelFor(runtime, logicalModel) {
-  const map = runtime === 'codex' ? CODEX_MODEL_IDS : CLAUDE_MODEL_ALIASES;
-  const model = map[logicalModel];
+  const adapter = runtimeAdapters.adapterForRuntime(runtime);
+  const model = adapter && adapter.modelFor(logicalModel);
   if (!model) refuse('UNSUPPORTED_SELECTION', `no ${runtime} model is registered for logical model ${logicalModel}`);
   return model;
 }
 
 function activeSignal(value) {
   return value !== undefined && value !== false && value !== null;
+}
+
+function ruleMatches(rule, signals, threshold) {
+  if (!rule || !Array.isArray(rule.any)) return false;
+  return rule.any.some((condition) => Object.entries(condition).every(([name, expected]) => {
+    const actual = signals[name];
+    if (expected && typeof expected === 'object' && expected.gt_policy === 'window_threshold_tokens') {
+      return Number.isInteger(actual) && actual > threshold;
+    }
+    return actual === expected;
+  }));
 }
 
 function evaluateSignals(role, rawSignals = {}, options = {}) {
@@ -312,6 +365,7 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     );
   }
   const threshold = WINDOW_THRESHOLD_TOKENS;
+  const roleRules = ROLE_SIGNAL_RULES[normalizedRole] || {};
   const reasons = [];
   const selected = [];
 
@@ -337,7 +391,7 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
   // "the caller never supplied the risk/checkpoint/window fact".
   if (hasOwn(signals, 'type')) {
     const alternatives = signals.type === 'alternatives';
-    if (alternatives && normalizedRole === 'research') {
+    if (alternatives && ruleMatches(roleRules.alternatives, signals, threshold)) {
       choose('alternatives', 'signals.type', signals.type, 'alternatives', 'signals.type=alternatives selects the research alternatives rung');
     } else {
       add(
@@ -352,45 +406,21 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
       );
     }
   }
-  if (signals.alternatives === true) {
-    if (normalizedRole === 'research') {
-      choose('alternatives', 'signals.alternatives', true, 'alternatives', 'signals.alternatives=true selects the research alternatives rung');
-    } else {
-      add('alternatives', 'signals.alternatives', true, false, null, `alternatives does not promote ${normalizedRole}`);
-    }
-  }
-
-  const veryComplex = signals.complexity === 'very-complex' || signals.veryComplex === true;
+  const veryComplex = signals.complexity === 'very-complex';
   if (hasOwn(signals, 'complexity')) {
-    if (signals.complexity === 'very-complex' && normalizedRole === 'research') {
+    if (signals.complexity === 'very-complex' && ruleMatches(roleRules['very-complex'], signals, threshold)) {
       choose('very-complex', 'signals.complexity', signals.complexity, 'very-complex', 'signals.complexity=very-complex selects the research ceiling rung');
-    } else if (signals.complexity === 'critical' && (normalizedRole === 'decomposition' || JUDGEMENT_ROLES.has(normalizedRole))) {
-      choose('critical', 'signals.complexity', signals.complexity, 'critical', `signals.complexity=critical selects the ${normalizedRole} critical rung`);
     } else {
       add(
-        signals.complexity === 'very-complex' ? 'very-complex' : signals.complexity === 'critical' ? 'critical' : 'complexity',
+        signals.complexity === 'very-complex' ? 'very-complex' : 'complexity',
         'signals.complexity',
         signals.complexity,
         false,
         null,
         veryComplex
           ? `very-complex is scoped to research and does not promote ${normalizedRole}`
-          : 'normal/critical classification does not select a rung for this role',
+          : 'normal classification does not select a rung for this role',
       );
-    }
-  }
-  if (signals.veryComplex === true) {
-    if (normalizedRole === 'research') {
-      choose('very-complex', 'signals.veryComplex', true, 'very-complex', 'signals.veryComplex=true selects the research ceiling rung');
-    } else {
-      add('very-complex', 'signals.veryComplex', true, false, null, `very-complex is scoped to research and does not promote ${normalizedRole}`);
-    }
-  }
-  if (signals.critical === true) {
-    if (normalizedRole === 'decomposition' || JUDGEMENT_ROLES.has(normalizedRole)) {
-      choose('critical', 'signals.critical', true, 'critical', `signals.critical=true selects the ${normalizedRole} critical rung`);
-    } else {
-      add('critical', 'signals.critical', true, false, null, `explicit critical classification does not promote ${normalizedRole}`);
     }
   }
 
@@ -407,7 +437,7 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     );
   }
   if (signals.checkpoint === true) {
-    const applies = normalizedRole === 'decomposition' || JUDGEMENT_ROLES.has(normalizedRole);
+    const applies = ruleMatches(roleRules.critical, signals, threshold);
     const reason = applies
       ? `signals.checkpoint=true selects the ${normalizedRole} critical rung`
       : FIXED_LUNA_ROLES.has(normalizedRole)
@@ -417,7 +447,7 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     if (applies) selected.push({ signal: 'checkpoint', rung: 'critical', reason });
   }
   if (signals.contested === true) {
-    const applies = JUDGEMENT_ROLES.has(normalizedRole);
+    const applies = ruleMatches(roleRules.critical, signals, threshold);
     const reason = applies
       ? 'signals.contested=true selects the judgement critical rung'
       : `contested judgement evidence does not promote ${normalizedRole}`;
@@ -430,7 +460,7 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     const reason = measuredWindow
       ? `signals.inputTokens=${signals.inputTokens} exceeds window threshold ${threshold}`
       : `measured input is at or below window threshold ${threshold}`;
-    const applies = measuredWindow && JUDGEMENT_ROLES.has(normalizedRole);
+    const applies = measuredWindow && ruleMatches(roleRules.critical, signals, threshold);
     add(
       'window',
       'signals.inputTokens',
@@ -448,7 +478,7 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
 
   if (hasOwn(signals, 'signatureState')) {
     const state = signals.signatureState;
-    const applies = REPAIR_ROLES.has(normalizedRole) && (state === 'repeat' || state === 'repeat_exhausted');
+    const applies = Boolean(roleRules[state]) && ruleMatches(roleRules[state], signals, threshold);
     const reason = applies
       ? `signals.signatureState=${state} selects the ${state} repair rung after receipt validation`
       : ['flake', 'plan_defect'].includes(state)
@@ -516,6 +546,60 @@ function previousReceiptFor(input, signals) {
   return value;
 }
 
+function receiptCandidate(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (raw.application_receipt && typeof raw.application_receipt === 'object' && !Array.isArray(raw.application_receipt)) {
+    return raw.application_receipt;
+  }
+  if (raw.receipt && typeof raw.receipt === 'object' && !Array.isArray(raw.receipt)) {
+    return raw.receipt;
+  }
+  return raw;
+}
+
+function validateApplicationReceiptShape(raw, { requireRole = true } = {}) {
+  const receipt = receiptCandidate(raw);
+  if (!receipt) refuse('MISSING_RECEIPT', 'application receipt must be an object');
+  for (const field of APPLICATION_RECEIPT_FIELDS) {
+    if (!hasOwn(receipt, field)) refuse('MISSING_RECEIPT', `application receipt is missing ${field}`, { field });
+  }
+  if (receipt.receipt_type !== 'adr-014.application') {
+    refuse('NONCOMPLIANT_RECEIPT', 'application receipt has an unknown receipt_type');
+  }
+  opaqueId(receipt.runtime, 'runtime');
+  if (requireRole) normalizeRole(receipt.role);
+  opaqueId(receipt.dispatch_id, 'dispatch_id');
+  opaqueId(receipt.launch_id, 'launch_id');
+  opaqueId(receipt.policy_hash, 'policy_hash');
+  if (receipt.policy_hash !== POLICY_HASH) {
+    refuse('STALE_POLICY_RECEIPT', 'application receipt has a stale policy fingerprint', { expected: POLICY_HASH, actual: receipt.policy_hash });
+  }
+  if (receipt.compliance !== 'verified' || !receipt.compliance_proof || typeof receipt.compliance_proof !== 'object' || Array.isArray(receipt.compliance_proof)) {
+    refuse('NONCOMPLIANT_RECEIPT', 'application receipt lacks the boundary compliance proof');
+  }
+  const proof = receipt.compliance_proof;
+  if (proof.status !== 'verified' || proof.boundary !== 'adr-014.dispatch-boundary' || proof.policy_hash !== receipt.policy_hash || proof.dispatch_id !== receipt.dispatch_id || proof.launch_id !== receipt.launch_id) {
+    refuse('NONCOMPLIANT_RECEIPT', 'application receipt compliance proof is incomplete or contradictory');
+  }
+  for (const field of ['requested_model', 'requested_effort', 'applied_model', 'applied_effort', 'observed_model', 'observed_effort']) {
+    if (receipt[field] !== 'unknown' && !nonEmptyString(receipt[field])) {
+      refuse('INVALID_RECEIPT', `application receipt ${field} must be concrete or unknown`, { field });
+    }
+  }
+  return receipt;
+}
+
+function registerApplicationReceipt(raw) {
+  const receipt = validateApplicationReceiptShape(raw);
+  const stored = deepFreeze(cloneValue(receipt));
+  const prior = TRUSTED_RECEIPTS.get(stored.dispatch_id);
+  if (prior && stableStringify(prior) !== stableStringify(stored)) {
+    refuse('NONCOMPLIANT_RECEIPT', 'dispatch id was already registered with different application evidence', { dispatch_id: stored.dispatch_id });
+  }
+  TRUSTED_RECEIPTS.set(stored.dispatch_id, stored);
+  return stored;
+}
+
 function validatePriorReceipt({ input, signals, runtime, role, requiredLogicalModel, requiredEffort }) {
   const raw = previousReceiptFor(input, signals);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -525,26 +609,17 @@ function validatePriorReceipt({ input, signals, runtime, role, requiredLogicalMo
       { role, signatureState: signals.signatureState },
     );
   }
-  const receipt = raw.receipt && typeof raw.receipt === 'object' ? { ...raw, ...raw.receipt } : raw;
-  if (receipt.compliant === false || receipt.compliance === 'failed' || receipt.valid === false) {
-    refuse('NONCOMPLIANT_RECEIPT', `${role} cannot escalate from a non-compliant prior receipt`, { role });
+  const receipt = validateApplicationReceiptShape(raw);
+  const previousDispatchId = input.previous_dispatch_id;
+  if (!nonEmptyString(previousDispatchId) || previousDispatchId !== receipt.dispatch_id) {
+    refuse('MISSING_RECEIPT', `${role} ${signals.signatureState} escalation must identify its immediately preceding dispatch_id`, { expected: receipt.dispatch_id, actual: previousDispatchId });
   }
-  const appliedModel = receipt.applied_model !== undefined ? receipt.applied_model : receipt.model;
-  const appliedEffort = receipt.applied_effort !== undefined ? receipt.applied_effort : receipt.effort;
-  const dispatchId = receipt.dispatch_id !== undefined
-    ? receipt.dispatch_id
-    : receipt.dispatchId !== undefined
-      ? receipt.dispatchId
-      : receipt.launch_id !== undefined
-        ? receipt.launch_id
-        : receipt.launchId;
-  if (!nonEmptyString(appliedModel) || !nonEmptyString(appliedEffort) || !nonEmptyString(dispatchId)) {
-    refuse(
-      'MISSING_RECEIPT',
-      `${role} ${signals.signatureState} escalation needs applied model, applied effort, and dispatch id from the preceding receipt`,
-      { role, signatureState: signals.signatureState },
-    );
+  const trusted = TRUSTED_RECEIPTS.get(receipt.dispatch_id);
+  if (!trusted || stableStringify(trusted) !== stableStringify(receipt)) {
+    refuse('UNVERIFIED_RECEIPT', `${role} ${signals.signatureState} escalation requires a receipt verified by the dispatch boundary`, { dispatch_id: receipt.dispatch_id });
   }
+  const appliedModel = receipt.applied_model;
+  const appliedEffort = receipt.applied_effort;
   const expectedModel = logicalModelFor(runtime, requiredLogicalModel);
   if (appliedModel !== expectedModel || appliedEffort !== requiredEffort) {
     refuse(
@@ -553,23 +628,20 @@ function validatePriorReceipt({ input, signals, runtime, role, requiredLogicalMo
       { role, signatureState: signals.signatureState, expected: { model: expectedModel, effort: requiredEffort }, actual: { model: appliedModel, effort: appliedEffort } },
     );
   }
-  if (receipt.runtime !== undefined && receipt.runtime !== runtime) {
+  if (receipt.runtime !== runtime) {
     refuse('NONCOMPLIANT_RECEIPT', `prior receipt runtime ${JSON.stringify(receipt.runtime)} does not match ${runtime}`, { runtime, prior: receipt.runtime });
   }
-  if (receipt.role !== undefined && receipt.role !== role) {
+  if (receipt.role !== role) {
     refuse('NONCOMPLIANT_RECEIPT', `prior receipt role ${JSON.stringify(receipt.role)} does not match ${role}`, { role, prior: receipt.role });
   }
-  if (receipt.policy_hash !== undefined && receipt.policy_hash !== POLICY_HASH) {
-    refuse('STALE_POLICY_RECEIPT', 'prior applied receipt has a stale policy fingerprint', { expected: POLICY_HASH, actual: receipt.policy_hash });
-  }
-  if (receipt.requested_model !== undefined && receipt.requested_model !== expectedModel) {
+  if (receipt.requested_model !== expectedModel) {
     refuse('NONCOMPLIANT_RECEIPT', 'prior receipt requested model does not match its applied model', { expected: expectedModel, actual: receipt.requested_model });
   }
-  if (receipt.requested_effort !== undefined && receipt.requested_effort !== requiredEffort) {
+  if (receipt.requested_effort !== requiredEffort) {
     refuse('NONCOMPLIANT_RECEIPT', 'prior receipt requested effort does not match its applied effort', { expected: requiredEffort, actual: receipt.requested_effort });
   }
   return {
-    dispatch_id: nonEmptyString(dispatchId),
+    dispatch_id: nonEmptyString(receipt.dispatch_id),
     model: nonEmptyString(appliedModel),
     effort: nonEmptyString(appliedEffort),
   };
@@ -762,23 +834,15 @@ function resolveDispatch(input) {
     if (selectedNames.has(candidate.name)) rung = candidate;
   }
 
-  if (REPAIR_ROLES.has(role) && signals.signatureState === 'repeat') {
+  const repairPrerequisite = REPAIR_PREREQUISITES[role] && REPAIR_PREREQUISITES[role][signals.signatureState];
+  if (repairPrerequisite) {
     priorReceipt = validatePriorReceipt({
       input,
       signals,
       runtime,
       role,
-      requiredLogicalModel: 'luna',
-      requiredEffort: 'max',
-    });
-  } else if (REPAIR_ROLES.has(role) && signals.signatureState === 'repeat_exhausted') {
-    priorReceipt = validatePriorReceipt({
-      input,
-      signals,
-      runtime,
-      role,
-      requiredLogicalModel: 'sol',
-      requiredEffort: 'medium',
+      requiredLogicalModel: repairPrerequisite.logical_model,
+      requiredEffort: repairPrerequisite.effort,
     });
   }
 
@@ -837,6 +901,10 @@ module.exports = {
   WINDOW_THRESHOLD_TOKENS,
   CODEX_MODEL_IDS,
   CLAUDE_MODEL_ALIASES,
+  RUNTIME_ADAPTERS: runtimeAdapters.RUNTIME_ADAPTERS,
+  ROLE_CLASSES,
+  ROLE_SIGNAL_RULES,
+  REPAIR_PREREQUISITES,
   ROLE_RUNG_DEFINITIONS,
   DYNAMIC_ROLES: Object.freeze([...DYNAMIC_ROLES]),
   REPAIR_ROLES: Object.freeze([...REPAIR_ROLES]),
@@ -848,6 +916,8 @@ module.exports = {
   normalizeSignals,
   evaluateSignals,
   validatePriorReceipt,
+  validateApplicationReceiptShape,
+  registerApplicationReceipt,
   validateResolution,
   resolveDispatch,
   codexAgentFile,
