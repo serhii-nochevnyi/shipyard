@@ -900,7 +900,7 @@ function resolveDispatch(input, internalOptions = {}) {
   return deepFreeze(resolution);
 }
 
-module.exports = {
+module.exports = Object.freeze({
   POLICY,
   POLICY_VERSION,
   POLICY_HASH,
@@ -934,7 +934,7 @@ module.exports = {
   codexAgentFile,
   variantSuffix,
   policyError,
-};
+});
 
 if (require.main === module) {
   try {

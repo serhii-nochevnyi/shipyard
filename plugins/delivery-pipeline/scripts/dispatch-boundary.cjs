@@ -8,6 +8,9 @@
 
 const crypto = require('crypto');
 const defaultPolicy = require('./model-policy.cjs');
+const canonicalResolveDispatch = defaultPolicy.resolveDispatch;
+const canonicalValidateResolution = defaultPolicy.validateResolution;
+const canonicalStableStringify = defaultPolicy.stableStringify;
 
 const OBSERVATION_UNKNOWN = 'unknown';
 
@@ -118,8 +121,8 @@ function adapterSupports(adapter, resolution) {
   }
 }
 
-function validateWithAdapter(resolution, adapter, policy) {
-  policy.validateResolution(resolution, { requireDispatchId: true });
+function validateWithAdapter(resolution, adapter) {
+  canonicalValidateResolution(resolution, { requireDispatchId: true });
   adapterSupports(adapter, resolution);
   let validatedResolution = resolution;
   if (resolution.agent_file) {
@@ -175,7 +178,7 @@ function verifyApplicationReceipt(resolution, rawReceipt, options = {}) {
   if (!isObject(receipt)) {
     refuse('MISSING_RECEIPT', 'launch did not return an application receipt; a successful process exit is not evidence of application');
   }
-  for (const field of [
+  const requiredFields = [
     'receipt_type',
     'runtime',
     'role',
@@ -186,9 +189,11 @@ function verifyApplicationReceipt(resolution, rawReceipt, options = {}) {
     'applied_model',
     'applied_effort',
     'policy_hash',
-    'compliance',
-    'compliance_proof',
-  ]) {
+  ];
+  if (options.requireComplianceProof !== false) {
+    requiredFields.push('compliance', 'compliance_proof');
+  }
+  for (const field of requiredFields) {
     if (!Object.prototype.hasOwnProperty.call(receipt, field)) {
       refuse('MISSING_RECEIPT', `application receipt is missing ${field}`, { field });
     }
@@ -235,15 +240,17 @@ function verifyApplicationReceipt(resolution, rawReceipt, options = {}) {
   if (receipt.mechanism !== undefined && receipt.mechanism !== resolution.mechanism) {
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt mechanism does not match the resolved mechanism', { expected: resolution.mechanism, actual: receipt.mechanism });
   }
-  if (receipt.compliance !== 'verified' || !isObject(receipt.compliance_proof)) {
-    refuse('NONCOMPLIANT_RECEIPT', 'application receipt must carry boundary compliance proof');
-  }
-  if (receipt.compliance_proof.status !== 'verified'
-      || receipt.compliance_proof.boundary !== 'adr-014.dispatch-boundary'
-      || receipt.compliance_proof.policy_hash !== receipt.policy_hash
-      || receipt.compliance_proof.dispatch_id !== receipt.dispatch_id
-      || receipt.compliance_proof.launch_id !== receipt.launch_id) {
-    refuse('NONCOMPLIANT_RECEIPT', 'application receipt compliance proof is incomplete or contradictory');
+  if (options.requireComplianceProof !== false) {
+    if (receipt.compliance !== 'verified' || !isObject(receipt.compliance_proof)) {
+      refuse('NONCOMPLIANT_RECEIPT', 'application receipt must carry boundary compliance proof');
+    }
+    if (receipt.compliance_proof.status !== 'verified'
+        || receipt.compliance_proof.boundary !== 'adr-014.dispatch-boundary'
+        || receipt.compliance_proof.policy_hash !== receipt.policy_hash
+        || receipt.compliance_proof.dispatch_id !== receipt.dispatch_id
+        || receipt.compliance_proof.launch_id !== receipt.launch_id) {
+      refuse('NONCOMPLIANT_RECEIPT', 'application receipt compliance proof is incomplete or contradictory');
+    }
   }
   if (resolution.agent_file) {
     if (typeof resolution.agent_file_digest !== 'string' || receipt.agent_file_digest !== resolution.agent_file_digest) {
@@ -261,6 +268,31 @@ function verifyApplicationReceipt(resolution, rawReceipt, options = {}) {
     observed_effort: observedEffort,
   };
   return deepFreeze(normalized);
+}
+
+function withoutBoundaryClaims(evidence) {
+  const {
+    compliance: ignoredCompliance,
+    compliance_proof: ignoredProof,
+    observation_unavailable: ignoredObservationCapability,
+    ...applicationEvidence
+  } = evidence;
+  return applicationEvidence;
+}
+
+function finalizeApplicationReceipt(resolution, evidence, adapter) {
+  const finalized = {
+    ...withoutBoundaryClaims(evidence),
+    compliance: 'verified',
+    compliance_proof: {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: resolution.policy_hash,
+      dispatch_id: resolution.dispatch_id,
+      launch_id: evidence.launch_id,
+    },
+  };
+  return verifyApplicationReceipt(resolution, finalized, { adapter });
 }
 
 function recorderFor(options, adapter) {
@@ -318,7 +350,7 @@ function createDispatchBoundary(options = {}) {
   }
 
   function stableReceipt(receipt) {
-    return defaultPolicy.stableStringify(receipt);
+    return canonicalStableStringify(receipt);
   }
 
   function resolve(input) {
@@ -327,14 +359,14 @@ function createDispatchBoundary(options = {}) {
       || Object.prototype.hasOwnProperty.call(input, 'dispatchId')
       ? input
       : { ...input, dispatch_id: newDispatchId() };
-    return deepFreeze(snapshot(policy.resolveDispatch(withId, {
+    return deepFreeze(snapshot(canonicalResolveDispatch(withId, {
       receiptVerifier: verifyPriorReceipt,
     })));
   }
 
   function validate(resolution, validateOptions = {}) {
     const adapter = validateOptions.adapter || adapterFor(validateOptions.adapters || adapters, resolution && resolution.runtime);
-    validateWithAdapter(resolution, adapter, policy);
+    validateWithAdapter(resolution, adapter);
     return true;
   }
 
@@ -354,13 +386,16 @@ function createDispatchBoundary(options = {}) {
     const stages = [
       { stage: 'resolve', status: 'passed', policy_version: resolution.policy_version, policy_hash: resolution.policy_hash },
     ];
-    const validatedResolution = validateWithAdapter(resolution, adapter, policy);
+    const validatedResolution = validateWithAdapter(resolution, adapter);
     stages.push({ stage: 'validate', status: 'passed' });
     const finish = (launchResult) => {
       const rawReceipt = unwrapReceipt(launchResult);
-      const applicationReceipt = verifyApplicationReceipt(validatedResolution, rawReceipt, { adapter });
-      stages.push({ stage: 'launch', status: 'passed', launch_id: applicationReceipt.launch_id });
-      stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
+      const applicationEvidence = verifyApplicationReceipt(validatedResolution, rawReceipt, {
+        adapter,
+        requireComplianceProof: false,
+      });
+      const strippedEvidence = withoutBoundaryClaims(applicationEvidence);
+      stages.push({ stage: 'launch', status: 'passed', launch_id: strippedEvidence.launch_id });
 
       const baseTrace = {
       dispatch_id: validatedResolution.dispatch_id,
@@ -375,26 +410,37 @@ function createDispatchBoundary(options = {}) {
       mechanism: validatedResolution.mechanism,
       resolution: validatedResolution,
       requested: { model: validatedResolution.requested_model, effort: validatedResolution.requested_effort },
-      applied: { model: applicationReceipt.applied_model, effort: applicationReceipt.applied_effort },
-      observed: { model: applicationReceipt.observed_model, effort: applicationReceipt.observed_effort },
+      applied: { model: strippedEvidence.applied_model, effort: strippedEvidence.applied_effort },
+      observed: { model: strippedEvidence.observed_model, effort: strippedEvidence.observed_effort },
       requested_model: validatedResolution.requested_model,
       requested_effort: validatedResolution.requested_effort,
-      applied_model: applicationReceipt.applied_model,
-      applied_effort: applicationReceipt.applied_effort,
-      observed_model: applicationReceipt.observed_model,
-      observed_effort: applicationReceipt.observed_effort,
-      receipt: applicationReceipt,
+      applied_model: strippedEvidence.applied_model,
+      applied_effort: strippedEvidence.applied_effort,
+      observed_model: strippedEvidence.observed_model,
+      observed_effort: strippedEvidence.observed_effort,
+      application_evidence: strippedEvidence,
+      receipt: strippedEvidence,
       };
-      if (record) {
-        const recordInput = deepFreeze(snapshot({ ...baseTrace, trace: [...stages] }));
-        const result = invokeSync(record, null, [recordInput], 'dispatch recorder');
-        if (result === false || result && result.recorded === false) {
-          refuse('RECORD_FAILED', 'dispatch receipt could not be recorded; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
-        }
-        stages.push({ stage: 'record', status: 'passed' });
+      const recordInput = deepFreeze(snapshot({ ...baseTrace, trace: [...stages] }));
+      const recordResult = invokeSync(record, null, [recordInput], 'dispatch recorder');
+      if (recordResult !== true && !(recordResult && recordResult.recorded === true)) {
+        refuse('RECORD_FAILED', 'durable dispatch recording did not return affirmative acknowledgement; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
       }
+      stages.push({ stage: 'record', status: 'passed' });
+      const applicationReceipt = finalizeApplicationReceipt(validatedResolution, applicationEvidence, adapter);
+      stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
       registerReceipt(applicationReceipt);
-      return deepFreeze(snapshot({ ...baseTrace, trace: stages }));
+      return deepFreeze(snapshot({
+        ...baseTrace,
+        applied: { model: applicationReceipt.applied_model, effort: applicationReceipt.applied_effort },
+        observed: { model: applicationReceipt.observed_model, effort: applicationReceipt.observed_effort },
+        applied_model: applicationReceipt.applied_model,
+        applied_effort: applicationReceipt.applied_effort,
+        observed_model: applicationReceipt.observed_model,
+        observed_effort: applicationReceipt.observed_effort,
+        receipt: applicationReceipt,
+        trace: stages,
+      }));
     };
     const fn = typeof adapter.launch === 'function'
       ? adapter.launch

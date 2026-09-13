@@ -61,7 +61,10 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
     adapters: {
       codex: fakeAdapter({ onLaunch: (resolution, context) => calls.push({ resolution, context }) }),
     },
-    recorder: (trace) => recorded.push(trace),
+    recorder: (trace) => {
+      recorded.push(trace);
+      return true;
+    },
   });
   const result = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-36-01' });
   assert.equal(calls.length, 1);
@@ -73,9 +76,11 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   assert.equal(result.requested_model, 'gpt-5.6-luna');
   assert.equal(result.applied_model, 'gpt-5.6-luna');
   assert.equal(result.observed_effort, 'max');
-  assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'receipt', 'record']);
+  assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'record', 'receipt']);
   assert.equal(result.trace.at(-1).status, 'passed');
   assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].receipt.compliance, undefined);
+  assert.equal(result.receipt.compliance, 'verified');
   assert.ok(Object.isFrozen(result));
   assert.ok(Object.isFrozen(result.resolution));
   assert.ok(Object.isFrozen(result.receipt));
@@ -88,7 +93,7 @@ test('static Codex roles pass the resolver-selected generated file to the adapte
     adapters: {
       codex: fakeAdapter({ onLaunch: (resolution) => { launched = resolution; } }),
     },
-    recorder: () => {},
+    recorder: () => true,
   });
   const result = boundary.dispatch({
     runtime: 'codex',
@@ -106,7 +111,7 @@ test('Claude launches use the existing palette alias with an explicit effort', (
     adapters: {
       claude: fakeAdapter({ onLaunch: (resolution) => { launched = resolution; } }),
     },
-    recorder: () => {},
+    recorder: () => true,
   });
   const result = boundary.dispatch({
     runtime: 'claude',
@@ -127,7 +132,7 @@ test('validation hooks can reject an unsupported selection before launch', () =>
         onLaunch: () => { launched = true; },
       }),
     },
-    recorder: () => {},
+    recorder: () => true,
   });
   assert.throws(
     () => boundary.dispatch({ runtime: 'codex', role: 'executor' }),
@@ -161,10 +166,38 @@ test('missing receipt fails closed and does not record a phantom dispatch', () =
   assert.equal(records, 0);
 });
 
+test('durable recording requires affirmative acknowledgement before repair provenance exists', () => {
+  let launchedReceipt;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        receipt: (resolution) => {
+          launchedReceipt = receiptFor(resolution);
+          return launchedReceipt;
+        },
+      }),
+    },
+    recorder: () => undefined,
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' } }),
+    (error) => error.code === 'RECORD_FAILED' && /affirmative/.test(error.message),
+  );
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: launchedReceipt },
+      previous_dispatch_id: launchedReceipt.dispatch_id,
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+});
+
 test('repair escalations require the boundary receipt chain and consume each predecessor once', () => {
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
-    recorder: () => {},
+    recorder: () => true,
   });
   const base = boundary.dispatch({
     runtime: 'codex',
@@ -217,7 +250,7 @@ test('custom policies and raw launch paths are unavailable', () => {
   );
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
-    recorder: () => {},
+    recorder: () => true,
   });
   const resolution = boundary.resolve({ runtime: 'codex', role: 'executor' });
   assert.equal(boundary.launch, undefined);
@@ -225,10 +258,34 @@ test('custom policies and raw launch paths are unavailable', () => {
   assert.ok(resolution);
 });
 
+test('the boundary keeps using the canonical policy if an exported method is replaced', () => {
+  const originalResolve = policy.resolveDispatch;
+  const originalValidate = policy.validateResolution;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: () => true,
+  });
+  let replacementCalled = false;
+  try {
+    policy.resolveDispatch = () => {
+      replacementCalled = true;
+      return { runtime: 'codex', role: 'executor', model: 'caller-model' };
+    };
+    policy.validateResolution = () => true;
+  } catch (error) {
+    // The canonical export is frozen; this is the expected protection.
+  }
+  const result = boundary.dispatch({ runtime: 'codex', role: 'executor' });
+  assert.equal(replacementCalled, false);
+  assert.equal(result.applied_model, 'gpt-5.6-luna');
+  assert.equal(policy.resolveDispatch, originalResolve);
+  assert.equal(policy.validateResolution, originalValidate);
+});
+
 test('static Codex dispatch requires generated-agent evidence and a digest', () => {
   const missing = boundaryModule.createDispatchBoundary({
     adapters: { codex: { launch: () => receiptFor(policy.resolveDispatch({ runtime: 'codex', role: 'research' })) } },
-    recorder: () => {},
+    recorder: () => true,
   });
   assert.throws(
     () => missing.dispatch({ runtime: 'codex', role: 'research' }),
@@ -247,7 +304,7 @@ test('static Codex dispatch requires generated-agent evidence and a digest', () 
         }),
       }),
     },
-    recorder: () => {},
+    recorder: () => true,
   });
   assert.throws(
     () => stale.dispatch({ runtime: 'codex', role: 'research' }),
@@ -281,7 +338,7 @@ test('requested values copied without adapter-applied evidence are not a receipt
         }),
       },
     },
-    recorder: () => {},
+    recorder: () => true,
   });
   assert.throws(
     () => boundary.dispatch({ runtime: 'codex', role: 'executor' }),
@@ -315,7 +372,7 @@ test('receipt contradictions, stale policy, and wrong agent file are rejected', 
           extra,
         }),
       },
-      recorder: () => {},
+      recorder: () => true,
     });
     assert.throws(
       () => boundary.dispatch({ runtime: 'codex', role: 'research' }),
@@ -352,7 +409,7 @@ test('a runtime that cannot expose observations may say so, but applied values r
         }),
       }),
     },
-    recorder: () => {},
+    recorder: () => true,
   });
   const result = boundary.dispatch({ runtime: 'codex', role: 'executor' });
   assert.equal(result.observed_model, 'unknown');
@@ -386,7 +443,7 @@ test('a receipt cannot self-authorize unavailable observations', () => {
         }),
       }),
     },
-    recorder: () => {},
+    recorder: () => true,
   });
   assert.throws(
     () => boundary.dispatch({ runtime: 'codex', role: 'executor' }),
