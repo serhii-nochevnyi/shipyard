@@ -3204,10 +3204,12 @@
       "unreachable_paths": false,
       "missing_paths": true,
       "files": [
+        "plugins/delivery-pipeline/scripts/runtime-adapters.cjs",
         "plugins/delivery-pipeline/scripts/model-policy.cjs",
         "plugins/delivery-pipeline/scripts/dispatch-boundary.cjs",
         "tests/unit/model-policy.test.cjs",
-        "tests/unit/dispatch-boundary.test.cjs"
+        "tests/unit/dispatch-boundary.test.cjs",
+        "tests/unit/gen-codex-shipyard.test.cjs"
       ],
       "risk": "high",
       "type": "implementation",
