@@ -8,6 +8,7 @@
 
 const crypto = require('crypto');
 const defaultPolicy = require('./model-policy.cjs');
+const boundaryCapability = require('./dispatch-boundary-capability.cjs');
 const canonicalResolveDispatch = defaultPolicy.resolveDispatch;
 const canonicalValidateResolution = defaultPolicy.validateResolution;
 const canonicalStableStringify = defaultPolicy.stableStringify;
@@ -173,7 +174,7 @@ function observedValue(receipt, field, applied, allowUnknown) {
   return value;
 }
 
-function verifyApplicationReceipt(resolution, rawReceipt, options = {}) {
+function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) {
   const receipt = unwrapReceipt(rawReceipt);
   if (!isObject(receipt)) {
     refuse('MISSING_RECEIPT', 'launch did not return an application receipt; a successful process exit is not evidence of application');
@@ -292,7 +293,14 @@ function finalizeApplicationReceipt(resolution, evidence, adapter) {
       launch_id: evidence.launch_id,
     },
   };
-  return verifyApplicationReceipt(resolution, finalized, { adapter });
+  return verifyApplicationReceiptInternal(resolution, finalized, { adapter });
+}
+
+function verifyApplicationReceipt(resolution, rawReceipt, options) {
+  if (options !== undefined) {
+    refuse('UNSUPPORTED_SELECTION', 'observation capability is boundary-owned by the configured dispatch boundary; use boundary.receipt for adapter-backed verification');
+  }
+  return verifyApplicationReceiptInternal(resolution, rawReceipt);
 }
 
 function recorderFor(options, adapter) {
@@ -317,6 +325,7 @@ function createDispatchBoundary(options = {}) {
   const trustedReceipts = new Map();
   const latestReceiptByTuple = new Map();
   const consumedReceiptIds = new Set();
+  const reservedDispatchIds = new Set();
 
   function receiptTupleKey(runtime, role) {
     return `${runtime}:${role}`;
@@ -340,10 +349,9 @@ function createDispatchBoundary(options = {}) {
   function registerReceipt(receipt) {
     const stored = deepFreeze(snapshot(receipt));
     const prior = trustedReceipts.get(stored.dispatch_id);
-    if (prior && stableReceipt(prior) !== stableReceipt(stored)) {
-      refuse('NONCOMPLIANT_RECEIPT', 'dispatch id was already registered with different application evidence', { dispatch_id: stored.dispatch_id });
+    if (prior) {
+      refuse('DUPLICATE_DISPATCH_ID', 'dispatch id was already registered; replay cannot be recorded twice', { dispatch_id: stored.dispatch_id });
     }
-    if (prior) return prior;
     trustedReceipts.set(stored.dispatch_id, stored);
     latestReceiptByTuple.set(receiptTupleKey(stored.runtime, stored.role), stored.dispatch_id);
     return stored;
@@ -353,13 +361,30 @@ function createDispatchBoundary(options = {}) {
     return canonicalStableStringify(receipt);
   }
 
+  function assertDispatchIdAvailable(input) {
+    const dispatchId = input && (input.dispatch_id !== undefined ? input.dispatch_id : input.dispatchId);
+    if (typeof dispatchId !== 'string') return;
+    if (reservedDispatchIds.has(dispatchId) || trustedReceipts.has(dispatchId)) {
+      refuse('DUPLICATE_DISPATCH_ID', 'dispatch id was already reserved or recorded; replay cannot launch', { dispatch_id: dispatchId });
+    }
+  }
+
+  function reserveDispatchId(dispatchId) {
+    if (reservedDispatchIds.has(dispatchId) || trustedReceipts.has(dispatchId)) {
+      refuse('DUPLICATE_DISPATCH_ID', 'dispatch id was already reserved or recorded; replay cannot launch', { dispatch_id: dispatchId });
+    }
+    reservedDispatchIds.add(dispatchId);
+  }
+
   function resolve(input) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
+    assertDispatchIdAvailable(input);
     const withId = Object.prototype.hasOwnProperty.call(input, 'dispatch_id')
       || Object.prototype.hasOwnProperty.call(input, 'dispatchId')
       ? input
       : { ...input, dispatch_id: newDispatchId() };
     return deepFreeze(snapshot(canonicalResolveDispatch(withId, {
+      [boundaryCapability]: true,
       receiptVerifier: verifyPriorReceipt,
     })));
   }
@@ -370,9 +395,12 @@ function createDispatchBoundary(options = {}) {
     return true;
   }
 
-  function receipt(resolution, rawReceipt, receiptOptions = {}) {
-    return verifyApplicationReceipt(resolution, rawReceipt, {
-      adapter: receiptOptions.adapter || adapterFor(receiptOptions.adapters || adapters, resolution && resolution.runtime),
+  function receipt(resolution, rawReceipt, receiptOptions) {
+    if (receiptOptions !== undefined) {
+      refuse('UNSUPPORTED_SELECTION', 'receipt verification options are boundary-owned; pass only the resolution and application receipt');
+    }
+    return verifyApplicationReceiptInternal(resolution, rawReceipt, {
+      adapter: adapterFor(adapters, resolution && resolution.runtime),
     });
   }
 
@@ -388,9 +416,10 @@ function createDispatchBoundary(options = {}) {
     ];
     const validatedResolution = validateWithAdapter(resolution, adapter);
     stages.push({ stage: 'validate', status: 'passed' });
+    reserveDispatchId(validatedResolution.dispatch_id);
     const finish = (launchResult) => {
       const rawReceipt = unwrapReceipt(launchResult);
-      const applicationEvidence = verifyApplicationReceipt(validatedResolution, rawReceipt, {
+      const applicationEvidence = verifyApplicationReceiptInternal(validatedResolution, rawReceipt, {
         adapter,
         requireComplianceProof: false,
       });

@@ -316,4 +316,28 @@ test('direct repair resolution does not accept caller-owned receipt evidence', (
   );
 });
 
+test('public resolver rejects caller-supplied receipt verifiers', () => {
+  let verifierCalled = false;
+  const priorApplied = priorReceipt('ci-fix', 'gpt-5.6-luna', 'max', 'caller-forged');
+  assert.throws(
+    () => policy.resolveDispatch(
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied },
+        previous_dispatch_id: 'caller-forged',
+      },
+      {
+        receiptVerifier: () => {
+          verifierCalled = true;
+          return priorApplied;
+        },
+      },
+    ),
+    (error) => error.code === 'UNVERIFIED_RECEIPT' && /private/.test(error.message),
+  );
+  assert.equal(verifierCalled, false);
+  assert.equal(policy.validatePriorReceipt, undefined);
+});
+
 done();

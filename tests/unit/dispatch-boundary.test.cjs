@@ -194,6 +194,29 @@ test('durable recording requires affirmative acknowledgement before repair prove
   );
 });
 
+test('a caller cannot replay a reserved dispatch id', () => {
+  let launches = 0;
+  let records = 0;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({ onLaunch: () => { launches++; } }),
+    },
+    recorder: () => {
+      records++;
+      return true;
+    },
+  });
+  const input = { runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-replay' };
+  const first = boundary.dispatch(input);
+  assert.equal(first.dispatch_id, 'dispatch-replay');
+  assert.throws(
+    () => boundary.dispatch(input),
+    (error) => error.code === 'DUPLICATE_DISPATCH_ID' && /replay/.test(error.message),
+  );
+  assert.equal(launches, 1);
+  assert.equal(records, 1);
+});
+
 test('repair escalations require the boundary receipt chain and consume each predecessor once', () => {
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
@@ -479,6 +502,14 @@ test('standalone receipt verification and injected recorder are available as bou
   assert.throws(
     () => boundaryModule.verifyApplicationReceipt(resolution, { ...receipt, observed_model: 'other' }),
     (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+  );
+  assert.throws(
+    () => boundaryModule.verifyApplicationReceipt(
+      resolution,
+      { ...receipt, observed_model: 'unknown', observed_effort: 'unknown' },
+      { adapter: { observationUnavailable: true } },
+    ),
+    (error) => error.code === 'UNSUPPORTED_SELECTION' && /boundary-owned/.test(error.message),
   );
   const direct = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },

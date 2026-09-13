@@ -10,6 +10,7 @@
 
 const crypto = require('crypto');
 const runtimeAdapters = require('./runtime-adapters.cjs');
+const boundaryCapability = require('./dispatch-boundary-capability.cjs');
 const { CODEX_MODEL_IDS, CLAUDE_MODEL_ALIASES } = runtimeAdapters;
 
 const POLICY_VERSION = 'adr-014.v1';
@@ -824,10 +825,23 @@ function validateResolution(resolution, options = {}) {
   return true;
 }
 
-function resolveDispatch(input, internalOptions = {}) {
+function resolveDispatch(input, internalOptions) {
   assertPlainObject(input, 'dispatch input');
-  if (!internalOptions || typeof internalOptions !== 'object' || Array.isArray(internalOptions)) {
-    refuse('INVALID_INPUT', 'dispatch resolution options must be an object');
+  let receiptVerifier;
+  if (internalOptions !== undefined) {
+    const symbols = Object.getOwnPropertySymbols(internalOptions || {});
+    const validBoundaryOptions = internalOptions
+      && typeof internalOptions === 'object'
+      && !Array.isArray(internalOptions)
+      && internalOptions[boundaryCapability] === true
+      && typeof internalOptions.receiptVerifier === 'function'
+      && Object.keys(internalOptions).every((key) => key === 'receiptVerifier')
+      && symbols.length === 1
+      && symbols[0] === boundaryCapability;
+    if (!validBoundaryOptions) {
+      refuse('UNVERIFIED_RECEIPT', 'receipt verification options are private to the canonical dispatch boundary');
+    }
+    receiptVerifier = internalOptions.receiptVerifier;
   }
   const runtime = normalizeRuntime(input.runtime);
   const role = normalizeRole(input.role);
@@ -854,7 +868,7 @@ function resolveDispatch(input, internalOptions = {}) {
       role,
       requiredLogicalModel: repairPrerequisite.logical_model,
       requiredEffort: repairPrerequisite.effort,
-      receiptVerifier: internalOptions.receiptVerifier,
+      receiptVerifier,
     });
   }
 
@@ -927,7 +941,6 @@ module.exports = Object.freeze({
   fingerprintPolicy,
   normalizeSignals,
   evaluateSignals,
-  validatePriorReceipt,
   validateApplicationReceiptShape,
   validateResolution,
   resolveDispatch,
