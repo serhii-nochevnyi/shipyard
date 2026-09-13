@@ -697,6 +697,30 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
   );
 });
 
+test('top-level dispatch continues a repair chain with the same durable recorder', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-convenience-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const options = {
+    adapters: { codex: fakeAdapter() },
+    recorder,
+  };
+  const base = boundaryModule.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'convenience-base',
+  }, options);
+  const repeat = boundaryModule.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'convenience-repeat',
+  }, options);
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
+});
+
 test('a failed repair launch releases its predecessor claim for a later attempt', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-retry-'));
   const recorder = boundaryModule.createDurableRecorder(storeDir);
