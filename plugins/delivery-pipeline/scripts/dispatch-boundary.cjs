@@ -17,6 +17,7 @@ const canonicalStableStringify = canonicalPolicy.stableStringify;
 
 const OBSERVATION_UNKNOWN = 'unknown';
 const CLAIM_TTL_MS = 60 * 60 * 1000;
+const CLAIM_HEARTBEAT_MS = Math.max(1000, Math.floor(CLAIM_TTL_MS / 3));
 const RECORDER_AUTHORITY = Symbol('adr-014-dispatch-boundary-recorder-authority');
 const DURABLE_RECORDERS = new WeakSet();
 
@@ -123,14 +124,33 @@ function createDurableRecorder(storeDir) {
   const consumedFile = (dispatchId) => file('consumed', dispatchId);
   const claimFile = (dispatchId) => file('claim', dispatchId);
   const claimLockFile = (dispatchId) => file('claim-recovery', dispatchId);
-  const claimPayload = (dispatchId, consumerId) => ({
-    dispatch_id: dispatchId,
-    consumer_id: consumerId,
-    claimed_at: new Date().toISOString(),
-  });
+  const claimPayload = (dispatchId, consumerId) => {
+    const now = Date.now();
+    return {
+      dispatch_id: dispatchId,
+      consumer_id: consumerId,
+      owner_pid: process.pid,
+      claimed_at: new Date(now).toISOString(),
+      lease_expires_at: new Date(now + CLAIM_TTL_MS).toISOString(),
+    };
+  };
   const claimIsStale = (claim) => {
-    const claimedAt = claim && typeof claim.claimed_at === 'string' ? Date.parse(claim.claimed_at) : NaN;
-    return Number.isFinite(claimedAt) && Date.now() - claimedAt >= CLAIM_TTL_MS;
+    const leaseExpiresAt = claim && typeof claim.lease_expires_at === 'string'
+      ? Date.parse(claim.lease_expires_at)
+      : claim && typeof claim.claimed_at === 'string'
+        ? Date.parse(claim.claimed_at) + CLAIM_TTL_MS
+        : NaN;
+    return !Number.isFinite(leaseExpiresAt) || Date.now() >= leaseExpiresAt;
+  };
+  const claimOwnerIsLive = (claim) => {
+    const pid = claim && Number.isInteger(claim.owner_pid) ? claim.owner_pid : 0;
+    if (pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return Boolean(error && error.code === 'EPERM');
+    }
   };
   const releaseClaimFile = (filePath) => {
     try { fs.unlinkSync(filePath); } catch (error) {
@@ -183,7 +203,7 @@ function createDurableRecorder(storeDir) {
         if (atomicCreateJson(claimFile(dispatchId), candidate)) return { claimed: true };
         let current = readJsonFile(claimFile(dispatchId));
         if (current && current.consumer_id === consumerId) return { claimed: true };
-        if (!claimIsStale(current)) return { claimed: false };
+        if (!claimIsStale(current) || claimOwnerIsLive(current)) return { claimed: false };
 
         // A stale claim is recoverable, but takeover itself is serialized by a
         // second O_EXCL marker. Every contender either owns that marker or
@@ -196,7 +216,7 @@ function createDurableRecorder(storeDir) {
           if (fs.existsSync(consumedFile(dispatchId))) return { claimed: false };
           current = readJsonFile(claimFile(dispatchId));
           if (current && current.consumer_id === consumerId) return { claimed: true };
-          if (!claimIsStale(current)) return { claimed: false };
+          if (!claimIsStale(current) || claimOwnerIsLive(current)) return { claimed: false };
           if (current) releaseClaimFile(claimFile(dispatchId));
           return atomicCreateJson(claimFile(dispatchId), candidate)
             ? { claimed: true }
@@ -217,6 +237,29 @@ function createDurableRecorder(storeDir) {
       } catch (error) {
         if (error && error.code === 'ENOENT') return { released: false };
         throw boundaryError('RECORD_FAILED', `durable receipt claim release failed: ${error.message}`, { dispatch_id: dispatchId });
+      }
+    },
+    renewClaim(dispatchId, consumerId) {
+      try {
+        if (fs.existsSync(consumedFile(dispatchId))) return { renewed: false };
+        // Renewal and stale-owner recovery share this lock. Without the same
+        // lock, a takeover could unlink a stale claim between the heartbeat's
+        // read and replace, and the old owner could then write itself back as
+        // the new owner.
+        if (!atomicCreateJson(claimLockFile(dispatchId), {
+          dispatch_id: dispatchId,
+          renewal_started_at: new Date().toISOString(),
+        })) return { renewed: false };
+        try {
+          const current = readJsonFile(claimFile(dispatchId));
+          if (!current || current.consumer_id !== consumerId) return { renewed: false };
+          atomicReplaceJson(claimFile(dispatchId), claimPayload(dispatchId, consumerId));
+          return { renewed: true };
+        } finally {
+          releaseClaimFile(claimLockFile(dispatchId));
+        }
+      } catch (error) {
+        throw boundaryError('RECORD_FAILED', `durable receipt claim renewal failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
     consume(dispatchId, consumerId) {
@@ -365,6 +408,52 @@ function generatedAgentRoot(adapter) {
   return typeof root === 'string' && root.trim() !== '' ? path.resolve(root) : null;
 }
 
+function generatedAgentManifestPath(adapter, root) {
+  const configured = adapter && typeof adapter === 'object'
+    ? adapter.agentManifest || adapter.agentManifestFile || adapter.manifestFile
+    : null;
+  if (configured !== undefined) {
+    if (typeof configured !== 'string' || configured.trim() === '') {
+      refuse('STALE_GENERATED_AGENT', 'the configured generated-agent manifest path must be non-empty');
+    }
+    return path.resolve(configured);
+  }
+  return path.join(root, '.shipyard-manifest.json');
+}
+
+function trustedGeneratedAgentDigest(resolution, adapter, root, actualDigest) {
+  const manifestPath = generatedAgentManifestPath(adapter, root);
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    const reason = error && error.code === 'ENOENT'
+      ? `generated-agent manifest ${manifestPath} does not exist`
+      : `generated-agent manifest ${manifestPath} could not be read: ${error.message}`;
+    refuse('STALE_GENERATED_AGENT', reason, { manifest: manifestPath, agent_file: resolution.agent_file });
+  }
+  if (!isObject(manifest) || !isObject(manifest.agent_digests)) {
+    refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} has no trusted agent_digests map`, { manifest: manifestPath, agent_file: resolution.agent_file });
+  }
+  if (manifest.policy_id !== undefined && manifest.policy_id !== canonicalPolicy.POLICY.id) {
+    refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} is for ${manifest.policy_id}, not ${canonicalPolicy.POLICY.id}`, { manifest: manifestPath });
+  }
+  if (manifest.policy_version !== undefined && manifest.policy_version !== resolution.policy_version) {
+    refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} has stale policy version`, { manifest: manifestPath, expected: resolution.policy_version, actual: manifest.policy_version });
+  }
+  if (manifest.policy_hash !== undefined && manifest.policy_hash !== resolution.policy_hash) {
+    refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} has stale policy hash`, { manifest: manifestPath, expected: resolution.policy_hash, actual: manifest.policy_hash });
+  }
+  const expectedDigest = manifest.agent_digests[resolution.agent_file];
+  if (typeof expectedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(expectedDigest)) {
+    refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} has no trusted digest for ${resolution.agent_file}`, { manifest: manifestPath, agent_file: resolution.agent_file });
+  }
+  if (actualDigest !== expectedDigest) {
+    refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} content does not match its trusted manifest digest`, { manifest: manifestPath, agent_file: resolution.agent_file, expected: expectedDigest, actual: actualDigest });
+  }
+  return { manifest: manifestPath, digest: expectedDigest };
+}
+
 function generatedAgentEvidence(resolution, adapter) {
   const root = generatedAgentRoot(adapter);
   if (!root || !resolution.agent_file) return null;
@@ -409,13 +498,15 @@ function generatedAgentEvidence(resolution, adapter) {
       refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} is not bound to ADR-014: ${field}=${JSON.stringify(actual[field])}, expected ${JSON.stringify(value)}`, { agent_file: resolution.agent_file, field, expected: value, actual: actual[field] });
     }
   }
+  const agentFileDigest = crypto.createHash('sha256').update(text).digest('hex');
+  trustedGeneratedAgentDigest(resolution, adapter, root, agentFileDigest);
   return {
     valid: true,
     exists: true,
     content_verified: true,
     policy_hash: resolution.policy_hash,
     agent_file: resolution.agent_file,
-    agent_file_digest: crypto.createHash('sha256').update(text).digest('hex'),
+    agent_file_digest: agentFileDigest,
   };
 }
 
@@ -684,6 +775,39 @@ function recorderClaim(recorder, dispatchId, consumerId) {
   return true;
 }
 
+function recorderRenew(recorder, dispatchId, consumerId) {
+  const target = recorderMethod(recorder, ['renewClaim', 'renew', 'heartbeat']);
+  if (target) {
+    const result = invokeSync(target.fn, target.receiver, [dispatchId, consumerId], 'receipt claim renewal');
+    return result === undefined || affirmative(result, 'renewed');
+  }
+  const state = sharedRecorderState(recorder);
+  if (!state) return true;
+  return state.claims.get(dispatchId) === consumerId;
+}
+
+function startClaimLease(recorder, dispatchId, consumerId) {
+  let failure = null;
+  const timer = setInterval(() => {
+    try {
+      if (!recorderRenew(recorder, dispatchId, consumerId)) {
+        failure = boundaryError('RECORD_FAILED', 'durable receipt claim lease was lost before launch finalization', { dispatch_id: dispatchId });
+      }
+    } catch (error) {
+      failure = error;
+    }
+  }, CLAIM_HEARTBEAT_MS);
+  if (timer && typeof timer.unref === 'function') timer.unref();
+  return {
+    assertHealthy() {
+      if (failure) throw failure;
+    },
+    stop() {
+      clearInterval(timer);
+    },
+  };
+}
+
 function recorderRelease(recorder, dispatchId, consumerId) {
   const target = recorderMethod(recorder, ['release', 'releaseReceipt', 'releaseClaim']);
   if (target) {
@@ -797,11 +921,15 @@ function createDispatchBoundary(options = {}) {
 
   function trustedRecordFor(recorder, dispatchId) {
     const memoryReceipt = trustedReceipts.get(dispatchId);
-    if (memoryReceipt) {
+    const memoryResolution = trustedResolutions.get(dispatchId);
+    if (memoryReceipt
+        && memoryReceipt.dispatch_id === dispatchId
+        && memoryResolution
+        && memoryResolution.dispatch_id === dispatchId) {
       return {
         record: { dispatch_id: dispatchId, receipt: memoryReceipt, resolution: trustedResolutions.get(dispatchId) },
         receipt: memoryReceipt,
-        resolution: trustedResolutions.get(dispatchId),
+        resolution: memoryResolution,
       };
     }
     const stored = recorderStoredRecord(recorder, dispatchId);
@@ -809,7 +937,12 @@ function createDispatchBoundary(options = {}) {
     const resolution = stored && isObject(stored.resolution)
       ? stored.resolution
       : trustedResolutions.get(dispatchId);
-    if (!stored || !receipt || !resolution) return null;
+    if (!stored
+        || stored.dispatch_id !== dispatchId
+        || !receipt
+        || receipt.dispatch_id !== dispatchId
+        || !resolution
+        || resolution.dispatch_id !== dispatchId) return null;
     try {
       canonicalValidateResolution(resolution, { requireDispatchId: true });
       const verified = verifyApplicationReceiptInternal(resolution, receipt, {
@@ -917,7 +1050,14 @@ function createDispatchBoundary(options = {}) {
       ? input
       : { ...input, dispatch_id: newDispatchId() };
     const prior = verifyPriorReceipt(withId, recorder);
-    const resolved = canonicalResolveDispatch(inputWithoutReceipt(withId));
+    const canonicalInput = inputWithoutReceipt(withId);
+    if (prior) {
+      canonicalInput.signals = {
+        ...(canonicalInput.signals || {}),
+        priorApplied: prior.receipt,
+      };
+    }
+    const resolved = canonicalResolveDispatch(canonicalInput);
     return deepFreeze(snapshot(prior ? { ...resolved, prior_applied: {
       dispatch_id: prior.dispatch_id,
       model: prior.model,
@@ -973,11 +1113,14 @@ function createDispatchBoundary(options = {}) {
     const prior = validatedResolution.prior_applied;
     const claimConsumerId = validatedResolution.dispatch_id;
     let priorClaimed = false;
+    let priorLease = null;
     if (prior) {
       priorClaimed = recorderClaim(record, prior.dispatch_id, claimConsumerId);
+      if (priorClaimed) priorLease = startClaimLease(record, prior.dispatch_id, claimConsumerId);
     }
     const observationCapabilities = adapterObservationCapabilities(adapter);
     const finish = (launchResult) => {
+      if (priorLease) priorLease.assertHealthy();
       const rawReceipt = unwrapReceipt(launchResult);
       const applicationEvidence = verifyApplicationReceiptInternal(validatedResolution, rawReceipt, {
         adapter,
@@ -1021,11 +1164,13 @@ function createDispatchBoundary(options = {}) {
       if (!affirmative(recordResult, 'recorded')) {
         refuse('RECORD_FAILED', 'durable dispatch recording did not return affirmative acknowledgement; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
       }
+      if (priorLease) priorLease.assertHealthy();
       consumePriorReceipt(prior, record, claimConsumerId);
       recorderRecordRemember(record, recordInput);
       stages.push({ stage: 'record', status: 'passed' });
       stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
       registerReceipt(applicationReceipt, validatedResolution, record, recordInput);
+      if (priorLease) priorLease.stop();
       return deepFreeze(snapshot({
         ...baseTrace,
         trace: stages,
@@ -1035,12 +1180,14 @@ function createDispatchBoundary(options = {}) {
       const launchResult = invokeLaunch(fn, adapter, [validatedResolution, context]);
       if (launchResult && typeof launchResult.then === 'function') {
         return launchResult.then(finish).catch((error) => {
+          if (priorLease) priorLease.stop();
           if (priorClaimed) recorderRelease(record, prior.dispatch_id, claimConsumerId);
           throw error;
         });
       }
       return finish(launchResult);
     } catch (error) {
+      if (priorLease) priorLease.stop();
       if (priorClaimed) recorderRelease(record, prior.dispatch_id, claimConsumerId);
       throw error;
     }

@@ -4,6 +4,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const canonicalInternalPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
 const runtimeAdapters = require('../../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
 
 const codex = (role, signals = {}, extra = {}) =>
@@ -403,6 +404,10 @@ test('runtime catalog and internal CLI reject inherited or receipt-free selectio
   ], { encoding: 'utf8' });
   assert.notEqual(repair.status, 0);
   assert.match(repair.stderr, /usage/);
+  assert.throws(
+    () => canonicalInternalPolicy.resolveDispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'repeat' } }),
+    (error) => error.code === 'MISSING_RECEIPT',
+  );
 });
 
 test('canonical policy ignores caller mutation attempts against runtime adapter exports', () => {

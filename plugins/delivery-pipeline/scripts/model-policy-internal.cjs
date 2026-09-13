@@ -321,6 +321,33 @@ function normalizeSignals(raw) {
   return out;
 }
 
+function requireRepairReceiptEvidence(role, signals) {
+  const prerequisite = REPAIR_PREREQUISITES[role] && REPAIR_PREREQUISITES[role][signals && signals.signatureState];
+  if (!prerequisite) return;
+  const prior = signals && signals.priorApplied;
+  if (!prior || typeof prior !== 'object' || Array.isArray(prior)) {
+    refuse(
+      'MISSING_RECEIPT',
+      `${role} ${signals.signatureState} escalation requires the immediately preceding compliant applied receipt`,
+      { role, signatureState: signals.signatureState },
+    );
+  }
+  const proof = prior.compliance_proof;
+  if (prior.compliance !== 'verified'
+      || !proof || typeof proof !== 'object' || Array.isArray(proof)
+      || proof.status !== 'verified'
+      || proof.boundary !== 'adr-014.dispatch-boundary'
+      || proof.policy_hash !== prior.policy_hash
+      || proof.dispatch_id !== prior.dispatch_id
+      || proof.launch_id !== prior.launch_id) {
+    refuse(
+      'UNVERIFIED_RECEIPT',
+      `${role} ${signals.signatureState} escalation requires receipt evidence issued by the routed dispatch boundary`,
+      { role, signatureState: signals.signatureState },
+    );
+  }
+}
+
 function logicalModelFor(runtime, logicalModel) {
   const model = CANONICAL_MODEL_MAPPINGS[runtime] && CANONICAL_MODEL_MAPPINGS[runtime][logicalModel];
   if (!model) refuse('UNSUPPORTED_SELECTION', `no ${runtime} model is registered for logical model ${logicalModel}`);
@@ -682,6 +709,7 @@ function validateResolution(resolution, options = {}) {
   const role = normalizeRole(resolution.role);
   const rungs = ROLE_RUNG_DEFINITIONS[role];
   const evaluation = evaluateSignals(role, resolution.signals);
+  requireRepairReceiptEvidence(role, evaluation.signals);
   let expectedRung = rungs[0];
   const selectedNames = new Set(evaluation.selected.map((entry) => entry.rung));
   for (const candidate of rungs) {
@@ -753,6 +781,7 @@ function resolveDispatch(input) {
   const runtime = normalizeRuntime(input.runtime);
   const role = normalizeRole(input.role);
   const signals = normalizeSignals(input.signals);
+  requireRepairReceiptEvidence(role, signals);
   const evaluation = evaluateSignals(role, signals);
   const rungs = ROLE_RUNG_DEFINITIONS[role];
   let rung = rungs[0];

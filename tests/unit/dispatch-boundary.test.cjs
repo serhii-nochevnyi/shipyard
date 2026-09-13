@@ -3,6 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -73,6 +74,15 @@ function writeStaticAgent(agentsDir, resolution) {
   ].join('\n');
   fs.mkdirSync(agentsDir, { recursive: true });
   fs.writeFileSync(path.join(agentsDir, resolution.agent_file), text);
+  fs.writeFileSync(path.join(agentsDir, '.shipyard-manifest.json'), JSON.stringify({
+    policy_id: policy.POLICY.id,
+    policy_version: resolution.policy_version,
+    policy_hash: resolution.policy_hash,
+    agent_files: [resolution.agent_file],
+    agent_digests: {
+      [resolution.agent_file]: crypto.createHash('sha256').update(text).digest('hex'),
+    },
+  }) + '\n');
 }
 
 suite('mandatory resolve → validate → launch → receipt boundary');
@@ -642,6 +652,11 @@ test('the boundary validates the actual generated Codex file before launch', () 
   assert.equal(result.receipt.agent_file, 'shipyard-inv-research.toml');
   assert.match(result.receipt.agent_file_digest, /^[a-f0-9]{64}$/);
   assert.equal(validatorCalled, false);
+  fs.appendFileSync(path.join(agentsDir, base.agent_file), '# tampered after generation\n');
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'tampered-agent-file' }),
+    (error) => error.code === 'STALE_GENERATED_AGENT' && /manifest digest/.test(error.message),
+  );
 });
 
 test('separate boundary instances share durable reservation and finalized receipt state', () => {
@@ -700,6 +715,42 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
       signals: { signatureState: 'repeat', priorApplied: base.receipt },
       previous_dispatch_id: base.dispatch_id,
       dispatch_id: 'durable-repair-repeat-again',
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+});
+
+test('a stored record whose identities disagree cannot authorize a repair', () => {
+  const base = policy.resolveDispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'identity-base',
+  });
+  const prior = receiptFor(base);
+  const recorder = {
+    reserve: () => ({ reserved: true }),
+    getReceipt: () => ({
+      dispatch_id: 'different-record',
+      receipt: prior,
+      resolution: base,
+    }),
+    claim: () => ({ claimed: true }),
+    release: () => ({ released: true }),
+    consume: () => ({ consumed: true }),
+    record: () => ({ recorded: true }),
+  };
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder,
+  });
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: prior },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'identity-repeat',
     }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
@@ -831,11 +882,30 @@ test('stale durable claims recover, while consumed predecessors cannot be reclai
   const claimPath = path.join(storeDir, claimName);
   const claim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
   claim.claimed_at = new Date(Date.now() - (2 * 60 * 60 * 1000)).toISOString();
+  claim.lease_expires_at = new Date(Date.now() - (60 * 60 * 1000)).toISOString();
+  delete claim.owner_pid;
   fs.writeFileSync(claimPath, JSON.stringify(claim) + '\n');
 
   assert.deepStrictEqual(recorder.claim('claim-id', 'recovered-owner'), { claimed: true });
   assert.deepStrictEqual(recorder.consume('claim-id', 'recovered-owner'), { consumed: true });
   assert.deepStrictEqual(recorder.claim('claim-id', 'late-owner'), { claimed: false });
+});
+
+test('a live owner renews its lease and cannot be reclaimed after the nominal TTL', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-live-claim-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  assert.deepStrictEqual(recorder.claim('live-claim-id', 'live-owner'), { claimed: true });
+  const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
+  const claimPath = path.join(storeDir, claimName);
+  const claim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+  claim.claimed_at = new Date(Date.now() - (2 * 60 * 60 * 1000)).toISOString();
+  claim.lease_expires_at = new Date(Date.now() - (60 * 60 * 1000)).toISOString();
+  fs.writeFileSync(claimPath, JSON.stringify(claim) + '\n');
+  assert.deepStrictEqual(recorder.claim('live-claim-id', 'other-owner'), { claimed: false });
+  assert.deepStrictEqual(recorder.renewClaim('live-claim-id', 'live-owner'), { renewed: true });
+  const renewed = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+  assert.ok(Date.parse(renewed.lease_expires_at) > Date.now());
+  assert.deepStrictEqual(recorder.claim('live-claim-id', 'other-owner'), { claimed: false });
 });
 
 test('file-backed reservation is atomic across Node processes', () => {
