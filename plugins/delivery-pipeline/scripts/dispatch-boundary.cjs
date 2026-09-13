@@ -271,19 +271,19 @@ function invokeLaunch(fn, receiver, args) {
   return fn.apply(receiver, args);
 }
 
-function adapterObservationUnavailable(adapter) {
-  return Boolean(
-    adapter && (
-      adapter.observationUnavailable === true
-      || adapter.observes === false
-      || adapter.observation === 'unavailable'
-      || adapter.capabilities && (
-        adapter.capabilities.observedModel === false
-        || adapter.capabilities.observedEffort === false
-        || adapter.capabilities.observation === 'unavailable'
-      )
-    ),
-  );
+function adapterObservationCapabilities(adapter) {
+  const capabilities = { model: false, effort: false };
+  if (!adapter) return capabilities;
+  const unavailable = adapter.observationUnavailable === true
+    || adapter.observes === false
+    || adapter.observation === 'unavailable';
+  if (unavailable) return { model: true, effort: true };
+  const declared = adapter.capabilities;
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return capabilities;
+  if (declared.observation === 'unavailable') return { model: true, effort: true };
+  capabilities.model = declared.observedModel === false;
+  capabilities.effort = declared.observedEffort === false;
+  return capabilities;
 }
 
 function adapterSupports(adapter, resolution) {
@@ -521,11 +521,16 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
   }
 
   const adapter = options.adapter || null;
-  const allowUnknown = typeof options.allowUnknown === 'boolean'
-    ? options.allowUnknown
-    : adapterObservationUnavailable(adapter);
-  const observedModel = observedValue(receipt, 'observed_model', receipt.applied_model, allowUnknown);
-  const observedEffort = observedValue(receipt, 'observed_effort', receipt.applied_effort, allowUnknown);
+  const observationCapabilities = isObject(options.observationCapabilities)
+    ? {
+      model: options.observationCapabilities.model === true,
+      effort: options.observationCapabilities.effort === true,
+    }
+    : typeof options.allowUnknown === 'boolean'
+      ? { model: options.allowUnknown, effort: options.allowUnknown }
+      : adapterObservationCapabilities(adapter);
+  const observedModel = observedValue(receipt, 'observed_model', receipt.applied_model, observationCapabilities.model);
+  const observedEffort = observedValue(receipt, 'observed_effort', receipt.applied_effort, observationCapabilities.effort);
   const normalized = {
     ...snapshot(receipt),
     observed_model: observedModel,
@@ -544,7 +549,7 @@ function withoutBoundaryClaims(evidence) {
   return applicationEvidence;
 }
 
-function finalizeApplicationReceipt(resolution, evidence, adapter, allowUnknown) {
+function finalizeApplicationReceipt(resolution, evidence, adapter, observationCapabilities) {
   const finalized = {
     ...withoutBoundaryClaims(evidence),
     compliance: 'verified',
@@ -556,7 +561,7 @@ function finalizeApplicationReceipt(resolution, evidence, adapter, allowUnknown)
       launch_id: evidence.launch_id,
     },
   };
-  return verifyApplicationReceiptInternal(resolution, finalized, { adapter, allowUnknown });
+  return verifyApplicationReceiptInternal(resolution, finalized, { adapter, observationCapabilities });
 }
 
 function recorderFor(options, adapter) {
@@ -782,7 +787,7 @@ function createDispatchBoundary(options = {}) {
       canonicalValidateResolution(resolution, { requireDispatchId: true });
       const verified = verifyApplicationReceiptInternal(resolution, receipt, {
         requireComplianceProof: true,
-        allowUnknown: true,
+        observationCapabilities: { model: true, effort: true },
       });
       if (stableReceipt(verified) !== stableReceipt(receipt)) return null;
       return { record: stored, receipt: verified, resolution };
@@ -911,10 +916,10 @@ function createDispatchBoundary(options = {}) {
     }
     const adapter = adapterFor(adapters, resolution && resolution.runtime);
     const validatedResolution = validateWithAdapter(resolution, adapter);
-    const allowUnknown = adapterObservationUnavailable(adapter);
+    const observationCapabilities = adapterObservationCapabilities(adapter);
     const evidence = verifyApplicationReceiptInternal(validatedResolution, rawReceipt, {
       adapter,
-      allowUnknown,
+      observationCapabilities,
       requireComplianceProof: false,
     });
     // This helper is deliberately an evidence parser, not a trust mint.  Only
@@ -950,19 +955,19 @@ function createDispatchBoundary(options = {}) {
     if (prior) {
       priorClaimed = recorderClaim(record, prior.dispatch_id, claimConsumerId);
     }
-    const allowUnknown = adapterObservationUnavailable(adapter);
+    const observationCapabilities = adapterObservationCapabilities(adapter);
     const finish = (launchResult) => {
       const rawReceipt = unwrapReceipt(launchResult);
       const applicationEvidence = verifyApplicationReceiptInternal(validatedResolution, rawReceipt, {
         adapter,
-        allowUnknown,
+        observationCapabilities,
         requireComplianceProof: false,
       });
       const strippedEvidence = withoutBoundaryClaims(applicationEvidence);
       stages.push({ stage: 'launch', status: 'passed', launch_id: strippedEvidence.launch_id });
       // The durable recorder receives this exact finalized receipt.  It is the
       // only value that may later authorize a repair escalation.
-      const applicationReceipt = finalizeApplicationReceipt(validatedResolution, applicationEvidence, adapter, allowUnknown);
+      const applicationReceipt = finalizeApplicationReceipt(validatedResolution, applicationEvidence, adapter, observationCapabilities);
       const baseTrace = {
         dispatch_id: validatedResolution.dispatch_id,
         policy_version: validatedResolution.policy_version,

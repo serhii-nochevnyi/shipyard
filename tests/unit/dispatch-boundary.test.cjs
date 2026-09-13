@@ -464,6 +464,35 @@ test('a runtime that cannot expose observations may say so, but applied values r
   assert.equal(result.observed_effort, 'unknown');
 });
 
+test('observation capability is enforced independently for model and effort', () => {
+  const partiallyUnavailable = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        capabilities: { observedModel: false, observedEffort: true },
+        extra: { observed_model: 'unknown', observed_effort: 'unknown' },
+      }),
+    },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => partiallyUnavailable.dispatch({ runtime: 'codex', role: 'executor' }),
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /observed_effort/.test(error.message),
+  );
+
+  const valid = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        capabilities: { observedModel: false, observedEffort: true },
+        extra: { observed_model: 'unknown' },
+      }),
+    },
+    recorder: () => true,
+  });
+  const result = valid.dispatch({ runtime: 'codex', role: 'executor' });
+  assert.equal(result.observed_model, 'unknown');
+  assert.equal(result.observed_effort, 'max');
+});
+
 test('an async launch cannot change observation capability after dispatch begins', async () => {
   let release;
   const pending = new Promise((resolve) => { release = resolve; });
