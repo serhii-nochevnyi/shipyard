@@ -2,6 +2,7 @@
 
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const runtimeAdapters = require('../../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
 
 const codex = (role, signals = {}, extra = {}) =>
   policy.resolveDispatch({ runtime: 'codex', role, signals, ...extra });
@@ -338,6 +339,21 @@ test('public resolver rejects caller-supplied receipt verifiers', () => {
   );
   assert.equal(verifierCalled, false);
   assert.equal(policy.validatePriorReceipt, undefined);
+});
+
+test('canonical policy ignores caller mutation attempts against runtime adapter exports', () => {
+  const originalAdapterForRuntime = runtimeAdapters.adapterForRuntime;
+  const originalCodexLuna = runtimeAdapters.CODEX_MODEL_IDS.luna;
+  try {
+    runtimeAdapters.adapterForRuntime = () => ({ modelFor: () => 'caller-controlled-model' });
+    runtimeAdapters.CODEX_MODEL_IDS.luna = 'caller-controlled-model';
+  } catch (error) {
+    // Frozen compatibility exports are the expected protection.
+  }
+  const result = codex('executor');
+  assert.equal(result.model, 'gpt-5.6-luna');
+  assert.equal(runtimeAdapters.adapterForRuntime, originalAdapterForRuntime);
+  assert.equal(runtimeAdapters.CODEX_MODEL_IDS.luna, originalCodexLuna);
 });
 
 done();

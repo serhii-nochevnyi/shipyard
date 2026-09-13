@@ -40,10 +40,13 @@ function adapterForRuntime(runtime) {
   return RUNTIME_ADAPTERS[runtime] || null;
 }
 
-module.exports = {
+// Export the adapter catalog as read-only compatibility data. Canonical policy
+// resolution captures its own mapping snapshot and never dispatches through
+// these replaceable entrypoints.
+module.exports = Object.freeze({
   CODEX_MODEL_IDS,
   CLAUDE_MODEL_ALIASES,
   RUNTIME_ADAPTERS,
   adapterForRuntime,
   modelFor,
-};
+});

@@ -439,6 +439,31 @@ test('a runtime that cannot expose observations may say so, but applied values r
   assert.equal(result.observed_effort, 'unknown');
 });
 
+test('an async launch cannot change observation capability after dispatch begins', async () => {
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const adapter = {
+    observationUnavailable: false,
+    launch(resolution) {
+      return pending.then(() => {
+        this.observationUnavailable = true;
+        return receiptFor(resolution, { observed_model: 'unknown', observed_effort: 'unknown' });
+      });
+    },
+  };
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: adapter },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({ runtime: 'codex', role: 'executor' });
+  adapter.observationUnavailable = true;
+  release();
+  await assert.rejects(
+    result,
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /observed_model/.test(error.message),
+  );
+});
+
 test('a receipt cannot self-authorize unavailable observations', () => {
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: {

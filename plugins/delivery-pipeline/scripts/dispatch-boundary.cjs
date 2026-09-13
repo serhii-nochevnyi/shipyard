@@ -8,10 +8,10 @@
 
 const crypto = require('crypto');
 const defaultPolicy = require('./model-policy.cjs');
-const boundaryCapability = require('./dispatch-boundary-capability.cjs');
-const canonicalResolveDispatch = defaultPolicy.resolveDispatch;
-const canonicalValidateResolution = defaultPolicy.validateResolution;
-const canonicalStableStringify = defaultPolicy.stableStringify;
+const canonicalPolicy = require('./model-policy-internal.cjs');
+const canonicalResolveDispatch = canonicalPolicy.resolveDispatch;
+const canonicalValidateResolution = canonicalPolicy.validateResolution;
+const canonicalStableStringify = canonicalPolicy.stableStringify;
 
 const OBSERVATION_UNKNOWN = 'unknown';
 
@@ -260,7 +260,9 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
   }
 
   const adapter = options.adapter || null;
-  const allowUnknown = adapterObservationUnavailable(adapter);
+  const allowUnknown = typeof options.allowUnknown === 'boolean'
+    ? options.allowUnknown
+    : adapterObservationUnavailable(adapter);
   const observedModel = observedValue(receipt, 'observed_model', receipt.applied_model, allowUnknown);
   const observedEffort = observedValue(receipt, 'observed_effort', receipt.applied_effort, allowUnknown);
   const normalized = {
@@ -281,7 +283,7 @@ function withoutBoundaryClaims(evidence) {
   return applicationEvidence;
 }
 
-function finalizeApplicationReceipt(resolution, evidence, adapter) {
+function finalizeApplicationReceipt(resolution, evidence, adapter, allowUnknown) {
   const finalized = {
     ...withoutBoundaryClaims(evidence),
     compliance: 'verified',
@@ -293,7 +295,7 @@ function finalizeApplicationReceipt(resolution, evidence, adapter) {
       launch_id: evidence.launch_id,
     },
   };
-  return verifyApplicationReceiptInternal(resolution, finalized, { adapter });
+  return verifyApplicationReceiptInternal(resolution, finalized, { adapter, allowUnknown });
 }
 
 function verifyApplicationReceipt(resolution, rawReceipt, options) {
@@ -383,10 +385,7 @@ function createDispatchBoundary(options = {}) {
       || Object.prototype.hasOwnProperty.call(input, 'dispatchId')
       ? input
       : { ...input, dispatch_id: newDispatchId() };
-    return deepFreeze(snapshot(canonicalResolveDispatch(withId, {
-      [boundaryCapability]: true,
-      receiptVerifier: verifyPriorReceipt,
-    })));
+    return deepFreeze(snapshot(canonicalResolveDispatch(withId, verifyPriorReceipt)));
   }
 
   function validate(resolution, validateOptions = {}) {
@@ -399,9 +398,9 @@ function createDispatchBoundary(options = {}) {
     if (receiptOptions !== undefined) {
       refuse('UNSUPPORTED_SELECTION', 'receipt verification options are boundary-owned; pass only the resolution and application receipt');
     }
-    return verifyApplicationReceiptInternal(resolution, rawReceipt, {
-      adapter: adapterFor(adapters, resolution && resolution.runtime),
-    });
+    const adapter = adapterFor(adapters, resolution && resolution.runtime);
+    const allowUnknown = adapterObservationUnavailable(adapter);
+    return verifyApplicationReceiptInternal(resolution, rawReceipt, { adapter, allowUnknown });
   }
 
   function dispatch(input, context = {}) {
@@ -417,10 +416,12 @@ function createDispatchBoundary(options = {}) {
     const validatedResolution = validateWithAdapter(resolution, adapter);
     stages.push({ stage: 'validate', status: 'passed' });
     reserveDispatchId(validatedResolution.dispatch_id);
+    const allowUnknown = adapterObservationUnavailable(adapter);
     const finish = (launchResult) => {
       const rawReceipt = unwrapReceipt(launchResult);
       const applicationEvidence = verifyApplicationReceiptInternal(validatedResolution, rawReceipt, {
         adapter,
+        allowUnknown,
         requireComplianceProof: false,
       });
       const strippedEvidence = withoutBoundaryClaims(applicationEvidence);
@@ -456,7 +457,7 @@ function createDispatchBoundary(options = {}) {
         refuse('RECORD_FAILED', 'durable dispatch recording did not return affirmative acknowledgement; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
       }
       stages.push({ stage: 'record', status: 'passed' });
-      const applicationReceipt = finalizeApplicationReceipt(validatedResolution, applicationEvidence, adapter);
+      const applicationReceipt = finalizeApplicationReceipt(validatedResolution, applicationEvidence, adapter, allowUnknown);
       stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
       registerReceipt(applicationReceipt);
       return deepFreeze(snapshot({
