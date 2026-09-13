@@ -316,7 +316,18 @@ function normalizeSignals(raw) {
   }
   if (hasOwn(signals, 'priorApplied')) {
     assertPlainObject(signals.priorApplied, 'signals.priorApplied');
-    out.priorApplied = cloneValue(signals.priorApplied);
+    // Keep a boundary-verified receipt's identity through resolution so
+    // validateResolution can re-check its unforgeable provenance.  All other
+    // caller data remains copied before policy evaluation.
+    let boundaryVerified = false;
+    try {
+      const boundary = require('./dispatch-boundary.cjs');
+      boundaryVerified = typeof boundary.isBoundaryVerifiedReceipt === 'function'
+        && boundary.isBoundaryVerifiedReceipt(signals.priorApplied);
+    } catch (_) {
+      // A direct resolver has no boundary provenance.
+    }
+    out.priorApplied = boundaryVerified ? signals.priorApplied : cloneValue(signals.priorApplied);
   }
   return out;
 }
@@ -343,6 +354,26 @@ function requireRepairReceiptEvidence(role, signals) {
     refuse(
       'UNVERIFIED_RECEIPT',
       `${role} ${signals.signatureState} escalation requires receipt evidence issued by the routed dispatch boundary`,
+      { role, signatureState: signals.signatureState },
+    );
+  }
+  // A receipt-shaped value is application input, not authority.  The dispatch
+  // boundary adds an object-identity capability only after it has read the
+  // matching finalized receipt from its durable recorder.  Keep this lookup
+  // lazy: dispatch-boundary imports this module during its own initialization.
+  let boundaryVerified = false;
+  try {
+    const boundary = require('./dispatch-boundary.cjs');
+    boundaryVerified = typeof boundary.isBoundaryVerifiedReceipt === 'function'
+      && boundary.isBoundaryVerifiedReceipt(prior);
+  } catch (_) {
+    // A repair resolver loaded without its boundary cannot establish durable
+    // provenance and must fail closed below.
+  }
+  if (!boundaryVerified) {
+    refuse(
+      'UNVERIFIED_RECEIPT',
+      `${role} ${signals.signatureState} escalation requires receipt evidence verified by the durable dispatch boundary`,
       { role, signatureState: signals.signatureState },
     );
   }

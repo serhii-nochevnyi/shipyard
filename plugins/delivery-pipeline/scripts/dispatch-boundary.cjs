@@ -20,6 +20,19 @@ const CLAIM_TTL_MS = 60 * 60 * 1000;
 const CLAIM_HEARTBEAT_MS = Math.max(1000, Math.floor(CLAIM_TTL_MS / 3));
 const RECORDER_AUTHORITY = Symbol('adr-014-dispatch-boundary-recorder-authority');
 const DURABLE_RECORDERS = new WeakSet();
+// Policy resolution must distinguish an actual durable receipt from a caller's
+// JSON lookalike.  Only this module can add a value to the set; the exported
+// predicate deliberately exposes verification but no way to mint membership.
+const BOUNDARY_VERIFIED_RECEIPTS = new WeakSet();
+
+function markBoundaryVerifiedReceipt(receipt) {
+  if (isObject(receipt)) BOUNDARY_VERIFIED_RECEIPTS.add(receipt);
+  return receipt;
+}
+
+function isBoundaryVerifiedReceipt(receipt) {
+  return isObject(receipt) && BOUNDARY_VERIFIED_RECEIPTS.has(receipt);
+}
 
 // A recorder is the durable owner of dispatch identity.  Function recorders
 // remain supported for small in-process callers, so this table supplies the
@@ -122,6 +135,7 @@ function createDurableRecorder(storeDir) {
   const recordFile = (dispatchId) => file('record', dispatchId);
   const latestFile = (runtime, role) => file('latest', `${runtime}:${role}`);
   const consumedFile = (dispatchId) => file('consumed', dispatchId);
+  const repairCommitFile = (dispatchId) => file('repair-commit', dispatchId);
   const claimFile = (dispatchId) => file('claim', dispatchId);
   const claimLockFile = (dispatchId) => file('claim-recovery', dispatchId);
   const claimPayload = (dispatchId, consumerId) => {
@@ -157,6 +171,41 @@ function createDurableRecorder(storeDir) {
       if (!error || error.code !== 'ENOENT') throw error;
     }
   };
+  const sameRecord = (left, right) => canonicalStableStringify(left) === canonicalStableStringify(right);
+  const validRepairCommit = (commit, predecessorDispatchId) => (
+    isObject(commit)
+    && commit.predecessor_dispatch_id === predecessorDispatchId
+    && typeof commit.successor_dispatch_id === 'string'
+    && typeof commit.consumer_id === 'string'
+    && isObject(commit.record_input)
+    && commit.record_input.dispatch_id === commit.successor_dispatch_id
+    && commit.record_input.predecessor_dispatch_id === predecessorDispatchId
+    && commit.record_input.predecessor_consumer_id === commit.consumer_id
+  );
+  const recoverRepairCommit = (predecessorDispatchId) => {
+    const commit = readJsonFile(repairCommitFile(predecessorDispatchId));
+    if (!commit) return null;
+    if (!validRepairCommit(commit, predecessorDispatchId)) {
+      throw boundaryError('RECORD_FAILED', 'durable repair commit is malformed', { dispatch_id: predecessorDispatchId });
+    }
+    const successorRecord = recordFile(commit.successor_dispatch_id);
+    const existing = readJsonFile(successorRecord);
+    if (!existing) {
+      if (!atomicCreateJson(successorRecord, commit.record_input)) {
+        const raced = readJsonFile(successorRecord);
+        if (!raced || !sameRecord(raced, commit.record_input)) {
+          throw boundaryError('RECORD_FAILED', 'durable repair commit could not recover its successor record', { dispatch_id: commit.successor_dispatch_id });
+        }
+      }
+    } else if (!sameRecord(existing, commit.record_input)) {
+      throw boundaryError('RECORD_FAILED', 'durable repair commit conflicts with its successor record', { dispatch_id: commit.successor_dispatch_id });
+    }
+    const receipt = commit.record_input.receipt;
+    if (isObject(receipt) && typeof receipt.runtime === 'string' && typeof receipt.role === 'string') {
+      atomicReplaceJson(latestFile(receipt.runtime, receipt.role), commit.record_input);
+    }
+    return commit;
+  };
 
   const recorder = Object.freeze({
     storeDir: root,
@@ -180,10 +229,28 @@ function createDurableRecorder(storeDir) {
         return { recorded: false };
       }
       if (!fs.existsSync(reservationFile(dispatchId))) return { recorded: false };
-      let created;
+      const predecessorDispatchId = recordInput.predecessor_dispatch_id;
+      const predecessorConsumerId = recordInput.predecessor_consumer_id;
       try {
-        created = atomicCreateJson(recordFile(dispatchId), recordInput);
-        if (!created) return { recorded: false };
+        if (predecessorDispatchId !== undefined || predecessorConsumerId !== undefined) {
+          if (typeof predecessorDispatchId !== 'string' || typeof predecessorConsumerId !== 'string') return { recorded: false };
+          const repairCommit = {
+            predecessor_dispatch_id: predecessorDispatchId,
+            successor_dispatch_id: dispatchId,
+            consumer_id: predecessorConsumerId,
+            record_input: recordInput,
+          };
+          const commitCreated = atomicCreateJson(repairCommitFile(predecessorDispatchId), repairCommit);
+          if (!commitCreated) {
+            const existingCommit = readJsonFile(repairCommitFile(predecessorDispatchId));
+            if (!existingCommit || !sameRecord(existingCommit, repairCommit)) return { recorded: false };
+          }
+        }
+        const created = atomicCreateJson(recordFile(dispatchId), recordInput);
+        if (!created) {
+          const existing = readJsonFile(recordFile(dispatchId));
+          if (!existing || !sameRecord(existing, recordInput)) return { recorded: false };
+        }
         atomicReplaceJson(latestFile(receipt.runtime, receipt.role), recordInput);
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable dispatch record failed: ${error.message}`, { dispatch_id: dispatchId });
@@ -200,6 +267,10 @@ function createDurableRecorder(storeDir) {
       try {
         const candidate = claimPayload(dispatchId, consumerId);
         if (fs.existsSync(consumedFile(dispatchId))) return { claimed: false };
+        // A successor is committed before its record is written.  If a process
+        // died between those writes, recover that record now and treat the
+        // predecessor as consumed: no later repair may replay it.
+        if (recoverRepairCommit(dispatchId)) return { claimed: false };
         if (atomicCreateJson(claimFile(dispatchId), candidate)) return { claimed: true };
         let current = readJsonFile(claimFile(dispatchId));
         if (current && current.consumer_id === consumerId) return { claimed: true };
@@ -229,6 +300,8 @@ function createDurableRecorder(storeDir) {
       }
     },
     release(dispatchId, consumerId) {
+      const repairCommit = recoverRepairCommit(dispatchId);
+      if (repairCommit && repairCommit.consumer_id === consumerId) return { released: true };
       const claim = readJsonFile(claimFile(dispatchId));
       if (!claim || claim.consumer_id !== consumerId) return { released: false };
       try {
@@ -264,14 +337,18 @@ function createDurableRecorder(storeDir) {
     },
     consume(dispatchId, consumerId) {
       try {
+        const repairCommit = recoverRepairCommit(dispatchId);
+        if (repairCommit && repairCommit.consumer_id !== consumerId) return { consumed: false };
         const claim = readJsonFile(claimFile(dispatchId));
-        if (!claim || claim.consumer_id !== consumerId) return { consumed: false };
+        if ((!claim || claim.consumer_id !== consumerId) && !repairCommit) return { consumed: false };
         const consumed = atomicCreateJson(consumedFile(dispatchId), {
           dispatch_id: dispatchId,
           consumer_id: consumerId,
           consumed_at: new Date().toISOString(),
         });
-        if (!consumed) return { consumed: false };
+        if (!consumed) return fs.existsSync(consumedFile(dispatchId)) && repairCommit
+          ? { consumed: true }
+          : { consumed: false };
         releaseClaimFile(claimFile(dispatchId));
         return { consumed: true };
       } catch (error) {
@@ -944,6 +1021,12 @@ function createDispatchBoundary(options = {}) {
         || !resolution
         || resolution.dispatch_id !== dispatchId) return null;
     try {
+      // This resolution was accepted only through the durable recorder.  Its
+      // embedded predecessor is therefore a stored copy of already-verified
+      // evidence, not a caller-provided object.
+      if (isObject(resolution.signals) && isObject(resolution.signals.priorApplied)) {
+        markBoundaryVerifiedReceipt(resolution.signals.priorApplied);
+      }
       canonicalValidateResolution(resolution, { requireDispatchId: true });
       const verified = verifyApplicationReceiptInternal(resolution, receipt, {
         requireComplianceProof: true,
@@ -1052,17 +1135,25 @@ function createDispatchBoundary(options = {}) {
     const prior = verifyPriorReceipt(withId, recorder);
     const canonicalInput = inputWithoutReceipt(withId);
     if (prior) {
+      markBoundaryVerifiedReceipt(prior.receipt);
       canonicalInput.signals = {
         ...(canonicalInput.signals || {}),
         priorApplied: prior.receipt,
       };
     }
     const resolved = canonicalResolveDispatch(canonicalInput);
-    return deepFreeze(snapshot(prior ? { ...resolved, prior_applied: {
+    const output = snapshot(prior ? { ...resolved, prior_applied: {
       dispatch_id: prior.dispatch_id,
       model: prior.model,
       effort: prior.effort,
-    } } : resolved));
+    } } : resolved);
+    // snapshot() deliberately severs every other caller reference. Rebrand
+    // this one cloned predecessor only because `prior` was re-read from the
+    // durable recorder immediately above.
+    if (prior && isObject(output.signals) && isObject(output.signals.priorApplied)) {
+      markBoundaryVerifiedReceipt(output.signals.priorApplied);
+    }
+    return deepFreeze(output);
   }
 
   function validate(resolution, validateOptions = {}) {
@@ -1155,6 +1246,10 @@ function createDispatchBoundary(options = {}) {
         observed_effort: applicationReceipt.observed_effort,
         application_evidence: strippedEvidence,
         receipt: applicationReceipt,
+        ...(prior ? {
+          predecessor_dispatch_id: prior.dispatch_id,
+          predecessor_consumer_id: claimConsumerId,
+        } : {}),
       };
       const recordInput = deepFreeze(snapshot({
         ...baseTrace,
@@ -1214,6 +1309,7 @@ module.exports = Object.freeze({
   createDurableRecorder,
   createDispatchBoundary,
   generatedAgentEvidence,
+  isBoundaryVerifiedReceipt,
   resolveDispatch,
   validateDispatch,
   dispatch,

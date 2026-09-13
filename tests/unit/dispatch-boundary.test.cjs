@@ -720,6 +720,107 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
   );
 });
 
+test('a crash after repair commit recovers its successor and blocks predecessor replay', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-repair-crash-'));
+  const base = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  }).dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'crash-commit-base',
+  });
+  const successorId = 'crash-commit-successor';
+  const recordInput = {
+    dispatch_id: successorId,
+    predecessor_dispatch_id: base.dispatch_id,
+    predecessor_consumer_id: successorId,
+    receipt: {
+      dispatch_id: successorId,
+      runtime: 'codex',
+      role: 'ci-fix',
+      compliance: 'verified',
+    },
+  };
+  const commitPath = path.join(storeDir, `repair-commit-${crypto.createHash('sha256').update(base.dispatch_id).digest('hex')}.json`);
+  // This is the durable state left by a process dying after the commit marker
+  // reaches disk but before it writes the successor record.
+  fs.writeFileSync(commitPath, JSON.stringify({
+    predecessor_dispatch_id: base.dispatch_id,
+    successor_dispatch_id: successorId,
+    consumer_id: successorId,
+    record_input: recordInput,
+  }) + '\n');
+
+  const recoveredRecorder = boundaryModule.createDurableRecorder(storeDir);
+  assert.deepStrictEqual(recoveredRecorder.claim(base.dispatch_id, 'replay-contender'), { claimed: false });
+  assert.deepStrictEqual(recoveredRecorder.getReceipt(successorId), recordInput);
+  assert.throws(
+    () => boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter() },
+      recorder: boundaryModule.createDurableRecorder(storeDir),
+    }).dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'crash-commit-replay',
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+});
+
+test('a recorded successor makes its predecessor non-replayable before physical consumption', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-recorded-crash-'));
+  const base = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  }).dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'recorded-crash-base',
+  });
+  const successorId = 'recorded-crash-successor';
+  const recordInput = {
+    dispatch_id: successorId,
+    predecessor_dispatch_id: base.dispatch_id,
+    predecessor_consumer_id: successorId,
+    receipt: {
+      dispatch_id: successorId,
+      runtime: 'codex',
+      role: 'ci-fix',
+      compliance: 'verified',
+    },
+  };
+  const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
+  fs.writeFileSync(path.join(storeDir, `repair-commit-${digest(base.dispatch_id)}.json`), JSON.stringify({
+    predecessor_dispatch_id: base.dispatch_id,
+    successor_dispatch_id: successorId,
+    consumer_id: successorId,
+    record_input: recordInput,
+  }) + '\n');
+  fs.writeFileSync(path.join(storeDir, `record-${digest(successorId)}.json`), JSON.stringify(recordInput) + '\n');
+
+  const restarted = boundaryModule.createDurableRecorder(storeDir);
+  assert.deepStrictEqual(restarted.claim(base.dispatch_id, 'recorded-replay-contender'), { claimed: false });
+  assert.equal(fs.existsSync(path.join(storeDir, `consumed-${digest(base.dispatch_id)}.json`)), false);
+  assert.throws(
+    () => boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter() },
+      recorder: boundaryModule.createDurableRecorder(storeDir),
+    }).dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'recorded-crash-replay',
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+});
+
 test('a stored record whose identities disagree cannot authorize a repair', () => {
   const base = policy.resolveDispatch({
     runtime: 'codex',

@@ -369,6 +369,19 @@ test('direct repair resolution does not accept caller-owned receipt evidence', (
   );
 });
 
+test('internal resolver rejects a receipt-shaped copy without durable boundary identity', () => {
+  const priorApplied = priorReceipt('ci-fix', 'gpt-5.6-luna', 'max', 'forged-internal-receipt');
+  assert.throws(
+    () => canonicalInternalPolicy.resolveDispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied },
+      previous_dispatch_id: priorApplied.dispatch_id,
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT' && /durable dispatch boundary/.test(error.message),
+  );
+});
+
 test('public resolver rejects caller-supplied receipt verifiers', () => {
   let verifierCalled = false;
   const priorApplied = priorReceipt('ci-fix', 'gpt-5.6-luna', 'max', 'caller-forged');
