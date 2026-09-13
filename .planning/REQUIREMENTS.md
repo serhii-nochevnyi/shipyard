@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 11b2f6cf3a000355d71adc07c5e612b70a16f7265baabb0f8e5572c8f37cc262 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 018e2ead48c9bcfb0e123805809de6538bf57d796c16ec115ac674b7366a2de3 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.

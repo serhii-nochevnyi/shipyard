@@ -1,21 +1,21 @@
 {
-  "generated_at": "2026-09-12T20:36:34.731Z",
-  "observed_at": "2026-09-12T20:36:34.731Z",
-  "generation": 223,
+  "generated_at": "2026-09-13T07:34:20.439Z",
+  "observed_at": "2026-09-13T07:34:20.439Z",
+  "generation": 228,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-12T20:36:34.731Z",
+  "dispatches_applied_at": "2026-09-13T07:34:20.439Z",
   "actionable": {
     "execute": [],
     "publish": [],
     "fix": [],
-    "finalize": [],
+    "finalize": [
+      "T-36-01"
+    ],
     "merge": []
   },
   "waiting": {
-    "ci": [
-      "T-36-01"
-    ],
+    "ci": [],
     "dispatched": [],
     "parent": [],
     "merge_human": [],
@@ -150,7 +150,7 @@
     "T-31-05": "T-31-04 (parent has no branch yet (nothing to cascade from))",
     "T-31-06": "T-31-05 (parent has no branch yet (nothing to cascade from))",
     "T-31-07": "T-31-06 (parent has no branch yet (nothing to cascade from))",
-    "T-36-01": "PR #125: 1 check(s) still running",
+    "T-36-01": "PR #125: green and still a draft — threads, arch-review, conform gate",
     "T-36-02": "T-31-02 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending))",
     "T-36-03": "T-36-02 (parent has no branch yet (nothing to cascade from))",
     "T-36-04": "T-36-03 (parent has no branch yet (nothing to cascade from))",
@@ -167,9 +167,9 @@
     "execute": 0,
     "publish": 0,
     "fix": 0,
-    "finalize": 0,
+    "finalize": 1,
     "merge": 0,
-    "ci": 1,
+    "ci": 0,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
@@ -178,7 +178,7 @@
     "done": 97
   },
   "parent_of": {},
-  "actionable_count": 0,
+  "actionable_count": 1,
   "left_behind_count": 0,
   "fixpoint": false,
   "capacity": {
@@ -187,10 +187,10 @@
     "free": 4
   },
   "sentinel": {
-    "duty": [],
-    "waiting_ci": [
+    "duty": [
       "T-36-01"
     ],
+    "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
     "clear": false
