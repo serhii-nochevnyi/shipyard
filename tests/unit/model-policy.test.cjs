@@ -31,7 +31,6 @@ function priorReceipt(role, model, effort, dispatchId) {
       launch_id: `launch-${dispatchId}`,
     },
   };
-  policy.registerApplicationReceipt(receipt);
   return receipt;
 }
 
@@ -101,6 +100,7 @@ test('maps logical rungs through the existing Claude palette without changing Co
     ['research', { type: 'alternatives' }, 'alternatives', 'sol', 'opus', 'medium'],
     ['research', { complexity: 'very-complex' }, 'very-complex', 'astra', 'fable', 'medium'],
     ['decomposition', { checkpoint: true }, 'critical', 'astra', 'fable', 'medium'],
+    ['decomposition', { critical: true }, 'critical', 'astra', 'fable', 'medium'],
     ['executor', {}, 'base', 'luna', 'opus', 'max'],
   ];
   for (const [role, signals, rung, logical, model, effort] of cases) {
@@ -132,6 +132,7 @@ test('research promotes alternatives and explicit very-complex, retaining both r
 test('decomposition uses only explicit checkpoint evidence, not global risk', () => {
   assert.equal(codex('decomposition', { risk: 'high' }).logical_rung, 'base');
   assert.equal(codex('decomposition', { checkpoint: true }).logical_rung, 'critical');
+  assert.equal(codex('decomposition', { critical: true }).logical_rung, 'critical');
   const result = codex('decomposition', { risk: 'high', checkpoint: true });
   assert.equal(result.logical_rung, 'critical');
   assert.ok(result.signals_fired.includes('risk'));
@@ -142,6 +143,7 @@ test('decomposition uses only explicit checkpoint evidence, not global risk', ()
 test('judgement roles promote only on ADR-014 scoped signals and preserve all fired reasons', () => {
   for (const role of ['integrator', 'arch-review']) {
     for (const signals of [
+      { critical: true },
       { contested: true },
       { checkpoint: true },
       { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 },
@@ -190,10 +192,11 @@ test('window escalation uses only measured input against the fingerprinted thres
   );
 });
 
-test('fixed Luna roles ignore global risk, checkpoint, and window promotion', () => {
+test('fixed Luna roles ignore global risk, critical, checkpoint, and window promotion', () => {
   for (const role of ['executor', 'pr-sentinel', 'drift-check']) {
     const result = codex(role, {
       risk: 'high',
+      critical: true,
       checkpoint: true,
       inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
     });
@@ -201,25 +204,24 @@ test('fixed Luna roles ignore global risk, checkpoint, and window promotion', ()
     assert.equal(result.logical_model, 'luna', role);
     assert.equal(result.model, 'gpt-5.6-luna', role);
     assert.ok(result.signals_fired.includes('risk'), `${role} retains risk`);
+    assert.ok(result.signals_fired.includes('critical'), `${role} retains critical`);
     assert.ok(result.signals_fired.includes('checkpoint'), `${role} retains checkpoint`);
     assert.ok(result.signals_fired.includes('window'), `${role} retains window`);
     assert.ok(result.signal_reasons.every((item) => item.applies === false), `${role} has no promotion reason`);
   }
 });
 
-test('repair escalation is ordered and requires the immediately preceding applied tuple', () => {
+test('direct policy repair resolution fails closed without boundary provenance', () => {
   assert.equal(codex('ci-fix', { signatureState: 'first' }).logical_rung, 'base');
   assert.equal(codex('review-fix', { signatureState: 'progress' }).logical_rung, 'base');
   const luna = priorReceipt('ci-fix', 'gpt-5.6-luna', 'max', 'luna-1');
-  assert.equal(codex('ci-fix', {
-    signatureState: 'repeat',
-    priorApplied: luna,
-  }, { previous_dispatch_id: 'luna-1' }).logical_rung, 'repeat');
-  const sol = priorReceipt('review-fix', 'gpt-5.6-sol', 'medium', 'sol-1');
-  assert.equal(codex('review-fix', {
-    signatureState: 'repeat_exhausted',
-    priorApplied: sol,
-  }, { previous_dispatch_id: 'sol-1' }).logical_rung, 'repeat_exhausted');
+  assert.throws(
+    () => codex('ci-fix', {
+      signatureState: 'repeat',
+      priorApplied: luna,
+    }, { previous_dispatch_id: 'luna-1' }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
   assert.equal(codex('review-fix', { signatureState: 'flake' }).logical_rung, 'base');
   assert.throws(
     () => codex('ci-fix', { signatureState: 'repeat' }),
@@ -230,7 +232,7 @@ test('repair escalation is ordered and requires the immediately preceding applie
       signatureState: 'repeat_exhausted',
       priorApplied: luna,
     }, { previous_dispatch_id: 'luna-1' }),
-    (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
   assert.throws(
     () => codex('ci-fix', {
@@ -283,13 +285,14 @@ test('unknown runtime, malformed signals, and unsupported signal names fail clos
     () => policy.resolveDispatch({ runtime: 'codex', role: 'executor', signals: { mystery: true } }),
     (error) => error.code === 'UNSUPPORTED_SIGNAL',
   );
-  for (const signals of [{ critical: true }, { alternatives: true }, { veryComplex: true }, { complexity: 'critical' }]) {
+  for (const signals of [{ alternatives: true }, { veryComplex: true }, { complexity: 'critical' }]) {
     assert.throws(
       () => policy.resolveDispatch({ runtime: 'codex', role: 'executor', signals }),
       (error) => error.code === 'UNSUPPORTED_SIGNAL',
       JSON.stringify(signals),
     );
   }
+  assert.equal(policy.resolveDispatch({ runtime: 'codex', role: 'executor', signals: { critical: true } }).logical_rung, 'base');
 });
 
 test('resolution is immutable and exposes route, backend, mechanism, and reason provenance', () => {
@@ -304,13 +307,13 @@ test('resolution is immutable and exposes route, backend, mechanism, and reason 
   assert.match(result.signal_reasons.find((item) => item.signal === 'risk').reason, /inert|not a role-scoped/);
 });
 
-test('freezing a resolution does not freeze caller-owned prior receipt evidence', () => {
+test('direct repair resolution does not accept caller-owned receipt evidence', () => {
   const priorApplied = priorReceipt('ci-fix', 'gpt-5.6-luna', 'max', 'luna-owned-by-caller');
-  const result = codex('ci-fix', { signatureState: 'repeat', priorApplied, }, { previous_dispatch_id: 'luna-owned-by-caller' });
-  assert.ok(Object.isFrozen(result));
   assert.equal(Object.isFrozen(priorApplied), false);
-  priorApplied.applied_model = 'caller-can-still-update-its-evidence';
-  assert.equal(priorApplied.applied_model, 'caller-can-still-update-its-evidence');
+  assert.throws(
+    () => codex('ci-fix', { signatureState: 'repeat', priorApplied }, { previous_dispatch_id: 'luna-owned-by-caller' }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
 });
 
 done();

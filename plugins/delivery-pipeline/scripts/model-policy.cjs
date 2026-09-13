@@ -100,13 +100,13 @@ const ROLE_SIGNAL_RULES = Object.freeze({
     'very-complex': Object.freeze({ rung: 'very-complex', any: Object.freeze([{ complexity: 'very-complex' }]) }),
   }),
   decomposition: Object.freeze({
-    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ checkpoint: true }]) }),
+    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ critical: true }, { checkpoint: true }]) }),
   }),
   integrator: Object.freeze({
-    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }]) }),
+    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ critical: true }, { checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }]) }),
   }),
   'arch-review': Object.freeze({
-    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }]) }),
+    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ critical: true }, { checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }]) }),
   }),
   'ci-fix': Object.freeze({
     repeat: Object.freeze({ rung: 'repeat', any: Object.freeze([{ signatureState: 'repeat' }]), prerequisite: 'luna/max' }),
@@ -177,7 +177,6 @@ const POLICY = deepFreeze({
 });
 
 const POLICY_HASH = fingerprintPolicy(POLICY);
-const TRUSTED_RECEIPTS = new Map();
 
 const APPLICATION_RECEIPT_FIELDS = Object.freeze([
   'receipt_type',
@@ -200,6 +199,7 @@ const SIGNAL_ORDER = Object.freeze([
   'type',
   'complexity',
   'risk',
+  'critical',
   'checkpoint',
   'contested',
   'inputTokens',
@@ -302,7 +302,7 @@ function normalizeSignals(raw) {
     }
     out.complexity = signals.complexity;
   }
-  for (const name of ['checkpoint', 'contested']) {
+  for (const name of ['critical', 'checkpoint', 'contested']) {
     if (hasOwn(signals, name)) out[name] = booleanSignal(signals[name], name);
   }
   if (hasOwn(signals, 'risk')) {
@@ -435,6 +435,16 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
         ? 'global risk is intentionally inert for a fixed Luna role'
         : 'risk is recorded context, not a role-scoped escalation signal',
     );
+  }
+  if (signals.critical === true) {
+    const applies = ruleMatches(roleRules.critical, signals, threshold);
+    const reason = applies
+      ? `signals.critical=true selects the ${normalizedRole} critical rung`
+      : FIXED_LUNA_ROLES.has(normalizedRole)
+        ? 'global critical state cannot promote a fixed Luna role'
+        : `critical state does not promote ${normalizedRole}`;
+    add('critical', 'signals.critical', true, applies, applies ? 'critical' : null, reason);
+    if (applies) selected.push({ signal: 'critical', rung: 'critical', reason });
   }
   if (signals.checkpoint === true) {
     const applies = ruleMatches(roleRules.critical, signals, threshold);
@@ -589,18 +599,7 @@ function validateApplicationReceiptShape(raw, { requireRole = true } = {}) {
   return receipt;
 }
 
-function registerApplicationReceipt(raw) {
-  const receipt = validateApplicationReceiptShape(raw);
-  const stored = deepFreeze(cloneValue(receipt));
-  const prior = TRUSTED_RECEIPTS.get(stored.dispatch_id);
-  if (prior && stableStringify(prior) !== stableStringify(stored)) {
-    refuse('NONCOMPLIANT_RECEIPT', 'dispatch id was already registered with different application evidence', { dispatch_id: stored.dispatch_id });
-  }
-  TRUSTED_RECEIPTS.set(stored.dispatch_id, stored);
-  return stored;
-}
-
-function validatePriorReceipt({ input, signals, runtime, role, requiredLogicalModel, requiredEffort }) {
+function validatePriorReceipt({ input, signals, runtime, role, requiredLogicalModel, requiredEffort, receiptVerifier }) {
   const raw = previousReceiptFor(input, signals);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     refuse(
@@ -614,13 +613,22 @@ function validatePriorReceipt({ input, signals, runtime, role, requiredLogicalMo
   if (!nonEmptyString(previousDispatchId) || previousDispatchId !== receipt.dispatch_id) {
     refuse('MISSING_RECEIPT', `${role} ${signals.signatureState} escalation must identify its immediately preceding dispatch_id`, { expected: receipt.dispatch_id, actual: previousDispatchId });
   }
-  const trusted = TRUSTED_RECEIPTS.get(receipt.dispatch_id);
-  if (!trusted || stableStringify(trusted) !== stableStringify(receipt)) {
+  const expectedModel = logicalModelFor(runtime, requiredLogicalModel);
+  if (typeof receiptVerifier !== 'function') {
+    refuse('UNVERIFIED_RECEIPT', `${role} ${signals.signatureState} escalation requires a receipt verified by the dispatch boundary`, { dispatch_id: receipt.dispatch_id });
+  }
+  const trusted = receiptVerifier(receipt, {
+    runtime,
+    role,
+    previousDispatchId,
+    expectedModel,
+    expectedEffort: requiredEffort,
+  });
+  if (!trusted || typeof trusted !== 'object' || Array.isArray(trusted) || stableStringify(trusted) !== stableStringify(receipt)) {
     refuse('UNVERIFIED_RECEIPT', `${role} ${signals.signatureState} escalation requires a receipt verified by the dispatch boundary`, { dispatch_id: receipt.dispatch_id });
   }
   const appliedModel = receipt.applied_model;
   const appliedEffort = receipt.applied_effort;
-  const expectedModel = logicalModelFor(runtime, requiredLogicalModel);
   if (appliedModel !== expectedModel || appliedEffort !== requiredEffort) {
     refuse(
       'NONCOMPLIANT_RECEIPT',
@@ -816,8 +824,11 @@ function validateResolution(resolution, options = {}) {
   return true;
 }
 
-function resolveDispatch(input) {
+function resolveDispatch(input, internalOptions = {}) {
   assertPlainObject(input, 'dispatch input');
+  if (!internalOptions || typeof internalOptions !== 'object' || Array.isArray(internalOptions)) {
+    refuse('INVALID_INPUT', 'dispatch resolution options must be an object');
+  }
   const runtime = normalizeRuntime(input.runtime);
   const role = normalizeRole(input.role);
   const signals = normalizeSignals(input.signals);
@@ -843,6 +854,7 @@ function resolveDispatch(input) {
       role,
       requiredLogicalModel: repairPrerequisite.logical_model,
       requiredEffort: repairPrerequisite.effort,
+      receiptVerifier: internalOptions.receiptVerifier,
     });
   }
 
@@ -917,7 +929,6 @@ module.exports = {
   evaluateSignals,
   validatePriorReceipt,
   validateApplicationReceiptShape,
-  registerApplicationReceipt,
   validateResolution,
   resolveDispatch,
   codexAgentFile,

@@ -252,7 +252,7 @@ function verifyApplicationReceipt(resolution, rawReceipt, options = {}) {
   }
 
   const adapter = options.adapter || null;
-  const allowUnknown = adapterObservationUnavailable(adapter) || receipt.observation_unavailable === true;
+  const allowUnknown = adapterObservationUnavailable(adapter);
   const observedModel = observedValue(receipt, 'observed_model', receipt.applied_model, allowUnknown);
   const observedEffort = observedValue(receipt, 'observed_effort', receipt.applied_effort, allowUnknown);
   const normalized = {
@@ -274,15 +274,52 @@ function recorderFor(options, adapter) {
 
 function createDispatchBoundary(options = {}) {
   if (!isObject(options)) refuse('INVALID_INPUT', 'boundary options must be an object');
-  const testOnly = options.testOnly === true;
   const policy = options.policy || defaultPolicy;
-  if (policy !== defaultPolicy && !testOnly) {
-    refuse('NONCANONICAL_POLICY', 'production dispatch is bound to the canonical ADR-014 policy; custom policy injection is test-only');
+  if (policy !== defaultPolicy) {
+    refuse('NONCANONICAL_POLICY', 'dispatch is bound to the canonical ADR-014 policy; custom policy injection is not permitted');
   }
   if (!policy || typeof policy.resolveDispatch !== 'function' || typeof policy.validateResolution !== 'function') {
     refuse('INVALID_INPUT', 'boundary policy must expose resolveDispatch and validateResolution');
   }
   const adapters = options.adapters || {};
+  const trustedReceipts = new Map();
+  const latestReceiptByTuple = new Map();
+  const consumedReceiptIds = new Set();
+
+  function receiptTupleKey(runtime, role) {
+    return `${runtime}:${role}`;
+  }
+
+  function verifyPriorReceipt(receipt, expected = {}) {
+    if (!isObject(receipt)) return null;
+    const stored = trustedReceipts.get(receipt.dispatch_id);
+    if (!stored || stableReceipt(receipt) !== stableReceipt(stored)) return null;
+    if (receipt.runtime !== expected.runtime || receipt.role !== expected.role) return null;
+    if (expected.previousDispatchId !== receipt.dispatch_id) return null;
+    if (expected.expectedModel !== undefined && receipt.applied_model !== expected.expectedModel) return null;
+    if (expected.expectedEffort !== undefined && receipt.applied_effort !== expected.expectedEffort) return null;
+    const tuple = receiptTupleKey(receipt.runtime, receipt.role);
+    if (latestReceiptByTuple.get(tuple) !== receipt.dispatch_id) return null;
+    if (consumedReceiptIds.has(receipt.dispatch_id)) return null;
+    consumedReceiptIds.add(receipt.dispatch_id);
+    return stored;
+  }
+
+  function registerReceipt(receipt) {
+    const stored = deepFreeze(snapshot(receipt));
+    const prior = trustedReceipts.get(stored.dispatch_id);
+    if (prior && stableReceipt(prior) !== stableReceipt(stored)) {
+      refuse('NONCOMPLIANT_RECEIPT', 'dispatch id was already registered with different application evidence', { dispatch_id: stored.dispatch_id });
+    }
+    if (prior) return prior;
+    trustedReceipts.set(stored.dispatch_id, stored);
+    latestReceiptByTuple.set(receiptTupleKey(stored.runtime, stored.role), stored.dispatch_id);
+    return stored;
+  }
+
+  function stableReceipt(receipt) {
+    return defaultPolicy.stableStringify(receipt);
+  }
 
   function resolve(input) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
@@ -290,26 +327,15 @@ function createDispatchBoundary(options = {}) {
       || Object.prototype.hasOwnProperty.call(input, 'dispatchId')
       ? input
       : { ...input, dispatch_id: newDispatchId() };
-    return deepFreeze(snapshot(policy.resolveDispatch(withId)));
+    return deepFreeze(snapshot(policy.resolveDispatch(withId, {
+      receiptVerifier: verifyPriorReceipt,
+    })));
   }
 
   function validate(resolution, validateOptions = {}) {
     const adapter = validateOptions.adapter || adapterFor(validateOptions.adapters || adapters, resolution && resolution.runtime);
     validateWithAdapter(resolution, adapter, policy);
     return true;
-  }
-
-  function launch(resolution, context = {}, launchOptions = {}) {
-    if (!testOnly) refuse('TEST_ONLY_PRIMITIVE', 'raw launch is test-only; production dispatch must use the atomic routed dispatch boundary');
-    const adapter = launchOptions.adapter || adapterFor(launchOptions.adapters || adapters, resolution && resolution.runtime);
-    const validatedResolution = validateWithAdapter(resolution, adapter, policy);
-    const fn = typeof adapter.launch === 'function'
-      ? adapter.launch
-      : typeof adapter.apply === 'function'
-        ? adapter.apply
-        : null;
-    if (!fn) refuse('MISSING_ADAPTER', `${resolution.runtime} dispatch adapter has no launch method`, { runtime: resolution.runtime });
-    return invokeLaunch(fn, adapter, [validatedResolution, context]);
   }
 
   function receipt(resolution, rawReceipt, receiptOptions = {}) {
@@ -322,7 +348,7 @@ function createDispatchBoundary(options = {}) {
     const resolution = resolve(input);
     const adapter = adapterFor(adapters, resolution.runtime);
     const record = recorderFor(options, adapter);
-    if (!record && !testOnly) {
+    if (!record) {
       refuse('RECORD_UNAVAILABLE', 'durable dispatch recording is mandatory; refusing to launch without a recorder');
     }
     const stages = [
@@ -333,7 +359,6 @@ function createDispatchBoundary(options = {}) {
     const finish = (launchResult) => {
       const rawReceipt = unwrapReceipt(launchResult);
       const applicationReceipt = verifyApplicationReceipt(validatedResolution, rawReceipt, { adapter });
-      if (typeof policy.registerApplicationReceipt === 'function') policy.registerApplicationReceipt(applicationReceipt);
       stages.push({ stage: 'launch', status: 'passed', launch_id: applicationReceipt.launch_id });
       stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
 
@@ -367,9 +392,8 @@ function createDispatchBoundary(options = {}) {
           refuse('RECORD_FAILED', 'dispatch receipt could not be recorded; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
         }
         stages.push({ stage: 'record', status: 'passed' });
-      } else {
-        stages.push({ stage: 'record', status: 'test-only-not-configured' });
       }
+      registerReceipt(applicationReceipt);
       return deepFreeze(snapshot({ ...baseTrace, trace: stages }));
     };
     const fn = typeof adapter.launch === 'function'
@@ -385,7 +409,7 @@ function createDispatchBoundary(options = {}) {
     return finish(launchResult);
   }
 
-  return Object.freeze({ resolve, validate, launch, receipt, dispatch });
+  return Object.freeze({ resolve, validate, receipt, dispatch });
 }
 
 function resolveDispatch(input) {
@@ -394,10 +418,6 @@ function resolveDispatch(input) {
 
 function validateDispatch(resolution, options = {}) {
   return createDispatchBoundary(options).validate(resolution, options);
-}
-
-function launchDispatch(resolution, context = {}, options = {}) {
-  return createDispatchBoundary(options).launch(resolution, context, options);
 }
 
 function dispatch(input, options = {}) {
@@ -410,7 +430,6 @@ module.exports = {
   createDispatchBoundary,
   resolveDispatch,
   validateDispatch,
-  launchDispatch,
   verifyApplicationReceipt,
   dispatch,
   dispatchThroughBoundary: dispatch,
