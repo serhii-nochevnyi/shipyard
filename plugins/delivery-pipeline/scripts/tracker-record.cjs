@@ -182,12 +182,21 @@ function recoverPendingLocked(graphDir) {
     throw new Error(`cannot recover tracker override: the journal prefix changed while the transaction was pending`);
   }
   const suffix = current.data.subarray(marker.journal_offset);
+  if (marker.journal_offset > 0 && current.data[marker.journal_offset - 1] !== 0x0a) {
+    throw new Error(
+      `cannot recover tracker override: the journal prefix ends with an incomplete JSONL line — repair the journal and retry`
+    );
+  }
   const eventLine = Buffer.from(marker.event_line, 'utf8');
   const eventAt = suffix.indexOf(eventLine);
   if (eventAt >= 0 && (eventAt === 0 || suffix[eventAt - 1] === 0x0a)) {
+    // Validate both payloads before replacing the cache or removing the
+    // recovery marker. A structurally valid marker with corrupt base64/JSON
+    // must remain pending and preserve the pre-transaction store.
+    const recovered = completedRecovery(marker);
     writeAtomic(graphStore(graphDir), Buffer.from(marker.after_store, 'base64'));
     unlinkIfPresent(markerFile);
-    return completedRecovery(marker);
+    return recovered;
   }
   // Other journal writers do not share the tracker lock. If one appended after
   // the marker but before this transaction's append, keep that complete line
@@ -616,7 +625,7 @@ function mutateRecord(graphDir, operation, fn) {
       if (recovered && sameRecoveredOperation(recovered, operation)) return recovered.record;
       const beforeStore = fileSnapshot(graphStore(graphDir));
       const store = readStore(graphDir);
-      const result = fn(store);
+      const result = fn(store, recovered);
       if (!result || !result.record) throw new Error('tracker-record mutation did not produce a record');
       store.tickets[result.record.ticket] = result.record;
       const afterStore = JSON.stringify(store, null, 2) + '\n';
@@ -627,6 +636,12 @@ function mutateRecord(graphDir, operation, fn) {
 
       const journal = path.join(graphDir, 'delivery-log.jsonl');
       const beforeJournal = fileSnapshot(journal);
+      if (beforeJournal.file && beforeJournal.data.length > 0
+          && beforeJournal.data[beforeJournal.data.length - 1] !== 0x0a) {
+        throw new Error(
+          `the tracker journal at ${journal} ends with an incomplete JSONL line — repair it before recording an override`
+        );
+      }
       const eventLine = JSON.stringify(result.event) + '\n';
       const marker = {
         version: 1,
@@ -709,24 +724,30 @@ function override(graphDir, input) {
   const { ticket, jiraKey } = validateTicket(graphDir, input.ticket, input.jiraKey);
   const overrideReason = requireNonEmpty(input.reason, 'override reason');
   const suppliedObservedAt = input.observedAt === undefined ? null : observedTimestamp(input.observedAt);
+  const statusProvided = input.statusProvided === true;
+  const assigneeProvided = input.assigneeProvided === true;
+  if (input.observedAt !== undefined && !statusProvided && !assigneeProvided) {
+    throw new Error('--observed-at requires --status or --assignee when overriding tracker facts');
+  }
   const newObservationAt = suppliedObservedAt || observedTimestamp(undefined);
   return mutateRecord(graphDir, {
     event: 'tracker_override',
     ticket,
     jira_key: jiraKey,
     override_reason: overrideReason,
-    status_provided: input.statusProvided === true,
-    status: input.statusProvided ? input.status : null,
-    assignee_provided: input.assigneeProvided === true,
-    assignee: input.assigneeProvided ? input.assignee : null,
+    status_provided: statusProvided,
+    status: statusProvided ? input.status : null,
+    assignee_provided: assigneeProvided,
+    assignee: assigneeProvided ? input.assignee : null,
     observed_at_provided: input.observedAt !== undefined,
     observed_at: suppliedObservedAt,
-  }, (store) => {
+  }, (store, recovered) => {
     const generation = requireGeneration(graphDir);
     const generationIdentity = requireMetadataIdentity(graphDir);
     const existing = store.tickets[ticket];
     const reusable = existing && existing.generation === generation
       && existing.generation_identity === generationIdentity
+      && existing.ticket === ticket
       && existing.jira_key === jiraKey
       && validRecord(existing, readConfigStatuses(projectRootOf(graphDir)), generationIdentity)
       ? existing
@@ -739,6 +760,9 @@ function override(graphDir, input) {
       throw new Error(
         'tracker facts may be overridden only after a complete current-generation tracker observation'
       );
+    }
+    if (reusable.override === true && (statusProvided || assigneeProvided) && !recovered) {
+      throw new Error('tracker facts cannot be replaced on an existing exact-ticket override; read Jira again first');
     }
 
     let status = reusable && typeof reusable.status === 'string' ? reusable.status : null;
@@ -755,17 +779,17 @@ function override(graphDir, input) {
       : 'no current tracker observation was available';
     let observedAt = reusable && reusable.observed_at ? reusable.observed_at : newObservationAt;
 
-    if (input.statusProvided) {
+    if (statusProvided) {
       status = normalizeStatusName(input.status);
       if (!status) throw new Error('status, when provided, must be a non-empty status NAME');
       observedAt = newObservationAt;
     }
-    if (input.assigneeProvided) {
+    if (assigneeProvided) {
       assignee = normalizeCliAssignee(input.assignee);
       assigneeObserved = true;
       observedAt = newObservationAt;
     }
-    if (input.statusProvided || input.assigneeProvided) {
+    if (statusProvided || assigneeProvided) {
       const complete = !!status && assigneeObserved;
       if (complete) {
         const result = evaluateEligibility(status, assignee, readConfigStatuses(projectRootOf(graphDir)));
@@ -806,6 +830,7 @@ function override(graphDir, input) {
         assignee: record.assignee,
         verdict: record.verdict,
         observation_reason: record.reason,
+        assignee_observed: record.assignee_observed,
         observed_at: record.observed_at,
         override_reason: overrideReason,
         generation,
@@ -828,19 +853,22 @@ function clear(graphDir, ticket) {
 }
 
 function parseArgs(argv) {
-  const args = [...argv];
-  const graphAt = args.indexOf('--graph');
-  if (graphAt !== -1) {
-    const value = args[graphAt + 1];
-    if (!value || value.startsWith('--')) throw new Error(`--graph needs a directory value (got ${value ? `the flag "${value}"` : 'nothing'})`);
-    args.splice(graphAt, 2);
-  }
+  const graphValue = { value: null };
   const values = {};
   const positional = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--graph') {
+      const value = argv[++i];
+      if (!value || value.startsWith('--')) {
+        throw new Error(`--graph needs a directory value (got ${value ? `the flag "${value}"` : 'nothing'})`);
+      }
+      if (graphValue.value !== null) throw new Error('duplicate option --graph');
+      graphValue.value = value;
+      continue;
+    }
     if (arg === '--status' || arg === '--assignee' || arg === '--reason' || arg === '--observed-at') {
-      const value = args[++i];
+      const value = argv[++i];
       // `--reason` carries opaque tracker/MCP text. A failure such as
       // "--retry-after 30" is data, not another option; rejecting it would
       // prevent the required fail-closed `unknown` record from being written.
@@ -855,7 +883,7 @@ function parseArgs(argv) {
       positional.push(arg);
     }
   }
-  return { positional, values, graph: graphAt === -1 ? null : argv[graphAt + 1] };
+  return { positional, values, graph: graphValue.value };
 }
 
 function cli() {

@@ -120,6 +120,15 @@ test('unknown observations preserve an error value that starts like an option', 
   assert.strictEqual(stored(graph).tickets['T-01'].reason, '--retry-after 30');
 });
 
+test('an opaque reason may equal --graph before an explicit graph selector', () => {
+  const { project, graph } = scratch(3);
+  const r = spawnSync('node', [
+    RECORD, 'unknown', 'T-01', 'MYD-1', '--reason', '--graph', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(stored(graph).tickets['T-01'].reason, '--graph');
+});
+
 test('an exact-ticket override preserves the observation and journals one atomic event', () => {
   const { project, graph } = scratch(4);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
@@ -145,6 +154,7 @@ test('an exact-ticket override preserves the observation and journals one atomic
     assignee: 'user-5',
     verdict: 'ineligible',
     observation_reason: record.reason,
+    assignee_observed: record.assignee_observed,
     observed_at: record.observed_at,
     override_reason: 'operator named this ticket explicitly',
     generation: 4,
@@ -273,6 +283,39 @@ test('an override cannot turn an unknown assignee into a complete observation', 
   assert.match(record.reason, /assignee lookup timed out/);
 });
 
+test('a plain override preserves an unknown observation and its knownness', () => {
+  const { project, graph } = scratch(4);
+  execFileSync('node', [
+    RECORD, 'unknown', 'T-02', 'MYD-2', '--status', 'To Do',
+    '--reason', 'assignee lookup timed out', '--graph', graph,
+  ], { cwd: project });
+  execFileSync('node', [
+    RECORD, 'override', 'T-02', 'MYD-2', '--reason', 'operator named this ticket explicitly', '--graph', graph,
+  ], { cwd: project });
+  const record = stored(graph).tickets['T-02'];
+  assert.strictEqual(record.verdict, 'unknown');
+  assert.strictEqual(record.eligible, null);
+  assert.strictEqual(record.status, 'To Do');
+  assert.strictEqual(record.assignee, null);
+  assert.strictEqual(record.assignee_observed, false);
+  assert.strictEqual(record.reason, 'assignee lookup timed out');
+});
+
+test('an override cannot replace tracker facts on an existing override', () => {
+  const { project, graph } = scratch(4);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--status', 'Backlog',
+    '--reason', 'second operator choice', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /cannot be replaced on an existing exact-ticket override/);
+  assert.strictEqual(stored(graph).tickets['T-01'].status, 'To Do');
+});
+
 test('an override refuses a malformed delivery generation', () => {
   const { project, graph } = scratch();
   fs.writeFileSync(path.join(graph, 'delivery-front.json'), JSON.stringify({ generation: 7 }));
@@ -295,6 +338,19 @@ test('an override refuses an invalid observed timestamp before opening its trans
   assert.match(r.stderr, /observed-at must be a valid date\/time string/);
   assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
   assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
+});
+
+test('an override rejects observed-at without a replacement tracker fact', () => {
+  const { project, graph } = scratch(4);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice',
+    '--observed-at', '2026-09-14T10:00:00.000Z', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /--observed-at requires --status or --assignee/);
+  assert.strictEqual(stored(graph).tickets['T-01'].override, undefined);
+  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')));
 });
 
 test('an override expires with its delivery generation', () => {
@@ -345,6 +401,42 @@ test('recovery finds a completed override after an intervening journal append', 
   assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
   assert.strictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8'),
     intervening.toString() + eventLine.toString());
+});
+
+test('recovery validates a completed marker before replacing the cache', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  stagePendingOverride(graph, beforeStore, Buffer.from('{not-json'), eventLine, Buffer.alloc(0));
+  const r = spawnSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /completed marker payload is corrupt/);
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'tracker.json')), beforeStore);
+  assert.ok(fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl')), eventLine);
+});
+
+test('recovery refuses an override appended after a torn journal prefix', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  const tornPrefix = Buffer.from('{"event":"interrupted"');
+  stagePendingOverride(graph, beforeStore, eventLine, eventLine, tornPrefix);
+  const journal = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  const r = spawnSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /journal prefix ends with an incomplete JSONL line/);
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'tracker.json')), beforeStore);
+  assert.ok(fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl')), journal);
 });
 
 test('recovery truncates only a partial UTF-8 override append', () => {
