@@ -288,6 +288,17 @@ test('a malformed ticket id or key is refused', () => {
   }
 });
 
+test('a tracker observation cannot use a Jira key different from the ticket graph', () => {
+  const { project, graph } = scratch();
+  const tickets = JSON.parse(fs.readFileSync(path.join(graph, 'tickets.json'), 'utf8'));
+  tickets.tickets['T-01'].jira = 'MYD-1';
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify(tickets));
+  const r = spawnSync('node', markArgs(graph, 'T-01', 'OTHER-1'), { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /does not match ticket T-01/);
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
+});
+
 test('the eligibility cache does not touch the outbound Jira projection', () => {
   const { project, graph } = scratch();
   const projection = path.join(graph, 'jira-projection.json');
