@@ -450,6 +450,8 @@ function unknown(graphDir, input) {
 function override(graphDir, input) {
   const { ticket, jiraKey } = validateTicket(graphDir, input.ticket, input.jiraKey);
   const overrideReason = requireNonEmpty(input.reason, 'override reason');
+  const suppliedObservedAt = input.observedAt === undefined ? null : observedTimestamp(input.observedAt);
+  const newObservationAt = suppliedObservedAt || observedTimestamp(undefined);
   return mutateRecord(graphDir, (store) => {
     const generation = requireGeneration(graphDir);
     const existing = store.tickets[ticket];
@@ -472,17 +474,17 @@ function override(graphDir, input) {
     let observationReason = reusable && reusable.reason
       ? reusable.reason
       : 'no current tracker observation was available';
-    let observedAt = reusable && reusable.observed_at ? reusable.observed_at : new Date().toISOString();
+    let observedAt = reusable && reusable.observed_at ? reusable.observed_at : newObservationAt;
 
     if (input.statusProvided) {
       status = normalizeStatusName(input.status);
       if (!status) throw new Error('status, when provided, must be a non-empty status NAME');
-      observedAt = input.observedAt || new Date().toISOString();
+      observedAt = newObservationAt;
     }
     if (input.assigneeProvided) {
       assignee = normalizeCliAssignee(input.assignee);
       assigneeObserved = true;
-      observedAt = input.observedAt || new Date().toISOString();
+      observedAt = newObservationAt;
     }
     if (input.statusProvided || input.assigneeProvided) {
       const complete = !!status && assigneeObserved;
