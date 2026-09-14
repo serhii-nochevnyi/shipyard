@@ -1194,35 +1194,20 @@
   "T-36-01": {
     "branch": "ticket/T-36-01-canonical-runtime-neutral-policy-and-res",
     "pr": 125,
-    "status": "pr-open",
-    "draft": true,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/125",
-    "pr_base": "epic/36-enforce-the-runtime-model-ladder",
-    "pr_created_at": "2026-09-12T20:26:12Z",
-    "head_sha": "cd5e3807ea3e97ff9d8d23eb9e35a1e99d8eb0e4",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false,
-      "unavailable": false
-    },
     "base": "epic/36-enforce-the-runtime-model-ladder",
     "base_reason": "no primary parent — a root ticket PRs into epic/36-enforce-the-runtime-model-ladder",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-12T20:26:45.234Z"
+    "reapable": true,
+    "since": "2026-09-14T12:17:32.355Z"
   },
   "T-36-02": {
     "branch": "ticket/T-36-02-authoritative-configuration-bridge-and-o",
     "pr": null,
     "status": "pending",
-    "base": "ticket/T-36-01-canonical-runtime-neutral-policy-and-res",
-    "base_reason": "T-36-01 is pr-open — cascade off ticket/T-36-01-canonical-runtime-neutral-policy-and-res; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-01 lands",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-01 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
     "ready": false,
     "blocked_by": [

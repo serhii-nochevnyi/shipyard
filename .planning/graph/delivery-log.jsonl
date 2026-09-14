@@ -979,3 +979,4 @@
 {"ts":"2026-09-12T20:49:54.537Z","event":"degenerate_green","ticket":"T-36-01","pr":125,"findings":0,"outcome":"clean"}
 {"ts":"2026-09-12T20:53:35.377Z","event":"dispatch","ticket":"T-36-01","role":"arch-review","pr":125,"agent_id":"01a09762-1d91-7d41-89b4-16bd72ff794c","dispatch_id":"dispatch-mtyv49w5-d51810d4-0b9a-4302-ae02-92cfb99e13d5","by":"dispatch-record"}
 {"ts":"2026-09-12T20:55:01.317Z","event":"dispatch","ticket":"T-36-01","role":"review-fix","pr":125,"agent_id":"01a09766-df3b-7640-a298-b2ced9075a82","dispatch_id":"dispatch-mtyv647d-45d0f032-3001-4d4d-90f5-74db7c83ef49","by":"dispatch-record"}
+{"ts":"2026-09-14T12:17:32.355Z","event":"status_change","ticket":"T-36-01","from":"pr-open","to":"merged","pr":125}
