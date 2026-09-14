@@ -114,6 +114,50 @@ const refPath = argv && argv.driftRefPath
 if (!refPath) throw new Error('drift-gate: args.driftRefPath is required')
 if (!tickets.length) return []
 
+// The Workflow DSL has no import surface. Use the injected bridge or resolve
+// the plugin module from the host; if neither exists, refuse the dispatch
+// rather than calling agent() outside createClaudeDispatchAdapter/
+// createDispatchBoundary.
+function loadClaudeWorkflowDispatch() {
+  if (typeof __createClaudeWorkflowDispatch === 'function') return __createClaudeWorkflowDispatch
+  if (argv && argv.dispatch && typeof argv.dispatch.createClaudeWorkflowDispatch === 'function') {
+    return argv.dispatch.createClaudeWorkflowDispatch
+  }
+  const requireModule = typeof __require === 'function'
+    ? __require
+    : typeof require === 'function' ? require
+      : typeof process !== 'undefined' && process && typeof process.getBuiltinModule === 'function'
+        ? process.getBuiltinModule('module').createRequire(`${process.cwd()}/.shipyard-workflow.cjs`)
+        : null
+  if (!requireModule) {
+    throw new Error('drift-gate: Claude dispatch boundary bridge is unavailable')
+  }
+  const candidates = []
+  const addRoot = (root) => {
+    if (typeof root !== 'string' || !root.trim()) return
+    const value = root.replace(/\/$/, '')
+    candidates.push(value.endsWith('.cjs')
+      ? value
+      : `${value}/scripts/claude-dispatch-adapter.cjs`)
+    candidates.push(`${value}/plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs`)
+  }
+  addRoot(argv.dispatchRoot)
+  addRoot(refPath.replace(/\/references\/[^/]+$/, ''))
+  if (typeof process !== 'undefined' && process && process.env) addRoot(process.env.CLAUDE_PLUGIN_ROOT)
+  if (typeof process !== 'undefined' && process && typeof process.cwd === 'function') addRoot(process.cwd())
+  for (const candidate of candidates) {
+    try {
+      const loaded = requireModule(candidate)
+      if (loaded && typeof loaded.createClaudeWorkflowDispatch === 'function') {
+        return loaded.createClaudeWorkflowDispatch
+      }
+    } catch (_) { /* try the next host/plugin root */ }
+  }
+  throw new Error('drift-gate: Claude dispatch boundary bridge could not be loaded')
+}
+
+const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
+
 phase('Drift')
 
 // fail-safe: a dead (null) OR throwing agent is treated as `drifted` so the
@@ -133,8 +177,7 @@ const results = await parallel(
     // A judge handed one base for a mixed-base cascade measures "has landed"
     // against a tree its ticket is not cut from.
     const baseRef = (t && t.baseRef) || argv.baseRef
-    return agent(
-      [
+    const prompt = [
         `You are a drift-check judge. First read your full instructions and output contract from this file: ${refPath}.`,
         `Then read the ticket contract (plan file): ${t.planPath} — including every path it lists under Context reads and files_modified.`,
         `Judge ONLY ticket ${t.id}. Do NOT modify anything.`,
@@ -146,21 +189,34 @@ const results = await parallel(
           ? [`If and only if your verdict is "drifted", persist it BEFORE answering: \`${argv.recordCmd} mark ${t.id} ${t.planPath} "<what moved>"${argv.graphDir ? ` --graph ${argv.graphDir}` : ''}\`. A verdict left only in this reply dies with the run and the next state-sync offers the same stale plan again; the record is bound to the plan's hash, so it lifts by itself once the ticket is re-planned. Report whether it landed.`]
           : []),
         `Return the verdict for ticket id "${t.id}".`,
-      ].join('\n'),
-      {
-        label: `drift:${t.id}`,
-        phase: 'Drift',
-        // The resolver owns the runtime palette and rung. Preserve its exact
-        // decision through the workflow boundary; the Claude adapter rejects
-        // missing, stale, contradictory, or unsupported selections.
+      ].join('\n')
+    try {
+      return createClaudeWorkflowDispatch({
+        agent,
+        prompt,
+        role: 'drift-check',
         model: t.model,
         effort: t.effort,
-        agentType: 'general-purpose',
-        schema: VERDICT,
-      }
-    )
-      .then((v) => (v ? { ...v, id: t.id } : driftFallback(t.id, 'judge returned no verdict — treat as drifted')))
-      .catch((e) => driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`))
+        signals: t.signals,
+        priorApplied: t.priorApplied,
+        priorReceipt: t.priorReceipt,
+        dispatchId: t.dispatch_id || t.dispatchId,
+        capabilities: argv.claudeCapabilities,
+        recorder: argv.dispatchRecorder,
+        launchId: t.launch_id || t.launchId,
+        label: `drift:${t.id}`,
+        agentOptions: {
+          label: `drift:${t.id}`,
+          phase: 'Drift',
+          agentType: 'general-purpose',
+          schema: VERDICT,
+        },
+      })
+        .then(({ result: v }) => (v ? { ...v, id: t.id } : driftFallback(t.id, 'judge returned no verdict — treat as drifted')))
+        .catch((e) => driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`))
+    } catch (e) {
+      return Promise.resolve(driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`))
+    }
   })
 )
 

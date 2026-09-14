@@ -6,8 +6,15 @@
 // this evidence into a compliant, durably recorded receipt.
 const policy = require('./model-policy.cjs');
 const { CLAUDE_MODEL_ALIASES } = require('./runtime-adapters.cjs');
+const { createDispatchBoundary } = require('./dispatch-boundary.cjs');
 
 const REPAIR = 'Install an ADR-014-capable Claude host with explicit workflow model and effort support; provide current host capabilities and retry the exact selection.';
+const WORKFLOW_CAPABILITIES = Object.freeze({
+  supportedModels: Object.freeze(Object.values(CLAUDE_MODEL_ALIASES)),
+  supportedEfforts: Object.freeze(['high', 'medium', 'max']),
+  observedModel: false,
+  observedEffort: false,
+});
 
 function refuse(code, message) {
   throw policy.policyError(code, message + '. ' + REPAIR);
@@ -145,7 +152,7 @@ function createClaudeDispatchAdapter(options = {}) {
       : applicationReceipt(resolution, result, selection);
   }
 
-  return Object.freeze({
+  const adapter = {
     runtime: 'claude', models: CLAUDE_MODEL_ALIASES,
     capabilities: Object.freeze({
       observedModel: capabilities.observedModel !== false,
@@ -153,8 +160,114 @@ function createClaudeDispatchAdapter(options = {}) {
     }),
     supports: (resolution) => validateAvailability(resolution, capabilities),
     validate,
-    launch,
+  };
+  // The boundary uses method presence to decide whether it can safely reserve
+  // an id and launch.  Exposing a method that only throws after reservation
+  // would leave a durable phantom reservation behind a missing host.
+  if (typeof launchNative === 'function') adapter.launch = launch;
+  return Object.freeze(adapter);
+}
+
+function createInProcessRecorder() {
+  const reserved = new Set();
+  const records = new Map();
+  return Object.freeze({
+    reserve(dispatchId) {
+      if (reserved.has(dispatchId) || records.has(dispatchId)) return false;
+      reserved.add(dispatchId);
+      return { reserved: true };
+    },
+    record(record) {
+      if (!object(record) || typeof record.dispatch_id !== 'string') return false;
+      records.set(record.dispatch_id, record);
+      return { recorded: true };
+    },
+    finalize(record) {
+      if (!object(record) || typeof record.dispatch_id !== 'string') return false;
+      records.set(record.dispatch_id, record);
+      return { finalized: true };
+    },
+    getRecord(dispatchId) {
+      return records.get(dispatchId) || null;
+    },
   });
+}
+
+// Workflow scripts receive the native `agent` callback but do not receive a
+// policy resolver. Keep the host callback behind the same adapter and boundary
+// used by direct callers so the agent is invoked only after resolve, validate,
+// and reservation, and its application receipt is recorded before the result
+// is returned to the workflow.
+function createClaudeWorkflowDispatch(options = {}) {
+  if (!object(options)) refuse('INVALID_INPUT', 'Claude workflow dispatch options must be an object');
+  if (typeof options.agent !== 'function') refuse('MISSING_ADAPTER', 'Claude workflow dispatch requires the native agent callback');
+  if (typeof options.prompt !== 'string') refuse('INVALID_INPUT', 'Claude workflow dispatch requires a prompt');
+  if (typeof options.role !== 'string' || !options.role.trim()) refuse('INVALID_INPUT', 'Claude workflow dispatch requires a role');
+  if (typeof options.model !== 'string' || !options.model.trim()
+      || typeof options.effort !== 'string' || !options.effort.trim()) {
+    refuse('INVALID_INPUT', 'Claude workflow dispatch requires explicit model and effort');
+  }
+
+  const capabilities = options.capabilities === undefined
+    ? WORKFLOW_CAPABILITIES
+    : options.capabilities;
+  const recorder = options.recorder === undefined ? createInProcessRecorder() : options.recorder;
+  if (!(typeof recorder === 'function'
+      || (recorder && typeof recorder === 'object' && typeof recorder.record === 'function'))) {
+    refuse('RECORD_UNAVAILABLE', 'Claude workflow dispatch requires a receipt recorder');
+  }
+  const agentOptions = object(options.agentOptions) ? { ...options.agentOptions } : {};
+  const launchId = options.launchId === undefined
+    ? `workflow-${options.role}-${String(options.label || 'dispatch').replace(/[^A-Za-z0-9_.:-]+/g, '_')}`
+    : options.launchId;
+  if (typeof launchId !== 'string' || !launchId || /\s/.test(launchId)) {
+    refuse('INVALID_INPUT', 'Claude workflow dispatch requires a whitespace-free launch id');
+  }
+
+  let agentResult;
+  const host = {
+    capabilities,
+    launch(selection) {
+      const result = options.agent(options.prompt, {
+        ...agentOptions,
+        model: selection.model,
+        effort: selection.effort,
+      });
+      const capture = (value) => {
+        agentResult = value;
+        return {
+          launch_id: launchId,
+          applied_model: selection.model,
+          applied_effort: selection.effort,
+        };
+      };
+      return result && typeof result.then === 'function' ? result.then(capture) : capture(result);
+    },
+  };
+  const adapter = createClaudeDispatchAdapter({ host, capabilities });
+  const boundary = createDispatchBoundary({ adapters: { claude: adapter }, recorder });
+  const input = {
+    runtime: 'claude',
+    role: options.role,
+    model: options.model,
+    effort: options.effort,
+  };
+  if (options.signals !== undefined) input.signals = options.signals;
+  if (options.priorApplied !== undefined) {
+    input.signals = { ...(input.signals || {}), priorApplied: options.priorApplied };
+  }
+  if (options.priorReceipt !== undefined) input.priorReceipt = options.priorReceipt;
+  if (options.dispatchId !== undefined) input.dispatch_id = options.dispatchId;
+  if (options.previousDispatchId !== undefined) input.previous_dispatch_id = options.previousDispatchId;
+  const context = options.context === undefined ? {} : options.context;
+  const finish = (record) => {
+    if (!object(record) || !object(record.receipt) || record.receipt.compliance !== 'verified') {
+      refuse('MISSING_RECEIPT', 'Claude workflow dispatch completed without a boundary-verified application receipt');
+    }
+    return Object.freeze({ result: agentResult, receipt: record.receipt, record });
+  };
+  const record = boundary.dispatch(input, context);
+  return record && typeof record.then === 'function' ? record.then(finish) : finish(record);
 }
 
 module.exports = Object.freeze({
@@ -162,4 +275,5 @@ module.exports = Object.freeze({
   REPAIR,
   validateAvailability,
   createClaudeDispatchAdapter,
+  createClaudeWorkflowDispatch,
 });

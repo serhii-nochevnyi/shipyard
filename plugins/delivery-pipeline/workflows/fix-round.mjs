@@ -122,6 +122,50 @@ if (!ciRef || !reviewRef || !reinitScript) {
   throw new Error('fix-round: args.ciFixRefPath, args.reviewFixRefPath and args.reinitScript are required')
 }
 
+// The Workflow DSL has no import surface. Use the injected bridge or resolve
+// the plugin module from the host; if neither exists, refuse the dispatch
+// rather than calling agent() outside createClaudeDispatchAdapter/
+// createDispatchBoundary.
+function loadClaudeWorkflowDispatch() {
+  if (typeof __createClaudeWorkflowDispatch === 'function') return __createClaudeWorkflowDispatch
+  if (argv && argv.dispatch && typeof argv.dispatch.createClaudeWorkflowDispatch === 'function') {
+    return argv.dispatch.createClaudeWorkflowDispatch
+  }
+  const requireModule = typeof __require === 'function'
+    ? __require
+    : typeof require === 'function' ? require
+      : typeof process !== 'undefined' && process && typeof process.getBuiltinModule === 'function'
+        ? process.getBuiltinModule('module').createRequire(`${process.cwd()}/.shipyard-workflow.cjs`)
+        : null
+  if (!requireModule) {
+    throw new Error('fix-round: Claude dispatch boundary bridge is unavailable')
+  }
+  const candidates = []
+  const addRoot = (root) => {
+    if (typeof root !== 'string' || !root.trim()) return
+    const value = root.replace(/\/$/, '')
+    candidates.push(value.endsWith('.cjs')
+      ? value
+      : `${value}/scripts/claude-dispatch-adapter.cjs`)
+    candidates.push(`${value}/plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs`)
+  }
+  addRoot(argv.dispatchRoot)
+  addRoot(reinitScript.replace(/\/scripts\/[^/]+$/, ''))
+  if (typeof process !== 'undefined' && process && process.env) addRoot(process.env.CLAUDE_PLUGIN_ROOT)
+  if (typeof process !== 'undefined' && process && typeof process.cwd === 'function') addRoot(process.cwd())
+  for (const candidate of candidates) {
+    try {
+      const loaded = requireModule(candidate)
+      if (loaded && typeof loaded.createClaudeWorkflowDispatch === 'function') {
+        return loaded.createClaudeWorkflowDispatch
+      }
+    } catch (_) { /* try the next host/plugin root */ }
+  }
+  throw new Error('fix-round: Claude dispatch boundary bridge could not be loaded')
+}
+
+const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
+
 // The base-merge script sits beside the reviewers one the orchestrator passed —
 // same scripts directory, and no module import is available in this runtime.
 const baseMergeScript = String(reinitScript).replace(/[^/]*$/, 'base-merge.cjs')
@@ -208,22 +252,46 @@ return await parallel(
     // would enter the record as something that was tried and ruled out. Say what
     // is actually known instead.
     const fixFallback = (why, hypothesis) => ({ id: p.id, pr: p.pr, pushed: false, status: 'escalate', notes: why, hypothesis })
-    return agent(buildPrompt(p), {
-      label: `fix:${p.id}#${p.pr}`,
-      phase: 'Fix',
-      // Preserve the caller's resolver decision exactly. The Claude adapter
-      // applies the native alias only after canonical boundary validation.
-      model: p.model,
-      effort: p.effort,
-      agentType: 'general-purpose',
-      schema: OUT,
-    })
-      .then((r) => (r
-        ? { ...r, id: p.id, pr: p.pr }
+    try {
+      const role = p.needsCiFix ? 'ci-fix' : p.needsReviewFix ? 'review-fix' : null
+      if (!role) throw new Error('fixer dispatch requires needsCiFix or needsReviewFix')
+      const signals = p.signals === undefined && p.signatureState !== undefined
+        ? { signatureState: p.signatureState }
+        : p.signals
+      return createClaudeWorkflowDispatch({
+        agent,
+        prompt: buildPrompt(p),
+        role,
+        model: p.model,
+        effort: p.effort,
+        signals,
+        priorApplied: p.priorApplied,
+        priorReceipt: p.priorReceipt,
+        dispatchId: p.dispatch_id || p.dispatchId,
+        previousDispatchId: p.previous_dispatch_id || p.previousDispatchId,
+        capabilities: argv.claudeCapabilities,
+        recorder: argv.dispatchRecorder,
+        launchId: p.launch_id || p.launchId,
+        label: `fix:${p.id}#${p.pr}`,
+        agentOptions: {
+          label: `fix:${p.id}#${p.pr}`,
+          phase: 'Fix',
+          agentType: 'general-purpose',
+          schema: OUT,
+        },
+      })
+        .then(({ result: r }) => (r
+          ? { ...r, id: p.id, pr: p.pr }
         : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one')))
-      .catch((e) => fixFallback(
+        .catch((e) => fixFallback(
+          `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
+          'unknown — the fixer errored before reporting one'
+        ))
+    } catch (e) {
+      return Promise.resolve(fixFallback(
         `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
         'unknown — the fixer errored before reporting one'
       ))
+    }
   })
 )
