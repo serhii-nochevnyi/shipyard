@@ -891,6 +891,23 @@ The reader trims entries, removes blanks, preserves the tracker's spelling and
 order, and removes duplicates. An empty value disables the eligibility gate;
 matching uses the tracker's status NAME only, with no `statusCategory` fallback.
 
+When the gate is enabled, a person may bypass it only for one explicitly named
+ticket after the tracker observation has been recorded. Use the canonical ticket
+id and its Jira key, preserve the observation, and state why the bypass is
+intentional:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs override <T> <KEY> \
+  --reason "<explicit operator reason>"
+```
+
+This is an exact-ticket escape hatch, not a scope setting: `whole phase N`,
+`everything reachable`, and `all ready` must never invoke `override` and remain
+subject to the eligibility gate for every pending ticket. The generation-bound
+record expires on the next delivery snapshot, so it is not a permanent
+exemption. A missing tracker answer is retained as `unknown`, never fabricated
+into a To Do/unassigned pair.
+
 Each emitted item carries `{ticket, key, from, to, target_status, ts}`, and its
 two status fields are two different vocabularies. Confusing them is the defect
 this section exists to prevent:
@@ -1220,6 +1237,9 @@ The `⚠` lines from state-sync — you MUST show them to the human as a separat
   phase N", **"everything reachable — drive to fixpoint" (default recommendation)**,
   "all ready".
   pr-open tickets are automatically in the babysit cycle's scope — they aren't chosen.
+- Only a single exact ticket id (or the Jira key mapped to that one id) may use
+  the generation-bound `tracker-record.cjs override`; set scopes never bypass
+  tracker eligibility.
 - **Scope is EXPANDABLE, not one-shot.** Whatever is chosen, the scope transitively
   includes the tickets that will become ready once the chosen ones advance (cascade
   children, unblocked dependents). Don't narrow the run to the starting set — after

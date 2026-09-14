@@ -179,6 +179,12 @@ const OWNED_BY_SCRIPTS = {
     lost: 'record',
     fix: 'jira-project.cjs record <ticket> <key> --to <item-to> --transition-id <id> --status <name>',
   },
+  tracker_override: {
+    by: 'tracker-record.cjs override', kind: 'PARKING the tracker override', why: halfAct,
+    otherHalf: 'recording the generation-bound override',
+    lost: 'override record',
+    fix: 'tracker-record.cjs override <ticket> <jira-key> --reason <text>',
+  },
   flake: {
     by: 'failure-signature.cjs rerun', why: forgedState,
     fix: 'failure-signature.cjs rerun <ticket> --signature <sig> --head <sha> --outcome green',

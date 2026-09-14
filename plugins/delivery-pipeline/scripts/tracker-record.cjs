@@ -66,7 +66,6 @@ function ticketMap(graphDir) {
  * state-sync publishes generation one and expires such records.
  */
 function currentGeneration(graphDir) {
-  const root = projectRootOf(graphDir);
   for (const file of [path.join(graphDir, META_NAME), path.join(graphDir, 'delivery-front.json')]) {
     const value = readJson(file, null);
     if (value && Number.isInteger(value.generation) && value.generation >= 0) return value.generation;
@@ -144,6 +143,40 @@ function writeRecord(graphDir, ticket, record) {
   }, { label: 'tracker-record' });
 }
 
+function mutateRecord(graphDir, fn) {
+  if (!hasGraph(graphDir)) throw new Error(`no ticket graph at ${graphDir}`);
+  fs.mkdirSync(graphDir, { recursive: true });
+  return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
+    const store = readStore(graphDir);
+    const result = fn(store);
+    if (!result || !result.record) throw new Error('tracker-record mutation did not produce a record');
+    let before = null;
+    try { before = fs.readFileSync(graphStore(graphDir)); } catch { before = null; }
+    store.tickets[result.record.ticket] = result.record;
+    writeAtomic(graphStore(graphDir), JSON.stringify(store, null, 2) + '\n');
+    if (result.event) {
+      try {
+        fs.appendFileSync(
+          path.join(graphDir, 'delivery-log.jsonl'),
+          JSON.stringify(result.event) + '\n'
+        );
+      } catch (error) {
+        if (before === null) {
+          try { fs.unlinkSync(graphStore(graphDir)); } catch { /* already absent */ }
+        } else {
+          writeAtomic(graphStore(graphDir), before);
+        }
+        throw new Error(
+          `the tracker journal at ${path.join(graphDir, 'delivery-log.jsonl')} could not be appended to (${error.message}).\n` +
+          '  The tracker record was rolled back, so nothing was recorded: the cache and its audit line\n' +
+          '  are one act. Fix the journal and run tracker-record.cjs override again.'
+        );
+      }
+    }
+    return result.record;
+  }, { label: 'tracker-record' });
+}
+
 function observe(graphDir, input) {
   const { ticket, jiraKey } = validateTicket(graphDir, input.ticket, input.jiraKey);
   const status = normalizeStatusName(input.status);
@@ -191,6 +224,89 @@ function unknown(graphDir, input) {
   return writeRecord(graphDir, ticket, record);
 }
 
+function override(graphDir, input) {
+  const { ticket, jiraKey } = validateTicket(graphDir, input.ticket, input.jiraKey);
+  const overrideReason = requireNonEmpty(input.reason, 'override reason');
+  return mutateRecord(graphDir, (store) => {
+    const generation = currentGenerationStrict(graphDir);
+    const existing = store.tickets[ticket];
+    const reusable = existing && existing.generation === generation && existing.jira_key === jiraKey
+      ? existing
+      : null;
+
+    let status = reusable && typeof reusable.status === 'string' ? reusable.status : null;
+    let assignee = reusable && Object.prototype.hasOwnProperty.call(reusable, 'assignee')
+      ? reusable.assignee
+      : null;
+    let verdict = reusable && typeof reusable.verdict === 'string' ? reusable.verdict : 'unknown';
+    let eligible = reusable && Object.prototype.hasOwnProperty.call(reusable, 'eligible')
+      ? reusable.eligible
+      : null;
+    let observationReason = reusable && reusable.reason
+      ? reusable.reason
+      : 'no current tracker observation was available';
+    let observedAt = reusable && reusable.observed_at ? reusable.observed_at : new Date().toISOString();
+
+    if (input.statusProvided) {
+      status = normalizeStatusName(input.status);
+      if (!status) throw new Error('status, when provided, must be a non-empty status NAME');
+      observedAt = input.observedAt || new Date().toISOString();
+    }
+    if (input.assigneeProvided) {
+      assignee = normalizeCliAssignee(input.assignee);
+      observedAt = input.observedAt || new Date().toISOString();
+    }
+    if (input.statusProvided || input.assigneeProvided) {
+      const complete = !!status && (reusable ? Object.prototype.hasOwnProperty.call(reusable, 'assignee') : input.assigneeProvided);
+      if (complete) {
+        const result = evaluateEligibility(status, assignee, readConfigStatuses(projectRootOf(graphDir)));
+        verdict = result.verdict;
+        eligible = result.eligible;
+        observationReason = result.reason;
+      } else {
+        verdict = 'unknown';
+        eligible = null;
+        observationReason = 'tracker observation is incomplete; eligibility is unknown';
+      }
+    }
+    if (input.observationReasonProvided) {
+      observationReason = requireNonEmpty(input.observationReason, 'observation reason');
+    }
+
+    const record = {
+      ticket,
+      jira_key: jiraKey,
+      status: status || null,
+      assignee: assignee || null,
+      verdict,
+      eligible,
+      reason: observationReason,
+      override: true,
+      override_reason: overrideReason,
+      observed_at: observedAt,
+      generation,
+    };
+    const at = new Date().toISOString();
+    return {
+      record,
+      event: {
+        ts: at,
+        event: 'tracker_override',
+        by: 'tracker-record.cjs override',
+        ticket,
+        jira_key: jiraKey,
+        status: record.status,
+        assignee: record.assignee,
+        verdict: record.verdict,
+        observation_reason: record.reason,
+        observed_at: record.observed_at,
+        override_reason: overrideReason,
+        generation,
+      },
+    };
+  });
+}
+
 function clear(graphDir, ticket) {
   if (!hasGraph(graphDir)) throw new Error(`no ticket graph at ${graphDir}`);
   const id = requireNonEmpty(ticket, 'ticket');
@@ -215,10 +331,12 @@ function parseArgs(argv) {
   const positional = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--status' || arg === '--assignee' || arg === '--reason' || arg === '--observed-at') {
+    if (arg === '--status' || arg === '--assignee' || arg === '--reason' || arg === '--observed-at'
+        || arg === '--observation-reason' || arg === '--observed-reason') {
       const value = args[++i];
       if (value === undefined || value.startsWith('--')) throw new Error(`${arg} needs a value`);
-      values[arg.slice(2).replace('-', '_')] = value;
+      const key = arg.slice(2).replace(/-/g, '_');
+      values[key] = value;
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option ${arg}`);
     } else {
@@ -269,13 +387,28 @@ function cli() {
         observedAt: values.observed_at,
       });
       console.log(`unknown tracker observation recorded for ${record.ticket} at generation ${record.generation}`);
+    } else if (command === 'override') {
+      const record = override(graph, {
+        ticket,
+        jiraKey,
+        status: values.status,
+        assignee: values.assignee,
+        statusProvided: Object.prototype.hasOwnProperty.call(values, 'status'),
+        assigneeProvided: Object.prototype.hasOwnProperty.call(values, 'assignee'),
+        reason: values.reason,
+        observationReason: values.observation_reason || values.observed_reason,
+        observationReasonProvided: Object.prototype.hasOwnProperty.call(values, 'observation_reason')
+          || Object.prototype.hasOwnProperty.call(values, 'observed_reason'),
+        observedAt: values.observed_at,
+      });
+      console.log(`tracker override recorded for ${record.ticket} at generation ${record.generation}`);
     } else if (command === 'clear') {
       console.log(clear(graph, ticket) ? `tracker record cleared for ${ticket}` : `no tracker record for ${ticket}`);
     } else if (command === 'list') {
       console.log(JSON.stringify(activeRecords(graph), null, 2));
     } else {
       fail(
-        'usage: tracker-record.cjs <mark|unknown|clear|list> <ticket> <jira-key> ' +
+        'usage: tracker-record.cjs <mark|unknown|override|clear|list> <ticket> <jira-key> ' +
         '[--status <name>] [--assignee <id|none>] [--reason <text>] [--graph <dir>]'
       );
     }
@@ -294,5 +427,6 @@ module.exports = {
   activeTrackers,
   observe,
   unknown,
+  override,
   clear,
 };

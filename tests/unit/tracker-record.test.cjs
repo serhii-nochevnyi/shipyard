@@ -84,6 +84,86 @@ test('unknown observations preserve tracker error words and remain unknown', () 
   assert.strictEqual(record.generation, 3);
 });
 
+test('an exact-ticket override preserves the observation and journals one atomic event', () => {
+  const { project, graph } = scratch(4);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator named this ticket explicitly', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const record = stored(graph).tickets['T-01'];
+  assert.strictEqual(record.override, true);
+  assert.strictEqual(record.override_reason, 'operator named this ticket explicitly');
+  assert.strictEqual(record.verdict, 'ineligible');
+  assert.strictEqual(record.assignee, 'user-5');
+  assert.strictEqual(record.generation, 4);
+  const events = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepStrictEqual(events, [{
+    ts: events[0].ts,
+    event: 'tracker_override',
+    by: 'tracker-record.cjs override',
+    ticket: 'T-01',
+    jira_key: 'MYD-1',
+    status: 'To Do',
+    assignee: 'user-5',
+    verdict: 'ineligible',
+    observation_reason: record.reason,
+    observed_at: record.observed_at,
+    override_reason: 'operator named this ticket explicitly',
+    generation: 4,
+  }]);
+});
+
+test('an override that supplies one tracker fact recomputes the complete observation', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--assignee', 'user-5', '--reason', 'operator named this ticket explicitly', '--graph', graph,
+  ], { cwd: project });
+  const record = stored(graph).tickets['T-01'];
+  assert.strictEqual(record.status, 'To Do');
+  assert.strictEqual(record.assignee, 'user-5');
+  assert.strictEqual(record.verdict, 'ineligible');
+  assert.strictEqual(record.eligible, false);
+});
+
+test('an override without a current observation stays unknown instead of fabricating eligibility', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', [
+    RECORD, 'override', 'T-02', 'MYD-2', '--reason', 'urgent named ticket', '--graph', graph,
+  ], { cwd: project });
+  const record = stored(graph).tickets['T-02'];
+  assert.strictEqual(record.override, true);
+  assert.strictEqual(record.verdict, 'unknown');
+  assert.strictEqual(record.eligible, null);
+  assert.strictEqual(record.status, null);
+  assert.strictEqual(record.assignee, null);
+  assert.match(record.reason, /no current tracker observation/);
+});
+
+test('an override expires with its delivery generation', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  assert.ok(require(RECORD).activeRecords(graph)['T-01']);
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
+});
+
+test('an override rolls back the cache when its journal cannot be appended', () => {
+  const { project, graph } = scratch();
+  fs.mkdirSync(path.join(graph, 'delivery-log.jsonl'));
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0, 'the failed journal append must refuse the operation');
+  assert.match(r.stderr, /rolled back/);
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')), 'a cache without its audit line is not durable');
+  assert.ok(fs.statSync(path.join(graph, 'delivery-log.jsonl')).isDirectory());
+});
+
 test('activeRecords omits a record after the delivery generation advances', () => {
   const { project, graph } = scratch(1);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });

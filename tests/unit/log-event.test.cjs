@@ -179,6 +179,16 @@ test('the jira_transition event is refused — the watermark and the line are ON
   assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
 });
 
+test('the tracker_override event is refused — the recorder owns the cache and journal act', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['tracker_override', 'ticket=T-31-06', 'jira_key=MYD-6', 'verdict=unknown']);
+  assert.notStrictEqual(r.status, 0, 'tracker_override must be refused');
+  assert.ok(/half-recorded/.test(r.stderr), r.stderr);
+  assert.ok(!/duplicate/.test(r.stderr), 'an incomplete act, not a duplicate');
+  assert.ok(/tracker-record\.cjs override/.test(r.stderr), 'it must name the sole writer');
+  assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
+});
+
 suite('log-event — one sha format: the full forty characters');
 
 // `gate_status` records a head as the full forty and a reader that only has the
