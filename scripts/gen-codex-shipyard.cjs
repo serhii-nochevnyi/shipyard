@@ -76,6 +76,16 @@ const policy = require('../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { codexSkillNames, codexStaticVariants, validateCodexCapabilities, validateCodexBundle } = require('../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const digest = (content) => require('crypto').createHash('sha256').update(content).digest('hex');
 
+// Compatibility exports use generated reference names (research is inv-research)
+// and describe only canonical static files, without restoring the retired grid.
+const DEEP_SUFFIX = policy.variantSuffix('ci-fix', 'repeat_exhausted');
+const CRITICAL_SUFFIX = policy.variantSuffix('arch-review', 'critical');
+const staticRolesWithSuffix = (suffix) => new Set(codexStaticVariants()
+  .filter(({ file, reference }) => file === `shipyard-${reference}${suffix}.toml`)
+  .map(({ reference }) => reference));
+const DEEP_ROLES = staticRolesWithSuffix(DEEP_SUFFIX);
+const CRITICAL_ROLES = staticRolesWithSuffix(CRITICAL_SUFFIX);
+
 function rmrf(p) {
   fs.rmSync(p, { recursive: true, force: true });
 }
@@ -295,7 +305,7 @@ function main() {
   );
 }
 
-module.exports = { codexStaticVariants, validateCodexBundle };
+module.exports = { codexStaticVariants, validateCodexBundle, DEEP_ROLES, DEEP_SUFFIX, CRITICAL_ROLES, CRITICAL_SUFFIX };
 
 // The installer runs this as a script; the unit test requires it as a module.
 if (require.main === module) {
