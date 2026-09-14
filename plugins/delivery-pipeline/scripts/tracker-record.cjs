@@ -57,31 +57,50 @@ function ticketMap(graphDir) {
   return graph.tickets;
 }
 
+function readGeneration(file) {
+  if (!fs.existsSync(file)) return { present: false, generation: null };
+  const value = readJson(file, null);
+  return {
+    present: true,
+    generation: value && Number.isInteger(value.generation) && value.generation >= 0
+      ? value.generation
+      : null,
+  };
+}
+
 /**
  * Read the generation of the last published delivery-state snapshot.
  *
- * The metadata file is authoritative. The front copy is a useful compatibility
- * fallback for a caller that ran immediately after a front refresh. Zero is the
+ * The metadata file is authoritative. The front copy is a compatibility
+ * fallback only when metadata has never existed; a present but malformed
+ * metadata file means there is no trustworthy active generation. Zero is the
  * pre-publication generation used by isolated/unit callers; the first real
  * state-sync publishes generation one and expires such records.
  */
 function currentGeneration(graphDir) {
-  for (const file of [path.join(graphDir, META_NAME), path.join(graphDir, 'delivery-front.json')]) {
-    const value = readJson(file, null);
-    if (value && Number.isInteger(value.generation) && value.generation >= 0) return value.generation;
-  }
-  return 0;
+  const meta = readGeneration(path.join(graphDir, META_NAME));
+  if (meta.present) return meta.generation;
+  const front = readGeneration(path.join(graphDir, 'delivery-front.json'));
+  return front.present ? front.generation : 0;
 }
 
 function currentGenerationStrict(graphDir) {
-  const meta = readJson(path.join(graphDir, META_NAME), null);
-  if (meta && Number.isInteger(meta.generation) && meta.generation >= 0) return meta.generation;
-  const front = readJson(path.join(graphDir, 'delivery-front.json'), null);
-  if (front && Number.isInteger(front.generation) && front.generation >= 0) return front.generation;
+  const meta = readGeneration(path.join(graphDir, META_NAME));
+  if (meta.present) return meta.generation;
+  const front = readGeneration(path.join(graphDir, 'delivery-front.json'));
+  if (front.present) return front.generation;
   // Keep the writer usable for a freshly created graph. A real state-sync will
   // move to generation 1 on its first publish, so generation 0 cannot survive
   // across the first cold start.
   return 0;
+}
+
+function requireGeneration(graphDir) {
+  const generation = currentGenerationStrict(graphDir);
+  if (!Number.isInteger(generation)) {
+    throw new Error('delivery-state generation is unreadable — run state-sync.cjs before recording a tracker observation');
+  }
+  return generation;
 }
 
 function activeRecords(graphDir, generation = currentGeneration(graphDir)) {
@@ -137,9 +156,23 @@ function writeRecord(graphDir, ticket, record) {
   fs.mkdirSync(graphDir, { recursive: true });
   return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
     const store = readStore(graphDir);
-    store.tickets[ticket] = record;
+    const previous = store.tickets[ticket];
+    const previousAt = previous && typeof previous.observed_at === 'string'
+      ? Date.parse(previous.observed_at)
+      : NaN;
+    const incomingAt = typeof record.observed_at === 'string'
+      ? Date.parse(record.observed_at)
+      : NaN;
+    // The lock orders writers, not the observations they captured before
+    // queueing for it. Preserve an already stored observation when it is newer
+    // than the incoming result, otherwise a delayed timeout can overwrite a
+    // fresher eligible/ineligible answer for the same generation.
+    const stored = Number.isFinite(previousAt) && (!Number.isFinite(incomingAt) || previousAt > incomingAt)
+      ? previous
+      : record;
+    store.tickets[ticket] = stored;
     writeAtomic(graphStore(graphDir), JSON.stringify(store, null, 2) + '\n');
-    return record;
+    return stored;
   }, { label: 'tracker-record' });
 }
 
@@ -185,7 +218,7 @@ function observe(graphDir, input) {
   const assignee = normalizeCliAssignee(input.assignee);
   const result = evaluateEligibility(status, assignee, readConfigStatuses(projectRootOf(graphDir)));
   const observedAt = input.observedAt || new Date().toISOString();
-  const generation = currentGenerationStrict(graphDir);
+  const generation = requireGeneration(graphDir);
   const record = {
     ticket,
     jira_key: jiraKey,
@@ -219,7 +252,7 @@ function unknown(graphDir, input) {
     eligible: null,
     reason,
     observed_at: input.observedAt || new Date().toISOString(),
-    generation: currentGenerationStrict(graphDir),
+    generation: requireGeneration(graphDir),
   };
   return writeRecord(graphDir, ticket, record);
 }
