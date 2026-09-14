@@ -137,6 +137,19 @@ test('normal observation refuses missing status or missing explicit assignee', (
   assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
 });
 
+test('normal and unknown observations refuse an invalid observed timestamp', () => {
+  const { project, graph } = scratch();
+  for (const args of [
+    markArgs(graph, 'T-01', 'MYD-1').concat(['--observed-at', 'not-a-date']),
+    [RECORD, 'unknown', 'T-02', 'MYD-2', '--reason', 'tracker unavailable', '--observed-at', 'not-a-date', '--graph', graph],
+  ]) {
+    const r = spawnSync('node', args, { cwd: project, encoding: 'utf8' });
+    assert.notStrictEqual(r.status, 0);
+    assert.match(r.stderr, /observed-at must be a valid date\/time string/);
+  }
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
+});
+
 test('missing graph selection is refused without creating a stray store', () => {
   const { project, worktree } = scratch();
   const r = spawnSync('node', [RECORD, 'mark', 'T-01', 'MYD-1', '--status', 'To Do', '--assignee', 'none'], {
