@@ -383,14 +383,14 @@ function validRecord(record, configuredStatuses, identity) {
     && (record.assignee === null || (typeof record.assignee === 'string' && !!record.assignee.trim()));
 }
 
-function activeRecordsLocked(graphDir, configuredStatuses) {
+function activeRecordsLocked(graphDir, configuredStatuses, options = {}) {
   if (fs.existsSync(pendingPath(graphDir))) return {};
   const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
   const statuses = Array.isArray(configuredStatuses)
     ? configuredStatuses
     : readConfigStatuses(projectRootOf(graphDir));
-  return recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir));
+  return recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir), options);
 }
 
 function activeRecords(graphDir, configuredStatuses) {
@@ -469,6 +469,20 @@ function activeTrackerSnapshot(graphDir, configuredStatuses) {
 // pending-marker race without making state-sync try to acquire the same lock a
 // second time.
 const activeTrackers = activeRecordsLocked;
+
+// state-sync is publishing the NEXT generation. A current-generation override
+// is valid for the round that recorded it, but copying it into that next
+// snapshot would grant one extra round of bypass. Keep this separate from the
+// ordinary current reader, which must still let front/dispatch honor an
+// override before the next publish.
+function activeTrackersForPublishLocked(graphDir, configuredStatuses) {
+  return activeRecordsLocked(graphDir, configuredStatuses, { excludeOverrides: true });
+}
+
+function activeTrackersForPublish(graphDir, configuredStatuses) {
+  return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () =>
+    activeTrackersForPublishLocked(graphDir, configuredStatuses), { label: 'tracker-record read' });
+}
 
 function requireNonEmpty(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required`);
@@ -926,6 +940,8 @@ module.exports = {
   activeTrackerSnapshot,
   activeTrackerSnapshotLocked,
   activeTrackers,
+  activeTrackersForPublish,
+  activeTrackersForPublishLocked,
   observe,
   unknown,
   override,

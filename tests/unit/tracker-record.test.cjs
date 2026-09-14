@@ -461,6 +461,21 @@ test('the predecessor bridge does not carry a direct override into the next gene
   assert.deepStrictEqual(Object.keys(record.activeTrackerSnapshot(graph)), ['T-02']);
 });
 
+test('the state-sync publish reader excludes a current-generation override', () => {
+  const { project, graph } = scratch(4);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const record = require(RECORD);
+  assert.ok(record.activeRecords(graph)['T-01'], 'the ordinary reader honors the current override');
+  assert.deepStrictEqual(
+    record.activeTrackersForPublish(graph),
+    {},
+    'the next published snapshot must not extend the override by one generation'
+  );
+});
+
 test('an invalid current-generation record fences the predecessor fallback', () => {
   const { project, graph } = scratch(1);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
