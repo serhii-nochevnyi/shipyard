@@ -48,17 +48,21 @@ test('deliver documents one issue read per pending ticket and fail-closed record
 
 test('state-sync passes the active tracker records without tracker I/O', () => {
   const doc = source(STATE_SYNC);
+  assert.match(doc, /valid: CFG_VALID, error: CFG_ERROR/);
+  assert.match(doc, /const TRACKER_STATUSES = CFG_VALID \? cfg\.jira_todo_statuses : \['__config_invalid__'\]/);
+  assert.match(doc, /const CONFIG_REFUSAL = CFG_VALID/);
   assert.match(doc, /require\(path\.join\(__dirname, 'tracker-record\.cjs'\)\)/);
   const publish = between(doc, "const published = withLock(lockDirFor(ROOT), 'tracker-record'", 'const front = published.front');
   assert.match(publish, /withLock\(lockDirFor\(ROOT\), 'state'/);
-  assert.match(publish, /activeTrackersForPublishLocked\(GRAPH_DIR, cfg\.jira_todo_statuses\)/);
+  assert.match(publish, /activeTrackersForPublishLocked\(GRAPH_DIR, TRACKER_STATUSES\)/);
   assert.match(publish, /activeTrackersForPublishLocked/);
   assert.match(publish, /previousGenerationIdentity/);
   assert.match(publish, /generationIdentity/);
   assert.match(publish, /previous_generation_identity/);
   const call = between(doc, 'const front = computeFront', 'writeAtomic\(STATE');
-  assert.match(call, /trackerStatuses:\s*cfg\.jira_todo_statuses/);
+  assert.match(call, /trackerStatuses:\s*TRACKER_STATUSES/);
   assert.match(call, /trackerRecords/);
+  assert.match(call, /if \(CONFIG_REFUSAL\)/);
   assert.doesNotMatch(doc, /getJiraIssue|searchJiraIssuesUsingJql|changelog|worklog/);
 });
 
@@ -79,11 +83,14 @@ test('dispatch refresh uses the same config and coherent tracker snapshot', () =
   const doc = source(DISPATCH);
   const refresh = between(doc, 'function refreshFront(cwd)', 'module.exports = {');
   assert.match(refresh, /loadConfig\(cwd\)/);
-  assert.match(refresh, /activeTrackerSnapshotLocked\(dir, config\.jira_todo_statuses\)/);
+  assert.match(refresh, /const \{ config, valid, error \} = loadConfig\(cwd\)/);
+  assert.match(refresh, /const trackerStatuses = valid \? config\.jira_todo_statuses : \['__config_invalid__'\]/);
+  assert.match(refresh, /valid \? activeTrackerSnapshotLocked\(dir, trackerStatuses\) : \{\}/);
   assert.match(refresh, /withLock\(lockDirFor\(cwd\), 'tracker-record'/);
   assert.match(refresh, /withLock\(lockDirFor\(cwd\), 'state'/);
-  assert.match(refresh, /trackerStatuses:\s*config\.jira_todo_statuses/);
+  assert.match(refresh, /trackerStatuses/);
   assert.match(refresh, /trackerRecords:\s*trackerRecordsForFront\(\)/);
+  assert.match(refresh, /if \(configRefusal\)/);
 });
 
 test('all front writers leave tracker reads outside the GitHub state lock', () => {

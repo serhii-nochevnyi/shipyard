@@ -260,7 +260,9 @@ function ghChecks(prNumber, repo) {
 // the loop acts on and prints the auto-merge policy the guard enforces, so an
 // unparseable config must not reach either as the DEFAULTS. Absent is a different
 // fact and keeps its old behaviour — the defaults are the right answer there.
-const { config: cfg, warnings: cfgWarnings, valid: CFG_VALID } = loadConfig(ROOT);
+const {
+  config: cfg, warnings: cfgWarnings, valid: CFG_VALID, error: CFG_ERROR,
+} = loadConfig(ROOT);
 
 if (!fs.existsSync(TICKETS)) fail('missing .planning/graph/tickets.json — run validate-graph first');
 let graph;
@@ -902,6 +904,18 @@ for (const [id, s] of Object.entries(state)) {
 // `auto_merge` in delivery-front.json, `autoMerge` into computeFront, and the
 // line printed below — is `off` whatever the defaults say.
 const AUTO_MERGE = CFG_VALID && cfg.auto_merge === 'epic' && mode === 'epic-stacked';
+// An invalid config must not collapse the tracker policy to the parsed
+// defaults. Use a non-empty sentinel status to keep every ready pending ticket
+// fail-closed, and carry the same human-readable refusal that the standalone
+// front prints. The sentinel is never a real Jira status and no record can
+// satisfy it.
+const TRACKER_STATUSES = CFG_VALID ? cfg.jira_todo_statuses : ['__config_invalid__'];
+const CONFIG_REFUSAL = CFG_VALID
+  ? null
+  : `front: no policy is in effect — ${CFG_ERROR.relative} ${CFG_ERROR.message}. `
+    + 'Every board below is the most restrictive reading, not this project\'s decision: '
+    + 'nothing may be auto-merged and nothing may be dispatched until the file parses '
+    + '(a `waiting.merge_human` entry below is still a human\'s option).';
 // Drift verdicts recorded by earlier runs, minus any whose plan has since been
 // re-planned (drift-record binds each verdict to the plan's content hash, so the
 // park lifts by itself). Without this the front hands a stale plan back to an
@@ -955,7 +969,9 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   // active reader feeds them into this new snapshot. The following state-sync
   // sees the next generation and expires the observation, forcing a fresh read
   // for any pending ticket that was not taken this round.
-  const trackerRecords = activeTrackersForPublishLocked(GRAPH_DIR, cfg.jira_todo_statuses);
+  const trackerRecords = CFG_VALID
+    ? activeTrackersForPublishLocked(GRAPH_DIR, TRACKER_STATUSES)
+    : {};
 
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
@@ -970,7 +986,7 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   // review of this PR.
   const front = computeFront(tickets, state, {
     parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED, escalated: ESCALATED,
-    trackerStatuses: cfg.jira_todo_statuses,
+    trackerStatuses: TRACKER_STATUSES,
     trackerRecords,
     // The dispatches still in force — the tickets an agent is holding RIGHT NOW.
     //
@@ -1011,6 +1027,10 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
     // answer; a caller with no such observation gets no left-behind at all.
     epics: epicInfo,
   });
+  if (CONFIG_REFUSAL) {
+    front.config_invalid = CONFIG_REFUSAL;
+    front.fixpoint = false;
+  }
   writeAtomic(STATE, JSON.stringify(state, null, 2) + '\n');
   // The generation rides the human mirror as a comment: the yaml is keyed by
   // ticket id exactly like the JSON, so it has no more room for a metadata key

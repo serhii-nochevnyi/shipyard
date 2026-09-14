@@ -1028,18 +1028,25 @@ function refreshFront(cwd) {
   const { computeFront, ciEstimates } = require(path.join(__dirname, 'front.cjs'));
   const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
-  const { config } = loadConfig(cwd);
+  const { config, valid, error } = loadConfig(cwd);
+  const trackerStatuses = valid ? config.jira_todo_statuses : ['__config_invalid__'];
+  const configRefusal = valid
+    ? null
+    : `front: no policy is in effect — ${error.relative} ${error.message}. `
+      + 'Every board below is the most restrictive reading, not this project\'s decision: '
+      + 'nothing may be auto-merged and nothing may be dispatched until the file parses '
+      + '(a `waiting.merge_human` entry below is still a human\'s option).';
   // A tracker read is valid for the current publication and the one
   // publisher-backed boundary immediately preceding it. Refresh must match the
   // standalone front reader, so use the same coherent cache snapshot.
   const trackerRecordsForFront = () => {
-    return activeTrackerSnapshotLocked(dir, config.jira_todo_statuses);
+    return valid ? activeTrackerSnapshotLocked(dir, trackerStatuses) : {};
   };
   try {
-    // Keep the global lock order tracker-record -> state. State-sync uses the
-    // same order, while tracker-record writers never acquire state; taking the
-    // locks in the opposite order here would make a refresh deadlock with a
-    // concurrent snapshot publish.
+    // Keep the global lock order tracker-record -> state. State-sync and
+    // tracker-record writers use that same order; taking the locks in the
+    // opposite order here would make a refresh deadlock with a concurrent
+    // snapshot publish.
     return withLock(lockDirFor(cwd), 'tracker-record', () => withLock(lockDirFor(cwd), 'state', () => {
       let previous;
       let tickets;
@@ -1054,18 +1061,22 @@ function refreshFront(cwd) {
       if (!previous || typeof previous !== 'object' || !state || typeof state !== 'object') return null;
       const front = computeFront(tickets, state, {
         parked: previous.parked_by_run || [],
-        autoMerge: previous.auto_merge === 'epic',
+        autoMerge: valid && previous.auto_merge === 'epic',
         drifted: activeDrift(cwd),
         escalated: activeParks(cwd, state),
         dispatched: activeDispatches(cwd, state),
-        trackerStatuses: config.jira_todo_statuses,
+        trackerStatuses,
         trackerRecords: trackerRecordsForFront(),
         ci_estimates: ciEstimates(dir, tickets),
       });
+      if (configRefusal) {
+        front.config_invalid = configRefusal;
+        front.fixpoint = false;
+      }
       writeAtomic(frontFile, JSON.stringify({
         generated_at: previous.generated_at,
         parked_by_run: previous.parked_by_run || [],
-        auto_merge: previous.auto_merge || 'off',
+        auto_merge: valid ? (previous.auto_merge || 'off') : 'off',
         dispatches_applied_at: new Date().toISOString(),
         ...front,
       }, null, 2) + '\n');
