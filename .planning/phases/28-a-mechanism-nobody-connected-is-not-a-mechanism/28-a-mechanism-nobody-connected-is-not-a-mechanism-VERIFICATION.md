@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 96b86bf3a677f41454150aaa8b339aeb2869ba166c9f0d720432b7ab6f6228fa
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5bee71621b1d2d9e652dce66a89b678a8a950476894f4c1da19aa929b2241b9a
 phase: 28
 status: gaps_found
-shipyard_source_fingerprint: 96b86bf3a677f41454150aaa8b339aeb2869ba166c9f0d720432b7ab6f6228fa
+shipyard_source_fingerprint: 5bee71621b1d2d9e652dce66a89b678a8a950476894f4c1da19aa929b2241b9a
 ---
 
 # Phase 28: A mechanism nobody connected is not a mechanism — Verification Projection
