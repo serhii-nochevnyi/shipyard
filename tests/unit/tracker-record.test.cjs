@@ -140,6 +140,40 @@ test('an exact-ticket override preserves the observation and journals one atomic
   }]);
 });
 
+test('a retry after completed override recovery is exactly once', () => {
+  const { project, graph } = scratch(4);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const afterStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  stagePendingOverride(graph, beforeStore, afterStore, eventLine, Buffer.alloc(0));
+
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
+  assert.strictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8'), eventLine.toString());
+  assert.strictEqual(stored(graph).tickets['T-01'].override_reason, 'operator choice');
+});
+
+test('an override cannot replace the tracker reason through a CLI alias', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice',
+    '--observation-reason', 'invented tracker explanation', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /unknown option --observation-reason/);
+  assert.strictEqual(stored(graph).tickets['T-01'].reason,
+    'tracker status "To Do" is configured and the ticket is unassigned');
+  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')));
+});
+
 test('an override that supplies one tracker fact recomputes the complete observation', () => {
   const { project, graph } = scratch();
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
