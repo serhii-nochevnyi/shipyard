@@ -622,19 +622,15 @@ function opaqueId(value, label) {
 }
 
 function dispatchIdFromInput(input) {
-  const hasSnakeCase = hasOwn(input, 'dispatch_id');
-  const hasCamelCase = hasOwn(input, 'dispatchId');
-  if (!hasSnakeCase && !hasCamelCase) return undefined;
-  const snakeCase = hasSnakeCase ? opaqueId(input.dispatch_id, 'dispatch_id') : null;
-  const camelCase = hasCamelCase ? opaqueId(input.dispatchId, 'dispatchId') : null;
-  if (snakeCase && camelCase && snakeCase !== camelCase) {
+  if (hasOwn(input, 'dispatchId')) {
     refuse(
-      'CONFLICTING_OVERRIDE',
-      'dispatch_id and dispatchId aliases must identify the same dispatch',
-      { dispatch_id: snakeCase, dispatchId: camelCase },
+      'UNSUPPORTED_SELECTION',
+      'dispatchId is not part of the ADR-014 resolver interface; use dispatch_id',
     );
   }
-  return snakeCase || camelCase;
+  return hasOwn(input, 'dispatch_id')
+    ? opaqueId(input.dispatch_id, 'dispatch_id')
+    : undefined;
 }
 
 function variantSuffix(role, rung) {
@@ -700,6 +696,9 @@ function overrideSources(input, role) {
   if (hasOwn(input, 'backend')) add('input.backend', { backend: input.backend });
   if (hasOwn(input, 'mechanism')) add('input.mechanism', { mechanism: input.mechanism });
   if (hasOwn(input, 'agent_file')) add('input.agent_file', { agent_file: input.agent_file });
+  for (const field of ['logical_model', 'logical_rung', 'rung', 'rung_index']) {
+    if (hasOwn(input, field)) add(`input.${field}`, { [field]: input[field] });
+  }
 
   const config = input.config;
   if (config && typeof config === 'object' && !Array.isArray(config)) {
@@ -743,9 +742,13 @@ function assertNoConflictingOverrides(input, expected) {
     if (effort !== undefined && effort !== expected.effort) {
       refuse('CONFLICTING_OVERRIDE', `${source} selects effort ${JSON.stringify(effort)}, but ADR-014 resolved ${expected.effort}`, { source, expected: expected.effort, actual: effort });
     }
-    for (const field of ['logical_model', 'logical_rung', 'rung']) {
+    for (const field of ['logical_model', 'logical_rung', 'rung', 'rung_index']) {
       if (override[field] !== undefined) {
-        const want = field === 'logical_model' ? expected.logical_model : expected.rung;
+        const want = field === 'logical_model'
+          ? expected.logical_model
+          : field === 'rung_index'
+            ? expected.rung_index
+            : expected.rung;
         if (override[field] !== want) {
           refuse('CONFLICTING_OVERRIDE', `${source} selects ${field} ${JSON.stringify(override[field])}, but ADR-014 resolved ${want}`, { source, field, expected: want, actual: override[field] });
         }

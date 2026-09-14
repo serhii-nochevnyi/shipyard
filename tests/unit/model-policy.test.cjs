@@ -282,13 +282,14 @@ test('matching overrides are harmless but conflicting or unsupported selections 
     () => policy.resolveDispatch({ runtime: 'codex', role: 'executor', model: 'inherit' }),
     (error) => error.code === 'CONFLICTING_OVERRIDE' || error.code === 'UNSUPPORTED_SELECTION',
   );
-  const aliased = policy.resolveDispatch({
-    runtime: 'codex',
-    role: 'executor',
-    dispatch_id: 'same-dispatch-id',
-    dispatchId: 'same-dispatch-id',
-  });
-  assert.equal(aliased.dispatch_id, 'same-dispatch-id');
+  assert.throws(
+    () => policy.resolveDispatch({
+      runtime: 'codex',
+      role: 'executor',
+      dispatchId: 'camel-dispatch-id',
+    }),
+    (error) => error.code === 'UNSUPPORTED_SELECTION' && /dispatch_id/.test(error.message),
+  );
   assert.throws(
     () => policy.resolveDispatch({
       runtime: 'codex',
@@ -296,7 +297,7 @@ test('matching overrides are harmless but conflicting or unsupported selections 
       dispatch_id: 'snake-dispatch-id',
       dispatchId: 'camel-dispatch-id',
     }),
-    (error) => error.code === 'CONFLICTING_OVERRIDE' && /aliases/.test(error.message),
+    (error) => error.code === 'UNSUPPORTED_SELECTION' && /dispatch_id/.test(error.message),
   );
   assert.throws(
     () => policy.resolveDispatch({
@@ -320,6 +321,18 @@ test('matching overrides are harmless but conflicting or unsupported selections 
     () => policy.resolveDispatch({ runtime: 'codex', role: 'executor', override: { runtime: 'claude' } }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
+  for (const [field, value] of [
+    ['logical_model', 'terra'],
+    ['logical_rung', 'critical'],
+    ['rung', 'critical'],
+    ['rung_index', 1],
+  ]) {
+    assert.throws(
+      () => policy.resolveDispatch({ runtime: 'codex', role: 'executor', [field]: value }),
+      (error) => error.code === 'CONFLICTING_OVERRIDE',
+      `top-level ${field} override must be rejected when it disagrees with the base executor route`,
+    );
+  }
 });
 
 test('unknown runtime, malformed signals, and unsupported signal names fail closed', () => {

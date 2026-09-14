@@ -21,6 +21,7 @@ const CLAIM_HEARTBEAT_MS = Math.max(1000, Math.floor(CLAIM_TTL_MS / 3));
 const CLAIM_LOCK_TTL_MS = Math.max(1000, Math.floor(CLAIM_TTL_MS / 3));
 const RECORDER_AUTHORITY = Symbol('adr-014-dispatch-boundary-recorder-authority');
 const DURABLE_RECORDERS = new WeakSet();
+const IN_PROCESS_RECORDERS = new WeakSet();
 const DURABLE_ENVELOPE_FORMAT = 'adr-014.durable-boundary.v1';
 const AUTHORITY_KEY_BYTES = 32;
 // Policy resolution must distinguish an actual durable receipt from a caller's
@@ -37,11 +38,12 @@ function isBoundaryVerifiedReceipt(receipt) {
   return isObject(receipt) && BOUNDARY_VERIFIED_RECEIPTS.has(receipt);
 }
 
-// A recorder is the durable owner of dispatch identity.  Function recorders
-// remain supported for small in-process callers, so this table supplies the
-// same instance/process uniqueness and receipt lookup guarantees for them.
-// Production callers that cross a process boundary must use a recorder object
-// with reserve/record/read methods (createDurableRecorder below is the bundled
+// A recorder is the durable owner of dispatch identity. Explicit recorder
+// injection remains supported for small in-process callers, so this table
+// supplies instance/process uniqueness for that opt-in contract. Adapter
+// telemetry hooks are never promoted into a trust root. Production callers
+// that cross a process boundary must use a recorder object with
+// reserve/record/read methods (createDurableRecorder below is the bundled
 // implementation).
 const SHARED_RECORDER_STATES = new WeakMap();
 
@@ -934,8 +936,11 @@ function trustedGeneratedAgentDigest(resolution, adapter, root, actualDigest) {
       : `generated-agent manifest ${manifestPath} could not be read: ${error.message}`;
     refuse('STALE_GENERATED_AGENT', reason, { manifest: manifestPath, agent_file: resolution.agent_file });
   }
-  if (!isObject(manifest) || !isObject(manifest.agent_digests)) {
-    refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} has no trusted agent_digests map`, { manifest: manifestPath, agent_file: resolution.agent_file });
+  if (!isObject(manifest)) {
+    refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} is not an object`, { manifest: manifestPath, agent_file: resolution.agent_file });
+  }
+  if (!Array.isArray(manifest.agent_files) || !manifest.agent_files.includes(resolution.agent_file)) {
+    refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} does not register ${resolution.agent_file}`, { manifest: manifestPath, agent_file: resolution.agent_file });
   }
   if (manifest.policy_id !== undefined && manifest.policy_id !== canonicalPolicy.POLICY.id) {
     refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} is for ${manifest.policy_id}, not ${canonicalPolicy.POLICY.id}`, { manifest: manifestPath });
@@ -946,6 +951,11 @@ function trustedGeneratedAgentDigest(resolution, adapter, root, actualDigest) {
   if (manifest.policy_hash !== undefined && manifest.policy_hash !== resolution.policy_hash) {
     refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} has stale policy hash`, { manifest: manifestPath, expected: resolution.policy_hash, actual: manifest.policy_hash });
   }
+  // The installer currently publishes agent_files before the per-file digest
+  // map is available. Consume that real legacy contract here and let the
+  // adapter-owned validator bind the file to the active policy. New manifests
+  // take the stronger authenticated digest path below.
+  if (!isObject(manifest.agent_digests)) return { manifest: manifestPath, digest: null, legacy: true };
   const expectedDigest = manifest.agent_digests[resolution.agent_file];
   if (typeof expectedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(expectedDigest)) {
     refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} has no trusted digest for ${resolution.agent_file}`, { manifest: manifestPath, agent_file: resolution.agent_file });
@@ -995,6 +1005,15 @@ function generatedAgentEvidence(resolution, adapter) {
     policy_role: generatedPolicyComment(text, 'role'),
     policy_rung: generatedPolicyComment(text, 'rung'),
   };
+  const bindingFields = ['policy_id', 'policy_version', 'policy_hash', 'policy_runtime', 'policy_role', 'policy_rung'];
+  // Current Codex installs contain model/effort plus the manifest's
+  // agent_files registration, but do not yet carry ADR-014 comments. In that
+  // format the injected adapter owns the policy-binding check; refusing here
+  // would reject every valid artifact produced by the current installer.
+  if (!bindingFields.some((field) => actual[field] !== null)) {
+    trustedGeneratedAgentDigest(resolution, adapter, root, crypto.createHash('sha256').update(text).digest('hex'));
+    return null;
+  }
   for (const [field, value] of Object.entries(expected)) {
     if (actual[field] !== value) {
       refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} is not bound to ADR-014: ${field}=${JSON.stringify(actual[field])}, expected ${JSON.stringify(value)}`, { agent_file: resolution.agent_file, field, expected: value, actual: actual[field] });
@@ -1249,9 +1268,17 @@ function finalizeApplicationReceipt(resolution, evidence, adapter, observationCa
 }
 
 function recorderFor(options, adapter) {
-  if (typeof options.recorder === 'function') return options.recorder;
-  if (options.recorder && typeof options.recorder.record === 'function') return options.recorder;
-  if (adapter && typeof adapter.record === 'function') return adapter;
+  if (typeof options.recorder === 'function') {
+    IN_PROCESS_RECORDERS.add(options.recorder);
+    return options.recorder;
+  }
+  if (options.recorder && typeof options.recorder.record === 'function') {
+    if (!DURABLE_RECORDERS.has(options.recorder)) IN_PROCESS_RECORDERS.add(options.recorder);
+    return options.recorder;
+  }
+  // An adapter's record hook is runtime telemetry, not a boundary-owned
+  // receipt store. Requiring options.recorder keeps later repair proof tied to
+  // the explicit in-process contract or the branded durable recorder.
   return null;
 }
 
@@ -1388,8 +1415,6 @@ function recorderRelease(recorder, dispatchId, consumerId, claimAuthority) {
 }
 
 function recorderStoredRecord(recorder, dispatchId) {
-  const state = sharedRecorderState(recorder);
-  if (state && state.records.has(dispatchId)) return state.records.get(dispatchId);
   if (DURABLE_RECORDERS.has(recorder)) {
     // A branded recorder must prove the on-disk envelope. Never fall back to
     // its readable legacy accessor here: that accessor exists for recovery and
@@ -1399,15 +1424,7 @@ function recorderStoredRecord(recorder, dispatchId) {
     const result = invokeSync(verified.fn, verified.receiver, [dispatchId], verified.name);
     return result || null;
   }
-  const verified = recorderMethod(recorder, ['getVerifiedRecord']);
-  if (verified) {
-    const result = invokeSync(verified.fn, verified.receiver, [dispatchId], verified.name);
-    return result || null;
-  }
-  const target = recorderMethod(recorder, ['getReceipt', 'readReceipt', 'getRecord', 'read']);
-  if (!target) return null;
-  const result = invokeSync(target.fn, target.receiver, [dispatchId], target.name);
-  return result || null;
+  return null;
 }
 
 function recorderConsume(recorder, dispatchId, consumerId, claimAuthority) {
@@ -1502,26 +1519,28 @@ function createDispatchBoundary(options = {}) {
   }
 
   function trustedRecordFor(recorder, dispatchId) {
-    const memoryReceiptEntry = trustedReceipts.get(dispatchId);
-    const memoryResolutionEntry = trustedResolutions.get(dispatchId);
-    // A receipt registered by this boundary is trusted in-process even when
-    // the caller supplied a function recorder. Bind both memory entries to
-    // that exact recorder so a second recorder cannot borrow the proof.
-    const memoryReceipt = memoryReceiptEntry && memoryReceiptEntry.recorder === recorder
-      ? memoryReceiptEntry.value
-      : null;
-    const memoryResolution = memoryResolutionEntry && memoryResolutionEntry.recorder === recorder
-      ? memoryResolutionEntry.value
-      : null;
-    if (memoryReceipt
-        && memoryReceipt.dispatch_id === dispatchId
-        && memoryResolution
-        && memoryResolution.dispatch_id === dispatchId) {
-      return {
-        record: { dispatch_id: dispatchId, receipt: memoryReceipt, resolution: memoryResolution },
-        receipt: memoryReceipt,
-        resolution: memoryResolution,
-      };
+    if (IN_PROCESS_RECORDERS.has(recorder)) {
+      const memoryReceiptEntry = trustedReceipts.get(dispatchId);
+      const memoryResolutionEntry = trustedResolutions.get(dispatchId);
+      // A receipt registered by this boundary is trusted in-process only for
+      // the exact explicitly injected recorder; a second recorder cannot
+      // borrow the proof.
+      const memoryReceipt = memoryReceiptEntry && memoryReceiptEntry.recorder === recorder
+        ? memoryReceiptEntry.value
+        : null;
+      const memoryResolution = memoryResolutionEntry && memoryResolutionEntry.recorder === recorder
+        ? memoryResolutionEntry.value
+        : null;
+      if (memoryReceipt
+          && memoryReceipt.dispatch_id === dispatchId
+          && memoryResolution
+          && memoryResolution.dispatch_id === dispatchId) {
+        return {
+          record: { dispatch_id: dispatchId, receipt: memoryReceipt, resolution: memoryResolution },
+          receipt: memoryReceipt,
+          resolution: memoryResolution,
+        };
+      }
     }
     // Arbitrary recorder objects are telemetry sinks, not trust roots. Only a
     // recorder branded by this module can authenticate durable boundary state
@@ -1531,7 +1550,7 @@ function createDispatchBoundary(options = {}) {
     const receipt = recordReceipt(stored);
     const resolution = stored && isObject(stored.resolution)
       ? stored.resolution
-      : memoryResolution;
+      : null;
     if (!stored
         || stored.dispatch_id !== dispatchId
         || !receipt

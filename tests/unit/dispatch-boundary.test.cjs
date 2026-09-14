@@ -408,6 +408,68 @@ test('static Codex dispatch requires generated-agent evidence and a digest', () 
   );
 });
 
+test('legacy Codex manifests delegate policy binding to the adapter contract', () => {
+  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-legacy-agent-'));
+  const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'legacy-agent-file' });
+  const text = [
+    `name = "${base.agent_file.replace(/\.toml$/, '')}"`,
+    `model = "${base.model}"`,
+    `model_reasoning_effort = "${base.effort}"`,
+    "developer_instructions = '''\nlegacy installer artifact\n'''",
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(agentsDir, base.agent_file), text);
+  fs.writeFileSync(path.join(agentsDir, '.shipyard-manifest.json'), JSON.stringify({
+    agent_files: [base.agent_file],
+    registrations: [`agents.${base.agent_file.replace(/\.toml$/, '')}`],
+  }) + '\n');
+  let validatorCalled = false;
+  const digest = crypto.createHash('sha256').update(text).digest('hex');
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        agentsDir,
+        validateGeneratedAgent: (resolution) => {
+          validatorCalled = true;
+          return {
+            valid: true,
+            exists: true,
+            content_verified: true,
+            policy_hash: resolution.policy_hash,
+            agent_file: resolution.agent_file,
+            agent_file_digest: digest,
+            agent_file_content: text,
+          };
+        },
+      }),
+    },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({
+    runtime: 'codex',
+    role: 'research',
+    dispatch_id: base.dispatch_id,
+  });
+  assert.equal(validatorCalled, true);
+  assert.equal(result.receipt.agent_file_digest, digest);
+});
+
+test('an adapter telemetry record hook cannot become repair authority', () => {
+  let launched = false;
+  let recorded = false;
+  const adapter = fakeAdapter({
+    onLaunch: () => { launched = true; },
+    record: () => { recorded = true; return { recorded: true }; },
+  });
+  const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter } });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+    (error) => error.code === 'RECORD_UNAVAILABLE',
+  );
+  assert.equal(launched, false);
+  assert.equal(recorded, false);
+});
+
 test('requested values copied without adapter-applied evidence are not a receipt', () => {
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: {
@@ -771,6 +833,36 @@ test('static Codex launch receives an immutable verified artifact handoff', () =
   assert.ok(Object.isFrozen(handoff));
   assert.equal(result.receipt.agent_file_digest, handoff.agent_file_digest);
   assert.notEqual(fs.readFileSync(path.join(agentsDir, base.agent_file), 'utf8'), originalContent);
+});
+
+test('durable repair authorization re-reads the authenticated record after local caching', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-durable-cache-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder,
+  });
+  const base = boundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'durable-cache-base',
+  });
+  const recordPath = path.join(
+    storeDir,
+    `record-${crypto.createHash('sha256').update(base.dispatch_id).digest('hex')}.json`,
+  );
+  fs.unlinkSync(recordPath);
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'durable-cache-repeat',
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
 });
 
 test('separate boundary instances share durable reservation and finalized receipt state', () => {
