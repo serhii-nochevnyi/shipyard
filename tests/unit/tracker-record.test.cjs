@@ -111,6 +111,15 @@ test('unknown observations preserve tracker error words and remain unknown', () 
   assert.match(record.generation_identity, /^\d+:\d+:/);
 });
 
+test('unknown observations preserve an error value that starts like an option', () => {
+  const { project, graph } = scratch(3);
+  const r = spawnSync('node', [
+    RECORD, 'unknown', 'T-01', 'MYD-1', '--reason', '--retry-after 30', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(stored(graph).tickets['T-01'].reason, '--retry-after 30');
+});
+
 test('an exact-ticket override preserves the observation and journals one atomic event', () => {
   const { project, graph } = scratch(4);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
@@ -450,6 +459,24 @@ test('the predecessor bridge does not carry a direct override into the next gene
   const record = require(RECORD);
   assert.deepStrictEqual(Object.keys(record.activePreviousTrackers(graph)), []);
   assert.deepStrictEqual(Object.keys(record.activeTrackerSnapshot(graph)), ['T-02']);
+});
+
+test('an invalid current-generation record fences the predecessor fallback', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  const previousIdentity = stored(graph).tickets['T-01'].generation_identity;
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({
+    generation: 2,
+    previous_generation_identity: previousIdentity,
+  }));
+  const current = markArgs(graph, 'T-01', 'MYD-1');
+  current[current.indexOf('--status') + 1] = 'Backlog';
+  execFileSync('node', current, { cwd: project });
+  fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({
+    pipeline: { jira_todo_statuses: 'To Do' },
+  }));
+  const record = require(RECORD);
+  assert.deepStrictEqual(record.activeTrackerSnapshot(graph), {});
 });
 
 test('a malformed or missing metadata file never falls back to the advisory front generation', () => {
