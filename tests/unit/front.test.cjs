@@ -77,19 +77,35 @@ test('an eligible current record allows a ready pending ticket to execute', () =
   assert.deepStrictEqual(f.parked.blocked, []);
 });
 
-test('a current-generation exact-ticket override may execute despite its tracker verdict', () => {
+test('a current-generation exact-ticket override with a known verdict may execute', () => {
   const f = computeFront(
     { T: trackerTicket() },
     { T: { status: 'pending', ready: true } },
     {
       jira_todo_statuses: ['To Do'],
       trackerRecords: {
-        T: { ...eligibleTracker(), verdict: 'unknown', eligible: null, override: true },
+        T: { ...eligibleTracker(), verdict: 'ineligible', eligible: false, override: true },
       },
     }
   );
   assert.deepStrictEqual(f.actionable.execute, ['T']);
   assert.match(f.why.T, /explicit tracker override/);
+});
+
+test('an unknown exact-ticket override remains blocked without a complete observation', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    {
+      jira_todo_statuses: ['To Do'],
+      trackerRecords: {
+        T: { ...eligibleTracker(), verdict: 'unknown', eligible: null, assignee_observed: false, override: true },
+      },
+    }
+  );
+  assert.deepStrictEqual(f.actionable.execute, []);
+  assert.deepStrictEqual(f.parked.blocked, ['T']);
+  assert.match(f.why.T, /name this exact ticket/);
 });
 
 test('ineligible, unknown, and missing records are blocked with the direct-ticket remedy', () => {

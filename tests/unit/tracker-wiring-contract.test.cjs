@@ -33,15 +33,24 @@ test('deliver documents one issue read per pending ticket and fail-closed record
   assert.match(section, /changelog\/worklog history/);
   assert.match(section, /tracker-record\.cjs mark <T> <KEY>/);
   assert.match(section, /tracker-record\.cjs unknown <T> <KEY>/);
+  assert.match(section, /values returned by MCP are data, never shell source/);
+  assert.match(section, /--status "\$status_name" --assignee "\$assignee_id"/);
+  assert.match(section, /--reason "\$tracker_error"/);
+  assert.match(section, /unknown\/incomplete record remains blocked/);
   assert.match(section, /preserve the\s+tracker's error words/);
   assert.match(section, /recompute the front before dispatching/);
   assert.match(section, /set scope never does/);
+  const loop = between(doc, '**Loop-back to the fixpoint (after each round/merge — mandatory).**', '## Step 5');
+  assert.match(loop, /Repeat the tracker eligibility pass/);
+  assert.match(loop, /one\s+issue read per pending candidate per loop-back round\/generation/);
+  assert.match(loop, /prior generation's\s+observation as fresh permission/);
 });
 
 test('state-sync passes the active tracker records without tracker I/O', () => {
   const doc = source(STATE_SYNC);
   assert.match(doc, /require\(path\.join\(__dirname, 'tracker-record\.cjs'\)\)/);
-  const publish = between(doc, 'const published = withLock', 'const front = published.front');
+  const publish = between(doc, "const published = withLock(lockDirFor(ROOT), 'tracker-record'", 'const front = published.front');
+  assert.match(publish, /withLock\(lockDirFor\(ROOT\), 'state'/);
   assert.match(publish, /activeTrackers\(GRAPH_DIR\)/);
   const call = between(doc, 'const front = computeFront', 'writeAtomic\(STATE');
   assert.match(call, /trackerStatuses:\s*cfg\.jira_todo_statuses/);
@@ -70,7 +79,7 @@ test('dispatch refresh uses the same config and active tracker cache', () => {
 
 test('all front writers leave tracker reads outside the GitHub state lock', () => {
   const sync = source(STATE_SYNC);
-  const lockBody = between(sync, "const published = withLock(lockDirFor(ROOT), 'state', () => {", '}, { label: \'state-sync\' });');
+  const lockBody = between(sync, "withLock(lockDirFor(ROOT), 'state', () => {", '}, { label: \'state-sync\' })');
   assert.doesNotMatch(lockBody, /getJiraIssue|searchJiraIssuesUsingJql|mcp__/);
   assert.doesNotMatch(source(FRONT), /getJiraIssue|searchJiraIssuesUsingJql|mcp__/);
   assert.doesNotMatch(source(DISPATCH), /getJiraIssue|searchJiraIssuesUsingJql|mcp__/);

@@ -917,7 +917,12 @@ const DRIFTED = activeDrift(ROOT);
 // rendered; this was the one caller that still did.
 const ESCALATED = activeParks(ROOT, state);
 
-const published = withLock(lockDirFor(ROOT), 'state', () => {
+// Hold the tracker-record lock for the complete snapshot publish. Tracker
+// writers commit their cache under that lock, so this prevents state-sync from
+// reading the tracker snapshot and then publishing a board that races a new
+// observation in between. The tracker lock is outermost because tracker writers
+// never acquire `state`; keeping one lock order avoids a deadlock.
+const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lockDirFor(ROOT), 'state', () => {
   // FIRST inside the lock, ahead of the journal append and every write. Nothing
   // this run holds was read under the lock — `prev`, the timestamps and every
   // `gh` observation were gathered minutes ago, because they have to be — so a
@@ -1035,7 +1040,7 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
     pid: process.pid,
   }, null, 2) + '\n');
   return { front, generation };
-}, { label: 'state-sync' });
+}, { label: 'state-sync' }), { label: 'state-sync tracker snapshot' });
 
 // A refusal is an OUTCOME, not a failure: the board on disk is the better of the
 // two snapshots and the run that has it is the one driving. Exit 0 before any

@@ -808,7 +808,9 @@ function computeFront(tickets, state, opts = {}) {
       if (trackerEnabled) {
         const jiraKey = trackerJiraKey(t);
         const record = trackerRecords && typeof trackerRecords === 'object' ? trackerRecords[id] : null;
-        if (record && (record.verdict === 'eligible' || record.override === true)
+        const knownOverride = record && record.override === true
+          && (record.verdict === 'eligible' || record.verdict === 'ineligible');
+        if (record && (record.verdict === 'eligible' || knownOverride)
             && jiraKey && record.jira_key === jiraKey) {
           actionable.execute.push(id);
           why[id] = record.override === true

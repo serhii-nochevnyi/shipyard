@@ -897,8 +897,10 @@ id and its Jira key, preserve the observation, and state why the bypass is
 intentional:
 
 ```bash
+project_graph="$PROJECT_ROOT/.planning/graph"
+override_reason="$OPERATOR_REASON"
 node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs override <T> <KEY> \
-  --reason "<explicit operator reason>"
+  --reason "$override_reason" --graph "$project_graph"
 ```
 
 This is an exact-ticket escape hatch, not a scope setting: `whole phase N`,
@@ -1273,19 +1275,29 @@ Adapt the response shape without changing the predicate:
 - record a successful observation with the exact status NAME and assignee
   identity (or `none`):
 
+The values returned by MCP are data, never shell source. Do not interpolate a
+status, assignee, or error string into a constructed command and do not use
+`eval`. Prefer the connection's argv/process-spawn API; if the only available
+runner is a shell, put each returned value in a variable and pass it as its own
+quoted argument, as below. This preserves exact tracker error text without
+letting tracker data become command syntax.
+
   ```bash
+  project_graph="$PROJECT_ROOT/.planning/graph"
+  status_name="$MCP_STATUS_NAME"
+  assignee_id="$MCP_ASSIGNEE_ID"   # set to "none" when MCP returned literal null
   node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs mark <T> <KEY> \
-    --status "<status NAME>" --assignee "<account id|none>" \
-    --graph <project-root>/.planning/graph
+    --status "$status_name" --assignee "$assignee_id" \
+    --graph "$project_graph"
   ```
 
 - if the MCP call fails or does not contain a complete answer, preserve the
   tracker's error words and record the fail-closed result instead:
 
   ```bash
+  tracker_error="$MCP_ERROR_TEXT"
   node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs unknown <T> <KEY> \
-    --reason "<MCP error or missing-field explanation>" \
-    --graph <project-root>/.planning/graph
+    --reason "$tracker_error" --graph "$project_graph"
   ```
 
 Read the cache after recording and recompute the front before dispatching. A
@@ -1295,7 +1307,11 @@ ticket with the tracker reason. If the command names one exact ticket, the
 operator may then invoke the documented `tracker-record.cjs override` for that
 ticket; a set scope never does. An unavailable Jira MCP with the policy enabled
 is therefore a per-ticket `unknown` outcome, not permission to proceed and not
-a reason to stop processing other tickets.
+a reason to stop processing other tickets. The override must still be based on
+a complete status-plus-assignee observation from the same delivery generation:
+an unknown/incomplete record remains blocked, and the override flag does not
+fabricate permission. The front accepts an override only alongside a known
+`eligible` or `ineligible` verdict.
 
 ## Step 2 — Drift-gate the chosen tickets
 
@@ -2029,17 +2045,22 @@ stop at that: move on to the recomputation of the front below.
    "Tracker projection — the acting half"): it is bookkeeping, so it is neither
    actionable nor a reason to block — the watermark makes catch-up free, and a
    round that skips it costs one round of tracker lag that the next round closes.
-2. Recompute the actionable front (the Principle at the top): new `ready` (unblocked
+2. Repeat the tracker eligibility pass above for every pending/ready ticket in
+   the expanded scope, especially tickets newly unblocked by the round. Take one
+   issue read per pending candidate per loop-back round/generation, record
+   `eligible`, `ineligible`, or `unknown`, and do not treat a prior generation's
+   observation as fresh permission.
+3. Recompute the actionable front (the Principle at the top): new `ready` (unblocked
    children, cascade dependents) + `branched-needs-pr` + open non-green PRs.
-3. Front NOT empty → add the new ready ones to scope, return to Step 2/3 for them;
+4. Front NOT empty → add the new ready ones to scope, return to Step 2/3 for them;
    the open PRs are the guard's (Step 4 inline only on the fallback path). Thus
    exhaust the graph wave by wave WITHOUT re-asking the human.
-4. Only `execute`/`publish` are empty but the guard is still working → that is NOT
+5. Only `execute`/`publish` are empty but the guard is still working → that is NOT
    a fixpoint. Report the guard's state, and wait for its report rather than
    ending the run. The board says this for itself once the hand-overs are
    recorded: `sentinel: clear` never appears while a ticket is out with the
    guard, and `fixpoint` stays NO while anything is dispatched.
-5. Only `waiting.ci` is left → **`ci-wait.cjs` and stay in the turn.** This is the
+6. Only `waiting.ci` is left → **`ci-wait.cjs` and stay in the turn.** This is the
    one legitimate wait, and it is a script rather than your judgement because the
    run cannot come back on its own: the babysit loop is driven by agent-completion
    wake-ups, and when the only thing left is CI there is no agent to complete.
