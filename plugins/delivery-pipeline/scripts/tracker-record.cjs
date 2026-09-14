@@ -177,6 +177,11 @@ function validateTicket(graphDir, ticket, jiraKey) {
   if (!Object.prototype.hasOwnProperty.call(tickets, id)) {
     throw new Error(`ticket ${id} is not present in tickets.json`);
   }
+  const configured = tickets[id] && tickets[id].jira;
+  if (configured !== null && configured !== undefined && String(configured).trim()
+      && key !== String(configured).trim()) {
+    throw new Error(`Jira key ${key} does not match ticket ${id}'s configured key ${String(configured).trim()}`);
+  }
   return { ticket: id, jiraKey: key };
 }
 
