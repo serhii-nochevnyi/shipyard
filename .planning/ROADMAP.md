@@ -598,8 +598,8 @@ findings or turn a merged ticket count into a false phase pass.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `d5b36a17f3261dacc1253a90b206d1e6dd39bdfed272a9dece8be378ad796d83`
-- Plans merged: 90/104
+- Source fingerprint: `567cbd5c58902eb6c76f2bd2c581183f24b8329898d858a1697c25b854c3aaed`
+- Plans merged: 97/104
 - Phases verified: 4/16
 - Current phase: 20
 
@@ -615,7 +615,7 @@ findings or turn a merged ticket count into a false phase pass.
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
-| 30 — A ticket you cannot reach is not deliverable | 10 | 3 | pending |
+| 30 — A ticket you cannot reach is not deliverable | 10 | 10 | pending |
 | 31 — Not every ticket is available work | 7 | 0 | pending |
 | 32 — Measure usage and make the backlog actionable | 7 | 7 | passed |
 | 33 — Reduce orchestration context and transfer sessions safely | 0 | 0 | pending |
