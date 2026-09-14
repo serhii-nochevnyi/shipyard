@@ -530,6 +530,22 @@ function computeFront(tickets, state, opts = {}) {
   // that answers "what is this run waiting for".
   const parentOf = {};
 
+  // A ticket whose own phase already landed without it is left-behind work,
+  // not a new execution candidate. Keep this decision ahead of the tracker
+  // gate: asking Jira for permission to start abandoned work would turn a
+  // deliberate completion hatch into an unfinished tracker hold.
+  const epics = opts.epics || {};
+  const keyOf = (id) => {
+    const t = (tickets && tickets[id]) || {};
+    return epicKey(t.phase, t.repo);
+  };
+  const leftBehind = (id) => {
+    if ((state[id] || {}).status === 'merged') return 0;
+    const info = epics[keyOf(id)];
+    if (!info || info.landed !== true) return 0;
+    return info.pr && String(info.pr.state || '').toUpperCase() === 'MERGED' ? 1 : 0;
+  };
+
   for (const id of Object.keys(state)) {
     const s = state[id] || {};
     const t = (tickets && tickets[id]) || {};
@@ -806,7 +822,7 @@ function computeFront(tickets, state, opts = {}) {
 
     // pending
     if (s.ready) {
-      if (trackerEnabled) {
+      if (trackerEnabled && !leftBehind(id)) {
         const jiraKey = trackerJiraKey(t);
         const record = trackerRecords && typeof trackerRecords === 'object' ? trackerRecords[id] : null;
         const knownOverride = record && record.override === true
@@ -919,11 +935,6 @@ function computeFront(tickets, state, opts = {}) {
   // (front.cjs's own CLI, `dispatch-record.cjs refreshFront`) gets NO left-behind
   // at all, deliberately: the hatch this feeds must never fire on a fact nobody
   // measured, and "no evidence" has to mean "keep driving".
-  const epics = opts.epics || {};
-  const keyOf = (id) => {
-    const t = (tickets && tickets[id]) || {};
-    return epicKey(t.phase, t.repo);
-  };
   // `landed === true` ALONE is not that evidence, and reading it as such would be
   // a worse defect than the arithmetic it replaces. It means "nothing from this
   // phase is outside the base" — a READINESS fact (state-sync blocks cross-phase
@@ -950,19 +961,6 @@ function computeFront(tickets, state, opts = {}) {
   // an epic PR outside the bulk window — or one a human merged and reaped
   // without a PR at all — is given up in the conservative direction: no
   // evidence, no hatch, the run keeps driving.
-  const leftBehind = (id) => {
-    // A merged ticket is IN the phase that landed; it is not a casualty of it.
-    // (It is never actionable either, so this is the definition holding rather
-    // than a bucket being filtered.)
-    if ((state[id] || {}).status === 'merged') return 0;
-    const info = epics[keyOf(id)];
-    // No record (direct-to-main, or a phase this graph knows no epic for) and
-    // `landed: null` (the compare did not answer) are both 0 — one has no epic
-    // that could land, the other has an answer nobody received.
-    if (!info || info.landed !== true) return 0;
-    return info.pr && String(info.pr.state || '').toUpperCase() === 'MERGED' ? 1 : 0;
-  };
-
   // UNBLOCKING POWER — how much other work this ticket is holding up. Depth
   // orders a stack and left-behind demotes a phase that shipped without it, but
   // neither says which of two live roots to take, and unattended that is the
