@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
-const { resolveRuntime, resolveDispatchContext } = require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs');
+const { resolveRuntime, resolveDispatchContext, readInheritedConfig } = require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs');
 
 function project(runtime) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-runtime-context-'));
@@ -19,6 +19,26 @@ function project(runtime) {
 }
 
 suite('runtime context is per invocation, not persisted project state');
+
+test('inherited GSD defaults preserve raw inputs and refuse unreadable or malformed settings', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-defaults-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-unconfigured-'));
+  const options = { env: { GSD_HOME: home } };
+  const file = path.join(home, '.gsd', 'defaults.json');
+  assert.deepEqual(readInheritedConfig(root, options), {});
+  fs.mkdirSync(path.dirname(file));
+  for (const content of ['{', 'null', '[]', 'false']) {
+    fs.writeFileSync(file, content);
+    assert.throws(() => readInheritedConfig(root, options), (error) =>
+      error.code === 'INVALID_CONFIG' && error.details.source === file);
+  }
+  const raw = { model_profile: 'inherit', model_overrides: { 'gsd-planner': 'opus' } };
+  fs.writeFileSync(file, JSON.stringify(raw));
+  assert.deepEqual(readInheritedConfig(root, options), raw);
+  assert.deepEqual(readInheritedConfig(root, { env: { HOME: home } }), raw);
+  fs.mkdirSync(path.join(root, '.planning'));
+  assert.deepEqual(readInheritedConfig(root, options), {});
+});
 
 test('explicit Shipyard context wins over a legacy project runtime', () => {
   const result = resolveRuntime(project('claude'), { env: { SHIPYARD_RUNTIME: 'codex' } });
