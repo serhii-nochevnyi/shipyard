@@ -119,15 +119,23 @@ function requireMetadataIdentity(graphDir) {
   return identity;
 }
 
-function recordsForGeneration(store, generation, configuredStatuses, identity) {
+function recordsForGeneration(store, generation, configuredStatuses, identity, tickets) {
   if (!Number.isInteger(generation) || generation < 1) return {};
   const out = {};
   for (const [ticket, record] of Object.entries(store.tickets)) {
     if (!record || record.ticket !== ticket || record.generation !== generation) continue;
+    if (!recordMatchesTicketGraph(record, tickets)) continue;
     if (!validRecord(record, configuredStatuses, identity)) continue;
     out[ticket] = { ...record };
   }
   return out;
+}
+
+function recordMatchesTicketGraph(record, tickets) {
+  if (!tickets || typeof tickets !== 'object' || Array.isArray(tickets)) return false;
+  const ticket = tickets[record.ticket];
+  const jira = ticket && typeof ticket === 'object' ? ticket.jira : null;
+  return typeof jira === 'string' && jira.trim() === record.jira_key;
 }
 
 function validRecord(record, configuredStatuses, identity) {
@@ -161,7 +169,13 @@ function validRecord(record, configuredStatuses, identity) {
 function activeRecords(graphDir) {
   const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
-  return recordsForGeneration(store, generation, readConfigStatuses(projectRootOf(graphDir)), metadataIdentity(graphDir));
+  return recordsForGeneration(
+    store,
+    generation,
+    readConfigStatuses(projectRootOf(graphDir)),
+    metadataIdentity(graphDir),
+    ticketMap(graphDir),
+  );
 }
 
 // The flat view is convenient for callers that only need the current record;
@@ -248,10 +262,12 @@ function writeRecord(graphDir, ticket, record) {
       // queueing for them. Generation is the primary ordering key: a late
       // result from an older snapshot can never replace a newer snapshot's
       // record. Only observations in the same generation are ordered by time.
-      const previousWins = previousGeneration > incomingGeneration
-        || (sameEpoch && previousGeneration === incomingGeneration
+      const previousWins = sameEpoch && (
+        previousGeneration > incomingGeneration
+        || (previousGeneration === incomingGeneration
           && Number.isFinite(previousAt)
-          && (!Number.isFinite(incomingAt) || previousAt > incomingAt));
+          && (!Number.isFinite(incomingAt) || previousAt > incomingAt))
+      );
       const stored = previousWins
         ? previous
         : boundRecord;
