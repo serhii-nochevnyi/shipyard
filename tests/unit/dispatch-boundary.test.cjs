@@ -38,22 +38,28 @@ function receiptFor(resolution, extra = {}) {
 }
 
 function fakeAdapter({ receipt = receiptFor, extra = {}, onLaunch, validateGeneratedAgent, ...options } = {}) {
+  const launch = (resolution, context, handoff) => {
+    if (onLaunch) onLaunch(resolution, context, handoff);
+    return receipt(resolution, extra);
+  };
   return {
     ...options,
     ...(validateGeneratedAgent ? { validateGeneratedAgent } : {
-      validateGeneratedAgent: (resolution) => ({
-        valid: true,
-        exists: true,
-        content_verified: true,
-        policy_hash: resolution.policy_hash,
-        agent_file: resolution.agent_file,
-        agent_file_digest: 'a'.repeat(64),
-      }),
+      validateGeneratedAgent: (resolution) => {
+        const agentFileContent = `adapter-owned:${resolution.agent_file}`;
+        return {
+          valid: true,
+          exists: true,
+          content_verified: true,
+          policy_hash: resolution.policy_hash,
+          agent_file: resolution.agent_file,
+          agent_file_digest: require('crypto').createHash('sha256').update(agentFileContent).digest('hex'),
+          agent_file_content: agentFileContent,
+        };
+      },
     }),
-    launch(resolution, context) {
-      if (onLaunch) onLaunch(resolution, context);
-      return receipt(resolution, extra);
-    },
+    launch,
+    launchStatic: launch,
   };
 }
 
@@ -296,6 +302,29 @@ test('repair escalations require the boundary receipt chain and consume each pre
   });
   assert.equal(exhausted.applied_model, 'gpt-6-astra');
   assert.equal(exhausted.applied_effort, 'medium');
+});
+
+test('same-boundary function recorders can authorize their own in-memory repair chain', () => {
+  const recorder = () => true;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder,
+  });
+  const base = boundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'function-recorder-base',
+  });
+  const repeat = boundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'function-recorder-repeat',
+  });
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
 });
 
 test('production dispatch refuses to launch without durable recording', () => {
@@ -691,13 +720,15 @@ test('adapter-owned static evidence is revalidated before launch without an agen
       codex: fakeAdapter({
         validateGeneratedAgent: (resolution) => {
           validationCalls += 1;
+          const agentFileContent = validationCalls === 1 ? 'adapter-agent-first' : 'adapter-agent-second';
           return {
             valid: true,
             exists: true,
             content_verified: true,
             policy_hash: resolution.policy_hash,
             agent_file: resolution.agent_file,
-            agent_file_digest: validationCalls === 1 ? 'a'.repeat(64) : 'b'.repeat(64),
+            agent_file_digest: crypto.createHash('sha256').update(agentFileContent).digest('hex'),
+            agent_file_content: agentFileContent,
           };
         },
         onLaunch: () => { launched = true; },
@@ -711,6 +742,35 @@ test('adapter-owned static evidence is revalidated before launch without an agen
   );
   assert.equal(validationCalls, 2);
   assert.equal(launched, false);
+});
+
+test('static Codex launch receives an immutable verified artifact handoff', () => {
+  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-agent-handoff-'));
+  const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'agent-handoff' });
+  writeStaticAgent(agentsDir, base);
+  const originalContent = fs.readFileSync(path.join(agentsDir, base.agent_file), 'utf8');
+  let handoff;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        agentsDir,
+        onLaunch: (resolution, context, receivedHandoff) => {
+          handoff = receivedHandoff;
+          // A generator may replace the path after the boundary has opened its
+          // verified snapshot. The adapter must use the handoff, not reopen it.
+          fs.appendFileSync(path.join(agentsDir, resolution.agent_file), '# replaced after handoff\n');
+        },
+      }),
+    },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: base.dispatch_id });
+  assert.equal(handoff.agent_file, base.agent_file);
+  assert.equal(handoff.agent_file_content, originalContent);
+  assert.equal(handoff.agent_file_digest, crypto.createHash('sha256').update(originalContent).digest('hex'));
+  assert.ok(Object.isFrozen(handoff));
+  assert.equal(result.receipt.agent_file_digest, handoff.agent_file_digest);
+  assert.notEqual(fs.readFileSync(path.join(agentsDir, base.agent_file), 'utf8'), originalContent);
 });
 
 test('separate boundary instances share durable reservation and finalized receipt state', () => {
@@ -871,9 +931,10 @@ test('an authenticated repair commit makes its predecessor non-replayable before
           content_verified: true,
           policy_hash: resolution.policy_hash,
           agent_file: resolution.agent_file,
-          agent_file_digest: 'a'.repeat(64),
+          agent_file_digest: require('crypto').createHash('sha256').update('recorded-crash-agent').digest('hex'),
+          agent_file_content: 'recorded-crash-agent',
         }),
-        launch: (resolution) => receiptFor(resolution),
+        launchStatic: (resolution) => receiptFor(resolution),
       } },
     });
     boundary.dispatch({

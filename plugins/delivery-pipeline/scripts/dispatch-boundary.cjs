@@ -891,6 +891,25 @@ function generatedAgentRoot(adapter) {
   return typeof root === 'string' && root.trim() !== '' ? path.resolve(root) : null;
 }
 
+function staticLaunchHandoff(resolution, content) {
+  if (typeof content !== 'string') {
+    refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} did not provide immutable launch content`, { agent_file: resolution.agent_file });
+  }
+  const digest = crypto.createHash('sha256').update(content).digest('hex');
+  if (digest !== resolution.agent_file_digest) {
+    refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} content does not match the validated launch digest`, {
+      agent_file: resolution.agent_file,
+      expected: resolution.agent_file_digest,
+      actual: digest,
+    });
+  }
+  return deepFreeze({
+    agent_file: resolution.agent_file,
+    agent_file_digest: digest,
+    agent_file_content: content,
+  });
+}
+
 function generatedAgentManifestPath(adapter, root) {
   const configured = adapter && typeof adapter === 'object'
     ? adapter.agentManifest || adapter.agentManifestFile || adapter.manifestFile
@@ -990,6 +1009,7 @@ function generatedAgentEvidence(resolution, adapter) {
     policy_hash: resolution.policy_hash,
     agent_file: resolution.agent_file,
     agent_file_digest: agentFileDigest,
+    agent_file_content: text,
   };
 }
 
@@ -1017,7 +1037,7 @@ function revalidateGeneratedAgent(resolution, adapter) {
         actual: evidence && evidence.agent_file_digest,
       });
     }
-    return;
+    return staticLaunchHandoff(resolution, evidence.agent_file_content);
   }
   const file = path.resolve(root, resolution.agent_file);
   const relative = path.relative(root, file);
@@ -1034,6 +1054,7 @@ function revalidateGeneratedAgent(resolution, adapter) {
   if (actualDigest !== resolution.agent_file_digest) {
     refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} changed after validation and before launch`, { agent_file: resolution.agent_file, expected: resolution.agent_file_digest, actual: actualDigest });
   }
+  return staticLaunchHandoff(resolution, text);
 }
 
 function validateWithAdapter(resolution, adapter) {
@@ -1053,6 +1074,13 @@ function validateWithAdapter(resolution, adapter) {
     }
     if (typeof evidence.agent_file_digest !== 'string' || !/^[a-f0-9]{64}$/.test(evidence.agent_file_digest)) {
       refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} did not return a content digest`, { agent_file: resolution.agent_file });
+    }
+    if (typeof evidence.agent_file_content !== 'string') {
+      refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} did not return immutable launch content`, { agent_file: resolution.agent_file });
+    }
+    const contentDigest = crypto.createHash('sha256').update(evidence.agent_file_content).digest('hex');
+    if (contentDigest !== evidence.agent_file_digest) {
+      refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} content does not match its returned digest`, { agent_file: resolution.agent_file, expected: evidence.agent_file_digest, actual: contentDigest });
     }
     validatedResolution = deepFreeze(snapshot({ ...resolution, agent_file_digest: evidence.agent_file_digest }));
   }
@@ -1474,27 +1502,36 @@ function createDispatchBoundary(options = {}) {
   }
 
   function trustedRecordFor(recorder, dispatchId) {
-    // Arbitrary recorder objects are telemetry sinks, not trust roots. Only a
-    // recorder branded by this module can authenticate durable boundary state
-    // across calls or process restarts.
-    if (!DURABLE_RECORDERS.has(recorder)) return null;
-    const memoryReceipt = trustedReceipts.get(dispatchId);
-    const memoryResolution = trustedResolutions.get(dispatchId);
+    const memoryReceiptEntry = trustedReceipts.get(dispatchId);
+    const memoryResolutionEntry = trustedResolutions.get(dispatchId);
+    // A receipt registered by this boundary is trusted in-process even when
+    // the caller supplied a function recorder. Bind both memory entries to
+    // that exact recorder so a second recorder cannot borrow the proof.
+    const memoryReceipt = memoryReceiptEntry && memoryReceiptEntry.recorder === recorder
+      ? memoryReceiptEntry.value
+      : null;
+    const memoryResolution = memoryResolutionEntry && memoryResolutionEntry.recorder === recorder
+      ? memoryResolutionEntry.value
+      : null;
     if (memoryReceipt
         && memoryReceipt.dispatch_id === dispatchId
         && memoryResolution
         && memoryResolution.dispatch_id === dispatchId) {
       return {
-        record: { dispatch_id: dispatchId, receipt: memoryReceipt, resolution: trustedResolutions.get(dispatchId) },
+        record: { dispatch_id: dispatchId, receipt: memoryReceipt, resolution: memoryResolution },
         receipt: memoryReceipt,
         resolution: memoryResolution,
       };
     }
+    // Arbitrary recorder objects are telemetry sinks, not trust roots. Only a
+    // recorder branded by this module can authenticate durable boundary state
+    // across calls or process restarts.
+    if (!DURABLE_RECORDERS.has(recorder)) return null;
     const stored = recorderStoredRecord(recorder, dispatchId);
     const receipt = recordReceipt(stored);
     const resolution = stored && isObject(stored.resolution)
       ? stored.resolution
-      : trustedResolutions.get(dispatchId);
+      : memoryResolution;
     if (!stored
         || stored.dispatch_id !== dispatchId
         || !receipt
@@ -1575,8 +1612,8 @@ function createDispatchBoundary(options = {}) {
     if (prior) {
       refuse('DUPLICATE_DISPATCH_ID', 'dispatch id was already registered; replay cannot be recorded twice', { dispatch_id: stored.dispatch_id });
     }
-    trustedReceipts.set(stored.dispatch_id, stored);
-    trustedResolutions.set(stored.dispatch_id, deepFreeze(snapshot(resolution)));
+    trustedReceipts.set(stored.dispatch_id, { recorder, value: stored });
+    trustedResolutions.set(stored.dispatch_id, { recorder, value: deepFreeze(snapshot(resolution)) });
     recorderRecordRemember(recorder, recordInput);
     return stored;
   }
@@ -1679,12 +1716,24 @@ function createDispatchBoundary(options = {}) {
     ];
     const validatedResolution = validateWithAdapter(resolution, adapter);
     stages.push({ stage: 'validate', status: 'passed' });
-    const fn = typeof adapter.launch === 'function'
-      ? adapter.launch
-      : typeof adapter.apply === 'function'
-        ? adapter.apply
-        : null;
-    if (!fn) refuse('MISSING_ADAPTER', `${resolution.runtime} dispatch adapter has no launch method`, { runtime: resolution.runtime });
+    const fn = validatedResolution.agent_file
+      ? typeof adapter.launchStatic === 'function'
+        ? adapter.launchStatic
+        : null
+      : typeof adapter.launch === 'function'
+        ? adapter.launch
+        : typeof adapter.apply === 'function'
+          ? adapter.apply
+          : null;
+    if (!fn) {
+      refuse(
+        'MISSING_ADAPTER',
+        validatedResolution.agent_file
+          ? `${resolution.runtime} static dispatch adapter must expose launchStatic(resolution, context, handoff)`
+          : `${resolution.runtime} dispatch adapter has no launch method`,
+        { runtime: resolution.runtime },
+      );
+    }
     reserveDispatchId(validatedResolution.dispatch_id, record, validatedResolution);
     const prior = validatedResolution.prior_applied;
     const claimConsumerId = validatedResolution.dispatch_id;
@@ -1762,11 +1811,18 @@ function createDispatchBoundary(options = {}) {
       return finalizedRecord;
     };
     try {
-      // Static Codex artifacts are mutable files. Re-read the digest after all
-      // validation hooks and immediately before invoking the adapter so a
-      // concurrent generator cannot turn an earlier proof into launch input.
-      revalidateGeneratedAgent(validatedResolution, adapter);
-      const launchResult = invokeLaunch(fn, adapter, [validatedResolution, context]);
+      // Static Codex artifacts are mutable files. Re-read and snapshot the
+      // content after all validation hooks immediately before invoking the
+      // dedicated static adapter method. The adapter cannot reopen the mutable
+      // path as launch input: it receives the immutable verified handoff.
+      const staticHandoff = revalidateGeneratedAgent(validatedResolution, adapter);
+      const launchResult = invokeLaunch(
+        fn,
+        adapter,
+        staticHandoff
+          ? [validatedResolution, context, staticHandoff]
+          : [validatedResolution, context],
+      );
       if (launchResult && typeof launchResult.then === 'function') {
         return launchResult.then(finish).catch((error) => {
           if (priorLease) priorLease.stop();

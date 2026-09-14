@@ -282,6 +282,22 @@ test('matching overrides are harmless but conflicting or unsupported selections 
     () => policy.resolveDispatch({ runtime: 'codex', role: 'executor', model: 'inherit' }),
     (error) => error.code === 'CONFLICTING_OVERRIDE' || error.code === 'UNSUPPORTED_SELECTION',
   );
+  const aliased = policy.resolveDispatch({
+    runtime: 'codex',
+    role: 'executor',
+    dispatch_id: 'same-dispatch-id',
+    dispatchId: 'same-dispatch-id',
+  });
+  assert.equal(aliased.dispatch_id, 'same-dispatch-id');
+  assert.throws(
+    () => policy.resolveDispatch({
+      runtime: 'codex',
+      role: 'executor',
+      dispatch_id: 'snake-dispatch-id',
+      dispatchId: 'camel-dispatch-id',
+    }),
+    (error) => error.code === 'CONFLICTING_OVERRIDE' && /aliases/.test(error.message),
+  );
   assert.throws(
     () => policy.resolveDispatch({
       runtime: 'codex',

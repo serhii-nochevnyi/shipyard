@@ -101,8 +101,9 @@ const ROLE_RUNG_DEFINITIONS = Object.freeze({
 });
 
 // Escalation semantics are data, not an un-fingerprinted collection of
-// conditionals.  The evaluator below reads this table, so changing a signal,
-// role classification, or repair prerequisite changes POLICY_HASH as well.
+// conditionals. The evaluator below reads this table, while repair receipt
+// gates are derived from the ordered rungs below, so changing a signal, role
+// classification, rung, or repair prerequisite changes POLICY_HASH as well.
 const ROLE_SIGNAL_RULES = Object.freeze({
   research: Object.freeze({
     alternatives: Object.freeze({ rung: 'alternatives', any: Object.freeze([{ type: 'alternatives' }]) }),
@@ -118,22 +119,40 @@ const ROLE_SIGNAL_RULES = Object.freeze({
     critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ critical: true }, { checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }]) }),
   }),
   'ci-fix': Object.freeze({
-    repeat: Object.freeze({ rung: 'repeat', any: Object.freeze([{ signatureState: 'repeat' }]), prerequisite: 'luna/max' }),
-    repeat_exhausted: Object.freeze({ rung: 'repeat_exhausted', any: Object.freeze([{ signatureState: 'repeat_exhausted' }]), prerequisite: 'sol/medium' }),
+    repeat: Object.freeze({ rung: 'repeat', any: Object.freeze([{ signatureState: 'repeat' }]) }),
+    repeat_exhausted: Object.freeze({ rung: 'repeat_exhausted', any: Object.freeze([{ signatureState: 'repeat_exhausted' }]) }),
   }),
   'review-fix': Object.freeze({
-    repeat: Object.freeze({ rung: 'repeat', any: Object.freeze([{ signatureState: 'repeat' }]), prerequisite: 'luna/max' }),
-    repeat_exhausted: Object.freeze({ rung: 'repeat_exhausted', any: Object.freeze([{ signatureState: 'repeat_exhausted' }]), prerequisite: 'sol/medium' }),
+    repeat: Object.freeze({ rung: 'repeat', any: Object.freeze([{ signatureState: 'repeat' }]) }),
+    repeat_exhausted: Object.freeze({ rung: 'repeat_exhausted', any: Object.freeze([{ signatureState: 'repeat_exhausted' }]) }),
   }),
   'pr-sentinel': Object.freeze({}),
   executor: Object.freeze({}),
   'drift-check': Object.freeze({}),
 });
 
-const REPAIR_PREREQUISITES = Object.freeze({
-  'ci-fix': Object.freeze({ repeat: Object.freeze({ logical_model: 'luna', effort: 'max' }), repeat_exhausted: Object.freeze({ logical_model: 'sol', effort: 'medium' }) }),
-  'review-fix': Object.freeze({ repeat: Object.freeze({ logical_model: 'luna', effort: 'max' }), repeat_exhausted: Object.freeze({ logical_model: 'sol', effort: 'medium' }) }),
-});
+function repairPrerequisitesFromRungs() {
+  const result = {};
+  for (const role of REPAIR_ROLES) {
+    const rungs = ROLE_RUNG_DEFINITIONS[role];
+    const prerequisites = {};
+    for (let index = 1; index < rungs.length; index++) {
+      const predecessor = rungs[index - 1];
+      const current = rungs[index];
+      prerequisites[current.name] = Object.freeze({
+        logical_model: predecessor.logical_model,
+        effort: predecessor.effort,
+      });
+    }
+    result[role] = Object.freeze(prerequisites);
+  }
+  return Object.freeze(result);
+}
+
+// Receipt gates must track the actual ordered ladder. Keeping a second set of
+// model/effort strings beside ROLE_RUNG_DEFINITIONS lets the fingerprint change
+// without changing enforcement when one table is edited in isolation.
+const REPAIR_PREREQUISITES = repairPrerequisitesFromRungs();
 
 // Static Codex roles are represented by generated files.  Dynamic roles must
 // receive explicit launch arguments because no static file can carry their
@@ -602,6 +621,22 @@ function opaqueId(value, label) {
   return id;
 }
 
+function dispatchIdFromInput(input) {
+  const hasSnakeCase = hasOwn(input, 'dispatch_id');
+  const hasCamelCase = hasOwn(input, 'dispatchId');
+  if (!hasSnakeCase && !hasCamelCase) return undefined;
+  const snakeCase = hasSnakeCase ? opaqueId(input.dispatch_id, 'dispatch_id') : null;
+  const camelCase = hasCamelCase ? opaqueId(input.dispatchId, 'dispatchId') : null;
+  if (snakeCase && camelCase && snakeCase !== camelCase) {
+    refuse(
+      'CONFLICTING_OVERRIDE',
+      'dispatch_id and dispatchId aliases must identify the same dispatch',
+      { dispatch_id: snakeCase, dispatchId: camelCase },
+    );
+  }
+  return snakeCase || camelCase;
+}
+
 function variantSuffix(role, rung) {
   if (rung === 'base') return '';
   if (role === 'research' && rung === 'alternatives') return '-alternatives';
@@ -827,6 +862,7 @@ function resolveDispatch(input) {
 
   const model = logicalModelFor(runtime, rung.logical_model);
   const metadata = launchMetadata(runtime, role, rung.name, model, rung.effort);
+  const dispatchId = dispatchIdFromInput(input);
   const firedNames = [];
   for (const reason of evaluation.reasons) {
     if (!firedNames.includes(reason.signal)) firedNames.push(reason.signal);
@@ -857,8 +893,8 @@ function resolveDispatch(input) {
     signals: evaluation.signals,
     ...(metadata.agent_file ? { agent_file: metadata.agent_file } : { agent_file: null }),
     ...(metadata.launch_arguments ? { launch_arguments: metadata.launch_arguments } : {}),
-    ...(input.dispatch_id !== undefined || input.dispatchId !== undefined
-      ? { dispatch_id: opaqueId(input.dispatch_id !== undefined ? input.dispatch_id : input.dispatchId, 'dispatch_id') }
+    ...(dispatchId !== undefined
+      ? { dispatch_id: dispatchId }
       : {}),
   };
   assertNoConflictingOverrides(input, resolution);
