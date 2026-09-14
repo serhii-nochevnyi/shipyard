@@ -923,6 +923,72 @@ test('the map is DECLARED in capability.json, so GSD tooling can set it', () => 
     DEFAULTS.jira_transitions);
 });
 
+suite('jira_todo_statuses — explicit tracker-name eligibility, empty means OFF');
+
+test('no config or the declared empty default keeps eligibility disabled without warnings', () => {
+  assert.deepStrictEqual(withConfig(undefined).config.jira_todo_statuses, []);
+  assert.deepStrictEqual(withConfig(undefined).warnings, []);
+  const declared = withConfig({ jira_todo_statuses: '' });
+  assert.deepStrictEqual(declared.config.jira_todo_statuses, []);
+  assert.deepStrictEqual(declared.warnings, []);
+});
+
+test('the string form trims names, removes blanks and duplicates, and preserves order and spelling', () => {
+  const { config, warnings } = withConfig({
+    jira_todo_statuses: ' To Do, Backlog, ,To Do, Selected for Development, Backlog ',
+  });
+  assert.deepStrictEqual(config.jira_todo_statuses, ['To Do', 'Backlog', 'Selected for Development']);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('non-string values are rejected with a warning and cannot enable the gate', () => {
+  for (const value of [7, null, {}, [], true]) {
+    const { config, warnings } = withConfig({ jira_todo_statuses: value });
+    assert.deepStrictEqual(config.jira_todo_statuses, [], JSON.stringify(value));
+    assert.ok(
+      warnings.some((warning) => /jira_todo_statuses.*comma-separated string/.test(warning)),
+      `${JSON.stringify(value)}: ${warnings.join('; ')}`
+    );
+  }
+});
+
+test('the capability declaration matches the reader and uses an empty string default', () => {
+  const cap = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'capabilities', 'delivery-pipeline', 'capability.json'), 'utf8'
+  ));
+  const declared = (cap.config || {})['delivery_pipeline.jira_todo_statuses'];
+  assert.ok(declared, 'capability.json must declare delivery_pipeline.jira_todo_statuses');
+  assert.strictEqual(declared.type, 'string');
+  assert.strictEqual(declared.default, '');
+  assert.deepStrictEqual(withConfig({ jira_todo_statuses: declared.default }).config.jira_todo_statuses,
+    DEFAULTS.jira_todo_statuses);
+});
+
+test('delivery_pipeline.jira_todo_statuses wins over the legacy namespace', () => {
+  const { config, warnings } = withRaw({
+    pipeline: { jira_todo_statuses: 'Legacy To Do' },
+    delivery_pipeline: { jira_todo_statuses: 'To Do, Backlog' },
+  });
+  assert.deepStrictEqual(config.jira_todo_statuses, ['To Do', 'Backlog']);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('a malformed preferred namespace value disables the gate instead of falling back to legacy', () => {
+  const { config, warnings } = withRaw({
+    pipeline: { jira_todo_statuses: 'Legacy To Do' },
+    delivery_pipeline: { jira_todo_statuses: { status: 'To Do' } },
+  });
+  assert.deepStrictEqual(config.jira_todo_statuses, []);
+  assert.ok(warnings.some((warning) => /jira_todo_statuses/.test(warning)), warnings.join('; '));
+});
+
+test('the returned status list is not shared with the disabled default', () => {
+  const first = withConfig({ jira_todo_statuses: 'To Do' }).config;
+  first.jira_todo_statuses.push('Backlog');
+  assert.deepStrictEqual(withConfig(undefined).config.jira_todo_statuses, []);
+  assert.deepStrictEqual(DEFAULTS.jira_todo_statuses, []);
+});
+
 suite('repos — sibling checkouts a multi-repo phase is driven in');
 
 test('no repos configured → an empty map, not undefined', () => {

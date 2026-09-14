@@ -73,6 +73,11 @@
       "default": "",
       "description": "The status projection: our ticket status mapped to the TARGET STATUS NAME in the tracker, '<our status>:<their status>' per entry, comma separated - for example 'pr-open:In Progress, merged:Done'. The right-hand side is a status name, never the name of a transition: a workflow's transition names are not a stable schema and its status names are, so the performing half looks up whichever offered transition lands on that status. The left-hand side is one of the four statuses the delivery board actually writes - pending, branched, pr-open, merged - and anything else (the front's bucket names, for instance) is warned about and skipped. EMPTY IS OFF, and empty is the default: silence is not consent to write into someone's tracker. Declared as a string for the same reason codex_models is - GSD's capability config vocabulary is boolean|string|number|enum - and kept flat rather than nested under 'jira' because delivery_pipeline is merged over pipeline shallowly, so an object-valued key in one namespace replaces the other's wholesale."
     },
+    "delivery_pipeline.jira_todo_statuses": {
+      "type": "string",
+      "default": "",
+      "description": "Comma-separated tracker status NAME allowlist for the delivery eligibility gate, for example 'To Do, Backlog, Selected for Development'. Names are trimmed, blanks removed, and first-seen spelling/order preserved. Matching uses the tracker's status NAME, never statusCategory or a transition name. EMPTY IS OFF."
+    },
     "delivery_pipeline.repos_root": {
       "type": "string",
       "default": "",

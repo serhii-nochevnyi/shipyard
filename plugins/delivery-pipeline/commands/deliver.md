@@ -527,7 +527,9 @@ switches off the depth rung a repeated failure earns, and the reader says so),
 `pr_fetch_limit`, `stale_merge_hours`, `stale_draft_hours`,
 `integration_mode`, `use_workflow`, `sentinel` (`auto` | `off`), `auto_merge`
 (`epic` | `off`), `graph_gate`, `jira`, `jira_transitions` (the tracker
-projection's map, EMPTY by default, which is the projection off), `repos`
+projection's map, EMPTY by default, which is the projection off),
+`jira_todo_statuses` (comma-separated tracker status NAME allowlist for
+eligibility, EMPTY by default, which leaves the gate off), `repos`
 (`{"owner/name": "/abs/path/to/checkout"}` — see the multi-repo section).
 
 **GSD's own settings the conveyor obeys** (read, never written):
@@ -881,6 +883,13 @@ OUR status to THEIR target status NAME — `pr-open:In Progress, merged:Done` �
 and it is EMPTY by default. Empty is the feature switched off, the planner then
 emits nothing, and nothing here runs: silence is not consent to write into
 someone's tracker.
+
+**Tracker eligibility is opt-in by status NAME.** `jira_todo_statuses` (declared
+as `delivery_pipeline.jira_todo_statuses`; the `pipeline.*` spelling is read too)
+is a comma-separated allowlist such as `To Do, Backlog, Selected for Development`.
+The reader trims entries, removes blanks, preserves the tracker's spelling and
+order, and removes duplicates. An empty value disables the eligibility gate;
+matching uses the tracker's status NAME only, with no `statusCategory` fallback.
 
 Each emitted item carries `{ticket, key, from, to, target_status, ts}`, and its
 two status fields are two different vocabularies. Confusing them is the defect

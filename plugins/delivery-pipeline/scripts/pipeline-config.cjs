@@ -452,6 +452,29 @@ function normalizeJiraTransitions(value, warnings) {
   return out;
 }
 
+// One ordered set of tracker status NAMES from the comma-separated capability
+// spelling. Empty segments are silent so the declared empty default remains the
+// safe, disabled state; duplicate names collapse to their first occurrence.
+// Status spelling is intentionally preserved after trimming because matching is
+// against the tracker's name, not a normalized category or an invented alias.
+function normalizeJiraTodoStatuses(value, warnings) {
+  if (typeof value !== 'string') {
+    warnings.push(
+      'pipeline.jira_todo_statuses must be a comma-separated string of tracker status names — ignored'
+    );
+    return null;
+  }
+  const out = [];
+  const seen = new Set();
+  for (const item of value.split(',')) {
+    const status = item.trim();
+    if (!status || seen.has(status)) continue;
+    seen.add(status);
+    out.push(status);
+  }
+  return out;
+}
+
 const DEFAULTS = {
   integration_mode: 'epic-stacked',   // | direct-to-main
   model_policy: 'balanced',           // economy | balanced | premium
@@ -545,6 +568,8 @@ const DEFAULTS = {
   // EMPTY IS OFF, and empty is the default — the same posture as `fable: off`:
   // silence is not consent to write into someone's tracker.
   jira_transitions: {},
+  // Tracker status NAME allowlist for the eligibility gate. EMPTY IS OFF.
+  jira_todo_statuses: [],
 };
 
 const KNOWN_KEYS = new Set(Object.keys(DEFAULTS));
@@ -917,6 +942,7 @@ function loadConfig(root, options = {}) {
     repos: {},
     codex_models: DEFAULT_CODEX_MODELS.map((e) => ({ ...e })),
     jira_transitions: {},
+    jira_todo_statuses: [],
   };
   for (const [key, value] of Object.entries(merged)) {
     if (!KNOWN_KEYS.has(key)) {
@@ -987,6 +1013,12 @@ function loadConfig(root, options = {}) {
       // A wholly unusable value keeps the empty map, which is the projection
       // switched off — the safe direction for anything that writes to a tracker.
       if (map !== null) cfg.jira_transitions = map;
+      continue;
+    }
+    if (key === 'jira_todo_statuses') {
+      const statuses = normalizeJiraTodoStatuses(value, warnings);
+      // A malformed value keeps the empty list, which leaves eligibility off.
+      if (statuses !== null) cfg.jira_todo_statuses = statuses;
       continue;
     }
     if (key === 'effort') {
@@ -1618,6 +1650,7 @@ module.exports = {
   TASK_LEVELS, TASK_LEVEL_RANK, LADDER_MODES, taskLevelRoute,
   DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS, NUMERIC_KNOBS, tierAllowedForRuntime,
   defaultRepositoryRoot, repositoryRootValue, validateRepositoryDestination,
+  normalizeJiraTodoStatuses,
 };
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
