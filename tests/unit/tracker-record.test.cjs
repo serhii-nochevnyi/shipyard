@@ -172,6 +172,17 @@ test('activeRecords omits a record after the delivery generation advances', () =
   assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
 });
 
+test('the previous-generation reader is derived internally and cannot be caller-selected', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
+  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
+  const record = require(RECORD);
+  assert.deepStrictEqual(Object.keys(record.activePreviousTrackers(graph)), ['T-01']);
+  assert.deepStrictEqual(Object.keys(record.activeRecords(graph)), ['T-02']);
+  assert.deepStrictEqual(record.activeRecords(graph, 1), record.activeRecords(graph));
+});
+
 test('a malformed metadata file never falls back to the advisory front generation', () => {
   const { project, graph } = scratch(7);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
