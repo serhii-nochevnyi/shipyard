@@ -366,6 +366,13 @@ test('the front snapshot rejects a previous-generation record from another metad
   assert.deepStrictEqual(Object.keys(require(RECORD).activeTrackerSnapshot(graph)), ['T-02']);
 });
 
+test('the front snapshot rejects a predecessor without an epoch proof', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
+  assert.deepStrictEqual(Object.keys(require(RECORD).activeTrackerSnapshot(graph)), []);
+});
+
 test('a malformed or missing metadata file never falls back to the advisory front generation', () => {
   const { project, graph } = scratch(7);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });

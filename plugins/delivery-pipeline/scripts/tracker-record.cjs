@@ -250,7 +250,10 @@ function metadataIdentity(graphDir) {
 function metadataPreviousIdentity(graphDir) {
   const value = readJson(path.join(graphDir, META_NAME), null);
   if (!value || !Object.prototype.hasOwnProperty.call(value, 'previous_generation_identity')) {
-    return undefined;
+    // No proof binds a predecessor to this metadata epoch. Treating the missing
+    // field as a wildcard would let a reset/recreated metadata file re-accept
+    // an old generation-1 record.
+    return null;
   }
   return typeof value.previous_generation_identity === 'string'
     && value.previous_generation_identity.trim()
