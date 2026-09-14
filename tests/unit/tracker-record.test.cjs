@@ -462,6 +462,28 @@ test('recovery refuses an override appended after a torn journal prefix', () => 
   assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl')), journal);
 });
 
+test('recovery refuses a complete override after an unrelated torn journal prefix', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const afterStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  const tornPrefix = Buffer.from('{"event":"interrupted"');
+  stagePendingOverride(graph, beforeStore, afterStore, eventLine, Buffer.alloc(0),
+    Buffer.concat([tornPrefix, eventLine]));
+  const journal = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+
+  const r = spawnSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /incomplete line before the completed override/);
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'tracker.json')), beforeStore);
+  assert.ok(fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl')), journal);
+});
+
 test('recovery refuses a completed override followed by a torn journal tail', () => {
   const { project, graph } = scratch();
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
