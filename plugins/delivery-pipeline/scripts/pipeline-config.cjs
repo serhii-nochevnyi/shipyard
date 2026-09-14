@@ -460,7 +460,7 @@ function normalizeJiraTransitions(value, warnings) {
 function normalizeJiraTodoStatuses(value, warnings) {
   if (typeof value !== 'string') {
     warnings.push(
-      'pipeline.jira_todo_statuses must be a comma-separated string of tracker status names — ignored'
+      'jira_todo_statuses must be a comma-separated string of tracker status names — ignored'
     );
     return null;
   }
