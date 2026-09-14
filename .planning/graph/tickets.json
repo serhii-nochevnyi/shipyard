@@ -3206,6 +3206,7 @@
       "files": [
         "plugins/delivery-pipeline/scripts/runtime-adapters.cjs",
         "plugins/delivery-pipeline/scripts/model-policy.cjs",
+        "plugins/delivery-pipeline/scripts/model-policy-internal.cjs",
         "plugins/delivery-pipeline/scripts/dispatch-boundary.cjs",
         "tests/unit/model-policy.test.cjs",
         "tests/unit/dispatch-boundary.test.cjs",
