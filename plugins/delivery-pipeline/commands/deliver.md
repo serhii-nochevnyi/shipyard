@@ -1066,15 +1066,15 @@ itself a STOP signal, not a reason to improvise.
    improperly (for example, substituted Jira tickets for the plans). Actions:
    a. honestly inform the user: there are no PLAN files, there's nothing for delivery
       to start from; show what was found instead (Jira tickets, ROLLOUT.md, etc.);
-   b. if the tickets exist in an external tracker (Jira/GitHub issues) —
-      offer an IMPORT: the agent reads each external ticket and materializes
-      it as `.planning/phases/<N>-*/<N>-<M>-PLAN.md` per the decomposition template
-      (frontmatter: phase/plan/title/depends_on/files_modified + delivery block;
-      body: Goal/Context/Scope/Out of scope/Acceptance criteria/Test strategy/
-      Verification commands). What's missing from Jira (depends_on, files_modified) —
-      derive it from the content or interrogate the user. After import — validate-graph
-      again (the real Gate 2) and then the usual flow;
-   c. if there are no external tickets — route to /shipyard:decompose.
+   b. if external Jira/GitHub tickets exist, treat them as intake evidence only and
+      route the work to `/shipyard:investigate` from a cold start. Investigation
+      must establish the problem, decisions, and repository context before any
+      executable plan is written. This is a handoff, not a delivery step: return
+      from `/shipyard:deliver` now and resume only after the later Gate 2 passes;
+   c. after the investigation has produced an accepted design, route to
+      `/shipyard:decompose` so the normal GSD plan contract is materialized and
+      Gate 2 (`validate-graph.cjs`) passes before invoking `/shipyard:deliver` again;
+   d. if there are no external tickets, route to `/shipyard:decompose` as well.
    NEVER construct tickets.json by hand, bypassing validate-graph.
 2. `state-sync.cjs` — rebuild delivery-state from the actual GitHub
    (the local file is just a cache). After publishing delivery-state and the
