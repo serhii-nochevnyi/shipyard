@@ -19,6 +19,38 @@
       "fingerprint": "881718480094d741",
       "fingerprint_kind": "role",
       "pr": 125
+    },
+    "T-36-03": {
+      "role": "review-fix",
+      "at": "2026-09-14T21:28:03.168Z",
+      "model": "sonnet",
+      "effort": "high",
+      "task_level": "critical",
+      "runtime": "codex",
+      "backend": "agent",
+      "observed_model": "gpt-6-astra",
+      "agent_id": "01a0a1d1-c625-7242-819f-067831a00419",
+      "dispatch_id": "dispatch-mu1r8apl-5523845d-2268-456c-b9ed-69e9b2d49334",
+      "reason": "tier=level:critical+cap:codex(sonnet) effort=flat:codex(high)",
+      "fingerprint": "448814905ce03aab",
+      "fingerprint_kind": "role",
+      "pr": 138
+    },
+    "T-36-06": {
+      "role": "executor",
+      "at": "2026-09-14T21:36:44.619Z",
+      "model": "sonnet",
+      "effort": "high",
+      "task_level": "critical",
+      "runtime": "codex",
+      "backend": "agent",
+      "observed_model": "gpt-6-astra",
+      "agent_id": "01a0a1d9-b1e8-7c23-9da6-984011210313",
+      "dispatch_id": "dispatch-mu1rjh2b-63aa3c6e-e969-4dad-b03a-da9051079f69",
+      "reason": "tier=level:critical+cap:codex(sonnet) effort=flat:codex(high)",
+      "fingerprint": "44e7f7dd620d9a5f",
+      "fingerprint_kind": "role",
+      "pr": null
     }
   }
 }
