@@ -53,13 +53,13 @@ const ROLE_CLASSES = Object.freeze({
   dynamic: Object.freeze(['executor', 'decomposition']),
   repair: Object.freeze(['ci-fix', 'review-fix']),
   judgement: Object.freeze(['integrator', 'arch-review']),
-  fixed_luna: Object.freeze(['executor', 'pr-sentinel', 'drift-check']),
+  fixed_model: Object.freeze(['executor', 'pr-sentinel', 'drift-check']),
 });
 
 const DYNAMIC_ROLES = new Set(ROLE_CLASSES.dynamic);
 const REPAIR_ROLES = new Set(ROLE_CLASSES.repair);
 const JUDGEMENT_ROLES = new Set(ROLE_CLASSES.judgement);
-const FIXED_LUNA_ROLES = new Set(ROLE_CLASSES.fixed_luna);
+const FIXED_MODEL_ROLES = new Set(ROLE_CLASSES.fixed_model);
 
 const ROLE_RUNG_DEFINITIONS = Object.freeze({
   research: Object.freeze([
@@ -72,7 +72,7 @@ const ROLE_RUNG_DEFINITIONS = Object.freeze({
     Object.freeze({ name: 'critical', logical_model: 'astra', effort: 'medium' }),
   ]),
   executor: Object.freeze([
-    Object.freeze({ name: 'base', logical_model: 'luna', effort: 'max' }),
+    Object.freeze({ name: 'base', logical_model: 'astra', effort: 'low' }),
   ]),
   'pr-sentinel': Object.freeze([
     Object.freeze({ name: 'base', logical_model: 'luna', effort: 'medium' }),
@@ -505,8 +505,8 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
       signals.risk,
       false,
       null,
-      FIXED_LUNA_ROLES.has(normalizedRole)
-        ? 'global risk is intentionally inert for a fixed Luna role'
+      FIXED_MODEL_ROLES.has(normalizedRole)
+        ? 'global risk is intentionally inert for a fixed-model role'
         : 'risk is recorded context, not a role-scoped escalation signal',
     );
   }
@@ -514,8 +514,8 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     const applies = ruleMatchesSignal(roleRules.critical, signals, 'critical', threshold);
     const reason = applies
       ? `signals.critical=true selects the ${normalizedRole} critical rung`
-      : FIXED_LUNA_ROLES.has(normalizedRole)
-        ? 'global critical state cannot promote a fixed Luna role'
+      : FIXED_MODEL_ROLES.has(normalizedRole)
+        ? 'global critical state cannot promote a fixed-model role'
         : `critical state does not promote ${normalizedRole}`;
     add('critical', 'signals.critical', true, applies, applies ? 'critical' : null, reason);
     if (applies) selected.push({ signal: 'critical', rung: 'critical', reason });
@@ -524,8 +524,8 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     const applies = ruleMatchesSignal(roleRules.critical, signals, 'checkpoint', threshold);
     const reason = applies
       ? `signals.checkpoint=true selects the ${normalizedRole} critical rung`
-      : FIXED_LUNA_ROLES.has(normalizedRole)
-        ? 'global checkpoint state cannot promote a fixed Luna role'
+      : FIXED_MODEL_ROLES.has(normalizedRole)
+        ? 'global checkpoint state cannot promote a fixed-model role'
         : `checkpoint state does not promote ${normalizedRole}`;
     add('checkpoint', 'signals.checkpoint', true, applies, applies ? 'critical' : null, reason);
     if (applies) selected.push({ signal: 'checkpoint', rung: 'critical', reason });
@@ -553,8 +553,8 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
       applies ? 'critical' : null,
       applies
         ? `${reason}; selects the judgement critical rung`
-        : FIXED_LUNA_ROLES.has(normalizedRole) && measuredWindow
-          ? `${reason}; window pressure cannot promote a fixed Luna role`
+        : FIXED_MODEL_ROLES.has(normalizedRole) && measuredWindow
+          ? `${reason}; window pressure cannot promote a fixed-model role`
           : reason,
     );
     if (applies) selected.push({ signal: 'window', rung: 'critical', reason: `${reason}; selects the judgement critical rung` });
@@ -926,7 +926,7 @@ module.exports = Object.freeze({
   DYNAMIC_ROLES: Object.freeze([...DYNAMIC_ROLES]),
   REPAIR_ROLES: Object.freeze([...REPAIR_ROLES]),
   JUDGEMENT_ROLES: Object.freeze([...JUDGEMENT_ROLES]),
-  FIXED_LUNA_ROLES: Object.freeze([...FIXED_LUNA_ROLES]),
+  FIXED_MODEL_ROLES: Object.freeze([...FIXED_MODEL_ROLES]),
   CODEX_STATIC_ROLES: Object.freeze([...CODEX_STATIC_ROLES]),
   stableStringify,
   fingerprintPolicy,

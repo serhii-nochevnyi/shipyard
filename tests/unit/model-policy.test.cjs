@@ -41,7 +41,7 @@ function priorReceipt(role, model, effort, dispatchId) {
 const CODEx_BASE = {
   research: ['terra', 'gpt-5.6-terra', 'high'],
   decomposition: ['sol', 'gpt-5.6-sol', 'medium'],
-  executor: ['luna', 'gpt-5.6-luna', 'max'],
+  executor: ['astra', 'gpt-6-astra', 'low'],
   'pr-sentinel': ['luna', 'gpt-5.6-luna', 'medium'],
   integrator: ['sol', 'gpt-5.6-sol', 'medium'],
   'drift-check': ['luna', 'gpt-5.6-luna', 'max'],
@@ -105,7 +105,7 @@ test('maps logical rungs through the existing Claude palette without changing Co
     ['research', { complexity: 'very-complex' }, 'very-complex', 'astra', 'fable', 'medium'],
     ['decomposition', { checkpoint: true }, 'critical', 'astra', 'fable', 'medium'],
     ['decomposition', { critical: true }, 'critical', 'astra', 'fable', 'medium'],
-    ['executor', {}, 'base', 'luna', 'opus', 'max'],
+    ['executor', {}, 'base', 'astra', 'fable', 'low'],
   ];
   for (const [role, signals, rung, logical, model, effort] of cases) {
     const result = claude(role, signals);
@@ -208,8 +208,13 @@ test('window escalation uses only measured input against the fingerprinted thres
   );
 });
 
-test('fixed Luna roles ignore global risk, critical, checkpoint, and window promotion', () => {
-  for (const role of ['executor', 'pr-sentinel', 'drift-check']) {
+test('fixed-model roles ignore global risk, critical, checkpoint, and window promotion', () => {
+  const expected = {
+    executor: ['astra', 'gpt-6-astra'],
+    'pr-sentinel': ['luna', 'gpt-5.6-luna'],
+    'drift-check': ['luna', 'gpt-5.6-luna'],
+  };
+  for (const [role, [logicalModel, concreteModel]] of Object.entries(expected)) {
     const result = codex(role, {
       risk: 'high',
       critical: true,
@@ -217,8 +222,8 @@ test('fixed Luna roles ignore global risk, critical, checkpoint, and window prom
       inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
     });
     assert.equal(result.logical_rung, 'base', role);
-    assert.equal(result.logical_model, 'luna', role);
-    assert.equal(result.model, 'gpt-5.6-luna', role);
+    assert.equal(result.logical_model, logicalModel, role);
+    assert.equal(result.model, concreteModel, role);
     assert.ok(result.signals_fired.includes('risk'), `${role} retains risk`);
     assert.ok(result.signals_fired.includes('critical'), `${role} retains critical`);
     assert.ok(result.signals_fired.includes('checkpoint'), `${role} retains checkpoint`);
@@ -267,15 +272,15 @@ test('matching overrides are harmless but conflicting or unsupported selections 
   const matching = codex('executor', {
     risk: 'high',
   }, {
-    override: { model: 'gpt-5.6-luna', effort: 'max', runtime: 'codex' },
+    override: { model: 'gpt-6-astra', effort: 'low', runtime: 'codex' },
   });
-  assert.equal(matching.model, 'gpt-5.6-luna');
+  assert.equal(matching.model, 'gpt-6-astra');
   assert.throws(
     () => codex('executor', {}, { override: { model: 'gpt-5.6-terra' } }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
   assert.throws(
-    () => codex('executor', {}, { override: { effort: 'low' } }),
+    () => codex('executor', {}, { override: { effort: 'max' } }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
   assert.throws(
@@ -454,17 +459,17 @@ test('runtime catalog and internal CLI reject inherited or receipt-free selectio
 
 test('canonical policy ignores caller mutation attempts against runtime adapter exports', () => {
   const originalAdapterForRuntime = runtimeAdapters.adapterForRuntime;
-  const originalCodexLuna = runtimeAdapters.CODEX_MODEL_IDS.luna;
+  const originalCodexAstra = runtimeAdapters.CODEX_MODEL_IDS.astra;
   try {
     runtimeAdapters.adapterForRuntime = () => ({ modelFor: () => 'caller-controlled-model' });
-    runtimeAdapters.CODEX_MODEL_IDS.luna = 'caller-controlled-model';
+    runtimeAdapters.CODEX_MODEL_IDS.astra = 'caller-controlled-model';
   } catch (error) {
     // Frozen compatibility exports are the expected protection.
   }
   const result = codex('executor');
-  assert.equal(result.model, 'gpt-5.6-luna');
+  assert.equal(result.model, 'gpt-6-astra');
   assert.equal(runtimeAdapters.adapterForRuntime, originalAdapterForRuntime);
-  assert.equal(runtimeAdapters.CODEX_MODEL_IDS.luna, originalCodexLuna);
+  assert.equal(runtimeAdapters.CODEX_MODEL_IDS.astra, originalCodexAstra);
 });
 
 done();

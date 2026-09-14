@@ -108,13 +108,13 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   const result = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-36-01' });
   assert.equal(calls.length, 1);
   assert.deepStrictEqual(calls[0].resolution.launch_arguments, {
-    model: 'gpt-5.6-luna',
-    reasoning_effort: 'max',
+    model: 'gpt-6-astra',
+    reasoning_effort: 'low',
   });
   assert.deepStrictEqual(calls[0].context, { ticket: 'T-36-01' });
-  assert.equal(result.requested_model, 'gpt-5.6-luna');
-  assert.equal(result.applied_model, 'gpt-5.6-luna');
-  assert.equal(result.observed_effort, 'max');
+  assert.equal(result.requested_model, 'gpt-6-astra');
+  assert.equal(result.applied_model, 'gpt-6-astra');
+  assert.equal(result.observed_effort, 'low');
   assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'record', 'receipt']);
   assert.equal(result.trace.at(-1).status, 'passed');
   assert.equal(recorded.length, 1);
@@ -373,7 +373,7 @@ test('the boundary keeps using the canonical policy if an exported method is rep
   }
   const result = boundary.dispatch({ runtime: 'codex', role: 'executor' });
   assert.equal(replacementCalled, false);
-  assert.equal(result.applied_model, 'gpt-5.6-luna');
+  assert.equal(result.applied_model, 'gpt-6-astra');
   assert.equal(policy.resolveDispatch, originalResolve);
   assert.equal(policy.validateResolution, originalValidate);
 });
@@ -600,7 +600,7 @@ test('observation capability is enforced independently for model and effort', ()
   });
   const result = valid.dispatch({ runtime: 'codex', role: 'executor' });
   assert.equal(result.observed_model, 'unknown');
-  assert.equal(result.observed_effort, 'max');
+  assert.equal(result.observed_effort, 'low');
 });
 
 test('an async launch cannot change observation capability after dispatch begins', async () => {
@@ -705,7 +705,7 @@ test('receipt parsing cannot mint boundary trust, while validation remains avail
     adapters: { codex: fakeAdapter() },
   });
   const evidence = boundary.receipt(resolution, receipt);
-  assert.equal(evidence.applied_model, 'gpt-5.6-luna');
+  assert.equal(evidence.applied_model, 'gpt-6-astra');
   assert.equal(evidence.compliance, undefined);
   assert.equal(evidence.compliance_proof, undefined);
   assert.ok(Object.isFrozen(evidence));
