@@ -938,7 +938,8 @@ const ESCALATED = activeParks(ROOT, state);
 // writers commit their cache under that lock, so this prevents state-sync from
 // reading the tracker snapshot and then publishing a board that races a new
 // observation in between. The tracker lock is outermost because tracker writers
-// never acquire `state`; keeping one lock order avoids a deadlock.
+// also acquire `state` after it; keeping the shared tracker-record -> state order
+// avoids a deadlock.
 const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lockDirFor(ROOT), 'state', () => {
   // FIRST inside the lock, ahead of the journal append and every write. Nothing
   // this run holds was read under the lock — `prev`, the timestamps and every
