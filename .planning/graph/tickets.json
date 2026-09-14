@@ -3204,6 +3204,10 @@
       "unreachable_paths": false,
       "missing_paths": true,
       "files": [
+        ".planning/architecture/ADR-014-mandatory-runtime-model-ladder.md",
+        ".planning/phases/36-enforce-the-runtime-model-ladder/36-01-PLAN.md",
+        ".planning/graph/tickets.json",
+        ".planning/graph/tickets.yaml",
         "plugins/delivery-pipeline/scripts/runtime-adapters.cjs",
         "plugins/delivery-pipeline/scripts/model-policy.cjs",
         "plugins/delivery-pipeline/scripts/model-policy-internal.cjs",

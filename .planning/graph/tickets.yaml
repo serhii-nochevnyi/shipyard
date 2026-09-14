@@ -1717,7 +1717,7 @@ tickets:
     repo: null
     wave: 1
     depends_on: []
-    files: [plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/model-policy.cjs, plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/model-policy.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
+    files: [.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md, .planning/phases/36-enforce-the-runtime-model-ladder/36-01-PLAN.md, .planning/graph/tickets.json, .planning/graph/tickets.yaml, plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/model-policy.cjs, plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/model-policy.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: true
