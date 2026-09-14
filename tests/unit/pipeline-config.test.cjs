@@ -18,7 +18,7 @@ const {
   taskLevelRoute, routeOf,
   TIERS, EFFORTS, DEFAULTS, ROLES, SIGNATURE_STATES, DEFAULT_CODEX_MODELS, SONNET_ROLES,
   NUMERIC_KNOBS, TICKET_STATUSES, TASK_LEVELS, defaultRepositoryRoot,
-  validateRepositoryDestination,
+  validateRepositoryDestination, resolveDispatch, COMPATIBILITY_ROLES,
 } = require(mod);
 const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
@@ -2093,7 +2093,7 @@ test('every role has exactly ONE row, so a contradictory duplicate cannot hide b
       + 'the doc guard resolves that by first match, so the second row can say anything');
     seen.set(role, r.cells.slice(1, 3).join('/'));
   }
-  for (const role of ROLES) assert.ok(seen.has(role), `§7.5 has no row for ${role}`);
+  for (const role of COMPATIBILITY_ROLES) assert.ok(seen.has(role), `§7.5 has no row for ${role}`);
 });
 
 test('a row below the floor carries a REASON, and the reason is not a placeholder', () => {
@@ -2222,5 +2222,149 @@ test('and the sweep: every single signal that moves a role is IN the table', () 
     `§7.5's escalation table is missing ${missing.length} row(s) the resolver actually has:\n  ${missing.join('\n  ')}`);
 });
 
+
+suite('ADR-014 authoritative configuration bridge');
+
+const canonicalPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const routedConfig = (raw = {}, runtime = 'codex', options = {}) =>
+  withRawOptions(raw, { runtime, env: {}, routed: true, ...options });
+const refusesSource = (fn, source) => assert.throws(fn, (error) =>
+  error.name === 'DispatchPolicyError' && error.details.source === source && error.message.includes(source));
+
+test('shares the canonical role vocabulary including decomposition', () => {
+  assert.strictEqual(ROLES, canonicalPolicy.ROLES);
+  assert.ok(ROLES.includes('decomposition'));
+});
+
+test('every runtime and role delegates base and escalation decisions with full identity', () => {
+  for (const runtime of ['claude', 'codex']) {
+    const { config } = routedConfig({}, runtime, { dispatch_id: 'T-36-02-launch' });
+    assert.equal(config.policy_hash, canonicalPolicy.POLICY_HASH);
+    assert.equal(config.policy_version, canonicalPolicy.POLICY_VERSION);
+    assert.equal(config.dispatch_context.runtime.dispatch_id, 'T-36-02-launch');
+    for (const role of ROLES) {
+      for (const signals of [{}, { checkpoint: true }, { type: 'alternatives' }, { complexity: 'very-complex' }, { inputTokens: 300001 }]) {
+        const expected = canonicalPolicy.resolveDispatch({ runtime, role, signals, dispatch_id: 'T-36-02-launch' });
+        const got = resolveDispatch({ config, role, signals });
+        assert.deepStrictEqual(got, expected);
+        assert.ok(Object.isFrozen(got));
+        assert.equal(resolveModel(role, signals, config), got.model);
+        assert.equal(resolveEffort(role, got.model, config, signals), got.effort);
+        assert.equal(routeOf(role, signals, config), got.route);
+      }
+    }
+  }
+});
+
+test('refuses original overrides before compatibility parsing or namespace merging can hide them', () => {
+  const cases = [
+    [{ pipeline: { models: { executor: 'unknown-full-model-id' } } }, 'pipeline.models.executor'],
+    [{ pipeline: { effort: { executor: 'ultra' } } }, 'pipeline.effort.executor'],
+    [{ pipeline: { models: { executor: 'opus' } }, delivery_pipeline: { models: {} } }, 'pipeline.models.executor'],
+    [{ delivery_pipeline: { models: { executor: 'opus' } } }, 'delivery_pipeline.models.executor'],
+    [{ models: { execution: 'opus' } }, 'config.models.execution'],
+    [{ model_overrides: { 'gsd-executor': 'opus' } }, 'config.model_overrides.gsd-executor'],
+    [{ effort: { agent_overrides: { 'gsd-executor': 'low' } } }, 'config.effort.agent_overrides.gsd-executor'],
+    [{ effort: { routing_tier_defaults: { standard: 'low' } } }, 'config.effort.routing_tier_defaults.standard'],
+    [{ gsd: { models: { executor: 'opus' } } }, 'gsd.models.executor'],
+    [{ pipeline: { models: null } }, 'pipeline.models'],
+    [{ pipeline: { inline: true } }, 'pipeline.inline'],
+  ];
+  for (const [raw, source] of cases) {
+    const { config } = routedConfig(raw);
+    refusesSource(() => resolveDispatch({ role: 'executor', config }), source);
+  }
+});
+
+test('validates GSD decomposition overrides and leaves unrelated role overrides alone', () => {
+  const { config } = routedConfig({ model_overrides: { 'gsd-planner': 'opus' } });
+  refusesSource(() => resolveDispatch({ role: 'decomposition', config }), 'config.model_overrides.gsd-planner');
+  assert.equal(resolveDispatch({ role: 'executor', config }).model, 'gpt-5.6-luna');
+});
+
+test('matching configured selections are harmless and cannot pin a later rung', () => {
+  for (const runtime of ['codex', 'claude']) {
+    const expected = canonicalPolicy.resolveDispatch({ runtime, role: 'executor' });
+    const { config } = routedConfig({
+      pipeline: { models: { executor: expected.model }, effort: { executor: expected.effort } },
+      models: { execution: expected.model },
+      effort: { agent_overrides: { 'gsd-executor': expected.effort } },
+    }, runtime);
+    assert.deepStrictEqual(resolveDispatch({ config, role: 'executor' }), expected);
+    refusesSource(() => resolveDispatch({ config, role: 'executor', signals: { checkpoint: true } }), 'config.models.execution');
+  }
+});
+
+test('inline and inherited selections cannot replace an explicit launch', () => {
+  const { config } = routedConfig();
+  for (const field of ['inline', 'inherit', 'session_inherited']) {
+    refusesSource(() => resolveDispatch({ config, role: 'executor', [field]: true }), `input.${field}`);
+  }
+  for (const field of ['session', 'sessionOverride', 'inlineOverride', 'inherited']) {
+    refusesSource(() => resolveDispatch({ config, role: 'executor', [field]: { model: 'parent-model' } }), `input.${field}`);
+  }
+  for (const field of ['gsdOverride', 'perRoleOverride', 'override', 'selection', 'launch_arguments']) {
+    assert.throws(() => resolveDispatch({ config, role: 'executor', [field]: { effort: 'low' } }), /selects effort/);
+  }
+});
+
+test('compatibility defaults and corrupt configuration can never become routed fallback', () => {
+  const { config, dir } = withRawOptions({ runtime: 'codex' }, { env: {} });
+  assert.equal(resolveModel('executor', {}, config), 'sonnet');
+  assert.throws(() => resolveDispatch({ config, role: 'executor' }), /compatibility-only/);
+  refusesSource(() => resolveDispatch({ config: DEFAULTS, role: 'executor' }), 'config');
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{');
+  const loaded = loadConfig(dir, { runtime: 'codex', env: {} });
+  assert.equal(loaded.valid, false);
+  assert.throws(() => resolveDispatch({ config: loaded.config, role: 'executor' }), { code: 'INVALID_CONFIG' });
+  assert.throws(() => loadConfig(dir, { routed: true, runtime: 'codex', env: {} }), { code: 'INVALID_CONFIG' });
+});
+
+test('a compatibility load retains rejected model input for a later routed call', () => {
+  const { config } = withRawOptions({ pipeline: { models: { executor: 'not-a-tier' } } }, { runtime: 'codex', env: {} });
+  assert.equal(config.models.executor, undefined);
+  refusesSource(() => resolveDispatch({ config, role: 'executor' }), 'pipeline.models.executor');
+});
+
+test('refuses post-load selection changes, stale fingerprints and identity conflicts', () => {
+  const { config } = routedConfig({}, 'codex', { dispatch_id: 'first' });
+  config.models.executor = 'opus';
+  refusesSource(() => resolveDispatch({ config, role: 'executor' }), 'pipeline.models.executor');
+  delete config.models.executor;
+  refusesSource(() => resolveDispatch({ config, role: 'executor', dispatch_id: 'second' }), 'input.dispatch_id');
+  assert.throws(() => resolveDispatch({ config, role: 'executor', runtime: 'claude' }), { code: 'AMBIGUOUS_RUNTIME' });
+  config.policy_hash = 'stale';
+  refusesSource(() => resolveDispatch({ config, role: 'executor' }), 'config.policy_hash');
+});
+
+test('repair escalation never gains receipt authority through configuration', () => {
+  const { config } = routedConfig();
+  assert.throws(() => resolveDispatch({ config, role: 'ci-fix', signals: { signatureState: 'repeat' } }), { code: 'MISSING_RECEIPT' });
+  assert.throws(() => resolveDispatch({ config, role: 'ci-fix', signals: { signatureState: 'repeat', priorApplied: {} } }), { code: 'UNVERIFIED_RECEIPT' });
+});
+
+test('routed CLI returns full decisions and exits nonzero without stdout on invalid input', () => {
+  const { dir } = routedConfig();
+  const cli = (args) => spawnSync(process.execPath, [mod, ...args], { cwd: dir, env: {}, encoding: 'utf8' });
+  const good = cli(['model', 'decomposition', '--routed', '--runtime', 'codex', '--checkpoint', '--dispatch-id', 'cli-launch']);
+  assert.equal(good.status, 0, good.stderr);
+  const decision = JSON.parse(good.stdout);
+  assert.equal(decision.model, 'gpt-6-astra');
+  assert.equal(decision.policy_hash, canonicalPolicy.POLICY_HASH);
+  assert.equal(decision.dispatch_id, 'cli-launch');
+  for (const args of [
+    ['--runtime', 'future'], ['--runtime', 'codex', '--signature-state', 'typo'],
+    ['--runtime', 'codex', '--effort', 'low'], ['--runtime', 'codex', '--inline'],
+    ['--runtime', 'codex', '--runtime', 'claude'], ['--runtime'], [],
+  ]) {
+    const result = cli(['model', 'executor', '--routed', ...args]);
+    assert.notEqual(result.status, 0, JSON.stringify(args));
+    assert.equal(result.stdout, '');
+    assert.ok(result.stderr.includes('pipeline-config:'));
+  }
+  const json = cli(['dispatch', JSON.stringify({ runtime: 'claude', role: 'executor', dispatch_id: 'json-launch' })]);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).dispatch_id, 'json-launch');
+});
 
 done();

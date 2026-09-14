@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+// Routed selection uses resolveDispatch (ADR-014). The tier/effort readers below
+// retain the older policy exclusively for non-routed compatibility callers.
 // Single deterministic reader for the conveyor's configuration, plus the model
 // policy — a floor, a role-keyed effort table and an earned ceiling — and the
 // repair STRATEGY a failure signature's history implies.
@@ -87,6 +89,7 @@
 const fs = require('fs');
 const path = require('path');
 const { resolveRuntime } = require('./runtime-context.cjs');
+const modelPolicy = require('./model-policy.cjs');
 
 // GSD resolves project-relative agent skills without consulting config.runtime,
 // which is the only form that remains correct when Claude and Codex share one
@@ -152,6 +155,7 @@ function integerSignal(value) {
 }
 
 function taskLevelRoute(role, signals = {}, cfg = {}) {
+  requireCompatibility(cfg, 'taskLevelRoute');
   const requested = TASK_LEVELS.includes(signals.taskLevel) ? signals.taskLevel : null;
   let value;
   let rule;
@@ -574,7 +578,8 @@ const DEFAULTS = {
 
 const KNOWN_KEYS = new Set(Object.keys(DEFAULTS));
 const KNOWN_JIRA_KEYS = new Set(['enabled', 'project', 'issue_type', 'epic_issue_type']);
-const ROLES = ['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research', 'pr-sentinel'];
+const COMPATIBILITY_ROLES = Object.freeze(['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research', 'pr-sentinel']);
+const ROLES = modelPolicy.ROLES;
 
 // Judgment roles are never cheapened: there is no mechanical safety net above
 // them, so a false verdict is the most expensive kind of error in the pipeline.
@@ -933,6 +938,17 @@ function loadConfig(root, options = {}) {
     ...options,
     scriptPath: options.scriptPath || __filename,
   });
+  // Keep a strict context even for compatibility loads. A later routed caller
+  // must see the original error/overrides, not the parser's sanitized defaults.
+  let dispatchRuntime;
+  let dispatchError;
+  try {
+    if (error) throw modelPolicy.policyError('INVALID_CONFIG', error.message, { source: file });
+    dispatchRuntime = resolveRuntime(base, { ...options, scriptPath: options.scriptPath || __filename, routed: true });
+  } catch (failure) {
+    if (options.routed === true) throw failure;
+    dispatchError = { code: failure.code, message: failure.message, details: failure.details };
+  }
 
   const cfg = {
     ...DEFAULTS,
@@ -943,6 +959,16 @@ function loadConfig(root, options = {}) {
     codex_models: DEFAULT_CODEX_MODELS.map((e) => ({ ...e })),
     jira_transitions: {},
     jira_todo_statuses: [],
+    routed: options.routed === true,
+    policy_version: modelPolicy.POLICY_VERSION,
+    policy_hash: modelPolicy.POLICY_HASH,
+    dispatch_context: freezeSelection({
+      runtime: dispatchRuntime || null,
+      error: dispatchError || null,
+      // Store selection inputs before namespace merging and validation. In
+      // particular a rejected full model ID must not disappear at this boundary.
+      configuration: selectionConfig(raw),
+    }),
   };
   for (const [key, value] of Object.entries(merged)) {
     if (!KNOWN_KEYS.has(key)) {
@@ -1249,6 +1275,152 @@ function loadConfig(root, options = {}) {
   return { config: cfg, warnings, file, exists, valid: error === null, error };
 }
 
+function freezeSelection(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeSelection(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function selectionConfig(raw) {
+  const keys = ['models', 'effort', 'model_overrides', 'model', 'reasoning_effort',
+    'override', 'overrides', 'selection', 'inline', 'inherit', 'session_inherited'];
+  const pick = (object) => Object.fromEntries(keys
+    .filter((key) => Object.prototype.hasOwnProperty.call(object, key))
+    .map((key) => [key, object[key]]));
+  const result = pick(raw);
+  for (const namespace of ['pipeline', 'delivery_pipeline', 'gsd']) {
+    if (raw[namespace] && typeof raw[namespace] === 'object') result[namespace] = pick(raw[namespace]);
+  }
+  return result;
+}
+
+const GSD_ROLE_KEYS = Object.freeze({
+  research: ['research', 'gsd-project-researcher', 'gsd-phase-researcher'],
+  decomposition: ['planning', 'gsd-planner'],
+  executor: ['execution', 'gsd-executor'],
+  'pr-sentinel': ['verification', 'gsd-verifier'],
+  integrator: ['verification', 'gsd-integration-checker'],
+  'drift-check': ['verification', 'gsd-verifier'],
+  'arch-review': ['verification', 'gsd-code-reviewer'],
+  'ci-fix': ['execution', 'gsd-debugger'],
+  'review-fix': ['execution', 'gsd-code-fixer'],
+});
+
+function configurationSelections(raw, role) {
+  const selections = [];
+  const add = (source, field, value) => {
+    if (value !== undefined) selections.push({ source, selection: { [field]: value } });
+  };
+  for (const [prefix, cfg] of [['config', raw], ...['pipeline', 'delivery_pipeline', 'gsd']
+    .filter((key) => raw[key]).map((key) => [key, raw[key]])]) {
+    const keys = new Set([role, ...(prefix === 'config' || prefix === 'gsd' ? GSD_ROLE_KEYS[role] || [] : [])]);
+    for (const [key, field] of [['models', 'model'], ['effort', 'effort'], ['model_overrides', 'model']]) {
+      const values = cfg[key];
+      if (values === undefined) continue;
+      if (!values || typeof values !== 'object' || Array.isArray(values)) {
+        add(`${prefix}.${key}`, field, values);
+        continue;
+      }
+      for (const name of keys) add(`${prefix}.${key}.${name}`, field, values[name]);
+      if (key === 'effort') {
+        for (const name of keys) add(`${prefix}.effort.agent_overrides.${name}`, field, values.agent_overrides?.[name]);
+        // Explicit generic defaults cannot override any rung of a routed role.
+        // Adapters must supply the canonical effort, without a GSD tier fallback.
+        for (const [tier, effort] of Object.entries(values.routing_tier_defaults || {})) {
+          add(`${prefix}.effort.routing_tier_defaults.${tier}`, field, effort);
+        }
+      }
+    }
+    for (const field of ['model', 'reasoning_effort', 'inline', 'inherit', 'session_inherited']) {
+      add(`${prefix}.${field}`, field, cfg[field]);
+    }
+    for (const field of ['override', 'overrides', 'selection']) {
+      if (cfg[field] !== undefined) selections.push({ source: `${prefix}.${field}`, selection: cfg[field] });
+    }
+  }
+  return selections;
+}
+
+function validateSelection(request, source, selection) {
+  try {
+    if (typeof selection === 'string') selection = { model: selection };
+    if (!selection || typeof selection !== 'object' || Array.isArray(selection)) {
+      throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'selection must be an object or model string');
+    }
+    for (const field of ['inline', 'inherit', 'session_inherited']) {
+      if (selection[field] !== undefined && typeof selection[field] !== 'boolean') {
+        throw modelPolicy.policyError('UNSUPPORTED_SELECTION', `${field} must be a boolean`);
+      }
+    }
+    modelPolicy.resolveDispatch({ ...request, override: selection });
+    // Check every alias independently: one matching model/effort must not hide
+    // a contradictory requested/applied value in the same override object.
+    for (const field of ['requested_model', 'applied_model', 'reasoning_effort', 'requested_effort', 'applied_effort']) {
+      if (selection[field] !== undefined) {
+        const key = field.endsWith('model') ? 'model' : 'effort';
+        modelPolicy.resolveDispatch({ ...request, override: { [key]: selection[field] } });
+      }
+    }
+  } catch (error) {
+    throw modelPolicy.policyError(error.code, `${source}: ${error.message}`, { ...error.details, source });
+  }
+}
+
+// Public configuration bridge. Pass {root, runtime, role, signals, dispatch_id}
+// or a config returned by loadConfig. Never call a compatibility tier reader to
+// supply a missing model/effort. Receipt-backed repair escalation stays private
+// to dispatch-boundary.cjs; this reader cannot manufacture receipt authority.
+function resolveDispatch(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw modelPolicy.policyError('INVALID_INPUT', 'dispatch input must be an object', { source: 'input' });
+  }
+  const cfg = input.config === undefined
+    ? loadConfig(input.root, { ...input, routed: true }).config : input.config;
+  const context = cfg && cfg.dispatch_context;
+  if (!context) throw modelPolicy.policyError('INVALID_CONFIG', 'config must come from loadConfig', { source: 'config' });
+  if (context.error) throw modelPolicy.policyError(context.error.code, context.error.message, context.error.details);
+  const runtime = context.runtime;
+  if (!runtime || runtime.policy_hash !== modelPolicy.POLICY_HASH || cfg.policy_hash !== modelPolicy.POLICY_HASH) {
+    throw modelPolicy.policyError('INVALID_CONFIG', 'config.policy_hash has a missing or stale policy fingerprint', { source: 'config.policy_hash' });
+  }
+  if (input.runtime !== undefined) {
+    resolveRuntime(null, { runtime: input.runtime, runtimeMarker: runtime.runtime, env: {}, routed: true });
+  }
+  if (input.dispatch_id !== undefined && runtime.dispatch_id !== undefined && input.dispatch_id !== runtime.dispatch_id) {
+    throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'input.dispatch_id conflicts with runtime context', { source: 'input.dispatch_id' });
+  }
+  const request = { ...input, config: undefined, runtime: runtime.runtime };
+  if (runtime.dispatch_id !== undefined && input.dispatch_id === undefined) request.dispatch_id = runtime.dispatch_id;
+  const resolution = modelPolicy.resolveDispatch(request);
+  const selections = configurationSelections(context.configuration, resolution.role);
+  if (cfg.gsd?.runtime !== runtime.runtime) {
+    throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'config.gsd.runtime conflicts with runtime context', { source: 'config.gsd.runtime' });
+  }
+  // Also validate current parsed values, so edits made after loadConfig cannot
+  // bypass checks against the original configuration.
+  selections.push(...configurationSelections({ pipeline: cfg }, resolution.role));
+  for (const field of ['inline', 'inherit', 'session_inherited']) {
+    if (input[field] !== undefined) selections.push({ source: `input.${field}`, selection: { [field]: input[field] } });
+  }
+  for (const field of ['inlineOverride', 'session', 'sessionOverride', 'inherited',
+    'override', 'overrides', 'selection', 'launch_arguments', 'gsdOverride', 'perRoleOverride', 'configOverride']) {
+    if (input[field] !== undefined) selections.push({ source: `input.${field}`, selection: input[field] });
+  }
+  for (const { source, selection } of selections) {
+    validateSelection(request, source, selection);
+  }
+  return resolution;
+}
+
+function requireCompatibility(cfg, source) {
+  if (cfg.routed === true) {
+    throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
+      `${source} is compatibility-only; routed callers must use resolveDispatch`, { source });
+  }
+}
+
 // `fable` exists on the Claude runtime only. GSD's tier vocabulary is
 // opus|sonnet|haiku, and the Codex agent files are rendered through that map, so
 // asking for `fable` there produces a model nobody can resolve. Runtime-aware
@@ -1347,6 +1519,7 @@ const runtimeToken = (cfg) => {
 // `opus` at `max` effort, which is the ADR's own escalation ORDER (opus at depth
 // first, fable after) with the reason printed rather than silently swallowed.
 function fableRoute(role, signals = {}, cfg = DEFAULTS) {
+  requireCompatibility(cfg, 'fableRoute');
   let route = null;
   let why = '';
   // R1 — window pressure. The CALLER measures its own input and passes the
@@ -1456,6 +1629,7 @@ function modelRoute(role, signals = {}, cfg = DEFAULTS) {
 
 // role × signals routing. Returns a tier alias the Agent tool accepts.
 function resolveModel(role, signals = {}, cfg = DEFAULTS) {
+  if (cfg.routed === true) return resolveDispatch({ role, signals, config: cfg }).model;
   return modelRoute(role, signals, cfg).value;
 }
 
@@ -1544,6 +1718,7 @@ function effortRoute(role, model, cfg = DEFAULTS, signals = null) {
 }
 
 function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
+  if (cfg.routed === true) return resolveDispatch({ role, signals: signals || {}, config: cfg, model }).effort;
   return effortRoute(role, model, cfg, signals).value;
 }
 
@@ -1567,6 +1742,7 @@ function resolveTaskLevel(role, signals = {}, cfg = DEFAULTS) {
 const ROUTE_RE = /^tier=([a-z][a-z0-9:+-]*)\(([a-z]+)\) effort=([a-z][a-z0-9:+-]*)\(([a-z]+)\)$/;
 
 function routeOf(role, signals = {}, cfg = DEFAULTS) {
+  if (cfg.routed === true) return resolveDispatch({ role, signals, config: cfg }).route;
   const m = modelRoute(role, signals, cfg);
   const e = effortRoute(role, m.value, cfg, signals);
   return `tier=${m.rule}(${m.value}) effort=${e.rule}(${e.value})`;
@@ -1627,6 +1803,7 @@ const SIGNAL_GAPS = {
 
 // The rows this dispatch could not reach for want of a signal, as sentences.
 function signalGaps(role, signals = {}, cfg = DEFAULTS) {
+  requireCompatibility(cfg, 'signalGaps');
   const rows = Object.prototype.hasOwnProperty.call(SIGNAL_GAPS, role) ? SIGNAL_GAPS[role] : [];
   const out = rows.filter((r) => r.absent(signals)).map((r) => `${role} reads ${r.flag} and did not get it — ${r.cost}`);
   if (cfg.model_ladder === 'adaptive'
@@ -1642,6 +1819,7 @@ function signalGaps(role, signals = {}, cfg = DEFAULTS) {
 }
 
 module.exports = {
+  resolveDispatch, COMPATIBILITY_ROLES,
   loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps,
   routeOf, parseRoute, ROUTE_RE, runtimeToken,
   parseCodexModelEntry, normalizeCodexModels,
@@ -1656,6 +1834,49 @@ module.exports = {
 // ── CLI ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {
   const [, , cmd, ...rest] = process.argv;
+  // Routed CLI output is always the complete immutable launch decision.
+  // Parse before the compatibility flags can ignore an invalid signal.
+  if (cmd === 'dispatch' || rest.includes('--routed')) {
+    try {
+      let input;
+      if (cmd === 'dispatch') {
+        input = JSON.parse(rest[0] || fs.readFileSync(0, 'utf8'));
+      } else {
+        if (cmd !== 'model') throw new Error('--routed requires model <role> or dispatch <json>');
+        input = { role: rest[0], signals: {} };
+        const flags = {
+          '--runtime': [input, 'runtime'], '--dispatch-id': [input, 'dispatch_id'],
+          '--model': [input, 'model'], '--effort': [input, 'effort'],
+          '--risk': [input.signals, 'risk'], '--type': [input.signals, 'type'],
+          '--complexity': [input.signals, 'complexity'], '--signature-state': [input.signals, 'signatureState'],
+          '--input-tokens': [input.signals, 'inputTokens'],
+        };
+        const seen = new Set();
+        for (let i = 1; i < rest.length; i++) {
+          const flag = rest[i];
+          if (seen.has(flag)) throw new Error(`duplicate routed flag ${flag}`);
+          seen.add(flag);
+          if (['--routed', '--json', '--explain'].includes(flag)) continue;
+          if (['--critical', '--checkpoint', '--contested'].includes(flag)) {
+            input.signals[flag.slice(2)] = true;
+          } else if (['--inline', '--inherit', '--session-inherited'].includes(flag)) {
+            input[flag.slice(2).replace(/-/g, '_')] = true;
+          } else if (flags[flag]) {
+            const value = rest[++i];
+            if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+            const [target, key] = flags[flag];
+            target[key] = flag === '--input-tokens' ? Number(value) : value;
+          } else {
+            throw new Error(`unsupported routed flag ${flag}`);
+          }
+        }
+      }
+      process.stdout.write(JSON.stringify(resolveDispatch(input)) + '\n');
+    } catch (error) {
+      process.stderr.write(`pipeline-config: ${error.code || 'INVALID_INPUT'}: ${error.message}\n`);
+      process.exitCode = 1;
+    }
+  } else {
   const runtimeIndex = rest.indexOf('--runtime');
   const runtimeFlag = runtimeIndex === -1 ? undefined : rest[runtimeIndex + 1];
   const { config, warnings, file, exists, valid, error } = loadConfig(
@@ -1811,4 +2032,5 @@ if (require.main === module) {
     '            other two used to gate)\n'
   );
   process.exit(2);
+  }
 }
