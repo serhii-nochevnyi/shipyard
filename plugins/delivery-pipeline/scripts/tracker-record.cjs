@@ -269,6 +269,24 @@ function metadataIdentity(graphDir) {
   }
 }
 
+// state-sync records the physical identity of the metadata file that preceded
+// the current publish. When the numeric counter is reset or reused, generation
+// alone is not enough to decide whether that predecessor belongs to this
+// publication epoch.
+function metadataPreviousIdentity(graphDir) {
+  const value = readJson(path.join(graphDir, META_NAME), null);
+  if (!value || !Object.prototype.hasOwnProperty.call(value, 'previous_generation_identity')) {
+    // No proof binds a predecessor to this metadata epoch. Treating the missing
+    // field as a wildcard would let a reset/recreated metadata file re-accept
+    // an old generation-1 record.
+    return null;
+  }
+  return typeof value.previous_generation_identity === 'string'
+    && value.previous_generation_identity.trim()
+    ? value.previous_generation_identity
+    : null;
+}
+
 /**
  * Read the generation of the last published delivery-state snapshot.
  *
@@ -346,6 +364,43 @@ function activeRecords(graphDir) {
   const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
   return recordsForGeneration(store, generation, readConfigStatuses(projectRootOf(graphDir)), metadataIdentity(graphDir));
+}
+
+// Tracker observations are recorded against the snapshot that was current
+// when the external read happened. The next state-sync publishes the next
+// generation, so front readers need this narrow, internally-derived bridge
+// across that publish boundary. Callers cannot choose an arbitrary generation.
+function activePreviousTrackers(graphDir) {
+  if (fs.existsSync(pendingPath(graphDir))) return {};
+  const store = readStore(graphDir);
+  const generation = currentGeneration(graphDir);
+  const previousIdentity = metadataPreviousIdentity(graphDir);
+  return Number.isInteger(generation) && generation > 1
+    ? recordsForGeneration(store, generation - 1, readConfigStatuses(projectRootOf(graphDir)), previousIdentity)
+    : {};
+}
+
+// Front readers need the current observation and the one publish-boundary
+// predecessor as one coherent cache view. The exported wrapper takes the
+// tracker lock; state-sync uses the locked form because it already holds that
+// lock before entering its state publish.
+function activeTrackerSnapshotLocked(graphDir) {
+  if (fs.existsSync(pendingPath(graphDir))) return {};
+  const store = readStore(graphDir);
+  const generation = currentGeneration(graphDir);
+  const statuses = readConfigStatuses(projectRootOf(graphDir));
+  const previousIdentity = metadataPreviousIdentity(graphDir);
+  return {
+    ...(Number.isInteger(generation) && generation > 1
+      ? recordsForGeneration(store, generation - 1, statuses, previousIdentity)
+      : {}),
+    ...recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir)),
+  };
+}
+
+function activeTrackerSnapshot(graphDir) {
+  return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () =>
+    activeTrackerSnapshotLocked(graphDir), { label: 'tracker-record read' });
 }
 
 // The flat view is convenient for callers that only need the current record;
@@ -758,6 +813,9 @@ module.exports = {
   metadataIdentity,
   currentGeneration,
   activeRecords,
+  activePreviousTrackers,
+  activeTrackerSnapshot,
+  activeTrackerSnapshotLocked,
   activeTrackers,
   observe,
   unknown,
