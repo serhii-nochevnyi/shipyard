@@ -961,7 +961,10 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   // "state, yaml and front were written together" is a fact a reader can check
   // rather than a property of this file it has to trust.
   const generation = (onDisk && Number.isInteger(onDisk.generation) ? onDisk.generation : 0) + 1;
-  const previousGenerationIdentity = onDisk ? metadataIdentity(GRAPH_DIR) : null;
+  // A refused publication must break the predecessor bridge. If the config is
+  // repaired before the next sync, the invalid snapshot is still the current
+  // boundary and must not resurrect an observation from before it.
+  const previousGenerationIdentity = onDisk && CFG_VALID ? metadataIdentity(GRAPH_DIR) : null;
   const generationIdentity = typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : crypto.randomBytes(16).toString('hex');

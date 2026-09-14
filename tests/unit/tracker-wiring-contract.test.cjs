@@ -57,6 +57,7 @@ test('state-sync passes the active tracker records without tracker I/O', () => {
   assert.match(publish, /activeTrackersForPublishLocked\(GRAPH_DIR, TRACKER_STATUSES\)/);
   assert.match(publish, /activeTrackersForPublishLocked/);
   assert.match(publish, /previousGenerationIdentity/);
+  assert.match(publish, /previousGenerationIdentity = onDisk && CFG_VALID \? metadataIdentity\(GRAPH_DIR\) : null/);
   assert.match(publish, /generationIdentity/);
   assert.match(publish, /previous_generation_identity/);
   const call = between(doc, 'const front = computeFront', 'writeAtomic\(STATE');

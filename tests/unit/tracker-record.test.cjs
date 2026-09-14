@@ -728,6 +728,22 @@ test('recreating metadata at the same numeric generation invalidates the old epo
   assert.ok(require(RECORD).activeRecords(graph)['T-01']);
 });
 
+test('an invalid publication fences the predecessor observation after config repair', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  const previousIdentity = stored(graph).tickets['T-01'].generation_identity;
+  // This is the metadata shape left by state-sync when generation 2 was
+  // published under an unreadable config: the publication has no predecessor
+  // identity even though the config is valid again by the time we read it.
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({
+    generation: 2,
+    generation_identity: 'invalid-publication',
+    previous_generation_identity: null,
+  }));
+  assert.notStrictEqual(previousIdentity, 'invalid-publication');
+  assert.deepStrictEqual(require(RECORD).activeTrackerSnapshot(graph), {});
+});
+
 test('a reset metadata epoch lets a lower new generation replace the old record', () => {
   const { project, graph } = scratch(7);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
