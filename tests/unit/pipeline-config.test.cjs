@@ -18,7 +18,7 @@ const {
   taskLevelRoute, routeOf,
   TIERS, EFFORTS, DEFAULTS, ROLES, SIGNATURE_STATES, DEFAULT_CODEX_MODELS, SONNET_ROLES,
   NUMERIC_KNOBS, TICKET_STATUSES, TASK_LEVELS, defaultRepositoryRoot,
-  validateRepositoryDestination, resolveDispatch, COMPATIBILITY_ROLES,
+  validateRepositoryDestination, resolveDispatch, COMPATIBILITY_ROLES, ROUTED_ROLES,
 } = require(mod);
 const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
@@ -2232,8 +2232,27 @@ const refusesSource = (fn, source) => assert.throws(fn, (error) =>
   error.name === 'DispatchPolicyError' && error.details.source === source && error.message.includes(source));
 
 test('shares the canonical role vocabulary including decomposition', () => {
-  assert.strictEqual(ROLES, canonicalPolicy.ROLES);
-  assert.ok(ROLES.includes('decomposition'));
+  assert.strictEqual(ROUTED_ROLES, canonicalPolicy.ROLES);
+  assert.ok(ROUTED_ROLES.includes('decomposition'));
+});
+
+test('legacy role consumers retain the compatibility vocabulary', () => {
+  assert.strictEqual(ROLES, COMPATIBILITY_ROLES);
+  assert.deepStrictEqual(ROLES, [
+    'integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix',
+    'drift-check', 'research', 'pr-sentinel',
+  ]);
+  for (const role of ROLES) assert.ok(ROUTED_ROLES.includes(role), role);
+});
+
+test('compatibility parsing cannot hide a conflicting routed decomposition override', () => {
+  for (const [key, value] of [['models', 'opus'], ['effort', 'low']]) {
+    const { config, warnings } = withRawOptions({ pipeline: { [key]: { decomposition: value } } },
+      { runtime: 'codex', env: {} });
+    assert.equal(config[key].decomposition, undefined);
+    assert.ok(warnings.some((warning) => warning.includes(`pipeline.${key}."decomposition"`)));
+    refusesSource(() => resolveDispatch({ role: 'decomposition', config }), `pipeline.${key}.decomposition`);
+  }
 });
 
 test('every runtime and role delegates base and escalation decisions with full identity', () => {
@@ -2242,7 +2261,7 @@ test('every runtime and role delegates base and escalation decisions with full i
     assert.equal(config.policy_hash, canonicalPolicy.POLICY_HASH);
     assert.equal(config.policy_version, canonicalPolicy.POLICY_VERSION);
     assert.equal(config.dispatch_context.runtime.dispatch_id, 'T-36-02-launch');
-    for (const role of ROLES) {
+    for (const role of ROUTED_ROLES) {
       for (const signals of [{}, { checkpoint: true }, { type: 'alternatives' }, { complexity: 'very-complex' }, { inputTokens: 300001 }]) {
         const expected = canonicalPolicy.resolveDispatch({ runtime, role, signals, dispatch_id: 'T-36-02-launch' });
         const got = resolveDispatch({ config, role, signals });

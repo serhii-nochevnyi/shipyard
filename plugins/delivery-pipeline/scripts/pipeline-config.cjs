@@ -579,7 +579,11 @@ const DEFAULTS = {
 const KNOWN_KEYS = new Set(Object.keys(DEFAULTS));
 const KNOWN_JIRA_KEYS = new Set(['enabled', 'project', 'issue_type', 'epic_issue_type']);
 const COMPATIBILITY_ROLES = Object.freeze(['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research', 'pr-sentinel']);
-const ROLES = modelPolicy.ROLES;
+// Existing board/recorder consumers use ROLES with their compatibility tables.
+// Routed consumers share the canonical vocabulary, including decomposition,
+// explicitly; expanding ROLES would advertise support those tables do not have.
+const ROLES = COMPATIBILITY_ROLES;
+const ROUTED_ROLES = modelPolicy.ROLES;
 
 // Judgment roles are never cheapened: there is no mechanical safety net above
 // them, so a false verdict is the most expensive kind of error in the pipeline.
@@ -1819,7 +1823,7 @@ function signalGaps(role, signals = {}, cfg = DEFAULTS) {
 }
 
 module.exports = {
-  resolveDispatch, COMPATIBILITY_ROLES,
+  resolveDispatch, COMPATIBILITY_ROLES, ROUTED_ROLES,
   loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps,
   routeOf, parseRoute, ROUTE_RE, runtimeToken,
   parseCodexModelEntry, normalizeCodexModels,
