@@ -643,7 +643,8 @@ if (capacityFull && agentsOut().plausible.length) allow();
 // foreground — but it may not stop, because nothing will bring it back.
 if (count <= 0 || leftBehind >= count) {
   const ci = (front.waiting && front.waiting.ci) || [];
-  if (!ci.length && trackerBlocked > 0) {
+  const parent = (front.waiting && front.waiting.parent) || [];
+  if (!ci.length && !dispatched.length && !parent.length && trackerBlocked > 0) {
     verdict(
       `shipyard: nothing is actionable, but ${trackerBlocked} pending ticket(s) are held by tracker eligibility — ` +
       'this is unfinished evidence collection, not a fixpoint. Do not summarise and stop:\n' +
