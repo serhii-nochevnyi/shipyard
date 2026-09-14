@@ -77,19 +77,35 @@ test('an eligible current record allows a ready pending ticket to execute', () =
   assert.deepStrictEqual(f.parked.blocked, []);
 });
 
-test('a current-generation exact-ticket override may execute despite its tracker verdict', () => {
+test('a current-generation exact-ticket override with a known verdict may execute', () => {
   const f = computeFront(
     { T: trackerTicket() },
     { T: { status: 'pending', ready: true } },
     {
       jira_todo_statuses: ['To Do'],
       trackerRecords: {
-        T: { ...eligibleTracker(), verdict: 'unknown', eligible: null, override: true },
+        T: { ...eligibleTracker(), verdict: 'ineligible', eligible: false, override: true },
       },
     }
   );
   assert.deepStrictEqual(f.actionable.execute, ['T']);
   assert.match(f.why.T, /explicit tracker override/);
+});
+
+test('an unknown exact-ticket override remains blocked without a complete observation', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    {
+      jira_todo_statuses: ['To Do'],
+      trackerRecords: {
+        T: { ...eligibleTracker(), verdict: 'unknown', eligible: null, assignee_observed: false, override: true },
+      },
+    }
+  );
+  assert.deepStrictEqual(f.actionable.execute, []);
+  assert.deepStrictEqual(f.parked.blocked, ['T']);
+  assert.match(f.why.T, /name this exact ticket/);
 });
 
 test('ineligible, unknown, and missing records are blocked with the direct-ticket remedy', () => {
@@ -1096,6 +1112,37 @@ test("a ticket its own phase's epic landed without IS left behind", () => {
   assert.deepStrictEqual(f.actionable.finalize, ['T-20-02'], 'still listed — the fixpoint must not lie');
   assert.strictEqual(f.left_behind_count, 1, 'the phase integrated without it');
   assert.ok(f.parked.done.includes('T-20-01'), 'and the merged one is the evidence, not a casualty');
+});
+
+test('an invalid policy blocks left-behind pending work instead of bypassing the tracker gate', () => {
+  const tickets = { 'T-20-02': { phase: '20', jira: 'MYD-2' } };
+  const state = { 'T-20-02': { status: 'pending', ready: true } };
+  const f = computeFront(tickets, state, {
+    configInvalid: true,
+    trackerStatuses: ['__config_invalid__'],
+    trackerRecords: {},
+    epics: epicsOf(landedEpic(20)),
+  });
+  assert.deepStrictEqual(f.actionable.execute, []);
+  assert.deepStrictEqual(f.parked.blocked, ['T-20-02']);
+  assert.match(f.why['T-20-02'], /policy is invalid/);
+  assert.strictEqual(f.fixpoint, false, 'an unreadable policy must not look like a finished phase');
+});
+
+test('an invalid policy suppresses every dispatch-producing bucket', () => {
+  const f = computeFront(
+    { P: {}, R: {} },
+    {
+      P: { status: 'branched', ready: true },
+      R: { status: 'pr-open', pr: 7, draft: true, checks: checks() },
+    },
+    { configInvalid: true },
+  );
+  for (const bucket of Object.values(f.actionable)) assert.deepStrictEqual(bucket, []);
+  assert.deepStrictEqual(f.parked.blocked.sort(), ['P', 'R']);
+  assert.strictEqual(f.fixpoint, false);
+  assert.match(f.why.P, /policy is invalid/);
+  assert.match(f.why.R, /policy is invalid/);
 });
 
 test('an epic freshly cut from its base has landed nothing at all', () => {
@@ -2766,6 +2813,26 @@ const frontJson = (dir) => {
   assert.strictEqual(r.status, 0, `front --json must exit 0 (${r.stderr})`);
   return JSON.parse(r.stdout);
 };
+const pendingTrackerBoard = (configText) => {
+  const dir = demoBoard(JSON.stringify({ pipeline: { jira_todo_statuses: 'To Do' } }));
+  const graph = path.join(dir, '.planning', 'graph');
+  dfs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({
+    tickets: { 'T-01-01': { jira: 'MYD-1' } },
+  }));
+  dfs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({
+    'T-01-01': { status: 'pending', ready: true },
+  }));
+  dfs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 7 }));
+  const recorded = dspawn(process.execPath, [
+    path.join(D_SCRIPTS, 'tracker-record.cjs'), 'mark', 'T-01-01', 'MYD-1',
+    '--status', 'To Do', '--assignee', 'none', '--graph', graph,
+  ], { cwd: dir, encoding: 'utf8' });
+  assert.strictEqual(recorded.status, 0, `tracker fixture must be recordable (${recorded.stderr})`);
+  if (configText !== undefined) {
+    dfs.writeFileSync(path.join(dir, '.planning', 'config.json'), configText);
+  }
+  return dir;
+};
 // The comparable half: everything the run acts on, with `capacity` left out —
 // that block already differed on base, and it is not what decides a dispatch.
 const boardShape = (f) => ({ actionable: f.actionable, waiting: f.waiting, parked: f.parked, sentinel: f.sentinel });
@@ -2791,6 +2858,16 @@ test('a corrupt config offers NO finalize, and the reason rides both faces', () 
   assert.strictEqual(human.stdout.split('\n')[0], j.config_invalid,
     `the refusal leads the human face: ${JSON.stringify(human.stdout.split('\n').slice(0, 3))}`);
   assert.ok(!/finalize/.test(human.stdout.split('\n')[1] || ''), human.stdout);
+});
+
+test('a corrupt config cannot leak an eligible tracker cache into execute', () => {
+  const j = frontJson(pendingTrackerBoard(CORRUPT));
+  assert.deepStrictEqual(j.actionable.execute, [],
+    'an unreadable policy must not let the standalone CLI dispatch from a cached eligible record');
+  assert.ok(j.parked.blocked.includes('T-01-01'), JSON.stringify(j));
+  assert.strictEqual(j.actionable_count, 0);
+  assert.ok(typeof j.config_invalid === 'string' && j.config_invalid, JSON.stringify(j));
+  assert.strictEqual(j.fixpoint, false, 'a refused tracker-gated board is not a finished phase');
 });
 
 test('the corrupt answer equals the answer a file that SAYS off gives, never the default epic', () => {
