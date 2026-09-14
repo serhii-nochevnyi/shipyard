@@ -123,6 +123,23 @@ test('a tracker hold keeps a board with no other work out of fixpoint', () => {
   assert.strictEqual(f.fixpoint, false, 'the pending ticket still needs a tracker read or exact-ticket decision');
 });
 
+test('a left-behind pending ticket is not held by the tracker gate', () => {
+  const f = computeFront(
+    { T: { phase: '20', jira: 'MYD-1' } },
+    { T: { status: 'pending', ready: true } },
+    {
+      jira_todo_statuses: ['To Do'],
+      trackerRecords: {},
+      epics: epicsOf(landedEpic(20)),
+    }
+  );
+  assert.deepStrictEqual(f.actionable.execute, ['T'],
+    'the existing left-behind completion hatch must remain visible to ordering');
+  assert.deepStrictEqual(f.parked.blocked, []);
+  assert.strictEqual(f.tracker_blocked_count, 0);
+  assert.strictEqual(f.left_behind_count, 1);
+});
+
 test('formatFront names a tracker-only hold instead of sending it to ci-wait', () => {
   const f = computeFront(
     { T: trackerTicket() },
