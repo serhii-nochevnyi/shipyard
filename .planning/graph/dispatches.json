@@ -19,6 +19,55 @@
       "fingerprint": "881718480094d741",
       "fingerprint_kind": "role",
       "pr": 125
+    },
+    "T-36-05": {
+      "role": "review-fix",
+      "at": "2026-09-14T23:06:06.429Z",
+      "model": "sonnet",
+      "effort": "high",
+      "task_level": "critical",
+      "runtime": "codex",
+      "backend": "agent",
+      "observed_model": "gpt-6-astra",
+      "agent_id": "01a0a22b-8f34-7940-8b25-3fefa2e8e353",
+      "reason": "tier=level:critical+cap:codex(sonnet) effort=flat:codex(high)",
+      "dispatch_id": "dispatch-mu1uqeap-03d96ef2-7498-4b02-b0ec-eb65fe7447a4",
+      "fingerprint": "baced5bc66ba347f",
+      "fingerprint_kind": "role",
+      "pr": 140
+    },
+    "T-36-04": {
+      "role": "review-fix",
+      "at": "2026-09-14T23:07:32.827Z",
+      "model": "sonnet",
+      "effort": "high",
+      "task_level": "critical",
+      "runtime": "codex",
+      "backend": "agent",
+      "observed_model": "gpt-6-astra",
+      "agent_id": "01a0a22c-e5f5-7612-a655-3b9bd17420fc",
+      "reason": "tier=level:critical+cap:codex(sonnet) effort=flat:codex(high)",
+      "dispatch_id": "dispatch-mu1us8yn-f0b0b762-5998-4a3b-821c-c6a00ce4f583",
+      "fingerprint": "c4854e1bfe3a173c",
+      "fingerprint_kind": "role",
+      "pr": 139
+    },
+    "T-36-03": {
+      "role": "review-fix",
+      "at": "2026-09-14T23:26:22.973Z",
+      "model": "sonnet",
+      "effort": "max",
+      "task_level": "critical",
+      "runtime": "codex",
+      "backend": "agent",
+      "observed_model": "gpt-5.6-luna",
+      "observed_effort": "max",
+      "agent_id": "01a0a23e-3ae2-70e0-82c1-22c822c637ad",
+      "dispatch_id": "dispatch-mu1v6c2d-b036d810-0096-4dae-b56b-b40a230fd1c4",
+      "reason": "tier=level:critical+cap:codex(sonnet) effort=flat:codex(max)",
+      "fingerprint": "36fdc08335a98e02",
+      "fingerprint_kind": "role",
+      "pr": 138
     }
   }
 }
