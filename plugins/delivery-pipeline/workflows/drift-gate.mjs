@@ -7,8 +7,8 @@ export const meta = {
 // ── args contract (built by /shipyard:deliver before invocation) ────────────
 //   args = {
 //     tickets: [ { id, planPath, baseRef, model, effort } ],  // all three
-//                        // optional; the model/effort defaults below are the
-//                        // ladder's drift-check row (sonnet / high), and
+//                        // model/effort values are caller-resolved and pass
+//                        // through unchanged; no runtime or CLI default here.
 //                        // `baseRef` falls back to the round-level one.
 //                        //
 //                        // PER TICKET, because the base is a per-ticket fact: in
@@ -150,20 +150,11 @@ const results = await parallel(
       {
         label: `drift:${t.id}`,
         phase: 'Drift',
-        model: t.model || 'sonnet',
-        // The ladder's own row for drift-check (`pipeline-config.cjs model
-        // drift-check --json` → sonnet/high), and the caller's resolved value
-        // still wins. It used to read `'low'` with "cheap effort on purpose":
-        // that was true when the executor carried the plan-defect burden, and
-        // this role now carries it — it is the one expected to notice a plan the
-        // codebase has outgrown, and it runs BEFORE an executor is paid. Effort
-        // is a QUALITY knob at roughly constant price (~12-19% of a line is
-        // output, a tier step is ~2.5x), so the row is bought with depth rather
-        // than with a tier. This is the ONLY path where `effort` is enforced —
-        // the Agent tool has no such parameter — so a literal that disagrees
-        // with the ladder is the effort actually used, and nothing else would
-        // report it. tests/unit/workflows-args.test.cjs pins the two together.
-        effort: t.effort || 'high',
+        // The resolver owns the runtime palette and rung. Preserve its exact
+        // decision through the workflow boundary; the Claude adapter rejects
+        // missing, stale, contradictory, or unsupported selections.
+        model: t.model,
+        effort: t.effort,
         agentType: 'general-purpose',
         schema: VERDICT,
       }

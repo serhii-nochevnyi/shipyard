@@ -25,8 +25,10 @@ export const meta = {
 //                        // the ORCHESTRATOR (this path builds prompts deterministically
 //                        // and must not shell out). Absent on a first attempt, and an
 //                        // entry without it builds exactly the prompt it always did.
-//       model,           // optional tier alias; default "opus"
-//       effort,          // optional reasoning effort; from `pipeline-config.cjs model … --json`
+//       model,           // caller-resolved native runtime alias; required at the
+//                        // dispatch boundary (never inherited or defaulted here)
+//       effort,          // caller-resolved reasoning effort; required at the
+//                        // dispatch boundary (never inherited or defaulted here)
 //     } ],
 //     ciFixRefPath,      // abs path to references/ci-fix.md
 //     reviewFixRefPath,  // abs path to references/review-fix.md
@@ -209,9 +211,10 @@ return await parallel(
     return agent(buildPrompt(p), {
       label: `fix:${p.id}#${p.pr}`,
       phase: 'Fix',
-      // tier aliases only — the Agent tool rejects full model IDs
-      model: p.model || 'opus',
-      ...(p.effort ? { effort: p.effort } : {}),
+      // Preserve the caller's resolver decision exactly. The Claude adapter
+      // applies the native alias only after canonical boundary validation.
+      model: p.model,
+      effort: p.effort,
       agentType: 'general-purpose',
       schema: OUT,
     })

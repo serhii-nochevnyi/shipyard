@@ -15,8 +15,10 @@ export const meta = {
 //       prBase,        // resolved base = delivery-state[id].base: epic branch for a
 //                      // root ticket, primary-parent branch for a dependent one
 //                      // (epic-stacked); "main"/deepest-unmerged dep (direct-to-main)
-//       model,         // optional tier alias; default "opus"
-//       effort,        // optional reasoning effort; from `pipeline-config.cjs model … --json`
+//       model,         // caller-resolved native runtime alias; required at the
+//                      // dispatch boundary (never inherited or defaulted here)
+//       effort,        // caller-resolved reasoning effort; required at the
+//                      // dispatch boundary (never inherited or defaulted here)
 //       reuseCandidates, // optional [string]; drift-check's `reuse_candidates` for
 //                      // this ticket — existing implementations to build on. Advisory
 //                      // context, NOT a scope change: it never widens files_modified.
@@ -230,9 +232,11 @@ const results = await parallel(
       {
         label: `exec:${t.id}`,
         phase: 'Execute',
-        // tier aliases only — the Agent tool rejects full model IDs
-        model: t.model || 'opus',
-        ...(t.effort ? { effort: t.effort } : {}),
+        // The resolver owns the runtime palette and rung. Preserve its exact
+        // decision through the workflow boundary; the Claude adapter rejects
+        // missing, stale, contradictory, or unsupported selections.
+        model: t.model,
+        effort: t.effort,
         agentType: 'general-purpose',
         schema: OUT,
       }

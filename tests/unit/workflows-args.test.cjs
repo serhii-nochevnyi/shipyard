@@ -26,8 +26,13 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const {
+  CLAUDE_MODEL_ALIASES,
+  createClaudeDispatchAdapter,
+} = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
 
 const WORKFLOWS = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'workflows'
@@ -307,44 +312,14 @@ test('a dead or throwing agent still returns a capped reason inline, with no wor
   assert.match(threw.value[0].summary, /boom/);
 });
 
-// ── THE DISPATCH DEFAULTS ARE THE LADDER'S ANSWER (T-27-01, ADR-006 D1) ──────
+// ── EXPLICIT RESOLVER LAUNCH INPUT (T-36-05, ADR-014) ───────────────────────
 //
-// `pipeline-config.cjs` is the single source for "which tier and how deep" — and
-// the WORKFLOW PATH is the only path where `effort` is enforced at all, because
-// the Agent tool carries no such parameter. So a literal in one of these scripts
-// is not a harmless fallback: it is the effort a judge or a fixer actually thinks
-// at whenever the caller omits one, and nothing else in the system would notice
-// it disagreeing with the policy. `drift-gate.mjs` shipped `effort: 'low'` with
-// the comment "cheap effort on purpose" while the ladder had moved drift-check to
-// `high` — the role now expected to notice a plan the codebase has outgrown,
-// which is the work the executor stopped doing.
-//
-// Resolved in a CONFIG-FREE temp cwd, through the CLI the skills themselves call:
-// `pipeline-config.cjs` reads `process.cwd()` and nothing else, so this pins
-// SHIPPED policy rather than whatever this checkout happens to be tuned to.
-//
-// Two designs are legitimate here and the table records WHICH each file uses,
-// because a silent move between them is the drift this suite exists to catch:
-//
-//   'default'  the script carries a literal — allowed only where the role's row
-//              is constant, and it must equal the row (drift-check → high);
-//   'caller'   the script passes no effort at all and the orchestrator's resolved
-//              value is the only one in force. Required where the row is keyed on
-//              a signal a literal cannot express: the executor's is `xhigh` at
-//              `--risk high` or `--checkpoint`, so any literal there would be
-//              wrong for half the board.
-suite('workflows/*.mjs — model and effort defaults equal the ladder\'s answer');
-
-const CONFIG_FREE = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-ladder-'));
-const RESOLVER = path.join(
-  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
-);
-function policyFor(role) {
-  const r = spawnSync(process.execPath, [RESOLVER, 'model', role, '--json'],
-    { cwd: CONFIG_FREE, encoding: 'utf8', timeout: 30000 });
-  assert.strictEqual(r.status, 0, `pipeline-config model ${role} exited ${r.status}: ${r.stderr}`);
-  return JSON.parse(r.stdout);
-}
+// Workflow scripts are an application surface, not a second policy resolver.
+// The orchestrator resolves runtime, role, signals, model, and effort before it
+// invokes one. These tests pin the handoff: each caller-resolved value reaches
+// the Agent invocation byte-for-byte, and an omitted value remains absent from
+// policy rather than being silently replaced by a workflow or CLI default.
+suite('workflows/*.mjs — explicit resolver model and effort launch arguments');
 
 const PR = {
   id: 'T-99-01', pr: 7, branch: 'ticket/T-99-01', worktreePath: '/w/T-99-01',
@@ -354,30 +329,25 @@ const DISPATCH = [
   {
     name: 'executors',
     // One agent per ticket, so one ticket is one dispatch to read the opts off.
-    args: (over = {}) => ({ tickets: [{ ...TICKETS[0], ...over }] }),
-    roles: ['executor'],
-    effort: 'caller',
+    args: (over = {}) => ({ tickets: [{ ...TICKETS[0], model: 'sonnet', effort: 'max', ...over }] }),
+    resolved: { model: 'sonnet', effort: 'max' },
   },
   {
     name: 'fix-round',
     args: (over = {}) => ({
-      prs: [{ ...PR, ...over }],
+      prs: [{ ...PR, model: 'opus', effort: 'medium', ...over }],
       ciFixRefPath: '/x/ci-fix.md', reviewFixRefPath: '/x/review-fix.md',
       reinitScript: '/x/scripts/reviewers.cjs',
     }),
-    // One fixer owns both roles for a round, so both must resolve to the tier it
-    // is dispatched at — that is the premise the single agent rests on.
-    roles: ['ci-fix', 'review-fix'],
-    effort: 'caller',
+    resolved: { model: 'opus', effort: 'medium' },
   },
   {
     name: 'drift-gate',
     args: (over = {}) => ({
-      tickets: [{ ...TICKETS[0], ...over }],
+      tickets: [{ ...TICKETS[0], model: 'fable', effort: 'high', ...over }],
       driftRefPath: '/x/drift-check.md',
     }),
-    roles: ['drift-check'],
-    effort: 'default',
+    resolved: { model: 'fable', effort: 'high' },
   },
 ];
 
@@ -388,51 +358,132 @@ for (const spec of DISPATCH) {
     return calls[0].opts;
   };
 
-  test(`${spec.name}.mjs dispatches at the tier the ladder resolves for ${spec.roles.join('/')}`, async () => {
-    const policies = spec.roles.map((role) => ({ role, ...policyFor(role) }));
-    // A file that dispatches two roles from one agent needs them to agree; if
-    // they ever stop agreeing, this file needs two agents and not a new literal.
-    const tiers = [...new Set(policies.map((p) => p.model))];
-    assert.strictEqual(tiers.length, 1,
-      `${spec.name}: ${spec.roles.join('/')} resolve to different tiers (${tiers.join(', ')}) — one agent cannot carry both`);
+  test(`${spec.name}.mjs passes the caller-resolved model and effort unchanged`, async () => {
     const opts = await optsOf();
-    assert.strictEqual(opts.model, tiers[0],
-      `${spec.name}: dispatches model "${opts.model}", the ladder says "${tiers[0]}"`);
+    assert.strictEqual(opts.model, spec.resolved.model);
+    assert.strictEqual(opts.effort, spec.resolved.effort);
   });
 
-  if (spec.effort === 'default') {
-    test(`${spec.name}.mjs carries an effort default, and it is the ladder's row`, async () => {
-      const want = policyFor(spec.roles[0]).effort;
-      const opts = await optsOf();
-      // PRESENT is half the assertion: on this path `effort` is the only place
-      // depth is enforced, so dropping the key hands the judge the runtime's
-      // default and nothing anywhere would say so.
-      assert.ok('effort' in opts,
-        `${spec.name}: no effort default — the ${spec.roles[0]} row (${want}) would not be in force`);
-      assert.strictEqual(opts.effort, want,
-        `${spec.name}: dispatches effort "${opts.effort}", the ladder says "${want}"`);
-    });
+  test(`${spec.name}.mjs does not synthesize absent launch values`, async () => {
+    const opts = await optsOf({ model: undefined, effort: undefined });
+    assert.ok(Object.hasOwn(opts, 'model'));
+    assert.ok(Object.hasOwn(opts, 'effort'));
+    assert.strictEqual(opts.model, undefined);
+    assert.strictEqual(opts.effort, undefined);
+  });
 
-    test(`${spec.name}.mjs still lets the caller's resolved effort win`, async () => {
-      const opts = await optsOf({ effort: 'xhigh' });
-      assert.strictEqual(opts.effort, 'xhigh',
-        'the orchestrator resolves per dispatch (a signal-keyed row, a repeated signature); the literal is only the floor');
-    });
-  } else {
-    test(`${spec.name}.mjs passes NO effort literal — the row it dispatches is signal-keyed`, async () => {
-      const opts = await optsOf();
-      assert.ok(!('effort' in opts),
-        `${spec.name}: a literal cannot express a signal-keyed row (executor: xhigh at --risk high), `
-        + `so this file must carry none — got "${opts.effort}"`);
-    });
-
-    test(`${spec.name}.mjs passes the caller's resolved effort straight through`, async () => {
-      const want = policyFor(spec.roles[0]).effort;
-      const opts = await optsOf({ effort: want });
-      assert.strictEqual(opts.effort, want, 'the ladder reaches the dispatch, or the table is decorative');
-    });
-  }
+  test(`${spec.name}.mjs preserves a per-dispatch resolver change`, async () => {
+    const opts = await optsOf({ model: 'sonnet', effort: 'xhigh' });
+    assert.strictEqual(opts.model, 'sonnet');
+    assert.strictEqual(opts.effort, 'xhigh');
+  });
 }
+
+suite('strict Claude adapter — native aliases and explicit application evidence (T-36-05)');
+
+const CLAUDE_CAPABILITIES = {
+  supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
+  supportedEfforts: ['high', 'medium', 'max'],
+  observedModel: false,
+  observedEffort: false,
+};
+
+function claudeFixture(extra = {}) {
+  const calls = [];
+  const host = {
+    capabilities: CLAUDE_CAPABILITIES,
+    launch: (selection) => {
+      calls.push(selection);
+      return {
+        launch_id: `claude-launch-${calls.length}`,
+        applied_model: selection.model,
+        applied_effort: selection.effort,
+      };
+    },
+    ...(extra.host || {}),
+  };
+  const adapter = createClaudeDispatchAdapter({ ...extra, host });
+  const boundary = createDispatchBoundary({ adapters: { claude: adapter }, recorder: () => true });
+  return { calls, adapter, boundary };
+}
+
+test('Claude receives the canonical native alias and effort for every base role', () => {
+  const f = claudeFixture();
+  for (const role of policy.ROLES) {
+    const result = f.boundary.dispatch({ runtime: 'claude', role });
+    const launch = f.calls.at(-1);
+    assert.ok(Object.values(CLAUDE_MODEL_ALIASES).includes(launch.model), `${role} must use a Claude alias`);
+    assert.ok(!/^gpt-/.test(launch.model), `${role} must not receive a Codex model id`);
+    assert.strictEqual(result.applied_model, launch.model);
+    assert.strictEqual(result.applied_effort, launch.effort);
+    assert.strictEqual(result.observed_model, 'unknown');
+    assert.strictEqual(result.observed_effort, 'unknown');
+    assert.strictEqual(result.receipt.compliance, 'verified');
+  }
+});
+
+test('Claude repair launches consume the preceding boundary receipt and preserve the escalated tuple', () => {
+  const f = claudeFixture();
+  const base = f.boundary.dispatch({ runtime: 'claude', role: 'ci-fix' });
+  const repeat = f.boundary.dispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    previous_dispatch_id: base.dispatch_id,
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+  });
+  assert.deepStrictEqual(f.calls.map((selection) => [selection.model, selection.effort]), [
+    ['opus', 'medium'],
+    ['opus', 'max'],
+  ]);
+  assert.strictEqual(repeat.receipt.compliance, 'verified');
+  assert.strictEqual(repeat.receipt.applied_model, 'opus');
+  assert.strictEqual(repeat.receipt.applied_effort, 'max');
+});
+
+test('missing capabilities, launch methods, and application evidence fail closed before dispatch', () => {
+  const missingCapabilities = claudeFixture({ capabilities: {} });
+  assert.throws(
+    () => missingCapabilities.boundary.dispatch({ runtime: 'claude', role: 'executor' }),
+    (error) => error.code === 'UNSUPPORTED_SELECTION',
+  );
+  assert.strictEqual(missingCapabilities.calls.length, 0);
+
+  const missingLaunch = claudeFixture({ host: { launch: undefined } });
+  assert.throws(
+    () => missingLaunch.boundary.dispatch({ runtime: 'claude', role: 'executor' }),
+    (error) => error.code === 'MISSING_ADAPTER',
+  );
+  assert.strictEqual(missingLaunch.calls.length, 0);
+
+  const badEvidence = claudeFixture({ host: {
+    launch: () => ({ launch_id: 'bad', applied_model: 'sonnet', applied_effort: 'low' }),
+  } });
+  assert.throws(
+    () => badEvidence.boundary.dispatch({ runtime: 'claude', role: 'executor' }),
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+  );
+});
+
+test('Claude rejects contradictory, inherited, and stale launch selections', () => {
+  const f = claudeFixture();
+  for (const context of [
+    { model: 'opus' },
+    { effort: 'medium' },
+    { launch_arguments: { model: 'fable' } },
+    { session: { inherit: true } },
+  ]) {
+    assert.throws(
+      () => f.boundary.dispatch({ runtime: 'claude', role: 'executor' }, context),
+      (error) => ['CONFLICTING_OVERRIDE', 'UNSUPPORTED_SELECTION'].includes(error.code),
+    );
+  }
+  const resolution = f.boundary.resolve({ runtime: 'claude', role: 'executor', dispatch_id: 'stale-claude' });
+  assert.throws(
+    () => f.adapter.launch({ ...resolution, policy_hash: 'stale-policy' }),
+    (error) => error.code === 'STALE_POLICY',
+  );
+  assert.strictEqual(f.calls.length, 0);
+});
 
 // ── ONE DISPATCH, ONE BASE (T-27-06) ────────────────────────────────────────
 //
