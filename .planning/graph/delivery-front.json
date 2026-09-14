@@ -1,14 +1,12 @@
 {
-  "generated_at": "2026-09-14T12:23:46.520Z",
-  "observed_at": "2026-09-14T12:23:46.520Z",
-  "generation": 211,
+  "generated_at": "2026-09-14T12:38:06.416Z",
+  "observed_at": "2026-09-14T12:38:06.416Z",
+  "generation": 230,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-14T12:23:46.520Z",
+  "dispatches_applied_at": "2026-09-14T12:38:06.416Z",
   "actionable": {
-    "execute": [
-      "T-31-01"
-    ],
+    "execute": [],
     "publish": [],
     "fix": [],
     "finalize": [],
@@ -23,12 +21,24 @@
   },
   "parked": {
     "blocked": [
+      "T-31-01",
       "T-31-02",
       "T-31-03",
       "T-31-04",
       "T-31-05",
       "T-31-06",
-      "T-31-07"
+      "T-31-07",
+      "T-36-02",
+      "T-36-03",
+      "T-36-04",
+      "T-36-05",
+      "T-36-06",
+      "T-36-07",
+      "T-36-08",
+      "T-36-09",
+      "T-36-10",
+      "T-36-11",
+      "T-36-12"
     ],
     "done": [
       "T-20-01",
@@ -127,20 +137,32 @@
       "T-32-07",
       "T-35-01",
       "T-35-02",
-      "T-35-03"
+      "T-35-03",
+      "T-36-01"
     ]
   },
   "why": {
-    "T-31-01": "ready — worktree + executor",
+    "T-31-01": "escalated — left behind after Phase 31 epic landed; outside current Phase 36 model-ladder scope; requires separate re-decomposition. It lifts by itself once the PR moves (a push, a review answer, undrafting); `escalation-record.cjs clear T-31-01` to take it back.",
     "T-31-02": "T-31-01 (parent has no branch yet (nothing to cascade from))",
     "T-31-03": "T-31-02 (parent has no branch yet (nothing to cascade from))",
     "T-31-04": "T-31-03 (parent has no branch yet (nothing to cascade from))",
     "T-31-05": "T-31-04 (parent has no branch yet (nothing to cascade from))",
     "T-31-06": "T-31-05 (parent has no branch yet (nothing to cascade from))",
-    "T-31-07": "T-31-06 (parent has no branch yet (nothing to cascade from))"
+    "T-31-07": "T-31-06 (parent has no branch yet (nothing to cascade from))",
+    "T-36-02": "T-31-02 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending))",
+    "T-36-03": "T-36-02 (parent has no branch yet (nothing to cascade from))",
+    "T-36-04": "T-36-03 (parent has no branch yet (nothing to cascade from))",
+    "T-36-05": "T-36-04 (parent has no branch yet (nothing to cascade from))",
+    "T-36-06": "T-36-05 (parent has no branch yet (nothing to cascade from))",
+    "T-36-07": "T-36-06 (parent has no branch yet (nothing to cascade from)); T-31-01 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)); T-31-02 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)); T-31-06 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)); T-31-07 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending))",
+    "T-36-08": "T-36-07 (parent has no branch yet (nothing to cascade from))",
+    "T-36-09": "T-36-08 (parent has no branch yet (nothing to cascade from))",
+    "T-36-10": "T-36-09 (parent has no branch yet (nothing to cascade from))",
+    "T-36-11": "T-36-10 (parent has no branch yet (nothing to cascade from))",
+    "T-36-12": "T-36-10 (parent has no branch yet (nothing to cascade from)); T-31-02 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending))"
   },
   "counts": {
-    "execute": 1,
+    "execute": 0,
     "publish": 0,
     "fix": 0,
     "finalize": 0,
@@ -150,13 +172,13 @@
     "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 6,
-    "done": 97
+    "blocked": 18,
+    "done": 98
   },
   "parent_of": {},
-  "actionable_count": 1,
-  "left_behind_count": 1,
-  "fixpoint": false,
+  "actionable_count": 0,
+  "left_behind_count": 0,
+  "fixpoint": true,
   "capacity": {
     "max": 4,
     "in_flight": 0,

@@ -890,7 +890,7 @@
     "base_reason": "T-30-03 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-14T12:23:46.520Z"
+    "since": "2026-09-12T19:57:33.322Z"
   },
   "T-30-05": {
     "branch": "ticket/T-30-05-validate-repository-destinations-with-th",
@@ -903,7 +903,7 @@
     "base_reason": "T-30-04 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-14T12:23:46.520Z"
+    "since": "2026-09-12T19:57:33.322Z"
   },
   "T-30-06": {
     "branch": "ticket/T-30-06-mirror-the-project-origin-protocol-for-r",
@@ -916,7 +916,7 @@
     "base_reason": "T-30-05 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-14T12:23:46.520Z"
+    "since": "2026-09-12T19:57:33.322Z"
   },
   "T-30-07": {
     "branch": "ticket/T-30-07-use-a-full-clone-with-all-refs-required",
@@ -927,7 +927,7 @@
     "base_reason": "T-30-06 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-14T12:23:46.520Z"
+    "since": "2026-09-12T19:57:33.322Z"
   },
   "T-30-08": {
     "branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c",
@@ -940,7 +940,7 @@
     "base_reason": "T-30-07 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-14T12:23:46.520Z"
+    "since": "2026-09-12T19:57:33.322Z"
   },
   "T-30-09": {
     "branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unre",
@@ -953,7 +953,7 @@
     "base_reason": "T-30-08 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-14T12:23:46.520Z"
+    "since": "2026-09-12T20:26:45.234Z"
   },
   "T-30-10": {
     "branch": "ticket/T-30-10-make-the-sentinel-honor-observed-ticket",
@@ -964,7 +964,7 @@
     "base_reason": "T-30-03 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-14T12:23:46.520Z"
+    "since": "2026-09-12T19:57:33.322Z"
   },
   "T-31-01": {
     "branch": "ticket/T-31-01-remove-the-external-ticket-import-shortc",
@@ -1190,5 +1190,213 @@
     "epic": "epic/35-gsd-and-shipyard-workflow-loop",
     "reapable": true,
     "since": "2026-09-11T08:00:15.458Z"
+  },
+  "T-36-01": {
+    "branch": "ticket/T-36-01-canonical-runtime-neutral-policy-and-res",
+    "pr": 125,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/125",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "no primary parent — a root ticket PRs into epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "reapable": true,
+    "since": "2026-09-14T12:17:32.355Z"
+  },
+  "T-36-02": {
+    "branch": "ticket/T-36-02-authoritative-configuration-bridge-and-o",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-01 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-31-02"
+    ],
+    "blocked_reasons": {
+      "T-31-02": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
+  },
+  "T-36-03": {
+    "branch": "ticket/T-36-03-strict-codex-adapter-and-named-model-pal",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-02 has no branch on the remote yet (status pending) — ticket/T-36-02-authoritative-configuration-bridge-and-o is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-36-02"
+    ],
+    "blocked_reasons": {
+      "T-36-02": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
+  },
+  "T-36-04": {
+    "branch": "ticket/T-36-04-generate-and-validate-the-complete-codex",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-03 has no branch on the remote yet (status pending) — ticket/T-36-03-strict-codex-adapter-and-named-model-pal is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-36-03"
+    ],
+    "blocked_reasons": {
+      "T-36-03": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
+  },
+  "T-36-05": {
+    "branch": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-04 has no branch on the remote yet (status pending) — ticket/T-36-04-generate-and-validate-the-complete-codex is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-36-04"
+    ],
+    "blocked_reasons": {
+      "T-36-04": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
+  },
+  "T-36-06": {
+    "branch": "ticket/T-36-06-route-gsd-decomposition-through-the-mand",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-05 has no branch on the remote yet (status pending) — ticket/T-36-05-claude-adapter-and-explicit-workflow-lau is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-36-05"
+    ],
+    "blocked_reasons": {
+      "T-36-05": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
+  },
+  "T-36-07": {
+    "branch": "ticket/T-36-07-enforce-the-boundary-across-shipyard-del",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-06 has no branch on the remote yet (status pending) — ticket/T-36-06-route-gsd-decomposition-through-the-mand is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-36-06",
+      "T-31-01",
+      "T-31-02",
+      "T-31-06",
+      "T-31-07"
+    ],
+    "blocked_reasons": {
+      "T-36-06": "parent has no branch yet (nothing to cascade from)",
+      "T-31-01": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)",
+      "T-31-02": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)",
+      "T-31-06": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)",
+      "T-31-07": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
+  },
+  "T-36-08": {
+    "branch": "ticket/T-36-08-application-receipts-and-dispatch-record",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-07 has no branch on the remote yet (status pending) — ticket/T-36-07-enforce-the-boundary-across-shipyard-del is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-36-07"
+    ],
+    "blocked_reasons": {
+      "T-36-07": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
+  },
+  "T-36-09": {
+    "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-08 has no branch on the remote yet (status pending) — ticket/T-36-08-application-receipts-and-dispatch-record is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-36-08"
+    ],
+    "blocked_reasons": {
+      "T-36-08": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
+  },
+  "T-36-10": {
+    "branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-09 has no branch on the remote yet (status pending) — ticket/T-36-09-policy-aware-telemetry-and-reconciliatio is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-36-09"
+    ],
+    "blocked_reasons": {
+      "T-36-09": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
+  },
+  "T-36-11": {
+    "branch": "ticket/T-36-11-cross-runtime-generated-install-smoke-ve",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-10 has no branch on the remote yet (status pending) — ticket/T-36-10-exhaustive-signal-matrix-and-negative-by is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-36-10"
+    ],
+    "blocked_reasons": {
+      "T-36-10": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
+  },
+  "T-36-12": {
+    "branch": "ticket/T-36-12-supersede-obsolete-ladder-documentation",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-10 has no branch on the remote yet (status pending) — ticket/T-36-10-exhaustive-signal-matrix-and-negative-by is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "epic": "epic/36-enforce-the-runtime-model-ladder",
+    "ready": false,
+    "blocked_by": [
+      "T-36-10",
+      "T-31-02"
+    ],
+    "blocked_reasons": {
+      "T-36-10": "parent has no branch yet (nothing to cascade from)",
+      "T-31-02": "cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-12T19:57:33.322Z"
   }
 }

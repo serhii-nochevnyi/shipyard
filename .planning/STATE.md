@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: eac84564863b55fb7a5bb230c90d5c02f7ee8e2c024fc3b4ce2cb878b15b8e72
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2728601387c170
 gsd_state_version: '1.0'
 status: planning
 progress:
-  total_phases: 16
+  total_phases: 17
   completed_phases: 4
-  total_plans: 104
-  completed_plans: 97
-  percent: 93
+  total_plans: 116
+  completed_plans: 98
+  percent: 84
 ---
 
 # Project State
@@ -21,16 +21,16 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
 ## Current Position
 
-Phase: 1 of 16 (Phase 20: Autonomy of the drive-to-green loop)
+Phase: 1 of 17 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
 Last activity: 2026-09-14 — Shipyard projection synchronized
 
-Progress: [█████████░] 93%
+Progress: [████████░░] 84%
 
 ## Performance Metrics
 
-- Total plans completed: 97
+- Total plans completed: 98
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -54,6 +54,7 @@ Progress: [█████████░] 93%
 | 33 | 0 | 0 | pending |
 | 34 | 0 | 0 | pending |
 | 35 | 3 | 3 | passed |
+| 36 | 12 | 1 | pending |
 
 ## Accumulated Context
 
@@ -75,7 +76,7 @@ Review and resolve phase integration findings shown in the phase artifacts.
 - T-31-05: delivery status is pending
 - T-31-06: delivery status is pending
 - T-31-07: delivery status is pending
-- Phase 20: INTEGRATION.md is missing
+- T-36-02: delivery status is pending
 
 ## Deferred Items
 
@@ -85,6 +86,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-14 12:23
+Last session: 2026-09-14 12:17
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None
