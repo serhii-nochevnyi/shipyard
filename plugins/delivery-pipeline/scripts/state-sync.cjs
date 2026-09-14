@@ -939,11 +939,11 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
   // rather than a property of this file it has to trust.
   const generation = (onDisk && Number.isInteger(onDisk.generation) ? onDisk.generation : 0) + 1;
   // Tracker observations are written after the previous snapshot and before
-  // this publish. They are bound to the snapshot that is current on disk, so
-  // feed that prior generation into the new snapshot. The following state-sync
-  // then sees no record for its own predecessor and expires the observation,
-  // forcing a fresh read for any pending ticket that was not taken this round.
-  const trackerRecords = activeTrackers(GRAPH_DIR, generation - 1);
+  // this publish. They are bound to the generation current on disk, so the
+  // active reader feeds them into this new snapshot. The following state-sync
+  // sees the next generation and expires the observation, forcing a fresh read
+  // for any pending ticket that was not taken this round.
+  const trackerRecords = activeTrackers(GRAPH_DIR);
 
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');

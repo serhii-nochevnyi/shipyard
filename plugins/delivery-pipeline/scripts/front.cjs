@@ -1676,16 +1676,14 @@ if (require.main === module) {
   // The RECORDS, not the flat view: the board's lifting sentence is chosen by the
   // park's kind, and the flat map keeps the kind only as a text prefix.
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
-  const { activeTrackers, currentGeneration } = require(path.join(__dirname, 'tracker-record.cjs'));
+  const { activePreviousTrackers, activeTrackers } = require(path.join(__dirname, 'tracker-record.cjs'));
   // A tracker read made after the last published snapshot is recorded against
   // that snapshot and consumed by the next one. Standalone front reads must
-  // therefore accept the current and immediately preceding generations until
-  // the next state-sync publishes a newer predecessor; current wins if both
-  // exist for a ticket.
-  const generation = currentGeneration(dir);
+  // therefore accept the current and immediately preceding generations through
+  // the cache's two bounded readers; current wins if both exist for a ticket.
   const trackerRecords = {
-    ...activeTrackers(dir, generation - 1),
-    ...activeTrackers(dir, generation),
+    ...activePreviousTrackers(dir),
+    ...activeTrackers(dir),
   };
   const front = computeFront(tickets, state, {
     parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,

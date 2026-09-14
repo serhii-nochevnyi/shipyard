@@ -38,11 +38,11 @@ test('deliver documents one issue read per pending ticket and fail-closed record
   assert.match(section, /set scope never does/);
 });
 
-test('state-sync passes the prior-generation tracker records without tracker I/O', () => {
+test('state-sync passes the active tracker records without tracker I/O', () => {
   const doc = source(STATE_SYNC);
   assert.match(doc, /require\(path\.join\(__dirname, 'tracker-record\.cjs'\)\)/);
   const publish = between(doc, 'const published = withLock', 'const front = published.front');
-  assert.match(publish, /activeTrackers\(GRAPH_DIR, generation - 1\)/);
+  assert.match(publish, /activeTrackers\(GRAPH_DIR\)/);
   const call = between(doc, 'const front = computeFront', 'writeAtomic\(STATE');
   assert.match(call, /trackerStatuses:\s*cfg\.jira_todo_statuses/);
   assert.match(call, /trackerRecords/);
@@ -52,18 +52,18 @@ test('state-sync passes the prior-generation tracker records without tracker I/O
 test('front CLI passes the config and active tracker cache to computeFront', () => {
   const doc = source(FRONT);
   const cli = between(doc, '// ── CLI: read the state files this project already has and print the verdict ──', 'process.exit(0);');
-  assert.match(cli, /activeTrackers/);
+  assert.match(cli, /activePreviousTrackers/);
   assert.match(cli, /trackerStatuses:\s*config\.jira_todo_statuses/);
-  assert.match(cli, /activeTrackers\(dir, generation - 1\)/);
-  assert.match(cli, /activeTrackers\(dir, generation\)/);
+  assert.match(cli, /activePreviousTrackers\(dir\)/);
+  assert.match(cli, /activeTrackers\(dir\)/);
 });
 
 test('dispatch refresh uses the same config and active tracker cache', () => {
   const doc = source(DISPATCH);
   const refresh = between(doc, 'function refreshFront(cwd)', 'module.exports = {');
   assert.match(refresh, /loadConfig\(cwd\)/);
-  assert.match(refresh, /activeTrackers\(dir, generation - 1\)/);
-  assert.match(refresh, /activeTrackers\(dir, generation\)/);
+  assert.match(refresh, /activePreviousTrackers\(dir\)/);
+  assert.match(refresh, /activeTrackers\(dir\)/);
   assert.match(refresh, /trackerStatuses:\s*config\.jira_todo_statuses/);
   assert.match(refresh, /trackerRecords:\s*trackerRecordsForFront\(\)/);
 });

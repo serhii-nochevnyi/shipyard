@@ -82,7 +82,7 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 const {
   ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime, loadConfig,
 } = require(path.join(__dirname, 'pipeline-config.cjs'));
-const { activeTrackers, currentGeneration } = require(path.join(__dirname, 'tracker-record.cjs'));
+const { activePreviousTrackers, activeTrackers } = require(path.join(__dirname, 'tracker-record.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -1030,13 +1030,12 @@ function refreshFront(cwd) {
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
   // A tracker read made after the last published snapshot is recorded against
   // that snapshot and consumed by the next one. Refresh must match the
-  // standalone front reader, so accept the current and immediately preceding
-  // generations; current wins if both exist for a ticket.
+  // standalone front reader, so use the cache's current and immediately
+  // preceding readers; current wins if both exist for a ticket.
   const trackerRecordsForFront = () => {
-    const generation = currentGeneration(dir);
     return {
-      ...activeTrackers(dir, generation - 1),
-      ...activeTrackers(dir, generation),
+      ...activePreviousTrackers(dir),
+      ...activeTrackers(dir),
     };
   };
   try {
