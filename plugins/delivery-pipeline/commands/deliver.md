@@ -897,14 +897,14 @@ id and its Jira key, preserve the observation, and state why the bypass is
 intentional:
 
 ```bash
-# The orchestrator passes these four values as separate argv/data values:
-# Invocation shape: tracker-record.cjs override <T> <KEY> [options]
-ticket_id="$1"
-jira_key="$2"
-override_reason="$3"
-project_graph="$4"
-node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs override "$ticket_id" "$jira_key" \
-  --reason "$override_reason" --graph "$project_graph"
+# The adapter receives these four values as data, then invokes the wrapper with
+# four separate argv entries. They are never interpolated into shell source.
+record_tracker_override() {
+  local ticket_id="$1" jira_key="$2" override_reason="$3" project_graph="$4"
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs override "$ticket_id" "$jira_key" \
+    --reason "$override_reason" --graph "$project_graph"
+}
+record_tracker_override "$ticket_id" "$jira_key" "$override_reason" "$project_graph"
 ```
 
 This is an exact-ticket escape hatch, not a scope setting: `whole phase N`,
@@ -1287,31 +1287,31 @@ quoted argument, as below. This preserves exact tracker error text without
 letting tracker data become command syntax.
 
   ```bash
-  # The orchestrator passes ticket-id, Jira key, status NAME, assignee identity,
-  # and graph directory as five separate argv/data values. Set assignee_id to
-  # "none" before this call when MCP returned literal null.
-  ticket_id="$1"
-  jira_key="$2"
-  status_name="$3"
-  assignee_id="$4"
-  project_graph="$5"
-  node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs mark "$ticket_id" "$jira_key" \
-    --status "$status_name" --assignee "$assignee_id" \
-    --graph "$project_graph"
+  # The adapter receives ticket-id, Jira key, status NAME, assignee identity,
+  # and graph directory as data, then invokes this wrapper with five separate
+  # argv entries. Set assignee_id to "none" before this call when MCP returned
+  # literal null.
+  record_tracker_mark() {
+    local ticket_id="$1" jira_key="$2" status_name="$3" assignee_id="$4" project_graph="$5"
+    node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs mark "$ticket_id" "$jira_key" \
+      --status "$status_name" --assignee "$assignee_id" \
+      --graph "$project_graph"
+  }
+  record_tracker_mark "$ticket_id" "$jira_key" "$status_name" "$assignee_id" "$project_graph"
   ```
 
 - if the MCP call fails or does not contain a complete answer, preserve the
   tracker's error words and record the fail-closed result instead:
 
   ```bash
-  # The orchestrator passes ticket-id, Jira key, error text, and graph directory
-  # as four separate argv/data values.
-  ticket_id="$1"
-  jira_key="$2"
-  tracker_error="$3"
-  project_graph="$4"
-  node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs unknown "$ticket_id" "$jira_key" \
-    --reason "$tracker_error" --graph "$project_graph"
+  # The adapter receives ticket-id, Jira key, error text, and graph directory as
+  # data, then invokes this wrapper with four separate argv entries.
+  record_tracker_unknown() {
+    local ticket_id="$1" jira_key="$2" tracker_error="$3" project_graph="$4"
+    node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs unknown "$ticket_id" "$jira_key" \
+      --reason "$tracker_error" --graph "$project_graph"
+  }
+  record_tracker_unknown "$ticket_id" "$jira_key" "$tracker_error" "$project_graph"
   ```
 
 Read the cache after recording and recompute the front before dispatching. A
@@ -2099,7 +2099,7 @@ stop at that: move on to the recomputation of the front below.
    drops it from the front and stops the refusal. So a pipeline that will not
    settle ends with a person rather than with you waiting all night — you do not
    need to decide when to give up.
-6. Front empty AND the guard has reported → go to Step 5 (fixpoint).
+7. Front empty AND the guard has reported → go to Step 5 (fixpoint).
 
 `stop-gate.cjs` exists to enforce this rule, because it was skipped repeatedly and
 always at the same moment: writing the summary. Where the runtime offers a stop

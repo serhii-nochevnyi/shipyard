@@ -1725,7 +1725,11 @@ if (require.main === module) {
       { label: 'front state' },
     ), { label: 'front tracker snapshot' });
   } catch (e) {
-    process.stderr.write(`front: cannot read .planning/graph (${e.message}) — run state-sync.cjs first\n`);
+    const message = e && e.message ? e.message : String(e);
+    const isLockFailure = /lock|mid-write|concurrent/i.test(message);
+    process.stderr.write(isLockFailure
+      ? `front: could not compute a coherent .planning/graph front (${message}) — retry after the shared writer finishes\n`
+      : `front: cannot read .planning/graph (${message}) — run state-sync.cjs first\n`);
     process.exit(1);
   }
   // Does the journal prove this cached state is already behind reality? Computed
