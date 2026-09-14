@@ -1781,7 +1781,7 @@ tickets:
     repo: null
     wave: 14
     depends_on: [T-36-04]
-    files: [plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, tests/unit/workflows-args.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, tests/unit/workflows-args.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/source-contract.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: true
