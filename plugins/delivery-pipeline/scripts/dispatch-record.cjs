@@ -80,8 +80,9 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 // RESOLVER's, so it is validated against the resolver's own grammar rather than a
 // regex copied over here — the drift `CODEX_DEEP_ROLES` already paid for.
 const {
-  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime,
+  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime, loadConfig,
 } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { activeTrackers, currentGeneration } = require(path.join(__dirname, 'tracker-record.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -1027,6 +1028,17 @@ function refreshFront(cwd) {
   const { computeFront, ciEstimates } = require(path.join(__dirname, 'front.cjs'));
   const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
+  // A tracker read made after the last published snapshot is recorded against
+  // that snapshot and consumed by the next one. Refresh must match the
+  // standalone front reader, so accept the current and immediately preceding
+  // generations; current wins if both exist for a ticket.
+  const trackerRecordsForFront = () => {
+    const generation = currentGeneration(dir);
+    return {
+      ...activeTrackers(dir, generation - 1),
+      ...activeTrackers(dir, generation),
+    };
+  };
   try {
     return withLock(lockDirFor(cwd), 'state', () => {
       let previous;
@@ -1040,12 +1052,15 @@ function refreshFront(cwd) {
         return null; // no board here yet — state-sync writes the first one
       }
       if (!previous || typeof previous !== 'object' || !state || typeof state !== 'object') return null;
+      const { config } = loadConfig(cwd);
       const front = computeFront(tickets, state, {
         parked: previous.parked_by_run || [],
         autoMerge: previous.auto_merge === 'epic',
         drifted: activeDrift(cwd),
         escalated: activeParks(cwd, state),
         dispatched: activeDispatches(cwd, state),
+        trackerStatuses: config.jira_todo_statuses,
+        trackerRecords: trackerRecordsForFront(),
         ci_estimates: ciEstimates(dir, tickets),
       });
       writeAtomic(frontFile, JSON.stringify({

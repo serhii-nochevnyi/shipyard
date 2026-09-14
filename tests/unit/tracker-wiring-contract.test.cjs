@@ -1,0 +1,79 @@
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const { suite, test, done, assert } = require('./assert-harness.cjs');
+
+const ROOT = path.join(__dirname, '..', '..');
+const PLUGIN = path.join(ROOT, 'plugins', 'delivery-pipeline');
+const DELIVER = path.join(PLUGIN, 'commands', 'deliver.md');
+const STATE_SYNC = path.join(PLUGIN, 'scripts', 'state-sync.cjs');
+const FRONT = path.join(PLUGIN, 'scripts', 'front.cjs');
+const DISPATCH = path.join(PLUGIN, 'scripts', 'dispatch-record.cjs');
+
+const source = (file) => fs.readFileSync(file, 'utf8');
+const between = (text, start, end) => {
+  const from = text.indexOf(start);
+  const to = text.indexOf(end, from + start.length);
+  assert.ok(from >= 0, `missing source marker: ${start}`);
+  assert.ok(to > from, `missing source marker after ${start}: ${end}`);
+  return text.slice(from, to);
+};
+
+suite('tracker wiring — the orchestrator reads once and the writers consume the cache');
+
+test('deliver documents one issue read per pending ticket and fail-closed recording', () => {
+  const doc = source(DELIVER);
+  const section = between(doc, '### Tracker eligibility read (only when `jira_todo_statuses` is non-empty)', '## Step 2 — Drift-gate');
+  assert.match(section, /each pending ticket being considered exactly once/);
+  assert.strictEqual((section.match(/getJiraIssue/g) || []).length, 1);
+  assert.match(section, /status\.name/);
+  assert.match(section, /fields\.status/);
+  assert.match(section, /fields\.assignee/);
+  assert.match(section, /changelog\/worklog history/);
+  assert.match(section, /tracker-record\.cjs mark <T> <KEY>/);
+  assert.match(section, /tracker-record\.cjs unknown <T> <KEY>/);
+  assert.match(section, /preserve the\s+tracker's error words/);
+  assert.match(section, /recompute the front before dispatching/);
+  assert.match(section, /set scope never does/);
+});
+
+test('state-sync passes the prior-generation tracker records without tracker I/O', () => {
+  const doc = source(STATE_SYNC);
+  assert.match(doc, /require\(path\.join\(__dirname, 'tracker-record\.cjs'\)\)/);
+  const publish = between(doc, 'const published = withLock', 'const front = published.front');
+  assert.match(publish, /activeTrackers\(GRAPH_DIR, generation - 1\)/);
+  const call = between(doc, 'const front = computeFront', 'writeAtomic\(STATE');
+  assert.match(call, /trackerStatuses:\s*cfg\.jira_todo_statuses/);
+  assert.match(call, /trackerRecords/);
+  assert.doesNotMatch(doc, /getJiraIssue|searchJiraIssuesUsingJql|changelog|worklog/);
+});
+
+test('front CLI passes the config and active tracker cache to computeFront', () => {
+  const doc = source(FRONT);
+  const cli = between(doc, '// ── CLI: read the state files this project already has and print the verdict ──', 'process.exit(0);');
+  assert.match(cli, /activeTrackers/);
+  assert.match(cli, /trackerStatuses:\s*config\.jira_todo_statuses/);
+  assert.match(cli, /activeTrackers\(dir, generation - 1\)/);
+  assert.match(cli, /activeTrackers\(dir, generation\)/);
+});
+
+test('dispatch refresh uses the same config and active tracker cache', () => {
+  const doc = source(DISPATCH);
+  const refresh = between(doc, 'function refreshFront(cwd)', 'module.exports = {');
+  assert.match(refresh, /loadConfig\(cwd\)/);
+  assert.match(refresh, /activeTrackers\(dir, generation - 1\)/);
+  assert.match(refresh, /activeTrackers\(dir, generation\)/);
+  assert.match(refresh, /trackerStatuses:\s*config\.jira_todo_statuses/);
+  assert.match(refresh, /trackerRecords:\s*trackerRecordsForFront\(\)/);
+});
+
+test('all front writers leave tracker reads outside the GitHub state lock', () => {
+  const sync = source(STATE_SYNC);
+  const lockBody = between(sync, "const published = withLock(lockDirFor(ROOT), 'state', () => {", '}, { label: \'state-sync\' });');
+  assert.doesNotMatch(lockBody, /getJiraIssue|searchJiraIssuesUsingJql|mcp__/);
+  assert.doesNotMatch(source(FRONT), /getJiraIssue|searchJiraIssuesUsingJql|mcp__/);
+  assert.doesNotMatch(source(DISPATCH), /getJiraIssue|searchJiraIssuesUsingJql|mcp__/);
+});
+
+done();

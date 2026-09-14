@@ -53,6 +53,10 @@ const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
 // "An agent is holding this one" — the third durable fact GitHub cannot know, and
 // the one this writer used to drop. See the comment at DISPATCHED below.
 const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
+// Tracker eligibility is observed by the orchestrating loop, never here. This
+// reader only consumes the generation-bound local cache, so state-sync keeps its
+// GitHub tick free of tracker calls and its state lock free of external I/O.
+const { activeTrackers } = require(path.join(__dirname, 'tracker-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
@@ -934,6 +938,12 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
   // "state, yaml and front were written together" is a fact a reader can check
   // rather than a property of this file it has to trust.
   const generation = (onDisk && Number.isInteger(onDisk.generation) ? onDisk.generation : 0) + 1;
+  // Tracker observations are written after the previous snapshot and before
+  // this publish. They are bound to the snapshot that is current on disk, so
+  // feed that prior generation into the new snapshot. The following state-sync
+  // then sees no record for its own predecessor and expires the observation,
+  // forcing a fresh read for any pending ticket that was not taken this round.
+  const trackerRecords = activeTrackers(GRAPH_DIR, generation - 1);
 
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
@@ -948,6 +958,8 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
   // review of this PR.
   const front = computeFront(tickets, state, {
     parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED, escalated: ESCALATED,
+    trackerStatuses: cfg.jira_todo_statuses,
+    trackerRecords,
     // The dispatches still in force — the tickets an agent is holding RIGHT NOW.
     //
     // Three writers produce delivery-front.json (front.cjs's CLI, dispatch-record's

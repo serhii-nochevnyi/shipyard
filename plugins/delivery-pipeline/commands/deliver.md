@@ -1253,6 +1253,50 @@ The `⚠` lines from state-sync — you MUST show them to the human as a separat
 - Cascade: a dependency does NOT have to be merged — a branch is enough. Selecting from
   the middle of the graph is legal; the root of the stack is the epic.
 
+### Tracker eligibility read (only when `jira_todo_statuses` is non-empty)
+
+After scope selection and before any pending ticket can enter `execute`, read
+each pending ticket being considered exactly once through the connected Jira
+MCP. Use the ticket's Jira key and the issue-read operation exposed by that
+connection (for example, `getJiraIssue`); pass only the required issue key,
+cloud/project identifier, and any arguments required by that tool's advertised
+schema. Do not depend on a `fields` versus `view` option, and do not request or
+inspect changelog/worklog history. The default issue response already contains
+the two facts this gate needs: the status NAME and assignee.
+
+Adapt the response shape without changing the predicate:
+
+- read `status.name` and `assignee` from the top-level response or from
+  `fields.status` / `fields.assignee`, as the connected MCP returns them;
+- a literal `null` assignee means explicitly unassigned; a missing, malformed,
+  or otherwise unreadable assignee/status is `unknown`, not unassigned;
+- record a successful observation with the exact status NAME and assignee
+  identity (or `none`):
+
+  ```bash
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs mark <T> <KEY> \
+    --status "<status NAME>" --assignee "<account id|none>" \
+    --graph <project-root>/.planning/graph
+  ```
+
+- if the MCP call fails or does not contain a complete answer, preserve the
+  tracker's error words and record the fail-closed result instead:
+
+  ```bash
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs unknown <T> <KEY> \
+    --reason "<MCP error or missing-field explanation>" \
+    --graph <project-root>/.planning/graph
+  ```
+
+Read the cache after recording and recompute the front before dispatching. A
+current-generation configured-status/unassigned observation reaches `execute`;
+assigned, wrong-status, missing, and `unknown` observations park only that
+ticket with the tracker reason. If the command names one exact ticket, the
+operator may then invoke the documented `tracker-record.cjs override` for that
+ticket; a set scope never does. An unavailable Jira MCP with the policy enabled
+is therefore a per-ticket `unknown` outcome, not permission to proceed and not
+a reason to stop processing other tickets.
+
 ## Step 2 — Drift-gate the chosen tickets
 
 **Who gets a judge is COMPUTED, not decided — ask the script, per ticket:**
