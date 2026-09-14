@@ -39,12 +39,12 @@ function stored(graph) {
   return JSON.parse(fs.readFileSync(path.join(graph, 'tracker.json'), 'utf8'));
 }
 
-function stagePendingOverride(graph, beforeStore, afterStore, eventLine, journalBytes, journalSuffix = eventLine) {
+function stagePendingOverride(graph, beforeStore, afterStore, eventLine, journalBytes, journalSuffix = eventLine, operation) {
   const journal = path.join(graph, 'delivery-log.jsonl');
   const beforeJournal = journalBytes || Buffer.alloc(0);
   fs.writeFileSync(path.join(graph, 'tracker.json'), beforeStore);
   fs.writeFileSync(journal, Buffer.concat([beforeJournal, Buffer.from(journalSuffix)]));
-  fs.writeFileSync(path.join(graph, '.tracker-override.pending.json'), JSON.stringify({
+  const marker = {
     version: 1,
     store_exists: true,
     store_file: true,
@@ -55,7 +55,9 @@ function stagePendingOverride(graph, beforeStore, afterStore, eventLine, journal
     journal_offset: beforeJournal.length,
     journal_digest: crypto.createHash('sha256').update(beforeJournal).digest('hex'),
     event_line: eventLine.toString(),
-  }) + '\n');
+  };
+  if (operation) marker.operation = operation;
+  fs.writeFileSync(path.join(graph, '.tracker-override.pending.json'), JSON.stringify(marker) + '\n');
 }
 
 const markArgs = (graph, ticket, key, assignee = 'none') => [
@@ -158,6 +160,41 @@ test('a retry after completed override recovery is exactly once', () => {
   assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
   assert.strictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8'), eventLine.toString());
   assert.strictEqual(stored(graph).tickets['T-01'].override_reason, 'operator choice');
+});
+
+test('a retry with changed tracker inputs is a new override operation', () => {
+  const { project, graph } = scratch(4);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const observedAt = '2026-09-14T10:00:00.000Z';
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--status', 'Backlog', '--assignee', 'user-5',
+    '--observed-at', observedAt, '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  const operation = {
+    event: 'tracker_override',
+    ticket: 'T-01',
+    jira_key: 'MYD-1',
+    override_reason: 'operator choice',
+    status_provided: true,
+    status: 'Backlog',
+    assignee_provided: true,
+    assignee: 'user-5',
+    observed_at_provided: true,
+    observed_at: observedAt,
+  };
+  stagePendingOverride(graph, beforeStore, beforeStore, eventLine, Buffer.alloc(0), eventLine, operation);
+
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--status', 'Backlog', '--assignee', 'user-6',
+    '--observed-at', observedAt, '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const events = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line));
+  assert.strictEqual(events.length, 2, 'changed tracker facts must not reuse the old recovery');
+  assert.strictEqual(stored(graph).tickets['T-01'].assignee, 'user-6');
 });
 
 test('an override cannot replace the tracker reason through a CLI alias', () => {
