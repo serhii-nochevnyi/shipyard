@@ -1506,7 +1506,7 @@ tickets:
     repo: null
     wave: 13
     depends_on: [T-31-04]
-    files: [plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/stop-gate.cjs, tests/unit/front.test.cjs, tests/unit/stop-gate.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false
