@@ -292,6 +292,28 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-104** — Sentinel stack guards accept the observed PR branch recorded for
   a validated ticket when GitHub's live branch name differs from the canonical
   graph slug, while preserving same-phase and checkpoint boundaries.
+- **REQ-105** — The delivery policy defines one versioned, role-scoped model
+  ladder with explicit model, effort, and escalation signals for research,
+  decomposition, execution, sentinel, integration, drift, architecture review,
+  CI-fix, and review-fix.
+- **REQ-106** — Codex resolves the approved Terra/Sol/Luna/Astra concrete model
+  IDs and efforts, generates/registers every required static variant, and fails
+  closed on unavailable, stale, missing, or conflicting model configuration.
+- **REQ-107** — Claude Code consumes the canonical role/escalation decision via
+  its existing palette without changing that palette, and both runtime adapters
+  reject unsupported or implicit model/effort application.
+- **REQ-108** — Every routed dispatch, including decomposition and dynamic
+  executor paths, passes through one mandatory resolve → validate → launch
+  boundary; inline fallback, parent-session inheritance, and conflicting GSD or
+  per-role overrides cannot bypass the selected model.
+- **REQ-109** — Repair escalation is evidence-backed (`Luna/max` →
+  `Sol/medium` → `Astra/medium`), judgement escalation retains all fired
+  signals, fixed Luna roles are not globally promoted, and missing prior
+  application evidence prevents escalation.
+- **REQ-110** — Dispatch telemetry records policy fingerprint, logical rung,
+  requested/applied/observed model and effort, runtime, backend, agent or launch
+  identity, signals, and receipt; negative tests prove enforcement on both
+  runtimes and preserve Claude palette files/configuration.
 
 *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
 initial isolated tooling slice; subsequent packages remain subject to decomposition
@@ -595,12 +617,23 @@ artifacts, lifecycle gates, cross-runtime packaging, and a reviewed bootstrap of
 this repository's missing GSD state. It must not rewrite historical integration
 findings or turn a merged ticket count into a false phase pass.
 
+### Phase 36: Enforce the runtime model ladder
+**Status**: planned (ADR-014)
+**Requirements**: REQ-105, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110
+
+Implement [ADR-014](architecture/ADR-014-mandatory-runtime-model-ladder.md):
+one canonical role/escalation policy, Codex concrete model palette, Claude
+adapter preservation, mandatory launch enforcement, evidence-backed repair and
+judgement escalation, and complete application telemetry. Deliver in dependency
+order so the resolver exists before generators and callers consume it; the
+existing Claude palette is a read-only compatibility surface.
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `d5b36a17f3261dacc1253a90b206d1e6dd39bdfed272a9dece8be378ad796d83`
-- Plans merged: 90/104
-- Phases verified: 4/16
+- Source fingerprint: `21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2728601387c170`
+- Plans merged: 98/116
+- Phases verified: 4/17
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -615,11 +648,12 @@ findings or turn a merged ticket count into a false phase pass.
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
-| 30 — A ticket you cannot reach is not deliverable | 10 | 3 | pending |
+| 30 — A ticket you cannot reach is not deliverable | 10 | 10 | pending |
 | 31 — Not every ticket is available work | 7 | 0 | pending |
 | 32 — Measure usage and make the backlog actionable | 7 | 7 | passed |
 | 33 — Reduce orchestration context and transfer sessions safely | 0 | 0 | pending |
 | 34 — Improve convergence and tune from measured outcomes | 0 | 0 | pending |
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
+| 36 — Enforce the runtime model ladder | 12 | 1 | pending |
 
 <!-- shipyard:gsd-sync:end -->

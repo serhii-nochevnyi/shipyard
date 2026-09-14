@@ -10,6 +10,15 @@
       "fingerprint": "93a2b624108dd7c5",
       "fingerprint_kind": "role",
       "pr": 90
+    },
+    "T-36-01": {
+      "role": "review-fix",
+      "at": "2026-09-12T20:55:01.317Z",
+      "agent_id": "01a09766-df3b-7640-a298-b2ced9075a82",
+      "dispatch_id": "dispatch-mtyv647d-45d0f032-3001-4d4d-90f5-74db7c83ef49",
+      "fingerprint": "881718480094d741",
+      "fingerprint_kind": "role",
+      "pr": 125
     }
   }
 }

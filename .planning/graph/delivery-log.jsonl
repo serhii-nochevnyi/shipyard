@@ -943,3 +943,40 @@
 {"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-08","from":"pending","to":"pr-open","pr":117}
 {"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-09","from":"pending","to":"pr-open","pr":118}
 {"ts":"2026-09-12T00:07:42.789Z","event":"status_change","ticket":"T-30-10","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-30-04","from":"pr-open","to":"merged","pr":113}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-30-05","from":"pr-open","to":"merged","pr":114}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-30-06","from":"pr-open","to":"merged","pr":115}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-30-07","from":"pr-open","to":"merged","pr":116}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-30-08","from":"pr-open","to":"merged","pr":117}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-30-10","from":"pending","to":"merged","pr":122}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-01","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-02","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-03","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-04","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-05","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-06","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-07","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-08","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-09","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-10","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-11","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T19:57:33.322Z","event":"status_change","ticket":"T-36-12","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-12T20:00:23.062Z","event":"reuse_scan","ticket":"T-36-01","hits":0,"verdict":"fresh"}
+{"ts":"2026-09-12T20:26:45.234Z","event":"status_change","ticket":"T-30-09","from":"pr-open","to":"merged","pr":118}
+{"ts":"2026-09-12T20:26:45.234Z","event":"status_change","ticket":"T-36-01","from":"pending","to":"pr-open","pr":125}
+{"ts":"2026-09-12T20:28:27.634Z","event":"dispatch","ticket":"T-36-01","role":"pr-sentinel","pr":125,"agent_id":"01a0974e-716a-7413-a275-221aa8ce92ad","dispatch_id":"dispatch-mtyu7yid-ac492dc7-1657-422e-8a47-a94110b76675","by":"dispatch-record"}
+{"ts":"2026-09-12T20:29:20.616Z","event":"base_merge","ticket":"T-36-01","pr":125,"base":"epic/36-enforce-the-runtime-model-ladder","head":"a53d4413c56b69cd0e851fc01810377d49e0e367"}
+{"ts":"2026-09-12T20:31:49.293Z","event":"attempt","ticket":"T-36-01","pr":125,"n":1,"role":"ci-fix","model":"opus","effort_applied":"unknown","outcome":"pushed","signature":"2570b45482b75a7e","head":"4ba6331ffc9d9c86c7ce8b94f21b78c4f1bc89e7","hypothesis":"The failure was caused by concrete model IDs in model-policy.cjs being visible outside the configured palette to the generated-source scan."}
+{"ts":"2026-09-12T20:32:18.386Z","event":"base_merge","ticket":"T-36-01","pr":125,"base":"epic/36-enforce-the-runtime-model-ladder","head":"e2b02034faa3c0f94be9ef47ca60708b352cd7e9"}
+{"ts":"2026-09-12T20:32:46.006Z","event":"base_merge","ticket":"T-36-01","pr":125,"base":"epic/36-enforce-the-runtime-model-ladder","head":"f179cba910fd433d6966c2255dc2490df4b02671"}
+{"ts":"2026-09-12T20:35:24.389Z","event":"attempt","ticket":"T-36-01","pr":125,"n":2,"role":"review-fix","model":"opus","effort_applied":"unknown","outcome":"pushed","signature":"2570b45482b75a7e","head":"940038a851b9064a5a0e3f3dd146f2bf3cf8a403","hypothesis":"The review round required the boundary to preserve synchronous compatibility while accepting asynchronous adapter launch receipts, and the Claude availability concern belonged to adapter capability validation."}
+{"ts":"2026-09-12T20:36:34.694Z","event":"escalation","ticket":"T-31-01","pr":null,"reason":"left behind after Phase 31 epic landed; outside current Phase 36 model-ladder scope; requires separate re-decomposition","by":"escalation-record"}
+{"ts":"2026-09-12T20:37:13.313Z","event":"base_merge","ticket":"T-36-01","pr":125,"base":"epic/36-enforce-the-runtime-model-ladder","head":"ce0e7c728f009c0b2a6e73244b20176044fa4841"}
+{"ts":"2026-09-12T20:41:41.311Z","event":"dispatch","ticket":"T-36-01","role":"arch-review","pr":125,"agent_id":"01a0975a-a9ad-77b1-9f9b-0d3717d61d1f","dispatch_id":"dispatch-mtyuoywy-9a4a8a20-cf55-4f91-be1d-a9d7e099bcc5","by":"dispatch-record"}
+{"ts":"2026-09-12T20:44:17.999Z","event":"dispatch","ticket":"T-36-01","role":"review-fix","pr":125,"agent_id":"01a0975d-0a81-7912-91d3-9bca6a56fdfe","dispatch_id":"dispatch-mtyusbte-df0ee239-ac13-4093-b006-1416770e9f40","by":"dispatch-record"}
+{"ts":"2026-09-12T20:47:26.294Z","event":"fix_round","ticket":"T-36-01","pr":125,"outcome":"fixed","pushed":true}
+{"ts":"2026-09-12T20:47:26.327Z","event":"attempt","ticket":"T-36-01","pr":125,"n":3,"role":"review-fix","model":"luna","effort_applied":"max","outcome":"pushed","signature":"2570b45482b75a7e","head":"cd5e3807ea3e97ff9d8d23eb9e35a1e99d8eb0e4","hypothesis":"Judgement escalation was reachable through global risk and caller-controlled window evidence, so it now accepts only ADR-014-approved explicit or measured signals."}
+{"ts":"2026-09-12T20:49:54.537Z","event":"degenerate_green","ticket":"T-36-01","pr":125,"findings":0,"outcome":"clean"}
+{"ts":"2026-09-12T20:53:35.377Z","event":"dispatch","ticket":"T-36-01","role":"arch-review","pr":125,"agent_id":"01a09762-1d91-7d41-89b4-16bd72ff794c","dispatch_id":"dispatch-mtyv49w5-d51810d4-0b9a-4302-ae02-92cfb99e13d5","by":"dispatch-record"}
+{"ts":"2026-09-12T20:55:01.317Z","event":"dispatch","ticket":"T-36-01","role":"review-fix","pr":125,"agent_id":"01a09766-df3b-7640-a298-b2ced9075a82","dispatch_id":"dispatch-mtyv647d-45d0f032-3001-4d4d-90f5-74db7c83ef49","by":"dispatch-record"}
+{"ts":"2026-09-14T12:17:32.355Z","event":"status_change","ticket":"T-36-01","from":"pr-open","to":"merged","pr":125}
