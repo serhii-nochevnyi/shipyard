@@ -1322,6 +1322,15 @@ function recorderRelease(recorder, dispatchId, consumerId, claimAuthority) {
 function recorderStoredRecord(recorder, dispatchId) {
   const state = sharedRecorderState(recorder);
   if (state && state.records.has(dispatchId)) return state.records.get(dispatchId);
+  if (DURABLE_RECORDERS.has(recorder)) {
+    // A branded recorder must prove the on-disk envelope. Never fall back to
+    // its readable legacy accessor here: that accessor exists for recovery and
+    // diagnostics, not for repair authorization across a process boundary.
+    const verified = recorderMethod(recorder, ['getVerifiedRecord']);
+    if (!verified) return null;
+    const result = invokeSync(verified.fn, verified.receiver, [dispatchId], verified.name);
+    return result || null;
+  }
   const verified = recorderMethod(recorder, ['getVerifiedRecord']);
   if (verified) {
     const result = invokeSync(verified.fn, verified.receiver, [dispatchId], verified.name);
