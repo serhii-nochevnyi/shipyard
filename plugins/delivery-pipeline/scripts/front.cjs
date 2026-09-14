@@ -1546,6 +1546,16 @@ function formatFront(front) {
       'Each record also lifts by itself when the ticket\'s state moves or its dispatch times out, ' +
       'so a run that dies here leaves nothing hidden.'
     );
+  } else if (front.actionable_count === 0 && front.tracker_blocked_count) {
+    // A tracker-only hold is unfinished evidence collection, not a pipeline
+    // wait. Without this branch the generic zero-actionable wording prints an
+    // empty wait list and sends the run to ci-wait.cjs, which has nothing to
+    // watch; the ticket's cold-start read or exact-ticket remedy would vanish.
+    lines.push(
+      `fixpoint: NO — ${front.tracker_blocked_count} pending ticket(s) are held by tracker eligibility. ` +
+      'Read each ticket once from Jira at cold start, or name one exact ticket for the documented override, ' +
+      'then recompute the front. This is not a CI wait — do NOT call `ci-wait.cjs`.'
+    );
   } else if (front.actionable_count === 0) {
     // Nothing to start, and what is left is a pipeline. Both waits belong here:
     // a ticket's own checks, and a ticket held behind a parent whose checks are
