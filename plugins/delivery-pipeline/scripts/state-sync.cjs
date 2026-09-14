@@ -57,7 +57,9 @@ const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs')
 // Tracker eligibility is observed by the orchestrating loop, never here. This
 // reader only consumes the generation-bound local cache, so state-sync keeps its
 // GitHub tick free of tracker calls and its state lock free of external I/O.
-const { activeTrackers, metadataIdentity } = require(path.join(__dirname, 'tracker-record.cjs'));
+const {
+  activeTrackersForPublishLocked, metadataIdentity,
+} = require(path.join(__dirname, 'tracker-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
@@ -953,7 +955,7 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   // active reader feeds them into this new snapshot. The following state-sync
   // sees the next generation and expires the observation, forcing a fresh read
   // for any pending ticket that was not taken this round.
-  const trackerRecords = activeTrackers(GRAPH_DIR, cfg.jira_todo_statuses);
+  const trackerRecords = activeTrackersForPublishLocked(GRAPH_DIR, cfg.jira_todo_statuses);
 
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
