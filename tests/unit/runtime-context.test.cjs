@@ -120,6 +120,14 @@ test('unknown or malformed explicit runtimes never fall through to a known host'
   assert.throws(() => resolveDispatchContext(null, { runtime: 'codex', env: { GSD_RUNTIME: 'typo' } }), /GSD_RUNTIME/);
 });
 
+test('empty runtime handshake variables are absent, so active session evidence still wins', () => {
+  const result = resolveDispatchContext(null, {
+    env: { SHIPYARD_RUNTIME: '', GSD_RUNTIME: '', CODEX_SANDBOX: '1' },
+  });
+  assert.equal(result.runtime, 'codex');
+  assert.equal(result.source, 'codex-session-env');
+});
+
 test('project, installed-home and default runtime values remain compatibility-only', () => {
   const installed = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-runtime-install-'));
   fs.writeFileSync(path.join(installed, 'config.toml'), '');
