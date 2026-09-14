@@ -304,6 +304,28 @@ function activePreviousTrackers(graphDir) {
     : {};
 }
 
+// Front readers need the current observation and the one publish-boundary
+// predecessor as one coherent cache view. The exported wrapper takes the
+// tracker lock; state-sync uses the locked form because it already holds that
+// lock before entering its state publish.
+function activeTrackerSnapshotLocked(graphDir) {
+  if (fs.existsSync(pendingPath(graphDir))) return {};
+  const store = readStore(graphDir);
+  const generation = currentGeneration(graphDir);
+  const statuses = readConfigStatuses(projectRootOf(graphDir));
+  return {
+    ...(Number.isInteger(generation) && generation > 1
+      ? recordsForGeneration(store, generation - 1, statuses)
+      : {}),
+    ...recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir)),
+  };
+}
+
+function activeTrackerSnapshot(graphDir) {
+  return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () =>
+    activeTrackerSnapshotLocked(graphDir), { label: 'tracker-record read' });
+}
+
 // The flat view is convenient for callers that only need the current record;
 // unlike the store itself it never exposes an older delivery generation.
 const activeTrackers = activeRecords;
@@ -495,10 +517,19 @@ function override(graphDir, input) {
   const newObservationAt = suppliedObservedAt || observedTimestamp(undefined);
   return mutateRecord(graphDir, (store) => {
     const generation = requireGeneration(graphDir);
+    const generationIdentity = requireMetadataIdentity(graphDir);
     const existing = store.tickets[ticket];
-    const reusable = existing && existing.generation === generation && existing.jira_key === jiraKey
+    const reusable = existing && existing.generation === generation
+      && existing.generation_identity === generationIdentity
+      && existing.jira_key === jiraKey
       ? existing
       : null;
+
+    if ((input.statusProvided || input.assigneeProvided) && (!reusable || reusable.verdict === 'unknown')) {
+      throw new Error(
+        'tracker facts may be overridden only after a complete current-generation tracker observation'
+      );
+    }
 
     let status = reusable && typeof reusable.status === 'string' ? reusable.status : null;
     let assignee = reusable && Object.prototype.hasOwnProperty.call(reusable, 'assignee')
@@ -557,6 +588,7 @@ function override(graphDir, input) {
       override_reason: overrideReason,
       observed_at: observedAt,
       generation,
+      generation_identity: generationIdentity,
     };
     const at = new Date().toISOString();
     return {
@@ -700,6 +732,8 @@ module.exports = {
   currentGeneration,
   activeRecords,
   activePreviousTrackers,
+  activeTrackerSnapshot,
+  activeTrackerSnapshotLocked,
   activeTrackers,
   observe,
   unknown,

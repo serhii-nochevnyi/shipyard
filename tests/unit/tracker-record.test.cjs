@@ -167,19 +167,33 @@ test('an override without a current observation stays unknown instead of fabrica
   assert.match(record.reason, /no current tracker observation/);
 });
 
+test('an override cannot invent tracker facts without a current observation', () => {
+  const { project, graph } = scratch();
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-02', 'MYD-2', '--status', 'Backlog', '--assignee', 'user-5',
+    '--reason', 'urgent named ticket', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /only after a complete current-generation tracker observation/);
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
+  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')));
+});
+
 test('an override cannot turn an unknown assignee into a complete observation', () => {
   const { project, graph } = scratch();
   execFileSync('node', [
     RECORD, 'unknown', 'T-02', 'MYD-2', '--status', 'To Do', '--reason', 'assignee lookup timed out', '--graph', graph,
   ], { cwd: project });
-  execFileSync('node', [
+  const r = spawnSync('node', [
     RECORD, 'override', 'T-02', 'MYD-2', '--status', 'Backlog', '--reason', 'operator named this ticket explicitly', '--graph', graph,
-  ], { cwd: project });
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /only after a complete current-generation tracker observation/);
   const record = stored(graph).tickets['T-02'];
   assert.strictEqual(record.verdict, 'unknown');
   assert.strictEqual(record.eligible, null);
   assert.strictEqual(record.assignee_observed, false);
-  assert.match(record.reason, /incomplete/);
+  assert.match(record.reason, /assignee lookup timed out/);
 });
 
 test('an override refuses a malformed delivery generation', () => {
@@ -299,6 +313,14 @@ test('the previous-generation reader is derived internally and cannot be caller-
   assert.deepStrictEqual(Object.keys(record.activePreviousTrackers(graph)), ['T-01']);
   assert.deepStrictEqual(Object.keys(record.activeRecords(graph)), ['T-02']);
   assert.deepStrictEqual(record.activeRecords(graph, 1), record.activeRecords(graph));
+});
+
+test('the front snapshot combines bounded generations from one store read', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
+  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
+  assert.deepStrictEqual(Object.keys(require(RECORD).activeTrackerSnapshot(graph)), ['T-01', 'T-02']);
 });
 
 test('a malformed or missing metadata file never falls back to the advisory front generation', () => {
