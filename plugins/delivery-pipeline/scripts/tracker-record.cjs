@@ -71,24 +71,20 @@ function readGeneration(file) {
 /**
  * Read the generation of the last published delivery-state snapshot.
  *
- * The metadata file is authoritative. The front copy is a compatibility
- * fallback only when metadata has never existed; a present but malformed
- * metadata file means there is no trustworthy active generation. Zero is the
- * pre-publication generation used by isolated/unit callers; the first real
- * state-sync publishes generation one and expires such records.
+ * The metadata file is authoritative. A missing or malformed metadata file
+ * means there is no trustworthy active generation; the front is an advisory
+ * rendering and cannot prove that a snapshot was published. Zero is the
+ * pre-publication generation used by isolated/unit callers; production readers
+ * never expose records from it.
  */
 function currentGeneration(graphDir) {
   const meta = readGeneration(path.join(graphDir, META_NAME));
-  if (meta.present) return meta.generation;
-  const front = readGeneration(path.join(graphDir, 'delivery-front.json'));
-  return front.present ? front.generation : 0;
+  return meta.present ? meta.generation : 0;
 }
 
 function currentGenerationStrict(graphDir) {
   const meta = readGeneration(path.join(graphDir, META_NAME));
   if (meta.present) return meta.generation;
-  const front = readGeneration(path.join(graphDir, 'delivery-front.json'));
-  if (front.present) return front.generation;
   // Keep the writer usable for a freshly created graph. A real state-sync will
   // move to generation 1 on its first publish, so generation 0 cannot survive
   // across the first cold start.
@@ -103,19 +99,44 @@ function requireGeneration(graphDir) {
   return generation;
 }
 
-function activeRecordsAt(graphDir, generation) {
-  if (!Number.isInteger(generation) || generation < 0) return {};
+function recordsForGeneration(store, generation) {
+  if (!Number.isInteger(generation) || generation < 1) return {};
   const out = {};
-  for (const [ticket, record] of Object.entries(readStore(graphDir).tickets)) {
-    if (!record || record.generation !== generation) continue;
-    if (typeof record.verdict !== 'string' || !record.verdict) continue;
+  for (const [ticket, record] of Object.entries(store.tickets)) {
+    if (!record || record.ticket !== ticket || record.generation !== generation) continue;
+    if (!validRecord(record)) continue;
     out[ticket] = { ...record };
   }
   return out;
 }
 
+function validRecord(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  if (typeof record.ticket !== 'string' || !record.ticket.trim()) return false;
+  if (typeof record.jira_key !== 'string' || !record.jira_key.trim()) return false;
+  if (!Number.isInteger(record.generation) || record.generation < 0) return false;
+  if (typeof record.observed_at !== 'string' || !Number.isFinite(Date.parse(record.observed_at))) return false;
+  if (typeof record.reason !== 'string' || !record.reason.trim()) return false;
+  if (typeof record.assignee_observed !== 'boolean'
+      && !(record.verdict !== 'unknown' && Object.prototype.hasOwnProperty.call(record, 'assignee'))) return false;
+  if (record.verdict === 'unknown') {
+    return record.eligible === null
+      && (record.status === null || (typeof record.status === 'string' && !!record.status.trim()))
+      && (record.assignee === null || (typeof record.assignee === 'string' && !!record.assignee.trim()));
+  }
+  if (!['eligible', 'ineligible'].includes(record.verdict)) return false;
+  if (typeof record.status !== 'string' || !record.status.trim()) return false;
+  const assigneeObserved = record.assignee_observed === true
+    || Object.prototype.hasOwnProperty.call(record, 'assignee');
+  if (!assigneeObserved) return false;
+  return typeof record.eligible === 'boolean'
+    && record.eligible === (record.verdict === 'eligible')
+    && (record.assignee === null || (typeof record.assignee === 'string' && !!record.assignee.trim()));
+}
+
 function activeRecords(graphDir) {
-  return activeRecordsAt(graphDir, currentGeneration(graphDir));
+  const store = readStore(graphDir);
+  return recordsForGeneration(store, currentGeneration(graphDir));
 }
 
 // Tracker observations are recorded against the snapshot that was current
@@ -123,9 +144,10 @@ function activeRecords(graphDir) {
 // generation, so front readers need this narrow, internally-derived bridge
 // across that publish boundary. Callers cannot choose an arbitrary generation.
 function activePreviousTrackers(graphDir) {
+  const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
-  return Number.isInteger(generation) && generation > 0
-    ? activeRecordsAt(graphDir, generation - 1)
+  return Number.isInteger(generation) && generation > 1
+    ? recordsForGeneration(store, generation - 1)
     : {};
 }
 
@@ -172,6 +194,8 @@ function writeRecord(graphDir, ticket, record) {
   return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
     const store = readStore(graphDir);
     const previous = store.tickets[ticket];
+    const previousGeneration = previous && Number.isInteger(previous.generation) ? previous.generation : -1;
+    const incomingGeneration = Number.isInteger(record.generation) ? record.generation : -1;
     const previousAt = previous && typeof previous.observed_at === 'string'
       ? Date.parse(previous.observed_at)
       : NaN;
@@ -179,10 +203,14 @@ function writeRecord(graphDir, ticket, record) {
       ? Date.parse(record.observed_at)
       : NaN;
     // The lock orders writers, not the observations they captured before
-    // queueing for it. Preserve an already stored observation when it is newer
-    // than the incoming result, otherwise a delayed timeout can overwrite a
-    // fresher eligible/ineligible answer for the same generation.
-    const stored = Number.isFinite(previousAt) && (!Number.isFinite(incomingAt) || previousAt > incomingAt)
+    // queueing for it. Generation is the primary ordering key: a late result
+    // from an older snapshot can never replace a newer snapshot's record. Only
+    // observations in the same generation are ordered by observed_at.
+    const previousWins = previousGeneration > incomingGeneration
+      || (previousGeneration === incomingGeneration
+        && Number.isFinite(previousAt)
+        && (!Number.isFinite(incomingAt) || previousAt > incomingAt));
+    const stored = previousWins
       ? previous
       : record;
     store.tickets[ticket] = stored;
@@ -208,6 +236,7 @@ function observe(graphDir, input) {
     verdict: result.verdict,
     eligible: result.eligible,
     reason: result.reason,
+    assignee_observed: true,
     observed_at: observedAt,
     generation,
   };
@@ -232,6 +261,7 @@ function unknown(graphDir, input) {
     verdict: 'unknown',
     eligible: null,
     reason,
+    assignee_observed: !!input.assigneeProvided,
     observed_at: input.observedAt || new Date().toISOString(),
     generation: requireGeneration(graphDir),
   };
