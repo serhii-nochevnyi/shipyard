@@ -42,66 +42,78 @@ exit 0 from validate-graph.cjs.
 3. No ADR at all → say to run `/shipyard:investigate` first, and stop.
 4. Multiple candidates → AskUserQuestion: which ADR (or several into one phase).
 
-## Step 0.5 — GSD agent models
+## Step 0.5 — Mandatory GSD runtime dispatch
 
-Decomposition is performed by GSD agents — their models are governed NOT by this skill
-but by GSD's own block in `.planning/config.json`. Check it and, if absent, propose
-adding it (project policy: role × risk × attempt routing — judgment always top tier,
-code by risk, repair via an escalation ladder, mechanics → Sonnet; profile —
-`pipeline.model_policy: economy|balanced|premium`, details in /shipyard:deliver):
+Every GSD launch made by this command crosses the ADR-014 dispatch boundary.
+The boundary, not `.planning/config.json`, a model profile, or an inherited
+session, is the authority for runtime, model, effort, escalation, and receipt.
+Initialize it before starting the GSD chain:
 
-```json
-{
-  "model_profile": "balanced",
-  "granularity": "standard",
-  "models": { "planning": "opus", "research": "sonnet", "execution": "opus", "verification": "sonnet" },
-  "context_window": 1000000,
-  "agent_skills": {
-    "gsd-planner": [".shipyard/generated/gsd-delivery-rules"],
-    "gsd-executor": [".shipyard/generated/gsd-delivery-rules"]
-  },
-  "ship": {
-    "pr_body_sections": [
-      { "heading": "Acceptance Criteria", "enabled": true,
-        "source": "PLAN.md ## Acceptance criteria",
-        "fallback": "- Covered by linked requirements and verification evidence." },
-      { "heading": "Risks & Dependencies", "enabled": true,
-        "source": "PLAN.md ## Risks || PLAN.md ## Dependencies",
-        "fallback": "- No known high-risk rollout dependencies." }
-    ]
-  }
-}
-```
+1. Identify the active host runtime. It MUST be exactly `codex` or `claude` and
+   MUST be passed explicitly on every `boundary.dispatch` input. A project
+   preference, an installed integration, or an ambiguous host is not runtime
+   selection.
+2. Use `createDispatchBoundary` from `dispatch-boundary.cjs` with the matching
+   `createCodexDispatchAdapter` or `createClaudeDispatchAdapter` and a
+   `createDurableRecorder`. The adapter must advertise the selected model and
+   effort pair. If the adapter, capabilities, recorder, or typed GSD launch
+   hook is unavailable, refuse before launching.
+3. Use the canonical boundary call for each role:
+   `boundary.dispatch({ runtime, role, signals, dispatch_id }, context)`.
+   The boundary resolves and validates the canonical policy, invokes the
+   runtime adapter, verifies application evidence, and records the receipt.
+   Do not resolve a model and then launch it through another path.
 
-**Config namespaces — do not conflate them:**
-- `models` / `model_profile` / `model_overrides` / `granularity` / `runtime`
-  (TOP level) belong to **GSD** and govern the GSD agents. `runtime` is an
-  execution context, not a shared project preference; leave it unset so the
-  active install can select it. `models.*` takes only
-  tier aliases; a full model ID may be pinned per-agent via `model_overrides`, and
-  GSD resolves it itself. If you pin one, verify the id against the current model
-  catalog first — do NOT copy a generation out of this document, it will be stale.
-  `model_profile` is `quality | balanced | budget | adaptive | inherit`.
-- `delivery_pipeline.*` / `pipeline.*` belong to **shipyard** and govern the
-  conveyor's own agents (see /shipyard:deliver). They take tier aliases ONLY,
-  because the Agent tool rejects full model IDs.
+The GSD role mapping is fixed and explicit:
 
-**`agent_skills` — use the project-relative projection.** This is how the
-frontmatter contract actually reaches the GSD planner and executor without
-making a shared checkout choose one host. `gsd-tune.cjs --apply` generates
-`.shipyard/generated/gsd-delivery-rules/SKILL.md` from the canonical skill and
-merges the path into both agent entries. A project-relative path resolves on
-both Claude and Codex; the runtime-native global skills remain available for
-direct Shipyard commands. Legacy `global:shipyard:delivery-rules` and
-`global:shipyard-delivery-rules` entries are migrated out by `gsd-tune`.
+| GSD launch | Boundary role | Base selection | Declared escalation signals |
+| --- | --- | --- | --- |
+| `gsd-phase-researcher` | `research` | Terra/high | `type: alternatives` or `complexity: very-complex` |
+| `gsd-planner` | `decomposition` | Sol/medium | `critical: true` or `checkpoint: true` |
+| `gsd-plan-checker` | `decomposition` | Sol/medium | `critical: true` or `checkpoint: true` |
 
-Do not put a hardcoded `runtime` in a shared project config. `pipeline-config`
-warns when a legacy namespaced entry would be skipped on the active runtime or
-when the project projection has not been generated.
+Research starts at Terra/high. Only the two declared research signals may
+escalate it; risk, criticality, token count, contestation, or a generic
+"important" label does not promote research. Decomposition starts at
+Sol/medium and may escalate to Astra/medium only for the declared critical or
+checkpoint signal. If both declared signals are present, let the canonical
+policy choose the highest applicable rung and retain the signal evidence.
+Pass signals as policy inputs; never compose a model, effort, alias, or literal
+fallback in this command.
 
-(`context_window` — GSD enables adaptive-context enrichment at **≥ 500 000**;
-`1000000` is for 1M-context models. Context-window selection is a GSD/runtime
-concern; it cannot be encoded in an Agent spawn's `model`.)
+Runtime-specific launch handling is also fixed:
+
+- On Codex, the researcher is the static generated-agent route: use the
+  boundary's validated `agent_file` and immutable handoff through
+  `launchStatic`. The planner and checker are dynamic decomposition routes:
+  pass `resolution.launch_arguments.model` and
+  `resolution.launch_arguments.reasoning_effort` unchanged to the typed GSD
+  host callback.
+- On Claude, all three roles use the workflow adapter's explicit native alias
+  and supported effort from `resolution.launch_arguments.model` and
+  `resolution.launch_arguments.effort`. Do not translate aliases or invent a
+  Codex model id.
+
+The `/gsd-plan-phase` Skill is only a coordinator for these callbacks. Wire its
+`gsd-phase-researcher`, `gsd-planner`, and `gsd-plan-checker` launches to the
+boundary map above; an opaque Skill invocation that spawns them outside the
+boundary is unavailable and MUST be refused. The typed host callback may run
+the named GSD role, but it must not replace it with a `generic-agent`, a bare
+Agent/Task launch, or a direct inline call. It must not inherit a model,
+effort, runtime, or session selection.
+
+Treat a dispatch as successful only when the returned record contains a
+boundary-verified receipt (`receipt.compliance` is `verified`) and the durable
+recorder has acknowledged the record. Retain the dispatch id, receipt, and
+trace as decomposition evidence for the corresponding researcher, planner, or
+checker launch. Host exit status or self-asserted application evidence alone
+is not a receipt. Missing or failed evidence is a refusal, not a fallback.
+
+If configuration must be loaded, use the routed `pipeline-config.cjs`
+`resolveDispatch` bridge only for canonical preflight with the explicit active
+runtime. Its compatibility tier/model readers, GSD `models` or
+`model_overrides`, `model_profile`, and session defaults cannot select or
+authorize a launch, and they cannot replace the boundary receipt.
 
 ## Step 1 — Clarify the mode and the ticket size
 
@@ -125,11 +137,27 @@ parses ADRs.)
 
 ## Step 2 — GSD chain
 
-1. Pick the phase number: the next free one (or the user's argument).
-2. Run `/gsd-plan-phase <N> --ingest <adr-paths> [--tdd|--mvp]`
+Before invoking GSD, complete Step 0.5 and keep one durable boundary recorder
+for the chain. The three launches below are separate dispatches and each must
+produce its own recorded receipt:
+
+1. `gsd-phase-researcher` → `role: research`, with only the declared research
+   signals.
+2. `gsd-planner` → `role: decomposition`, with only the declared
+   critical/checkpoint signals.
+3. `gsd-plan-checker` → `role: decomposition`, with only the declared
+   critical/checkpoint signals.
+
+The Skill/coordinator must pass the explicit runtime and resolved launch
+selection into each typed callback. Never collapse these roles into one inline
+prompt or launch a generic agent when a callback cannot apply the resolution.
+
+4. Pick the phase number: the next free one (or the user's argument).
+5. Run `/gsd-plan-phase <N> --ingest <adr-paths> [--tdd|--mvp]`
    (via the Skill tool if GSD commands are available as skills, otherwise prompt
-   the user to run it and wait).
-3. **Verify materialization**: `ls .planning/phases/<N>-*/*-PLAN.md` — the files
+   the user to run it and wait). If the available Skill cannot be wired to the
+   boundary callbacks, refuse instead of running it opaquely.
+6. **Verify materialization**: `ls .planning/phases/<N>-*/*-PLAN.md` — the files
    MUST exist. If the GSD chain is unavailable or did not create the files —
    do NOT substitute Jira tickets for them: create the PLAN.md files yourself, one per
    ticket, using the template:
@@ -171,7 +199,7 @@ parses ADRs.)
    `files_modified`/`requirements` is rejected by Gate 2: it is almost always a
    comment that leaked into the value, and a corrupted path silently disables the
    file-overlap guarantee for that entry.
-4. Run `/gsd-plan-review-convergence <N> --all --max-cycles 3`
+7. Run `/gsd-plan-review-convergence <N> --all --max-cycles 3`
    (if available; skipping convergence is a TUNE, skipping files is a BLOCK).
 
 ## Step 3 — Delivery frontmatter extension
