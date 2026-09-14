@@ -301,6 +301,14 @@ test('the previous-generation reader is derived internally and cannot be caller-
   assert.deepStrictEqual(record.activeRecords(graph, 1), record.activeRecords(graph));
 });
 
+test('the front snapshot combines bounded generations from one store read', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
+  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
+  assert.deepStrictEqual(Object.keys(require(RECORD).activeTrackerSnapshot(graph)), ['T-01', 'T-02']);
+});
+
 test('a malformed or missing metadata file never falls back to the advisory front generation', () => {
   const { project, graph } = scratch(7);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
