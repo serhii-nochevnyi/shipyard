@@ -64,9 +64,11 @@ test('state-sync passes the active tracker records without tracker I/O', () => {
 test('front CLI passes the config and active tracker cache to computeFront', () => {
   const doc = source(FRONT);
   const cli = between(doc, '// ── CLI: read the state files this project already has and print the verdict ──', 'process.exit(0);');
-  assert.match(cli, /activeTrackerSnapshot/);
+  assert.match(cli, /activeTrackerSnapshotLocked/);
   assert.match(cli, /trackerStatuses:\s*config\.jira_todo_statuses/);
-  assert.match(cli, /activeTrackerSnapshot\(dir\)/);
+  assert.match(cli, /activeTrackerSnapshotLocked\(dir\)/);
+  assert.match(cli, /withLock\(lockDirFor\(root\), 'tracker-record'/);
+  assert.match(cli, /withLock\(\s*lockDirFor\(root\),\s*'state'/);
 });
 
 test('dispatch refresh uses the same config and active tracker cache', () => {

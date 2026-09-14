@@ -1640,11 +1640,27 @@ if (require.main === module) {
   const root = process.cwd();
   const dir = path.join(root, '.planning', 'graph');
   const read = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+  const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
+  const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
   let tickets = {};
   let state = {};
+  let trackerRecords = {};
   try {
-    tickets = (read('tickets.json') || {}).tickets || {};
-    state = read('delivery-state.json');
+    // Read the state inputs and tracker cache as one publication. State-sync
+    // publishes under tracker-record -> state, so the standalone reader must
+    // take the same order; otherwise a sync between these reads can produce a
+    // board from a state/tickets pair and tracker snapshot that never coexisted.
+    const snapshot = withLock(lockDirFor(root), 'tracker-record', () => withLock(
+      lockDirFor(root),
+      'state',
+      () => ({
+        tickets: (read('tickets.json') || {}).tickets || {},
+        state: read('delivery-state.json'),
+        trackerRecords: activeTrackerSnapshotLocked(dir),
+      }),
+      { label: 'front state' },
+    ), { label: 'front tracker snapshot' });
+    ({ tickets, state, trackerRecords } = snapshot);
   } catch (e) {
     process.stderr.write(`front: cannot read .planning/graph (${e.message}) — run state-sync.cjs first\n`);
     process.exit(1);
@@ -1697,13 +1713,6 @@ if (require.main === module) {
   // The RECORDS, not the flat view: the board's lifting sentence is chosen by the
   // park's kind, and the flat map keeps the kind only as a text prefix.
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
-  const { activeTrackerSnapshot } = require(path.join(__dirname, 'tracker-record.cjs'));
-  // A tracker read made after the last published snapshot is recorded against
-  // that snapshot and consumed by the next one. Read the current and the
-  // immediately preceding generations as one lock-protected cache view; two
-  // independent reads can straddle a clear or pending override transaction and
-  // hand computeFront a combination that never existed on disk.
-  const trackerRecords = activeTrackerSnapshot(dir);
   const front = computeFront(tickets, state, {
     parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
     drifted: activeDrift(root), escalated: activeParks(root, state),
