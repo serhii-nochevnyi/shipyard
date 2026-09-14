@@ -132,9 +132,25 @@ function validPendingMarker(marker) {
 // audit line. The marker makes that pair recoverable across a killed process.
 // Readers fail closed while it exists, and the next writer either finalizes a
 // journal line that made it to disk or rolls back a missing/partial append.
+function completedRecovery(marker) {
+  let event;
+  let store;
+  try {
+    event = JSON.parse(marker.event_line);
+    store = JSON.parse(Buffer.from(marker.after_store, 'base64').toString('utf8'));
+  } catch (error) {
+    throw new Error(`cannot recover tracker override: completed marker payload is corrupt (${error.message})`);
+  }
+  const record = store && store.tickets && event && store.tickets[event.ticket];
+  if (!event || event.event !== 'tracker_override' || typeof event.ticket !== 'string' || !record) {
+    throw new Error('cannot recover tracker override: completed marker has no matching record');
+  }
+  return { event, record };
+}
+
 function recoverPendingLocked(graphDir) {
   const markerFile = pendingPath(graphDir);
-  if (!fs.existsSync(markerFile)) return;
+  if (!fs.existsSync(markerFile)) return null;
   let marker;
   try {
     marker = JSON.parse(fs.readFileSync(markerFile, 'utf8'));
@@ -154,7 +170,7 @@ function recoverPendingLocked(graphDir) {
     if (!marker.journal_file) {
       restoreStoreSnapshot(graphDir, marker);
       unlinkIfPresent(markerFile);
-      return;
+      return null;
     }
     throw new Error(`cannot recover tracker override: ${journal} changed shape while the transaction was pending`);
   }
@@ -169,7 +185,7 @@ function recoverPendingLocked(graphDir) {
   if (eventAt >= 0 && (eventAt === 0 || suffix[eventAt - 1] === 0x0a)) {
     writeAtomic(graphStore(graphDir), Buffer.from(marker.after_store, 'base64'));
     unlinkIfPresent(markerFile);
-    return;
+    return completedRecovery(marker);
   }
   // Other journal writers do not share the tracker lock. If one appended after
   // the marker but before this transaction's append, keep that complete line
@@ -185,14 +201,14 @@ function recoverPendingLocked(graphDir) {
     rewriteJournalIfUnchanged(journal, current, preserved, preserved.length === 0 && !marker.journal_exists);
     restoreStoreSnapshot(graphDir, marker);
     unlinkIfPresent(markerFile);
-    return;
+    return null;
   }
   const lastNewline = suffix.lastIndexOf(0x0a);
   const tail = suffix.subarray(lastNewline + 1);
   if (tail.length === 0) {
     restoreStoreSnapshot(graphDir, marker);
     unlinkIfPresent(markerFile);
-    return;
+    return null;
   }
   if (tail.length > eventLine.length || !eventLine.subarray(0, tail.length).equals(tail)) {
     throw new Error(`cannot recover tracker override: the journal contains an unrelated append at the pending transaction offset`);
@@ -209,6 +225,7 @@ function recoverPendingLocked(graphDir) {
   );
   restoreStoreSnapshot(graphDir, marker);
   unlinkIfPresent(markerFile);
+  return null;
 }
 
 function projectRootOf(graphDir) {
@@ -359,24 +376,30 @@ function validRecord(record, configuredStatuses, identity) {
     && (record.assignee === null || (typeof record.assignee === 'string' && !!record.assignee.trim()));
 }
 
-function activeRecords(graphDir) {
+function activeRecords(graphDir, configuredStatuses) {
   if (fs.existsSync(pendingPath(graphDir))) return {};
   const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
-  return recordsForGeneration(store, generation, readConfigStatuses(projectRootOf(graphDir)), metadataIdentity(graphDir));
+  const statuses = Array.isArray(configuredStatuses)
+    ? configuredStatuses
+    : readConfigStatuses(projectRootOf(graphDir));
+  return recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir));
 }
 
 // Tracker observations are recorded against the snapshot that was current
 // when the external read happened. The next state-sync publishes the next
 // generation, so front readers need this narrow, internally-derived bridge
 // across that publish boundary. Callers cannot choose an arbitrary generation.
-function activePreviousTrackers(graphDir) {
+function activePreviousTrackers(graphDir, configuredStatuses) {
   if (fs.existsSync(pendingPath(graphDir))) return {};
   const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
   const previousIdentity = metadataPreviousIdentity(graphDir);
+  const statuses = Array.isArray(configuredStatuses)
+    ? configuredStatuses
+    : readConfigStatuses(projectRootOf(graphDir));
   return Number.isInteger(generation) && generation > 1
-    ? recordsForGeneration(store, generation - 1, readConfigStatuses(projectRootOf(graphDir)), previousIdentity)
+    ? recordsForGeneration(store, generation - 1, statuses, previousIdentity)
     : {};
 }
 
@@ -384,11 +407,13 @@ function activePreviousTrackers(graphDir) {
 // predecessor as one coherent cache view. The exported wrapper takes the
 // tracker lock; state-sync uses the locked form because it already holds that
 // lock before entering its state publish.
-function activeTrackerSnapshotLocked(graphDir) {
+function activeTrackerSnapshotLocked(graphDir, configuredStatuses) {
   if (fs.existsSync(pendingPath(graphDir))) return {};
   const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
-  const statuses = readConfigStatuses(projectRootOf(graphDir));
+  const statuses = Array.isArray(configuredStatuses)
+    ? configuredStatuses
+    : readConfigStatuses(projectRootOf(graphDir));
   const previousIdentity = metadataPreviousIdentity(graphDir);
   return {
     ...(Number.isInteger(generation) && generation > 1
@@ -398,9 +423,9 @@ function activeTrackerSnapshotLocked(graphDir) {
   };
 }
 
-function activeTrackerSnapshot(graphDir) {
+function activeTrackerSnapshot(graphDir, configuredStatuses) {
   return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () =>
-    activeTrackerSnapshotLocked(graphDir), { label: 'tracker-record read' });
+    activeTrackerSnapshotLocked(graphDir, configuredStatuses), { label: 'tracker-record read' });
 }
 
 // The flat view is convenient for callers that only need the current record;
@@ -502,11 +527,25 @@ function writeRecord(graphDir, ticket, record) {
     }, { label: 'tracker-record state binding' }), { label: 'tracker-record' });
 }
 
-function mutateRecord(graphDir, fn) {
+function sameRecoveredOperation(event, operation) {
+  return event && operation
+    && event.event === operation.event
+    && event.ticket === operation.ticket
+    && event.jira_key === operation.jira_key
+    && event.override_reason === operation.override_reason;
+}
+
+function mutateRecord(graphDir, operation, fn) {
   if (!hasGraph(graphDir)) throw new Error(`no ticket graph at ${graphDir}`);
   fs.mkdirSync(graphDir, { recursive: true });
   return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
-    recoverPendingLocked(graphDir);
+    const recovered = recoverPendingLocked(graphDir);
+    // If this invocation is the retry of a transaction whose journal append
+    // and cache write both landed before the process died, return that durable
+    // result instead of running the override callback a second time. A
+    // different operation may still proceed after recovery has removed the
+    // marker.
+    if (recovered && sameRecoveredOperation(recovered.event, operation)) return recovered.record;
     const beforeStore = fileSnapshot(graphStore(graphDir));
     const store = readStore(graphDir);
     const result = fn(store);
@@ -602,7 +641,12 @@ function override(graphDir, input) {
   const overrideReason = requireNonEmpty(input.reason, 'override reason');
   const suppliedObservedAt = input.observedAt === undefined ? null : observedTimestamp(input.observedAt);
   const newObservationAt = suppliedObservedAt || observedTimestamp(undefined);
-  return mutateRecord(graphDir, (store) => {
+  return mutateRecord(graphDir, {
+    event: 'tracker_override',
+    ticket,
+    jira_key: jiraKey,
+    override_reason: overrideReason,
+  }, (store) => {
     const generation = requireGeneration(graphDir);
     const generationIdentity = requireMetadataIdentity(graphDir);
     const existing = store.tickets[ticket];
@@ -659,10 +703,6 @@ function override(graphDir, input) {
         observationReason = 'tracker observation is incomplete; eligibility is unknown';
       }
     }
-    if (input.observationReasonProvided) {
-      observationReason = requireNonEmpty(input.observationReason, 'observation reason');
-    }
-
     const record = {
       ticket,
       jira_key: jiraKey,
@@ -724,8 +764,7 @@ function parseArgs(argv) {
   const positional = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--status' || arg === '--assignee' || arg === '--reason' || arg === '--observed-at'
-        || arg === '--observation-reason' || arg === '--observed-reason') {
+    if (arg === '--status' || arg === '--assignee' || arg === '--reason' || arg === '--observed-at') {
       const value = args[++i];
       if (value === undefined || value.startsWith('--')) throw new Error(`${arg} needs a value`);
       const key = arg.slice(2).replace(/-/g, '_');
@@ -794,9 +833,6 @@ function cli() {
         statusProvided: Object.prototype.hasOwnProperty.call(values, 'status'),
         assigneeProvided: Object.prototype.hasOwnProperty.call(values, 'assignee'),
         reason: values.reason,
-        observationReason: values.observation_reason || values.observed_reason,
-        observationReasonProvided: Object.prototype.hasOwnProperty.call(values, 'observation_reason')
-          || Object.prototype.hasOwnProperty.call(values, 'observed_reason'),
         observedAt: values.observed_at,
       });
       console.log(`tracker override recorded for ${record.ticket} at generation ${record.generation}`);
