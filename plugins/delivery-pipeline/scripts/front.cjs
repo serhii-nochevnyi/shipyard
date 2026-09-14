@@ -1662,6 +1662,11 @@ if (require.main === module) {
   // human's, so the standalone CLI has to read it too (state-sync passes it in).
   const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
   const { config, valid, error } = loadConfig(root);
+  // An unreadable policy cannot authorize a tracker-gated dispatch. Keep the
+  // standalone reader aligned with state-sync and dispatch-record: a sentinel
+  // status can satisfy no real observation, and the snapshot must be empty so
+  // a cached eligible record cannot leak through the refusal path.
+  const trackerStatuses = valid ? config.jira_todo_statuses : ['__config_invalid__'];
   // A CONFIGURATION THAT DOES NOT PARSE PERMITS NO MUTATION (ADR-004 D2, audit
   // F03), and this CLI is a reachable surface for it: `deliver.md` advertises it
   // as re-runnable on its own. `loadConfig` keeps `config` populated so a board
@@ -1715,11 +1720,11 @@ if (require.main === module) {
       () => {
         const tickets = (read('tickets.json') || {}).tickets || {};
         const state = read('delivery-state.json');
-        const trackerRecords = activeTrackerSnapshotLocked(dir, config.jira_todo_statuses);
+        const trackerRecords = valid ? activeTrackerSnapshotLocked(dir, trackerStatuses) : {};
         return computeFront(tickets, state, {
           parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
           drifted: activeDrift(root), escalated: activeParks(root, state),
-          trackerStatuses: config.jira_todo_statuses,
+          trackerStatuses,
           trackerRecords,
           dispatched: activeDispatches(root, state),
           ci_estimates: ciEstimates(dir, tickets),

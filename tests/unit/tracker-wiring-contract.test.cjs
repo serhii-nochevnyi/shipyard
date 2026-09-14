@@ -70,12 +70,13 @@ test('front CLI passes the config and coherent tracker snapshot to computeFront'
   const doc = source(FRONT);
   const cli = between(doc, '// ── CLI: read the state files this project already has and print the verdict ──', 'process.exit(0);');
   assert.match(cli, /activeTrackerSnapshotLocked/);
-  assert.match(cli, /trackerStatuses:\s*config\.jira_todo_statuses/);
-  assert.match(cli, /activeTrackerSnapshotLocked\(dir, config\.jira_todo_statuses\)/);
+  assert.match(cli, /const trackerStatuses = valid \? config\.jira_todo_statuses : \['__config_invalid__'\]/);
+  assert.match(cli, /valid \? activeTrackerSnapshotLocked\(dir, trackerStatuses\) : \{\}/);
+  assert.match(cli, /trackerStatuses,/);
   assert.match(cli, /withLock\(lockDirFor\(root\), 'tracker-record'/);
   assert.match(cli, /withLock\(\s*lockDirFor\(root\),\s*'state'/);
   const lockBody = between(cli, "withLock(lockDirFor(root), 'tracker-record'", '  } catch (e)');
-  assert.match(lockBody, /const trackerRecords = activeTrackerSnapshotLocked\(dir, config\.jira_todo_statuses\)/);
+  assert.match(lockBody, /const trackerRecords = valid \? activeTrackerSnapshotLocked\(dir, trackerStatuses\) : \{\}/);
   assert.match(lockBody, /return computeFront\(tickets, state/);
 });
 

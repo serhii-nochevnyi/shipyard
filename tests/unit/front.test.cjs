@@ -2765,6 +2765,23 @@ const frontJson = (dir) => {
   assert.strictEqual(r.status, 0, `front --json must exit 0 (${r.stderr})`);
   return JSON.parse(r.stdout);
 };
+const pendingTrackerBoard = (configText) => {
+  const dir = demoBoard(configText);
+  const graph = path.join(dir, '.planning', 'graph');
+  dfs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({
+    tickets: { 'T-01-01': { jira: 'MYD-1' } },
+  }));
+  dfs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({
+    'T-01-01': { status: 'pending', ready: true },
+  }));
+  dfs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 7 }));
+  const recorded = dspawn(process.execPath, [
+    path.join(D_SCRIPTS, 'tracker-record.cjs'), 'mark', 'T-01-01', 'MYD-1',
+    '--status', 'To Do', '--assignee', 'none', '--graph', graph,
+  ], { cwd: dir, encoding: 'utf8' });
+  assert.strictEqual(recorded.status, 0, `tracker fixture must be recordable (${recorded.stderr})`);
+  return dir;
+};
 // The comparable half: everything the run acts on, with `capacity` left out —
 // that block already differed on base, and it is not what decides a dispatch.
 const boardShape = (f) => ({ actionable: f.actionable, waiting: f.waiting, parked: f.parked, sentinel: f.sentinel });
@@ -2790,6 +2807,16 @@ test('a corrupt config offers NO finalize, and the reason rides both faces', () 
   assert.strictEqual(human.stdout.split('\n')[0], j.config_invalid,
     `the refusal leads the human face: ${JSON.stringify(human.stdout.split('\n').slice(0, 3))}`);
   assert.ok(!/finalize/.test(human.stdout.split('\n')[1] || ''), human.stdout);
+});
+
+test('a corrupt config cannot leak an eligible tracker cache into execute', () => {
+  const j = frontJson(pendingTrackerBoard(CORRUPT));
+  assert.deepStrictEqual(j.actionable.execute, [],
+    'an unreadable policy must not let the standalone CLI dispatch from a cached eligible record');
+  assert.ok(j.parked.blocked.includes('T-01-01'), JSON.stringify(j));
+  assert.strictEqual(j.actionable_count, 0);
+  assert.ok(typeof j.config_invalid === 'string' && j.config_invalid, JSON.stringify(j));
+  assert.strictEqual(j.fixpoint, false, 'a refused tracker-gated board is not a finished phase');
 });
 
 test('the corrupt answer equals the answer a file that SAYS off gives, never the default epic', () => {
