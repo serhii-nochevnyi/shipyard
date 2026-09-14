@@ -61,7 +61,8 @@ function resolveGsdLib(explicit, codexHome) {
   if (explicit) candidates.push(expandHome(explicit));
   candidates.push(path.join(codexHome, 'gsd-core', 'bin', 'lib', 'runtime-artifact-conversion.cjs'));
   for (const c of candidates) {
-    if (c && fs.existsSync(c)) return c;
+    const resolved = c && path.resolve(c);
+    if (resolved && fs.existsSync(resolved)) return resolved;
   }
   fail(
     'could not locate gsd-core runtime-artifact-conversion.cjs.\n' +
@@ -73,7 +74,10 @@ function resolveGsdLib(explicit, codexHome) {
 // Static selections come only from ADR-014 metadata. Project palettes/remaps
 // remain compatibility settings for other callers; they cannot tune this bundle.
 const policy = require('../plugins/delivery-pipeline/scripts/model-policy.cjs');
-const { codexSkillNames, codexStaticVariants, validateCodexCapabilities, validateCodexBundle } = require('../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
+const {
+  codexSkillNames, codexStaticVariants, validateCodexCapabilities, validateCodexBundle,
+  payloadFiles, payloadDigests,
+} = require('../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const digest = (content) => require('crypto').createHash('sha256').update(content).digest('hex');
 
 // Compatibility exports use generated reference names (research is inv-research)
@@ -169,6 +173,11 @@ function main() {
 
   if (!fs.existsSync(pluginDir)) fail(`plugin dir not found: ${pluginDir}`);
   const gsdLib = resolveGsdLib(args['gsd-lib'], codexHome);
+  // Capture the converter before loading or generating anything. Validation
+  // compares this exact pre-generation snapshot with the live file again, so a
+  // concurrent refresh cannot silently produce a bundle whose manifest names a
+  // converter different from the one that was loaded.
+  const gsdLibDigest = digest(fs.readFileSync(gsdLib));
   const convert = require(gsdLib);
   for (const fn of ['convertClaudeCommandToCodexSkill', 'convertClaudeToCodexMarkdown']) {
     if (typeof convert[fn] !== 'function') fail(`gsd-core lib missing export ${fn} (incompatible version?)`);
@@ -278,6 +287,8 @@ function main() {
   }
 
   // The manifest binds ownership, policy identity, files and registrations.
+  const skillFiles = payloadFiles(path.join(outDir, 'skills'));
+  const bundleFiles = payloadFiles(path.join(outDir, 'bundle'));
   const manifest = {
     phase,
     policy_id: policy.POLICY.id,
@@ -292,10 +303,16 @@ function main() {
     skill_digests: Object.fromEntries(emittedSkills.map((name) => [
       name, digest(fs.readFileSync(path.join(outDir, 'skills', name, 'SKILL.md'))),
     ])),
+    skill_files: skillFiles,
+    skill_file_digests: payloadDigests(path.join(outDir, 'skills'), skillFiles),
+    bundle_files: bundleFiles,
+    bundle_digests: payloadDigests(path.join(outDir, 'bundle'), bundleFiles),
     agents: emittedAgents.map((a) => a.agentName),
     agent_files: emittedAgents.map((a) => `${a.agentName}.toml`),
     registrations: emittedAgents.map((a) => `agents.${a.agentName}`),
     gsdLib,
+    gsd_lib: gsdLib,
+    gsd_lib_digest: gsdLibDigest,
   };
   writeFile(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 

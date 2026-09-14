@@ -19,6 +19,8 @@ for f in scripts/gen-codex-shipyard.cjs scripts/merge-codex-config.cjs scripts/i
 done
 node --check scripts/gen-codex-shipyard.cjs
 node --check scripts/merge-codex-config.cjs
+node --check plugins/delivery-pipeline/scripts/gsd-tune.cjs
+node --check plugins/delivery-pipeline/scripts/dispatch-record.cjs
 node --check plugins/delivery-pipeline/scripts/gsd-sync.cjs
 node --check capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs
 bash -n scripts/install-shipyard-codex.sh
@@ -71,7 +73,9 @@ GSD_BEFORE="$(gsd_owned_state)"
 # version's converter. The installer now refreshes gsd-core to the latest by
 # default — correct for a user, wrong here: it would overwrite the setup this
 # test just built and make every assertion below describe a different gsd-core
-# than the one it installed. Exported once; every install call below inherits it.
+# than the one it installed. Most installs use this explicit host fixture; a
+# later call deliberately unsets it to exercise the installer's bare-install
+# provisioning path.
 export SHIPYARD_GSD_AUTO_INSTALL=0
 
 # Explicit host capability fixture, independent of the compatibility palette.
@@ -105,6 +109,20 @@ grep -rq 'CLAUDE_PLUGIN_ROOT' "$SKILLS"/shipyard-*/SKILL.md && { echo "CLAUDE_PL
 grep -rq '/shipyard:' "$SKILLS"/shipyard-*/SKILL.md && { echo "unconverted /shipyard: reference"; exit 1; } || true
 grep -rq '[$]shipyard-' "$SKILLS"/shipyard-*/SKILL.md || { echo "no \$shipyard- invocations found"; exit 1; }
 grep -q 'codex_skill_adapter' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "missing codex adapter header"; exit 1; }
+for f in "$SKILLS/shipyard-deliver/SKILL.md" "$CODEX_HOME/agents/shipyard-pr-sentinel.toml"; do
+  if grep -Eq 'inv-research-critical|pr-sentinel-deep|arch-review-deep' "$f"; then
+    echo "canonical Codex instructions name a non-emitted variant: $f"; exit 1
+  fi
+done
+grep -q 'shipyard-integrator-critical' "$SKILLS/shipyard-deliver/SKILL.md" \
+  || { echo "canonical deliver instructions omit integrator-critical"; exit 1; }
+
+# A documented bare install must still pass the same capability gate. The
+# installer provisions a complete canonical contract only when no explicit host
+# evidence is supplied; it never disables validation.
+env -u SHIPYARD_CODEX_CAPABILITIES_FILE bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+[[ -f "$CODEX_HOME/agents/.shipyard-manifest.json" ]] \
+  || { echo "bare install did not produce an ownership manifest"; exit 1; }
 
 # bundle payload carries the deterministic scripts (incl. the telemetry layer)
 # and they are valid node — the deliver skill calls them via the rewritten root
@@ -239,6 +257,14 @@ for (const role of policy.DYNAMIC_ROLES) {
   }
 }
 assert.equal(require(path.join(home, 'shipyard/scripts/model-policy.cjs')).POLICY_HASH, policy.POLICY_HASH);
+for (const file of manifest.skill_files) {
+  const text = fs.readFileSync(path.join(home, '..', '.agents', 'skills', file), 'utf8');
+  assert.equal(require('crypto').createHash('sha256').update(text).digest('hex'), manifest.skill_file_digests[file]);
+}
+for (const file of manifest.bundle_files) {
+  const text = fs.readFileSync(path.join(home, 'shipyard', file), 'utf8');
+  assert.equal(require('crypto').createHash('sha256').update(text).digest('hex'), manifest.bundle_digests[file]);
+}
 console.log(variants.length);
 NODE
 )"

@@ -11,8 +11,8 @@ set -euo pipefail
 #
 # Prerequisites:
 #   - node on PATH
-#   - gsd-core already installed for Codex:
-#       npx --yes @opengsd/gsd-core@latest --codex --global
+#   - network access for the default gsd-core bootstrap (or an existing install
+#     with SHIPYARD_GSD_AUTO_INSTALL=0)
 #
 # Environment overrides:
 #   CODEX_HOME         Codex config home (default: ~/.codex)
@@ -21,6 +21,8 @@ set -euo pipefail
 #   SHIPYARD_PROJECT_DIR  conveyor project root whose .planning/config.json is read
 #   SHIPYARD_CODEX_CAPABILITIES_FILE  host JSON: supportedModels, supportedEfforts,
 #                                    optional supportedSelections [{model, effort}]
+#                                    (optional; omitted means the canonical
+#                                    ADR-014 Codex contract is provisioned)
 #
 # Usage: bash scripts/install-shipyard-codex.sh [--phase 1|2] [--project-dir <dir>]
 
@@ -50,9 +52,15 @@ command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; e
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
 [[ -d "$PROJECT_DIR" ]] || { echo "error: project dir missing: $PROJECT_DIR" >&2; exit 1; }
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
-# gsd-core's installed converter is needed for read-only bundle preflight.
-# Refresh happens after validation so a refused bundle cannot rewrite the host.
+# gsd-core's installed converter is needed for read-only bundle preflight. It is
+# bootstrapped/refreshed BEFORE checking for it and before generation, so a fresh
+# documented install does not fail before the dependency can be installed. No
+# refresh is allowed after generation: the manifest binds the exact converter
+# bytes used for the staged bundle.
 # SHIPYARD_GSD_AUTO_INSTALL=0 opts out; GSD_CORE_VERSION pins the refresh.
+if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
+  bash "$REPO_ROOT/scripts/ensure-gsd-core.sh" codex
+fi
 if [[ ! -f "$GSD_TOOLS" ]]; then
   echo "error: gsd-core for Codex not found at $GSD_TOOLS" >&2
   echo "       install it first:" >&2
@@ -204,10 +212,47 @@ snapshot_runtime_path() {
 }
 trap 'cleanup $?' EXIT
 OUT="$STAGE/bundle-out"
+CAPABILITIES_FILE="${SHIPYARD_CODEX_CAPABILITIES_FILE:-$STAGE/codex-capabilities.json}"
 RUNTIME_BACKUP="$STAGE/runtime-before"
 RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
 mkdir -p "$RUNTIME_BACKUP"
 : > "$RUNTIME_BACKUP_INDEX"
+
+# A bare install still has to cross the same strict capability gate as an
+# explicitly provisioned host. When no host capability document was supplied,
+# materialize the complete ADR-014 Codex contract from the canonical policy;
+# this is evidence for the installer transaction, not a model-less/default
+# fallback. An explicit host document remains authoritative and is never
+# replaced.
+if [[ -z "${SHIPYARD_CODEX_CAPABILITIES_FILE:-}" ]]; then
+  SHIPYARD_CODEX_CAPABILITIES_OUT="$CAPABILITIES_FILE" \
+  SHIPYARD_CODEX_PHASE="$PHASE" \
+  SHIPYARD_MODEL_POLICY="$PLUGIN_DIR/scripts/model-policy.cjs" \
+  node - <<'NODE'
+const fs = require('fs');
+const policy = require(process.env.SHIPYARD_MODEL_POLICY);
+const phase = Number(process.env.SHIPYARD_CODEX_PHASE || 2);
+if (![1, 2].includes(phase)) throw new Error(`Codex phase must be 1 or 2 (got ${phase})`);
+const roles = policy.ROLES.filter((role) => phase === 2 || ['research', 'decomposition'].includes(role));
+const selections = [];
+for (const role of roles) {
+  for (const rung of policy.CODEX_ROLE_RUNG_DEFINITIONS[role]) {
+    const selection = { model: policy.CODEX_MODEL_IDS[rung.model_key], effort: rung.effort };
+    if (!selections.some((entry) => entry.model === selection.model && entry.effort === selection.effort)) {
+      selections.push(selection);
+    }
+  }
+}
+const capabilities = {
+  source: 'shipyard-installer:adr-014-codex-contract',
+  phase,
+  supportedModels: [...new Set(selections.map((entry) => entry.model))],
+  supportedEfforts: [...new Set(selections.map((entry) => entry.effort))],
+  supportedSelections: selections,
+};
+fs.writeFileSync(process.env.SHIPYARD_CODEX_CAPABILITIES_OUT, `${JSON.stringify(capabilities, null, 2)}\n`);
+NODE
+fi
 
 # ── generate ─────────────────────────────────────────────────────────────────
 echo "→ generating Codex bundle (phase $PHASE)…"
@@ -216,18 +261,12 @@ echo "→ generating Codex bundle (phase $PHASE)…"
 GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" \
   --plugin "$PLUGIN_DIR" --out "$OUT" \
   --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE" \
-  --project-dir "$PROJECT_DIR"
+  --project-dir "$PROJECT_DIR" --capabilities "$CAPABILITIES_FILE"
 
 # Validate the staged generation against the source policy and host evidence
 # before any destination replacement (including agents/config/capabilities).
 node "$PLUGIN_DIR/scripts/gsd-tune.cjs" --validate-codex-bundle "$OUT" \
-  --codex-home "$CODEX_HOME" --phase "$PHASE"
-
-# Refresh the dependency only after the bundle passes preflight. An invalid
-# generation must not let GSD rewrite the destination's config first.
-if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
-  bash "$REPO_ROOT/scripts/ensure-gsd-core.sh" codex
-fi
+  --codex-home "$CODEX_HOME" --phase "$PHASE" --capabilities "$CAPABILITIES_FILE"
 
 # ── skills + bundle install LAST ───────────────────────────────────────────────
 # Keep both staged until agent/config/capability/AGENTS.md have succeeded, so a
