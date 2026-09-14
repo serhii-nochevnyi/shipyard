@@ -709,9 +709,58 @@ Consequences you must honour:
   "@coderabbitai full review" on whatever unrelated PR shares that number here.
 - **Tracking is free, EXECUTING needs a local checkout.** Configure it:
   `pipeline.repos: {"pdffiller/jsfiller": "/abs/path/to/jsfiller"}` (absolute —
-  the run works from many worktrees). state-sync prints a `⚠ repo … has no local
-  checkout configured` line when it is missing: those tickets can be tracked but
-  not driven, and saying so is mandatory, not optional.
+  the run works from many worktrees). state-sync prints a `⚠ repo … holds …
+  ticket(s) but is track-only — <reason>` line when resolution cannot produce an
+  executable checkout: those tickets can be tracked but not driven, and saying
+  so is mandatory, not optional.
+- **Cold-start resolution follows the configured then discovery branches.** For
+  every foreign ticket before preparing its worktree, call:
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs resolve <owner/name> \
+  --ticket <T-id> --project-dir <project-root> --json`. A result with
+  `resolution: "configured"` or `resolution: "discovered"` and `executable: true`
+  supplies `repository_root`; `resolution: "track-only"` or
+  `resolution: "undiscovered"` supplies the ticket and reason. An
+  `resolution: "ambiguous"` result lists every candidate and must be handed to
+  the operator; this branch never picks by basename. Do not prompt or clone from
+  this branch; those are later resolver steps. Carry an executable result's
+  `repository_root` in the ticket's per-repo execution context and use that
+  value for the worktree, git and gh calls below; do not re-read `pipeline.repos`
+  after resolution, because a unique discovered checkout is executable before
+  the later write-back step.
+- **An unresolved checkout requires an explicit D3 choice.** For an
+  `undiscovered` or `ambiguous` result, ask one question naming the repository
+  slug and present exactly: clone to the validated default destination, provide
+  an existing checkout path, or skip for now. Apply the answer with:
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs choose <owner/name> \
+  --ticket <T-id> --project-dir <project-root> --choice <clone|existing|skip> \
+  [--path <existing-checkout>] --json`. The `existing` choice is executable only
+  after the resolver confirms the path is a repository root with the requested
+  origin and an allowed nesting layout. A `clone` choice reads the project's
+  `git remote get-url origin`, calls `gh repo view <owner/name> --json sshUrl,url`,
+  and selects `sshUrl` for an SSH project origin or `url` for an HTTPS project
+  origin. It refuses missing, inconsistent, or credential-bearing metadata and
+  records the safe `clone_url`, protocol, validated destination, and intent; it
+  does not run `git clone` in this resolver step. Never let gh's global git
+  protocol preference choose the URL.
+- **An explicit clone is a delivery action.** After the operator chooses clone,
+  use the state entry's effective `base` and the safe values returned by `choose`:
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs clone <owner/name> \
+  --ticket <T-id> --project-dir <project-root> --destination <validated-destination> \
+  --base <state[T-id].base> --clone-url <safe-clone-url> --json`. This performs a
+  full clone, verifies `refs/remotes/origin/<base>`, and writes the canonical
+  checkout path back to `.planning/config.json` atomically while preserving the
+  other keys. A failed clone, missing base, or refused config write returns a
+  track-only result with a `park_reason`; park that ticket and continue the rest
+  of the board. A 404 from GitHub says the repository is inaccessible or
+  nonexistent; it does not prove which one.
+- **Silence selects skip.** In a text-mode or unattended run, omit the choice
+  and pass `--non-interactive`; the result is `resolution: "track-only"`,
+  `decision: "skip"`, and a non-empty `park_reason`. Immediately make that
+  reason durable from the project directory with:
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/escalation-record.cjs mark <T-id> \
+  <park_reason> --graph <project-root>/.planning/graph`. Do not carry this only
+  through `state-sync --parked`: the escalation record is the durable park and
+  the front must continue with the rest of the graph.
 - **`.planning/` stays in the project repo only.** State, plans and the log never
   get copied into the sibling checkout.
 - A plan whose `files_modified` uses `../other-repo/...` paths is a broken plan,
@@ -1314,8 +1363,10 @@ the branch exists and only the publish half is missing (skip straight to 5).
    root → epic; dependent → the primary parent's branch; merged parent → epic).
    Do NOT construct the base by hand and don't take main directly in epic-stacked.
    `state[T].repo` present → run every git/gh step of this ticket in THAT repo's
-   checkout (`pipeline.repos`), `gh … --repo <owner/name>`; no checkout configured
-   → the ticket can only be TRACKED: park it and say so.
+   resolved `repository_root` from the cold-start execution context, with
+   `gh … --repo <owner/name>`; `pipeline.repos` is only the configured input to
+   resolution, not a second source of truth for execution. No executable
+   resolution → the ticket can only be TRACKED: park it and say so.
 2. Preflight (GSD 1.7): if gsd-tools is available —
    `node ~/.claude/gsd-core/bin/gsd-tools.cjs worktree base-check` —
    catches a divergence of HEAD from the fork-base before creating the worktree

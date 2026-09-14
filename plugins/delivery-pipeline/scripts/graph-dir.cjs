@@ -97,15 +97,101 @@ function loadTickets(argv, worktree, label) {
  * remote-only ref does not resolve through a bare name, and a stale local one is
  * worse because it does.
  *
- * The full refs/remotes/ probe makes SHAs and already-prefixed refs fall through
- * naturally. Callers print the resolved ref: a silently substituted base would be
- * a new invisible behaviour, which is the exact class this exists to remove.
+ * The full refs/remotes/ probe makes SHAs and explicit refs safe. A shorthand
+ * `origin/foo` is tried as the literal branch name first, then as the common
+ * remote-qualified spelling for `foo`; this preserves a real branch named
+ * `origin/foo` while keeping existing callers compatible. Callers print the
+ * resolved ref: a silently substituted base would be a new invisible
+ * behaviour, which is the exact class this exists to remove.
  */
-function resolveBaseRef(worktreePath, base) {
-  const r = spawnSync('git',
-    ['-C', worktreePath, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${base}`],
-    { encoding: 'utf8' });
-  return r.status === 0 ? `origin/${base}` : base;
+function parseOriginBase(base) {
+  if (typeof base !== 'string') return null;
+  const raw = base.trim();
+  if (!raw) return null;
+  let mode = 'bare';
+  let value = raw;
+  if (raw.startsWith('refs/remotes/origin/')) {
+    mode = 'explicit-remote';
+    value = raw.slice('refs/remotes/origin/'.length);
+  } else if (raw.startsWith('refs/heads/')) {
+    mode = 'explicit-local';
+    value = raw.slice('refs/heads/'.length);
+  } else if (raw.startsWith('refs/')) {
+    return null;
+  } else if (raw.startsWith('origin/')) {
+    mode = 'origin-shorthand';
+    value = raw.slice('origin/'.length);
+  }
+  // This is used as one component of a ref path passed to git. Keep the
+  // accepted vocabulary narrower than git's full ref grammar so a malformed
+  // ticket base cannot escape the intended refs/remotes/origin namespace.
+  if (!value || value.startsWith('-') || value.endsWith('/') || value.endsWith('.lock')) return null;
+  if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.includes('..') || value.includes('//')) return null;
+  return { mode, raw, value };
 }
 
-module.exports = { resolveGraphDir, loadTickets, repoRootOf, resolveBaseRef };
+function originRefName(base) {
+  const parsed = parseOriginBase(base);
+  return parsed ? parsed.value : null;
+}
+
+function originRefCandidates(base) {
+  const parsed = parseOriginBase(base);
+  if (!parsed) return [];
+  if (parsed.mode === 'origin-shorthand') return [parsed.raw, parsed.value];
+  return [parsed.value];
+}
+
+function originBaseLabel(base) {
+  const name = originRefName(base);
+  return name ? `origin/${name}` : null;
+}
+
+/**
+ * Resolve a named base strictly through origin's remote-tracking namespace.
+ * A missing result is deliberately null: callers that require a fresh clone
+ * must not silently fall back to a local branch or bare name.
+ *
+ * @param {string} worktreePath
+ * @param {string} base
+ * @returns {string|null} `origin/<base>` when the commit exists
+ */
+function resolveOriginRef(worktreePath, base) {
+  for (const name of originRefCandidates(base)) {
+    const r = spawnSync('git',
+      ['-C', worktreePath, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${name}^{commit}`],
+      { encoding: 'utf8' });
+    if (r.status === 0) return `origin/${name}`;
+  }
+  return null;
+}
+
+/**
+ * Resolve a local branch for a local clone source. The destination clone still
+ * proves the resulting origin ref; this accepts a source checkout whose branch
+ * exists locally but whose own remote-tracking namespace has not been refreshed.
+ */
+function resolveLocalBranchRef(worktreePath, base) {
+  for (const name of originRefCandidates(base)) {
+    const r = spawnSync('git',
+      ['-C', worktreePath, 'rev-parse', '--verify', '-q', `refs/heads/${name}^{commit}`],
+      { encoding: 'utf8' });
+    if (r.status === 0) return `refs/heads/${name}`;
+  }
+  return null;
+}
+
+function resolveBaseRef(worktreePath, base) {
+  return resolveOriginRef(worktreePath, base) || base;
+}
+
+module.exports = {
+  resolveGraphDir,
+  loadTickets,
+  repoRootOf,
+  originRefName,
+  originBaseLabel,
+  resolveOriginRef,
+  resolveLocalBranchRef,
+  resolveBaseRef,
+};

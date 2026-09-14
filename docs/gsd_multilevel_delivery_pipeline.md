@@ -433,6 +433,24 @@ Parallelism is free: all tickets for which `ready(T)` holds are launched
 simultaneously — each in its own worktree, file conflicts ruled out by Gate 2.
 The cascade also makes the chain independent: a child starts as soon as the parent has a branch.
 
+### 6.1a. Multi-repository cold start
+
+A ticket with `delivery.repo: owner/name` is tracked in the project's graph but is
+executed from a checkout of that repository. On every cold start, `state-sync`
+resolves each foreign repository in this order: the absolute `pipeline.repos`
+entry, a unique origin-matching checkout in the declared roots, then an explicit
+operator choice. A successful discovery or existing-checkout choice is written
+back to `.planning/config.json` atomically, so the next run uses the configured
+path without asking again. Unparseable configuration or a failed write parks the
+tickets for that repository with the resolver reason and leaves other repositories
+moving.
+
+Cloning is a separate explicit action. It follows the project's origin protocol,
+uses a full clone, verifies `refs/remotes/origin/<base>` before execution, and
+keeps an unverified checkout for diagnosis rather than deleting it. A failed
+GitHub lookup is reported as the repository being inaccessible or nonexistent;
+the pipeline does not claim to know which case occurred.
+
 **Branch naming.** A ticket's branch is `ticket/<ID>-<slug>`, where the slug is the
 **ticket title after sanitization**: lowercase, Cyrillic is
 transliterated, any character other than letters and digits (spaces, `: , ( ) / ' "`
@@ -900,7 +918,7 @@ human's, so GSD's "no auto-merge" boundary is preserved where it matters.
   `uat-gate.cjs ${PHASE_NUMBER}` wraps the fail-closed predicate
   `phase uat-passed` — /gsd-ship will not pass without verification evidence
   (switch: `delivery_pipeline.uat_gate`). Without a phase in context — skip.
-- **GSD projection gates** (capability v0.51.1): `gsd-sync.cjs` writes after
+- **GSD projection gates** (capability v0.52.0): `gsd-sync.cjs` writes after
   `plan:post`, `execute:post`, and `verify:post`, then runs in `--check` mode at
   `ship:pre` (switch: `delivery_pipeline.gsd_sync`). The launcher is inert when
   no plan carries a Shipyard `delivery:` block, so ordinary GSD projects are not
