@@ -449,9 +449,10 @@ test('recovery refuses an override appended after a torn journal prefix', () => 
   execFileSync('node', [
     RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
   ], { cwd: project });
+  const afterStore = fs.readFileSync(path.join(graph, 'tracker.json'));
   const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
   const tornPrefix = Buffer.from('{"event":"interrupted"');
-  stagePendingOverride(graph, beforeStore, eventLine, eventLine, tornPrefix);
+  stagePendingOverride(graph, beforeStore, afterStore, eventLine, tornPrefix);
   const journal = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
   const r = spawnSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project, encoding: 'utf8' });
   assert.notStrictEqual(r.status, 0);
@@ -459,6 +460,35 @@ test('recovery refuses an override appended after a torn journal prefix', () => 
   assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'tracker.json')), beforeStore);
   assert.ok(fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
   assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl')), journal);
+});
+
+test('recovery of another ticket does not reopen an existing exact-ticket override', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'keep T-01 override', '--graph', graph,
+  ], { cwd: project });
+  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
+
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  const journalBefore = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-02', 'MYD-2', '--reason', 'pending T-02 override', '--graph', graph,
+  ], { cwd: project });
+  const fullJournal = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  const eventLine = fullJournal.subarray(journalBefore.length);
+  const afterStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  stagePendingOverride(graph, beforeStore, afterStore, eventLine, journalBefore, eventLine);
+
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'must read again',
+    '--status', 'Backlog', '--assignee', 'none', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /cannot be replaced on an existing exact-ticket override/);
+  assert.strictEqual(stored(graph).tickets['T-01'].override, true);
+  assert.strictEqual(stored(graph).tickets['T-01'].status, 'To Do');
+  assert.strictEqual(stored(graph).tickets['T-02'].override, true);
 });
 
 test('recovery truncates only a partial UTF-8 override append', () => {
