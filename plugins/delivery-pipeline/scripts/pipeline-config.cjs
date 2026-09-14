@@ -1462,7 +1462,18 @@ const GSD_PROFILE_FOR_POLICY = Object.freeze({
 function boundDispatchContext(cfg) {
   if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return null;
   const context = LOADED_DISPATCH_CONTEXTS.get(cfg);
-  if (!context) return null;
+  if (!context) {
+    // Copies retain routed intent but lose the loader's private binding. Never
+    // interpret that loss of provenance as permission to use compatibility.
+    if (cfg.dispatch_context?.mode === 'routed' || cfg.dispatch_context?.routed === true) {
+      throw modelPolicy.policyError(
+        'INVALID_CONFIG',
+        'config.dispatch_context is routed but config is not bound to loadConfig; reload with routed: true',
+        { source: 'config.dispatch_context' },
+      );
+    }
+    return null;
+  }
   if (cfg.dispatch_context !== context) {
     throw modelPolicy.policyError(
       'INVALID_CONFIG',

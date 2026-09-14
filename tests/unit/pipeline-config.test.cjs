@@ -2276,6 +2276,33 @@ test('routed readers reject a replacement context before compatibility fallback'
   }
 });
 
+for (const [name, copy] of [
+  ['spread', (config) => ({ ...config })],
+  ['serialized', (config) => JSON.parse(JSON.stringify(config))],
+]) {
+  test(`routed readers reject an unbound ${name} copy before compatibility fallback`, () => {
+    const original = routedConfig().config;
+    const config = copy(original);
+    assert.equal(resolveModel('executor', {}, original), 'gpt-5.6-luna');
+    for (const read of [
+      () => resolveModel('executor', {}, config),
+      () => resolveEffort('executor', 'gpt-5.6-luna', config),
+      () => routeOf('executor', {}, config),
+      () => resolveDispatch({ config, role: 'executor' }),
+      () => taskLevelRoute('executor', {}, config),
+      () => fableRoute('executor', {}, config),
+      () => signalGaps('executor', {}, config),
+    ]) {
+      assert.throws(read, (error) => error.name === 'DispatchPolicyError'
+        && error.code === 'INVALID_CONFIG'
+        && error.details.source === 'config.dispatch_context'
+        && error.message.includes('config.dispatch_context'));
+    }
+    const compatibility = copy(withRawOptions({}, { runtime: 'codex', env: {} }).config);
+    assert.equal(resolveModel('executor', {}, compatibility), 'sonnet');
+  });
+}
+
 test('compatibility parsing cannot hide a conflicting routed decomposition override', () => {
   for (const [key, value] of [['models', 'opus'], ['effort', 'low']]) {
     const { config, warnings } = withRawOptions({ pipeline: { [key]: { decomposition: value } } },
