@@ -189,6 +189,23 @@ function readGeneration(file) {
   };
 }
 
+// The numeric counter is monotonic only while its metadata file survives. The
+// file identity makes a recreated/reset metadata file a new publication epoch,
+// even when an operator restores the same numeric generation from a backup.
+function metadataIdentity(graphDir) {
+  const file = path.join(graphDir, META_NAME);
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) return null;
+    const raw = fs.readFileSync(file);
+    const inode = `${stat.dev}:${stat.ino}:${stat.mtimeNs || Math.round(stat.mtimeMs * 1e6)}`;
+    return `${inode}:${crypto.createHash('sha256').update(raw).digest('hex')}`;
+  } catch (error) {
+    if (error.code === 'ENOENT') return 'missing';
+    throw error;
+  }
+}
+
 /**
  * Read the generation of the last published delivery-state snapshot.
  *
@@ -220,26 +237,35 @@ function requireGeneration(graphDir) {
   return generation;
 }
 
-function recordsForGeneration(store, generation, configuredStatuses) {
+function requireMetadataIdentity(graphDir) {
+  const identity = metadataIdentity(graphDir);
+  if (!identity) {
+    throw new Error('delivery-state metadata identity is unreadable — run state-sync.cjs before recording a tracker observation');
+  }
+  return identity;
+}
+
+function recordsForGeneration(store, generation, configuredStatuses, identity) {
   if (!Number.isInteger(generation) || generation < 1) return {};
   const out = {};
   for (const [ticket, record] of Object.entries(store.tickets)) {
     if (!record || record.ticket !== ticket || record.generation !== generation) continue;
-    if (!validRecord(record, configuredStatuses)) continue;
+    if (!validRecord(record, configuredStatuses, identity)) continue;
     out[ticket] = { ...record };
   }
   return out;
 }
 
-function validRecord(record, configuredStatuses) {
+function validRecord(record, configuredStatuses, identity) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
   if (typeof record.ticket !== 'string' || !record.ticket.trim()) return false;
   if (typeof record.jira_key !== 'string' || !record.jira_key.trim()) return false;
   if (!Number.isInteger(record.generation) || record.generation < 0) return false;
+  if (typeof record.generation_identity !== 'string' || !record.generation_identity.trim()) return false;
+  if (identity !== undefined && record.generation_identity !== identity) return false;
   if (typeof record.observed_at !== 'string' || !Number.isFinite(Date.parse(record.observed_at))) return false;
   if (typeof record.reason !== 'string' || !record.reason.trim()) return false;
-  if (typeof record.assignee_observed !== 'boolean'
-      && !(record.verdict !== 'unknown' && Object.prototype.hasOwnProperty.call(record, 'assignee'))) return false;
+  if (typeof record.assignee_observed !== 'boolean') return false;
   if (record.verdict === 'unknown') {
     return record.eligible === null
       && (record.status === null || (typeof record.status === 'string' && !!record.status.trim()))
@@ -247,9 +273,7 @@ function validRecord(record, configuredStatuses) {
   }
   if (!['eligible', 'ineligible'].includes(record.verdict)) return false;
   if (typeof record.status !== 'string' || !record.status.trim()) return false;
-  const assigneeObserved = record.assignee_observed === true
-    || (typeof record.assignee_observed !== 'boolean'
-      && Object.prototype.hasOwnProperty.call(record, 'assignee'));
+  const assigneeObserved = record.assignee_observed === true;
   if (!assigneeObserved) return false;
   if (Array.isArray(configuredStatuses)) {
     const current = evaluateEligibility(record.status, record.assignee, configuredStatuses);
@@ -263,7 +287,8 @@ function validRecord(record, configuredStatuses) {
 function activeRecords(graphDir) {
   if (fs.existsSync(pendingPath(graphDir))) return {};
   const store = readStore(graphDir);
-  return recordsForGeneration(store, currentGeneration(graphDir), readConfigStatuses(projectRootOf(graphDir)));
+  const generation = currentGeneration(graphDir);
+  return recordsForGeneration(store, generation, readConfigStatuses(projectRootOf(graphDir)), metadataIdentity(graphDir));
 }
 
 // Tracker observations are recorded against the snapshot that was current
@@ -336,6 +361,7 @@ function writeRecord(graphDir, ticket, record) {
     recoverPendingLocked(graphDir);
     const store = readStore(graphDir);
     const previous = store.tickets[ticket];
+    const sameEpoch = previous && previous.generation_identity === record.generation_identity;
     const previousGeneration = previous && Number.isInteger(previous.generation) ? previous.generation : -1;
     const incomingGeneration = Number.isInteger(record.generation) ? record.generation : -1;
     const previousAt = previous && typeof previous.observed_at === 'string'
@@ -348,10 +374,10 @@ function writeRecord(graphDir, ticket, record) {
     // queueing for it. Generation is the primary ordering key: a late result
     // from an older snapshot can never replace a newer snapshot's record. Only
     // observations in the same generation are ordered by observed_at.
-    const previousWins = previousGeneration > incomingGeneration
+    const previousWins = sameEpoch && (previousGeneration > incomingGeneration
       || (previousGeneration === incomingGeneration
         && Number.isFinite(previousAt)
-        && (!Number.isFinite(incomingAt) || previousAt > incomingAt));
+        && (!Number.isFinite(incomingAt) || previousAt > incomingAt)));
     const stored = previousWins
       ? previous
       : record;
@@ -419,6 +445,7 @@ function observe(graphDir, input) {
   const result = evaluateEligibility(status, assignee, readConfigStatuses(projectRootOf(graphDir)));
   const observedAt = observedTimestamp(input.observedAt);
   const generation = requireGeneration(graphDir);
+  const generationIdentity = requireMetadataIdentity(graphDir);
   const record = {
     ticket,
     jira_key: jiraKey,
@@ -430,6 +457,7 @@ function observe(graphDir, input) {
     assignee_observed: true,
     observed_at: observedAt,
     generation,
+    generation_identity: generationIdentity,
   };
   return writeRecord(graphDir, ticket, record);
 }
@@ -455,6 +483,7 @@ function unknown(graphDir, input) {
     assignee_observed: !!input.assigneeProvided,
     observed_at: observedTimestamp(input.observedAt),
     generation: requireGeneration(graphDir),
+    generation_identity: requireMetadataIdentity(graphDir),
   };
   return writeRecord(graphDir, ticket, record);
 }

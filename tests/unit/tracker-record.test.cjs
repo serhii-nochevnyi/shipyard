@@ -80,7 +80,9 @@ test('a complete eligible observation is stored with the tracker facts and gener
     assignee_observed: true,
     observed_at: record.observed_at,
     generation: 7,
+    generation_identity: record.generation_identity,
   });
+  assert.match(record.generation_identity, /^\d+:\d+:/);
   assert.ok(/T-01/.test(r.stdout));
 });
 
@@ -104,6 +106,7 @@ test('unknown observations preserve tracker error words and remain unknown', () 
   assert.strictEqual(record.reason, 'Jira API timed out');
   assert.strictEqual(record.assignee_observed, false);
   assert.strictEqual(record.generation, 3);
+  assert.match(record.generation_identity, /^\d+:\d+:/);
 });
 
 test('an exact-ticket override preserves the observation and journals one atomic event', () => {
@@ -310,6 +313,19 @@ test('a malformed or missing metadata file never falls back to the advisory fron
   assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
 });
 
+test('recreating metadata at the same numeric generation invalidates the old epoch', () => {
+  const { project, graph } = scratch(7);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  assert.ok(require(RECORD).activeRecords(graph)['T-01']);
+  const meta = path.join(graph, 'delivery-state-meta.json');
+  const saved = fs.readFileSync(meta);
+  fs.rmSync(meta);
+  fs.writeFileSync(meta, saved);
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  assert.ok(require(RECORD).activeRecords(graph)['T-01']);
+});
+
 test('a new observation at the new generation becomes active', () => {
   const { project, graph } = scratch(1);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
@@ -435,6 +451,9 @@ test('an explicit missing-assignee observation cannot become complete from a cop
   const file = path.join(graph, 'tracker.json');
   const store = stored(graph);
   store.tickets['T-01'].assignee_observed = false;
+  fs.writeFileSync(file, JSON.stringify(store));
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
+  delete store.tickets['T-01'].assignee_observed;
   fs.writeFileSync(file, JSON.stringify(store));
   assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
 });
