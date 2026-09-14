@@ -104,9 +104,31 @@ function rewriteJournalIfUnchanged(journal, expected, replacement, remove) {
   else writeAtomic(journal, replacement);
 }
 
+function decodeStoreSnapshot(value, label) {
+  if (typeof value !== 'string'
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new Error(`cannot recover tracker override: ${label} payload is corrupt`);
+  }
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.toString('base64') !== value) {
+    throw new Error(`cannot recover tracker override: ${label} payload is corrupt`);
+  }
+  let store;
+  try {
+    store = JSON.parse(bytes.toString('utf8'));
+  } catch (error) {
+    throw new Error(`cannot recover tracker override: ${label} payload is corrupt (${error.message})`);
+  }
+  if (!store || typeof store !== 'object' || Array.isArray(store)
+      || !store.tickets || typeof store.tickets !== 'object' || Array.isArray(store.tickets)) {
+    throw new Error(`cannot recover tracker override: ${label} payload is corrupt`);
+  }
+  return bytes;
+}
+
 function restoreStoreSnapshot(graphDir, marker) {
   if (marker.store_file) {
-    writeAtomic(graphStore(graphDir), Buffer.from(marker.before_store, 'base64'));
+    writeAtomic(graphStore(graphDir), decodeStoreSnapshot(marker.before_store, 'before_store'));
   } else if (!marker.store_exists) {
     unlinkIfPresent(graphStore(graphDir));
   } else {
@@ -139,7 +161,7 @@ function completedRecovery(marker) {
   let store;
   try {
     event = JSON.parse(marker.event_line);
-    store = JSON.parse(Buffer.from(marker.after_store, 'base64').toString('utf8'));
+    store = JSON.parse(decodeStoreSnapshot(marker.after_store, 'after_store').toString('utf8'));
   } catch (error) {
     throw new Error(`cannot recover tracker override: completed marker payload is corrupt (${error.message})`);
   }
