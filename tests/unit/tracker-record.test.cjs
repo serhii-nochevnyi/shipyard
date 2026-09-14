@@ -92,6 +92,15 @@ test('activeRecords omits a record after the delivery generation advances', () =
   assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
 });
 
+test('a malformed metadata file never falls back to the advisory front generation', () => {
+  const { project, graph } = scratch(7);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  fs.writeFileSync(path.join(graph, 'delivery-front.json'), JSON.stringify({ generation: 7 }));
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), '{not-json');
+  assert.strictEqual(require(RECORD).currentGeneration(graph), null);
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
+});
+
 test('a new observation at the new generation becomes active', () => {
   const { project, graph } = scratch(1);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
@@ -151,6 +160,18 @@ test('the eligibility cache does not touch the outbound Jira projection', () => 
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
   assert.strictEqual(fs.readFileSync(projection, 'utf8'), before);
   assert.ok(stored(graph).tickets['T-01']);
+});
+
+test('an older observation cannot overwrite a newer result after the lock', () => {
+  const { project, graph } = scratch(7);
+  execFileSync('node', [...markArgs(graph, 'T-01', 'MYD-1'), '--observed-at', '2026-09-14T10:00:00.000Z'], { cwd: project });
+  const olderArgs = markArgs(graph, 'T-01', 'MYD-1');
+  olderArgs[olderArgs.indexOf('--status') + 1] = 'Backlog';
+  olderArgs.push('--observed-at', '2026-09-14T09:00:00.000Z');
+  execFileSync('node', olderArgs, { cwd: project });
+  const record = stored(graph).tickets['T-01'];
+  assert.strictEqual(record.status, 'To Do');
+  assert.strictEqual(record.observed_at, '2026-09-14T10:00:00.000Z');
 });
 
 test('concurrent observations for different tickets do not lose records', async () => {
