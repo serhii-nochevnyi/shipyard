@@ -2374,6 +2374,13 @@ test('model_profile must match the normalized pipeline policy at the routed boun
   refusesSource(() => resolveDispatch({ config: missing.config, role: 'executor' }), 'config.model_profile');
 });
 
+test('routed profile controls reject raw nested values hidden by compatibility normalization', () => {
+  for (const namespace of ['pipeline', 'delivery_pipeline']) {
+    const { config } = routedConfig({ [namespace]: { model_policy: 'bogus' } });
+    refusesSource(() => resolveDispatch({ config, role: 'executor' }), `${namespace}.model_policy`);
+  }
+});
+
 test('routed Fable controls are normalized, carried, and cannot be bypassed', () => {
   const shut = routedConfig({}, 'claude');
   assert.deepStrictEqual(shut.config.dispatch_context.normalized, {

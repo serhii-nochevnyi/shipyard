@@ -1313,7 +1313,7 @@ function freezeSelection(value) {
 function selectionConfig(raw) {
   const keys = ['models', 'effort', 'model_overrides', 'model', 'reasoning_effort',
     'override', 'overrides', 'selection', 'inline', 'inherit', 'session_inherited',
-    'model_profile', 'fable', 'fable_window_tokens'];
+    'model_profile', 'model_policy', 'fable', 'fable_window_tokens'];
   const pick = (object) => Object.fromEntries(keys
     .filter((key) => Object.prototype.hasOwnProperty.call(object, key))
     .map((key) => [key, object[key]]));
@@ -1497,6 +1497,25 @@ function normalizedRoutedControls(cfg, context) {
       'config.dispatch_context.normalized is missing from the frozen routed context',
       { source: 'config.dispatch_context.normalized' },
     );
+  }
+  // `loadConfig` normalizes an unknown pipeline profile to `balanced` for
+  // compatibility readers. Routed readers must retain the raw nested value so
+  // an explicit typo cannot become indistinguishable from an omitted control.
+  for (const [namespace, values] of [
+    ['pipeline', context.configuration?.pipeline],
+    ['delivery_pipeline', context.configuration?.delivery_pipeline],
+  ]) {
+    if (!values || typeof values !== 'object' || Array.isArray(values)
+        || !Object.prototype.hasOwnProperty.call(values, 'model_policy')) continue;
+    const raw = values.model_policy;
+    const profile = typeof raw === 'string' ? PROFILE_ALIASES[raw] || raw : null;
+    if (!['economy', 'balanced', 'premium'].includes(profile)) {
+      throw modelPolicy.policyError(
+        'UNSUPPORTED_SELECTION',
+        `${namespace}.model_policy ${JSON.stringify(raw)} is not a supported pipeline profile`,
+        { source: `${namespace}.model_policy` },
+      );
+    }
   }
   for (const [field, source] of [
     ['fable', 'pipeline.fable'],
