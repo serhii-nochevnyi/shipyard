@@ -276,7 +276,7 @@ function override(graphDir, input) {
   const { ticket, jiraKey } = validateTicket(graphDir, input.ticket, input.jiraKey);
   const overrideReason = requireNonEmpty(input.reason, 'override reason');
   return mutateRecord(graphDir, (store) => {
-    const generation = currentGenerationStrict(graphDir);
+    const generation = requireGeneration(graphDir);
     const existing = store.tickets[ticket];
     const reusable = existing && existing.generation === generation && existing.jira_key === jiraKey
       ? existing

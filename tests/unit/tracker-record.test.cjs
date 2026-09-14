@@ -142,6 +142,18 @@ test('an override without a current observation stays unknown instead of fabrica
   assert.match(record.reason, /no current tracker observation/);
 });
 
+test('an override refuses a malformed delivery generation', () => {
+  const { project, graph } = scratch();
+  fs.writeFileSync(path.join(graph, 'delivery-front.json'), JSON.stringify({ generation: 7 }));
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), '{not-json');
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-02', 'MYD-2', '--reason', 'urgent named ticket', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0, 'a corrupt generation cannot authorize an override');
+  assert.match(r.stderr, /delivery-state generation is unreadable/);
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
+});
+
 test('an override expires with its delivery generation', () => {
   const { project, graph } = scratch(1);
   execFileSync('node', [
