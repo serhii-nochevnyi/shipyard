@@ -74,6 +74,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createCodexDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 const { CLAUDE_MODEL_ALIASES, createClaudeDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
@@ -651,6 +652,59 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
       && source.includes('refuse instead of running it opaquely'),
     'an opaque GSD Skill invocation must be refused'
   );
+});
+
+test('delivery launch docs route every role through the boundary and the generated Codex names', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
+  const source = `${deliver}\n${sentinel}`;
+  const compact = normalized(source);
+
+  for (const phrase of [
+    'resolve → validate → launch → receipt',
+    'createDispatchBoundary',
+    'createCodexDispatchAdapter',
+    'createClaudeDispatchAdapter',
+    'createDurableRecorder',
+    'boundary.dispatch',
+    'priorApplied',
+    'previous_dispatch_id',
+    'literal model',
+    'omitted effort',
+    'inline',
+    'inherited',
+    'phantom',
+    'receipt',
+  ]) {
+    assert.ok(compact.includes(normalized(phrase)), `delivery docs must state the boundary contract: ${phrase}`);
+  }
+
+  for (const role of [
+    'executor', 'pr-sentinel', 'drift-check', 'ci-fix', 'review-fix',
+    'arch-review', 'integrator',
+  ]) {
+    assert.ok(compact.includes(normalized(role)), `delivery docs must name routed role ${role}`);
+  }
+
+  for (const pair of [
+    'Luna/max', 'Luna/medium', 'Sol/medium', 'Astra/medium',
+    'Sonnet/max', 'Sonnet/high', 'Opus/medium', 'Opus/high', 'Opus/max',
+    'Fable/medium',
+  ]) {
+    assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
+  }
+
+  for (const variant of codexStaticVariants(2)) {
+    assert.ok(source.includes(variant.file), `delivery docs must name generated Codex variant ${variant.file}`);
+  }
+  for (const retired of ['pr-sentinel-deep', 'arch-review-deep']) {
+    assert.ok(!source.includes(retired), `delivery docs must not reintroduce retired variant ${retired}`);
+  }
+  assert.ok(!/--backend[^\n]*\|inline/.test(source), 'delivery docs must not authorize an inline backend');
+    assert.ok(
+      !/node[^\n]*pipeline-config\.cjs\s+model\s+/.test(source),
+      'delivery docs must not execute the compatibility model command'
+    );
 });
 
 test('research and decomposition use the canonical runtime ladders and only declared escalation signals', () => {
