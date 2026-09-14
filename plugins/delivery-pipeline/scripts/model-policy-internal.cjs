@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 'use strict';
 
-// ADR-014's runtime-neutral model policy.
+// ADR-014's versioned runtime model policy.
 //
-// This module intentionally does not read pipeline-config.cjs.  That module
+// This module intentionally does not read pipeline-config.cjs. That module
 // contains the compatibility policy used by non-routed callers; routed delivery
-// needs one versioned contract whose result is explicit enough for either
-// runtime adapter to apply and later prove.
+// needs one versioned contract whose result is explicit enough for each runtime
+// adapter to apply and later prove. The two runtime grids are deliberately
+// independent: Claude's native aliases are not derived from Codex's logical
+// model names.
 
 const crypto = require('crypto');
 const runtimeAdapters = require('./runtime-adapters.cjs');
 
-// Capture the concrete runtime mappings once, before any caller can mutate the
+// Capture the concrete runtime palettes once, before any caller can mutate the
 // runtime-adapter module. Canonical policy resolution never consults the
 // replaceable adapter functions or exported objects after this point.
 const CODEX_MODEL_IDS = Object.freeze({ ...runtimeAdapters.CODEX_MODEL_IDS });
@@ -21,7 +23,7 @@ const CANONICAL_MODEL_MAPPINGS = Object.freeze({
   claude: CLAUDE_MODEL_ALIASES,
 });
 
-const POLICY_VERSION = 'adr-014.v1';
+const POLICY_VERSION = 'adr-014.v2';
 const SUPPORTED_RUNTIMES = Object.freeze(['codex', 'claude']);
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const SIGNATURE_STATES = Object.freeze([
@@ -53,59 +55,112 @@ const ROLE_CLASSES = Object.freeze({
   dynamic: Object.freeze(['executor', 'decomposition']),
   repair: Object.freeze(['ci-fix', 'review-fix']),
   judgement: Object.freeze(['integrator', 'arch-review']),
-  fixed_luna: Object.freeze(['pr-sentinel', 'drift-check']),
+  fixed: Object.freeze(['pr-sentinel', 'drift-check']),
 });
 
 const DYNAMIC_ROLES = new Set(ROLE_CLASSES.dynamic);
 const REPAIR_ROLES = new Set(ROLE_CLASSES.repair);
 const JUDGEMENT_ROLES = new Set(ROLE_CLASSES.judgement);
-const FIXED_LUNA_ROLES = new Set(ROLE_CLASSES.fixed_luna);
+const FIXED_ROLES = new Set(ROLE_CLASSES.fixed);
 
-const ROLE_RUNG_DEFINITIONS = Object.freeze({
+// Codex's grid remains expressed in its own logical model vocabulary. It is
+// not reused by Claude.
+const CODEX_ROLE_RUNG_DEFINITIONS = Object.freeze({
   research: Object.freeze([
-    Object.freeze({ name: 'base', logical_model: 'terra', effort: 'high' }),
-    Object.freeze({ name: 'alternatives', logical_model: 'sol', effort: 'medium' }),
-    Object.freeze({ name: 'very-complex', logical_model: 'astra', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'terra', logical_model: 'terra', effort: 'high' }),
+    Object.freeze({ name: 'alternatives', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'very-complex', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   decomposition: Object.freeze([
-    Object.freeze({ name: 'base', logical_model: 'sol', effort: 'medium' }),
-    Object.freeze({ name: 'critical', logical_model: 'astra', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   executor: Object.freeze([
-    Object.freeze({ name: 'base', logical_model: 'luna', effort: 'max' }),
-    Object.freeze({ name: 'critical', logical_model: 'astra', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
+    Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   'pr-sentinel': Object.freeze([
-    Object.freeze({ name: 'base', logical_model: 'luna', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'medium' }),
   ]),
   integrator: Object.freeze([
-    Object.freeze({ name: 'base', logical_model: 'sol', effort: 'medium' }),
-    Object.freeze({ name: 'critical', logical_model: 'astra', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   'drift-check': Object.freeze([
-    Object.freeze({ name: 'base', logical_model: 'luna', effort: 'max' }),
+    Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
   ]),
   'arch-review': Object.freeze([
-    Object.freeze({ name: 'base', logical_model: 'sol', effort: 'medium' }),
-    Object.freeze({ name: 'critical', logical_model: 'astra', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   'ci-fix': Object.freeze([
-    Object.freeze({ name: 'base', logical_model: 'luna', effort: 'max' }),
-    Object.freeze({ name: 'repeat', logical_model: 'sol', effort: 'medium' }),
-    Object.freeze({ name: 'repeat_exhausted', logical_model: 'astra', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
+    Object.freeze({ name: 'repeat', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'repeat_exhausted', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   'review-fix': Object.freeze([
-    Object.freeze({ name: 'base', logical_model: 'luna', effort: 'max' }),
-    Object.freeze({ name: 'repeat', logical_model: 'sol', effort: 'medium' }),
-    Object.freeze({ name: 'repeat_exhausted', logical_model: 'astra', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
+    Object.freeze({ name: 'repeat', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'repeat_exhausted', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
 });
 
+// Claude has its own native grid. These entries name Claude aliases directly;
+// no Terra/Sol/Luna/Astra translation is involved. The existing alias palette
+// is consumed only as a set of supported concrete Claude selections.
+const CLAUDE_ROLE_RUNG_DEFINITIONS = Object.freeze({
+  research: Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'high' }),
+    Object.freeze({ name: 'alternatives', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'very-complex', model_key: 'fable', effort: 'medium' }),
+  ]),
+  decomposition: Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'critical', model_key: 'fable', effort: 'medium' }),
+  ]),
+  executor: Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'max' }),
+    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
+  ]),
+  'pr-sentinel': Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'high' }),
+  ]),
+  integrator: Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
+  ]),
+  'drift-check': Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'opus', effort: 'max' }),
+  ]),
+  'arch-review': Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'max' }),
+    Object.freeze({ name: 'ceiling', model_key: 'fable', effort: 'medium' }),
+  ]),
+  'ci-fix': Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'repeat', model_key: 'opus', effort: 'max' }),
+    // Keep the receipt-chain state explicit while holding the requested Opus
+    // max ceiling; Claude repair does not escalate to Fable.
+    Object.freeze({ name: 'repeat_exhausted', model_key: 'opus', effort: 'max' }),
+  ]),
+  'review-fix': Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'repeat', model_key: 'opus', effort: 'max' }),
+    Object.freeze({ name: 'repeat_exhausted', model_key: 'opus', effort: 'max' }),
+  ]),
+});
+
+const RUNTIME_ROLE_RUNG_DEFINITIONS = Object.freeze({
+  codex: CODEX_ROLE_RUNG_DEFINITIONS,
+  claude: CLAUDE_ROLE_RUNG_DEFINITIONS,
+});
+
 // Escalation semantics are data, not an un-fingerprinted collection of
-// conditionals. The evaluator below reads this table, while repair receipt
-// gates are derived from the ordered rungs below, so changing a signal, role
-// classification, rung, or repair prerequisite changes POLICY_HASH as well.
-const ROLE_SIGNAL_RULES = Object.freeze({
+// conditionals. Each runtime owns its signal-to-rung grid as well. Claude's
+// architecture review uses the measured-window signal for its third, Fable
+// ceiling; ordinary critical/contested/checkpoint evidence stops at Opus max.
+const CODEX_ROLE_SIGNAL_RULES = Object.freeze({
   research: Object.freeze({
     alternatives: Object.freeze({ rung: 'alternatives', any: Object.freeze([{ type: 'alternatives' }]) }),
     'very-complex': Object.freeze({ rung: 'very-complex', any: Object.freeze([{ complexity: 'very-complex' }]) }),
@@ -134,16 +189,71 @@ const ROLE_SIGNAL_RULES = Object.freeze({
   'drift-check': Object.freeze({}),
 });
 
-function repairPrerequisitesFromRungs() {
+const CLAUDE_ROLE_SIGNAL_RULES = Object.freeze({
+  research: CODEX_ROLE_SIGNAL_RULES.research,
+  decomposition: CODEX_ROLE_SIGNAL_RULES.decomposition,
+  executor: CODEX_ROLE_SIGNAL_RULES.executor,
+  'pr-sentinel': Object.freeze({}),
+  integrator: CODEX_ROLE_SIGNAL_RULES.integrator,
+  'drift-check': Object.freeze({}),
+  'arch-review': Object.freeze({
+    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ critical: true }, { checkpoint: true }, { contested: true }]) }),
+    ceiling: Object.freeze({ rung: 'ceiling', any: Object.freeze([{ inputTokens: { gt_policy: 'window_threshold_tokens' } }]) }),
+  }),
+  'ci-fix': CODEX_ROLE_SIGNAL_RULES['ci-fix'],
+  'review-fix': CODEX_ROLE_SIGNAL_RULES['review-fix'],
+});
+
+const RUNTIME_ROLE_SIGNAL_RULES = Object.freeze({
+  codex: CODEX_ROLE_SIGNAL_RULES,
+  claude: CLAUDE_ROLE_SIGNAL_RULES,
+});
+
+// Backwards-compatible names retain Codex's role-neutral API shape for callers
+// that only inspect the Codex grid. Resolution itself always uses the runtime
+// keyed tables above.
+const ROLE_RUNG_DEFINITIONS = CODEX_ROLE_RUNG_DEFINITIONS;
+const ROLE_SIGNAL_RULES = CODEX_ROLE_SIGNAL_RULES;
+
+function runtimeModelFor(runtime, modelKey) {
+  const model = CANONICAL_MODEL_MAPPINGS[runtime] && CANONICAL_MODEL_MAPPINGS[runtime][modelKey];
+  if (!model) refuse('UNSUPPORTED_SELECTION', `no ${runtime} model is registered for native model ${modelKey}`);
+  return model;
+}
+
+function rungsFor(runtime, role) {
+  const rungs = RUNTIME_ROLE_RUNG_DEFINITIONS[runtime] && RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role];
+  if (!rungs) refuse('UNSUPPORTED_SELECTION', `no ${runtime} rung grid is registered for role ${role}`);
+  return rungs;
+}
+
+function signalRulesFor(runtime, role) {
+  return (RUNTIME_ROLE_SIGNAL_RULES[runtime] && RUNTIME_ROLE_SIGNAL_RULES[runtime][role]) || {};
+}
+
+function selectionFor(runtime, rung) {
+  const model = runtimeModelFor(runtime, rung.model_key);
+  return {
+    model_key: rung.model_key,
+    logical_model: rung.model_key,
+    model,
+    effort: rung.effort,
+  };
+}
+
+function repairPrerequisitesFromRungs(runtime) {
   const result = {};
   for (const role of REPAIR_ROLES) {
-    const rungs = ROLE_RUNG_DEFINITIONS[role];
+    const rungs = rungsFor(runtime, role);
     const prerequisites = {};
     for (let index = 1; index < rungs.length; index++) {
       const predecessor = rungs[index - 1];
       const current = rungs[index];
+      const predecessorSelection = selectionFor(runtime, predecessor);
       prerequisites[current.name] = Object.freeze({
-        logical_model: predecessor.logical_model,
+        model_key: predecessor.model_key,
+        logical_model: predecessor.model_key,
+        model: predecessorSelection.model,
         effort: predecessor.effort,
       });
     }
@@ -153,9 +263,13 @@ function repairPrerequisitesFromRungs() {
 }
 
 // Receipt gates must track the actual ordered ladder. Keeping a second set of
-// model/effort strings beside ROLE_RUNG_DEFINITIONS lets the fingerprint change
-// without changing enforcement when one table is edited in isolation.
-const REPAIR_PREREQUISITES = repairPrerequisitesFromRungs();
+// model/effort strings beside each runtime's rung grid lets the fingerprint
+// change without changing enforcement when one table is edited in isolation.
+const RUNTIME_REPAIR_PREREQUISITES = deepFreeze({
+  codex: repairPrerequisitesFromRungs('codex'),
+  claude: repairPrerequisitesFromRungs('claude'),
+});
+const REPAIR_PREREQUISITES = RUNTIME_REPAIR_PREREQUISITES.codex;
 
 // Static Codex roles are represented by generated files.  Dynamic roles must
 // receive explicit launch arguments because no static file can carry their
@@ -201,10 +315,15 @@ const POLICY = deepFreeze({
     codex: { adapter: 'codex' },
     claude: { adapter: 'claude' },
   },
+  // `roles`, `signal_rules`, and `repair_prerequisites` remain the Codex
+  // compatibility view. The runtime-keyed fields are the authoritative grids.
   roles: ROLE_RUNG_DEFINITIONS,
+  role_rungs: RUNTIME_ROLE_RUNG_DEFINITIONS,
   role_classes: ROLE_CLASSES,
   signal_rules: ROLE_SIGNAL_RULES,
+  runtime_signal_rules: RUNTIME_ROLE_SIGNAL_RULES,
   repair_prerequisites: REPAIR_PREREQUISITES,
+  runtime_repair_prerequisites: RUNTIME_REPAIR_PREREQUISITES,
 });
 
 const POLICY_HASH = fingerprintPolicy(POLICY);
@@ -354,8 +473,10 @@ function normalizeSignals(raw) {
   return out;
 }
 
-function requireRepairReceiptEvidence(role, signals) {
-  const prerequisite = REPAIR_PREREQUISITES[role] && REPAIR_PREREQUISITES[role][signals && signals.signatureState];
+function requireRepairReceiptEvidence(runtime, role, signals) {
+  const prerequisite = RUNTIME_REPAIR_PREREQUISITES[runtime]
+    && RUNTIME_REPAIR_PREREQUISITES[runtime][role]
+    && RUNTIME_REPAIR_PREREQUISITES[runtime][role][signals && signals.signatureState];
   if (!prerequisite) return;
   const prior = signals && signals.priorApplied;
   if (!prior || typeof prior !== 'object' || Array.isArray(prior)) {
@@ -401,12 +522,6 @@ function requireRepairReceiptEvidence(role, signals) {
   }
 }
 
-function logicalModelFor(runtime, logicalModel) {
-  const model = CANONICAL_MODEL_MAPPINGS[runtime] && CANONICAL_MODEL_MAPPINGS[runtime][logicalModel];
-  if (!model) refuse('UNSUPPORTED_SELECTION', `no ${runtime} model is registered for logical model ${logicalModel}`);
-  return model;
-}
-
 function activeSignal(value) {
   return value !== undefined && value !== false && value !== null;
 }
@@ -441,8 +556,9 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
       { windowThresholdTokens: options.windowThresholdTokens },
     );
   }
+  const runtime = options.runtime === undefined ? 'codex' : normalizeRuntime(options.runtime);
   const threshold = WINDOW_THRESHOLD_TOKENS;
-  const roleRules = ROLE_SIGNAL_RULES[normalizedRole] || {};
+  const roleRules = signalRulesFor(runtime, normalizedRole);
   const reasons = [];
   const selected = [];
 
@@ -508,8 +624,8 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
       signals.risk,
       false,
       null,
-      FIXED_LUNA_ROLES.has(normalizedRole)
-        ? 'global risk is intentionally inert for a fixed Luna role'
+      FIXED_ROLES.has(normalizedRole)
+        ? 'global risk is intentionally inert for a fixed role'
         : 'risk is recorded context, not a role-scoped escalation signal',
     );
   }
@@ -517,8 +633,8 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     const applies = ruleMatchesSignal(roleRules.critical, signals, 'critical', threshold);
     const reason = applies
       ? `signals.critical=true selects the ${normalizedRole} critical rung`
-      : FIXED_LUNA_ROLES.has(normalizedRole)
-        ? 'global critical state cannot promote a fixed Luna role'
+      : FIXED_ROLES.has(normalizedRole)
+        ? 'global critical state cannot promote a fixed role'
         : `critical state does not promote ${normalizedRole}`;
     add('critical', 'signals.critical', true, applies, applies ? 'critical' : null, reason);
     if (applies) selected.push({ signal: 'critical', rung: 'critical', reason });
@@ -527,8 +643,8 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     const applies = ruleMatchesSignal(roleRules.critical, signals, 'checkpoint', threshold);
     const reason = applies
       ? `signals.checkpoint=true selects the ${normalizedRole} critical rung`
-      : FIXED_LUNA_ROLES.has(normalizedRole)
-        ? 'global checkpoint state cannot promote a fixed Luna role'
+      : FIXED_ROLES.has(normalizedRole)
+        ? 'global checkpoint state cannot promote a fixed role'
         : `checkpoint state does not promote ${normalizedRole}`;
     add('checkpoint', 'signals.checkpoint', true, applies, applies ? 'critical' : null, reason);
     if (applies) selected.push({ signal: 'checkpoint', rung: 'critical', reason });
@@ -547,20 +663,22 @@ function evaluateSignals(role, rawSignals = {}, options = {}) {
     const reason = measuredWindow
       ? `signals.inputTokens=${signals.inputTokens} exceeds window threshold ${threshold}`
       : `measured input is at or below window threshold ${threshold}`;
-    const applies = measuredWindow && ruleMatchesSignal(roleRules.critical, signals, 'inputTokens', threshold);
+    const windowRule = roleRules.ceiling || roleRules.critical;
+    const windowRung = windowRule && windowRule.rung ? windowRule.rung : 'critical';
+    const applies = measuredWindow && ruleMatchesSignal(windowRule, signals, 'inputTokens', threshold);
     add(
       'window',
       'signals.inputTokens',
       signals.inputTokens,
       applies,
-      applies ? 'critical' : null,
+      applies ? windowRung : null,
       applies
-        ? `${reason}; selects the judgement critical rung`
-        : FIXED_LUNA_ROLES.has(normalizedRole) && measuredWindow
-          ? `${reason}; window pressure cannot promote a fixed Luna role`
+        ? `${reason}; selects the ${normalizedRole} ${windowRung} rung`
+        : FIXED_ROLES.has(normalizedRole) && measuredWindow
+          ? `${reason}; window pressure cannot promote a fixed role`
           : reason,
     );
-    if (applies) selected.push({ signal: 'window', rung: 'critical', reason: `${reason}; selects the judgement critical rung` });
+    if (applies) selected.push({ signal: 'window', rung: windowRung, reason: `${reason}; selects the ${normalizedRole} ${windowRung} rung` });
   }
 
   if (hasOwn(signals, 'signatureState')) {
@@ -779,9 +897,9 @@ function validateResolution(resolution, options = {}) {
   }
   const runtime = normalizeRuntime(resolution.runtime);
   const role = normalizeRole(resolution.role);
-  const rungs = ROLE_RUNG_DEFINITIONS[role];
-  const evaluation = evaluateSignals(role, resolution.signals);
-  requireRepairReceiptEvidence(role, evaluation.signals);
+  const rungs = rungsFor(runtime, role);
+  const evaluation = evaluateSignals(role, resolution.signals, { runtime });
+  requireRepairReceiptEvidence(runtime, role, evaluation.signals);
   let expectedRung = rungs[0];
   const selectedNames = new Set(evaluation.selected.map((entry) => entry.rung));
   for (const candidate of rungs) {
@@ -803,7 +921,7 @@ function validateResolution(resolution, options = {}) {
   const selectedRoute = selectedReasons.length
     ? selectedReasons.map((entry) => `${entry.signal}->${entry.rung}`).join('+')
     : 'base';
-  const expectedRoute = `role=${role} rung=${expectedRung.name} model=${expectedRung.logical_model} signals=${selectedRoute}`;
+  const expectedRoute = `role=${role} rung=${expectedRung.name} model=${expectedRung.model_key} signals=${selectedRoute}`;
   if (resolution.route !== expectedRoute
       || stableStringify(resolution.signals_fired) !== stableStringify(firedNames)
       || stableStringify(resolution.signal_reasons) !== stableStringify(evaluation.reasons)
@@ -815,17 +933,21 @@ function validateResolution(resolution, options = {}) {
   }
   const rung = rungs.find((entry) => entry.name === resolution.rung);
   if (!rung || resolution.logical_rung !== resolution.rung) refuse('INVALID_RESOLUTION', `resolution rung ${JSON.stringify(resolution.rung)} is not valid for ${role}`);
-  const expectedModel = logicalModelFor(runtime, rung.logical_model);
-  if (resolution.logical_model !== rung.logical_model || resolution.model !== expectedModel || resolution.requested_model !== expectedModel) {
+  const selection = selectionFor(runtime, rung);
+  const expectedModel = selection.model;
+  if (resolution.model_key !== selection.model_key
+      || resolution.logical_model !== selection.logical_model
+      || resolution.model !== expectedModel
+      || resolution.requested_model !== expectedModel) {
     refuse('INVALID_RESOLUTION', `resolution model does not match ${runtime} ${role} ${rung.name}`, { expected: expectedModel, actual: resolution.model });
   }
-  if (!EFFORTS.includes(resolution.effort) || resolution.effort !== rung.effort || resolution.requested_effort !== rung.effort) {
-    refuse('INVALID_RESOLUTION', `resolution effort does not match ${runtime} ${role} ${rung.name}`, { expected: rung.effort, actual: resolution.effort });
+  if (!EFFORTS.includes(resolution.effort) || resolution.effort !== selection.effort || resolution.requested_effort !== selection.effort) {
+    refuse('INVALID_RESOLUTION', `resolution effort does not match ${runtime} ${role} ${rung.name}`, { expected: selection.effort, actual: resolution.effort });
   }
   if (typeof resolution.route !== 'string' || resolution.route.trim() === '') refuse('INVALID_RESOLUTION', 'resolution route is required');
   if (typeof resolution.backend !== 'string' || resolution.backend.trim() === '') refuse('INVALID_RESOLUTION', 'resolution backend is required');
   if (typeof resolution.mechanism !== 'string' || resolution.mechanism.trim() === '') refuse('INVALID_RESOLUTION', 'resolution mechanism is required');
-  const metadata = launchMetadata(runtime, role, rung.name, expectedModel, rung.effort);
+  const metadata = launchMetadata(runtime, role, rung.name, expectedModel, selection.effort);
   if (resolution.backend !== metadata.backend || resolution.mechanism !== metadata.mechanism) {
     refuse('INVALID_RESOLUTION', `resolution launch mechanism does not match ${runtime}/${role}`, { expected: metadata, actual: { backend: resolution.backend, mechanism: resolution.mechanism } });
   }
@@ -839,7 +961,7 @@ function validateResolution(resolution, options = {}) {
     if (!args || typeof args !== 'object' || Array.isArray(args)) refuse('INVALID_RESOLUTION', `${runtime}/${role} requires explicit launch arguments`);
     if (args.model !== expectedModel) refuse('INVALID_RESOLUTION', 'launch arguments must carry the resolved concrete model');
     const effort = runtime === 'codex' ? args.reasoning_effort : args.effort;
-    if (effort !== rung.effort) refuse('INVALID_RESOLUTION', 'launch arguments must carry the resolved effort');
+    if (effort !== selection.effort) refuse('INVALID_RESOLUTION', 'launch arguments must carry the resolved effort');
   }
   if (options.requireDispatchId && !nonEmptyString(resolution.dispatch_id)) refuse('INVALID_RESOLUTION', 'dispatch id is required at the dispatch boundary');
   return true;
@@ -853,9 +975,9 @@ function resolveDispatch(input) {
   const runtime = normalizeRuntime(input.runtime);
   const role = normalizeRole(input.role);
   const signals = normalizeSignals(input.signals);
-  requireRepairReceiptEvidence(role, signals);
-  const evaluation = evaluateSignals(role, signals);
-  const rungs = ROLE_RUNG_DEFINITIONS[role];
+  requireRepairReceiptEvidence(runtime, role, signals);
+  const evaluation = evaluateSignals(role, signals, { runtime });
+  const rungs = rungsFor(runtime, role);
   let rung = rungs[0];
 
   const selectedNames = new Set(evaluation.selected.map((entry) => entry.rung));
@@ -866,8 +988,8 @@ function resolveDispatch(input) {
     if (selectedNames.has(candidate.name)) rung = candidate;
   }
 
-  const model = logicalModelFor(runtime, rung.logical_model);
-  const metadata = launchMetadata(runtime, role, rung.name, model, rung.effort);
+  const selection = selectionFor(runtime, rung);
+  const metadata = launchMetadata(runtime, role, rung.name, selection.model, selection.effort);
   const dispatchId = dispatchIdFromInput(input);
   const firedNames = [];
   for (const reason of evaluation.reasons) {
@@ -882,15 +1004,16 @@ function resolveDispatch(input) {
     policy_hash: POLICY_HASH,
     runtime,
     role,
-    logical_model: rung.logical_model,
+    model_key: selection.model_key,
+    logical_model: selection.logical_model,
     logical_rung: rung.name,
     rung: rung.name,
     rung_index: rungs.indexOf(rung),
-    model,
-    effort: rung.effort,
-    requested_model: model,
-    requested_effort: rung.effort,
-    route: `role=${role} rung=${rung.name} model=${rung.logical_model} signals=${selectedRoute}`,
+    model: selection.model,
+    effort: selection.effort,
+    requested_model: selection.model,
+    requested_effort: selection.effort,
+    route: `role=${role} rung=${rung.name} model=${selection.model_key} signals=${selectedRoute}`,
     backend: metadata.backend,
     mechanism: metadata.mechanism,
     signals_fired: firedNames,
@@ -926,10 +1049,18 @@ module.exports = Object.freeze({
   ROLE_SIGNAL_RULES,
   REPAIR_PREREQUISITES,
   ROLE_RUNG_DEFINITIONS,
+  CODEX_ROLE_RUNG_DEFINITIONS,
+  CLAUDE_ROLE_RUNG_DEFINITIONS,
+  RUNTIME_ROLE_RUNG_DEFINITIONS,
+  RUNTIME_ROLE_SIGNAL_RULES,
+  RUNTIME_REPAIR_PREREQUISITES,
   DYNAMIC_ROLES: Object.freeze([...DYNAMIC_ROLES]),
   REPAIR_ROLES: Object.freeze([...REPAIR_ROLES]),
   JUDGEMENT_ROLES: Object.freeze([...JUDGEMENT_ROLES]),
-  FIXED_LUNA_ROLES: Object.freeze([...FIXED_LUNA_ROLES]),
+  FIXED_ROLES: Object.freeze([...FIXED_ROLES]),
+  // Compatibility export for callers that still use the old class name. The
+  // class is no longer tied to a Luna model; each runtime owns its fixed tuple.
+  FIXED_LUNA_ROLES: Object.freeze([...FIXED_ROLES]),
   CODEX_STATIC_ROLES: Object.freeze([...CODEX_STATIC_ROLES]),
   stableStringify,
   fingerprintPolicy,

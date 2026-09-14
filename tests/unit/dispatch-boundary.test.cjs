@@ -167,7 +167,7 @@ test('static Codex roles pass the resolver-selected generated file to the adapte
   assert.equal(launched.launch_arguments, undefined);
 });
 
-test('Claude launches use the existing palette alias with an explicit effort', () => {
+test('Claude launches use the independent native grid with an explicit effort', () => {
   let launched;
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: {
@@ -180,9 +180,40 @@ test('Claude launches use the existing palette alias with an explicit effort', (
     role: 'integrator',
     signals: { contested: true },
   });
-  assert.deepStrictEqual(launched.launch_arguments, { model: 'fable', effort: 'medium' });
-  assert.equal(result.applied_model, 'fable');
+  assert.deepStrictEqual(launched.launch_arguments, { model: 'opus', effort: 'high' });
+  assert.equal(result.applied_model, 'opus');
   assert.equal(result.receipt.policy_hash, policy.POLICY_HASH);
+});
+
+test('Claude repair receipts authorize only the Claude-native predecessor rung', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-claude-chain-'));
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { claude: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  const base = boundary.dispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+  });
+  assert.equal(base.applied_model, 'opus');
+  assert.equal(base.applied_effort, 'medium');
+  const repeat = boundary.dispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+  });
+  assert.equal(repeat.applied_model, 'opus');
+  assert.equal(repeat.applied_effort, 'max');
+  const exhausted = boundary.dispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
+    previous_dispatch_id: repeat.dispatch_id,
+  });
+  assert.equal(exhausted.applied_model, 'opus');
+  assert.equal(exhausted.applied_effort, 'max');
 });
 
 test('validation hooks can reject an unsupported selection before launch', () => {

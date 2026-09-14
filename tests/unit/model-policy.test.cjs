@@ -98,27 +98,52 @@ test('resolves every base role to the ADR-014 logical and concrete tuple on Code
   }
 });
 
-test('maps logical rungs through the existing Claude palette without changing Codex ids', () => {
+test('resolves Claude through its independent native grid without changing Codex ids', () => {
   const cases = [
-    ['research', {}, 'base', 'terra', 'sonnet', 'high'],
-    ['research', { type: 'alternatives' }, 'alternatives', 'sol', 'opus', 'medium'],
-    ['research', { complexity: 'very-complex' }, 'very-complex', 'astra', 'fable', 'medium'],
-    ['decomposition', { checkpoint: true }, 'critical', 'astra', 'fable', 'medium'],
-    ['decomposition', { critical: true }, 'critical', 'astra', 'fable', 'medium'],
-    ['executor', {}, 'base', 'luna', 'opus', 'max'],
-    ['executor', { critical: true }, 'critical', 'astra', 'fable', 'medium'],
+    ['research', {}, 'base', 'sonnet', 'sonnet', 'high'],
+    ['research', { type: 'alternatives' }, 'alternatives', 'opus', 'opus', 'medium'],
+    ['research', { complexity: 'very-complex' }, 'very-complex', 'fable', 'fable', 'medium'],
+    ['decomposition', { checkpoint: true }, 'critical', 'fable', 'fable', 'medium'],
+    ['decomposition', { critical: true }, 'critical', 'fable', 'fable', 'medium'],
+    ['executor', {}, 'base', 'sonnet', 'sonnet', 'max'],
+    ['executor', { critical: true }, 'critical', 'opus', 'opus', 'high'],
+    ['pr-sentinel', {}, 'base', 'sonnet', 'sonnet', 'high'],
+    ['integrator', {}, 'base', 'opus', 'opus', 'medium'],
+    ['integrator', { contested: true }, 'critical', 'opus', 'opus', 'high'],
+    ['drift-check', {}, 'base', 'opus', 'opus', 'max'],
+    ['arch-review', {}, 'base', 'opus', 'opus', 'medium'],
+    ['arch-review', { contested: true }, 'critical', 'opus', 'opus', 'max'],
+    ['arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'fable', 'medium'],
+    ['ci-fix', {}, 'base', 'opus', 'opus', 'medium'],
+    ['review-fix', {}, 'base', 'opus', 'opus', 'medium'],
   ];
-  for (const [role, signals, rung, logical, model, effort] of cases) {
+  for (const [role, signals, rung, modelKey, model, effort] of cases) {
     const result = claude(role, signals);
     assert.deepStrictEqual(
-      [result.logical_rung, result.logical_model, result.model, result.effort],
-      [rung, logical, model, effort],
+      [result.logical_rung, result.model_key, result.logical_model, result.model, result.effort],
+      [rung, modelKey, modelKey, model, effort],
       `${role}/${JSON.stringify(signals)}`,
     );
     assert.equal(result.backend, 'workflow');
     assert.equal(result.mechanism, 'workflow-explicit-selection');
     assert.deepStrictEqual(result.launch_arguments, { model, effort });
   }
+  assert.deepStrictEqual(policy.CLAUDE_MODEL_ALIASES, {
+    sonnet: 'sonnet',
+    opus: 'opus',
+    fable: 'fable',
+  });
+  assert.equal(runtimeAdapters.modelFor('codex', 'sonnet'), undefined);
+  assert.equal(runtimeAdapters.modelFor('claude', 'terra'), undefined);
+  assert.equal(runtimeAdapters.modelFor('claude', 'sol'), undefined);
+  assert.equal(runtimeAdapters.modelFor('claude', 'luna'), undefined);
+  assert.equal(runtimeAdapters.modelFor('claude', 'astra'), undefined);
+  assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.codex.executor[0], {
+    name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max',
+  });
+  assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.executor[0], {
+    name: 'base', model_key: 'sonnet', effort: 'max',
+  });
 });
 
 test('research promotes alternatives and explicit very-complex, retaining both reasons', () => {

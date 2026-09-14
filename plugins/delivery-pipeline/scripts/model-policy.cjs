@@ -10,9 +10,11 @@ function repairInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const signals = input.signals;
   if (!signals || typeof signals !== 'object' || Array.isArray(signals)) return null;
+  const runtime = typeof input.runtime === 'string' ? input.runtime.trim() : input.runtime;
   const role = typeof input.role === 'string' ? input.role.trim() : input.role;
-  return canonicalPolicy.REPAIR_PREREQUISITES[role]
-    && canonicalPolicy.REPAIR_PREREQUISITES[role][signals.signatureState]
+  const prerequisites = canonicalPolicy.RUNTIME_REPAIR_PREREQUISITES[runtime];
+  return prerequisites && prerequisites[role]
+    && prerequisites[role][signals.signatureState]
     ? { role, signatureState: signals.signatureState }
     : null;
 }

@@ -1,8 +1,9 @@
 'use strict';
 
-// Runtime-owned concrete mappings.  model-policy.cjs owns only logical roles,
-// rungs, and evidence rules; these adapters translate a logical model at the
-// last responsible moment without changing Claude's existing aliases.
+// Runtime-owned concrete palettes. The canonical policy owns the role grids and
+// evidence rules; each runtime names its own native model keys. Claude's keys
+// are the existing aliases themselves and are intentionally not translations of
+// Codex's Terra/Sol/Luna/Astra vocabulary.
 
 const CODEX_MODEL_IDS = Object.freeze({
   terra: 'gpt-5.6-terra',
@@ -12,26 +13,25 @@ const CODEX_MODEL_IDS = Object.freeze({
 });
 
 const CLAUDE_MODEL_ALIASES = Object.freeze({
-  terra: 'sonnet',
-  sol: 'opus',
-  luna: 'opus',
-  astra: 'fable',
+  sonnet: 'sonnet',
+  opus: 'opus',
+  fable: 'fable',
 });
 
-function modelFor(runtime, logicalModel) {
+function modelFor(runtime, modelKey) {
   const map = runtime === 'codex' ? CODEX_MODEL_IDS : runtime === 'claude' ? CLAUDE_MODEL_ALIASES : null;
-  return map && Object.prototype.hasOwnProperty.call(map, logicalModel) ? map[logicalModel] : undefined;
+  return map && Object.prototype.hasOwnProperty.call(map, modelKey) ? map[modelKey] : undefined;
 }
 
 const RUNTIME_ADAPTERS = Object.freeze({
   codex: Object.freeze({
     runtime: 'codex',
-    modelFor: (logicalModel) => modelFor('codex', logicalModel),
+    modelFor: (modelKey) => modelFor('codex', modelKey),
     models: CODEX_MODEL_IDS,
   }),
   claude: Object.freeze({
     runtime: 'claude',
-    modelFor: (logicalModel) => modelFor('claude', logicalModel),
+    modelFor: (modelKey) => modelFor('claude', modelKey),
     models: CLAUDE_MODEL_ALIASES,
   }),
 });

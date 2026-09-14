@@ -1495,23 +1495,15 @@ function createDispatchBoundary(options = {}) {
   }
 
   function repairPrerequisiteFor(input) {
+    const runtime = input && typeof input.runtime === 'string' ? input.runtime.trim() : input && input.runtime;
     const role = input && typeof input.role === 'string' ? input.role.trim() : input && input.role;
     const signals = input && input.signals;
     const state = signals && signals.signatureState;
-    return canonicalPolicy.REPAIR_PREREQUISITES[role]
-      && canonicalPolicy.REPAIR_PREREQUISITES[role][state]
-      ? { role, signatureState: state, ...canonicalPolicy.REPAIR_PREREQUISITES[role][state] }
+    const prerequisites = canonicalPolicy.RUNTIME_REPAIR_PREREQUISITES[runtime];
+    return prerequisites && prerequisites[role]
+      && prerequisites[role][state]
+      ? { runtime, role, signatureState: state, ...prerequisites[role][state] }
       : null;
-  }
-
-  function modelFor(runtime, logicalModel) {
-    if (!canonicalPolicy.SUPPORTED_RUNTIMES.includes(runtime)) {
-      refuse('UNKNOWN_RUNTIME', `unknown or ambiguous runtime ${JSON.stringify(runtime)}`);
-    }
-    const map = runtime === 'codex' ? canonicalPolicy.CODEX_MODEL_IDS : canonicalPolicy.CLAUDE_MODEL_ALIASES;
-    const model = map && map[logicalModel];
-    if (!model) refuse('UNSUPPORTED_SELECTION', `no ${runtime} model is registered for logical model ${logicalModel}`);
-    return model;
   }
 
   function recordReceipt(value) {
@@ -1601,7 +1593,7 @@ function createDispatchBoundary(options = {}) {
       refuse('UNVERIFIED_RECEIPT', `${prerequisite.role} ${prerequisite.signatureState} escalation requires the receipt returned by the durable dispatch boundary`, { dispatch_id: previousDispatchId });
     }
     const runtime = String(input.runtime || '').trim();
-    const expectedModel = modelFor(runtime, prerequisite.logical_model);
+    const expectedModel = prerequisite.model;
     if (trusted.receipt.runtime !== runtime || trusted.receipt.role !== prerequisite.role) {
       refuse('NONCOMPLIANT_RECEIPT', 'the preceding receipt runtime or role does not match the repair dispatch', { expected: { runtime, role: prerequisite.role }, actual: { runtime: trusted.receipt.runtime, role: trusted.receipt.role } });
     }
@@ -1609,7 +1601,7 @@ function createDispatchBoundary(options = {}) {
         || trusted.receipt.requested_model !== expectedModel || trusted.receipt.requested_effort !== prerequisite.effort) {
       refuse(
         'NONCOMPLIANT_RECEIPT',
-        `${prerequisite.role} ${prerequisite.signatureState} requires a preceding ${prerequisite.logical_model}/${prerequisite.effort} receipt on ${runtime}`,
+        `${prerequisite.role} ${prerequisite.signatureState} requires a preceding ${prerequisite.model}/${prerequisite.effort} receipt on ${runtime}`,
         { expected: { model: expectedModel, effort: prerequisite.effort }, actual: { model: trusted.receipt.applied_model, effort: trusted.receipt.applied_effort } },
       );
     }

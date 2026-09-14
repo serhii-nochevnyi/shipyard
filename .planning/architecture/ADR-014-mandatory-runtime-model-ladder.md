@@ -25,13 +25,13 @@ model IDs or provider configuration is explicitly out of scope.
 
 ## Decision
 
-### 1. One canonical policy, two runtime adapters
+### 1. One boundary contract, two independent runtime grids
 
-Shipyard defines one role/escalation policy. The Claude adapter resolves its
-logical rungs through the existing Claude palette without changing that palette.
-The Codex adapter resolves concrete model IDs from the Codex palette below.
-Generated Codex `.toml` files are adapter output and never an independent policy
-source.
+Shipyard defines one versioned dispatch contract, but each runtime owns an
+independent role/rung/model grid. Claude does not resolve Codex's Terra/Sol/Luna/Astra
+logical names through aliases. Its grid names the existing Claude Code aliases
+directly. Generated Codex `.toml` files are adapter output and never an
+independent policy source.
 
 Codex model IDs are:
 
@@ -42,7 +42,15 @@ Codex model IDs are:
 | Luna | `gpt-5.6-luna` |
 | Astra | `gpt-6-astra` |
 
-### 2. Approved role ladder
+Claude's existing native palette is:
+
+| Claude model key | Claude Code alias |
+|---|---|
+| Sonnet | `sonnet` |
+| Opus | `opus` |
+| Fable | `fable` |
+
+### 2. Approved Codex role ladder
 
 | Role | Base selection | Escalation 1 | Escalation 2 | Escalation signals |
 |---|---|---|---|---|
@@ -66,13 +74,39 @@ applied receipt; `repeat_exhausted` is valid only when the previous Sol launch
 has an applied receipt. A terminal `flake` or `plan_defect` is a gate/strategy
 outcome, not an automatic model promotion.
 
-Signals are role-scoped. Global context-window pressure cannot promote fixed
-Luna roles (`pr-sentinel` and `drift-check`), and it does not promote executor
-without the executor's explicit critical/checkpoint evidence. When multiple
-signals fire, the resolver retains all reasons and selects the highest rung
-allowed for that role. A missing signal never silently promotes a role.
+### 3. Approved Claude Code role ladder
 
-### 3. Mandatory dispatch boundary
+The Claude grid is independent of the Codex table and uses Claude's native
+aliases as its model keys:
+
+| Role | Base selection | Escalation 1 | Escalation 2 | Escalation signals |
+|---|---|---|---|---|
+| research | Sonnet/high | Opus/medium | Fable/medium | `alternatives`; explicit `very-complex` |
+| decomposition | Opus/medium | — | Fable/medium | explicit `critical` or `checkpoint` |
+| executor | Sonnet/max | Opus/high | — | explicit `critical` or `checkpoint` |
+| pr-sentinel | Sonnet/high | — | — | gate strategy only |
+| integrator | Opus/medium | Opus/high | — | `contested`, explicit `critical`/`checkpoint`, measured window |
+| drift-check | Opus/max | — | — | evidence/gate strategy only |
+| arch-review | Opus/medium | Opus/max | Fable/medium | `critical`/`checkpoint`/`contested`; measured window |
+| ci-fix | Opus/medium | Opus/max | — | verified `repeat`; `repeat_exhausted` |
+| review-fix | Opus/medium | Opus/max | — | verified `repeat`; `repeat_exhausted` |
+
+For Claude architecture review, explicit critical/checkpoint/contested evidence
+selects Opus/max. Measured input above the policy window threshold selects the
+Fable/medium ceiling; when both classes of evidence fire, the ceiling wins.
+Claude repair roles require a boundary-verified receipt from the immediately
+preceding Claude rung. `repeat_exhausted` records a distinct receipt-chain
+state but remains at the requested Opus/max ceiling; it does not add a Fable
+promotion.
+
+Signals are role-scoped. Global context-window pressure cannot promote fixed
+mechanical roles (`pr-sentinel` and `drift-check`) and it does not promote
+executor without the executor's explicit critical/checkpoint evidence. Each
+runtime applies its own role grid when multiple signals fire; the resolver
+retains all reasons and selects the highest rung allowed for that runtime and
+role. A missing signal never silently promotes a role.
+
+### 4. Mandatory dispatch boundary
 
 Every routed launch, on either runtime, must pass through:
 
@@ -94,10 +128,10 @@ evidence of compliance.
 Codex static roles must use the resolver-selected generated agent file. Dynamic
 roles such as executor and decomposition must receive explicit `model` and
 `reasoning_effort` launch arguments. Claude launches must receive the selected
-existing palette alias and supported effort/application evidence. If the host
+native palette alias and supported effort/application evidence. If the host
 cannot carry the required override, the dispatch is refused.
 
-### 4. Configuration and override precedence
+### 5. Configuration and override precedence
 
 The canonical role ladder has authority over generic GSD tier defaults and
 per-role Shipyard model/effort overrides for routed delivery roles. A conflicting
@@ -105,12 +139,13 @@ override is a configuration error, not a promotion or downgrade. Runtime
 availability is checked at install and dispatch time. No project config may
 select a runtime implicitly when both runtimes are installed.
 
-### 5. Telemetry contract
+### 6. Telemetry contract
 
-Each dispatch records runtime, role, logical rung, concrete requested model and
-effort, all fired signals, policy version/fingerprint, backend, selected agent
-file or explicit launch arguments, dispatch ID, application receipt, and
-observed model/effort when the runtime exposes them. Missing or contradictory
+Each dispatch records runtime, role, runtime-native model key, logical rung,
+concrete requested model and effort, all fired signals, policy
+version/fingerprint, backend, selected agent file or explicit launch
+arguments, dispatch ID, application receipt, and observed model/effort when the
+runtime exposes them. Missing or contradictory
 fields are enforcement failures and remain visible in reports.
 
 ## Consequences
@@ -119,8 +154,8 @@ fields are enforcement failures and remain visible in reports.
 
 - Codex can use Terra, Sol, Luna, and Astra for the roles that need them.
 - Research, judgement, repair, and fixed mechanical lanes are distinguishable.
-- Claude retains its working model palette while both runtimes share the same
-  role and escalation semantics.
+- Claude retains its working model palette while its role/rung grid can evolve
+  independently of Codex's model vocabulary.
 - A parent session model cannot silently decide a child dispatch.
 - Historical runs remain truthful; the new policy applies only after rollout.
 
@@ -136,7 +171,8 @@ fields are enforcement failures and remain visible in reports.
 ## Scope fences
 
 - Claude's existing model palette, aliases, provider, and credentials are not
-  changed by this ADR.
+  changed by this ADR; only the canonical role grid's references to those
+  aliases are made explicit.
 - No historical dispatch is relabeled as having used the new ladder.
 - Product code and non-Shipyard model selection are unaffected.
 - This ADR does not authorize automatic online tuning of thresholds or signals.
