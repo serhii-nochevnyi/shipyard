@@ -41,7 +41,7 @@ function priorReceipt(role, model, effort, dispatchId) {
 const CODEx_BASE = {
   research: ['terra', 'gpt-5.6-terra', 'high'],
   decomposition: ['sol', 'gpt-5.6-sol', 'medium'],
-  executor: ['astra', 'gpt-6-astra', 'low'],
+  executor: ['luna', 'gpt-5.6-luna', 'max'],
   'pr-sentinel': ['luna', 'gpt-5.6-luna', 'medium'],
   integrator: ['sol', 'gpt-5.6-sol', 'medium'],
   'drift-check': ['luna', 'gpt-5.6-luna', 'max'],
@@ -105,7 +105,8 @@ test('maps logical rungs through the existing Claude palette without changing Co
     ['research', { complexity: 'very-complex' }, 'very-complex', 'astra', 'fable', 'medium'],
     ['decomposition', { checkpoint: true }, 'critical', 'astra', 'fable', 'medium'],
     ['decomposition', { critical: true }, 'critical', 'astra', 'fable', 'medium'],
-    ['executor', {}, 'base', 'astra', 'fable', 'low'],
+    ['executor', {}, 'base', 'luna', 'opus', 'max'],
+    ['executor', { critical: true }, 'critical', 'astra', 'fable', 'medium'],
   ];
   for (const [role, signals, rung, logical, model, effort] of cases) {
     const result = claude(role, signals);
@@ -208,9 +209,27 @@ test('window escalation uses only measured input against the fingerprinted thres
   );
 });
 
-test('fixed-model roles ignore global risk, critical, checkpoint, and window promotion', () => {
+test('executor keeps Luna/max by default and escalates to Astra/medium on explicit critical evidence', () => {
+  const base = codex('executor', { risk: 'high', inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 });
+  assert.equal(base.logical_rung, 'base');
+  assert.equal(base.logical_model, 'luna');
+  assert.equal(base.model, 'gpt-5.6-luna');
+  assert.equal(base.effort, 'max');
+  assert.ok(base.signal_reasons.some((item) => item.signal === 'risk' && item.applies === false));
+  assert.ok(base.signal_reasons.some((item) => item.signal === 'window' && item.applies === false));
+
+  for (const signal of ['critical', 'checkpoint']) {
+    const result = codex('executor', { [signal]: true });
+    assert.equal(result.logical_rung, 'critical', signal);
+    assert.equal(result.logical_model, 'astra', signal);
+    assert.equal(result.model, 'gpt-6-astra', signal);
+    assert.equal(result.effort, 'medium', signal);
+    assert.ok(result.signal_reasons.some((item) => item.signal === signal && item.applies === true));
+  }
+});
+
+test('fixed Luna roles ignore global risk, critical, checkpoint, and window promotion', () => {
   const expected = {
-    executor: ['astra', 'gpt-6-astra'],
     'pr-sentinel': ['luna', 'gpt-5.6-luna'],
     'drift-check': ['luna', 'gpt-5.6-luna'],
   };
@@ -272,15 +291,15 @@ test('matching overrides are harmless but conflicting or unsupported selections 
   const matching = codex('executor', {
     risk: 'high',
   }, {
-    override: { model: 'gpt-6-astra', effort: 'low', runtime: 'codex' },
+    override: { model: 'gpt-5.6-luna', effort: 'max', runtime: 'codex' },
   });
-  assert.equal(matching.model, 'gpt-6-astra');
+  assert.equal(matching.model, 'gpt-5.6-luna');
   assert.throws(
     () => codex('executor', {}, { override: { model: 'gpt-5.6-terra' } }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
   assert.throws(
-    () => codex('executor', {}, { override: { effort: 'max' } }),
+    () => codex('executor', {}, { override: { effort: 'low' } }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
   assert.throws(
@@ -364,11 +383,11 @@ test('unknown runtime, malformed signals, and unsupported signal names fail clos
       JSON.stringify(signals),
     );
   }
-  assert.equal(policy.resolveDispatch({ runtime: 'codex', role: 'executor', signals: { critical: true } }).logical_rung, 'base');
+  assert.equal(policy.resolveDispatch({ runtime: 'codex', role: 'executor', signals: { critical: true } }).logical_rung, 'critical');
 });
 
 test('resolution is immutable and exposes route, backend, mechanism, and reason provenance', () => {
-  const result = codex('executor', { risk: 'high', checkpoint: true });
+  const result = codex('executor', { risk: 'high' });
   assert.ok(Object.isFrozen(result));
   assert.ok(Object.isFrozen(result.signals_fired));
   assert.ok(Object.isFrozen(result.signal_reasons));
@@ -459,17 +478,17 @@ test('runtime catalog and internal CLI reject inherited or receipt-free selectio
 
 test('canonical policy ignores caller mutation attempts against runtime adapter exports', () => {
   const originalAdapterForRuntime = runtimeAdapters.adapterForRuntime;
-  const originalCodexAstra = runtimeAdapters.CODEX_MODEL_IDS.astra;
+  const originalCodexLuna = runtimeAdapters.CODEX_MODEL_IDS.luna;
   try {
     runtimeAdapters.adapterForRuntime = () => ({ modelFor: () => 'caller-controlled-model' });
-    runtimeAdapters.CODEX_MODEL_IDS.astra = 'caller-controlled-model';
+    runtimeAdapters.CODEX_MODEL_IDS.luna = 'caller-controlled-model';
   } catch (error) {
     // Frozen compatibility exports are the expected protection.
   }
   const result = codex('executor');
-  assert.equal(result.model, 'gpt-6-astra');
+  assert.equal(result.model, 'gpt-5.6-luna');
   assert.equal(runtimeAdapters.adapterForRuntime, originalAdapterForRuntime);
-  assert.equal(runtimeAdapters.CODEX_MODEL_IDS.astra, originalCodexAstra);
+  assert.equal(runtimeAdapters.CODEX_MODEL_IDS.luna, originalCodexLuna);
 });
 
 done();

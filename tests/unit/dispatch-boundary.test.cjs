@@ -108,13 +108,13 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   const result = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-36-01' });
   assert.equal(calls.length, 1);
   assert.deepStrictEqual(calls[0].resolution.launch_arguments, {
-    model: 'gpt-6-astra',
-    reasoning_effort: 'low',
+    model: 'gpt-5.6-luna',
+    reasoning_effort: 'max',
   });
   assert.deepStrictEqual(calls[0].context, { ticket: 'T-36-01' });
-  assert.equal(result.requested_model, 'gpt-6-astra');
-  assert.equal(result.applied_model, 'gpt-6-astra');
-  assert.equal(result.observed_effort, 'low');
+  assert.equal(result.requested_model, 'gpt-5.6-luna');
+  assert.equal(result.applied_model, 'gpt-5.6-luna');
+  assert.equal(result.observed_effort, 'max');
   assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'record', 'receipt']);
   assert.equal(result.trace.at(-1).status, 'passed');
   assert.equal(recorded.length, 1);
@@ -126,6 +126,27 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   assert.ok(Object.isFrozen(result.resolution));
   assert.ok(Object.isFrozen(result.receipt));
   assert.ok(Object.isFrozen(result.trace));
+});
+
+test('executor critical dispatch uses the Astra/medium escalation rung', () => {
+  let launched;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({ onLaunch: (resolution) => { launched = resolution; } }),
+    },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({
+    runtime: 'codex',
+    role: 'executor',
+    signals: { critical: true },
+  });
+  assert.deepStrictEqual(launched.launch_arguments, {
+    model: 'gpt-6-astra',
+    reasoning_effort: 'medium',
+  });
+  assert.equal(result.applied_model, 'gpt-6-astra');
+  assert.equal(result.applied_effort, 'medium');
 });
 
 test('static Codex roles pass the resolver-selected generated file to the adapter', () => {
@@ -373,7 +394,7 @@ test('the boundary keeps using the canonical policy if an exported method is rep
   }
   const result = boundary.dispatch({ runtime: 'codex', role: 'executor' });
   assert.equal(replacementCalled, false);
-  assert.equal(result.applied_model, 'gpt-6-astra');
+  assert.equal(result.applied_model, 'gpt-5.6-luna');
   assert.equal(policy.resolveDispatch, originalResolve);
   assert.equal(policy.validateResolution, originalValidate);
 });
@@ -600,7 +621,7 @@ test('observation capability is enforced independently for model and effort', ()
   });
   const result = valid.dispatch({ runtime: 'codex', role: 'executor' });
   assert.equal(result.observed_model, 'unknown');
-  assert.equal(result.observed_effort, 'low');
+  assert.equal(result.observed_effort, 'max');
 });
 
 test('an async launch cannot change observation capability after dispatch begins', async () => {
@@ -705,7 +726,7 @@ test('receipt parsing cannot mint boundary trust, while validation remains avail
     adapters: { codex: fakeAdapter() },
   });
   const evidence = boundary.receipt(resolution, receipt);
-  assert.equal(evidence.applied_model, 'gpt-6-astra');
+  assert.equal(evidence.applied_model, 'gpt-5.6-luna');
   assert.equal(evidence.compliance, undefined);
   assert.equal(evidence.compliance_proof, undefined);
   assert.ok(Object.isFrozen(evidence));

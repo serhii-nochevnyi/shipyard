@@ -1,7 +1,7 @@
 # ADR-014 — mandatory runtime model ladder
 
 - **Status:** accepted
-- **Date:** 2026-09-12
+- **Date:** 2026-09-12; amended 2026-09-14
 - **Decision owner:** repository operator
 - **Scope:** Shipyard roles dispatched through Claude Code and Codex
 - **Supersedes:** ADR-005 and ADR-012 where they define model/effort selection
@@ -48,7 +48,7 @@ Codex model IDs are:
 |---|---|---|---|---|
 | research | Terra/high | Sol/medium | Astra/medium | `alternatives`; explicit `very-complex` |
 | decomposition | Sol/medium | — | Astra/medium | explicit `critical` or `checkpoint` |
-| executor | Luna/max | — | — | safety signals do not change model |
+| executor | Luna/max | Astra/medium | — | explicit `critical` or `checkpoint` |
 | pr-sentinel | Luna/medium | — | — | gate strategy only |
 | integrator | Sol/medium | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
 | drift-check | Luna/max | — | — | evidence/gate strategy only |
@@ -58,15 +58,19 @@ Codex model IDs are:
 
 For research, `alternatives` selects the middle rung; it does not by itself
 mean `very-complex`. A very-complex classification is explicit and durable in
-the dispatch input. For repair roles, `repeat` is valid only when the previous
-Luna launch has an applied receipt; `repeat_exhausted` is valid only when the
-previous Sol launch has an applied receipt. A terminal `flake` or `plan_defect`
-is a gate/strategy outcome, not an automatic model promotion.
+the dispatch input. Executor keeps Luna/max for its ordinary lane and selects
+Astra/medium only from explicit `critical` or `checkpoint` evidence; global
+risk, context-window pressure, and normal complexity do not promote it. For
+repair roles, `repeat` is valid only when the previous Luna launch has an
+applied receipt; `repeat_exhausted` is valid only when the previous Sol launch
+has an applied receipt. A terminal `flake` or `plan_defect` is a gate/strategy
+outcome, not an automatic model promotion.
 
 Signals are role-scoped. Global context-window pressure cannot promote fixed
-Luna roles. When multiple signals fire, the resolver retains all reasons and
-selects the highest rung allowed for that role. A missing signal never silently
-promotes a role.
+Luna roles (`pr-sentinel` and `drift-check`), and it does not promote executor
+without the executor's explicit critical/checkpoint evidence. When multiple
+signals fire, the resolver retains all reasons and selects the highest rung
+allowed for that role. A missing signal never silently promotes a role.
 
 ### 3. Mandatory dispatch boundary
 
