@@ -1558,7 +1558,7 @@ const FIX_ROUND = path.join(
 function runFixRound(args) {
   const src = fs.readFileSync(FIX_ROUND, 'utf8').replace(/^export const meta/m, 'const meta');
   // eslint-disable-next-line no-new-func
-  const wf = new Function('agent', 'parallel', 'phase', 'log', 'args',
+  const wf = new Function('agent', 'parallel', 'phase', 'log', 'args', '__require',
     `return (async () => {\n${src}\n})()`);
   const prompts = [];
   const agent = (prompt) => {
@@ -1566,14 +1566,14 @@ function runFixRound(args) {
     return Promise.resolve({ pushed: true, status: 'fixed', notes: 'n', hypothesis: 'h' });
   };
   const parallel = (fns) => Promise.all(fns.map((f) => f()));
-  return { prompts, result: wf(agent, parallel, () => {}, () => {}, args) };
+  return { prompts, result: wf(agent, parallel, () => {}, () => {}, args, require) };
 }
 
 const FIX_ARGS = (over = {}) => ({
   prs: [{
     id: 'T-24-06', pr: 42, branch: 'ticket/T-24-06', worktreePath: '/wt/T-24-06',
     planPath: '/proj/.planning/phases/24/24-06-PLAN.md', needsCiFix: true,
-    base: 'epic/24-x', ...over,
+    base: 'epic/24-x', model: 'opus', effort: 'medium', ...over,
   }],
   ciFixRefPath: '/refs/ci-fix.md',
   reviewFixRefPath: '/refs/review-fix.md',

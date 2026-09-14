@@ -475,14 +475,14 @@ test('command-backed verification rule reaches every delivery boundary', () => {
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const workflowArgs = {
   executors: {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01', model: 'sonnet', effort: 'max' }],
   },
   'drift-gate': {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', model: 'opus', effort: 'max' }],
     driftRefPath: '/p/drift-check.md',
   },
   'fix-round': {
-    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false }],
+    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'opus', effort: 'medium' }],
     ciFixRefPath: '/p/ci-fix.md',
     reviewFixRefPath: '/p/review-fix.md',
     reinitScript: '/p/reviewers.cjs',
@@ -500,7 +500,7 @@ async function renderedPrompt(name) {
     return { id: 'T-30-01', pr: 109, pushed: false, status: 'no-op', notes: '', hypothesis: 'none' };
   };
   const parallel = async (thunks) => Promise.all(thunks.map((thunk) => thunk()));
-  await new AsyncFunction('agent', 'parallel', 'phase', 'log', 'args', source)(agent, parallel, () => {}, () => {}, workflowArgs[name]);
+  await new AsyncFunction('agent', 'parallel', 'phase', 'log', 'args', '__require', source)(agent, parallel, () => {}, () => {}, workflowArgs[name], require);
   assert.strictEqual(calls.length, 1, `${name} must dispatch one prompt in the rendered-contract fixture`);
   return calls[0];
 }
