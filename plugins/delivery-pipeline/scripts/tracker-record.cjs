@@ -337,11 +337,16 @@ function requireMetadataIdentity(graphDir) {
   return identity;
 }
 
-function recordsForGeneration(store, generation, configuredStatuses, identity) {
+function recordsForGeneration(store, generation, configuredStatuses, identity, options = {}) {
   if (!Number.isInteger(generation) || generation < 1) return {};
   const out = {};
   for (const [ticket, record] of Object.entries(store.tickets)) {
     if (!record || record.ticket !== ticket || record.generation !== generation) continue;
+    // The predecessor bridge keeps an external observation alive across the
+    // publish boundary, but a direct override is not an observation to carry
+    // forward. Its contract is one current-generation exception; including it
+    // here would let a named bypass survive the next snapshot.
+    if (options.excludeOverrides && record.override === true) continue;
     if (!validRecord(record, configuredStatuses, identity)) continue;
     out[ticket] = { ...record };
   }
@@ -399,7 +404,7 @@ function activePreviousTrackers(graphDir, configuredStatuses) {
     ? configuredStatuses
     : readConfigStatuses(projectRootOf(graphDir));
   return Number.isInteger(generation) && generation > 1
-    ? recordsForGeneration(store, generation - 1, statuses, previousIdentity)
+    ? recordsForGeneration(store, generation - 1, statuses, previousIdentity, { excludeOverrides: true })
     : {};
 }
 
@@ -417,7 +422,7 @@ function activeTrackerSnapshotLocked(graphDir, configuredStatuses) {
   const previousIdentity = metadataPreviousIdentity(graphDir);
   return {
     ...(Number.isInteger(generation) && generation > 1
-      ? recordsForGeneration(store, generation - 1, statuses, previousIdentity)
+      ? recordsForGeneration(store, generation - 1, statuses, previousIdentity, { excludeOverrides: true })
       : {}),
     ...recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir)),
   };

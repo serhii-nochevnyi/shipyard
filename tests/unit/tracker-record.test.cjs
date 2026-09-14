@@ -398,6 +398,23 @@ test('the front snapshot combines only the current and publisher-backed predeces
   assert.deepStrictEqual(Object.keys(record.activeTrackerSnapshot(isolated.graph)), []);
 });
 
+test('the predecessor bridge does not carry a direct override into the next generation', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const previousIdentity = stored(graph).tickets['T-01'].generation_identity;
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({
+    generation: 2,
+    previous_generation_identity: previousIdentity,
+  }));
+  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
+  const record = require(RECORD);
+  assert.deepStrictEqual(Object.keys(record.activePreviousTrackers(graph)), []);
+  assert.deepStrictEqual(Object.keys(record.activeTrackerSnapshot(graph)), ['T-02']);
+});
+
 test('a malformed or missing metadata file never falls back to the advisory front generation', () => {
   const { project, graph } = scratch(7);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
