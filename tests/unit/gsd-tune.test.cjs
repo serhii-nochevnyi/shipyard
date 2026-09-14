@@ -1008,4 +1008,156 @@ test('the pin is REPORTED and never rewritten', () => {
   }
 });
 
+suite('Codex bundle — complete canonical static coverage and fail-closed validation');
+
+const bundlePolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const { validateCodexBundle, validateCodexCapabilities } = require(SCRIPT);
+const GENERATOR = path.resolve(__dirname, '../../scripts/gen-codex-shipyard.cjs');
+const bundleSelections = Object.values(bundlePolicy.CODEX_ROLE_RUNG_DEFINITIONS).flat().map((rung) => ({
+  model: bundlePolicy.CODEX_MODEL_IDS[rung.model_key], effort: rung.effort,
+}));
+const bundleCapabilities = {
+  supportedModels: [...new Set(bundleSelections.map((s) => s.model))],
+  supportedEfforts: [...new Set(bundleSelections.map((s) => s.effort))],
+  supportedSelections: bundleSelections,
+};
+
+function withBundle(check, phase = 2) {
+  const root = project({ model_policy: { runtime_tiers: { codex: { sonnet: 'foreign-model' } } } });
+  try {
+    const converter = path.join(root, 'converter.cjs');
+    fs.writeFileSync(converter, 'module.exports = { convertClaudeCommandToCodexSkill: x => x, convertClaudeToCodexMarkdown: x => x };');
+    const capabilitiesFile = path.join(root, 'capabilities.json');
+    fs.writeFileSync(capabilitiesFile, JSON.stringify(bundleCapabilities));
+    const out = path.join(root, 'out');
+    const codexHome = path.join(root, 'codex');
+    const args = [GENERATOR, '--out', out, '--codex-home', codexHome, '--gsd-lib', converter,
+      '--project-dir', root, '--phase', String(phase), '--capabilities', capabilitiesFile];
+    const generated = spawnSync(process.execPath, args, { encoding: 'utf8', env: hermetic() });
+    assert.equal(generated.status, 0, generated.stderr);
+    check({ root, out, args, options: { codexHome, phase, capabilities: bundleCapabilities } });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('generation covers every static rung and excludes every dynamic file in both phases', () => {
+  for (const phase of [1, 2]) withBundle(({ out, options }) => {
+    const manifest = validateCodexBundle(out, options);
+    assert.equal(manifest.policy_hash, bundlePolicy.POLICY_HASH);
+    for (const role of bundlePolicy.CODEX_STATIC_ROLES.filter((role) => phase === 2 || role === 'research')) {
+      for (const rung of bundlePolicy.CODEX_ROLE_RUNG_DEFINITIONS[role]) {
+        assert.ok(manifest.agent_files.includes(bundlePolicy.codexAgentFile(role, rung.name)));
+      }
+    }
+    for (const role of bundlePolicy.DYNAMIC_ROLES) {
+      for (const rung of bundlePolicy.CODEX_ROLE_RUNG_DEFINITIONS[role]) {
+        assert.ok(!fs.existsSync(path.join(out, 'agents', bundlePolicy.codexAgentFile(role, rung.name))));
+      }
+    }
+  }, phase);
+});
+
+test('validator rejects incomplete, stale, tampered, unregistered and dynamic artifacts', () => {
+  const mutations = {
+    missing: ({ out }, m) => fs.unlinkSync(path.join(out, 'agents', m.agent_files[0])),
+    omitted: (_, m) => m.agent_files.pop(),
+    duplicate: (_, m) => m.agent_files.push(m.agent_files[0]),
+    stale: (_, m) => { m.policy_hash = '0'.repeat(64); },
+    version: (_, m) => { m.policy_version = 'obsolete'; },
+    unregistered: ({ out }) => fs.writeFileSync(path.join(out, 'config.fragment.toml'), ''),
+    registration: (_, m) => m.registrations.pop(),
+    digest: (_, m) => { m.agent_digests[m.agent_files[0]] = '0'.repeat(64); },
+    dynamic: ({ out }) => fs.writeFileSync(path.join(out, 'agents', 'shipyard-executor.toml'), ''),
+    payload: ({ out }) => fs.appendFileSync(path.join(out, 'bundle/scripts/model-policy.cjs'), '// stale'),
+    skill: ({ out }) => fs.unlinkSync(path.join(out, 'skills/shipyard-bench/SKILL.md')),
+    foreignSkill: ({ out }) => {
+      fs.mkdirSync(path.join(out, 'skills/gsd-executor'));
+      fs.writeFileSync(path.join(out, 'skills/gsd-executor/SKILL.md'), 'must not replace GSD');
+    },
+    symlink: ({ out, root }, m) => {
+      const file = path.join(out, 'agents', m.agent_files[0]);
+      fs.renameSync(file, path.join(root, 'foreign.toml'));
+      fs.symlinkSync(path.join(root, 'foreign.toml'), file);
+    },
+  };
+  for (const [name, mutate] of Object.entries(mutations)) withBundle((fixture) => {
+    const file = path.join(fixture.out, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(file));
+    mutate(fixture, manifest);
+    fs.writeFileSync(file, JSON.stringify(manifest));
+    assert.throws(() => validateCodexBundle(fixture.out, fixture.options), undefined, name);
+  });
+});
+
+test('a recomputed digest cannot authorize a model-less, downgraded or trailing configuration', () => {
+  for (const change of [
+    (text) => text.replace(/^model = .*\n/m, ''),
+    (text) => text.replace(/^model = .*$/m, 'model = "foreign-model"'),
+    (text) => text.replace(/^model_reasoning_effort = .*$/m, 'model_reasoning_effort = "low"'),
+    (text) => text + '\nmodel = "foreign-model"\n',
+    (text) => text.replace(/^# shipyard-policy-role = .*$/m, '# shipyard-policy-role = "executor"'),
+  ]) withBundle(({ out, options }) => {
+    const manifestFile = path.join(out, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile));
+    const name = manifest.agent_files[0];
+    const file = path.join(out, 'agents', name);
+    const text = change(fs.readFileSync(file, 'utf8'));
+    fs.writeFileSync(file, text);
+    manifest.agent_digests[name] = require('crypto').createHash('sha256').update(text).digest('hex');
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    assert.throws(() => validateCodexBundle(out, options));
+  });
+});
+
+test('capabilities must explicitly support every required model, effort and pair', () => {
+  for (const capabilities of [undefined, {},
+    { ...bundleCapabilities, supportedModels: [] },
+    { ...bundleCapabilities, supportedEfforts: ['medium', 'high'] },
+    { ...bundleCapabilities, supportedSelections: [] },
+  ]) assert.throws(() => validateCodexCapabilities(capabilities));
+  validateCodexCapabilities(bundleCapabilities);
+});
+
+test('the strict dispatch adapter accepts actual generated files and their manifest', () => {
+  withBundle(({ out, options }) => {
+    const { createCodexDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
+    const adapter = createCodexDispatchAdapter({
+      agentsDir: path.join(out, 'agents'), agentManifest: path.join(out, 'manifest.json'),
+      capabilities: options.capabilities,
+    });
+    for (const role of bundlePolicy.CODEX_STATIC_ROLES) {
+      const resolution = bundlePolicy.resolveDispatch({ runtime: 'codex', role });
+      assert.equal(adapter.validate(resolution), true);
+      assert.equal(adapter.validateGeneratedAgent(resolution).policy_hash, bundlePolicy.POLICY_HASH);
+    }
+  });
+});
+
+test('unreadable config and incapable hosts refuse generation before clearing a previous stage', () => {
+  withBundle(({ root, out, args }) => {
+    const before = fs.readFileSync(path.join(out, 'manifest.json'), 'utf8');
+    fs.writeFileSync(path.join(root, 'capabilities.json'), '{}');
+    assert.equal(spawnSync(process.execPath, args, { env: hermetic() }).status, 1);
+    assert.equal(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8'), before);
+    fs.writeFileSync(path.join(root, 'capabilities.json'), JSON.stringify(bundleCapabilities));
+    fs.writeFileSync(path.join(root, '.planning/config.json'), '{');
+    assert.equal(spawnSync(process.execPath, args, { env: hermetic() }).status, 1);
+    assert.equal(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8'), before);
+  });
+});
+
+test('Codex tuning preserves foreign planner and executor skills', () => {
+  const dir = project({ agent_skills: {
+    'gsd-planner': ['foreign-planning', 'global:shipyard-delivery-rules'],
+    'gsd-executor': ['foreign-execution'],
+  } });
+  try {
+    assert.equal(run(dir, ['--runtime', 'codex', '--apply']).status, 0);
+    const skills = readCfg(dir).agent_skills;
+    assert.deepEqual(skills['gsd-planner'], ['foreign-planning', PROJECT_DELIVERY_RULES]);
+    assert.deepEqual(skills['gsd-executor'], ['foreign-execution', PROJECT_DELIVERY_RULES]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 done();

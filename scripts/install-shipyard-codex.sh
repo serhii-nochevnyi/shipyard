@@ -19,6 +19,8 @@ set -euo pipefail
 #   AGENTS_SKILLS_DIR  Codex/cursor/cline skills dir (default: ~/.agents/skills)
 #   SHIPYARD_CODEX_PHASE  1 = investigate+decompose only; 2 = + deliver (default 2)
 #   SHIPYARD_PROJECT_DIR  conveyor project root whose .planning/config.json is read
+#   SHIPYARD_CODEX_CAPABILITIES_FILE  host JSON: supportedModels, supportedEfforts,
+#                                    optional supportedSelections [{model, effort}]
 #
 # Usage: bash scripts/install-shipyard-codex.sh [--phase 1|2] [--project-dir <dir>]
 
@@ -48,21 +50,13 @@ command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; e
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
 [[ -d "$PROJECT_DIR" ]] || { echo "error: project dir missing: $PROJECT_DIR" >&2; exit 1; }
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
-# gsd-core is a hard dependency here — the generator cannot convert a command
-# without it — so install/refresh it rather than telling the user to. Default is
-# the latest: shipyard is a superstructure over GSD, and pinning the base while
-# the superstructure moves is what left three different versions on one machine,
-# with the Codex generator reading the oldest of them. SHIPYARD_GSD_AUTO_INSTALL=0
-# opts out; GSD_CORE_VERSION pins.
-if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
-  bash "$REPO_ROOT/scripts/ensure-gsd-core.sh" codex
-fi
-
+# gsd-core's installed converter is needed for read-only bundle preflight.
+# Refresh happens after validation so a refused bundle cannot rewrite the host.
+# SHIPYARD_GSD_AUTO_INSTALL=0 opts out; GSD_CORE_VERSION pins the refresh.
 if [[ ! -f "$GSD_TOOLS" ]]; then
   echo "error: gsd-core for Codex not found at $GSD_TOOLS" >&2
   echo "       install it first:" >&2
   echo "       npx --yes @opengsd/gsd-core@latest --codex --global" >&2
-  echo "       (or re-run this installer with a network — it installs it for you)" >&2
   exit 1
 fi
 
@@ -223,6 +217,17 @@ GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$REPO_ROOT/scripts/gen-codex-ship
   --plugin "$PLUGIN_DIR" --out "$OUT" \
   --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE" \
   --project-dir "$PROJECT_DIR"
+
+# Validate the staged generation against the source policy and host evidence
+# before any destination replacement (including agents/config/capabilities).
+node "$PLUGIN_DIR/scripts/gsd-tune.cjs" --validate-codex-bundle "$OUT" \
+  --codex-home "$CODEX_HOME" --phase "$PHASE"
+
+# Refresh the dependency only after the bundle passes preflight. An invalid
+# generation must not let GSD rewrite the destination's config first.
+if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
+  bash "$REPO_ROOT/scripts/ensure-gsd-core.sh" codex
+fi
 
 # ── skills + bundle install LAST ───────────────────────────────────────────────
 # Keep both staged until agent/config/capability/AGENTS.md have succeeded, so a
