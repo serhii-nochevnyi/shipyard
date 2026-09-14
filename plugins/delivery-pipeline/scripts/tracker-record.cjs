@@ -165,6 +165,14 @@ function requireNonEmpty(value, label) {
   return value.trim();
 }
 
+function observedTimestamp(value) {
+  if (value === undefined) return new Date().toISOString();
+  if (typeof value !== 'string' || !value.trim() || !Number.isFinite(Date.parse(value))) {
+    throw new Error('--observed-at must be a valid date/time string');
+  }
+  return value;
+}
+
 function normalizeCliAssignee(value) {
   const text = requireNonEmpty(value, 'assignee');
   if (text.toLowerCase() === 'none') return null;
@@ -236,7 +244,7 @@ function observe(graphDir, input) {
   if (!input.assigneeProvided) throw new Error('assignee is required for a normal observation (use "none" when unassigned)');
   const assignee = normalizeCliAssignee(input.assignee);
   const result = evaluateEligibility(status, assignee, readConfigStatuses(projectRootOf(graphDir)));
-  const observedAt = input.observedAt || new Date().toISOString();
+  const observedAt = observedTimestamp(input.observedAt);
   const generation = requireGeneration(graphDir);
   const record = {
     ticket,
@@ -272,7 +280,7 @@ function unknown(graphDir, input) {
     eligible: null,
     reason,
     assignee_observed: !!input.assigneeProvided,
-    observed_at: input.observedAt || new Date().toISOString(),
+    observed_at: observedTimestamp(input.observedAt),
     generation: requireGeneration(graphDir),
   };
   return writeRecord(graphDir, ticket, record);
