@@ -52,6 +52,9 @@ test('state-sync passes the active tracker records without tracker I/O', () => {
   const publish = between(doc, "const published = withLock(lockDirFor(ROOT), 'tracker-record'", 'const front = published.front');
   assert.match(publish, /withLock\(lockDirFor\(ROOT\), 'state'/);
   assert.match(publish, /activeTrackers\(GRAPH_DIR\)/);
+  assert.match(publish, /previousGenerationIdentity/);
+  assert.match(publish, /generationIdentity/);
+  assert.match(publish, /previous_generation_identity/);
   const call = between(doc, 'const front = computeFront', 'writeAtomic\(STATE');
   assert.match(call, /trackerStatuses:\s*cfg\.jira_todo_statuses/);
   assert.match(call, /trackerRecords/);

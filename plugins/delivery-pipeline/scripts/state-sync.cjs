@@ -40,6 +40,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
@@ -56,7 +57,7 @@ const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs')
 // Tracker eligibility is observed by the orchestrating loop, never here. This
 // reader only consumes the generation-bound local cache, so state-sync keeps its
 // GitHub tick free of tracker calls and its state lock free of external I/O.
-const { activeTrackers } = require(path.join(__dirname, 'tracker-record.cjs'));
+const { activeTrackers, metadataIdentity } = require(path.join(__dirname, 'tracker-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
@@ -943,6 +944,10 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   // "state, yaml and front were written together" is a fact a reader can check
   // rather than a property of this file it has to trust.
   const generation = (onDisk && Number.isInteger(onDisk.generation) ? onDisk.generation : 0) + 1;
+  const previousGenerationIdentity = onDisk ? metadataIdentity(GRAPH_DIR) : null;
+  const generationIdentity = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
   // Tracker observations are written after the previous snapshot and before
   // this publish. They are bound to the generation current on disk, so the
   // active reader feeds them into this new snapshot. The following state-sync
@@ -1034,6 +1039,8 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   // rewrites everything rather than trusting a half-published board.
   writeAtomic(META, JSON.stringify({
     generation,
+    generation_identity: generationIdentity,
+    previous_generation_identity: previousGenerationIdentity,
     observed_at: OBSERVED_AT,
     generated_at: nowIso,
     by: 'state-sync',
