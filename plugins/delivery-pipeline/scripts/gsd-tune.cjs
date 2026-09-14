@@ -65,6 +65,15 @@ const policy = require('./model-policy.cjs');
 const digest = (content) => require('crypto').createHash('sha256').update(content).digest('hex');
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const IGNORED_PAYLOAD = /\.(bak|orig|rej|swp)$|^\.DS_Store$|~$/;
+const CODEX_CAPABILITIES_BUNDLE_FILE = 'codex-capabilities.json';
+
+function sortedJson(value) {
+  if (Array.isArray(value)) return value.map(sortedJson);
+  if (object(value)) {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortedJson(value[key])]));
+  }
+  return value;
+}
 
 // The installer copies these trees wholesale. Keep their inventory in the
 // manifest so validation covers nested references, templates, workflows and
@@ -188,6 +197,22 @@ function validateCodexBundle(root, { codexHome, phase = 2, capabilities } = {}) 
       throw new Error(`stale Codex bundle payload: ${file}`);
     }
   }
+  if (manifest.capabilities_file !== CODEX_CAPABILITIES_BUNDLE_FILE
+      || typeof manifest.capabilities_digest !== 'string') {
+    throw new Error('missing durable Codex capability evidence');
+  }
+  const bundledCapabilitiesRaw = read(`bundle/${CODEX_CAPABILITIES_BUNDLE_FILE}`);
+  if (digest(bundledCapabilitiesRaw) !== manifest.capabilities_digest) {
+    throw new Error('stale durable Codex capability evidence');
+  }
+  let bundledCapabilities;
+  try { bundledCapabilities = JSON.parse(bundledCapabilitiesRaw); }
+  catch (error) { throw new Error(`invalid durable Codex capability evidence: ${error.message}`); }
+  validateCodexCapabilities(bundledCapabilities, phase);
+  validateCodexCapabilities(capabilities, phase);
+  if (JSON.stringify(sortedJson(bundledCapabilities)) !== JSON.stringify(sortedJson(capabilities))) {
+    throw new Error('durable Codex capability evidence does not match the supplied host evidence');
+  }
   const converterPath = manifest.gsd_lib;
   const converterDigest = manifest.gsd_lib_digest;
   if (typeof converterPath !== 'string' || typeof converterDigest !== 'string'
@@ -199,7 +224,6 @@ function validateCodexBundle(root, { codexHome, phase = 2, capabilities } = {}) 
   } catch (error) {
     throw new Error(`stale or missing GSD converter: ${converterPath}`);
   }
-  validateCodexCapabilities(capabilities, phase);
   let expectedFragment = '# shipyard-agents:begin — delivery-pipeline agents, managed by install-shipyard-codex.sh\n';
   for (const variant of variants) {
     const content = read(`agents/${variant.file}`);
@@ -246,7 +270,7 @@ function validateCodexBundle(root, { codexHome, phase = 2, capabilities } = {}) 
 
 module.exports = {
   codexSkillNames, codexStaticVariants, validateCodexCapabilities, validateCodexBundle,
-  payloadFiles, payloadDigests,
+  payloadFiles, payloadDigests, CODEX_CAPABILITIES_BUNDLE_FILE,
 };
 
 function main() {
@@ -260,8 +284,10 @@ if (process.argv.includes('--validate-codex-bundle')) {
       || process.env.SHIPYARD_CODEX_CAPABILITIES_FILE;
     if (!capabilitiesFile) throw new Error('missing Codex host capabilities; pass --capabilities or set SHIPYARD_CODEX_CAPABILITIES_FILE');
     const capabilities = JSON.parse(fs.readFileSync(capabilitiesFile, 'utf8'));
+    const phaseArg = value('--phase');
+    const phase = phaseArg === undefined ? 2 : Number(phaseArg);
     validateCodexBundle(value('--validate-codex-bundle'), {
-      codexHome: value('--codex-home'), phase: Number(value('--phase')), capabilities,
+      codexHome: value('--codex-home'), phase, capabilities,
     });
     console.log('Codex bundle policy, completeness, registrations and capabilities: valid');
     process.exit(0);

@@ -21,6 +21,8 @@ command-backed evidence is not verification.
 ## Input (provided by the orchestrator)
 - The list of guarded tickets (id, PR number, branch, worktree path, repo, base).
 - `SHIPYARD_ROOT` — the absolute path of the plugin scripts directory.
+- On the Codex bundle, the durable host-evidence file is
+  `$SHIPYARD_ROOT/codex-capabilities.json`; pass it to every Codex selector.
 - The project root (where `.planning/` lives) and, per ticket, the checkout its
   repo lives in (a multi-repo phase has more than one).
 - `maxAttempts` (default 5), `plan_defect_signatures` (default 3 — the K of the
@@ -100,7 +102,9 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
 
   **`critical` — the resolver classified this `ci-fix` dispatch from high risk
   or a checkpoint.** On Codex, run
-  `codex-agent.cjs select ci-fix --json --checkpoint [--project-dir <project>]`
+  `node $SHIPYARD_ROOT/scripts/codex-agent.cjs select ci-fix --json --checkpoint
+  --capabilities-file "$SHIPYARD_ROOT/codex-capabilities.json"
+  [--project-dir <project>]`
   and record the exact emitted `agent_file` alongside the resolver's model,
   effort and route. Run
   it from the conveyor project, or pass `--project-dir <project>` from a ticket
@@ -461,7 +465,8 @@ reinit is not optional.
   fixer has no such parameter, so pass `unsupported` when that is known, `unknown`
   when the host did not expose what ran, or omit the flag when no observation is
   available. On the Codex bundle add the selector's exact `agent_file`, which is
-  where that runtime's model choice lives — `codex-agent.cjs select <role> --json
+  where that runtime's model choice lives — `node $SHIPYARD_ROOT/scripts/codex-agent.cjs
+  select <role> --json --capabilities-file "$SHIPYARD_ROOT/codex-capabilities.json"
   [--project-dir <project>]` gives the exact file. A dispatch that does not name
   the selected file does not record the
   escalation. Neither call is a cleanup you can forget

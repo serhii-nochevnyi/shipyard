@@ -17,7 +17,7 @@ const PLUGIN = path.join(ROOT, 'plugins', 'delivery-pipeline');
 const gen = require(GEN);
 const pc = require(path.join(PLUGIN, 'scripts', 'pipeline-config.cjs'));
 const policy = require(path.join(PLUGIN, 'scripts', 'model-policy.cjs'));
-const { validateCodexCapabilities } = require(path.join(PLUGIN, 'scripts', 'gsd-tune.cjs'));
+const { validateCodexCapabilities, CODEX_CAPABILITIES_BUNDLE_FILE } = require(path.join(PLUGIN, 'scripts', 'gsd-tune.cjs'));
 const selections = Object.values(policy.CODEX_ROLE_RUNG_DEFINITIONS).flat().map((rung) => ({
   model: policy.CODEX_MODEL_IDS[rung.model_key], effort: rung.effort,
 }));
@@ -114,6 +114,9 @@ function expectedVariants(phase) {
 function assertCanonical(f) {
   const manifest = gen.validateCodexBundle(f.out, f.options);
   const variants = expectedVariants(f.options.phase);
+  assert.strictEqual(manifest.capabilities_file, CODEX_CAPABILITIES_BUNDLE_FILE);
+  assert.strictEqual(manifest.capabilities_digest, hash(read(path.join(f.out, 'bundle', CODEX_CAPABILITIES_BUNDLE_FILE))));
+  assert.strictEqual(read(path.join(f.out, 'bundle', CODEX_CAPABILITIES_BUNDLE_FILE)), read(f.capabilitiesFile));
   assert.ok(variants.length > 0);
   assert.deepStrictEqual(fs.readdirSync(path.join(f.out, 'agents')).sort(), variants.map((v) => v.file).sort());
   assert.deepStrictEqual(manifest.agent_files.slice().sort(), variants.map((v) => v.file).sort());
@@ -160,6 +163,7 @@ test('the README example is labeled compatibility input, not canonical bundle po
   assert.ok(quoted, 'README should show a codex_models example');
   assert.deepStrictEqual(pc.normalizeCodexModels(quoted[1], []), pc.DEFAULT_CODEX_MODELS);
   assert.match(readme, /compatibility input[\s\S]*canonical Codex bundle/i);
+  assert.match(readme, /routed Codex projects should omit that legacy palette/i);
 });
 
 test('a model id is DATA — the palette default, or a comment that quotes a measurement', () => {
@@ -256,7 +260,7 @@ test('the exported variant helper agrees with every canonical selection', () => 
   assert.throws(() => gen.codexStaticVariants(3), /phase must be 1 or 2/);
 });
 
-test('the generator writes nothing outside --out and repeat generation is byte-identical', () => {
+test('the generator writes nothing outside --out and preserves a valid stage on failure', () => {
   withFixture({ project: { agent_skills: { 'gsd-executor': ['foreign'] } } }, (f) => {
     const beforeHome = snapshot(f.home);
     const beforeProject = snapshot(f.proj);
@@ -264,6 +268,14 @@ test('the generator writes nothing outside --out and repeat generation is byte-i
     const beforeStage = snapshot(f.out);
     generated(f);
     assert.deepStrictEqual(snapshot(f.out), beforeStage);
+
+    const brokenPlugin = path.join(f.dir, 'broken-plugin');
+    fs.cpSync(PLUGIN, brokenPlugin, { recursive: true });
+    fs.rmSync(path.join(brokenPlugin, 'commands', 'deliver.md'));
+    const refused = f.run(['--plugin', brokenPlugin, '--capabilities', f.capabilitiesFile]);
+    assert.strictEqual(refused.status, 1, refused.stderr);
+    assert.match(refused.stderr, /command not found/);
+    assert.deepStrictEqual(snapshot(f.out), beforeStage, 'failed conversion must not erase the prior stage');
     assert.deepStrictEqual(snapshot(f.home), beforeHome);
     assert.deepStrictEqual(snapshot(f.proj), beforeProject);
   });
@@ -282,6 +294,9 @@ test('the bundle carries canonical payloads and rewrites installed Shipyard refe
       ...manifest.agent_files.map((name) => read(path.join(f.out, 'agents', name))),
     ];
     for (const text of texts) assert.ok(!/\$\{CLAUDE_PLUGIN_ROOT\}|\/shipyard:/.test(text));
+    for (const text of texts.filter((text) => text.includes('codex-agent.cjs select'))) {
+      assert.ok(text.includes(CODEX_CAPABILITIES_BUNDLE_FILE), 'Codex selector must receive durable host evidence');
+    }
     assert.ok(texts.some((text) => text.includes(path.join(f.codexHome, 'shipyard'))));
     assert.ok(texts.some((text) => text.includes('$shipyard-')));
   });
@@ -645,12 +660,31 @@ test('install and reinstall preserve foreign GSD skills, agents and registration
   });
 });
 
-test('a bare install provisions the canonical capability contract', () => {
+test('the installer refuses a bare install without explicit host capability evidence', () => {
   withFixture({}, (f) => {
     const result = install(f, 2, { capabilities: false });
-    assert.strictEqual(result.status, 0, result.stderr + result.stdout);
-    const manifest = json(path.join(f.codexHome, 'agents/.shipyard-manifest.json'));
-    assert.deepStrictEqual(manifest.agent_files.slice().sort(), expectedVariants(2).map((v) => v.file).sort());
+    assert.strictEqual(result.status, 2, result.stderr + result.stdout);
+    assert.match(result.stderr, /SHIPYARD_CODEX_CAPABILITIES_FILE/);
+    assert.ok(!fs.existsSync(path.join(f.codexHome, 'agents/.shipyard-manifest.json')));
+    assert.ok(!fs.existsSync(path.join(f.codexHome, 'shipyard')));
+    assert.ok(!fs.existsSync(f.env.AGENTS_SKILLS_DIR));
+  });
+});
+
+test('a phase downgrade removes only previously owned phase-specific skills', () => {
+  withFixture({}, (f) => {
+    const full = install(f, 2);
+    assert.strictEqual(full.status, 0, full.stderr + full.stdout);
+    write(path.join(f.env.AGENTS_SKILLS_DIR, 'shipyard-operator/SKILL.md'), 'foreign\n');
+    assert.ok(fs.existsSync(path.join(f.env.AGENTS_SKILLS_DIR, 'shipyard-deliver/SKILL.md')));
+
+    const reduced = install(f, 1);
+    assert.strictEqual(reduced.status, 0, reduced.stderr + reduced.stdout);
+    assert.ok(!fs.existsSync(path.join(f.env.AGENTS_SKILLS_DIR, 'shipyard-deliver')));
+    assert.ok(fs.existsSync(path.join(f.env.AGENTS_SKILLS_DIR, 'shipyard-route/SKILL.md')));
+    assert.strictEqual(read(path.join(f.env.AGENTS_SKILLS_DIR, 'shipyard-operator/SKILL.md')), 'foreign\n');
+    assert.deepStrictEqual(json(path.join(f.codexHome, 'agents/.shipyard-manifest.json')).skills,
+      ['shipyard-route', 'shipyard-investigate', 'shipyard-decompose', 'shipyard-bench', 'shipyard-delivery-rules']);
   });
 });
 
@@ -675,10 +709,21 @@ test('the installer bootstraps GSD before rejecting a missing converter/tools in
     fs.chmodSync(path.join(f.dir, 'bin/npx'), 0o755);
     const result = spawnSync('/bin/bash', [path.join(ROOT, 'scripts/install-shipyard-codex.sh'),
       '--phase', '2', '--project-dir', f.proj], {
-      cwd: f.dir, encoding: 'utf8', env: { ...f.env, SHIPYARD_GSD_AUTO_INSTALL: '1' },
+      cwd: f.dir, encoding: 'utf8', env: {
+        ...f.env, SHIPYARD_GSD_AUTO_INSTALL: '1',
+        SHIPYARD_CODEX_CAPABILITIES_FILE: f.capabilitiesFile,
+      },
     });
     assert.strictEqual(result.status, 0, result.stderr + result.stdout);
     assert.ok(fs.existsSync(path.join(f.codexHome, 'agents/.shipyard-manifest.json')));
+  });
+});
+
+test('installer global tuning reads policy from the selected project directory', () => {
+  withFixture({ project: { pipeline: { model_policy: 'premium' } } }, (f) => {
+    const result = install(f);
+    assert.strictEqual(result.status, 0, result.stderr + result.stdout);
+    assert.strictEqual(json(f.env.GSD_DEFAULTS_PATH).model_profile, 'quality');
   });
 });
 

@@ -4,6 +4,8 @@ const os = require('os');
 const {spawnSync} = require('child_process');
 // Diagnostic only: prints observed behavior; assertions and fixes belong to the
 // corresponding implementation tickets. All mutations target temporary fixtures.
+// The capability document below is a synthetic fixture for exercising the
+// complete-policy path; it is not host support evidence and is never installed.
 const root = path.resolve(process.argv[2] || process.cwd());
 const gsdRoot = path.resolve(process.argv[3] || path.join(os.homedir(),'.codex'));
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(),'shipyard-recheck-probes-'));
@@ -22,7 +24,7 @@ for (const role of modelPolicy.ROLES) {
   }
 }
 fs.writeFileSync(capabilitiesFile,JSON.stringify({
-  source:'models-autonomy-probes:adr-014-codex-contract',
+  source:'models-autonomy-probes:synthetic-capability-fixture',
   supportedModels:[...new Set(capabilitySelections.map((entry)=>entry.model))],
   supportedEfforts:[...new Set(capabilitySelections.map((entry)=>entry.effort))],
   supportedSelections:capabilitySelections,

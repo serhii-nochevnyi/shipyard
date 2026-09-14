@@ -1048,6 +1048,8 @@ test('generation covers every static rung and excludes every dynamic file in bot
     assert.equal(manifest.gsd_lib, converter);
     assert.equal(manifest.gsd_lib_digest,
       require('crypto').createHash('sha256').update(fs.readFileSync(converter)).digest('hex'));
+    assert.equal(manifest.capabilities_file, 'codex-capabilities.json');
+    assert.ok(manifest.bundle_files.includes('codex-capabilities.json'));
     assert.ok(manifest.bundle_files.length > 0);
     assert.ok(manifest.skill_files.includes(`shipyard-${phase === 2 ? 'deliver' : 'bench'}/SKILL.md`));
     for (const role of bundlePolicy.CODEX_STATIC_ROLES.filter((role) => phase === 2 || role === 'research')) {
@@ -1061,6 +1063,16 @@ test('generation covers every static rung and excludes every dynamic file in bot
       }
     }
   }, phase);
+});
+
+test('the direct bundle validator defaults an omitted phase to phase 2', () => {
+  withBundle(({ root, out, options }) => {
+    const result = spawnSync(process.execPath, [SCRIPT, '--validate-codex-bundle', out,
+      '--codex-home', options.codexHome, '--capabilities', path.join(root, 'capabilities.json')], {
+      encoding: 'utf8', env: hermetic(),
+    });
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+  });
 });
 
 test('validator rejects incomplete, stale, tampered, unregistered and dynamic artifacts', () => {
