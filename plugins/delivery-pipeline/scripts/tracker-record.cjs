@@ -117,6 +117,14 @@ function requireGeneration(graphDir) {
   return generation;
 }
 
+function requireMetadataIdentity(graphDir) {
+  const identity = metadataIdentity(graphDir);
+  if (!identity) {
+    throw new Error('delivery-state metadata identity is unreadable — run state-sync.cjs before recording a tracker observation');
+  }
+  return identity;
+}
+
 function recordsForGeneration(store, generation, configuredStatuses, identity) {
   if (!Number.isInteger(generation) || generation < 1) return {};
   const out = {};
@@ -265,7 +273,7 @@ function observe(graphDir, input) {
   const result = evaluateEligibility(status, assignee, readConfigStatuses(projectRootOf(graphDir)));
   const observedAt = observedTimestamp(input.observedAt);
   const generation = requireGeneration(graphDir);
-  const generationIdentity = metadataIdentity(graphDir);
+  const generationIdentity = requireMetadataIdentity(graphDir);
   const record = {
     ticket,
     jira_key: jiraKey,
@@ -303,7 +311,7 @@ function unknown(graphDir, input) {
     assignee_observed: !!input.assigneeProvided,
     observed_at: observedTimestamp(input.observedAt),
     generation: requireGeneration(graphDir),
-    generation_identity: metadataIdentity(graphDir),
+    generation_identity: requireMetadataIdentity(graphDir),
   };
   return writeRecord(graphDir, ticket, record);
 }
