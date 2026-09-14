@@ -99,26 +99,28 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   hold, so it is EXCLUDED, not a candidate to refine.
 
   **`critical` — the resolver classified this `ci-fix` dispatch from high risk
-  or a checkpoint.** On Codex, select the matching `-critical` agent file with
+  or a checkpoint.** On Codex, run
   `codex-agent.cjs select ci-fix --json --checkpoint [--project-dir <project>]`
-  and record that file alongside the resolver's model, effort and route. Run
+  and record the exact emitted `agent_file` alongside the resolver's model,
+  effort and route. Run
   it from the conveyor project, or pass `--project-dir <project>` from a ticket
   worktree so the selector reads the project's adaptive policy. The
-  `pr-sentinel` guard is mechanical and has no first-attempt `-critical` file:
-  checkpointed sentinel work stays on `shipyard-pr-sentinel`, while
-  `shipyard-pr-sentinel-deep` is reserved for `repeat_exhausted`.
+  `pr-sentinel` guard is mechanical and has no critical or recovery rung:
+  checkpointed sentinel work stays on the one emitted file,
+  `shipyard-pr-sentinel`.
 
   **`repeat_exhausted` — the signature came back AFTER a `rethink`.** The deeper
   effort has already been spent on this failure, so repeating it buys nothing.
   Where an agent is a static file and the effort axis is flat (the Codex bundle),
   the only escalation left is the model, and it has its own file: dispatch
   `$shipyard-ci-fix-deep` or `$shipyard-review-fix-deep` — the same contract at
-  the palette's ceiling model — and use `$shipyard-pr-sentinel-deep` for a guard
-  round on that PR. ONE such dispatch per signature; if it comes back again the
-  ticket is a human's (`escalation-record.cjs mark`), not a third model's. Where
-  the harness passes `model`/`effort` per call there is no separate agent to
-  name: the resolver's own answer already carries the escalation. A `-deep` agent
-  the generator did not write does not exist — check before naming it.
+  the canonical recovery model. A sentinel guard round remains
+  `shipyard-pr-sentinel`; it has no recovery file. ONE such dispatch per
+  signature; if it comes back again the ticket is a human's
+  (`escalation-record.cjs mark`), not a third model's. Where the harness passes
+  `model`/`effort` per call there is no separate agent to name: the resolver's
+  own answer already carries the escalation. Check the generated agent directory
+  before naming any static file.
 
 Then the fix itself: `gh run view <run-id> --log-failed` for the real
 failing assertion, reproduce it in the ticket's worktree with the plan's
@@ -217,12 +219,10 @@ because two copies drifting apart is how this path came to read a
    call, that answer IS the escalation and there is no second agent to name. On
    the Codex bundle a `.toml` carries one model and nothing is passed per
    dispatch, so a contested re-judgement is a different AGENT instead:
-   `$shipyard-arch-review-critical` for a first-attempt critical task, or
-   `$shipyard-arch-review-deep` after a contested judgement, the same contract at the palette's ceiling
-   model — a second reading at the same depth is what produced the contested
-   verdict in the first place. There is no `$shipyard-integrator-deep`; the
-   integrator runs at the ceiling on every call, and an agent the generator did
-   not write does not exist, so check before naming one.
+   `$shipyard-arch-review-critical`. Integrator work has the corresponding
+   `$shipyard-integrator-critical` file for its critical/contested rung; the
+   base file is used otherwise. An agent the generator did not write does not
+   exist, so check before naming one.
 
 3. **DISPATCH the judge**, judgment work — do not cheapen it. Its prompt is
    `references/arch-review.md`, plus the diff it is about and
@@ -460,10 +460,10 @@ reinit is not optional.
   Workflow tool carried the fixer (its `agent()` takes an effort); an `Agent`-spawned
   fixer has no such parameter, so pass `unsupported` when that is known, `unknown`
   when the host did not expose what ran, or omit the flag when no observation is
-  available. On the Codex bundle add
-  `--agent-file shipyard-<role>[-critical|-deep]`, which is where that runtime's
-  model choice lives — `codex-agent.cjs select <role> --json [--project-dir <project>]`
-  gives the exact file. A dispatch that does not name the selected file does not record the
+  available. On the Codex bundle add the selector's exact `agent_file`, which is
+  where that runtime's model choice lives — `codex-agent.cjs select <role> --json
+  [--project-dir <project>]` gives the exact file. A dispatch that does not name
+  the selected file does not record the
   escalation. Neither call is a cleanup you can forget
   safely-but-late: the record lifts on the OWNER'S OUTPUT — your own dispatch
   when the PR merges or its base moves, a fixer's when the PR's head moves — and
