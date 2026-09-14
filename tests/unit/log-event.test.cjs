@@ -186,6 +186,8 @@ test('the tracker_override event is refused — the recorder owns the cache and 
   assert.ok(/half-recorded/.test(r.stderr), r.stderr);
   assert.ok(!/duplicate/.test(r.stderr), 'an incomplete act, not a duplicate');
   assert.ok(/tracker-record\.cjs override/.test(r.stderr), 'it must name the sole writer');
+  assert.ok(/tracker override/.test(r.stderr), 'it must name the refused event plainly');
+  assert.ok(!/PARKING the tracker override/.test(r.stderr), 'the event name is not a parking state');
   assert.strictEqual(lines(graph).length, 0, 'nothing may reach the journal');
 });
 

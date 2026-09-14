@@ -144,6 +144,21 @@ test('an override without a current observation stays unknown instead of fabrica
   assert.match(record.reason, /no current tracker observation/);
 });
 
+test('an override cannot turn an unknown assignee into a complete observation', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', [
+    RECORD, 'unknown', 'T-02', 'MYD-2', '--status', 'To Do', '--reason', 'assignee lookup timed out', '--graph', graph,
+  ], { cwd: project });
+  execFileSync('node', [
+    RECORD, 'override', 'T-02', 'MYD-2', '--status', 'Backlog', '--reason', 'operator named this ticket explicitly', '--graph', graph,
+  ], { cwd: project });
+  const record = stored(graph).tickets['T-02'];
+  assert.strictEqual(record.verdict, 'unknown');
+  assert.strictEqual(record.eligible, null);
+  assert.strictEqual(record.assignee_observed, false);
+  assert.match(record.reason, /incomplete/);
+});
+
 test('an override refuses a malformed delivery generation', () => {
   const { project, graph } = scratch();
   fs.writeFileSync(path.join(graph, 'delivery-front.json'), JSON.stringify({ generation: 7 }));
@@ -173,9 +188,22 @@ test('an override rolls back the cache when its journal cannot be appended', () 
     RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
   ], { cwd: project, encoding: 'utf8' });
   assert.notStrictEqual(r.status, 0, 'the failed journal append must refuse the operation');
-  assert.match(r.stderr, /rolled back/);
+  assert.match(r.stderr, /transaction is pending and remains recoverable/);
   assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')), 'a cache without its audit line is not durable');
+  assert.ok(fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
   assert.ok(fs.statSync(path.join(graph, 'delivery-log.jsonl')).isDirectory());
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')), 'the next writer must recover the failed transaction');
+});
+
+test('tracker-record rejects extra positional arguments instead of ignoring them', () => {
+  const { project, graph } = scratch();
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', 'unexpected', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /usage: tracker-record\.cjs/);
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
 });
 
 test('activeRecords omits a record after the delivery generation advances', () => {
