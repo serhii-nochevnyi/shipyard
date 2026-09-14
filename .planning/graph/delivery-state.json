@@ -1177,7 +1177,7 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/137",
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T19:34:48Z",
-    "head_sha": "6fdfed95550cd2e91ec117eb9062f83256fb4539",
+    "head_sha": "15eb05dbf8e66fcc98a172fa39b00ff2311fa039",
     "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
@@ -1203,13 +1203,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/138",
     "pr_base": "ticket/T-36-02-authoritative-configuration-bridge-and-o",
     "pr_created_at": "2026-09-14T19:53:24Z",
-    "head_sha": "5e9ac3ee2e821622475d606c354494e069bc6fa0",
-    "merge_state": "CLEAN",
-    "behind_by": 1,
+    "head_sha": "58498952638da7619f9495b0c002afbad076d135",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
@@ -1230,8 +1230,8 @@
     "pr_base": "ticket/T-36-03-strict-codex-adapter-and-named-model-pal",
     "pr_created_at": "2026-09-14T20:35:18Z",
     "head_sha": "6e1b5ca663ad8bd7b4dfe00b5d382042fe261cb7",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
+    "merge_state": "UNKNOWN",
+    "behind_by": 8,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1256,12 +1256,12 @@
     "pr_base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
     "pr_created_at": "2026-09-14T21:26:23Z",
     "head_sha": "c773dcc774b20d504db0b966a58452dc99f09b62",
-    "merge_state": "UNSTABLE",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
