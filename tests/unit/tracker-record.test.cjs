@@ -189,6 +189,15 @@ test('the eligibility cache does not touch the outbound Jira projection', () => 
   assert.ok(stored(graph).tickets['T-01']);
 });
 
+test('a policy change invalidates a cached verdict until the tracker is read again', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({
+    pipeline: { jira_todo_statuses: 'Backlog' },
+  }));
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
+});
+
 test('an older observation cannot overwrite a newer result after the lock', () => {
   const { project, graph } = scratch(7);
   execFileSync('node', [...markArgs(graph, 'T-01', 'MYD-1'), '--observed-at', '2026-09-14T10:00:00.000Z'], { cwd: project });
