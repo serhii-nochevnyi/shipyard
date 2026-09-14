@@ -901,6 +901,7 @@ intentional:
 # four separate argv entries. They are never interpolated into shell source.
 record_tracker_override() {
   local ticket_id="$1" jira_key="$2" override_reason="$3" project_graph="$4"
+  # Canonical argv shape: tracker-record.cjs override <T> <KEY> --reason <REASON> --graph <GRAPH>
   node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs override "$ticket_id" "$jira_key" \
     --reason "$override_reason" --graph "$project_graph"
 }
