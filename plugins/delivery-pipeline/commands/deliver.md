@@ -230,7 +230,7 @@ whole session's motion — recognize them in yourself):
    of them on one. Leave the PR to the guard, go serve `execute`/`publish`, and
    read its report when it lands. The one legitimate wait is `ci-wait.cjs`, and
    it is a script precisely so this stays mechanical: it REFUSES while anything
-   is actionable or a ticket is with an agent (loop-back item 5 below). "I'll do
+   is actionable or a ticket is with an agent (loop-back item 6 below). "I'll do
    the rest after the merge" is the same defect wearing a different hat.
 2. **Reading a human gate as "do nothing".** `human_checkpoint: true` and
    "show me before you open the PR" gate the **publish/merge step only** — never
@@ -1794,7 +1794,7 @@ loop:
        cycle, serve the rest of the front, and pick it up next round. The guard
        does the same — it holds every guarded PR, so a wait on one is a wait on
        all of them, and its step 4 hands them back instead. The ONE legitimate
-       wait is `ci-wait.cjs` (loop-back item 5), which refuses unless the board
+       wait is `ci-wait.cjs` (loop-back item 6), which refuses unless the board
        has no other move. Serializing the whole run behind one CI queue is the
        single most expensive stall this pipeline has produced.
      no checks reported at all → state-sync flags it; treat "green" as "nothing ran"
@@ -2037,7 +2037,7 @@ itself. The round order:
    the backstop reads `attempt-history.cjs <T> --json` → `attempts`
    (MAX = `pipeline.max_attempts`).
    Then re-run state-sync: if the front still has actionable items, serve THEM
-   while CI runs — `ci-wait.cjs` (loop-back item 5) is the wait, and only once the
+   while CI runs — `ci-wait.cjs` (loop-back item 6) is the wait, and only once the
    front has no other move: it refuses while it has.
 4. Then — step **c** of the cycle (arch-review, resolved with a measured
    `--input-tokens`), the conform gate
@@ -2123,7 +2123,7 @@ repeats only after the board advanced: a newer `generated_at`, or a journalled
 merge/push since the last one), capped by `SHIPYARD_STOP_GATE_MAX_BLOCKS` (12),
 and falling back to one per turn wherever a round cannot be proven. It is NOT
 silent when only CI is pending — that board is a WAIT, not a fixpoint, so it
-blocks and names `ci-wait.cjs` (the loop-back's item 5). It is NOT silent on a board
+blocks and names `ci-wait.cjs` (the loop-back's item 6). It is NOT silent on a board
 the run has moved past without re-syncing: a journalled merge or push after
 `generated_at` proves the board is behind reality, whatever its age, and that is
 the shape that ended a run mid-cascade with three PRs to go. It is also silent over a ticket an
@@ -2139,7 +2139,7 @@ does not happen.
 Each squash-merge rewrites the parent's history, so the next child goes `DIRTY` the
 moment its base lands: base-merge it, push, and the push re-runs every check. An
 N-ticket stack therefore costs **N rounds and N CI waits**, and every one of them
-is `ci-wait.cjs`'s (loop-back item 5) — not a stop. "Merge everything" is done when
+is `ci-wait.cjs`'s (loop-back item 6) — not a stop. "Merge everything" is done when
 the board says `fixpoint: YES`, not when the first ticket lands.
 
 After each parent merge:

@@ -1129,6 +1129,22 @@ test('an invalid policy blocks left-behind pending work instead of bypassing the
   assert.strictEqual(f.fixpoint, false, 'an unreadable policy must not look like a finished phase');
 });
 
+test('an invalid policy suppresses every dispatch-producing bucket', () => {
+  const f = computeFront(
+    { P: {}, R: {} },
+    {
+      P: { status: 'branched', ready: true },
+      R: { status: 'pr-open', pr: 7, draft: true, checks: checks() },
+    },
+    { configInvalid: true },
+  );
+  for (const bucket of Object.values(f.actionable)) assert.deepStrictEqual(bucket, []);
+  assert.deepStrictEqual(f.parked.blocked.sort(), ['P', 'R']);
+  assert.strictEqual(f.fixpoint, false);
+  assert.match(f.why.P, /policy is invalid/);
+  assert.match(f.why.R, /policy is invalid/);
+});
+
 test('an epic freshly cut from its base has landed nothing at all', () => {
   // `exists` + 0 ahead is `landed: true`, and it is exactly as true of an empty
   // new epic as of one whose whole diff is in. Reading that alone as evidence

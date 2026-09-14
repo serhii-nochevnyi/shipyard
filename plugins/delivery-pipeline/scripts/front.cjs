@@ -857,6 +857,20 @@ function computeFront(tickets, state, opts = {}) {
     }
   }
 
+  // An unreadable policy authorizes no mutation, regardless of which branch
+  // classified the ticket. The pending branch handles the tracker-specific
+  // case above; this fence also covers publish, fix, finalize and merge work.
+  if (configInvalid) {
+    const refusal = 'project policy is invalid — repair .planning/config.json before dispatching';
+    for (const bucket of Object.keys(actionable)) {
+      for (const id of actionable[bucket]) {
+        parked.blocked.push(id);
+        why[id] = refusal;
+      }
+      actionable[bucket].length = 0;
+    }
+  }
+
   const counts = {
     execute: actionable.execute.length,
     publish: actionable.publish.length,
@@ -880,7 +894,7 @@ function computeFront(tickets, state, opts = {}) {
   // back for it. A ready ticket held only by the tracker gate is also not done:
   // the loop still owes one issue read (or an exact-ticket decision) before it
   // can conclude that there is no executable work.
-  const fixpoint = actionableCount === 0 && waiting.ci.length === 0
+  const fixpoint = !configInvalid && actionableCount === 0 && waiting.ci.length === 0
     && waiting.dispatched.length === 0 && waiting.parent.length === 0
     && trackerBlockedCount === 0;
   // What a wave may take NOW. The cap is a TRUNCATION of the order below, never
