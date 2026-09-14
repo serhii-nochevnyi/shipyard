@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -1131,20 +1131,169 @@ test('a superseded claim owner cannot commit after an expired-lease takeover', a
   );
 });
 
-test('file-backed reservation is atomic across Node processes', () => {
+test('failed temporary writes and fsync never publish a reservation', () => {
+  for (const operation of ['writeFileSync', 'fsyncSync', 'linkSync']) {
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-create-failure-'));
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const original = fs[operation];
+    fs[operation] = (...args) => {
+      if (operation === 'writeFileSync') original(args[0], '{');
+      throw new Error(`injected ${operation} failure`);
+    };
+    try {
+      assert.throws(() => recorder.reserve('retry-id'), /injected/);
+      assert.deepStrictEqual(fs.readdirSync(storeDir), []);
+    } finally {
+      fs[operation] = original;
+    }
+    assert.deepStrictEqual(recorder.reserve('retry-id'), { reserved: true });
+    const final = fs.readdirSync(storeDir);
+    assert.equal(final.length, 1);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, final[0]), 'utf8')).dispatch_id, 'retry-id');
+  }
+});
+
+test('a process crash during a temporary write leaves the final reservation available', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-temp-crash-'));
+  const modulePath = require.resolve('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const child = spawnSync(process.execPath, ['-e', `
+    const fs = require('fs');
+    const b = require(process.argv[1]);
+    const write = fs.writeFileSync;
+    fs.writeFileSync = (fd) => { write(fd, '{'); process.exit(73); };
+    b.createDurableRecorder(process.argv[2]).reserve('crash-id');
+  `, modulePath, storeDir], { encoding: 'utf8' });
+  assert.equal(child.status, 73, child.stderr);
+  const orphan = fs.readdirSync(storeDir);
+  assert.equal(orphan.length, 1);
+  assert.equal(orphan[0].endsWith('.tmp'), true);
+  assert.deepStrictEqual(boundaryModule.createDurableRecorder(storeDir).reserve('crash-id'), { reserved: true });
+  const final = fs.readdirSync(storeDir).filter((name) => name.endsWith('.json'));
+  assert.equal(final.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, final[0]), 'utf8')).dispatch_id, 'crash-id');
+});
+
+test('directory fsync failure preserves a complete exclusive reservation', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-directory-failure-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const original = fs.fsyncSync;
+  fs.fsyncSync = (fd) => {
+    if (fs.fstatSync(fd).isDirectory()) throw new Error('injected directory fsync failure');
+    return original(fd);
+  };
+  try {
+    assert.throws(() => recorder.reserve('directory-id'), /injected directory/);
+  } finally {
+    fs.fsyncSync = original;
+  }
+  const files = fs.readdirSync(storeDir);
+  assert.equal(files.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, files[0]), 'utf8')).dispatch_id, 'directory-id');
+  assert.deepStrictEqual(recorder.reserve('directory-id'), { reserved: false });
+});
+
+test('durable observation capabilities survive process restart independently', () => {
+  for (const unavailable of [{ model: true, effort: true }, { model: true, effort: false }, { model: false, effort: true }]) {
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-observation-restart-'));
+    const base = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter({
+        capabilities: { observedModel: !unavailable.model, observedEffort: !unavailable.effort },
+        extra: {
+          ...(unavailable.model ? { observed_model: 'unknown' } : {}),
+          ...(unavailable.effort ? { observed_effort: 'unknown' } : {}),
+        },
+      }) },
+      recorder: boundaryModule.createDurableRecorder(storeDir),
+    }).dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' });
+    assert.deepStrictEqual(base.observation_unavailable, unavailable);
+    const child = spawnSync(process.execPath, ['-e', `
+      const b = require(process.argv[1]);
+      const recorder = b.createDurableRecorder(process.argv[2]);
+      const base = recorder.getReceipt('base');
+      const receiptFor = ${receiptFor.toString()};
+      const fakeAdapter = ${fakeAdapter.toString()};
+      const boundary = b.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
+      const result = boundary.dispatch({ runtime: 'codex', role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: base.receipt },
+        previous_dispatch_id: 'base', dispatch_id: 'repeat' });
+      process.stdout.write(JSON.stringify(result.resolution));
+    `, require.resolve('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'), storeDir], { encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(JSON.parse(child.stdout).prior_applied.dispatch_id, 'base');
+
+    // Model and effort permissions must come from the stored boundary record.
+    // Removing either required permission (or legacy absence of both) fails
+    // closed even when the caller presents the otherwise matching receipt.
+    const recordPath = path.join(storeDir, `record-${crypto.createHash('sha256').update('base').digest('hex')}.json`);
+    for (const field of [...Object.keys(unavailable).filter((key) => unavailable[key]), 'legacy']) {
+      const stored = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+      stored.observation_unavailable = { ...unavailable, [field]: false };
+      if (field === 'legacy') delete stored.observation_unavailable;
+      fs.writeFileSync(recordPath, JSON.stringify(stored));
+      const freshRecorder = boundaryModule.createDurableRecorder(storeDir);
+      assert.throws(() => boundaryModule.createDispatchBoundary({ recorder: freshRecorder }).resolve({
+        runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'repeat', priorApplied: base.receipt },
+        previous_dispatch_id: 'base', dispatch_id: `missing-${field}`,
+      }, freshRecorder), (error) => error.code === 'UNVERIFIED_RECEIPT');
+    }
+  }
+});
+
+test('caller capability claims cannot relax stored observation requirements', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-observation-forged-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const base = boundaryModule.createDispatchBoundary({ adapters: { codex: fakeAdapter() }, recorder })
+    .dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' });
+  const forged = { ...base.receipt, observed_model: 'unknown', observed_effort: 'unknown',
+    observation_unavailable: { model: true, effort: true } };
+  const freshRecorder = boundaryModule.createDurableRecorder(storeDir);
+  const fresh = boundaryModule.createDispatchBoundary({ recorder: freshRecorder });
+  assert.throws(() => fresh.resolve({ runtime: 'codex', role: 'ci-fix',
+    observation_unavailable: { model: true, effort: true },
+    signals: { signatureState: 'repeat', priorApplied: forged },
+    previous_dispatch_id: base.dispatch_id, dispatch_id: 'forged' }, freshRecorder),
+  (error) => error.code === 'UNVERIFIED_RECEIPT');
+});
+
+test('file-backed reservation is atomic across concurrent Node processes', async () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-'));
   const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
   const script = [
     'const b = require(process.argv[1]);',
     'const r = b.createDurableRecorder(process.argv[2]);',
-    'process.stdout.write(JSON.stringify(r.reserve(process.argv[3])));',
+    'process.send("ready");',
+    'process.once("message", () => { process.stdout.write(JSON.stringify(r.reserve(process.argv[3]))); process.disconnect(); });',
   ].join('\n');
-  const first = spawnSync(process.execPath, ['-e', script, modulePath, storeDir, 'atomic-id'], { encoding: 'utf8' });
-  const second = spawnSync(process.execPath, ['-e', script, modulePath, storeDir, 'atomic-id'], { encoding: 'utf8' });
-  assert.equal(first.status, 0, first.stderr);
-  assert.equal(second.status, 0, second.stderr);
-  assert.deepStrictEqual(JSON.parse(first.stdout), { reserved: true });
-  assert.deepStrictEqual(JSON.parse(second.stdout), { reserved: false });
+  const children = Array.from({ length: 8 }, () => {
+    const child = spawn(process.execPath, ['-e', script, modulePath, storeDir, 'atomic-id'], {
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const ready = new Promise((resolve, reject) => {
+      child.once('message', resolve);
+      child.once('error', reject);
+      child.once('exit', () => reject(new Error('child exited before ready')));
+    });
+    const result = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code) => {
+        if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
+        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
+      });
+    });
+    return { child, ready, result };
+  });
+  await Promise.all(children.map(({ ready }) => ready));
+  children.forEach(({ child }) => child.send('reserve'));
+  const results = await Promise.all(children.map(({ result }) => result));
+  assert.equal(results.filter((result) => result.reserved).length, 1);
+  assert.equal(results.filter((result) => !result.reserved).length, 7);
+  const files = fs.readdirSync(storeDir);
+  assert.equal(files.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, files[0]), 'utf8')).dispatch_id, 'atomic-id');
 });
 
 done();

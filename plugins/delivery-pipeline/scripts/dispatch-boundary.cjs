@@ -84,19 +84,39 @@ function readJsonFile(file) {
 }
 
 function atomicCreateJson(file, value) {
+  const temp = `${file}.${process.pid}.${crypto.randomBytes(16).toString('hex')}.tmp`;
   let fd;
+  let dirFd;
+  let tempCreated = false;
   try {
-    fd = fs.openSync(file, 'wx', 0o600);
+    fd = fs.openSync(temp, 'wx', 0o600);
+    tempCreated = true;
     fs.writeFileSync(fd, JSON.stringify(value) + '\n', 'utf8');
     fs.fsyncSync(fd);
     fs.closeSync(fd);
+    fd = undefined;
+    // Unlike rename, link never replaces an existing destination. Publish only
+    // the complete, synced inode while retaining exclusive reservation semantics.
+    try {
+      fs.linkSync(temp, file);
+    } catch (error) {
+      if (error && error.code === 'EEXIST') return false;
+      throw error;
+    }
+    dirFd = fs.openSync(path.dirname(file), 'r');
+    fs.fsyncSync(dirFd);
     return true;
-  } catch (error) {
+  } finally {
     if (fd !== undefined) {
       try { fs.closeSync(fd); } catch (_) { /* best effort */ }
     }
-    if (error && error.code === 'EEXIST') return false;
-    throw error;
+    if (dirFd !== undefined) {
+      try { fs.closeSync(dirFd); } catch (_) { /* best effort */ }
+    }
+    // A crash may leave an orphan temp, but never a partially written final.
+    if (tempCreated) {
+      try { fs.unlinkSync(temp); } catch (_) { /* best effort */ }
+    }
   }
 }
 
@@ -119,7 +139,7 @@ function atomicReplaceJson(file, value) {
 
 // A small file-backed recorder for callers that need uniqueness and receipt
 // provenance across boundary instances or Node processes.  Reservation files
-// use O_EXCL (`wx`), so two processes cannot both win the same dispatch id.
+// use exclusive hard-link installation, so two processes cannot both win an id.
 // Records and latest-by-role pointers are written atomically and contain the
 // finalized boundary receipt, never pre-proof application evidence. Trusted
 // record writes require a module-private boundary capability. Receipt claims
@@ -1184,7 +1204,11 @@ function createDispatchBoundary(options = {}) {
       canonicalValidateResolution(resolution, { requireDispatchId: true });
       const verified = verifyApplicationReceiptInternal(resolution, receipt, {
         requireComplianceProof: true,
-        observationCapabilities: { model: true, effort: true },
+        // These flags mean "unknown allowed", and come only from the original
+        // boundary-owned record, never from the caller's receipt or context.
+        observationCapabilities: isObject(stored.observation_unavailable)
+          ? stored.observation_unavailable
+          : { model: false, effort: false },
       });
       if (stableReceipt(verified) !== stableReceipt(receipt)) return null;
       return { record: stored, receipt: verified, resolution };
@@ -1392,6 +1416,7 @@ function createDispatchBoundary(options = {}) {
         requested: { model: validatedResolution.requested_model, effort: validatedResolution.requested_effort },
         applied: { model: applicationReceipt.applied_model, effort: applicationReceipt.applied_effort },
         observed: { model: applicationReceipt.observed_model, effort: applicationReceipt.observed_effort },
+        observation_unavailable: observationCapabilities,
         requested_model: validatedResolution.requested_model,
         requested_effort: validatedResolution.requested_effort,
         applied_model: applicationReceipt.applied_model,
