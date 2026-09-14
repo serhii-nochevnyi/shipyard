@@ -100,7 +100,11 @@ test('activeRecords omits a record after the delivery generation advances', () =
 test('the previous-generation reader is derived internally and cannot be caller-selected', () => {
   const { project, graph } = scratch(1);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
-  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
+  const previousIdentity = stored(graph).tickets['T-01'].generation_identity;
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({
+    generation: 2,
+    previous_generation_identity: previousIdentity,
+  }));
   execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
   const record = require(RECORD);
   assert.deepStrictEqual(Object.keys(record.activePreviousTrackers(graph)), ['T-01']);
@@ -111,9 +115,24 @@ test('the previous-generation reader is derived internally and cannot be caller-
 test('the front snapshot combines bounded generations from one store read', () => {
   const { project, graph } = scratch(1);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
-  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
+  const previousIdentity = stored(graph).tickets['T-01'].generation_identity;
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({
+    generation: 2,
+    previous_generation_identity: previousIdentity,
+  }));
   execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
   assert.deepStrictEqual(Object.keys(require(RECORD).activeTrackerSnapshot(graph)), ['T-01', 'T-02']);
+});
+
+test('the front snapshot rejects a previous-generation record from another metadata epoch', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({
+    generation: 2,
+    previous_generation_identity: 'different-publication-epoch',
+  }));
+  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
+  assert.deepStrictEqual(Object.keys(require(RECORD).activeTrackerSnapshot(graph)), ['T-02']);
 });
 
 test('a malformed or missing metadata file never falls back to the advisory front generation', () => {

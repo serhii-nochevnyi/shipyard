@@ -86,6 +86,21 @@ function metadataIdentity(graphDir) {
   }
 }
 
+// state-sync records the physical identity of the metadata file that preceded
+// the current publish. When the numeric counter is reset or reused, generation
+// alone is not enough to decide whether that predecessor belongs to this
+// publication epoch.
+function metadataPreviousIdentity(graphDir) {
+  const value = readJson(path.join(graphDir, META_NAME), null);
+  if (!value || !Object.prototype.hasOwnProperty.call(value, 'previous_generation_identity')) {
+    return undefined;
+  }
+  return typeof value.previous_generation_identity === 'string'
+    && value.previous_generation_identity.trim()
+    ? value.previous_generation_identity
+    : null;
+}
+
 /**
  * Read the generation of the last published delivery-state snapshot.
  *
@@ -177,8 +192,9 @@ function activeRecords(graphDir) {
 function activePreviousTrackers(graphDir) {
   const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
+  const previousIdentity = metadataPreviousIdentity(graphDir);
   return Number.isInteger(generation) && generation > 1
-    ? recordsForGeneration(store, generation - 1, readConfigStatuses(projectRootOf(graphDir)))
+    ? recordsForGeneration(store, generation - 1, readConfigStatuses(projectRootOf(graphDir)), previousIdentity)
     : {};
 }
 
@@ -190,9 +206,10 @@ function activeTrackerSnapshotLocked(graphDir) {
   const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
   const statuses = readConfigStatuses(projectRootOf(graphDir));
+  const previousIdentity = metadataPreviousIdentity(graphDir);
   return {
     ...(Number.isInteger(generation) && generation > 1
-      ? recordsForGeneration(store, generation - 1, statuses)
+      ? recordsForGeneration(store, generation - 1, statuses, previousIdentity)
       : {}),
     ...recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir)),
   };
@@ -435,6 +452,7 @@ if (require.main === module) cli();
 module.exports = {
   STORE_NAME,
   readStore,
+  metadataIdentity,
   currentGeneration,
   activeRecords,
   activePreviousTrackers,
