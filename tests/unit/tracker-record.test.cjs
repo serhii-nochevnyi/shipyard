@@ -57,6 +57,7 @@ test('a complete eligible observation is stored with the tracker facts and gener
     verdict: 'eligible',
     eligible: true,
     reason: 'tracker status "To Do" is configured and the ticket is unassigned',
+    assignee_observed: true,
     observed_at: record.observed_at,
     generation: 7,
   });
@@ -81,6 +82,7 @@ test('unknown observations preserve tracker error words and remain unknown', () 
   assert.strictEqual(record.verdict, 'unknown');
   assert.strictEqual(record.eligible, null);
   assert.strictEqual(record.reason, 'Jira API timed out');
+  assert.strictEqual(record.assignee_observed, false);
   assert.strictEqual(record.generation, 3);
 });
 
@@ -142,6 +144,21 @@ test('an override without a current observation stays unknown instead of fabrica
   assert.match(record.reason, /no current tracker observation/);
 });
 
+test('an override cannot turn an unknown assignee into a complete observation', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', [
+    RECORD, 'unknown', 'T-02', 'MYD-2', '--status', 'To Do', '--reason', 'assignee lookup timed out', '--graph', graph,
+  ], { cwd: project });
+  execFileSync('node', [
+    RECORD, 'override', 'T-02', 'MYD-2', '--status', 'Backlog', '--reason', 'operator named this ticket explicitly', '--graph', graph,
+  ], { cwd: project });
+  const record = stored(graph).tickets['T-02'];
+  assert.strictEqual(record.verdict, 'unknown');
+  assert.strictEqual(record.eligible, null);
+  assert.strictEqual(record.assignee_observed, false);
+  assert.match(record.reason, /incomplete/);
+});
+
 test('an override refuses a malformed delivery generation', () => {
   const { project, graph } = scratch();
   fs.writeFileSync(path.join(graph, 'delivery-front.json'), JSON.stringify({ generation: 7 }));
@@ -171,9 +188,22 @@ test('an override rolls back the cache when its journal cannot be appended', () 
     RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
   ], { cwd: project, encoding: 'utf8' });
   assert.notStrictEqual(r.status, 0, 'the failed journal append must refuse the operation');
-  assert.match(r.stderr, /rolled back/);
+  assert.match(r.stderr, /transaction is pending and remains recoverable/);
   assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')), 'a cache without its audit line is not durable');
+  assert.ok(fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
   assert.ok(fs.statSync(path.join(graph, 'delivery-log.jsonl')).isDirectory());
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')), 'the next writer must recover the failed transaction');
+});
+
+test('tracker-record rejects extra positional arguments instead of ignoring them', () => {
+  const { project, graph } = scratch();
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', 'unexpected', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /usage: tracker-record\.cjs/);
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
 });
 
 test('activeRecords omits a record after the delivery generation advances', () => {
@@ -195,12 +225,15 @@ test('the previous-generation reader is derived internally and cannot be caller-
   assert.deepStrictEqual(record.activeRecords(graph, 1), record.activeRecords(graph));
 });
 
-test('a malformed metadata file never falls back to the advisory front generation', () => {
+test('a malformed or missing metadata file never falls back to the advisory front generation', () => {
   const { project, graph } = scratch(7);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
   fs.writeFileSync(path.join(graph, 'delivery-front.json'), JSON.stringify({ generation: 7 }));
   fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), '{not-json');
   assert.strictEqual(require(RECORD).currentGeneration(graph), null);
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
+  fs.rmSync(path.join(graph, 'delivery-state-meta.json'));
+  assert.strictEqual(require(RECORD).currentGeneration(graph), 0);
   assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
 });
 
@@ -275,6 +308,29 @@ test('an older observation cannot overwrite a newer result after the lock', () =
   const record = stored(graph).tickets['T-01'];
   assert.strictEqual(record.status, 'To Do');
   assert.strictEqual(record.observed_at, '2026-09-14T10:00:00.000Z');
+});
+
+test('generation ordering beats observation time when writes arrive out of order', () => {
+  const { project, graph } = scratch(7);
+  execFileSync('node', [...markArgs(graph, 'T-01', 'MYD-1'), '--observed-at', '2026-09-14T10:00:00.000Z'], { cwd: project });
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 8 }));
+  const newerArgs = markArgs(graph, 'T-01', 'MYD-1');
+  newerArgs[newerArgs.indexOf('--status') + 1] = 'Backlog';
+  newerArgs.push('--observed-at', '2026-09-14T09:00:00.000Z');
+  execFileSync('node', newerArgs, { cwd: project });
+  const record = stored(graph).tickets['T-01'];
+  assert.strictEqual(record.generation, 8);
+  assert.strictEqual(record.status, 'Backlog');
+});
+
+test('an explicit missing-assignee observation cannot become complete from a copied assignee field', () => {
+  const { project, graph } = scratch(7);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const file = path.join(graph, 'tracker.json');
+  const store = stored(graph);
+  store.tickets['T-01'].assignee_observed = false;
+  fs.writeFileSync(file, JSON.stringify(store));
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
 });
 
 test('concurrent observations for different tickets do not lose records', async () => {

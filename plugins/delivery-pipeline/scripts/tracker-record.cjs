@@ -11,12 +11,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
 const { resolveGraphDir } = require(path.join(__dirname, 'graph-dir.cjs'));
 const { evaluateEligibility, normalizeStatusName, normalizeAssignee } = require(path.join(__dirname, 'tracker-eligibility.cjs'));
 
 const STORE_NAME = 'tracker.json';
 const META_NAME = 'delivery-state-meta.json';
+const PENDING_NAME = '.tracker-override.pending.json';
 
 function fail(message) {
   process.stderr.write(`tracker-record: ${message}\n`);
@@ -25,6 +27,113 @@ function fail(message) {
 
 function graphStore(graphDir) {
   return path.join(graphDir, STORE_NAME);
+}
+
+function pendingPath(graphDir) {
+  return path.join(graphDir, PENDING_NAME);
+}
+
+function fileSnapshot(file) {
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) return { exists: true, file: false, data: null };
+    return { exists: true, file: true, data: fs.readFileSync(file) };
+  } catch (error) {
+    if (error.code === 'ENOENT') return { exists: false, file: false, data: null };
+    throw error;
+  }
+}
+
+function digest(data) {
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+function unlinkIfPresent(file) {
+  try {
+    fs.unlinkSync(file);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+function restoreStoreSnapshot(graphDir, marker) {
+  if (marker.store_file) {
+    writeAtomic(graphStore(graphDir), Buffer.from(marker.before_store, 'base64'));
+  } else if (!marker.store_exists) {
+    unlinkIfPresent(graphStore(graphDir));
+  } else {
+    throw new Error(`cannot recover tracker override: ${graphStore(graphDir)} was not a regular file before the transaction`);
+  }
+}
+
+function validPendingMarker(marker) {
+  return marker && marker.version === 1
+    && typeof marker.event_line === 'string' && marker.event_line.endsWith('\n')
+    && typeof marker.after_store === 'string'
+    && typeof marker.store_exists === 'boolean'
+    && typeof marker.store_file === 'boolean'
+    && (!marker.store_file || typeof marker.before_store === 'string')
+    && (!marker.store_file || marker.store_exists)
+    && typeof marker.journal_exists === 'boolean'
+    && typeof marker.journal_file === 'boolean'
+    && Number.isInteger(marker.journal_offset) && marker.journal_offset >= 0
+    && typeof marker.journal_digest === 'string' && /^[0-9a-f]{64}$/.test(marker.journal_digest);
+}
+
+// An override changes two durable stores: the generation-bound cache and its
+// audit line. The marker makes that pair recoverable across a killed process.
+// Readers fail closed while it exists, and the next writer either finalizes a
+// journal line that made it to disk or rolls back a missing/partial append.
+function recoverPendingLocked(graphDir) {
+  const markerFile = pendingPath(graphDir);
+  if (!fs.existsSync(markerFile)) return;
+  let marker;
+  try {
+    marker = JSON.parse(fs.readFileSync(markerFile, 'utf8'));
+  } catch (error) {
+    throw new Error(`cannot recover tracker override: ${markerFile} is corrupt (${error.message})`);
+  }
+  if (!validPendingMarker(marker)) {
+    throw new Error(`cannot recover tracker override: ${markerFile} is incomplete`);
+  }
+
+  const journal = path.join(graphDir, 'delivery-log.jsonl');
+  const current = fileSnapshot(journal);
+  if (!current.file) {
+    // No append can have happened when the journal is still the same non-file
+    // path that the transaction observed. This is also the recoverable form of
+    // the EISDIR failure used by the CLI error path.
+    if (!marker.journal_file && current.exists === marker.journal_exists) {
+      restoreStoreSnapshot(graphDir, marker);
+      unlinkIfPresent(markerFile);
+      return;
+    }
+    throw new Error(`cannot recover tracker override: ${journal} changed shape while the transaction was pending`);
+  }
+
+  if (current.data.length < marker.journal_offset
+      || digest(current.data.subarray(0, marker.journal_offset)) !== marker.journal_digest) {
+    throw new Error(`cannot recover tracker override: the journal prefix changed while the transaction was pending`);
+  }
+  const suffix = current.data.subarray(marker.journal_offset).toString('utf8');
+  if (suffix.startsWith(marker.event_line)) {
+    writeAtomic(graphStore(graphDir), Buffer.from(marker.after_store, 'base64'));
+    unlinkIfPresent(markerFile);
+    return;
+  }
+  if (!marker.event_line.startsWith(suffix)) {
+    throw new Error(`cannot recover tracker override: the journal contains an unrelated append at the pending transaction offset`);
+  }
+
+  // The append was absent or interrupted before a complete JSONL line. Restore
+  // exactly the prefix that was present before the transaction.
+  if (marker.journal_file) {
+    fs.truncateSync(journal, marker.journal_offset);
+  } else {
+    unlinkIfPresent(journal);
+  }
+  restoreStoreSnapshot(graphDir, marker);
+  unlinkIfPresent(markerFile);
 }
 
 function projectRootOf(graphDir) {
@@ -71,24 +180,20 @@ function readGeneration(file) {
 /**
  * Read the generation of the last published delivery-state snapshot.
  *
- * The metadata file is authoritative. The front copy is a compatibility
- * fallback only when metadata has never existed; a present but malformed
- * metadata file means there is no trustworthy active generation. Zero is the
- * pre-publication generation used by isolated/unit callers; the first real
- * state-sync publishes generation one and expires such records.
+ * The metadata file is authoritative. A missing or malformed metadata file
+ * means there is no trustworthy active generation; the front is an advisory
+ * rendering and cannot prove that a snapshot was published. Zero is the
+ * pre-publication generation used by isolated/unit callers; production readers
+ * never expose records from it.
  */
 function currentGeneration(graphDir) {
   const meta = readGeneration(path.join(graphDir, META_NAME));
-  if (meta.present) return meta.generation;
-  const front = readGeneration(path.join(graphDir, 'delivery-front.json'));
-  return front.present ? front.generation : 0;
+  return meta.present ? meta.generation : 0;
 }
 
 function currentGenerationStrict(graphDir) {
   const meta = readGeneration(path.join(graphDir, META_NAME));
   if (meta.present) return meta.generation;
-  const front = readGeneration(path.join(graphDir, 'delivery-front.json'));
-  if (front.present) return front.generation;
   // Keep the writer usable for a freshly created graph. A real state-sync will
   // move to generation 1 on its first publish, so generation 0 cannot survive
   // across the first cold start.
@@ -103,19 +208,46 @@ function requireGeneration(graphDir) {
   return generation;
 }
 
-function activeRecordsAt(graphDir, generation) {
-  if (!Number.isInteger(generation) || generation < 0) return {};
+function recordsForGeneration(store, generation) {
+  if (!Number.isInteger(generation) || generation < 1) return {};
   const out = {};
-  for (const [ticket, record] of Object.entries(readStore(graphDir).tickets)) {
-    if (!record || record.generation !== generation) continue;
-    if (typeof record.verdict !== 'string' || !record.verdict) continue;
+  for (const [ticket, record] of Object.entries(store.tickets)) {
+    if (!record || record.ticket !== ticket || record.generation !== generation) continue;
+    if (!validRecord(record)) continue;
     out[ticket] = { ...record };
   }
   return out;
 }
 
+function validRecord(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  if (typeof record.ticket !== 'string' || !record.ticket.trim()) return false;
+  if (typeof record.jira_key !== 'string' || !record.jira_key.trim()) return false;
+  if (!Number.isInteger(record.generation) || record.generation < 0) return false;
+  if (typeof record.observed_at !== 'string' || !Number.isFinite(Date.parse(record.observed_at))) return false;
+  if (typeof record.reason !== 'string' || !record.reason.trim()) return false;
+  if (typeof record.assignee_observed !== 'boolean'
+      && !(record.verdict !== 'unknown' && Object.prototype.hasOwnProperty.call(record, 'assignee'))) return false;
+  if (record.verdict === 'unknown') {
+    return record.eligible === null
+      && (record.status === null || (typeof record.status === 'string' && !!record.status.trim()))
+      && (record.assignee === null || (typeof record.assignee === 'string' && !!record.assignee.trim()));
+  }
+  if (!['eligible', 'ineligible'].includes(record.verdict)) return false;
+  if (typeof record.status !== 'string' || !record.status.trim()) return false;
+  const assigneeObserved = record.assignee_observed === true
+    || (typeof record.assignee_observed !== 'boolean'
+      && Object.prototype.hasOwnProperty.call(record, 'assignee'));
+  if (!assigneeObserved) return false;
+  return typeof record.eligible === 'boolean'
+    && record.eligible === (record.verdict === 'eligible')
+    && (record.assignee === null || (typeof record.assignee === 'string' && !!record.assignee.trim()));
+}
+
 function activeRecords(graphDir) {
-  return activeRecordsAt(graphDir, currentGeneration(graphDir));
+  if (fs.existsSync(pendingPath(graphDir))) return {};
+  const store = readStore(graphDir);
+  return recordsForGeneration(store, currentGeneration(graphDir));
 }
 
 // Tracker observations are recorded against the snapshot that was current
@@ -123,9 +255,11 @@ function activeRecords(graphDir) {
 // generation, so front readers need this narrow, internally-derived bridge
 // across that publish boundary. Callers cannot choose an arbitrary generation.
 function activePreviousTrackers(graphDir) {
+  if (fs.existsSync(pendingPath(graphDir))) return {};
+  const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
-  return Number.isInteger(generation) && generation > 0
-    ? activeRecordsAt(graphDir, generation - 1)
+  return Number.isInteger(generation) && generation > 1
+    ? recordsForGeneration(store, generation - 1)
     : {};
 }
 
@@ -170,8 +304,11 @@ function writeRecord(graphDir, ticket, record) {
   if (!hasGraph(graphDir)) throw new Error(`no ticket graph at ${graphDir}`);
   fs.mkdirSync(graphDir, { recursive: true });
   return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
+    recoverPendingLocked(graphDir);
     const store = readStore(graphDir);
     const previous = store.tickets[ticket];
+    const previousGeneration = previous && Number.isInteger(previous.generation) ? previous.generation : -1;
+    const incomingGeneration = Number.isInteger(record.generation) ? record.generation : -1;
     const previousAt = previous && typeof previous.observed_at === 'string'
       ? Date.parse(previous.observed_at)
       : NaN;
@@ -179,10 +316,14 @@ function writeRecord(graphDir, ticket, record) {
       ? Date.parse(record.observed_at)
       : NaN;
     // The lock orders writers, not the observations they captured before
-    // queueing for it. Preserve an already stored observation when it is newer
-    // than the incoming result, otherwise a delayed timeout can overwrite a
-    // fresher eligible/ineligible answer for the same generation.
-    const stored = Number.isFinite(previousAt) && (!Number.isFinite(incomingAt) || previousAt > incomingAt)
+    // queueing for it. Generation is the primary ordering key: a late result
+    // from an older snapshot can never replace a newer snapshot's record. Only
+    // observations in the same generation are ordered by observed_at.
+    const previousWins = previousGeneration > incomingGeneration
+      || (previousGeneration === incomingGeneration
+        && Number.isFinite(previousAt)
+        && (!Number.isFinite(incomingAt) || previousAt > incomingAt));
+    const stored = previousWins
       ? previous
       : record;
     store.tickets[ticket] = stored;
@@ -195,32 +336,47 @@ function mutateRecord(graphDir, fn) {
   if (!hasGraph(graphDir)) throw new Error(`no ticket graph at ${graphDir}`);
   fs.mkdirSync(graphDir, { recursive: true });
   return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
+    recoverPendingLocked(graphDir);
+    const beforeStore = fileSnapshot(graphStore(graphDir));
     const store = readStore(graphDir);
     const result = fn(store);
     if (!result || !result.record) throw new Error('tracker-record mutation did not produce a record');
-    let before = null;
-    try { before = fs.readFileSync(graphStore(graphDir)); } catch { before = null; }
     store.tickets[result.record.ticket] = result.record;
-    writeAtomic(graphStore(graphDir), JSON.stringify(store, null, 2) + '\n');
-    if (result.event) {
-      try {
-        fs.appendFileSync(
-          path.join(graphDir, 'delivery-log.jsonl'),
-          JSON.stringify(result.event) + '\n'
-        );
-      } catch (error) {
-        if (before === null) {
-          try { fs.unlinkSync(graphStore(graphDir)); } catch { /* already absent */ }
-        } else {
-          writeAtomic(graphStore(graphDir), before);
-        }
-        throw new Error(
-          `the tracker journal at ${path.join(graphDir, 'delivery-log.jsonl')} could not be appended to (${error.message}).\n` +
-          '  The tracker record was rolled back, so nothing was recorded: the cache and its audit line\n' +
-          '  are one act. Fix the journal and run tracker-record.cjs override again.'
-        );
-      }
+    const afterStore = JSON.stringify(store, null, 2) + '\n';
+    if (!result.event) {
+      writeAtomic(graphStore(graphDir), afterStore);
+      return result.record;
     }
+
+    const journal = path.join(graphDir, 'delivery-log.jsonl');
+    const beforeJournal = fileSnapshot(journal);
+    const eventLine = JSON.stringify(result.event) + '\n';
+    const marker = {
+      version: 1,
+      store_exists: beforeStore.exists,
+      store_file: beforeStore.file,
+      before_store: beforeStore.file ? beforeStore.data.toString('base64') : null,
+      after_store: Buffer.from(afterStore).toString('base64'),
+      journal_exists: beforeJournal.exists,
+      journal_file: beforeJournal.file,
+      journal_offset: beforeJournal.file ? beforeJournal.data.length : 0,
+      journal_digest: digest(beforeJournal.file ? beforeJournal.data : Buffer.alloc(0)),
+      event_line: eventLine,
+    };
+    writeAtomic(pendingPath(graphDir), JSON.stringify(marker) + '\n');
+    try {
+      fs.appendFileSync(journal, eventLine);
+    } catch (error) {
+      throw new Error(
+        `the tracker journal at ${journal} could not be appended to (${error.message}).\n` +
+        '  The override transaction is pending and remains recoverable; no cache record was published.\n' +
+        '  Fix the journal and run tracker-record.cjs override again.'
+      );
+    }
+    writeAtomic(graphStore(graphDir), afterStore);
+    // If this unlink is interrupted, the next writer sees the complete event
+    // and cache and safely finishes the transaction.
+    unlinkIfPresent(pendingPath(graphDir));
     return result.record;
   }, { label: 'tracker-record' });
 }
@@ -242,6 +398,7 @@ function observe(graphDir, input) {
     verdict: result.verdict,
     eligible: result.eligible,
     reason: result.reason,
+    assignee_observed: true,
     observed_at: observedAt,
     generation,
   };
@@ -266,6 +423,7 @@ function unknown(graphDir, input) {
     verdict: 'unknown',
     eligible: null,
     reason,
+    assignee_observed: !!input.assigneeProvided,
     observed_at: input.observedAt || new Date().toISOString(),
     generation: requireGeneration(graphDir),
   };
@@ -290,6 +448,10 @@ function override(graphDir, input) {
     let eligible = reusable && Object.prototype.hasOwnProperty.call(reusable, 'eligible')
       ? reusable.eligible
       : null;
+    let assigneeObserved = reusable && typeof reusable.assignee_observed === 'boolean'
+      ? reusable.assignee_observed
+      : !!(reusable && reusable.verdict !== 'unknown'
+        && Object.prototype.hasOwnProperty.call(reusable, 'assignee'));
     let observationReason = reusable && reusable.reason
       ? reusable.reason
       : 'no current tracker observation was available';
@@ -302,10 +464,11 @@ function override(graphDir, input) {
     }
     if (input.assigneeProvided) {
       assignee = normalizeCliAssignee(input.assignee);
+      assigneeObserved = true;
       observedAt = input.observedAt || new Date().toISOString();
     }
     if (input.statusProvided || input.assigneeProvided) {
-      const complete = !!status && (reusable ? Object.prototype.hasOwnProperty.call(reusable, 'assignee') : input.assigneeProvided);
+      const complete = !!status && assigneeObserved;
       if (complete) {
         const result = evaluateEligibility(status, assignee, readConfigStatuses(projectRootOf(graphDir)));
         verdict = result.verdict;
@@ -329,6 +492,7 @@ function override(graphDir, input) {
       verdict,
       eligible,
       reason: observationReason,
+      assignee_observed: assigneeObserved,
       override: true,
       override_reason: overrideReason,
       observed_at: observedAt,
@@ -359,6 +523,7 @@ function clear(graphDir, ticket) {
   if (!hasGraph(graphDir)) throw new Error(`no ticket graph at ${graphDir}`);
   const id = requireNonEmpty(ticket, 'ticket');
   return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
+    recoverPendingLocked(graphDir);
     const store = readStore(graphDir);
     const had = Object.prototype.hasOwnProperty.call(store.tickets, id);
     delete store.tickets[id];
@@ -410,6 +575,11 @@ function cli() {
     );
   }
   const [command, ticket, jiraKey] = parsed.positional;
+  const arity = { mark: 3, unknown: 3, override: 3, clear: 2, list: 1 }[command];
+  const usage =
+    'usage: tracker-record.cjs mark|unknown|override <ticket> <jira-key> [options] | ' +
+    'clear <ticket> [--graph <dir>] | list [--graph <dir>]';
+  if (!arity || parsed.positional.length !== arity) fail(usage);
   const values = parsed.values;
   try {
     if (command === 'mark') {
@@ -455,10 +625,7 @@ function cli() {
     } else if (command === 'list') {
       console.log(JSON.stringify(activeRecords(graph), null, 2));
     } else {
-      fail(
-        'usage: tracker-record.cjs <mark|unknown|override|clear|list> <ticket> <jira-key> ' +
-        '[--status <name>] [--assignee <id|none>] [--reason <text>] [--graph <dir>]'
-      );
+      fail(usage);
     }
   } catch (error) {
     fail(error.message);

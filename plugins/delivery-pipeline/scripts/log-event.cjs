@@ -180,7 +180,7 @@ const OWNED_BY_SCRIPTS = {
     fix: 'jira-project.cjs record <ticket> <key> --to <item-to> --transition-id <id> --status <name>',
   },
   tracker_override: {
-    by: 'tracker-record.cjs override', kind: 'PARKING the tracker override', why: halfAct,
+    by: 'tracker-record.cjs override', kind: 'tracker override', why: halfAct,
     otherHalf: 'recording the generation-bound override',
     lost: 'override record',
     fix: 'tracker-record.cjs override <ticket> <jira-key> --reason <text>',
