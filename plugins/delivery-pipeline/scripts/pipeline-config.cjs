@@ -91,6 +91,11 @@ const path = require('path');
 const { resolveRuntime } = require('./runtime-context.cjs');
 const modelPolicy = require('./model-policy.cjs');
 
+// A dispatch context is issued by loadConfig, not by a caller mutating the
+// returned config. Keep that binding private so routed readers can reject a
+// replacement before they fall back to compatibility behavior.
+const LOADED_DISPATCH_CONTEXTS = new WeakMap();
+
 // GSD resolves project-relative agent skills without consulting config.runtime,
 // which is the only form that remains correct when Claude and Codex share one
 // checkout. gsd-tune generates this projection from the canonical delivery-rules
@@ -980,6 +985,7 @@ function loadConfig(root, options = {}) {
     policy_hash: modelPolicy.POLICY_HASH,
     dispatch_context: dispatchContext,
   };
+  LOADED_DISPATCH_CONTEXTS.set(cfg, dispatchContext);
   for (const [key, value] of Object.entries(merged)) {
     if (!KNOWN_KEYS.has(key)) {
       warnings.push(`unknown pipeline config key "${key}" — ignored (known: ${[...KNOWN_KEYS].sort().join(', ')})`);
@@ -1453,10 +1459,23 @@ const GSD_PROFILE_FOR_POLICY = Object.freeze({
   premium: 'quality',
 });
 
+function boundDispatchContext(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return null;
+  const context = LOADED_DISPATCH_CONTEXTS.get(cfg);
+  if (!context) return null;
+  if (cfg.dispatch_context !== context) {
+    throw modelPolicy.policyError(
+      'INVALID_CONFIG',
+      'config.dispatch_context was replaced after loadConfig',
+      { source: 'config.dispatch_context' },
+    );
+  }
+  return context;
+}
+
 function routedConfig(cfg) {
-  return Boolean(cfg && cfg.dispatch_context
-    && cfg.dispatch_context.mode === 'routed'
-    && cfg.dispatch_context.routed === true);
+  const context = boundDispatchContext(cfg);
+  return Boolean(context && context.mode === 'routed' && context.routed === true);
 }
 
 function normalizedRoutedControls(cfg, context) {
@@ -1551,7 +1570,7 @@ function resolveDispatch(input) {
   }
   const cfg = input.config === undefined
     ? loadConfig(input.root, { ...input, routed: true }).config : input.config;
-  const context = cfg && cfg.dispatch_context;
+  const context = boundDispatchContext(cfg);
   if (!context) throw modelPolicy.policyError('INVALID_CONFIG', 'config must come from loadConfig', { source: 'config' });
   if (!routedConfig(cfg)) {
     throw modelPolicy.policyError(

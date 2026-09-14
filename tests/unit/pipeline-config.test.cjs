@@ -2263,6 +2263,19 @@ test('the routed mode marker is frozen and outranks a mutable compatibility flag
   assert.equal(resolveModel('executor', {}, routed), 'gpt-5.6-luna');
 });
 
+test('routed readers reject a replacement context before compatibility fallback', () => {
+  const { config } = routedConfig();
+  config.dispatch_context = { mode: 'compatibility', routed: false };
+  for (const read of [
+    () => resolveDispatch({ config, role: 'executor' }),
+    () => resolveModel('executor', {}, config),
+    () => resolveEffort('executor', 'gpt-5.6-luna', config),
+    () => routeOf('executor', {}, config),
+  ]) {
+    refusesSource(read, 'config.dispatch_context');
+  }
+});
+
 test('compatibility parsing cannot hide a conflicting routed decomposition override', () => {
   for (const [key, value] of [['models', 'opus'], ['effort', 'low']]) {
     const { config, warnings } = withRawOptions({ pipeline: { [key]: { decomposition: value } } },
@@ -2495,7 +2508,9 @@ test('refuses incomplete or stale policy pairs in config and runtime context', (
           if (source !== 'config') {
             config.dispatch_context = { ...config.dispatch_context, runtime: target };
           }
-          const expectedSource = `${source}.${field}`;
+          const expectedSource = source === 'config'
+            ? `${source}.${field}`
+            : 'config.dispatch_context';
           assert.throws(() => resolveDispatch({ config, role: 'executor' }), (error) =>
             error.name === 'DispatchPolicyError' && error.code === 'INVALID_CONFIG'
               && error.details.source === expectedSource && error.message.includes(expectedSource),
