@@ -18,6 +18,7 @@ const canonicalStableStringify = canonicalPolicy.stableStringify;
 const OBSERVATION_UNKNOWN = 'unknown';
 const CLAIM_TTL_MS = 60 * 60 * 1000;
 const CLAIM_HEARTBEAT_MS = Math.max(1000, Math.floor(CLAIM_TTL_MS / 3));
+const CLAIM_LOCK_TTL_MS = Math.max(1000, Math.floor(CLAIM_TTL_MS / 3));
 const RECORDER_AUTHORITY = Symbol('adr-014-dispatch-boundary-recorder-authority');
 const DURABLE_RECORDERS = new WeakSet();
 // Policy resolution must distinguish an actual durable receipt from a caller's
@@ -148,6 +149,16 @@ function createDurableRecorder(storeDir) {
       lease_expires_at: new Date(now + CLAIM_TTL_MS).toISOString(),
     };
   };
+  const claimLockPayload = (dispatchId, purpose) => {
+    const now = Date.now();
+    return {
+      dispatch_id: dispatchId,
+      purpose,
+      owner_pid: process.pid,
+      acquired_at: new Date(now).toISOString(),
+      lease_expires_at: new Date(now + CLAIM_LOCK_TTL_MS).toISOString(),
+    };
+  };
   const claimIsStale = (claim) => {
     const leaseExpiresAt = claim && typeof claim.lease_expires_at === 'string'
       ? Date.parse(claim.lease_expires_at)
@@ -169,6 +180,36 @@ function createDurableRecorder(storeDir) {
   const releaseClaimFile = (filePath) => {
     try { fs.unlinkSync(filePath); } catch (error) {
       if (!error || error.code !== 'ENOENT') throw error;
+    }
+  };
+  const lockIsStale = (lock) => {
+    const leaseExpiresAt = lock && typeof lock.lease_expires_at === 'string'
+      ? Date.parse(lock.lease_expires_at)
+      : lock && typeof lock.acquired_at === 'string'
+        ? Date.parse(lock.acquired_at) + CLAIM_LOCK_TTL_MS
+        : NaN;
+    return !Number.isFinite(leaseExpiresAt) || Date.now() >= leaseExpiresAt;
+  };
+  const acquireClaimLock = (dispatchId, purpose) => {
+    const lock = claimLockFile(dispatchId);
+    const candidate = claimLockPayload(dispatchId, purpose);
+    if (atomicCreateJson(lock, candidate)) return true;
+    const current = readJsonFile(lock);
+    if (!lockIsStale(current) || claimOwnerIsLive(current)) return false;
+    // Retiring a stale lock is an atomic rename, never an unlink after a
+    // time-of-check. A competing recovery can therefore only make this rename
+    // lose with ENOENT; it cannot have its fresh lock removed by us.
+    const retired = `${lock}.${process.pid}.${keyDigest(`${Date.now()}-${Math.random()}`)}.stale`;
+    try {
+      fs.renameSync(lock, retired);
+    } catch (error) {
+      if (error && error.code === 'ENOENT') return false;
+      throw error;
+    }
+    try {
+      return atomicCreateJson(lock, candidate);
+    } finally {
+      releaseClaimFile(retired);
     }
   };
   const sameRecord = (left, right) => canonicalStableStringify(left) === canonicalStableStringify(right);
@@ -279,10 +320,7 @@ function createDurableRecorder(storeDir) {
         // A stale claim is recoverable, but takeover itself is serialized by a
         // second O_EXCL marker. Every contender either owns that marker or
         // backs off; no process may unlink a fresh owner's claim blindly.
-        if (!atomicCreateJson(claimLockFile(dispatchId), {
-          dispatch_id: dispatchId,
-          recovery_started_at: new Date().toISOString(),
-        })) return { claimed: false };
+        if (!acquireClaimLock(dispatchId, 'recovery')) return { claimed: false };
         try {
           if (fs.existsSync(consumedFile(dispatchId))) return { claimed: false };
           current = readJsonFile(claimFile(dispatchId));
@@ -319,10 +357,7 @@ function createDurableRecorder(storeDir) {
         // lock, a takeover could unlink a stale claim between the heartbeat's
         // read and replace, and the old owner could then write itself back as
         // the new owner.
-        if (!atomicCreateJson(claimLockFile(dispatchId), {
-          dispatch_id: dispatchId,
-          renewal_started_at: new Date().toISOString(),
-        })) return { renewed: false };
+        if (!acquireClaimLock(dispatchId, 'renewal')) return { renewed: false };
         try {
           const current = readJsonFile(claimFile(dispatchId));
           if (!current || current.consumer_id !== consumerId) return { renewed: false };
@@ -1253,7 +1288,10 @@ function createDispatchBoundary(options = {}) {
       };
       const recordInput = deepFreeze(snapshot({
         ...baseTrace,
-        trace: [...stages, { stage: 'record', status: 'pending' }, { stage: 'receipt', status: 'pending' }],
+        // The record itself is not yet known to have succeeded. Persist only
+        // completed stages; the returned trace gains record/receipt after the
+        // recorder's affirmative acknowledgement below.
+        trace: [...stages],
       }));
       const recordResult = recorderRecord(record, recordInput);
       if (!affirmative(recordResult, 'recorded')) {
