@@ -323,6 +323,31 @@ function createDurableRecorder(storeDir) {
     // displaced inode is no longer needed in the transition marker.
     if (fs.existsSync(lock)) releaseClaimFile(dead);
   };
+  const removeClaimIfFence = (dispatchId, fence) => {
+    const claimPath = claimFile(dispatchId);
+    const observed = readLockRecord(claimPath);
+    if (!observed || !sameClaimFence(observed.value, fence)) return false;
+    const retired = `${claimPath}.${process.pid}.${keyDigest(`${Date.now()}-${Math.random()}`)}.retired`;
+    let moved = false;
+    let removed = false;
+    try {
+      fs.renameSync(claimPath, retired);
+      moved = true;
+      const displaced = readLockRecord(retired);
+      if (!displaced || displaced.raw !== observed.raw) return false;
+      releaseClaimFile(retired);
+      removed = true;
+      return true;
+    } catch (error) {
+      if (error && error.code === 'ENOENT' && !moved) return false;
+      throw error;
+    } finally {
+      if (moved && !removed && fs.existsSync(retired) && !fs.existsSync(claimPath)) {
+        restoreMovedLock(retired, claimPath);
+      }
+      if (fs.existsSync(retired) && fs.existsSync(claimPath)) releaseClaimFile(retired);
+    }
+  };
   const acquireClaimLock = (dispatchId, purpose) => {
     const lock = claimLockFile(dispatchId);
     const candidate = claimLockPayload(dispatchId, purpose);
@@ -623,7 +648,7 @@ function createDurableRecorder(storeDir) {
           if (!claimIsStale(current)) return { claimed: false };
           const generation = current && Number.isInteger(current.generation) ? current.generation + 1 : 1;
           candidate = claimPayload(dispatchId, consumerId, generation);
-          if (current) releaseClaimFile(claimFile(dispatchId));
+          if (current) removeClaimIfFence(dispatchId, current);
           return atomicCreateJson(claimFile(dispatchId), candidate)
             ? { claimed: true, ...claimFence(candidate) }
             : { claimed: false };
@@ -647,8 +672,7 @@ function createDurableRecorder(storeDir) {
         try {
           const claim = readJsonFile(claimFile(dispatchId));
           if (!sameClaimFence(claim, claimAuthority)) return { released: false };
-          releaseClaimFile(claimFile(dispatchId));
-          return { released: true };
+          return { released: removeClaimIfFence(dispatchId, claimAuthority) };
         } finally {
           releaseClaimLock(dispatchId, lockOwner);
         }
@@ -695,7 +719,11 @@ function createDurableRecorder(storeDir) {
         if (!lockOwner) return { consumed: false };
         try {
           const claim = readJsonFile(claimFile(dispatchId));
-          if (!sameClaimFence(claim, claimAuthority) && !committedFenceMatches) return { consumed: false };
+          // A durable commit proves which consumer started the repair, not that
+          // an old process still owns the predecessor after a lease takeover.
+          // Consumption must therefore match the live fenced claim as well as
+          // the commit marker before it can create the consumed record.
+          if (!sameClaimFence(claim, claimAuthority)) return { consumed: false };
           const consumed = atomicCreateJson(consumedFile(dispatchId), {
             dispatch_id: dispatchId,
             consumer_id: consumerId,
@@ -706,7 +734,7 @@ function createDurableRecorder(storeDir) {
           if (!consumed) return fs.existsSync(consumedFile(dispatchId)) && committedFenceMatches
             ? { consumed: true }
             : { consumed: false };
-          if (sameClaimFence(claim, claimAuthority)) releaseClaimFile(claimFile(dispatchId));
+          removeClaimIfFence(dispatchId, claimAuthority);
           return { consumed: true };
         } finally {
           releaseClaimLock(dispatchId, lockOwner);
@@ -945,6 +973,27 @@ function generatedAgentEvidence(resolution, adapter) {
     agent_file: resolution.agent_file,
     agent_file_digest: agentFileDigest,
   };
+}
+
+function revalidateGeneratedAgent(resolution, adapter) {
+  if (!resolution || !resolution.agent_file) return;
+  const root = generatedAgentRoot(adapter);
+  if (!root) return;
+  const file = path.resolve(root, resolution.agent_file);
+  const relative = path.relative(root, file);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    refuse('STALE_GENERATED_AGENT', `generated agent path escapes its configured Codex agents directory: ${resolution.agent_file}`, { agent_file: resolution.agent_file });
+  }
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} changed or disappeared before launch: ${error.message}`, { agent_file: resolution.agent_file });
+  }
+  const actualDigest = crypto.createHash('sha256').update(text).digest('hex');
+  if (actualDigest !== resolution.agent_file_digest) {
+    refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} changed after validation and before launch`, { agent_file: resolution.agent_file, expected: resolution.agent_file_digest, actual: actualDigest });
+  }
 }
 
 function validateWithAdapter(resolution, adapter) {
@@ -1664,6 +1713,10 @@ function createDispatchBoundary(options = {}) {
       return finalizedRecord;
     };
     try {
+      // Static Codex artifacts are mutable files. Re-read the digest after all
+      // validation hooks and immediately before invoking the adapter so a
+      // concurrent generator cannot turn an earlier proof into launch input.
+      revalidateGeneratedAgent(validatedResolution, adapter);
       const launchResult = invokeLaunch(fn, adapter, [validatedResolution, context]);
       if (launchResult && typeof launchResult.then === 'function') {
         return launchResult.then(finish).catch((error) => {

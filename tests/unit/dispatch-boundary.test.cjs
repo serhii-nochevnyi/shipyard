@@ -660,6 +660,28 @@ test('the boundary validates the actual generated Codex file before launch', () 
   );
 });
 
+test('static Codex evidence is rechecked after validation hooks and before launch', () => {
+  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-agent-race-'));
+  const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'agent-race' });
+  writeStaticAgent(agentsDir, base);
+  let launched = false;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        agentsDir,
+        validate: () => fs.appendFileSync(path.join(agentsDir, base.agent_file), '# changed during validation\n'),
+        onLaunch: () => { launched = true; },
+      }),
+    },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'agent-race' }),
+    (error) => error.code === 'STALE_GENERATED_AGENT' && /after validation/.test(error.message),
+  );
+  assert.equal(launched, false);
+});
+
 test('separate boundary instances share durable reservation and finalized receipt state', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-store-'));
   const recorderA = boundaryModule.createDurableRecorder(storeDir);
