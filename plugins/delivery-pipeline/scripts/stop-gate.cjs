@@ -517,6 +517,7 @@ const whereToSync = wrongCwd
 
 const count = Number(front.actionable_count || 0);
 const leftBehind = Number(front.left_behind_count || 0);
+const trackerBlocked = Number(front.tracker_blocked_count || 0);
 const dispatched = (front.waiting && front.waiting.dispatched) || [];
 
 // The cap, read defensively: a `delivery-front.json` written before capacity
@@ -642,6 +643,16 @@ if (capacityFull && agentsOut().plausible.length) allow();
 // foreground — but it may not stop, because nothing will bring it back.
 if (count <= 0 || leftBehind >= count) {
   const ci = (front.waiting && front.waiting.ci) || [];
+  const parent = (front.waiting && front.waiting.parent) || [];
+  if (!ci.length && !dispatched.length && !parent.length && trackerBlocked > 0) {
+    verdict(
+      `shipyard: nothing is actionable, but ${trackerBlocked} pending ticket(s) are held by tracker eligibility — ` +
+      'this is unfinished evidence collection, not a fixpoint. Do not summarise and stop:\n' +
+      '  1. read each pending ticket once from Jira at cold start, or use the exact-ticket `tracker-record.cjs override`;\n' +
+      '  2. re-run `front.cjs`/`state-sync.cjs` and take the ticket only after the tracker verdict is known;\n' +
+      '  3. loop back. Do NOT wait on CI: no CI wait can resolve a missing tracker observation.' + whereToSync
+    );
+  }
   if (!ci.length) allow();
   if (agentsOut().plausible.length) allow();
   const gone = goneText();

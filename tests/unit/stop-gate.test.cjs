@@ -161,6 +161,33 @@ test('waiting on CI is a reason to WAIT, and that is not the same as stopping', 
   assert.ok(/T-01-01/.test(v.reason), 'and which PR it is waiting on');
 });
 
+test('tracker-only holds block the stop until the missing observation is served', () => {
+  const v = run({
+    generated_at: fresh(), actionable_count: 0, tracker_blocked_count: 1,
+    left_behind_count: 0, actionable: {},
+    waiting: { ci: [], dispatched: [], parent: [], merge_human: [], human: [] },
+  });
+  assert.ok(v && v.decision === 'block', 'a tracker hold is unfinished work');
+  assert.ok(/tracker eligibility/.test(v.reason), 'the refusal names the actual hold');
+  assert.ok(/tracker-record\.cjs override/.test(v.reason), 'the refusal names the exact-ticket remedy');
+  assert.doesNotMatch(v.reason, /ci-wait\.cjs/, 'a tracker hold is not a CI wait');
+});
+
+test('tracker holds do not suppress a dispatched or parent wake-up', () => {
+  const common = {
+    generated_at: fresh(), actionable_count: 0, tracker_blocked_count: 1,
+    left_behind_count: 0, actionable: {},
+  };
+  assert.equal(run({
+    ...common,
+    waiting: { ci: [], dispatched: ['T-01-02'], parent: [], merge_human: [], human: [] },
+  }), null, 'an agent completion is the earlier wake-up');
+  assert.equal(run({
+    ...common,
+    waiting: { ci: [], dispatched: [], parent: ['T-01-03'], merge_human: [], human: [] },
+  }), null, 'the parent pipeline remains the normal wait');
+});
+
 test('a ticket with an agent silences the CI branch — that wake-up is free', () => {
   assert.equal(run({
     generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {},

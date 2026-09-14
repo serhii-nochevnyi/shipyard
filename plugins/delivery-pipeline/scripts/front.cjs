@@ -305,11 +305,56 @@ const PARKED_RENDER_ONLY = '--parked applies to THIS RENDER ONLY — nothing was
   + 'The durable board the stop gate enforces on is written by `state-sync.cjs --parked <ids>`; '
   + 'pass the same ids there, or the next round re-offers these tickets.';
 
+// ── the tracker holding gate ────────────────────────────────────────────────
+//
+// The front does not read Jira and does not read the tracker cache itself. The
+// caller supplies both facts: the configured status-name list and the active
+// generation's records. This keeps computeFront pure while giving every front
+// writer one transition rule.
+function trackerPolicyEnabled(value) {
+  if (typeof value === 'string') return value.split(',').some((s) => s.trim());
+  return Array.isArray(value) && value.some((s) => typeof s === 'string' && s.trim());
+}
+
+function trackerJiraKey(ticket) {
+  const t = ticket || {};
+  const delivery = t.delivery && typeof t.delivery === 'object' ? t.delivery : {};
+  const candidates = [
+    t.jira_key, t.jiraKey, t.jira,
+    delivery.jira_key, delivery.jiraKey, delivery.jira,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      for (const key of ['key', 'issueKey', 'jira_key', 'id']) {
+        if (typeof candidate[key] === 'string' && candidate[key].trim()) return candidate[key].trim();
+      }
+    }
+  }
+  return null;
+}
+
+function trackerBlockedWhy(id, jiraKey, record) {
+  const remedy = `name this exact ticket (${id}) explicitly to bypass the tracker gate; set scopes do not bypass it`;
+  if (!jiraKey) return `tracker eligibility has no Jira key for ${id} — ${remedy}`;
+  if (!record) return `tracker eligibility has no current-generation observation for ${jiraKey} — read it at cold start, or ${remedy}`;
+  if (record.jira_key !== jiraKey) {
+    return `tracker eligibility record for ${id} is bound to ${record.jira_key || 'no Jira key'}, not ${jiraKey} — re-read it, or ${remedy}`;
+  }
+  const fact = record.reason || `tracker verdict is ${record.verdict || 'unknown'} for ${jiraKey}`;
+  return `${fact}; ${remedy}`;
+}
+
 // Facts GitHub cannot know. `parked` is the session-scoped channel — a judgement
 // made mid-run that has no home on disk yet; a front that keeps re-offering an
 // escalated PR is an infinite babysit loop, so the caller passes those ids in.
 function computeFront(tickets, state, opts = {}) {
   const parkedIds = new Set(opts.parked || []);
+  // The aliases keep the pure API readable for callers while accepting the
+  // snake_case shape used by the durable store and config vocabulary.
+  const trackerStatuses = opts.trackerStatuses || opts.jiraTodoStatuses || opts.jira_todo_statuses || [];
+  const trackerRecords = opts.trackerRecords || opts.tracker_records || {};
+  const trackerEnabled = trackerPolicyEnabled(trackerStatuses);
   // A drift verdict is a fact about the PLAN, not about a session, so unlike
   // `parked` it has to outlive the run that discovered it. Without that the front
   // re-offers the ticket as executable on every single run: two tickets confirmed
@@ -478,11 +523,28 @@ function computeFront(tickets, state, opts = {}) {
   const waiting = { ci: [], dispatched: [], parent: [], merge_human: [], human: [] };
   const parked = { blocked: [], done: [] };
   const why = {};
+  let trackerBlockedCount = 0;
   // Which parent each `waiting.parent` child is held behind. The FRONT decides
   // who that is, so `ci-wait.cjs` can watch the parent's pipeline without
   // re-deriving graph semantics from tickets.json — the board is the one place
   // that answers "what is this run waiting for".
   const parentOf = {};
+
+  // A ticket whose own phase already landed without it is left-behind work,
+  // not a new execution candidate. Keep this decision ahead of the tracker
+  // gate: asking Jira for permission to start abandoned work would turn a
+  // deliberate completion hatch into an unfinished tracker hold.
+  const epics = opts.epics || {};
+  const keyOf = (id) => {
+    const t = (tickets && tickets[id]) || {};
+    return epicKey(t.phase, t.repo);
+  };
+  const leftBehind = (id) => {
+    if ((state[id] || {}).status === 'merged') return 0;
+    const info = epics[keyOf(id)];
+    if (!info || info.landed !== true) return 0;
+    return info.pr && String(info.pr.state || '').toUpperCase() === 'MERGED' ? 1 : 0;
+  };
 
   for (const id of Object.keys(state)) {
     const s = state[id] || {};
@@ -760,8 +822,24 @@ function computeFront(tickets, state, opts = {}) {
 
     // pending
     if (s.ready) {
-      actionable.execute.push(id);
-      why[id] = 'ready — worktree + executor';
+      if (trackerEnabled && !leftBehind(id)) {
+        const jiraKey = trackerJiraKey(t);
+        const record = trackerRecords && typeof trackerRecords === 'object' ? trackerRecords[id] : null;
+        if (record && (record.verdict === 'eligible' || record.override === true)
+            && jiraKey && record.jira_key === jiraKey) {
+          actionable.execute.push(id);
+          why[id] = record.override === true
+            ? `ready — explicit tracker override for ${jiraKey}; worktree + executor`
+            : `ready — tracker ${jiraKey} is eligible; worktree + executor`;
+        } else {
+          trackerBlockedCount += 1;
+          parked.blocked.push(id);
+          why[id] = trackerBlockedWhy(id, jiraKey, record);
+        }
+      } else {
+        actionable.execute.push(id);
+        why[id] = 'ready — worktree + executor';
+      }
     } else {
       parked.blocked.push(id);
       why[id] = blockedWhy(s);
@@ -788,9 +866,12 @@ function computeFront(tickets, state, opts = {}) {
   // hand the human a summary written before the answers came back. A child held
   // behind a moving parent is the same class of fact: the parent is being driven,
   // and when it lands this ticket becomes work again — so the round has to come
-  // back for it.
+  // back for it. A ready ticket held only by the tracker gate is also not done:
+  // the loop still owes one issue read (or an exact-ticket decision) before it
+  // can conclude that there is no executable work.
   const fixpoint = actionableCount === 0 && waiting.ci.length === 0
-    && waiting.dispatched.length === 0 && waiting.parent.length === 0;
+    && waiting.dispatched.length === 0 && waiting.parent.length === 0
+    && trackerBlockedCount === 0;
   // What a wave may take NOW. The cap is a TRUNCATION of the order below, never
   // a filter: nothing is moved out of `actionable`, and that is what keeps the
   // fixpoint honest without touching its formula — `actionable_count` is
@@ -852,11 +933,6 @@ function computeFront(tickets, state, opts = {}) {
   // (front.cjs's own CLI, `dispatch-record.cjs refreshFront`) gets NO left-behind
   // at all, deliberately: the hatch this feeds must never fire on a fact nobody
   // measured, and "no evidence" has to mean "keep driving".
-  const epics = opts.epics || {};
-  const keyOf = (id) => {
-    const t = (tickets && tickets[id]) || {};
-    return epicKey(t.phase, t.repo);
-  };
   // `landed === true` ALONE is not that evidence, and reading it as such would be
   // a worse defect than the arithmetic it replaces. It means "nothing from this
   // phase is outside the base" — a READINESS fact (state-sync blocks cross-phase
@@ -883,19 +959,6 @@ function computeFront(tickets, state, opts = {}) {
   // an epic PR outside the bulk window — or one a human merged and reaped
   // without a PR at all — is given up in the conservative direction: no
   // evidence, no hatch, the run keeps driving.
-  const leftBehind = (id) => {
-    // A merged ticket is IN the phase that landed; it is not a casualty of it.
-    // (It is never actionable either, so this is the definition holding rather
-    // than a bucket being filtered.)
-    if ((state[id] || {}).status === 'merged') return 0;
-    const info = epics[keyOf(id)];
-    // No record (direct-to-main, or a phase this graph knows no epic for) and
-    // `landed: null` (the compare did not answer) are both 0 — one has no epic
-    // that could land, the other has an answer nobody received.
-    if (!info || info.landed !== true) return 0;
-    return info.pr && String(info.pr.state || '').toUpperCase() === 'MERGED' ? 1 : 0;
-  };
-
   // UNBLOCKING POWER — how much other work this ticket is holding up. Depth
   // orders a stack and left-behind demotes a phase that shipped without it, but
   // neither says which of two live roots to take, and unattended that is the
@@ -994,7 +1057,21 @@ function computeFront(tickets, state, opts = {}) {
   const actionableIds = ORDER.flatMap((k) => actionable[k]);
   const leftBehindCount = actionableIds.filter((id) => leftBehind(id)).length;
 
-  return { actionable, waiting, parked, why, counts, parent_of: parentOf, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, capacity, sentinel, roles: BUCKET_ROLES };
+  return {
+    actionable,
+    waiting,
+    parked,
+    why,
+    counts,
+    parent_of: parentOf,
+    actionable_count: actionableCount,
+    tracker_blocked_count: trackerBlockedCount,
+    left_behind_count: leftBehindCount,
+    fixpoint,
+    capacity,
+    sentinel,
+    roles: BUCKET_ROLES,
+  };
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
@@ -1465,6 +1542,19 @@ function formatFront(front) {
       'Each record also lifts by itself when the ticket\'s state moves or its dispatch times out, ' +
       'so a run that dies here leaves nothing hidden.'
     );
+  } else if (front.actionable_count === 0 && front.tracker_blocked_count
+      && !(front.waiting.ci || []).length
+      && !(front.waiting.dispatched || []).length
+      && !(front.waiting.parent || []).length) {
+    // A tracker-only hold is unfinished evidence collection, not a pipeline
+    // wait. Without this branch the generic zero-actionable wording prints an
+    // empty wait list and sends the run to ci-wait.cjs, which has nothing to
+    // watch; the ticket's cold-start read or exact-ticket remedy would vanish.
+    lines.push(
+      `fixpoint: NO — ${front.tracker_blocked_count} pending ticket(s) are held by tracker eligibility. ` +
+      'Read each ticket once from Jira at cold start, or name one exact ticket for the documented override, ' +
+      'then recompute the front. This is not a CI wait — do NOT call `ci-wait.cjs`.'
+    );
   } else if (front.actionable_count === 0) {
     // Nothing to start, and what is left is a pipeline. Both waits belong here:
     // a ticket's own checks, and a ticket held behind a parent whose checks are
@@ -1541,6 +1631,7 @@ module.exports = {
   // board must never offer what the guard refuses, and two texts for one rule is
   // how they came to disagree in the first place.
   reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy, PARKED_RENDER_ONLY,
+  trackerPolicyEnabled, trackerJiraKey, trackerBlockedWhy,
   // The cap's counting unit, exported so the test can hold it against
   // `pipeline-config.cjs`'s ROLES: a role with no cardinality would be counted
   // by the fallback and nothing would say so.
