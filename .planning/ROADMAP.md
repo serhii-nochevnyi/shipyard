@@ -631,7 +631,7 @@ existing Claude palette is a read-only compatibility surface.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `ad3433bd4d1024ae40725444fb4e42c0f94a6743f99f289b8389f99d995d0625`
+- Source fingerprint: `96b86bf3a677f41454150aaa8b339aeb2869ba166c9f0d720432b7ab6f6228fa`
 - Plans merged: 97/116
 - Phases verified: 4/17
 - Current phase: 20
