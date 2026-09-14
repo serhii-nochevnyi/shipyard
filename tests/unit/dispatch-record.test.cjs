@@ -36,18 +36,9 @@ const run = (args, cwd, env = {}) => spawnSync('node', [DISPATCH, ...args], {
   cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '', ...env },
 });
 
-const DEFAULT_CODEX_AGENT_FILES = (() => {
-  const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
-    .filter((f) => f.endsWith('.md'))
-    .map((f) => f.slice(0, -3));
-  const files = new Set();
-  for (const role of refs) {
-    files.add(`shipyard-${role}`);
-    if (gen.DEEP_ROLES.has(role)) files.add(`shipyard-${role}${gen.DEEP_SUFFIX}`);
-    if (gen.CRITICAL_ROLES.has(role)) files.add(`shipyard-${role}${gen.CRITICAL_SUFFIX}`);
-  }
-  return [...files].sort();
-})();
+const DEFAULT_CODEX_AGENT_FILES = gen.codexStaticVariants()
+  .map(({ file }) => file.replace(/\.toml$/, ''))
+  .sort();
 
 function writeCodexAgents(dir, files = DEFAULT_CODEX_AGENT_FILES) {
   fs.mkdirSync(dir, { recursive: true });
@@ -915,18 +906,18 @@ test('an unknown flag, a duplicate and a missing value are all refused', () => {
 });
 
 test('--agent-file records the Codex file that ran, and refuses one nothing produces', () => {
-  // On Codex the model lives IN the file, so the ordinary/-deep choice IS the
+  // On Codex the model lives IN the file, so the canonical rung filename IS the
   // dispatch's decision. A name the generator does not produce is unverifiable,
   // and an unverifiable name is worse than none.
   const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
   const ok = run(
-    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-deep'],
+    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-critical'],
     project,
     { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
   );
   assert.equal(ok.status, 0, `must succeed (${ok.stderr})`);
-  assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-deep', 'verbatim');
-  assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-deep');
+  assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-critical', 'verbatim');
+  assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-critical');
 
   const claude = scratch({ 'T-01-02': { ...OPEN_PR } });
   const impossible = run([
@@ -937,7 +928,13 @@ test('--agent-file records the Codex file that ran, and refuses one nothing prod
   assert.match(impossible.stderr, /Codex-only/);
   assert.deepStrictEqual(store(claude.graph), {});
 
-  for (const bad of ['shipyard-nope', 'arch-review', 'shipyard-integrator-deep']) {
+  for (const bad of [
+    'shipyard-nope',
+    'shipyard-arch-review-deep',
+    'shipyard-pr-sentinel-deep',
+    'shipyard-integrator-deep',
+    'shipyard-ci-fix-critical',
+  ]) {
     const s = scratch({ 'T-01-02': { ...OPEN_PR } });
     const r = run(
       ['mark', 'T-01-02', 'arch-review', '--agent-file', bad],
@@ -962,14 +959,15 @@ test('the accepted agent files are read from the generated Codex agents director
     'the critical-eligible roles must be the generator\'s own');
   assert.equal(CODEX_CRITICAL_SUFFIX, gen.CRITICAL_SUFFIX);
 
-  // And the ordinary names are one per shipped reference — the generator's own
-  // filter — so a reference added there is accepted here without an edit.
+  // Every canonical variant is present, including research alternatives and the
+  // repeat rung that used to be absent from this contract.
   const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
     .filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agents-'));
   const files = codexAgentFiles(writeCodexAgents(dir));
   for (const role of refs) assert.ok(files.has(`shipyard-${role}`), `shipyard-${role} must be accepted`);
-  assert.equal(files.size, refs.length + gen.DEEP_ROLES.size + gen.CRITICAL_ROLES.size, 'and nothing else is');
+  const expected = gen.codexStaticVariants().map(({ file }) => file.replace(/\.toml$/, '')).sort();
+  assert.deepStrictEqual([...files].sort(), expected, 'and nothing else is');
 });
 
 test('a stale critical file is refused when the installed Codex agents directory did not generate it', () => {
@@ -1137,17 +1135,15 @@ test('--effort-applied is NOT cross-checked, because it is the OTHER claim', () 
 });
 
 test('a KNOWN agent file belonging to another role is refused, and names both', () => {
-  // Reproduced before it was a rule: `mark T-01-01 executor --agent-file
-  // shipyard-arch-review-deep` was accepted. On Codex the model lives IN the file,
-  // so a file from another role makes the model recorded beside it fiction —
-  // either the dispatch ran the wrong agent or the record names the wrong file,
-  // and the journal must not quietly hold it under either reading.
+  // On Codex the model lives IN the file, so a file from another role makes the
+  // model recorded beside it fiction — either the dispatch ran the wrong agent
+  // or the record names the wrong file, and the journal must not quietly hold it
+  // under either reading.
   const cases = [
     ['arch-review', 'shipyard-ci-fix'],
     ['arch-review', 'shipyard-ci-fix-deep'],
     ['ci-fix', 'shipyard-review-fix'],
-    // The role's own file at the WRONG depth is fine — the palette's two rungs are
-    // both this role's — so the refusal is about the role, never about `-deep`.
+    ['integrator', 'shipyard-inv-research-critical'],
     ['pr-sentinel', 'shipyard-arch-review'],
   ];
   for (const [role, file] of cases) {
