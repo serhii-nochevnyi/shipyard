@@ -898,6 +898,7 @@ intentional:
 
 ```bash
 # The orchestrator passes these four values as separate argv/data values:
+# Invocation shape: tracker-record.cjs override <T> <KEY> [options]
 ticket_id="$1"
 jira_key="$2"
 override_reason="$3"
