@@ -111,6 +111,18 @@ test('ineligible, unknown, and missing records are blocked with the direct-ticke
   }
 });
 
+test('a tracker hold keeps a board with no other work out of fixpoint', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: ['To Do'], trackerRecords: {} }
+  );
+  assert.deepStrictEqual(f.actionable.execute, []);
+  assert.deepStrictEqual(f.parked.blocked, ['T']);
+  assert.strictEqual(f.tracker_blocked_count, 1);
+  assert.strictEqual(f.fixpoint, false, 'the pending ticket still needs a tracker read or exact-ticket decision');
+});
+
 test('missing Jira key and a key-mismatched record fail closed', () => {
   const missing = computeFront(
     { T: trackerTicket(null) },
