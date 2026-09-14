@@ -203,6 +203,16 @@ test('generation ordering beats observation time when writes arrive out of order
   assert.strictEqual(record.status, 'Backlog');
 });
 
+test('an explicit missing-assignee observation cannot become complete from a copied assignee field', () => {
+  const { project, graph } = scratch(7);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const file = path.join(graph, 'tracker.json');
+  const store = stored(graph);
+  store.tickets['T-01'].assignee_observed = false;
+  fs.writeFileSync(file, JSON.stringify(store));
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
+});
+
 test('concurrent observations for different tickets do not lose records', async () => {
   const { project, graph } = scratch();
   await Promise.all(['T-01', 'T-02'].map((ticket, i) => new Promise((resolve) => {
