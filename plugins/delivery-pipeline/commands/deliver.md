@@ -1101,10 +1101,11 @@ itself a STOP signal, not a reason to improvise.
    b. if external Jira/GitHub tickets exist, treat them as intake evidence only and
       route the work to `/shipyard:investigate` from a cold start. Investigation
       must establish the problem, decisions, and repository context before any
-      executable plan is written;
+      executable plan is written. This is a handoff, not a delivery step: return
+      from `/shipyard:deliver` now and resume only after the later Gate 2 passes;
    c. after the investigation has produced an accepted design, route to
       `/shipyard:decompose` so the normal GSD plan contract is materialized and
-      Gate 2 (`validate-graph.cjs`) passes before delivery resumes;
+      Gate 2 (`validate-graph.cjs`) passes before invoking `/shipyard:deliver` again;
    d. if there are no external tickets, route to `/shipyard:decompose` as well.
    NEVER construct tickets.json by hand, bypassing validate-graph.
 2. `state-sync.cjs` — rebuild delivery-state from the actual GitHub

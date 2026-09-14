@@ -152,6 +152,23 @@ test('formatFront names a tracker-only hold instead of sending it to ci-wait', (
   assert.doesNotMatch(line, /run ci-wait/);
 });
 
+test('formatFront preserves a real CI or parent wait beside a tracker hold', () => {
+  const f = computeFront(
+    { T: trackerTicket(), P: {} },
+    {
+      T: { status: 'pending', ready: true },
+      P: { status: 'pr-open', pr: 9, checks: checks(0, 1) },
+    },
+    { jira_todo_statuses: ['To Do'], trackerRecords: {} }
+  );
+  assert.strictEqual(f.tracker_blocked_count, 1);
+  assert.deepStrictEqual(f.waiting.ci, ['P']);
+  const out = formatFront(f).join('\n');
+  assert.ok(/1 PR\(s\) still running CI/.test(out), out);
+  assert.ok(/ci-wait\.cjs/.test(out), out);
+  assert.doesNotMatch(out, /This is not a CI wait/);
+});
+
 test('missing Jira key and a key-mismatched record fail closed', () => {
   const missing = computeFront(
     { T: trackerTicket(null) },

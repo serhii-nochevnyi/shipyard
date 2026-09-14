@@ -1546,7 +1546,10 @@ function formatFront(front) {
       'Each record also lifts by itself when the ticket\'s state moves or its dispatch times out, ' +
       'so a run that dies here leaves nothing hidden.'
     );
-  } else if (front.actionable_count === 0 && front.tracker_blocked_count) {
+  } else if (front.actionable_count === 0 && front.tracker_blocked_count
+      && !(front.waiting.ci || []).length
+      && !(front.waiting.dispatched || []).length
+      && !(front.waiting.parent || []).length) {
     // A tracker-only hold is unfinished evidence collection, not a pipeline
     // wait. Without this branch the generic zero-actionable wording prints an
     // empty wait list and sends the run to ci-wait.cjs, which has nothing to
