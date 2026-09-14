@@ -3,6 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync, execFileSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
@@ -36,6 +37,25 @@ function scratch(generation = 7) {
 
 function stored(graph) {
   return JSON.parse(fs.readFileSync(path.join(graph, 'tracker.json'), 'utf8'));
+}
+
+function stagePendingOverride(graph, beforeStore, afterStore, eventLine, journalBytes, journalSuffix = eventLine) {
+  const journal = path.join(graph, 'delivery-log.jsonl');
+  const beforeJournal = journalBytes || Buffer.alloc(0);
+  fs.writeFileSync(path.join(graph, 'tracker.json'), beforeStore);
+  fs.writeFileSync(journal, Buffer.concat([beforeJournal, Buffer.from(journalSuffix)]));
+  fs.writeFileSync(path.join(graph, '.tracker-override.pending.json'), JSON.stringify({
+    version: 1,
+    store_exists: true,
+    store_file: true,
+    before_store: beforeStore.toString('base64'),
+    after_store: afterStore.toString('base64'),
+    journal_exists: beforeJournal.length > 0,
+    journal_file: true,
+    journal_offset: beforeJournal.length,
+    journal_digest: crypto.createHash('sha256').update(beforeJournal).digest('hex'),
+    event_line: eventLine.toString(),
+  }) + '\n');
 }
 
 const markArgs = (graph, ticket, key, assignee = 'none') => [
@@ -206,6 +226,47 @@ test('an override rolls back the cache when its journal cannot be appended', () 
   assert.ok(fs.statSync(path.join(graph, 'delivery-log.jsonl')).isDirectory());
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
   assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')), 'the next writer must recover the failed transaction');
+});
+
+test('recovery finds a completed override after an intervening journal append', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'оператор явно вибрав', '--graph', graph,
+  ], { cwd: project });
+  const afterStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  const intervening = Buffer.from('{"event":"status_change","ticket":"T-02"}\n');
+  stagePendingOverride(graph, beforeStore, afterStore, eventLine, intervening);
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {}, 'readers fail closed while recovery is pending');
+  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
+  assert.strictEqual(stored(graph).tickets['T-01'].override, true);
+  assert.ok(stored(graph).tickets['T-02']);
+  assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
+  assert.strictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8'),
+    intervening.toString() + eventLine.toString());
+});
+
+test('recovery truncates only a partial UTF-8 override append', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'оператор явно вибрав', '--graph', graph,
+  ], { cwd: project });
+  const afterStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  const eventBytes = Buffer.from(eventLine);
+  const cut = eventBytes.indexOf(Buffer.from('оператор')) + 1;
+  const partial = eventBytes.subarray(0, cut);
+  const intervening = Buffer.from('{"event":"status_change","ticket":"T-02"}\n');
+  stagePendingOverride(graph, beforeStore, afterStore, eventLine, intervening, partial);
+  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
+  assert.strictEqual(stored(graph).tickets['T-01'].override, undefined);
+  assert.ok(stored(graph).tickets['T-02']);
+  assert.strictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8'), intervening.toString());
+  assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
 });
 
 test('tracker-record rejects extra positional arguments instead of ignoring them', () => {

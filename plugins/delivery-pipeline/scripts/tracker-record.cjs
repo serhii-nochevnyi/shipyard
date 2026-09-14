@@ -115,23 +115,35 @@ function recoverPendingLocked(graphDir) {
       || digest(current.data.subarray(0, marker.journal_offset)) !== marker.journal_digest) {
     throw new Error(`cannot recover tracker override: the journal prefix changed while the transaction was pending`);
   }
-  const suffix = current.data.subarray(marker.journal_offset).toString('utf8');
-  if (suffix.startsWith(marker.event_line)) {
+  const suffix = current.data.subarray(marker.journal_offset);
+  const eventLine = Buffer.from(marker.event_line, 'utf8');
+  const eventAt = suffix.indexOf(eventLine);
+  if (eventAt >= 0 && (eventAt === 0 || suffix[eventAt - 1] === 0x0a)) {
     writeAtomic(graphStore(graphDir), Buffer.from(marker.after_store, 'base64'));
     unlinkIfPresent(markerFile);
     return;
   }
-  if (!marker.event_line.startsWith(suffix)) {
+  // Other journal writers do not share the tracker lock. If one appended after
+  // the marker but before this transaction's append, keep that complete line
+  // and inspect only the final raw byte segment for our possible partial line.
+  // Buffer comparison is intentional: decoding a killed UTF-8 append can turn a
+  // partial multibyte reason into U+FFFD and strand the marker forever.
+  const lastNewline = suffix.lastIndexOf(0x0a);
+  const tail = suffix.subarray(lastNewline + 1);
+  if (tail.length === 0) {
+    restoreStoreSnapshot(graphDir, marker);
+    unlinkIfPresent(markerFile);
+    return;
+  }
+  if (tail.length > eventLine.length || !eventLine.subarray(0, tail.length).equals(tail)) {
     throw new Error(`cannot recover tracker override: the journal contains an unrelated append at the pending transaction offset`);
   }
 
   // The append was absent or interrupted before a complete JSONL line. Restore
-  // exactly the prefix that was present before the transaction.
-  if (marker.journal_file) {
-    fs.truncateSync(journal, marker.journal_offset);
-  } else {
-    unlinkIfPresent(journal);
-  }
+  // only our partial final segment, preserving any complete intervening lines.
+  const rollbackLength = current.data.length - tail.length;
+  if (marker.journal_file || rollbackLength > 0) fs.truncateSync(journal, rollbackLength);
+  else if (!marker.journal_exists) unlinkIfPresent(journal);
   restoreStoreSnapshot(graphDir, marker);
   unlinkIfPresent(markerFile);
 }
