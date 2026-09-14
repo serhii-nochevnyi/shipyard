@@ -410,9 +410,17 @@ function activePreviousTrackersLocked(graphDir, configuredStatuses) {
   const statuses = Array.isArray(configuredStatuses)
     ? configuredStatuses
     : readConfigStatuses(projectRootOf(graphDir));
-  return Number.isInteger(generation) && generation > 1
-    ? recordsForGeneration(store, generation - 1, statuses, previousIdentity, { excludeOverrides: true })
-    : {};
+  if (!Number.isInteger(generation) || generation <= 1) return {};
+  const previous = recordsForGeneration(
+    store, generation - 1, statuses, previousIdentity, { excludeOverrides: true }
+  );
+  // A current-generation entry is a fresh answer even when it is malformed or
+  // no longer agrees with the current policy. Do not resurrect an older
+  // eligible answer behind that failed current read; the gate must fail closed.
+  for (const [ticket, record] of Object.entries(store.tickets)) {
+    if (record && typeof record === 'object' && record.generation === generation) delete previous[ticket];
+  }
+  return previous;
 }
 
 function activePreviousTrackers(graphDir, configuredStatuses) {
@@ -432,10 +440,19 @@ function activeTrackerSnapshotLocked(graphDir, configuredStatuses) {
     ? configuredStatuses
     : readConfigStatuses(projectRootOf(graphDir));
   const previousIdentity = metadataPreviousIdentity(graphDir);
+  const previous = Number.isInteger(generation) && generation > 1
+    ? recordsForGeneration(
+      store, generation - 1, statuses, previousIdentity, { excludeOverrides: true }
+    )
+    : {};
+  // A current-generation record that fails validation is still evidence that a
+  // fresh answer was attempted. Fallback to the predecessor would turn a
+  // policy change or malformed current record into a stale authorization.
+  for (const [ticket, record] of Object.entries(store.tickets)) {
+    if (record && typeof record === 'object' && record.generation === generation) delete previous[ticket];
+  }
   return {
-    ...(Number.isInteger(generation) && generation > 1
-      ? recordsForGeneration(store, generation - 1, statuses, previousIdentity, { excludeOverrides: true })
-      : {}),
+    ...previous,
     ...recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir)),
   };
 }
@@ -810,7 +827,12 @@ function parseArgs(argv) {
     const arg = args[i];
     if (arg === '--status' || arg === '--assignee' || arg === '--reason' || arg === '--observed-at') {
       const value = args[++i];
-      if (value === undefined || value.startsWith('--')) throw new Error(`${arg} needs a value`);
+      // `--reason` carries opaque tracker/MCP text. A failure such as
+      // "--retry-after 30" is data, not another option; rejecting it would
+      // prevent the required fail-closed `unknown` record from being written.
+      if (value === undefined || (arg !== '--reason' && value.startsWith('--'))) {
+        throw new Error(`${arg} needs a value`);
+      }
       const key = arg.slice(2).replace(/-/g, '_');
       values[key] = value;
     } else if (arg.startsWith('--')) {
