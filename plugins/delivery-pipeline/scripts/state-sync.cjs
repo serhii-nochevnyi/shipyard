@@ -987,6 +987,7 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   // review of this PR.
   const front = computeFront(tickets, state, {
     parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED, escalated: ESCALATED,
+    configInvalid: !CFG_VALID,
     trackerStatuses: TRACKER_STATUSES,
     trackerRecords,
     // The dispatches still in force — the tickets an agent is holding RIGHT NOW.

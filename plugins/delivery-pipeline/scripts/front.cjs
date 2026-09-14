@@ -355,6 +355,11 @@ function computeFront(tickets, state, opts = {}) {
   const trackerStatuses = opts.trackerStatuses || opts.jiraTodoStatuses || opts.jira_todo_statuses || [];
   const trackerRecords = opts.trackerRecords || opts.tracker_records || {};
   const trackerEnabled = trackerPolicyEnabled(trackerStatuses);
+  // A sentinel status plus an empty snapshot fences ordinary tracker reads, but
+  // left-behind work deliberately bypasses that gate. Carry the parse failure
+  // explicitly so no cached eligibility can turn into a dispatch while policy
+  // is unknown.
+  const configInvalid = opts.configInvalid === true;
   // A drift verdict is a fact about the PLAN, not about a session, so unlike
   // `parked` it has to outlive the run that discovered it. Without that the front
   // re-offers the ticket as executable on every single run: two tickets confirmed
@@ -822,7 +827,11 @@ function computeFront(tickets, state, opts = {}) {
 
     // pending
     if (s.ready) {
-      if (trackerEnabled && !leftBehind(id)) {
+      if (configInvalid) {
+        trackerBlockedCount += 1;
+        parked.blocked.push(id);
+        why[id] = 'tracker eligibility is unavailable because project policy is invalid — repair .planning/config.json before dispatching';
+      } else if (trackerEnabled && !leftBehind(id)) {
         const jiraKey = trackerJiraKey(t);
         const record = trackerRecords && typeof trackerRecords === 'object' ? trackerRecords[id] : null;
         const knownOverride = record && record.override === true
@@ -1721,6 +1730,7 @@ if (require.main === module) {
         const trackerRecords = valid ? activeTrackerSnapshotLocked(dir, trackerStatuses) : {};
         return computeFront(tickets, state, {
           parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
+          configInvalid: !valid,
           drifted: activeDrift(root), escalated: activeParks(root, state),
           trackerStatuses,
           trackerRecords,

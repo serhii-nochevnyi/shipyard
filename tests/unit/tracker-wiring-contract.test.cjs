@@ -60,6 +60,7 @@ test('state-sync passes the active tracker records without tracker I/O', () => {
   assert.match(publish, /generationIdentity/);
   assert.match(publish, /previous_generation_identity/);
   const call = between(doc, 'const front = computeFront', 'writeAtomic\(STATE');
+  assert.match(call, /configInvalid:\s*!CFG_VALID/);
   assert.match(call, /trackerStatuses:\s*TRACKER_STATUSES/);
   assert.match(call, /trackerRecords/);
   assert.match(call, /if \(CONFIG_REFUSAL\)/);
@@ -72,6 +73,7 @@ test('front CLI passes the config and coherent tracker snapshot to computeFront'
   assert.match(cli, /activeTrackerSnapshotLocked/);
   assert.match(cli, /const trackerStatuses = valid \? config\.jira_todo_statuses : \['__config_invalid__'\]/);
   assert.match(cli, /valid \? activeTrackerSnapshotLocked\(dir, trackerStatuses\) : \{\}/);
+  assert.match(cli, /configInvalid:\s*!valid/);
   assert.match(cli, /trackerStatuses,/);
   assert.match(cli, /withLock\(lockDirFor\(root\), 'tracker-record'/);
   assert.match(cli, /withLock\(\s*lockDirFor\(root\),\s*'state'/);
@@ -87,6 +89,7 @@ test('dispatch refresh uses the same config and coherent tracker snapshot', () =
   assert.match(refresh, /const \{ config, valid, error \} = loadConfig\(cwd\)/);
   assert.match(refresh, /const trackerStatuses = valid \? config\.jira_todo_statuses : \['__config_invalid__'\]/);
   assert.match(refresh, /valid \? activeTrackerSnapshotLocked\(dir, trackerStatuses\) : \{\}/);
+  assert.match(refresh, /configInvalid:\s*!valid/);
   assert.match(refresh, /withLock\(lockDirFor\(cwd\), 'tracker-record'/);
   assert.match(refresh, /withLock\(lockDirFor\(cwd\), 'state'/);
   assert.match(refresh, /trackerStatuses/);

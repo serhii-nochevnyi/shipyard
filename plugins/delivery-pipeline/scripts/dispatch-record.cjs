@@ -1062,6 +1062,7 @@ function refreshFront(cwd) {
       const front = computeFront(tickets, state, {
         parked: previous.parked_by_run || [],
         autoMerge: valid && previous.auto_merge === 'epic',
+        configInvalid: !valid,
         drifted: activeDrift(cwd),
         escalated: activeParks(cwd, state),
         dispatched: activeDispatches(cwd, state),

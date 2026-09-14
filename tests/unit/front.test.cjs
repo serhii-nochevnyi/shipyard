@@ -1114,6 +1114,21 @@ test("a ticket its own phase's epic landed without IS left behind", () => {
   assert.ok(f.parked.done.includes('T-20-01'), 'and the merged one is the evidence, not a casualty');
 });
 
+test('an invalid policy blocks left-behind pending work instead of bypassing the tracker gate', () => {
+  const tickets = { 'T-20-02': { phase: '20', jira: 'MYD-2' } };
+  const state = { 'T-20-02': { status: 'pending', ready: true } };
+  const f = computeFront(tickets, state, {
+    configInvalid: true,
+    trackerStatuses: ['__config_invalid__'],
+    trackerRecords: {},
+    epics: epicsOf(landedEpic(20)),
+  });
+  assert.deepStrictEqual(f.actionable.execute, []);
+  assert.deepStrictEqual(f.parked.blocked, ['T-20-02']);
+  assert.match(f.why['T-20-02'], /policy is invalid/);
+  assert.strictEqual(f.fixpoint, false, 'an unreadable policy must not look like a finished phase');
+});
+
 test('an epic freshly cut from its base has landed nothing at all', () => {
   // `exists` + 0 ahead is `landed: true`, and it is exactly as true of an empty
   // new epic as of one whose whole diff is in. Reading that alone as evidence
@@ -2783,7 +2798,7 @@ const frontJson = (dir) => {
   return JSON.parse(r.stdout);
 };
 const pendingTrackerBoard = (configText) => {
-  const dir = demoBoard(configText);
+  const dir = demoBoard(JSON.stringify({ pipeline: { jira_todo_statuses: 'To Do' } }));
   const graph = path.join(dir, '.planning', 'graph');
   dfs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({
     tickets: { 'T-01-01': { jira: 'MYD-1' } },
@@ -2797,6 +2812,9 @@ const pendingTrackerBoard = (configText) => {
     '--status', 'To Do', '--assignee', 'none', '--graph', graph,
   ], { cwd: dir, encoding: 'utf8' });
   assert.strictEqual(recorded.status, 0, `tracker fixture must be recordable (${recorded.stderr})`);
+  if (configText !== undefined) {
+    dfs.writeFileSync(path.join(dir, '.planning', 'config.json'), configText);
+  }
   return dir;
 };
 // The comparable half: everything the run acts on, with `capacity` left out —
