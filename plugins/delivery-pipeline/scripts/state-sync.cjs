@@ -40,6 +40,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
@@ -53,6 +54,12 @@ const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
 // "An agent is holding this one" — the third durable fact GitHub cannot know, and
 // the one this writer used to drop. See the comment at DISPATCHED below.
 const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
+// Tracker eligibility is observed by the orchestrating loop, never here. This
+// reader only consumes the generation-bound local cache, so state-sync keeps its
+// GitHub tick free of tracker calls and its state lock free of external I/O.
+const {
+  activeTrackersForPublishLocked, metadataIdentity,
+} = require(path.join(__dirname, 'tracker-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
@@ -253,7 +260,9 @@ function ghChecks(prNumber, repo) {
 // the loop acts on and prints the auto-merge policy the guard enforces, so an
 // unparseable config must not reach either as the DEFAULTS. Absent is a different
 // fact and keeps its old behaviour — the defaults are the right answer there.
-const { config: cfg, warnings: cfgWarnings, valid: CFG_VALID } = loadConfig(ROOT);
+const {
+  config: cfg, warnings: cfgWarnings, valid: CFG_VALID, error: CFG_ERROR,
+} = loadConfig(ROOT);
 
 if (!fs.existsSync(TICKETS)) fail('missing .planning/graph/tickets.json — run validate-graph first');
 let graph;
@@ -895,6 +904,18 @@ for (const [id, s] of Object.entries(state)) {
 // `auto_merge` in delivery-front.json, `autoMerge` into computeFront, and the
 // line printed below — is `off` whatever the defaults say.
 const AUTO_MERGE = CFG_VALID && cfg.auto_merge === 'epic' && mode === 'epic-stacked';
+// An invalid config must not collapse the tracker policy to the parsed
+// defaults. Use a non-empty sentinel status to keep every ready pending ticket
+// fail-closed, and carry the same human-readable refusal that the standalone
+// front prints. The sentinel is never a real Jira status and no record can
+// satisfy it.
+const TRACKER_STATUSES = CFG_VALID ? cfg.jira_todo_statuses : ['__config_invalid__'];
+const CONFIG_REFUSAL = CFG_VALID
+  ? null
+  : `front: no policy is in effect — ${CFG_ERROR.relative} ${CFG_ERROR.message}. `
+    + 'Every board below is the most restrictive reading, not this project\'s decision: '
+    + 'nothing may be auto-merged and nothing may be dispatched until the file parses '
+    + '(a `waiting.merge_human` entry below is still a human\'s option).';
 // Drift verdicts recorded by earlier runs, minus any whose plan has since been
 // re-planned (drift-record binds each verdict to the plan's content hash, so the
 // park lifts by itself). Without this the front hands a stale plan back to an
@@ -913,7 +934,13 @@ const DRIFTED = activeDrift(ROOT);
 // rendered; this was the one caller that still did.
 const ESCALATED = activeParks(ROOT, state);
 
-const published = withLock(lockDirFor(ROOT), 'state', () => {
+// Hold the tracker-record lock for the complete snapshot publish. Tracker
+// writers commit their cache under that lock, so this prevents state-sync from
+// reading the tracker snapshot and then publishing a board that races a new
+// observation in between. The tracker lock is outermost because tracker writers
+// also acquire `state` after it; keeping the shared tracker-record -> state order
+// avoids a deadlock.
+const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lockDirFor(ROOT), 'state', () => {
   // FIRST inside the lock, ahead of the journal append and every write. Nothing
   // this run holds was read under the lock — `prev`, the timestamps and every
   // `gh` observation were gathered minutes ago, because they have to be — so a
@@ -934,6 +961,21 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
   // "state, yaml and front were written together" is a fact a reader can check
   // rather than a property of this file it has to trust.
   const generation = (onDisk && Number.isInteger(onDisk.generation) ? onDisk.generation : 0) + 1;
+  // A refused publication must break the predecessor bridge. If the config is
+  // repaired before the next sync, the invalid snapshot is still the current
+  // boundary and must not resurrect an observation from before it.
+  const previousGenerationIdentity = onDisk && CFG_VALID ? metadataIdentity(GRAPH_DIR) : null;
+  const generationIdentity = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
+  // Tracker observations are written after the previous snapshot and before
+  // this publish. They are bound to the generation current on disk, so the
+  // active reader feeds them into this new snapshot. The following state-sync
+  // sees the next generation and expires the observation, forcing a fresh read
+  // for any pending ticket that was not taken this round.
+  const trackerRecords = CFG_VALID
+    ? activeTrackersForPublishLocked(GRAPH_DIR, TRACKER_STATUSES)
+    : {};
 
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
@@ -948,6 +990,9 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
   // review of this PR.
   const front = computeFront(tickets, state, {
     parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED, escalated: ESCALATED,
+    configInvalid: !CFG_VALID,
+    trackerStatuses: TRACKER_STATUSES,
+    trackerRecords,
     // The dispatches still in force — the tickets an agent is holding RIGHT NOW.
     //
     // Three writers produce delivery-front.json (front.cjs's CLI, dispatch-record's
@@ -987,6 +1032,10 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
     // answer; a caller with no such observation gets no left-behind at all.
     epics: epicInfo,
   });
+  if (CONFIG_REFUSAL) {
+    front.config_invalid = CONFIG_REFUSAL;
+    front.fixpoint = false;
+  }
   writeAtomic(STATE, JSON.stringify(state, null, 2) + '\n');
   // The generation rides the human mirror as a comment: the yaml is keyed by
   // ticket id exactly like the JSON, so it has no more room for a metadata key
@@ -1017,13 +1066,15 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
   // rewrites everything rather than trusting a half-published board.
   writeAtomic(META, JSON.stringify({
     generation,
+    generation_identity: generationIdentity,
+    previous_generation_identity: previousGenerationIdentity,
     observed_at: OBSERVED_AT,
     generated_at: nowIso,
     by: 'state-sync',
     pid: process.pid,
   }, null, 2) + '\n');
   return { front, generation };
-}, { label: 'state-sync' });
+}, { label: 'state-sync' }), { label: 'state-sync tracker snapshot' });
 
 // A refusal is an OUTCOME, not a failure: the board on disk is the better of the
 // two snapshots and the run that has it is the one driving. Exit 0 before any

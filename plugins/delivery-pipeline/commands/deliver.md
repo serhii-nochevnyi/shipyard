@@ -230,7 +230,7 @@ whole session's motion — recognize them in yourself):
    of them on one. Leave the PR to the guard, go serve `execute`/`publish`, and
    read its report when it lands. The one legitimate wait is `ci-wait.cjs`, and
    it is a script precisely so this stays mechanical: it REFUSES while anything
-   is actionable or a ticket is with an agent (loop-back item 5 below). "I'll do
+   is actionable or a ticket is with an agent (loop-back item 6 below). "I'll do
    the rest after the merge" is the same defect wearing a different hat.
 2. **Reading a human gate as "do nothing".** `human_checkpoint: true` and
    "show me before you open the PR" gate the **publish/merge step only** — never
@@ -897,8 +897,15 @@ id and its Jira key, preserve the observation, and state why the bypass is
 intentional:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs override <T> <KEY> \
-  --reason "<explicit operator reason>"
+# The adapter receives these four values as data, then invokes the wrapper with
+# four separate argv entries. They are never interpolated into shell source.
+record_tracker_override() {
+  local ticket_id="$1" jira_key="$2" override_reason="$3" project_graph="$4"
+  # Canonical argv shape: tracker-record.cjs override <T> <KEY> --reason <REASON> --graph <GRAPH>
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs override "$ticket_id" "$jira_key" \
+    --reason "$override_reason" --graph "$project_graph"
+}
+record_tracker_override "$ticket_id" "$jira_key" "$override_reason" "$project_graph"
 ```
 
 This is an exact-ticket escape hatch, not a scope setting: `whole phase N`,
@@ -1253,6 +1260,74 @@ The `⚠` lines from state-sync — you MUST show them to the human as a separat
   same run. In direct-to-main "blocked" = the parent is not merged.
 - Cascade: a dependency does NOT have to be merged — a branch is enough. Selecting from
   the middle of the graph is legal; the root of the stack is the epic.
+
+### Tracker eligibility read (only when `jira_todo_statuses` is non-empty)
+
+After scope selection and before any pending ticket can enter `execute`, read
+each pending ticket being considered exactly once through the connected Jira
+MCP. Use the ticket's Jira key and the issue-read operation exposed by that
+connection (for example, `getJiraIssue`); pass only the required issue key,
+cloud/project identifier, and any arguments required by that tool's advertised
+schema. Do not depend on a `fields` versus `view` option, and do not request or
+inspect changelog/worklog history. The default issue response already contains
+the two facts this gate needs: the status NAME and assignee.
+
+Adapt the response shape without changing the predicate:
+
+- read `status.name` and `assignee` from the top-level response or from
+  `fields.status` / `fields.assignee`, as the connected MCP returns them;
+- a literal `null` assignee means explicitly unassigned; a missing, malformed,
+  or otherwise unreadable assignee/status is `unknown`, not unassigned;
+- record a successful observation with the exact status NAME and assignee
+  identity (or `none`):
+
+The values returned by MCP are data, never shell source. Do not interpolate a
+status, assignee, or error string into a constructed command and do not use
+`eval`. Prefer the connection's argv/process-spawn API; if the only available
+runner is a shell, put each returned value in a variable and pass it as its own
+quoted argument, as below. This preserves exact tracker error text without
+letting tracker data become command syntax.
+
+  ```bash
+  # The adapter receives ticket-id, Jira key, status NAME, assignee identity,
+  # and graph directory as data, then invokes this wrapper with five separate
+  # argv entries. Set assignee_id to "none" before this call when MCP returned
+  # literal null.
+  record_tracker_mark() {
+    local ticket_id="$1" jira_key="$2" status_name="$3" assignee_id="$4" project_graph="$5"
+    node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs mark "$ticket_id" "$jira_key" \
+      --status "$status_name" --assignee "$assignee_id" \
+      --graph "$project_graph"
+  }
+  record_tracker_mark "$ticket_id" "$jira_key" "$status_name" "$assignee_id" "$project_graph"
+  ```
+
+- if the MCP call fails or does not contain a complete answer, preserve the
+  tracker's error words and record the fail-closed result instead:
+
+  ```bash
+  # The adapter receives ticket-id, Jira key, error text, and graph directory as
+  # data, then invokes this wrapper with four separate argv entries.
+  record_tracker_unknown() {
+    local ticket_id="$1" jira_key="$2" tracker_error="$3" project_graph="$4"
+    node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs unknown "$ticket_id" "$jira_key" \
+      --reason "$tracker_error" --graph "$project_graph"
+  }
+  record_tracker_unknown "$ticket_id" "$jira_key" "$tracker_error" "$project_graph"
+  ```
+
+Read the cache after recording and recompute the front before dispatching. A
+current-generation configured-status/unassigned observation reaches `execute`;
+assigned, wrong-status, missing, and `unknown` observations park only that
+ticket with the tracker reason. If the command names one exact ticket, the
+operator may then invoke the documented `tracker-record.cjs override` for that
+ticket; a set scope never does. An unavailable Jira MCP with the policy enabled
+is therefore a per-ticket `unknown` outcome, not permission to proceed and not
+a reason to stop processing other tickets. The override must still be based on
+a complete status-plus-assignee observation from the same delivery generation:
+an unknown/incomplete record remains blocked, and the override flag does not
+fabricate permission. The front accepts an override only alongside a known
+`eligible` or `ineligible` verdict.
 
 ## Step 2 — Drift-gate the chosen tickets
 
@@ -1719,7 +1794,7 @@ loop:
        cycle, serve the rest of the front, and pick it up next round. The guard
        does the same — it holds every guarded PR, so a wait on one is a wait on
        all of them, and its step 4 hands them back instead. The ONE legitimate
-       wait is `ci-wait.cjs` (loop-back item 5), which refuses unless the board
+       wait is `ci-wait.cjs` (loop-back item 6), which refuses unless the board
        has no other move. Serializing the whole run behind one CI queue is the
        single most expensive stall this pipeline has produced.
      no checks reported at all → state-sync flags it; treat "green" as "nothing ran"
@@ -1962,7 +2037,7 @@ itself. The round order:
    the backstop reads `attempt-history.cjs <T> --json` → `attempts`
    (MAX = `pipeline.max_attempts`).
    Then re-run state-sync: if the front still has actionable items, serve THEM
-   while CI runs — `ci-wait.cjs` (loop-back item 5) is the wait, and only once the
+   while CI runs — `ci-wait.cjs` (loop-back item 6) is the wait, and only once the
    front has no other move: it refuses while it has.
 4. Then — step **c** of the cycle (arch-review, resolved with a measured
    `--input-tokens`), the conform gate
@@ -1986,17 +2061,22 @@ stop at that: move on to the recomputation of the front below.
    "Tracker projection — the acting half"): it is bookkeeping, so it is neither
    actionable nor a reason to block — the watermark makes catch-up free, and a
    round that skips it costs one round of tracker lag that the next round closes.
-2. Recompute the actionable front (the Principle at the top): new `ready` (unblocked
+2. Repeat the tracker eligibility pass above for every pending/ready ticket in
+   the expanded scope, especially tickets newly unblocked by the round. Take one
+   issue read per pending candidate per loop-back round/generation, record
+   `eligible`, `ineligible`, or `unknown`, and do not treat a prior generation's
+   observation as fresh permission.
+3. Recompute the actionable front (the Principle at the top): new `ready` (unblocked
    children, cascade dependents) + `branched-needs-pr` + open non-green PRs.
-3. Front NOT empty → add the new ready ones to scope, return to Step 2/3 for them;
+4. Front NOT empty → add the new ready ones to scope, return to Step 2/3 for them;
    the open PRs are the guard's (Step 4 inline only on the fallback path). Thus
    exhaust the graph wave by wave WITHOUT re-asking the human.
-4. Only `execute`/`publish` are empty but the guard is still working → that is NOT
+5. Only `execute`/`publish` are empty but the guard is still working → that is NOT
    a fixpoint. Report the guard's state, and wait for its report rather than
    ending the run. The board says this for itself once the hand-overs are
    recorded: `sentinel: clear` never appears while a ticket is out with the
    guard, and `fixpoint` stays NO while anything is dispatched.
-5. Only `waiting.ci` is left → **`ci-wait.cjs` and stay in the turn.** This is the
+6. Only `waiting.ci` is left → **`ci-wait.cjs` and stay in the turn.** This is the
    one legitimate wait, and it is a script rather than your judgement because the
    run cannot come back on its own: the babysit loop is driven by agent-completion
    wake-ups, and when the only thing left is CI there is no agent to complete.
@@ -2021,7 +2101,7 @@ stop at that: move on to the recomputation of the front below.
    drops it from the front and stops the refusal. So a pipeline that will not
    settle ends with a person rather than with you waiting all night — you do not
    need to decide when to give up.
-6. Front empty AND the guard has reported → go to Step 5 (fixpoint).
+7. Front empty AND the guard has reported → go to Step 5 (fixpoint).
 
 `stop-gate.cjs` exists to enforce this rule, because it was skipped repeatedly and
 always at the same moment: writing the summary. Where the runtime offers a stop
@@ -2043,7 +2123,7 @@ repeats only after the board advanced: a newer `generated_at`, or a journalled
 merge/push since the last one), capped by `SHIPYARD_STOP_GATE_MAX_BLOCKS` (12),
 and falling back to one per turn wherever a round cannot be proven. It is NOT
 silent when only CI is pending — that board is a WAIT, not a fixpoint, so it
-blocks and names `ci-wait.cjs` (the loop-back's item 5). It is NOT silent on a board
+blocks and names `ci-wait.cjs` (the loop-back's item 6). It is NOT silent on a board
 the run has moved past without re-syncing: a journalled merge or push after
 `generated_at` proves the board is behind reality, whatever its age, and that is
 the shape that ended a run mid-cascade with three PRs to go. It is also silent over a ticket an
@@ -2059,7 +2139,7 @@ does not happen.
 Each squash-merge rewrites the parent's history, so the next child goes `DIRTY` the
 moment its base lands: base-merge it, push, and the push re-runs every check. An
 N-ticket stack therefore costs **N rounds and N CI waits**, and every one of them
-is `ci-wait.cjs`'s (loop-back item 5) — not a stop. "Merge everything" is done when
+is `ci-wait.cjs`'s (loop-back item 6) — not a stop. "Merge everything" is done when
 the board says `fixpoint: YES`, not when the first ticket lands.
 
 After each parent merge:

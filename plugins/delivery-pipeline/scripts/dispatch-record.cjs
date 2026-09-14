@@ -80,8 +80,9 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 // RESOLVER's, so it is validated against the resolver's own grammar rather than a
 // regex copied over here — the drift `CODEX_DEEP_ROLES` already paid for.
 const {
-  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime,
+  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime, loadConfig,
 } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -1027,8 +1028,26 @@ function refreshFront(cwd) {
   const { computeFront, ciEstimates } = require(path.join(__dirname, 'front.cjs'));
   const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
+  const { config, valid, error } = loadConfig(cwd);
+  const trackerStatuses = valid ? config.jira_todo_statuses : ['__config_invalid__'];
+  const configRefusal = valid
+    ? null
+    : `front: no policy is in effect — ${error.relative} ${error.message}. `
+      + 'Every board below is the most restrictive reading, not this project\'s decision: '
+      + 'nothing may be auto-merged and nothing may be dispatched until the file parses '
+      + '(a `waiting.merge_human` entry below is still a human\'s option).';
+  // A tracker read is valid for the current publication and the one
+  // publisher-backed boundary immediately preceding it. Refresh must match the
+  // standalone front reader, so use the same coherent cache snapshot.
+  const trackerRecordsForFront = () => {
+    return valid ? activeTrackerSnapshotLocked(dir, trackerStatuses) : {};
+  };
   try {
-    return withLock(lockDirFor(cwd), 'state', () => {
+    // Keep the global lock order tracker-record -> state. State-sync and
+    // tracker-record writers use that same order; taking the locks in the
+    // opposite order here would make a refresh deadlock with a concurrent
+    // snapshot publish.
+    return withLock(lockDirFor(cwd), 'tracker-record', () => withLock(lockDirFor(cwd), 'state', () => {
       let previous;
       let tickets;
       let state;
@@ -1042,21 +1061,28 @@ function refreshFront(cwd) {
       if (!previous || typeof previous !== 'object' || !state || typeof state !== 'object') return null;
       const front = computeFront(tickets, state, {
         parked: previous.parked_by_run || [],
-        autoMerge: previous.auto_merge === 'epic',
+        autoMerge: valid && previous.auto_merge === 'epic',
+        configInvalid: !valid,
         drifted: activeDrift(cwd),
         escalated: activeParks(cwd, state),
         dispatched: activeDispatches(cwd, state),
+        trackerStatuses,
+        trackerRecords: trackerRecordsForFront(),
         ci_estimates: ciEstimates(dir, tickets),
       });
+      if (configRefusal) {
+        front.config_invalid = configRefusal;
+        front.fixpoint = false;
+      }
       writeAtomic(frontFile, JSON.stringify({
         generated_at: previous.generated_at,
         parked_by_run: previous.parked_by_run || [],
-        auto_merge: previous.auto_merge || 'off',
+        auto_merge: valid ? (previous.auto_merge || 'off') : 'off',
         dispatches_applied_at: new Date().toISOString(),
         ...front,
       }, null, 2) + '\n');
       return front;
-    }, { label: 'dispatch-record', waitMs: 20_000 });
+    }, { label: 'dispatch-record', waitMs: 20_000 }), { label: 'dispatch tracker snapshot', waitMs: 20_000 });
   } catch (e) {
     process.stderr.write(
       `dispatch-record: the record is stored, but delivery-front.json could not be refreshed (${e.message}).\n` +

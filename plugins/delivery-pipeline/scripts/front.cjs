@@ -355,6 +355,11 @@ function computeFront(tickets, state, opts = {}) {
   const trackerStatuses = opts.trackerStatuses || opts.jiraTodoStatuses || opts.jira_todo_statuses || [];
   const trackerRecords = opts.trackerRecords || opts.tracker_records || {};
   const trackerEnabled = trackerPolicyEnabled(trackerStatuses);
+  // A sentinel status plus an empty snapshot fences ordinary tracker reads, but
+  // left-behind work deliberately bypasses that gate. Carry the parse failure
+  // explicitly so no cached eligibility can turn into a dispatch while policy
+  // is unknown.
+  const configInvalid = opts.configInvalid === true;
   // A drift verdict is a fact about the PLAN, not about a session, so unlike
   // `parked` it has to outlive the run that discovered it. Without that the front
   // re-offers the ticket as executable on every single run: two tickets confirmed
@@ -822,10 +827,16 @@ function computeFront(tickets, state, opts = {}) {
 
     // pending
     if (s.ready) {
-      if (trackerEnabled && !leftBehind(id)) {
+      if (configInvalid) {
+        trackerBlockedCount += 1;
+        parked.blocked.push(id);
+        why[id] = 'tracker eligibility is unavailable because project policy is invalid — repair .planning/config.json before dispatching';
+      } else if (trackerEnabled && !leftBehind(id)) {
         const jiraKey = trackerJiraKey(t);
         const record = trackerRecords && typeof trackerRecords === 'object' ? trackerRecords[id] : null;
-        if (record && (record.verdict === 'eligible' || record.override === true)
+        const knownOverride = record && record.override === true
+          && (record.verdict === 'eligible' || record.verdict === 'ineligible');
+        if (record && (record.verdict === 'eligible' || knownOverride)
             && jiraKey && record.jira_key === jiraKey) {
           actionable.execute.push(id);
           why[id] = record.override === true
@@ -843,6 +854,20 @@ function computeFront(tickets, state, opts = {}) {
     } else {
       parked.blocked.push(id);
       why[id] = blockedWhy(s);
+    }
+  }
+
+  // An unreadable policy authorizes no mutation, regardless of which branch
+  // classified the ticket. The pending branch handles the tracker-specific
+  // case above; this fence also covers publish, fix, finalize and merge work.
+  if (configInvalid) {
+    const refusal = 'project policy is invalid — repair .planning/config.json before dispatching';
+    for (const bucket of Object.keys(actionable)) {
+      for (const id of actionable[bucket]) {
+        parked.blocked.push(id);
+        why[id] = refusal;
+      }
+      actionable[bucket].length = 0;
     }
   }
 
@@ -869,7 +894,7 @@ function computeFront(tickets, state, opts = {}) {
   // back for it. A ready ticket held only by the tracker gate is also not done:
   // the loop still owes one issue read (or an exact-ticket decision) before it
   // can conclude that there is no executable work.
-  const fixpoint = actionableCount === 0 && waiting.ci.length === 0
+  const fixpoint = !configInvalid && actionableCount === 0 && waiting.ci.length === 0
     && waiting.dispatched.length === 0 && waiting.parent.length === 0
     && trackerBlockedCount === 0;
   // What a wave may take NOW. The cap is a TRUNCATION of the order below, never
@@ -1649,15 +1674,8 @@ if (require.main === module) {
   const root = process.cwd();
   const dir = path.join(root, '.planning', 'graph');
   const read = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-  let tickets = {};
-  let state = {};
-  try {
-    tickets = (read('tickets.json') || {}).tickets || {};
-    state = read('delivery-state.json');
-  } catch (e) {
-    process.stderr.write(`front: cannot read .planning/graph (${e.message}) — run state-sync.cjs first\n`);
-    process.exit(1);
-  }
+  const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
+  const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
   const argv = process.argv.slice(2);
   const pIdx = argv.indexOf('--parked');
   const parked = pIdx === -1 ? [] : String(argv[pIdx + 1] || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -1665,6 +1683,11 @@ if (require.main === module) {
   // human's, so the standalone CLI has to read it too (state-sync passes it in).
   const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
   const { config, valid, error } = loadConfig(root);
+  // An unreadable policy cannot authorize a tracker-gated dispatch. Keep the
+  // standalone reader aligned with state-sync and dispatch-record: a sentinel
+  // status can satisfy no real observation, and the snapshot must be empty so
+  // a cached eligible record cannot leak through the refusal path.
+  const trackerStatuses = valid ? config.jira_todo_statuses : ['__config_invalid__'];
   // A CONFIGURATION THAT DOES NOT PARSE PERMITS NO MUTATION (ADR-004 D2, audit
   // F03), and this CLI is a reachable surface for it: `deliver.md` advertises it
   // as re-runnable on its own. `loadConfig` keeps `config` populated so a board
@@ -1706,18 +1729,39 @@ if (require.main === module) {
   // The RECORDS, not the flat view: the board's lifting sentence is chosen by the
   // park's kind, and the flat map keeps the kind only as a text prefix.
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
-  const front = computeFront(tickets, state, {
-    parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
-    drifted: activeDrift(root), escalated: activeParks(root, state),
-    // Same reason as the two stores above: this CLI is advertised as re-runnable
-    // on its own, and a board that re-offers a ticket an agent is holding is not
-    // the same board.
-    dispatched: activeDispatches(root, state),
-    // …and the ORDER has the same requirement as the verdict: state-sync derives
-    // this from the journal, so the CLI must too, or the two commands rank the
-    // same graph differently.
-    ci_estimates: ciEstimates(dir, tickets),
-  });
+  let front;
+  try {
+    // State-sync publishes under tracker-record -> state. Keep the complete
+    // read/compute section in that same order: a tracker mark that queues behind
+    // this invocation cannot replace an eligible record after the snapshot read
+    // but before this CLI emits an execute verdict.
+    front = withLock(lockDirFor(root), 'tracker-record', () => withLock(
+      lockDirFor(root),
+      'state',
+      () => {
+        const tickets = (read('tickets.json') || {}).tickets || {};
+        const state = read('delivery-state.json');
+        const trackerRecords = valid ? activeTrackerSnapshotLocked(dir, trackerStatuses) : {};
+        return computeFront(tickets, state, {
+          parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
+          configInvalid: !valid,
+          drifted: activeDrift(root), escalated: activeParks(root, state),
+          trackerStatuses,
+          trackerRecords,
+          dispatched: activeDispatches(root, state),
+          ci_estimates: ciEstimates(dir, tickets),
+        });
+      },
+      { label: 'front state' },
+    ), { label: 'front tracker snapshot' });
+  } catch (e) {
+    const message = e && e.message ? e.message : String(e);
+    const isLockFailure = /lock|mid-write|concurrent/i.test(message);
+    process.stderr.write(isLockFailure
+      ? `front: could not compute a coherent .planning/graph front (${message}) — retry after the shared writer finishes\n`
+      : `front: cannot read .planning/graph (${message}) — run state-sync.cjs first\n`);
+    process.exit(1);
+  }
   // Does the journal prove this cached state is already behind reality? Computed
   // HERE rather than in computeFront, which is a pure function of what it is
   // handed and must stay one. `--json` carries the same finding as a field, so a
