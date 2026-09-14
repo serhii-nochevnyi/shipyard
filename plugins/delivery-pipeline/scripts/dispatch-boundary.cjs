@@ -139,11 +139,16 @@ function createDurableRecorder(storeDir) {
   const repairCommitFile = (dispatchId) => file('repair-commit', dispatchId);
   const claimFile = (dispatchId) => file('claim', dispatchId);
   const claimLockFile = (dispatchId) => file('claim-recovery', dispatchId);
-  const claimPayload = (dispatchId, consumerId) => {
+  const newFenceToken = () => typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
+  const claimPayload = (dispatchId, consumerId, generation, token = newFenceToken()) => {
     const now = Date.now();
     return {
       dispatch_id: dispatchId,
       consumer_id: consumerId,
+      generation,
+      claim_token: token,
       owner_pid: process.pid,
       claimed_at: new Date(now).toISOString(),
       lease_expires_at: new Date(now + CLAIM_TTL_MS).toISOString(),
@@ -154,6 +159,7 @@ function createDurableRecorder(storeDir) {
     return {
       dispatch_id: dispatchId,
       purpose,
+      lock_token: newFenceToken(),
       owner_pid: process.pid,
       acquired_at: new Date(now).toISOString(),
       lease_expires_at: new Date(now + CLAIM_LOCK_TTL_MS).toISOString(),
@@ -166,16 +172,6 @@ function createDurableRecorder(storeDir) {
         ? Date.parse(claim.claimed_at) + CLAIM_TTL_MS
         : NaN;
     return !Number.isFinite(leaseExpiresAt) || Date.now() >= leaseExpiresAt;
-  };
-  const claimOwnerIsLive = (claim) => {
-    const pid = claim && Number.isInteger(claim.owner_pid) ? claim.owner_pid : 0;
-    if (pid <= 0) return false;
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      return Boolean(error && error.code === 'EPERM');
-    }
   };
   const releaseClaimFile = (filePath) => {
     try { fs.unlinkSync(filePath); } catch (error) {
@@ -193,9 +189,9 @@ function createDurableRecorder(storeDir) {
   const acquireClaimLock = (dispatchId, purpose) => {
     const lock = claimLockFile(dispatchId);
     const candidate = claimLockPayload(dispatchId, purpose);
-    if (atomicCreateJson(lock, candidate)) return true;
+    if (atomicCreateJson(lock, candidate)) return candidate;
     const current = readJsonFile(lock);
-    if (!lockIsStale(current) || claimOwnerIsLive(current)) return false;
+    if (!lockIsStale(current)) return null;
     // Retiring a stale lock is an atomic rename, never an unlink after a
     // time-of-check. A competing recovery can therefore only make this rename
     // lose with ENOENT; it cannot have its fresh lock removed by us.
@@ -203,15 +199,36 @@ function createDurableRecorder(storeDir) {
     try {
       fs.renameSync(lock, retired);
     } catch (error) {
-      if (error && error.code === 'ENOENT') return false;
+      if (error && error.code === 'ENOENT') return null;
       throw error;
     }
     try {
-      return atomicCreateJson(lock, candidate);
+      return atomicCreateJson(lock, candidate) ? candidate : null;
     } finally {
       releaseClaimFile(retired);
     }
   };
+  const releaseClaimLock = (dispatchId, lockOwner) => {
+    if (!lockOwner) return;
+    const lock = claimLockFile(dispatchId);
+    const current = readJsonFile(lock);
+    if (!current || current.lock_token !== lockOwner.lock_token) return;
+    releaseClaimFile(lock);
+  };
+  const claimFence = (claim) => claim && ({
+    dispatch_id: claim.dispatch_id,
+    consumer_id: claim.consumer_id,
+    generation: claim.generation,
+    claim_token: claim.claim_token,
+  });
+  const sameClaimFence = (claim, fence) => (
+    isObject(claim)
+    && isObject(fence)
+    && claim.dispatch_id === fence.dispatch_id
+    && claim.consumer_id === fence.consumer_id
+    && claim.generation === fence.generation
+    && claim.claim_token === fence.claim_token
+  );
   const sameRecord = (left, right) => canonicalStableStringify(left) === canonicalStableStringify(right);
   const validRepairCommit = (commit, predecessorDispatchId) => (
     isObject(commit)
@@ -222,6 +239,8 @@ function createDurableRecorder(storeDir) {
     && commit.record_input.dispatch_id === commit.successor_dispatch_id
     && commit.record_input.predecessor_dispatch_id === predecessorDispatchId
     && commit.record_input.predecessor_consumer_id === commit.consumer_id
+    && (commit.claim_generation === undefined || Number.isInteger(commit.claim_generation))
+    && (commit.claim_token === undefined || typeof commit.claim_token === 'string')
   );
   const recoverRepairCommit = (predecessorDispatchId) => {
     const commit = readJsonFile(repairCommitFile(predecessorDispatchId));
@@ -239,7 +258,14 @@ function createDurableRecorder(storeDir) {
         }
       }
     } else if (!sameRecord(existing, commit.record_input)) {
-      throw boundaryError('RECORD_FAILED', 'durable repair commit conflicts with its successor record', { dispatch_id: commit.successor_dispatch_id });
+      const sameDispatch = existing.dispatch_id === commit.record_input.dispatch_id
+        && canonicalStableStringify(existing.receipt) === canonicalStableStringify(commit.record_input.receipt);
+      const existingTrace = Array.isArray(existing.trace) ? existing.trace : [];
+      const committedTrace = Array.isArray(commit.record_input.trace) ? commit.record_input.trace : [];
+      if (!sameDispatch || committedTrace.length < existingTrace.length) {
+        throw boundaryError('RECORD_FAILED', 'durable repair commit conflicts with its successor record', { dispatch_id: commit.successor_dispatch_id });
+      }
+      atomicReplaceJson(successorRecord, commit.record_input);
     }
     const receipt = commit.record_input.receipt;
     if (isObject(receipt) && typeof receipt.runtime === 'string' && typeof receipt.role === 'string') {
@@ -262,7 +288,7 @@ function createDurableRecorder(storeDir) {
         throw boundaryError('RECORD_FAILED', `durable dispatch reservation failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
-    record(recordInput, authority) {
+    record(recordInput, authority, claimAuthority) {
       if (authority !== RECORDER_AUTHORITY) return { recorded: false };
       const receipt = recordInput && recordInput.receipt;
       const dispatchId = recordInput && recordInput.dispatch_id;
@@ -275,16 +301,26 @@ function createDurableRecorder(storeDir) {
       try {
         if (predecessorDispatchId !== undefined || predecessorConsumerId !== undefined) {
           if (typeof predecessorDispatchId !== 'string' || typeof predecessorConsumerId !== 'string') return { recorded: false };
-          const repairCommit = {
-            predecessor_dispatch_id: predecessorDispatchId,
-            successor_dispatch_id: dispatchId,
-            consumer_id: predecessorConsumerId,
-            record_input: recordInput,
-          };
-          const commitCreated = atomicCreateJson(repairCommitFile(predecessorDispatchId), repairCommit);
-          if (!commitCreated) {
-            const existingCommit = readJsonFile(repairCommitFile(predecessorDispatchId));
-            if (!existingCommit || !sameRecord(existingCommit, repairCommit)) return { recorded: false };
+          const lockOwner = acquireClaimLock(predecessorDispatchId, 'commit');
+          if (!lockOwner) return { recorded: false };
+          try {
+            const claim = readJsonFile(claimFile(predecessorDispatchId));
+            if (!sameClaimFence(claim, claimAuthority) || claimIsStale(claim)) return { recorded: false };
+            const repairCommit = {
+              predecessor_dispatch_id: predecessorDispatchId,
+              successor_dispatch_id: dispatchId,
+              consumer_id: predecessorConsumerId,
+              claim_generation: claim.generation,
+              claim_token: claim.claim_token,
+              record_input: recordInput,
+            };
+            const commitCreated = atomicCreateJson(repairCommitFile(predecessorDispatchId), repairCommit);
+            if (!commitCreated) {
+              const existingCommit = readJsonFile(repairCommitFile(predecessorDispatchId));
+              if (!existingCommit || !sameRecord(existingCommit, repairCommit)) return { recorded: false };
+            }
+          } finally {
+            releaseClaimLock(predecessorDispatchId, lockOwner);
           }
         }
         const created = atomicCreateJson(recordFile(dispatchId), recordInput);
@@ -298,6 +334,36 @@ function createDurableRecorder(storeDir) {
       }
       return { recorded: true };
     },
+    finalize(recordInput, authority) {
+      if (authority !== RECORDER_AUTHORITY) return { finalized: false };
+      const dispatchId = recordInput && recordInput.dispatch_id;
+      const receipt = recordInput && recordInput.receipt;
+      if (typeof dispatchId !== 'string' || !isObject(receipt) || receipt.dispatch_id !== dispatchId) {
+        return { finalized: false };
+      }
+      try {
+        const existing = readJsonFile(recordFile(dispatchId));
+        if (!existing || existing.dispatch_id !== dispatchId
+            || canonicalStableStringify(existing.receipt) !== canonicalStableStringify(receipt)) {
+          return { finalized: false };
+        }
+        const predecessorDispatchId = recordInput.predecessor_dispatch_id;
+        if (predecessorDispatchId !== undefined) {
+          const repairCommit = readJsonFile(repairCommitFile(predecessorDispatchId));
+          if (!validRepairCommit(repairCommit, predecessorDispatchId)
+              || repairCommit.successor_dispatch_id !== dispatchId) return { finalized: false };
+          atomicReplaceJson(repairCommitFile(predecessorDispatchId), {
+            ...repairCommit,
+            record_input: recordInput,
+          });
+        }
+        atomicReplaceJson(recordFile(dispatchId), recordInput);
+        atomicReplaceJson(latestFile(receipt.runtime, receipt.role), recordInput);
+        return { finalized: true };
+      } catch (error) {
+        throw boundaryError('RECORD_FAILED', `durable dispatch finalization failed: ${error.message}`, { dispatch_id: dispatchId });
+      }
+    },
     getReceipt(dispatchId) {
       return readJsonFile(recordFile(dispatchId));
     },
@@ -306,86 +372,121 @@ function createDurableRecorder(storeDir) {
     },
     claim(dispatchId, consumerId) {
       try {
-        const candidate = claimPayload(dispatchId, consumerId);
         if (fs.existsSync(consumedFile(dispatchId))) return { claimed: false };
         // A successor is committed before its record is written.  If a process
         // died between those writes, recover that record now and treat the
         // predecessor as consumed: no later repair may replay it.
         if (recoverRepairCommit(dispatchId)) return { claimed: false };
-        if (atomicCreateJson(claimFile(dispatchId), candidate)) return { claimed: true };
+        let candidate = claimPayload(dispatchId, consumerId, 1);
+        if (atomicCreateJson(claimFile(dispatchId), candidate)) return { claimed: true, ...claimFence(candidate) };
         let current = readJsonFile(claimFile(dispatchId));
-        if (current && current.consumer_id === consumerId) return { claimed: true };
-        if (!claimIsStale(current) || claimOwnerIsLive(current)) return { claimed: false };
+        if (current && current.consumer_id === consumerId && !claimIsStale(current)) {
+          return { claimed: true, ...claimFence(current) };
+        }
+        if (!claimIsStale(current)) return { claimed: false };
 
         // A stale claim is recoverable, but takeover itself is serialized by a
         // second O_EXCL marker. Every contender either owns that marker or
         // backs off; no process may unlink a fresh owner's claim blindly.
-        if (!acquireClaimLock(dispatchId, 'recovery')) return { claimed: false };
+        const lockOwner = acquireClaimLock(dispatchId, 'recovery');
+        if (!lockOwner) return { claimed: false };
         try {
           if (fs.existsSync(consumedFile(dispatchId))) return { claimed: false };
           current = readJsonFile(claimFile(dispatchId));
-          if (current && current.consumer_id === consumerId) return { claimed: true };
-          if (!claimIsStale(current) || claimOwnerIsLive(current)) return { claimed: false };
+          if (current && current.consumer_id === consumerId && !claimIsStale(current)) {
+            return { claimed: true, ...claimFence(current) };
+          }
+          if (!claimIsStale(current)) return { claimed: false };
+          const generation = current && Number.isInteger(current.generation) ? current.generation + 1 : 1;
+          candidate = claimPayload(dispatchId, consumerId, generation);
           if (current) releaseClaimFile(claimFile(dispatchId));
           return atomicCreateJson(claimFile(dispatchId), candidate)
-            ? { claimed: true }
+            ? { claimed: true, ...claimFence(candidate) }
             : { claimed: false };
         } finally {
-          releaseClaimFile(claimLockFile(dispatchId));
+          releaseClaimLock(dispatchId, lockOwner);
         }
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable receipt claim failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
-    release(dispatchId, consumerId) {
+    release(dispatchId, consumerId, claimAuthority) {
       const repairCommit = recoverRepairCommit(dispatchId);
-      if (repairCommit && repairCommit.consumer_id === consumerId) return { released: true };
-      const claim = readJsonFile(claimFile(dispatchId));
-      if (!claim || claim.consumer_id !== consumerId) return { released: false };
+      if (repairCommit
+          && isObject(claimAuthority)
+          && repairCommit.consumer_id === consumerId
+          && repairCommit.claim_token === claimAuthority.claim_token
+          && repairCommit.claim_generation === claimAuthority.generation) return { released: true };
       try {
-        fs.unlinkSync(claimFile(dispatchId));
-        return { released: true };
+        const lockOwner = acquireClaimLock(dispatchId, 'release');
+        if (!lockOwner) return { released: false };
+        try {
+          const claim = readJsonFile(claimFile(dispatchId));
+          if (!sameClaimFence(claim, claimAuthority)) return { released: false };
+          releaseClaimFile(claimFile(dispatchId));
+          return { released: true };
+        } finally {
+          releaseClaimLock(dispatchId, lockOwner);
+        }
       } catch (error) {
-        if (error && error.code === 'ENOENT') return { released: false };
         throw boundaryError('RECORD_FAILED', `durable receipt claim release failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
-    renewClaim(dispatchId, consumerId) {
+    renewClaim(dispatchId, consumerId, claimAuthority) {
       try {
         if (fs.existsSync(consumedFile(dispatchId))) return { renewed: false };
         // Renewal and stale-owner recovery share this lock. Without the same
         // lock, a takeover could unlink a stale claim between the heartbeat's
         // read and replace, and the old owner could then write itself back as
         // the new owner.
-        if (!acquireClaimLock(dispatchId, 'renewal')) return { renewed: false };
+        const lockOwner = acquireClaimLock(dispatchId, 'renewal');
+        if (!lockOwner) return { renewed: false };
         try {
           const current = readJsonFile(claimFile(dispatchId));
-          if (!current || current.consumer_id !== consumerId) return { renewed: false };
-          atomicReplaceJson(claimFile(dispatchId), claimPayload(dispatchId, consumerId));
+          if (!sameClaimFence(current, claimAuthority) || claimIsStale(current)) return { renewed: false };
+          atomicReplaceJson(claimFile(dispatchId), claimPayload(
+            dispatchId,
+            consumerId,
+            current.generation,
+            current.claim_token,
+          ));
           return { renewed: true };
         } finally {
-          releaseClaimFile(claimLockFile(dispatchId));
+          releaseClaimLock(dispatchId, lockOwner);
         }
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable receipt claim renewal failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
-    consume(dispatchId, consumerId) {
+    consume(dispatchId, consumerId, claimAuthority) {
       try {
         const repairCommit = recoverRepairCommit(dispatchId);
-        if (repairCommit && repairCommit.consumer_id !== consumerId) return { consumed: false };
-        const claim = readJsonFile(claimFile(dispatchId));
-        if ((!claim || claim.consumer_id !== consumerId) && !repairCommit) return { consumed: false };
-        const consumed = atomicCreateJson(consumedFile(dispatchId), {
-          dispatch_id: dispatchId,
-          consumer_id: consumerId,
-          consumed_at: new Date().toISOString(),
-        });
-        if (!consumed) return fs.existsSync(consumedFile(dispatchId)) && repairCommit
-          ? { consumed: true }
-          : { consumed: false };
-        releaseClaimFile(claimFile(dispatchId));
-        return { consumed: true };
+        const committedFenceMatches = repairCommit
+          && isObject(claimAuthority)
+          && repairCommit.consumer_id === consumerId
+          && repairCommit.claim_token === claimAuthority.claim_token
+          && repairCommit.claim_generation === claimAuthority.generation;
+        if (repairCommit && !committedFenceMatches) return { consumed: false };
+        const lockOwner = acquireClaimLock(dispatchId, 'consume');
+        if (!lockOwner) return { consumed: false };
+        try {
+          const claim = readJsonFile(claimFile(dispatchId));
+          if (!sameClaimFence(claim, claimAuthority) && !committedFenceMatches) return { consumed: false };
+          const consumed = atomicCreateJson(consumedFile(dispatchId), {
+            dispatch_id: dispatchId,
+            consumer_id: consumerId,
+            claim_generation: claimAuthority.generation,
+            claim_token: claimAuthority.claim_token,
+            consumed_at: new Date().toISOString(),
+          });
+          if (!consumed) return fs.existsSync(consumedFile(dispatchId)) && committedFenceMatches
+            ? { consumed: true }
+            : { consumed: false };
+          if (sameClaimFence(claim, claimAuthority)) releaseClaimFile(claimFile(dispatchId));
+          return { consumed: true };
+        } finally {
+          releaseClaimLock(dispatchId, lockOwner);
+        }
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable receipt consumption failed: ${error.message}`, { dispatch_id: dispatchId });
       }
@@ -813,15 +914,27 @@ function recorderFor(options, adapter) {
   return null;
 }
 
-function recorderRecord(recorder, recordInput) {
+function recorderRecord(recorder, recordInput, claimAuthority) {
   const target = typeof recorder === 'function'
     ? { fn: recorder, receiver: null, name: 'dispatch recorder' }
     : recorderMethod(recorder, ['record']);
   if (!target) refuse('RECORD_UNAVAILABLE', 'durable dispatch recorder has no record method');
   const args = DURABLE_RECORDERS.has(recorder)
-    ? [recordInput, RECORDER_AUTHORITY]
+    ? [recordInput, RECORDER_AUTHORITY, claimAuthority]
     : [recordInput];
   return invokeSync(target.fn, target.receiver, args, target.name);
+}
+
+function recorderFinalize(recorder, recordInput) {
+  const target = recorderMethod(recorder, ['finalize', 'finalizeRecord']);
+  if (!target) return;
+  const args = DURABLE_RECORDERS.has(recorder)
+    ? [recordInput, RECORDER_AUTHORITY]
+    : [recordInput];
+  const result = invokeSync(target.fn, target.receiver, args, 'dispatch record finalization');
+  if (!affirmative(result, 'finalized')) {
+    refuse('RECORD_FAILED', 'durable dispatch record could not be finalized after acknowledgement', { dispatch_id: recordInput.dispatch_id });
+  }
 }
 
 function recorderReserve(recorder, dispatchId, reservation) {
@@ -874,7 +987,7 @@ function recorderClaim(recorder, dispatchId, consumerId) {
     if (!affirmative(result, 'claimed')) {
       refuse('UNVERIFIED_RECEIPT', 'the preceding receipt was already claimed by another repair dispatch', { dispatch_id: dispatchId });
     }
-    return true;
+    return isObject(result) ? result : { claimed: true, dispatch_id: dispatchId, consumer_id: consumerId };
   }
   const state = sharedRecorderState(recorder);
   if (!state) return false;
@@ -882,15 +995,15 @@ function recorderClaim(recorder, dispatchId, consumerId) {
   if (current && current !== consumerId) {
     refuse('UNVERIFIED_RECEIPT', 'the preceding receipt was already claimed by another repair dispatch', { dispatch_id: dispatchId });
   }
-  if (current === consumerId) return true;
+  if (current === consumerId) return { claimed: true, dispatch_id: dispatchId, consumer_id: consumerId };
   state.claims.set(dispatchId, consumerId);
-  return true;
+  return { claimed: true, dispatch_id: dispatchId, consumer_id: consumerId };
 }
 
-function recorderRenew(recorder, dispatchId, consumerId) {
+function recorderRenew(recorder, dispatchId, consumerId, claimAuthority) {
   const target = recorderMethod(recorder, ['renewClaim', 'renew', 'heartbeat']);
   if (target) {
-    const result = invokeSync(target.fn, target.receiver, [dispatchId, consumerId], 'receipt claim renewal');
+    const result = invokeSync(target.fn, target.receiver, [dispatchId, consumerId, claimAuthority], 'receipt claim renewal');
     return result === undefined || affirmative(result, 'renewed');
   }
   const state = sharedRecorderState(recorder);
@@ -898,11 +1011,11 @@ function recorderRenew(recorder, dispatchId, consumerId) {
   return state.claims.get(dispatchId) === consumerId;
 }
 
-function startClaimLease(recorder, dispatchId, consumerId) {
+function startClaimLease(recorder, dispatchId, consumerId, claimAuthority) {
   let failure = null;
   const timer = setInterval(() => {
     try {
-      if (!recorderRenew(recorder, dispatchId, consumerId)) {
+      if (!recorderRenew(recorder, dispatchId, consumerId, claimAuthority)) {
         failure = boundaryError('RECORD_FAILED', 'durable receipt claim lease was lost before launch finalization', { dispatch_id: dispatchId });
       }
     } catch (error) {
@@ -920,10 +1033,10 @@ function startClaimLease(recorder, dispatchId, consumerId) {
   };
 }
 
-function recorderRelease(recorder, dispatchId, consumerId) {
+function recorderRelease(recorder, dispatchId, consumerId, claimAuthority) {
   const target = recorderMethod(recorder, ['release', 'releaseReceipt', 'releaseClaim']);
   if (target) {
-    const result = invokeSync(target.fn, target.receiver, [dispatchId, consumerId], 'receipt claim release');
+    const result = invokeSync(target.fn, target.receiver, [dispatchId, consumerId, claimAuthority], 'receipt claim release');
     if (result !== undefined && !affirmative(result, 'released')) {
       refuse('RECORD_FAILED', 'durable receipt claim could not be released', { dispatch_id: dispatchId });
     }
@@ -942,12 +1055,14 @@ function recorderStoredRecord(recorder, dispatchId) {
   return result || null;
 }
 
-function recorderConsume(recorder, dispatchId, consumerId) {
+function recorderConsume(recorder, dispatchId, consumerId, claimAuthority) {
   const target = recorderMethod(recorder, ['consume', 'consumeReceipt']);
   if (target) {
     let result;
     try {
-      result = invokeSync(target.fn, target.receiver, consumerId === undefined ? [dispatchId] : [dispatchId, consumerId], 'receipt consumption');
+      result = invokeSync(target.fn, target.receiver, consumerId === undefined
+        ? [dispatchId]
+        : [dispatchId, consumerId, claimAuthority], 'receipt consumption');
     } catch (error) {
       if (error && (error.code === 'DUPLICATE_DISPATCH_ID' || error.code === 'EEXIST')) {
         refuse('UNVERIFIED_RECEIPT', 'the preceding receipt was already consumed by another repair dispatch', { dispatch_id: dispatchId });
@@ -1032,6 +1147,10 @@ function createDispatchBoundary(options = {}) {
   }
 
   function trustedRecordFor(recorder, dispatchId) {
+    // Arbitrary recorder objects are telemetry sinks, not trust roots. Only a
+    // recorder branded by this module can authenticate durable boundary state
+    // across calls or process restarts.
+    if (!DURABLE_RECORDERS.has(recorder)) return null;
     const memoryReceipt = trustedReceipts.get(dispatchId);
     const memoryResolution = trustedResolutions.get(dispatchId);
     if (memoryReceipt
@@ -1144,9 +1263,9 @@ function createDispatchBoundary(options = {}) {
     reservedDispatchIds.add(dispatchId);
   }
 
-  function consumePriorReceipt(prior, recorder, consumerId) {
+  function consumePriorReceipt(prior, recorder, consumerId, claimAuthority) {
     if (!prior) return;
-    recorderConsume(recorder, prior.dispatch_id, consumerId);
+    recorderConsume(recorder, prior.dispatch_id, consumerId, claimAuthority);
     consumedReceiptIds.add(prior.dispatch_id);
   }
 
@@ -1238,11 +1357,11 @@ function createDispatchBoundary(options = {}) {
     reserveDispatchId(validatedResolution.dispatch_id, record, validatedResolution);
     const prior = validatedResolution.prior_applied;
     const claimConsumerId = validatedResolution.dispatch_id;
-    let priorClaimed = false;
+    let priorClaim = null;
     let priorLease = null;
     if (prior) {
-      priorClaimed = recorderClaim(record, prior.dispatch_id, claimConsumerId);
-      if (priorClaimed) priorLease = startClaimLease(record, prior.dispatch_id, claimConsumerId);
+      priorClaim = recorderClaim(record, prior.dispatch_id, claimConsumerId);
+      if (priorClaim) priorLease = startClaimLease(record, prior.dispatch_id, claimConsumerId, priorClaim);
     }
     const observationCapabilities = adapterObservationCapabilities(adapter);
     const finish = (launchResult) => {
@@ -1293,35 +1412,36 @@ function createDispatchBoundary(options = {}) {
         // recorder's affirmative acknowledgement below.
         trace: [...stages],
       }));
-      const recordResult = recorderRecord(record, recordInput);
+      const recordResult = recorderRecord(record, recordInput, priorClaim);
       if (!affirmative(recordResult, 'recorded')) {
         refuse('RECORD_FAILED', 'durable dispatch recording did not return affirmative acknowledgement; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
       }
       if (priorLease) priorLease.assertHealthy();
-      consumePriorReceipt(prior, record, claimConsumerId);
-      recorderRecordRemember(record, recordInput);
       stages.push({ stage: 'record', status: 'passed' });
       stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
-      registerReceipt(applicationReceipt, validatedResolution, record, recordInput);
-      if (priorLease) priorLease.stop();
-      return deepFreeze(snapshot({
+      const finalizedRecord = deepFreeze(snapshot({
         ...baseTrace,
         trace: stages,
       }));
+      recorderFinalize(record, finalizedRecord);
+      consumePriorReceipt(prior, record, claimConsumerId, priorClaim);
+      registerReceipt(applicationReceipt, validatedResolution, record, finalizedRecord);
+      if (priorLease) priorLease.stop();
+      return finalizedRecord;
     };
     try {
       const launchResult = invokeLaunch(fn, adapter, [validatedResolution, context]);
       if (launchResult && typeof launchResult.then === 'function') {
         return launchResult.then(finish).catch((error) => {
           if (priorLease) priorLease.stop();
-          if (priorClaimed) recorderRelease(record, prior.dispatch_id, claimConsumerId);
+          if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
           throw error;
         });
       }
       return finish(launchResult);
     } catch (error) {
       if (priorLease) priorLease.stop();
-      if (priorClaimed) recorderRelease(record, prior.dispatch_id, claimConsumerId);
+      if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
       throw error;
     }
   }

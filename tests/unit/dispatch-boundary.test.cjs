@@ -253,9 +253,10 @@ test('a caller cannot replay a reserved dispatch id', () => {
 });
 
 test('repair escalations require the boundary receipt chain and consume each predecessor once', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-chain-'));
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
-    recorder: () => true,
+    recorder: boundaryModule.createDurableRecorder(storeDir),
   });
   assert.throws(
     () => boundary.dispatch({
@@ -674,6 +675,18 @@ test('separate boundary instances share durable reservation and finalized receip
   const stored = recorderB.getReceipt('cross-boundary-id');
   assert.equal(stored.receipt.compliance, 'verified');
   assert.deepStrictEqual(stored.receipt, first.receipt);
+  assert.deepStrictEqual(stored.trace, first.trace);
+  assert.deepStrictEqual(stored, first);
+  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  const restarted = spawnSync(process.execPath, [
+    '-e',
+    'const b=require(process.argv[1]);process.stdout.write(JSON.stringify(b.createDurableRecorder(process.argv[2]).getReceipt(process.argv[3])));',
+    modulePath,
+    storeDir,
+    first.dispatch_id,
+  ], { encoding: 'utf8' });
+  assert.equal(restarted.status, 0, restarted.stderr);
+  assert.deepStrictEqual(JSON.parse(restarted.stdout), first);
   assert.throws(
     () => makeBoundary(recorderB).dispatch({
       runtime: 'codex', role: 'executor', dispatch_id: 'cross-boundary-id',
@@ -857,6 +870,53 @@ test('a stored record whose identities disagree cannot authorize a repair', () =
   );
 });
 
+test('a self-consistent forged Claude predecessor from a custom recorder cannot authorize repair', () => {
+  const forgedResolution = policy.resolveDispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'forged-claude-base',
+  });
+  const forgedReceipt = receiptFor(forgedResolution);
+  const forgedRecord = {
+    dispatch_id: forgedResolution.dispatch_id,
+    resolution: forgedResolution,
+    receipt: forgedReceipt,
+    trace: [
+      { stage: 'resolve', status: 'passed' },
+      { stage: 'validate', status: 'passed' },
+      { stage: 'launch', status: 'passed', launch_id: forgedReceipt.launch_id },
+      { stage: 'record', status: 'passed' },
+      { stage: 'receipt', status: 'passed', launch_id: forgedReceipt.launch_id },
+    ],
+  };
+  let launched = false;
+  const recorder = {
+    reserve: () => ({ reserved: true }),
+    record: () => ({ recorded: true }),
+    getReceipt: () => forgedRecord,
+    claim: () => ({ claimed: true }),
+    renewClaim: () => ({ renewed: true }),
+    release: () => ({ released: true }),
+    consume: () => ({ consumed: true }),
+  };
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { claude: fakeAdapter({ onLaunch: () => { launched = true; } }) },
+    recorder,
+  });
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'claude',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: forgedReceipt },
+      previous_dispatch_id: forgedResolution.dispatch_id,
+      dispatch_id: 'forged-claude-repeat',
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+  assert.equal(launched, false);
+});
+
 test('independent repair chains do not share a global latest receipt lane', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-parallel-repair-'));
   const makeBoundary = () => boundaryModule.createDispatchBoundary({
@@ -976,7 +1036,10 @@ test('durable recorder writes require boundary authority', () => {
 test('stale durable claims recover, while consumed predecessors cannot be reclaimed', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-claims-'));
   const recorder = boundaryModule.createDurableRecorder(storeDir);
-  assert.deepStrictEqual(recorder.claim('claim-id', 'active-owner'), { claimed: true });
+  const active = recorder.claim('claim-id', 'active-owner');
+  assert.equal(active.claimed, true);
+  assert.equal(active.generation, 1);
+  assert.equal(typeof active.claim_token, 'string');
   assert.deepStrictEqual(recorder.claim('claim-id', 'other-owner'), { claimed: false });
 
   const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
@@ -987,26 +1050,85 @@ test('stale durable claims recover, while consumed predecessors cannot be reclai
   delete claim.owner_pid;
   fs.writeFileSync(claimPath, JSON.stringify(claim) + '\n');
 
-  assert.deepStrictEqual(recorder.claim('claim-id', 'recovered-owner'), { claimed: true });
-  assert.deepStrictEqual(recorder.consume('claim-id', 'recovered-owner'), { consumed: true });
+  const recovered = recorder.claim('claim-id', 'recovered-owner');
+  assert.equal(recovered.claimed, true);
+  assert.equal(recovered.generation, active.generation + 1);
+  assert.notEqual(recovered.claim_token, active.claim_token);
+  assert.deepStrictEqual(recorder.consume('claim-id', 'recovered-owner', recovered), { consumed: true });
   assert.deepStrictEqual(recorder.claim('claim-id', 'late-owner'), { claimed: false });
 });
 
-test('a live owner renews its lease and cannot be reclaimed after the nominal TTL', () => {
+test('an active owner renews its lease, but expiry permits takeover despite a live PID', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-live-claim-'));
   const recorder = boundaryModule.createDurableRecorder(storeDir);
-  assert.deepStrictEqual(recorder.claim('live-claim-id', 'live-owner'), { claimed: true });
+  const active = recorder.claim('live-claim-id', 'live-owner');
+  assert.equal(active.claimed, true);
+  assert.deepStrictEqual(recorder.renewClaim('live-claim-id', 'live-owner', active), { renewed: true });
   const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
   const claimPath = path.join(storeDir, claimName);
   const claim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
   claim.claimed_at = new Date(Date.now() - (2 * 60 * 60 * 1000)).toISOString();
   claim.lease_expires_at = new Date(Date.now() - (60 * 60 * 1000)).toISOString();
   fs.writeFileSync(claimPath, JSON.stringify(claim) + '\n');
-  assert.deepStrictEqual(recorder.claim('live-claim-id', 'other-owner'), { claimed: false });
-  assert.deepStrictEqual(recorder.renewClaim('live-claim-id', 'live-owner'), { renewed: true });
-  const renewed = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
-  assert.ok(Date.parse(renewed.lease_expires_at) > Date.now());
-  assert.deepStrictEqual(recorder.claim('live-claim-id', 'other-owner'), { claimed: false });
+  const takeover = recorder.claim('live-claim-id', 'other-owner');
+  assert.equal(takeover.claimed, true);
+  assert.equal(takeover.generation, active.generation + 1);
+  assert.notEqual(takeover.claim_token, active.claim_token);
+  assert.deepStrictEqual(recorder.renewClaim('live-claim-id', 'live-owner', active), { renewed: false });
+  assert.deepStrictEqual(recorder.release('live-claim-id', 'live-owner', active), { released: false });
+  assert.deepStrictEqual(recorder.consume('live-claim-id', 'live-owner', active), { consumed: false });
+  assert.deepStrictEqual(recorder.renewClaim('live-claim-id', 'other-owner', takeover), { renewed: true });
+});
+
+test('a superseded claim owner cannot commit after an expired-lease takeover', async () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-fenced-claim-'));
+  const base = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  }).dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'fenced-base',
+  });
+  let finishLaunch;
+  const pendingLaunch = new Promise((resolve) => { finishLaunch = resolve; });
+  const oldOwner = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        receipt: (resolution) => pendingLaunch.then(() => receiptFor(resolution)),
+      }),
+    },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  const pendingDispatch = oldOwner.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'fenced-old-successor',
+  });
+
+  const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
+  const claimPath = path.join(storeDir, claimName);
+  const stale = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+  stale.lease_expires_at = new Date(Date.now() - 1000).toISOString();
+  fs.writeFileSync(claimPath, JSON.stringify(stale) + '\n');
+  const takeoverRecorder = boundaryModule.createDurableRecorder(storeDir);
+  const takeover = takeoverRecorder.claim(base.dispatch_id, 'fenced-new-successor');
+  assert.equal(takeover.claimed, true);
+  assert.equal(takeover.generation, stale.generation + 1);
+
+  finishLaunch();
+  await assert.rejects(
+    pendingDispatch,
+    (error) => error.code === 'RECORD_FAILED',
+  );
+  assert.equal(takeoverRecorder.getReceipt('fenced-old-successor'), null);
+  assert.deepStrictEqual(
+    takeoverRecorder.consume(base.dispatch_id, 'fenced-new-successor', takeover),
+    { consumed: true },
+  );
 });
 
 test('file-backed reservation is atomic across Node processes', () => {
