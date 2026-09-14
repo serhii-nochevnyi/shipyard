@@ -1159,9 +1159,10 @@ test('a process crash during a temporary write leaves the final reservation avai
   const child = spawnSync(process.execPath, ['-e', `
     const fs = require('fs');
     const b = require(process.argv[1]);
+    const recorder = b.createDurableRecorder(process.argv[2]);
     const write = fs.writeFileSync;
     fs.writeFileSync = (fd) => { write(fd, '{'); process.exit(73); };
-    b.createDurableRecorder(process.argv[2]).reserve('crash-id');
+    recorder.reserve('crash-id');
   `, modulePath, storeDir], { encoding: 'utf8' });
   assert.equal(child.status, 73, child.stderr);
   const orphan = fs.readdirSync(storeDir);
@@ -1227,8 +1228,8 @@ test('durable observation capabilities survive process restart independently', (
     const recordPath = path.join(storeDir, `record-${crypto.createHash('sha256').update('base').digest('hex')}.json`);
     for (const field of [...Object.keys(unavailable).filter((key) => unavailable[key]), 'legacy']) {
       const stored = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
-      stored.observation_unavailable = { ...unavailable, [field]: false };
-      if (field === 'legacy') delete stored.observation_unavailable;
+      stored.payload.observation_unavailable = { ...unavailable, [field]: false };
+      if (field === 'legacy') delete stored.payload.observation_unavailable;
       fs.writeFileSync(recordPath, JSON.stringify(stored));
       const freshRecorder = boundaryModule.createDurableRecorder(storeDir);
       assert.throws(() => boundaryModule.createDispatchBoundary({ recorder: freshRecorder }).resolve({

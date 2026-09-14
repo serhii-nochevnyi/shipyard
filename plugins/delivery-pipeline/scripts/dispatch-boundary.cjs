@@ -21,6 +21,8 @@ const CLAIM_HEARTBEAT_MS = Math.max(1000, Math.floor(CLAIM_TTL_MS / 3));
 const CLAIM_LOCK_TTL_MS = Math.max(1000, Math.floor(CLAIM_TTL_MS / 3));
 const RECORDER_AUTHORITY = Symbol('adr-014-dispatch-boundary-recorder-authority');
 const DURABLE_RECORDERS = new WeakSet();
+const DURABLE_ENVELOPE_FORMAT = 'adr-014.durable-boundary.v1';
+const AUTHORITY_KEY_BYTES = 32;
 // Policy resolution must distinguish an actual durable receipt from a caller's
 // JSON lookalike.  Only this module can add a value to the set; the exported
 // predicate deliberately exposes verification but no way to mint membership.
@@ -83,15 +85,26 @@ function readJsonFile(file) {
   }
 }
 
-function atomicCreateJson(file, value) {
+function fsyncDirectory(directory) {
+  let fd;
+  try {
+    fd = fs.openSync(directory, 'r');
+    fs.fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch (_) { /* best effort */ }
+    }
+  }
+}
+
+function atomicCreateBuffer(file, value) {
   const temp = `${file}.${process.pid}.${crypto.randomBytes(16).toString('hex')}.tmp`;
   let fd;
-  let dirFd;
   let tempCreated = false;
   try {
     fd = fs.openSync(temp, 'wx', 0o600);
     tempCreated = true;
-    fs.writeFileSync(fd, JSON.stringify(value) + '\n', 'utf8');
+    fs.writeFileSync(fd, value);
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = undefined;
@@ -103,21 +116,21 @@ function atomicCreateJson(file, value) {
       if (error && error.code === 'EEXIST') return false;
       throw error;
     }
-    dirFd = fs.openSync(path.dirname(file), 'r');
-    fs.fsyncSync(dirFd);
+    fsyncDirectory(path.dirname(file));
     return true;
   } finally {
     if (fd !== undefined) {
       try { fs.closeSync(fd); } catch (_) { /* best effort */ }
-    }
-    if (dirFd !== undefined) {
-      try { fs.closeSync(dirFd); } catch (_) { /* best effort */ }
     }
     // A crash may leave an orphan temp, but never a partially written final.
     if (tempCreated) {
       try { fs.unlinkSync(temp); } catch (_) { /* best effort */ }
     }
   }
+}
+
+function atomicCreateJson(file, value) {
+  return atomicCreateBuffer(file, Buffer.from(`${JSON.stringify(value)}\n`, 'utf8'));
 }
 
 function atomicReplaceJson(file, value) {
@@ -129,12 +142,71 @@ function atomicReplaceJson(file, value) {
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fs.renameSync(temp, file);
+    fsyncDirectory(path.dirname(file));
   } finally {
     if (fd !== undefined) {
       try { fs.closeSync(fd); } catch (_) { /* best effort */ }
     }
     try { fs.unlinkSync(temp); } catch (_) { /* absent after rename */ }
   }
+}
+
+function authorityKeyPath(root) {
+  return path.join(path.dirname(root), `.shipyard-dispatch-authority-${keyDigest(root)}.key`);
+}
+
+function loadAuthorityKey(root) {
+  const file = authorityKeyPath(root);
+  const candidate = crypto.randomBytes(AUTHORITY_KEY_BYTES);
+  atomicCreateBuffer(file, candidate);
+  let stat;
+  let key;
+  try {
+    stat = fs.lstatSync(file);
+    key = fs.readFileSync(file);
+  } catch (error) {
+    refuse('RECORD_FAILED', `durable dispatch authority key could not be read: ${error.message}`, { file });
+  }
+  if (!stat.isFile() || key.length !== AUTHORITY_KEY_BYTES || (stat.mode & 0o077) !== 0) {
+    refuse('RECORD_FAILED', 'durable dispatch authority key is invalid or too broadly accessible', { file });
+  }
+  return key;
+}
+
+function durableEnvelope(payload, key) {
+  const serialized = canonicalStableStringify(payload);
+  const mac = crypto.createHmac('sha256', key).update(serialized).digest('hex');
+  return {
+    format: DURABLE_ENVELOPE_FORMAT,
+    payload,
+    integrity: { algorithm: 'hmac-sha256', mac },
+  };
+}
+
+function durablePayload(raw, key) {
+  if (!isObject(raw) || raw.format !== DURABLE_ENVELOPE_FORMAT) return null;
+  if (!isObject(raw.payload) || !isObject(raw.integrity)
+      || raw.integrity.algorithm !== 'hmac-sha256'
+      || typeof raw.integrity.mac !== 'string'
+      || !/^[a-f0-9]{64}$/.test(raw.integrity.mac)) return null;
+  const expected = crypto.createHmac('sha256', key)
+    .update(canonicalStableStringify(raw.payload))
+    .digest('hex');
+  const expectedBytes = Buffer.from(expected, 'hex');
+  const actualBytes = Buffer.from(raw.integrity.mac, 'hex');
+  return crypto.timingSafeEqual(expectedBytes, actualBytes) ? raw.payload : null;
+}
+
+function readDurableFile(file, key) {
+  const raw = readJsonFile(file);
+  if (!raw) return null;
+  if (isObject(raw) && raw.format === DURABLE_ENVELOPE_FORMAT) {
+    const payload = durablePayload(raw, key);
+    return payload ? { payload, authenticated: true } : { payload: null, authenticated: false };
+  }
+  // Plain records are retained as readable legacy/recovery data, but are never
+  // accepted by getVerifiedRecord as repair authority.
+  return { payload: raw, authenticated: false };
 }
 
 // A small file-backed recorder for callers that need uniqueness and receipt
@@ -151,6 +223,13 @@ function createDurableRecorder(storeDir) {
   }
   const root = path.resolve(storeDir);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const authorityKey = loadAuthorityKey(root);
+  const seal = (payload) => durableEnvelope(payload, authorityKey);
+  const readStored = (filePath) => readDurableFile(filePath, authorityKey);
+  const readAuthenticated = (filePath) => {
+    const stored = readStored(filePath);
+    return stored && stored.authenticated ? stored.payload : null;
+  };
   const file = (prefix, value) => path.join(root, `${prefix}-${keyDigest(value)}.json`);
   const reservationFile = (dispatchId) => file('reservation', dispatchId);
   const recordFile = (dispatchId) => file('record', dispatchId);
@@ -206,34 +285,126 @@ function createDurableRecorder(storeDir) {
         : NaN;
     return !Number.isFinite(leaseExpiresAt) || Date.now() >= leaseExpiresAt;
   };
-  const acquireClaimLock = (dispatchId, purpose) => {
-    const lock = claimLockFile(dispatchId);
-    const candidate = claimLockPayload(dispatchId, purpose);
-    if (atomicCreateJson(lock, candidate)) return candidate;
-    const current = readJsonFile(lock);
-    if (!lockIsStale(current)) return null;
-    // Retiring a stale lock is an atomic rename, never an unlink after a
-    // time-of-check. A competing recovery can therefore only make this rename
-    // lose with ENOENT; it cannot have its fresh lock removed by us.
-    const retired = `${lock}.${process.pid}.${keyDigest(`${Date.now()}-${Math.random()}`)}.stale`;
+  const readLockRecord = (filePath) => {
+    let raw;
     try {
-      fs.renameSync(lock, retired);
+      raw = fs.readFileSync(filePath, 'utf8');
     } catch (error) {
       if (error && error.code === 'ENOENT') return null;
       throw error;
     }
+    let value = null;
+    try { value = JSON.parse(raw); } catch (_) { /* malformed locks are stale */ }
+    return { raw, value };
+  };
+  const lockIdentity = (record) => record && typeof record.raw === 'string'
+    ? keyDigest(record.raw)
+    : null;
+  const sweepTransitionMarkers = (lock) => {
+    const prefix = `${path.basename(lock)}.stale-`;
+    let entries = [];
+    try { entries = fs.readdirSync(path.dirname(lock)); } catch (_) { return; }
+    for (const name of entries) {
+      if (!name.startsWith(prefix)) continue;
+      const marker = path.join(path.dirname(lock), name);
+      try {
+        if (Date.now() - fs.statSync(marker).mtimeMs < CLAIM_LOCK_TTL_MS) continue;
+        fs.rmSync(marker, { recursive: true, force: true });
+      } catch (_) { /* raced with the claimant */ }
+    }
+  };
+  const restoreMovedLock = (dead, lock) => {
     try {
-      return atomicCreateJson(lock, candidate) ? candidate : null;
+      fs.linkSync(dead, lock);
+    } catch (error) {
+      if (!error || error.code !== 'EEXIST') throw error;
+    }
+    // If the link succeeded, or a new owner already occupies the name, the
+    // displaced inode is no longer needed in the transition marker.
+    if (fs.existsSync(lock)) releaseClaimFile(dead);
+  };
+  const acquireClaimLock = (dispatchId, purpose) => {
+    const lock = claimLockFile(dispatchId);
+    const candidate = claimLockPayload(dispatchId, purpose);
+    if (atomicCreateJson(lock, candidate)) return candidate;
+    const observed = readLockRecord(lock);
+    if (!observed || !lockIsStale(observed.value)) return null;
+    const identity = lockIdentity(observed);
+    if (!identity) return null;
+    sweepTransitionMarkers(lock);
+    const marker = `${lock}.stale-${identity}`;
+    try {
+      fs.mkdirSync(marker);
+    } catch (error) {
+      if (error && error.code === 'EEXIST') return null;
+      throw error;
+    }
+    const dead = path.join(marker, 'dead');
+    let moved = false;
+    let acquired = false;
+    try {
+      const current = readLockRecord(lock);
+      if (!current || current.raw !== observed.raw || !lockIsStale(current.value)) return null;
+      fs.renameSync(lock, dead);
+      moved = true;
+      const displaced = readLockRecord(dead);
+      if (!displaced || displaced.raw !== observed.raw) return null;
+      if (atomicCreateJson(lock, candidate)) {
+        acquired = true;
+        return candidate;
+      }
+      return null;
+    } catch (error) {
+      if (error && error.code === 'ENOENT' && !moved) return null;
+      throw error;
     } finally {
-      releaseClaimFile(retired);
+      if (moved && !acquired && fs.existsSync(dead) && !fs.existsSync(lock)) {
+        restoreMovedLock(dead, lock);
+      }
+      // A failed restore leaves the displaced inode under the marker rather
+      // than risking its deletion. Normal acquisition can still proceed at the
+      // lock path, and the marker is swept after the lock TTL.
+      if (!fs.existsSync(dead) || fs.existsSync(lock)) {
+        try { fs.rmSync(marker, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+      }
     }
   };
   const releaseClaimLock = (dispatchId, lockOwner) => {
     if (!lockOwner) return;
     const lock = claimLockFile(dispatchId);
-    const current = readJsonFile(lock);
-    if (!current || current.lock_token !== lockOwner.lock_token) return;
-    releaseClaimFile(lock);
+    const observed = readLockRecord(lock);
+    if (!observed || !observed.value || observed.value.lock_token !== lockOwner.lock_token) return;
+    sweepTransitionMarkers(lock);
+    const identity = lockIdentity(observed);
+    if (!identity) return;
+    const marker = `${lock}.stale-${identity}`;
+    try {
+      fs.mkdirSync(marker);
+    } catch (error) {
+      if (error && error.code === 'EEXIST') return;
+      throw error;
+    }
+    const dead = path.join(marker, 'dead');
+    let moved = false;
+    let released = false;
+    try {
+      const current = readLockRecord(lock);
+      if (!current || current.raw !== observed.raw
+          || !current.value || current.value.lock_token !== lockOwner.lock_token) return;
+      fs.renameSync(lock, dead);
+      moved = true;
+      const displaced = readLockRecord(dead);
+      if (!displaced || displaced.raw !== observed.raw) return;
+      releaseClaimFile(dead);
+      released = true;
+    } finally {
+      if (moved && !released && fs.existsSync(dead) && !fs.existsSync(lock)) {
+        restoreMovedLock(dead, lock);
+      }
+      if (!fs.existsSync(dead) || fs.existsSync(lock)) {
+        try { fs.rmSync(marker, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+      }
+    }
   };
   const claimFence = (claim) => claim && ({
     dispatch_id: claim.dispatch_id,
@@ -263,18 +434,32 @@ function createDurableRecorder(storeDir) {
     && (commit.claim_token === undefined || typeof commit.claim_token === 'string')
   );
   const recoverRepairCommit = (predecessorDispatchId) => {
-    const commit = readJsonFile(repairCommitFile(predecessorDispatchId));
-    if (!commit) return null;
+    const commitStored = readStored(repairCommitFile(predecessorDispatchId));
+    if (!commitStored) return null;
+    const commit = commitStored.payload;
     if (!validRepairCommit(commit, predecessorDispatchId)) {
       throw boundaryError('RECORD_FAILED', 'durable repair commit is malformed', { dispatch_id: predecessorDispatchId });
     }
     const successorRecord = recordFile(commit.successor_dispatch_id);
-    const existing = readJsonFile(successorRecord);
+    const existingStored = readStored(successorRecord);
+    const existing = existingStored && existingStored.payload;
+    const durableRecord = commitStored.authenticated
+      ? seal(commit.record_input)
+      : commit.record_input;
     if (!existing) {
-      if (!atomicCreateJson(successorRecord, commit.record_input)) {
-        const raced = readJsonFile(successorRecord);
+      if (existingStored) {
+        if (!commitStored.authenticated) {
+          throw boundaryError('RECORD_FAILED', 'durable repair commit found an invalid successor record', { dispatch_id: commit.successor_dispatch_id });
+        }
+        atomicReplaceJson(successorRecord, durableRecord);
+      } else if (!atomicCreateJson(successorRecord, durableRecord)) {
+        const racedStored = readStored(successorRecord);
+        const raced = racedStored && racedStored.payload;
         if (!raced || !sameRecord(raced, commit.record_input)) {
           throw boundaryError('RECORD_FAILED', 'durable repair commit could not recover its successor record', { dispatch_id: commit.successor_dispatch_id });
+        }
+        if (commitStored.authenticated && !racedStored.authenticated) {
+          atomicReplaceJson(successorRecord, durableRecord);
         }
       }
     } else if (!sameRecord(existing, commit.record_input)) {
@@ -285,11 +470,13 @@ function createDurableRecorder(storeDir) {
       if (!sameDispatch || committedTrace.length < existingTrace.length) {
         throw boundaryError('RECORD_FAILED', 'durable repair commit conflicts with its successor record', { dispatch_id: commit.successor_dispatch_id });
       }
-      atomicReplaceJson(successorRecord, commit.record_input);
+      atomicReplaceJson(successorRecord, durableRecord);
+    } else if (commitStored.authenticated && !existingStored.authenticated) {
+      atomicReplaceJson(successorRecord, durableRecord);
     }
     const receipt = commit.record_input.receipt;
     if (isObject(receipt) && typeof receipt.runtime === 'string' && typeof receipt.role === 'string') {
-      atomicReplaceJson(latestFile(receipt.runtime, receipt.role), commit.record_input);
+      atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
     }
     return commit;
   };
@@ -334,21 +521,28 @@ function createDurableRecorder(storeDir) {
               claim_token: claim.claim_token,
               record_input: recordInput,
             };
-            const commitCreated = atomicCreateJson(repairCommitFile(predecessorDispatchId), repairCommit);
+            const commitCreated = atomicCreateJson(repairCommitFile(predecessorDispatchId), seal(repairCommit));
             if (!commitCreated) {
-              const existingCommit = readJsonFile(repairCommitFile(predecessorDispatchId));
+              const existingCommitStored = readStored(repairCommitFile(predecessorDispatchId));
+              const existingCommit = existingCommitStored && existingCommitStored.payload;
               if (!existingCommit || !sameRecord(existingCommit, repairCommit)) return { recorded: false };
+              if (!existingCommitStored.authenticated) {
+                atomicReplaceJson(repairCommitFile(predecessorDispatchId), seal(repairCommit));
+              }
             }
           } finally {
             releaseClaimLock(predecessorDispatchId, lockOwner);
           }
         }
-        const created = atomicCreateJson(recordFile(dispatchId), recordInput);
+        const durableRecord = seal(recordInput);
+        const created = atomicCreateJson(recordFile(dispatchId), durableRecord);
         if (!created) {
-          const existing = readJsonFile(recordFile(dispatchId));
+          const existingStored = readStored(recordFile(dispatchId));
+          const existing = existingStored && existingStored.payload;
           if (!existing || !sameRecord(existing, recordInput)) return { recorded: false };
+          if (!existingStored.authenticated) atomicReplaceJson(recordFile(dispatchId), durableRecord);
         }
-        atomicReplaceJson(latestFile(receipt.runtime, receipt.role), recordInput);
+        atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable dispatch record failed: ${error.message}`, { dispatch_id: dispatchId });
       }
@@ -362,33 +556,43 @@ function createDurableRecorder(storeDir) {
         return { finalized: false };
       }
       try {
-        const existing = readJsonFile(recordFile(dispatchId));
+        const existingStored = readStored(recordFile(dispatchId));
+        const existing = existingStored && existingStored.payload;
         if (!existing || existing.dispatch_id !== dispatchId
+            || !existingStored.authenticated
             || canonicalStableStringify(existing.receipt) !== canonicalStableStringify(receipt)) {
           return { finalized: false };
         }
         const predecessorDispatchId = recordInput.predecessor_dispatch_id;
         if (predecessorDispatchId !== undefined) {
-          const repairCommit = readJsonFile(repairCommitFile(predecessorDispatchId));
-          if (!validRepairCommit(repairCommit, predecessorDispatchId)
+          const repairCommitStored = readStored(repairCommitFile(predecessorDispatchId));
+          const repairCommit = repairCommitStored && repairCommitStored.payload;
+          if (!repairCommitStored || !repairCommitStored.authenticated
+              || !validRepairCommit(repairCommit, predecessorDispatchId)
               || repairCommit.successor_dispatch_id !== dispatchId) return { finalized: false };
-          atomicReplaceJson(repairCommitFile(predecessorDispatchId), {
+          atomicReplaceJson(repairCommitFile(predecessorDispatchId), seal({
             ...repairCommit,
             record_input: recordInput,
-          });
+          }));
         }
-        atomicReplaceJson(recordFile(dispatchId), recordInput);
-        atomicReplaceJson(latestFile(receipt.runtime, receipt.role), recordInput);
+        const durableRecord = seal(recordInput);
+        atomicReplaceJson(recordFile(dispatchId), durableRecord);
+        atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
         return { finalized: true };
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable dispatch finalization failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
     getReceipt(dispatchId) {
-      return readJsonFile(recordFile(dispatchId));
+      const stored = readStored(recordFile(dispatchId));
+      return stored ? stored.payload : null;
+    },
+    getVerifiedRecord(dispatchId) {
+      return readAuthenticated(recordFile(dispatchId));
     },
     getLatestReceipt(runtime, role) {
-      return readJsonFile(latestFile(runtime, role));
+      const stored = readStored(latestFile(runtime, role));
+      return stored ? stored.payload : null;
     },
     claim(dispatchId, consumerId) {
       try {
@@ -1069,6 +1273,11 @@ function recorderRelease(recorder, dispatchId, consumerId, claimAuthority) {
 function recorderStoredRecord(recorder, dispatchId) {
   const state = sharedRecorderState(recorder);
   if (state && state.records.has(dispatchId)) return state.records.get(dispatchId);
+  const verified = recorderMethod(recorder, ['getVerifiedRecord']);
+  if (verified) {
+    const result = invokeSync(verified.fn, verified.receiver, [dispatchId], verified.name);
+    return result || null;
+  }
   const target = recorderMethod(recorder, ['getReceipt', 'readReceipt', 'getRecord', 'read']);
   if (!target) return null;
   const result = invokeSync(target.fn, target.receiver, [dispatchId], target.name);
