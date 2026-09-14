@@ -48,6 +48,31 @@ function digest(data) {
   return crypto.createHash('sha256').update(data).digest('hex');
 }
 
+function completeJsonl(data) {
+  if (!data.length || data[data.length - 1] !== 0x0a) return false;
+  const lines = data.toString('utf8').split('\n').slice(0, -1);
+  return lines.length > 0 && lines.every((line) => {
+    if (!line) return false;
+    try {
+      JSON.parse(line);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function partialPrefixBeforeCompleteLines(suffix, eventLine) {
+  const limit = Math.min(eventLine.length - 1, suffix.length);
+  for (let length = 1; length <= limit; length += 1) {
+    if (!eventLine.subarray(0, length).equals(suffix.subarray(0, length))) continue;
+    const remainder = suffix.subarray(length);
+    if (remainder[0] !== 0x7b || !completeJsonl(remainder)) continue;
+    return length;
+  }
+  return null;
+}
+
 function unlinkIfPresent(file) {
   try {
     fs.unlinkSync(file);
@@ -128,6 +153,18 @@ function recoverPendingLocked(graphDir) {
   // and inspect only the final raw byte segment for our possible partial line.
   // Buffer comparison is intentional: decoding a killed UTF-8 append can turn a
   // partial multibyte reason into U+FFFD and strand the marker forever.
+  const partialPrefixLength = partialPrefixBeforeCompleteLines(suffix, eventLine);
+  if (partialPrefixLength !== null) {
+    const preserved = Buffer.concat([
+      current.data.subarray(0, marker.journal_offset),
+      suffix.subarray(partialPrefixLength),
+    ]);
+    if (preserved.length > 0 || marker.journal_exists) writeAtomic(journal, preserved);
+    else unlinkIfPresent(journal);
+    restoreStoreSnapshot(graphDir, marker);
+    unlinkIfPresent(markerFile);
+    return;
+  }
   const lastNewline = suffix.lastIndexOf(0x0a);
   const tail = suffix.subarray(lastNewline + 1);
   if (tail.length === 0) {

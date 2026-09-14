@@ -287,6 +287,29 @@ test('recovery truncates only a partial UTF-8 override append', () => {
   assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
 });
 
+test('recovery removes a partial override prefix before an intervening complete append', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'оператор явно вибрав', '--graph', graph,
+  ], { cwd: project });
+  const afterStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  const eventBytes = Buffer.from(eventLine);
+  const cut = eventBytes.indexOf(Buffer.from('оператор')) + 1;
+  const partial = eventBytes.subarray(0, cut);
+  const intervening = Buffer.from('{"event":"status_change","ticket":"T-02"}\n');
+  stagePendingOverride(graph, beforeStore, afterStore, eventLine, Buffer.alloc(0),
+    Buffer.concat([partial, intervening]));
+  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
+  assert.strictEqual(stored(graph).tickets['T-01'].override, undefined);
+  assert.ok(stored(graph).tickets['T-02']);
+  assert.strictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8'),
+    intervening.toString());
+  assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
+});
+
 test('tracker-record rejects extra positional arguments instead of ignoring them', () => {
   const { project, graph } = scratch();
   const r = spawnSync('node', [
