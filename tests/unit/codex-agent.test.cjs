@@ -10,7 +10,9 @@ const ROOT = path.join(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'plugins/delivery-pipeline/scripts/codex-agent.cjs');
 const { selectAgent, parseArgs, signalsFrom, projectDirFrom } = require(SCRIPT);
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-const { createCodexRemapper, readProjectConfig } = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
+const {
+  createCodexRemapper, readProjectConfig, validateCodexConfiguration,
+} = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
 
 const capabilities = {
   supportedModels: ['gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-astra'],
@@ -110,11 +112,8 @@ for (const raw of [
   { pipeline: { models: { executor: 'gpt-5.6-terra' } } },
   { delivery_pipeline: { effort: { executor: 'high' } } },
   { model_overrides: { 'gsd-executor': 'gpt-5.6-terra' } },
-  { model_policy: { runtime_tiers: { codex: { luna: 'gpt-6-astra' } } } },
-  { model_profile_overrides: { codex: { sonnet: 'gpt-5.6-luna' } } },
   { model_policy: { runtime_tiers: { codex: { luna: { model: 'gpt-5.6-luna', effort: 'medium' } } } } },
   { delivery_pipeline: { codex_models: [] } },
-  { delivery_pipeline: { codex_models: [{ model: 'gpt-5.6-terra' }] } },
   { delivery_pipeline: { codex_models: [{ model: 'gpt-5.6-luna', effort: 'high' }] } },
 ]) {
   test('configuration conflicts are not normalized away: ' + JSON.stringify(raw), () => {
@@ -124,6 +123,63 @@ for (const raw of [
     } finally { clean(f); }
   });
 }
+
+test('an effective GSD remap survives selection and keeps the canonical effort', () => {
+  const model = 'vendor/codex-sonnet-v2';
+  const f = fixture({
+    model_policy: { runtime_tiers: { codex: { sonnet: model } } },
+    delivery_pipeline: { codex_models: [{ model, effort: 'high' }] },
+  });
+  try {
+    const result = selectAgent('decomposition', {
+      ...f.options,
+      capabilities: {
+        ...capabilities,
+        supportedModels: [...capabilities.supportedModels, model],
+        supportedEfforts: ['medium'],
+      },
+    });
+    assert.equal(result.model, model);
+    assert.equal(result.requested_model, model);
+    assert.equal(result.model_source, 'gsd-remap');
+    assert.equal(result.remap_key, 'sonnet');
+    assert.equal(result.effort, 'medium');
+    assert.deepEqual(result.launch_arguments, { model, reasoning_effort: 'medium' });
+  } finally { clean(f); }
+});
+
+test('an effective remap is refused when the host does not advertise its model', () => {
+  const model = 'vendor/codex-not-installed';
+  const f = fixture({ model_policy: { runtime_tiers: { codex: { sonnet: model } } } });
+  try {
+    assert.throws(() => selectAgent('executor', f.options), (error) =>
+      error.code === 'UNSUPPORTED_SELECTION' && /supportedModels.*vendor\/codex-not-installed/.test(error.message));
+  } finally { clean(f); }
+});
+
+test('a static remap refuses instead of bypassing generated-file evidence', () => {
+  const model = 'vendor/codex-static-remap';
+  const f = fixture({ model_policy: { runtime_tiers: { codex: { sonnet: model } } } });
+  try {
+    assert.throws(() => selectAgent('research', {
+      ...f.options,
+      capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
+    }), (error) => error.code === 'CONFLICTING_OVERRIDE' && /static Codex selections/.test(error.message));
+  } finally { clean(f); }
+});
+
+test('a configured effort above the canonical effort is accepted but the host receives canonical effort', () => {
+  const f = fixture({ delivery_pipeline: { codex_models: [
+    { model: 'gpt-5.6-sol', effort: 'high' },
+  ] } });
+  try {
+    const resolution = policy.resolveDispatch({ runtime: 'codex', role: 'decomposition' });
+    assert.equal(validateCodexConfiguration(resolution, readProjectConfig(f.root), capabilities), true);
+    const result = selectAgent('decomposition', f.options);
+    assert.equal(result.effort, 'medium');
+    assert.deepEqual(result.launch_arguments, { model: 'gpt-5.6-sol', reasoning_effort: 'medium' });
+  } finally { clean(f); }
+});
 
 test('matching named configuration is an assertion, independent of palette order', () => {
   const f = fixture({
@@ -214,15 +270,18 @@ test('malformed project config does not fall through to defaults or the GSD cata
   } finally { clean(f); }
 });
 
-test('named remapper exposes exactly the canonical palette without loading GSD', () => {
+test('named remapper returns configured arbitrary ids without loading GSD', () => {
   const f = fixture();
   try {
-    const remap = createCodexRemapper({ cwd: f.root, codexHome: '/nonexistent-gsd' });
-    assert.equal(remap('terra'), 'gpt-5.6-terra');
-    assert.equal(remap('sol'), 'gpt-5.6-sol');
-    assert.equal(remap('luna'), 'gpt-5.6-luna');
-    assert.equal(remap('astra'), 'gpt-6-astra');
-    for (const key of ['sonnet', 'unknown', '', undefined]) assert.throws(() => remap(key), /unknown named Codex model/);
+    const remap = createCodexRemapper({
+      cwd: f.root,
+      codexHome: '/nonexistent-gsd',
+      config: { model_policy: { runtime_tiers: { codex: { sonnet: 'vendor/model@2026' } } } },
+    });
+    assert.equal(remap('sonnet'), 'vendor/model@2026');
+    assert.equal(remap('unknown'), null);
+    assert.equal(remap(''), null);
+    assert.equal(remap(undefined), null);
   } finally { clean(f); }
 });
 

@@ -21,6 +21,42 @@ function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+// A selector may carry an operator remap alongside the immutable ADR-014
+// resolution. Keep the canonical view available when the selection is passed
+// through JSON, where the non-enumerable in-process reference is lost.
+function canonicalView(resolution) {
+  if (!object(resolution)) return resolution;
+  if (object(resolution.canonical_resolution)) return resolution.canonical_resolution;
+  if (typeof resolution.canonical_model === 'string'
+      && typeof resolution.effective_model === 'string'
+      && resolution.model === resolution.effective_model
+      && resolution.model !== resolution.canonical_model) {
+    const candidate = { ...resolution, model: resolution.canonical_model, requested_model: resolution.canonical_model };
+    if (object(candidate.launch_arguments) && (candidate.agent_file === null || candidate.agent_file === undefined)) {
+      candidate.launch_arguments = { ...candidate.launch_arguments, model: resolution.canonical_model };
+    }
+    return candidate;
+  }
+  return resolution;
+}
+
+function effectiveModelFor(resolution, canonical) {
+  const explicit = resolution && resolution.effective_model;
+  const model = explicit === undefined
+    ? (resolution && resolution.model !== canonical.model ? resolution.model : canonical.model)
+    : explicit;
+  if (typeof model !== 'string' || !model.trim()) {
+    refuse('CONFLICTING_OVERRIDE', 'effective Codex model must be a non-empty model id');
+  }
+  if (explicit !== undefined && resolution.model !== canonical.model && resolution.model !== explicit) {
+    refuse('CONFLICTING_OVERRIDE', 'effective Codex selection disagrees with its model');
+  }
+  if (canonical.agent_file && model !== canonical.model) {
+    refuse('CONFLICTING_OVERRIDE', 'static Codex selections cannot use an effective model remap');
+  }
+  return model.trim();
+}
+
 // Deliberately accept the generator's flat TOML subset, not arbitrary TOML.
 // In particular, model-looking text in instructions or a table is not evidence.
 function readGeneratedSelection(content) {
@@ -64,18 +100,20 @@ function readGeneratedSelection(content) {
   return { fields, comments };
 }
 
-function validateAvailability(resolution, capabilities) {
-  policy.validateResolution(resolution);
-  if (resolution.runtime !== 'codex') refuse('UNSUPPORTED_SELECTION', 'Codex adapter requires runtime codex');
+function validateAvailability(resolution, capabilities, canonicalOverride) {
+  const canonical = canonicalOverride || canonicalView(resolution);
+  policy.validateResolution(canonical);
+  if (canonical.runtime !== 'codex') refuse('UNSUPPORTED_SELECTION', 'Codex adapter requires runtime codex');
   if (!object(capabilities)) refuse('UNSUPPORTED_SELECTION', 'missing Codex host capabilities');
-  for (const [key, value] of [['supportedModels', resolution.model], ['supportedEfforts', resolution.effort]]) {
+  const model = effectiveModelFor(resolution, canonical);
+  for (const [key, value] of [['supportedModels', model], ['supportedEfforts', canonical.effort]]) {
     if (!Array.isArray(capabilities[key]) || !capabilities[key].includes(value)) {
       refuse('UNSUPPORTED_SELECTION', 'host ' + key + ' does not explicitly support ' + value);
     }
   }
   if (capabilities.supportedSelections !== undefined
       && (!Array.isArray(capabilities.supportedSelections)
-        || !capabilities.supportedSelections.some((entry) => object(entry) && entry.model === resolution.model && entry.effort === resolution.effort))) {
+        || !capabilities.supportedSelections.some((entry) => object(entry) && entry.model === model && entry.effort === canonical.effort))) {
     refuse('UNSUPPORTED_SELECTION', 'host does not support the required model/effort pair');
   }
   return true;
@@ -99,13 +137,27 @@ function createCodexDispatchAdapter(options = {}) {
     // snapshot loses the predecessor receipt's object-identity capability.
     // Retain only evidence already accepted by canonical validation, and reuse
     // that identity only for an otherwise byte-equivalent dispatch resolution.
-    const previous = validatedRepairs.get(resolution && resolution.dispatch_id);
-    let candidate = resolution;
+    const view = canonicalView(resolution);
+    if (object(resolution?.canonical_resolution)) {
+      for (const field of [
+        'policy_version', 'policy_hash', 'runtime', 'role', 'model_key', 'logical_model',
+        'logical_rung', 'rung', 'rung_index', 'effort', 'requested_effort', 'route',
+        'backend', 'mechanism', 'signals_fired', 'signal_reasons', 'selected_signals',
+        'signals', 'agent_file', 'dispatch_id',
+      ]) {
+        if (resolution[field] !== undefined
+            && policy.stableStringify(resolution[field]) !== policy.stableStringify(view[field])) {
+          refuse('INVALID_RESOLUTION', 'effective Codex selection changed canonical ' + field);
+        }
+      }
+    }
+    const previous = validatedRepairs.get(view && view.dispatch_id);
+    let candidate = view;
     if (previous) {
-      const { agent_file_digest: ignored, ...withoutDigest } = resolution;
+      const { agent_file_digest: ignored, ...withoutDigest } = view;
       const { agent_file_digest: previousDigest, ...previousWithoutDigest } = previous;
       if (policy.stableStringify(withoutDigest) === policy.stableStringify(previousWithoutDigest)) {
-        candidate = { ...resolution, signals: previous.signals };
+        candidate = { ...view, signals: previous.signals };
       }
     }
     policy.validateResolution(candidate);
@@ -116,8 +168,8 @@ function createCodexDispatchAdapter(options = {}) {
   }
 
   function validateGeneratedAgent(resolution) {
-    canonicalResolution(resolution);
-    if (resolution.runtime !== 'codex' || !resolution.agent_file || !agentsDir) {
+    const canonical = canonicalResolution(resolution);
+    if (canonical.runtime !== 'codex' || !canonical.agent_file || !agentsDir) {
       refuse('STALE_GENERATED_AGENT', 'static Codex launch requires its exact agents directory and file');
     }
     if (typeof agentManifest !== 'string' || !agentManifest.trim()) refuse('STALE_GENERATED_AGENT', 'missing generated manifest path');
@@ -125,34 +177,34 @@ function createCodexDispatchAdapter(options = {}) {
     try { manifest = JSON.parse(fs.readFileSync(agentManifest, 'utf8')); }
     catch (error) { refuse('STALE_GENERATED_AGENT', 'cannot read generated manifest: ' + error.message); }
     if (!object(manifest) || manifest.policy_id !== policy.POLICY.id
-        || manifest.policy_version !== resolution.policy_version || manifest.policy_hash !== resolution.policy_hash
+        || manifest.policy_version !== canonical.policy_version || manifest.policy_hash !== canonical.policy_hash
         || !object(manifest.agent_digests) || !Array.isArray(manifest.agent_files)
-        || manifest.agent_files.filter((file) => file === resolution.agent_file).length !== 1
-        || !/^[a-f0-9]{64}$/.test(manifest.agent_digests[resolution.agent_file] || '')) {
+        || manifest.agent_files.filter((file) => file === canonical.agent_file).length !== 1
+        || !/^[a-f0-9]{64}$/.test(manifest.agent_digests[canonical.agent_file] || '')) {
       refuse('STALE_GENERATED_AGENT', 'generated manifest lacks the exact file, digest, or current policy identity');
     }
     let content;
     try {
-      const file = path.join(agentsDir, resolution.agent_file);
+      const file = path.join(agentsDir, canonical.agent_file);
       const relative = path.relative(fs.realpathSync(agentsDir), fs.realpathSync(file));
       if (relative.startsWith('..') || path.isAbsolute(relative)) refuse('STALE_GENERATED_AGENT', 'generated file escapes agents directory');
       content = fs.readFileSync(file, 'utf8');
     } catch (error) { refuse('STALE_GENERATED_AGENT', 'cannot read exact generated file: ' + error.message); }
     const parsed = readGeneratedSelection(content);
     const expectedComments = {
-      id: policy.POLICY.id, version: resolution.policy_version, hash: resolution.policy_hash,
-      runtime: 'codex', role: resolution.role, rung: resolution.rung,
+      id: policy.POLICY.id, version: canonical.policy_version, hash: canonical.policy_hash,
+      runtime: 'codex', role: canonical.role, rung: canonical.rung,
     };
     for (const [key, value] of Object.entries(expectedComments)) {
       if (parsed.comments[key] !== value) refuse('STALE_GENERATED_AGENT', 'generated policy ' + key + ' is missing or stale');
     }
-    if (parsed.fields.name !== resolution.agent_file.replace(/\.toml$/, '')
-        || parsed.fields.model !== resolution.model || parsed.fields.model_reasoning_effort !== resolution.effort
-        || digest(content) !== manifest.agent_digests[resolution.agent_file]) {
+    if (parsed.fields.name !== canonical.agent_file.replace(/\.toml$/, '')
+        || parsed.fields.model !== canonical.model || parsed.fields.model_reasoning_effort !== canonical.effort
+        || digest(content) !== manifest.agent_digests[canonical.agent_file]) {
       refuse('STALE_GENERATED_AGENT', 'generated file selection or content disagrees with policy/manifest');
     }
     // Reuse the authoritative boundary's identity/digest evidence contract.
-    const evidence = generatedAgentEvidence(resolution, { agentsDir, agentManifest });
+    const evidence = generatedAgentEvidence(canonical, { agentsDir, agentManifest });
     if (!evidence || evidence.agent_file_digest !== digest(content)) {
       refuse('STALE_GENERATED_AGENT', 'generated file changed during validation');
     }
@@ -160,8 +212,9 @@ function createCodexDispatchAdapter(options = {}) {
   }
 
   function validate(resolution) {
-    validateAvailability(canonicalResolution(resolution), capabilities);
-    if (resolution.agent_file) validateGeneratedAgent(resolution);
+    const canonical = canonicalResolution(resolution);
+    validateAvailability(resolution, capabilities, canonical);
+    if (canonical.agent_file) validateGeneratedAgent(canonical);
     return true;
   }
 
@@ -191,7 +244,7 @@ function createCodexDispatchAdapter(options = {}) {
     return Object.freeze({
       receipt_type: 'adr-014.application', runtime: 'codex', role: resolution.role,
       dispatch_id: resolution.dispatch_id, launch_id: applied.launch_id,
-      requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
+      requested_model: selection.model, requested_effort: selection.reasoning_effort,
       applied_model: applied.applied_model, applied_effort: applied.applied_effort,
       ...observations, policy_hash: resolution.policy_hash,
       backend: resolution.backend, mechanism: resolution.mechanism,
@@ -200,29 +253,31 @@ function createCodexDispatchAdapter(options = {}) {
   }
 
   function launch(resolution, context = {}, handoff) {
-    policy.validateResolution(canonicalResolution(resolution), { requireDispatchId: true });
+    const canonical = canonicalResolution(resolution);
+    policy.validateResolution(canonical, { requireDispatchId: true });
     validate(resolution);
     if (!object(context)) refuse('INVALID_INPUT', 'launch context must be an object');
+    const effectiveModel = effectiveModelFor(resolution, canonical);
     for (const source of [context, context.launch_arguments, context.selection, context.session]) {
       if (source === undefined) continue;
       if (!object(source)) refuse('CONFLICTING_OVERRIDE', 'launch selection overrides must be objects');
       for (const [field, expected] of [
-        ['model', resolution.model], ['requested_model', resolution.model], ['applied_model', resolution.model],
-        ['effort', resolution.effort], ['reasoning_effort', resolution.effort],
-        ['model_reasoning_effort', resolution.effort], ['agent_file', resolution.agent_file],
+        ['model', effectiveModel], ['requested_model', effectiveModel], ['applied_model', effectiveModel],
+        ['effort', canonical.effort], ['reasoning_effort', canonical.effort],
+        ['model_reasoning_effort', canonical.effort], ['agent_file', canonical.agent_file],
       ]) {
         if (source[field] !== undefined && source[field] !== expected) refuse('CONFLICTING_OVERRIDE', 'launch context contradicts resolved ' + field);
       }
       if (source.inherit || source.inline || source.session_inherited) refuse('UNSUPPORTED_SELECTION', 'launch context requests inherited or inline selection');
     }
-    const staticRole = Boolean(resolution.agent_file);
+    const staticRole = Boolean(canonical.agent_file);
     const method = staticRole ? launchStatic : launchDynamic;
     if (typeof method !== 'function') refuse('MISSING_ADAPTER', 'host lacks the required explicit ' + (staticRole ? 'static' : 'dynamic') + ' launch method');
     let selection;
     if (staticRole) {
-      const current = validateGeneratedAgent(resolution);
-      if (!handoff || handoff.agent_file !== resolution.agent_file
-          || handoff.agent_file_digest !== resolution.agent_file_digest
+      const current = validateGeneratedAgent(canonical);
+      if (!handoff || handoff.agent_file !== canonical.agent_file
+          || handoff.agent_file_digest !== canonical.agent_file_digest
           || handoff.agent_file_digest !== current.agent_file_digest
           || typeof handoff.agent_file_content !== 'string'
           || digest(handoff.agent_file_content) !== handoff.agent_file_digest) {
@@ -236,27 +291,27 @@ function createCodexDispatchAdapter(options = {}) {
       };
     } else {
       if (handoff !== undefined) refuse('UNSUPPORTED_SELECTION', 'dynamic launch cannot use a static handoff');
-      selection = { model: resolution.launch_arguments.model, reasoning_effort: resolution.launch_arguments.reasoning_effort };
+      selection = { model: effectiveModel, reasoning_effort: canonical.effort };
     }
     Object.freeze(selection);
-    validatedRepairs.delete(resolution.dispatch_id);
+    validatedRepairs.delete(canonical.dispatch_id);
     const result = method.call(host, selection, context);
     return result && typeof result.then === 'function'
-      ? result.then((applied) => applicationReceipt(resolution, applied, selection))
-      : applicationReceipt(resolution, result, selection);
+      ? result.then((applied) => applicationReceipt(canonical, applied, selection))
+      : applicationReceipt(canonical, result, selection);
   }
 
   return Object.freeze({
     runtime: 'codex', models: CODEX_MODEL_IDS,
     capabilities: Object.freeze({ observedModel: capabilities.observedModel !== false, observedEffort: capabilities.observedEffort !== false }),
-    supports: (resolution) => validateAvailability(canonicalResolution(resolution), capabilities),
+    supports: (resolution) => validateAvailability(resolution, capabilities),
     validate, validateGeneratedAgent,
     launch: (resolution, context) => {
-      if (resolution.agent_file) refuse('UNSUPPORTED_SELECTION', 'static role must use launchStatic');
+      if (canonicalView(resolution).agent_file) refuse('UNSUPPORTED_SELECTION', 'static role must use launchStatic');
       return launch(resolution, context);
     },
     launchStatic: (resolution, context, handoff) => {
-      if (!resolution.agent_file) refuse('UNSUPPORTED_SELECTION', 'dynamic role must use explicit launch arguments');
+      if (!canonicalView(resolution).agent_file) refuse('UNSUPPORTED_SELECTION', 'dynamic role must use explicit launch arguments');
       return launch(resolution, context, handoff);
     },
   });

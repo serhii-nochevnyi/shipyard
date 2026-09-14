@@ -11,10 +11,14 @@ const pc = require('./pipeline-config.cjs');
 const boundary = require('./dispatch-boundary.cjs');
 const policy = require('./model-policy.cjs');
 const { createCodexDispatchAdapter, REPAIR } = require('./codex-dispatch-adapter.cjs');
-const { readProjectConfig, validateCodexConfiguration } = require('./codex-model-remap.cjs');
+const { createCodexRemapper, readProjectConfig, validateCodexConfiguration } = require('./codex-model-remap.cjs');
 
 const ROLE_ALIASES = Object.freeze({ 'inv-research': 'research' });
 const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json> (supportedModels and supportedEfforts)';
+// The GSD compatibility tier that the Codex selector historically passed to
+// its remapper. The ADR-014 resolver owns the concrete rung; this alias only
+// identifies which operator remap is effective for a dynamic Codex launch.
+const CODEX_GSD_REMAP_TIER = 'sonnet';
 
 function fail(message, code = 'INVALID_INPUT') {
   throw policy.policyError(code, message + '. ' + REPAIR);
@@ -97,12 +101,11 @@ function capabilitiesFrom(options, flags) {
 function configForCodexResolution(config) {
   const original = config.dispatch_context.configuration;
   const configuration = { ...original };
-  // The bridge treats these named entries as per-rung launch overrides. They
-  // are assertions about the canonical palette instead, so remove only these
-  // two namespaces from the bridge input and validate the raw project config
-  // separately below. This keeps matching lower-precedence assertions from
-  // changing an otherwise canonical rung, while contradictory values still
-  // fail strict validation.
+  // The bridge treats these named entries as per-rung launch overrides. Resolve
+  // the ADR-014 rung first, then apply the effective Codex remap below; keep
+  // the raw namespaces out of the bridge input so an operator model id cannot
+  // be mistaken for a canonical policy model. The raw values are still
+  // validated separately, including contradictions and host availability.
   const modelPolicy = configuration.model_policy;
   if (isObject(modelPolicy) && isObject(modelPolicy.runtime_tiers)) {
     const runtimeTiers = { ...modelPolicy.runtime_tiers };
@@ -120,6 +123,47 @@ function configForCodexResolution(config) {
   };
 }
 
+function remapKeysForResolution(resolution) {
+  // Static files cannot be rewritten at dispatch time. Still inspect the
+  // shared GSD tier for them so an effective custom remap is refused rather
+  // than silently ignored behind a canonical generated artifact.
+  const keys = [CODEX_GSD_REMAP_TIER];
+  if (typeof resolution.model_key === 'string') keys.push(resolution.model_key);
+  return [...new Set(keys)];
+}
+
+function effectiveRemapFor(resolution, config) {
+  const remapFor = createCodexRemapper({ config });
+  const keys = remapKeysForResolution(resolution);
+  for (const key of keys) {
+    const model = remapFor(key);
+    if (model) return { model, key, keys };
+  }
+  return { model: resolution.model, key: null, keys };
+}
+
+function selectionWithEffectiveRemap(selection, effective) {
+  if (!effective || effective.model === selection.model) return selection;
+  if (!policy.DYNAMIC_ROLES.includes(selection.role)) {
+    fail('static Codex selections cannot use an effective model remap', 'CONFLICTING_OVERRIDE');
+  }
+  const result = {
+    ...selection,
+    model: effective.model,
+    requested_model: effective.model,
+    launch_arguments: { ...selection.launch_arguments, model: effective.model },
+    canonical_model: selection.model,
+    effective_model: effective.model,
+    model_source: 'gsd-remap',
+    remap_key: effective.key,
+  };
+  // Keep a non-enumerable canonical reference for in-process callers. The
+  // adapter can reconstruct the same view from canonical_model/effective_model
+  // after a JSON round trip.
+  Object.defineProperty(result, 'canonical_resolution', { value: selection });
+  return Object.freeze(result);
+}
+
 function selectAgentInternal(role, options) {
   const cwd = path.resolve(options.cwd || process.cwd());
   const flags = options.flags || new Map();
@@ -133,16 +177,24 @@ function selectAgentInternal(role, options) {
     role: ROLE_ALIASES[role] || role, signals: options.signals || {},
     dispatch_id: options.dispatch_id === undefined ? boundary.newDispatchId() : options.dispatch_id,
   });
-  validateCodexConfiguration(resolution, readProjectConfig(cwd, loaded.file), capabilities);
+  const projectConfig = readProjectConfig(cwd, loaded.file);
+  const effective = effectiveRemapFor(resolution, projectConfig);
+  validateCodexConfiguration(resolution, projectConfig, capabilities, {
+    remapKeys: effective.keys,
+    effectiveModel: effective.model,
+  });
   const agentsDir = path.resolve(options.agentDir || agentDirFrom(flags, env));
   const adapter = createCodexDispatchAdapter({ agentsDir, agentManifest: options.agentManifest, capabilities });
-  boundary.validateDispatch(resolution, { adapters: { codex: adapter } });
+  const adapterResolution = effective.model === resolution.model
+    ? resolution : { ...resolution, effective_model: effective.model };
+  boundary.validateDispatch(adapterResolution, { adapters: { codex: adapter } });
   const evidence = resolution.agent_file ? adapter.validateGeneratedAgent(resolution) : null;
-  return Object.freeze({
+  const selected = selectionWithEffectiveRemap({
     ...resolution, project_dir: cwd,
     agent_path: resolution.agent_file ? path.join(agentsDir, resolution.agent_file) : null,
     ...(evidence ? { agent_file_digest: evidence.agent_file_digest } : {}),
-  });
+  }, effective);
+  return Object.isFrozen(selected) ? selected : Object.freeze(selected);
 }
 
 function selectAgent(role, options = {}) {

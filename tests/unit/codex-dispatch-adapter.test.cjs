@@ -191,6 +191,36 @@ test('unavailable model, effort or pair never selects a lower tuple', () => {
   }
 });
 
+test('a dynamic remap uses the advertised concrete model and canonical effort', () => {
+  const model = 'vendor/codex-runtime-model';
+  const f = setup({
+    capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
+  });
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
+    const selected = { ...resolution, effective_model: model };
+    const result = f.adapter.launch(selected);
+    assert.equal(f.calls.at(-1).model, model);
+    assert.equal(f.calls.at(-1).reasoning_effort, 'medium');
+    assert.equal(result.requested_model, model);
+    assert.equal(result.requested_effort, 'medium');
+    assert.equal(result.applied_model, model);
+    assert.equal(result.applied_effort, 'medium');
+  } finally { clean(f); }
+});
+
+test('static generated evidence cannot be bypassed by an effective remap', () => {
+  const model = 'vendor/codex-static-model';
+  const f = setup({
+    capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
+  });
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'research' });
+    assert.throws(() => f.adapter.validate({ ...resolution, effective_model: model }),
+      (error) => error.code === 'CONFLICTING_OVERRIDE' && /static Codex selections/.test(error.message));
+  } finally { clean(f); }
+});
+
 test('missing native launch method refuses without any ordinary-agent fallback', () => {
   const f = setup({ host: { launch: undefined } });
   try {
