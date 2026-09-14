@@ -305,11 +305,56 @@ const PARKED_RENDER_ONLY = '--parked applies to THIS RENDER ONLY — nothing was
   + 'The durable board the stop gate enforces on is written by `state-sync.cjs --parked <ids>`; '
   + 'pass the same ids there, or the next round re-offers these tickets.';
 
+// ── the tracker holding gate ────────────────────────────────────────────────
+//
+// The front does not read Jira and does not read the tracker cache itself. The
+// caller supplies both facts: the configured status-name list and the active
+// generation's records. This keeps computeFront pure while giving every front
+// writer one transition rule.
+function trackerPolicyEnabled(value) {
+  if (typeof value === 'string') return value.split(',').some((s) => s.trim());
+  return Array.isArray(value) && value.some((s) => typeof s === 'string' && s.trim());
+}
+
+function trackerJiraKey(ticket) {
+  const t = ticket || {};
+  const delivery = t.delivery && typeof t.delivery === 'object' ? t.delivery : {};
+  const candidates = [
+    t.jira_key, t.jiraKey, t.jira,
+    delivery.jira_key, delivery.jiraKey, delivery.jira,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      for (const key of ['key', 'issueKey', 'jira_key', 'id']) {
+        if (typeof candidate[key] === 'string' && candidate[key].trim()) return candidate[key].trim();
+      }
+    }
+  }
+  return null;
+}
+
+function trackerBlockedWhy(id, jiraKey, record) {
+  const remedy = `name this exact ticket (${id}) explicitly to bypass the tracker gate; set scopes do not bypass it`;
+  if (!jiraKey) return `tracker eligibility has no Jira key for ${id} — ${remedy}`;
+  if (!record) return `tracker eligibility has no current-generation observation for ${jiraKey} — read it at cold start, or ${remedy}`;
+  if (record.jira_key !== jiraKey) {
+    return `tracker eligibility record for ${id} is bound to ${record.jira_key || 'no Jira key'}, not ${jiraKey} — re-read it, or ${remedy}`;
+  }
+  const fact = record.reason || `tracker verdict is ${record.verdict || 'unknown'} for ${jiraKey}`;
+  return `${fact}; ${remedy}`;
+}
+
 // Facts GitHub cannot know. `parked` is the session-scoped channel — a judgement
 // made mid-run that has no home on disk yet; a front that keeps re-offering an
 // escalated PR is an infinite babysit loop, so the caller passes those ids in.
 function computeFront(tickets, state, opts = {}) {
   const parkedIds = new Set(opts.parked || []);
+  // The aliases keep the pure API readable for callers while accepting the
+  // snake_case shape used by the durable store and config vocabulary.
+  const trackerStatuses = opts.trackerStatuses || opts.jiraTodoStatuses || opts.jira_todo_statuses || [];
+  const trackerRecords = opts.trackerRecords || opts.tracker_records || {};
+  const trackerEnabled = trackerPolicyEnabled(trackerStatuses);
   // A drift verdict is a fact about the PLAN, not about a session, so unlike
   // `parked` it has to outlive the run that discovered it. Without that the front
   // re-offers the ticket as executable on every single run: two tickets confirmed
@@ -760,8 +805,20 @@ function computeFront(tickets, state, opts = {}) {
 
     // pending
     if (s.ready) {
-      actionable.execute.push(id);
-      why[id] = 'ready — worktree + executor';
+      if (trackerEnabled) {
+        const jiraKey = trackerJiraKey(t);
+        const record = trackerRecords && typeof trackerRecords === 'object' ? trackerRecords[id] : null;
+        if (record && record.verdict === 'eligible' && jiraKey && record.jira_key === jiraKey) {
+          actionable.execute.push(id);
+          why[id] = `ready — tracker ${jiraKey} is eligible; worktree + executor`;
+        } else {
+          parked.blocked.push(id);
+          why[id] = trackerBlockedWhy(id, jiraKey, record);
+        }
+      } else {
+        actionable.execute.push(id);
+        why[id] = 'ready — worktree + executor';
+      }
     } else {
       parked.blocked.push(id);
       why[id] = blockedWhy(s);
@@ -1541,6 +1598,7 @@ module.exports = {
   // board must never offer what the guard refuses, and two texts for one rule is
   // how they came to disagree in the first place.
   reviewStandsAlone, REVIEW_STANDS_WHY, baseMoved, baseMergeWhy, PARKED_RENDER_ONLY,
+  trackerPolicyEnabled, trackerJiraKey, trackerBlockedWhy,
   // The cap's counting unit, exported so the test can hold it against
   // `pipeline-config.cjs`'s ROLES: a role with no cardinality would be counted
   // by the fallback and nothing would say so.

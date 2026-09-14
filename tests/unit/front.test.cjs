@@ -58,6 +58,84 @@ test('a ready pending ticket is executable work', () => {
   assert.strictEqual(f.fixpoint, false);
 });
 
+suite('front — tracker eligibility gates only the pending → execute transition');
+
+const trackerTicket = (jira = 'MYD-1') => (jira ? { jira } : {});
+const eligibleTracker = (jira = 'MYD-1') => ({
+  jira_key: jira,
+  verdict: 'eligible',
+  reason: `tracker status "To Do" is configured and the ticket is unassigned`,
+});
+
+test('an eligible current record allows a ready pending ticket to execute', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: ['To Do'], trackerRecords: { T: eligibleTracker() } }
+  );
+  assert.deepStrictEqual(f.actionable.execute, ['T']);
+  assert.deepStrictEqual(f.parked.blocked, []);
+});
+
+test('ineligible, unknown, and missing records are blocked with the direct-ticket remedy', () => {
+  const cases = [
+    ['ineligible', { jira_key: 'MYD-1', verdict: 'ineligible', reason: 'assigned to user-5' }, /assigned to user-5/],
+    ['unknown', { jira_key: 'MYD-1', verdict: 'unknown', reason: 'Jira API timed out' }, /Jira API timed out/],
+    ['missing', undefined, /no current-generation observation/],
+  ];
+  for (const [label, record, expected] of cases) {
+    const f = computeFront(
+      { T: trackerTicket() },
+      { T: { status: 'pending', ready: true } },
+      { jira_todo_statuses: ['To Do'], trackerRecords: record ? { T: record } : {} }
+    );
+    assert.deepStrictEqual(f.actionable.execute, [], label);
+    assert.deepStrictEqual(f.parked.blocked, ['T'], label);
+    assert.match(f.why.T, expected, label);
+    assert.match(f.why.T, /name this exact ticket/, label);
+  }
+});
+
+test('missing Jira key and a key-mismatched record fail closed', () => {
+  const missing = computeFront(
+    { T: trackerTicket(null) },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: ['To Do'], trackerRecords: { T: eligibleTracker() } }
+  );
+  assert.deepStrictEqual(missing.actionable.execute, []);
+  assert.match(missing.why.T, /no Jira key/);
+
+  const mismatched = computeFront(
+    { T: trackerTicket('MYD-2') },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: ['To Do'], trackerRecords: { T: eligibleTracker('MYD-1') } }
+  );
+  assert.deepStrictEqual(mismatched.actionable.execute, []);
+  assert.match(mismatched.why.T, /bound to MYD-1, not MYD-2/);
+});
+
+test('an empty policy preserves the pre-gate result without inspecting tracker data', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: [], trackerRecords: null }
+  );
+  assert.deepStrictEqual(f.actionable.execute, ['T']);
+});
+
+test('branched and PR-open work remains deliverable regardless of tracker state', () => {
+  const f = computeFront(
+    { B: trackerTicket(), P: trackerTicket() },
+    {
+      B: { status: 'branched', ready: true },
+      P: { status: 'pr-open', pr: 7, draft: true, checks: checks() },
+    },
+    { jira_todo_statuses: ['To Do'], trackerRecords: {} }
+  );
+  assert.deepStrictEqual(f.actionable.publish, ['B']);
+  assert.deepStrictEqual(f.actionable.finalize, ['P']);
+});
+
 test('a branched ticket with no PR is publish work, not a curiosity', () => {
   const f = computeFront({ 'T-01-02': {} }, { 'T-01-02': { status: 'branched', ready: true, needs_pr: true } });
   assert.deepStrictEqual(f.actionable.publish, ['T-01-02']);
