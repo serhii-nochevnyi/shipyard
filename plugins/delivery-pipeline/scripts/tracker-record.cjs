@@ -217,41 +217,48 @@ function readConfigStatuses(projectRoot) {
 function writeRecord(graphDir, ticket, record) {
   if (!hasGraph(graphDir)) throw new Error(`no ticket graph at ${graphDir}`);
   fs.mkdirSync(graphDir, { recursive: true });
-  return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
-    // Bind the observation while holding the same lock as state-sync. A read
-    // that queued behind a publish must use one coherent generation/identity
-    // pair, otherwise the next active-reader pass can drop the record.
-    const boundRecord = {
-      ...record,
-      generation: requireGeneration(graphDir),
-      generation_identity: requireMetadataIdentity(graphDir),
-    };
-    const store = readStore(graphDir);
-    const previous = store.tickets[ticket];
-    const sameEpoch = previous && previous.generation_identity === boundRecord.generation_identity;
-    const previousGeneration = previous && Number.isInteger(previous.generation) ? previous.generation : -1;
-    const incomingGeneration = Number.isInteger(boundRecord.generation) ? boundRecord.generation : -1;
-    const previousAt = previous && typeof previous.observed_at === 'string'
-      ? Date.parse(previous.observed_at)
-      : NaN;
-    const incomingAt = typeof boundRecord.observed_at === 'string'
-      ? Date.parse(boundRecord.observed_at)
-      : NaN;
-    // The lock orders writers, not the observations they captured before
-    // queueing for it. Generation is the primary ordering key: a late result
-    // from an older snapshot can never replace a newer snapshot's record. Only
-    // observations in the same generation are ordered by observed_at.
-    const previousWins = previousGeneration > incomingGeneration
-      || (sameEpoch && previousGeneration === incomingGeneration
-        && Number.isFinite(previousAt)
-        && (!Number.isFinite(incomingAt) || previousAt > incomingAt));
-    const stored = previousWins
-      ? previous
-      : boundRecord;
-    store.tickets[ticket] = stored;
-    writeAtomic(graphStore(graphDir), JSON.stringify(store, null, 2) + '\n');
-    return stored;
-  }, { label: 'tracker-record' });
+  // The tracker binding and state-sync publication share this nested critical
+  // section. State-sync takes tracker-record -> state before consuming the
+  // cache, while the older state writer takes state alone; using the same order
+  // here closes both publication races without introducing a reverse lock path.
+  return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => withLock(
+    lockDirFor(projectRootOf(graphDir)),
+    'state',
+    () => {
+      // Bind the observation while both publication locks are held. A read
+      // that queued behind a publish must use one coherent generation/identity
+      // pair, otherwise the next active-reader pass can drop the record.
+      const boundRecord = {
+        ...record,
+        generation: requireGeneration(graphDir),
+        generation_identity: requireMetadataIdentity(graphDir),
+      };
+      const store = readStore(graphDir);
+      const previous = store.tickets[ticket];
+      const sameEpoch = previous && previous.generation_identity === boundRecord.generation_identity;
+      const previousGeneration = previous && Number.isInteger(previous.generation) ? previous.generation : -1;
+      const incomingGeneration = Number.isInteger(boundRecord.generation) ? boundRecord.generation : -1;
+      const previousAt = previous && typeof previous.observed_at === 'string'
+        ? Date.parse(previous.observed_at)
+        : NaN;
+      const incomingAt = typeof boundRecord.observed_at === 'string'
+        ? Date.parse(boundRecord.observed_at)
+        : NaN;
+      // The locks order writers, not the observations they captured before
+      // queueing for them. Generation is the primary ordering key: a late
+      // result from an older snapshot can never replace a newer snapshot's
+      // record. Only observations in the same generation are ordered by time.
+      const previousWins = previousGeneration > incomingGeneration
+        || (sameEpoch && previousGeneration === incomingGeneration
+          && Number.isFinite(previousAt)
+          && (!Number.isFinite(incomingAt) || previousAt > incomingAt));
+      const stored = previousWins
+        ? previous
+        : boundRecord;
+      store.tickets[ticket] = stored;
+      writeAtomic(graphStore(graphDir), JSON.stringify(store, null, 2) + '\n');
+      return stored;
+    }, { label: 'tracker-record state binding' }), { label: 'tracker-record' });
 }
 
 function observe(graphDir, input) {
