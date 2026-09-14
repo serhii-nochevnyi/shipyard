@@ -51,7 +51,7 @@ test('state-sync passes the active tracker records without tracker I/O', () => {
   assert.match(doc, /require\(path\.join\(__dirname, 'tracker-record\.cjs'\)\)/);
   const publish = between(doc, "const published = withLock(lockDirFor(ROOT), 'tracker-record'", 'const front = published.front');
   assert.match(publish, /withLock\(lockDirFor\(ROOT\), 'state'/);
-  assert.match(publish, /activeTrackers\(GRAPH_DIR\)/);
+  assert.match(publish, /activeTrackers\(GRAPH_DIR, cfg\.jira_todo_statuses\)/);
   assert.match(publish, /previousGenerationIdentity/);
   assert.match(publish, /generationIdentity/);
   assert.match(publish, /previous_generation_identity/);
@@ -66,11 +66,11 @@ test('front CLI passes the config and coherent tracker snapshot to computeFront'
   const cli = between(doc, '// ── CLI: read the state files this project already has and print the verdict ──', 'process.exit(0);');
   assert.match(cli, /activeTrackerSnapshotLocked/);
   assert.match(cli, /trackerStatuses:\s*config\.jira_todo_statuses/);
-  assert.match(cli, /activeTrackerSnapshotLocked\(dir\)/);
+  assert.match(cli, /activeTrackerSnapshotLocked\(dir, config\.jira_todo_statuses\)/);
   assert.match(cli, /withLock\(lockDirFor\(root\), 'tracker-record'/);
   assert.match(cli, /withLock\(\s*lockDirFor\(root\),\s*'state'/);
   const lockBody = between(cli, "withLock(lockDirFor(root), 'tracker-record'", '  } catch (e)');
-  assert.match(lockBody, /const trackerRecords = activeTrackerSnapshotLocked\(dir\)/);
+  assert.match(lockBody, /const trackerRecords = activeTrackerSnapshotLocked\(dir, config\.jira_todo_statuses\)/);
   assert.match(lockBody, /return computeFront\(tickets, state/);
 });
 
@@ -78,7 +78,7 @@ test('dispatch refresh uses the same config and coherent tracker snapshot', () =
   const doc = source(DISPATCH);
   const refresh = between(doc, 'function refreshFront(cwd)', 'module.exports = {');
   assert.match(refresh, /loadConfig\(cwd\)/);
-  assert.match(refresh, /activeTrackerSnapshotLocked\(dir\)/);
+  assert.match(refresh, /activeTrackerSnapshotLocked\(dir, config\.jira_todo_statuses\)/);
   assert.match(refresh, /withLock\(lockDirFor\(cwd\), 'tracker-record'/);
   assert.match(refresh, /withLock\(lockDirFor\(cwd\), 'state'/);
   assert.match(refresh, /trackerStatuses:\s*config\.jira_todo_statuses/);

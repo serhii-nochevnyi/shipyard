@@ -1028,11 +1028,12 @@ function refreshFront(cwd) {
   const { computeFront, ciEstimates } = require(path.join(__dirname, 'front.cjs'));
   const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
+  const { config } = loadConfig(cwd);
   // A tracker read is valid for the current publication and the one
   // publisher-backed boundary immediately preceding it. Refresh must match the
   // standalone front reader, so use the same coherent cache snapshot.
   const trackerRecordsForFront = () => {
-    return activeTrackerSnapshotLocked(dir);
+    return activeTrackerSnapshotLocked(dir, config.jira_todo_statuses);
   };
   try {
     // Keep the global lock order tracker-record -> state. State-sync uses the
@@ -1051,7 +1052,6 @@ function refreshFront(cwd) {
         return null; // no board here yet — state-sync writes the first one
       }
       if (!previous || typeof previous !== 'object' || !state || typeof state !== 'object') return null;
-      const { config } = loadConfig(cwd);
       const front = computeFront(tickets, state, {
         parked: previous.parked_by_run || [],
         autoMerge: previous.auto_merge === 'epic',

@@ -953,7 +953,7 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   // active reader feeds them into this new snapshot. The following state-sync
   // sees the next generation and expires the observation, forcing a fresh read
   // for any pending ticket that was not taken this round.
-  const trackerRecords = activeTrackers(GRAPH_DIR);
+  const trackerRecords = activeTrackers(GRAPH_DIR, cfg.jira_todo_statuses);
 
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');

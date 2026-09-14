@@ -1712,7 +1712,7 @@ if (require.main === module) {
       () => {
         const tickets = (read('tickets.json') || {}).tickets || {};
         const state = read('delivery-state.json');
-        const trackerRecords = activeTrackerSnapshotLocked(dir);
+        const trackerRecords = activeTrackerSnapshotLocked(dir, config.jira_todo_statuses);
         return computeFront(tickets, state, {
           parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
           drifted: activeDrift(root), escalated: activeParks(root, state),
