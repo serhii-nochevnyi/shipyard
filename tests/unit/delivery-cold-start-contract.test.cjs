@@ -27,21 +27,23 @@ test('external tickets enter through investigation and decomposition', () => {
   const section = coldStartSection();
   const investigation = section.indexOf('/shipyard:investigate');
   const decomposition = section.indexOf('/shipyard:decompose');
-  const gate = section.indexOf('validate-graph.cjs');
+  const gate = section.indexOf('Gate 2 (`validate-graph.cjs`)');
 
   assert.ok(investigation >= 0, 'external tracker evidence must route to investigation');
   assert.ok(decomposition > investigation, 'decomposition must follow investigation');
-  assert.ok(gate > decomposition, 'Gate 2 must follow decomposition');
+  assert.ok(gate > decomposition, 'the explicit Gate 2 instruction must follow decomposition');
   assert.match(section, /external Jira\/GitHub tickets/);
   assert.match(section, /intake evidence only/);
   assert.match(section, /accepted design/);
+  assert.match(section, /return[\s\S]+deliver|handoff, not a delivery step/i);
 });
 
 test('the delivery cold-start branch has no import or tracker-prose derivation shortcut', () => {
   const section = coldStartSection();
   assert.doesNotMatch(section, /\boffer an import\b/i);
   assert.doesNotMatch(section, /\bimport\b/i);
-  assert.doesNotMatch(section, /derive(?:s|d)?\s+(?:it|depends_on|files_modified)\s+from/i);
+  assert.doesNotMatch(section, /reads each external ticket and materializes/i);
+  assert.doesNotMatch(section, /(?:depends_on|files_modified)[\s\S]{0,120}derive[\s\S]{0,120}from/i);
   assert.doesNotMatch(section, /direct execution/i);
 });
 
