@@ -20,8 +20,8 @@ function scratch(generation = 7) {
   fs.mkdirSync(worktree, { recursive: true });
   fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({
     tickets: {
-      'T-01': { title: 'first' },
-      'T-02': { title: 'second' },
+      'T-01': { title: 'first', jira: 'MYD-1' },
+      'T-02': { title: 'second', jira: 'MYD-2' },
     },
   }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({
@@ -663,6 +663,30 @@ test('recreating metadata at the same numeric generation invalidates the old epo
   assert.ok(require(RECORD).activeRecords(graph)['T-01']);
 });
 
+test('a reset metadata epoch lets a lower new generation replace the old record', () => {
+  const { project, graph } = scratch(7);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  const meta = path.join(graph, 'delivery-state-meta.json');
+  fs.rmSync(meta);
+  fs.writeFileSync(meta, JSON.stringify({ generation: 1 }));
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  assert.strictEqual(require(RECORD).activeRecords(graph)['T-01'].generation, 1);
+  assert.strictEqual(require(RECORD).activeRecords(graph)['T-01'].assignee, 'user-5');
+});
+
+test('a tracker record is invalidated when the ticket graph changes its Jira key', () => {
+  const { project, graph } = scratch();
+  const ticketsFile = path.join(graph, 'tickets.json');
+  const tickets = JSON.parse(fs.readFileSync(ticketsFile, 'utf8'));
+  tickets.tickets['T-01'].jira = 'MYD-1';
+  fs.writeFileSync(ticketsFile, JSON.stringify(tickets));
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  assert.ok(require(RECORD).activeRecords(graph)['T-01']);
+  tickets.tickets['T-01'].jira = 'MYD-2';
+  fs.writeFileSync(ticketsFile, JSON.stringify(tickets));
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
+});
+
 test('a new observation at the new generation becomes active', () => {
   const { project, graph } = scratch(1);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
@@ -702,13 +726,12 @@ test('normal and unknown observations refuse before a published generation exist
   assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
 });
 
-test('a newer record from another metadata epoch cannot be overwritten by an older generation', () => {
+test('a newer record in the same metadata epoch cannot be overwritten by an older generation', () => {
   const { project, graph } = scratch(8);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
   const file = path.join(graph, 'tracker.json');
   const store = stored(graph);
   store.tickets['T-01'].generation = 9;
-  store.tickets['T-01'].generation_identity = 'newer-epoch';
   store.tickets['T-01'].status = 'Backlog';
   store.tickets['T-01'].verdict = 'eligible';
   store.tickets['T-01'].eligible = true;

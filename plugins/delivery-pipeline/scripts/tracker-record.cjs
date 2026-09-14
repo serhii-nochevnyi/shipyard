@@ -380,10 +380,23 @@ function recordsForGeneration(store, generation, configuredStatuses, identity, o
     // forward. Its contract is one current-generation exception; including it
     // here would let a named bypass survive the next snapshot.
     if (options.excludeOverrides && record.override === true) continue;
+    if (!recordMatchesTicketGraph(record, options.tickets)) continue;
+    // The predecessor bridge keeps an external observation alive across the
+    // publish boundary, but a direct override is not an observation to carry
+    // forward. Its contract is one current-generation exception; including it
+    // here would let a named bypass survive the next snapshot.
+    if (options.excludeOverrides && record.override === true) continue;
     if (!validRecord(record, configuredStatuses, identity)) continue;
     out[ticket] = { ...record };
   }
   return out;
+}
+
+function recordMatchesTicketGraph(record, tickets) {
+  if (!tickets || typeof tickets !== 'object' || Array.isArray(tickets)) return false;
+  const ticket = tickets[record.ticket];
+  const jira = ticket && typeof ticket === 'object' ? ticket.jira : null;
+  return typeof jira === 'string' && jira.trim() === record.jira_key;
 }
 
 function validRecord(record, configuredStatuses, identity) {
@@ -421,7 +434,10 @@ function activeRecordsLocked(graphDir, configuredStatuses, options = {}) {
   const statuses = Array.isArray(configuredStatuses)
     ? configuredStatuses
     : readConfigStatuses(projectRootOf(graphDir));
-  return recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir), options);
+  return recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir), {
+    ...options,
+    tickets: ticketMap(graphDir),
+  });
 }
 
 function activeRecords(graphDir, configuredStatuses) {
@@ -443,7 +459,11 @@ function activePreviousTrackersLocked(graphDir, configuredStatuses) {
     : readConfigStatuses(projectRootOf(graphDir));
   if (!Number.isInteger(generation) || generation <= 1) return {};
   const previous = recordsForGeneration(
-    store, generation - 1, statuses, previousIdentity, { excludeOverrides: true }
+    store,
+    generation - 1,
+    statuses,
+    previousIdentity,
+    { excludeOverrides: true, tickets: ticketMap(graphDir) },
   );
   // A current-generation entry is a fresh answer even when it is malformed or
   // no longer agrees with the current policy. Do not resurrect an older
@@ -471,9 +491,14 @@ function activeTrackerSnapshotLocked(graphDir, configuredStatuses) {
     ? configuredStatuses
     : readConfigStatuses(projectRootOf(graphDir));
   const previousIdentity = metadataPreviousIdentity(graphDir);
+  const tickets = ticketMap(graphDir);
   const previous = Number.isInteger(generation) && generation > 1
     ? recordsForGeneration(
-      store, generation - 1, statuses, previousIdentity, { excludeOverrides: true }
+      store,
+      generation - 1,
+      statuses,
+      previousIdentity,
+      { excludeOverrides: true, tickets },
     )
     : {};
   // A current-generation record that fails validation is still evidence that a
@@ -484,7 +509,7 @@ function activeTrackerSnapshotLocked(graphDir, configuredStatuses) {
   }
   return {
     ...previous,
-    ...recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir)),
+    ...recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir), { tickets }),
   };
 }
 
@@ -597,10 +622,12 @@ function writeRecord(graphDir, ticket, record) {
       // queueing for them. Generation is the primary ordering key: a late
       // result from an older snapshot can never replace a newer snapshot's
       // record. Only observations in the same generation are ordered by time.
-      const previousWins = previousGeneration > incomingGeneration
-        || (sameEpoch && previousGeneration === incomingGeneration
+      const previousWins = sameEpoch && (
+        previousGeneration > incomingGeneration
+        || (previousGeneration === incomingGeneration
           && Number.isFinite(previousAt)
-          && (!Number.isFinite(incomingAt) || previousAt > incomingAt));
+          && (!Number.isFinite(incomingAt) || previousAt > incomingAt))
+      );
       const stored = previousWins
         ? previous
         : boundRecord;
