@@ -1652,29 +1652,6 @@ if (require.main === module) {
   const read = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
   const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
   const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
-  let tickets = {};
-  let state = {};
-  let trackerRecords = {};
-  try {
-    // Read the state inputs and tracker cache as one publication. State-sync
-    // publishes under tracker-record -> state, so the standalone reader must
-    // take the same order; otherwise a sync between these reads can produce a
-    // board from a state/tickets pair and tracker snapshot that never coexisted.
-    const snapshot = withLock(lockDirFor(root), 'tracker-record', () => withLock(
-      lockDirFor(root),
-      'state',
-      () => ({
-        tickets: (read('tickets.json') || {}).tickets || {},
-        state: read('delivery-state.json'),
-        trackerRecords: activeTrackerSnapshotLocked(dir),
-      }),
-      { label: 'front state' },
-    ), { label: 'front tracker snapshot' });
-    ({ tickets, state, trackerRecords } = snapshot);
-  } catch (e) {
-    process.stderr.write(`front: cannot read .planning/graph (${e.message}) — run state-sync.cjs first\n`);
-    process.exit(1);
-  }
   const argv = process.argv.slice(2);
   const pIdx = argv.indexOf('--parked');
   const parked = pIdx === -1 ? [] : String(argv[pIdx + 1] || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -1723,20 +1700,34 @@ if (require.main === module) {
   // The RECORDS, not the flat view: the board's lifting sentence is chosen by the
   // park's kind, and the flat map keeps the kind only as a text prefix.
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
-  const front = computeFront(tickets, state, {
-    parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
-    drifted: activeDrift(root), escalated: activeParks(root, state),
-    trackerStatuses: config.jira_todo_statuses,
-    trackerRecords,
-    // Same reason as the two stores above: this CLI is advertised as re-runnable
-    // on its own, and a board that re-offers a ticket an agent is holding is not
-    // the same board.
-    dispatched: activeDispatches(root, state),
-    // …and the ORDER has the same requirement as the verdict: state-sync derives
-    // this from the journal, so the CLI must too, or the two commands rank the
-    // same graph differently.
-    ci_estimates: ciEstimates(dir, tickets),
-  });
+  let front;
+  try {
+    // State-sync publishes under tracker-record -> state. Keep the complete
+    // read/compute section in that same order: a tracker mark that queues behind
+    // this invocation cannot replace an eligible record after the snapshot read
+    // but before this CLI emits an execute verdict.
+    front = withLock(lockDirFor(root), 'tracker-record', () => withLock(
+      lockDirFor(root),
+      'state',
+      () => {
+        const tickets = (read('tickets.json') || {}).tickets || {};
+        const state = read('delivery-state.json');
+        const trackerRecords = activeTrackerSnapshotLocked(dir);
+        return computeFront(tickets, state, {
+          parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
+          drifted: activeDrift(root), escalated: activeParks(root, state),
+          trackerStatuses: config.jira_todo_statuses,
+          trackerRecords,
+          dispatched: activeDispatches(root, state),
+          ci_estimates: ciEstimates(dir, tickets),
+        });
+      },
+      { label: 'front state' },
+    ), { label: 'front tracker snapshot' });
+  } catch (e) {
+    process.stderr.write(`front: cannot read .planning/graph (${e.message}) — run state-sync.cjs first\n`);
+    process.exit(1);
+  }
   // Does the journal prove this cached state is already behind reality? Computed
   // HERE rather than in computeFront, which is a pure function of what it is
   // handed and must stay one. `--json` carries the same finding as a field, so a

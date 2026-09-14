@@ -61,7 +61,7 @@ test('state-sync passes the active tracker records without tracker I/O', () => {
   assert.doesNotMatch(doc, /getJiraIssue|searchJiraIssuesUsingJql|changelog|worklog/);
 });
 
-test('front CLI passes the config and active tracker cache to computeFront', () => {
+test('front CLI passes the config and coherent tracker snapshot to computeFront', () => {
   const doc = source(FRONT);
   const cli = between(doc, '// ── CLI: read the state files this project already has and print the verdict ──', 'process.exit(0);');
   assert.match(cli, /activeTrackerSnapshotLocked/);
@@ -69,9 +69,12 @@ test('front CLI passes the config and active tracker cache to computeFront', () 
   assert.match(cli, /activeTrackerSnapshotLocked\(dir\)/);
   assert.match(cli, /withLock\(lockDirFor\(root\), 'tracker-record'/);
   assert.match(cli, /withLock\(\s*lockDirFor\(root\),\s*'state'/);
+  const lockBody = between(cli, "withLock(lockDirFor(root), 'tracker-record'", '  } catch (e)');
+  assert.match(lockBody, /const trackerRecords = activeTrackerSnapshotLocked\(dir\)/);
+  assert.match(lockBody, /return computeFront\(tickets, state/);
 });
 
-test('dispatch refresh uses the same config and active tracker cache', () => {
+test('dispatch refresh uses the same config and coherent tracker snapshot', () => {
   const doc = source(DISPATCH);
   const refresh = between(doc, 'function refreshFront(cwd)', 'module.exports = {');
   assert.match(refresh, /loadConfig\(cwd\)/);

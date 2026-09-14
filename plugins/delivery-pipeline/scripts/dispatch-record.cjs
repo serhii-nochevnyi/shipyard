@@ -1028,9 +1028,9 @@ function refreshFront(cwd) {
   const { computeFront, ciEstimates } = require(path.join(__dirname, 'front.cjs'));
   const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
-  // A tracker read made after the last published snapshot is recorded against
-  // that snapshot and consumed by the next one. Refresh must match the
-  // standalone front reader, so use the same single coherent cache snapshot.
+  // A tracker read is valid for the current publication and the one
+  // publisher-backed boundary immediately preceding it. Refresh must match the
+  // standalone front reader, so use the same coherent cache snapshot.
   const trackerRecordsForFront = () => {
     return activeTrackerSnapshotLocked(dir);
   };
