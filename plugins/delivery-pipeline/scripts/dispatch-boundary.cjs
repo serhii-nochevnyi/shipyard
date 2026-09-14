@@ -202,11 +202,13 @@ function readDurableFile(file, key) {
   if (!raw) return null;
   if (isObject(raw) && raw.format === DURABLE_ENVELOPE_FORMAT) {
     const payload = durablePayload(raw, key);
-    return payload ? { payload, authenticated: true } : { payload: null, authenticated: false };
+    return payload
+      ? { payload, authenticated: true, legacy: false }
+      : { payload: null, authenticated: false, legacy: false };
   }
   // Plain records are retained as readable legacy/recovery data, but are never
   // accepted by getVerifiedRecord as repair authority.
-  return { payload: raw, authenticated: false };
+  return { payload: raw, authenticated: false, legacy: true };
 }
 
 // A small file-backed recorder for callers that need uniqueness and receipt
@@ -461,6 +463,15 @@ function createDurableRecorder(storeDir) {
   const recoverRepairCommit = (predecessorDispatchId) => {
     const commitStored = readStored(repairCommitFile(predecessorDispatchId));
     if (!commitStored) return null;
+    // A pre-envelope marker may still be useful to an operator inspecting the
+    // store, but it cannot make a predecessor non-replayable. Only the
+    // module-authenticated marker written by this recorder can authorize
+    // recovery across a process boundary. Invalid envelopes fail closed
+    // rather than being mistaken for a legacy record.
+    if (!commitStored.authenticated) {
+      if (commitStored.legacy) return null;
+      throw boundaryError('RECORD_FAILED', 'durable repair commit has invalid integrity evidence', { dispatch_id: predecessorDispatchId });
+    }
     const commit = commitStored.payload;
     if (!validRepairCommit(commit, predecessorDispatchId)) {
       throw boundaryError('RECORD_FAILED', 'durable repair commit is malformed', { dispatch_id: predecessorDispatchId });
@@ -550,9 +561,16 @@ function createDurableRecorder(storeDir) {
             if (!commitCreated) {
               const existingCommitStored = readStored(repairCommitFile(predecessorDispatchId));
               const existingCommit = existingCommitStored && existingCommitStored.payload;
-              if (!existingCommit || !sameRecord(existingCommit, repairCommit)) return { recorded: false };
-              if (!existingCommitStored.authenticated) {
+              if (existingCommitStored && existingCommitStored.legacy) {
+                // A pre-envelope marker is readable history, not an
+                // authority. Replace it only while holding the same fenced
+                // predecessor lock that guards all new repair commits.
                 atomicReplaceJson(repairCommitFile(predecessorDispatchId), seal(repairCommit));
+              } else {
+                if (!existingCommit || !sameRecord(existingCommit, repairCommit)) return { recorded: false };
+                if (!existingCommitStored.authenticated) {
+                  throw boundaryError('RECORD_FAILED', 'durable repair commit has invalid integrity evidence', { dispatch_id: predecessorDispatchId });
+                }
               }
             }
           } finally {
@@ -978,7 +996,29 @@ function generatedAgentEvidence(resolution, adapter) {
 function revalidateGeneratedAgent(resolution, adapter) {
   if (!resolution || !resolution.agent_file) return;
   const root = generatedAgentRoot(adapter);
-  if (!root) return;
+  if (!root) {
+    const validator = adapter && typeof adapter.validateGeneratedAgent === 'function'
+      ? adapter.validateGeneratedAgent
+      : null;
+    if (!validator) {
+      refuse('STALE_GENERATED_AGENT', `static Codex dispatch requires ${resolution.agent_file} launch-time evidence revalidation`, { agent_file: resolution.agent_file });
+    }
+    const evidence = invokeSync(validator, adapter, [resolution], 'adapter.validateGeneratedAgent');
+    if (!isObject(evidence)
+        || evidence.valid !== true
+        || evidence.exists !== true
+        || evidence.content_verified !== true
+        || evidence.policy_hash !== resolution.policy_hash
+        || evidence.agent_file !== resolution.agent_file
+        || evidence.agent_file_digest !== resolution.agent_file_digest) {
+      refuse('STALE_GENERATED_AGENT', `generated agent ${resolution.agent_file} changed after validation and before launch`, {
+        agent_file: resolution.agent_file,
+        expected: resolution.agent_file_digest,
+        actual: evidence && evidence.agent_file_digest,
+      });
+    }
+    return;
+  }
   const file = path.resolve(root, resolution.agent_file);
   const relative = path.relative(root, file);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {

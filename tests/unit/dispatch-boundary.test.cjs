@@ -682,6 +682,37 @@ test('static Codex evidence is rechecked after validation hooks and before launc
   assert.equal(launched, false);
 });
 
+test('adapter-owned static evidence is revalidated before launch without an agents root', () => {
+  const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'adapter-agent-race' });
+  let validationCalls = 0;
+  let launched = false;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        validateGeneratedAgent: (resolution) => {
+          validationCalls += 1;
+          return {
+            valid: true,
+            exists: true,
+            content_verified: true,
+            policy_hash: resolution.policy_hash,
+            agent_file: resolution.agent_file,
+            agent_file_digest: validationCalls === 1 ? 'a'.repeat(64) : 'b'.repeat(64),
+          };
+        },
+        onLaunch: () => { launched = true; },
+      }),
+    },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'adapter-agent-race' }),
+    (error) => error.code === 'STALE_GENERATED_AGENT' && /after validation/.test(error.message),
+  );
+  assert.equal(validationCalls, 2);
+  assert.equal(launched, false);
+});
+
 test('separate boundary instances share durable reservation and finalized receipt state', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-store-'));
   const recorderA = boundaryModule.createDurableRecorder(storeDir);
@@ -755,7 +786,7 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
   );
 });
 
-test('a crash after repair commit recovers its successor and blocks predecessor replay', () => {
+test('an unsigned legacy repair commit cannot recover a successor or block replay', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-repair-crash-'));
   const base = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
@@ -789,24 +820,25 @@ test('a crash after repair commit recovers its successor and blocks predecessor 
   }) + '\n');
 
   const recoveredRecorder = boundaryModule.createDurableRecorder(storeDir);
-  assert.deepStrictEqual(recoveredRecorder.claim(base.dispatch_id, 'replay-contender'), { claimed: false });
-  assert.deepStrictEqual(recoveredRecorder.getReceipt(successorId), recordInput);
-  assert.throws(
-    () => boundaryModule.createDispatchBoundary({
-      adapters: { codex: fakeAdapter() },
-      recorder: boundaryModule.createDurableRecorder(storeDir),
-    }).dispatch({
-      runtime: 'codex',
-      role: 'ci-fix',
-      signals: { signatureState: 'repeat', priorApplied: base.receipt },
-      previous_dispatch_id: base.dispatch_id,
-      dispatch_id: 'crash-commit-replay',
-    }),
-    (error) => error.code === 'UNVERIFIED_RECEIPT',
-  );
+  const claim = recoveredRecorder.claim(base.dispatch_id, 'replay-contender');
+  assert.equal(claim.claimed, true);
+  assert.equal(recoveredRecorder.getReceipt(successorId), null);
+  assert.deepStrictEqual(recoveredRecorder.release(base.dispatch_id, 'replay-contender', claim), { released: true });
+
+  const repaired = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  }).dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'legacy-repair-replacement',
+  });
+  assert.equal(repaired.dispatch_id, 'legacy-repair-replacement');
 });
 
-test('a recorded successor makes its predecessor non-replayable before physical consumption', () => {
+test('an authenticated repair commit makes its predecessor non-replayable before physical consumption', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-recorded-crash-'));
   const base = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
@@ -818,29 +850,47 @@ test('a recorded successor makes its predecessor non-replayable before physical 
     dispatch_id: 'recorded-crash-base',
   });
   const successorId = 'recorded-crash-successor';
-  const recordInput = {
-    dispatch_id: successorId,
-    predecessor_dispatch_id: base.dispatch_id,
-    predecessor_consumer_id: successorId,
-    receipt: {
-      dispatch_id: successorId,
+  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  const child = spawnSync(process.execPath, ['-e', `
+    const fs = require('fs');
+    const b = require(process.argv[1]);
+    const recorder = b.createDurableRecorder(process.argv[2]);
+    const prior = JSON.parse(process.argv[3]);
+    const originalLink = fs.linkSync;
+    fs.linkSync = (source, destination) => {
+      originalLink(source, destination);
+      if (String(destination).includes('repair-commit-')) process.exit(73);
+    };
+    const receiptFor = ${receiptFor.toString()};
+    const boundary = b.createDispatchBoundary({
+      recorder,
+      adapters: { codex: {
+        validateGeneratedAgent: (resolution) => ({
+          valid: true,
+          exists: true,
+          content_verified: true,
+          policy_hash: resolution.policy_hash,
+          agent_file: resolution.agent_file,
+          agent_file_digest: 'a'.repeat(64),
+        }),
+        launch: (resolution) => receiptFor(resolution),
+      } },
+    });
+    boundary.dispatch({
       runtime: 'codex',
       role: 'ci-fix',
-      compliance: 'verified',
-    },
-  };
-  const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
-  fs.writeFileSync(path.join(storeDir, `repair-commit-${digest(base.dispatch_id)}.json`), JSON.stringify({
-    predecessor_dispatch_id: base.dispatch_id,
-    successor_dispatch_id: successorId,
-    consumer_id: successorId,
-    record_input: recordInput,
-  }) + '\n');
-  fs.writeFileSync(path.join(storeDir, `record-${digest(successorId)}.json`), JSON.stringify(recordInput) + '\n');
+      signals: { signatureState: 'repeat', priorApplied: prior },
+      previous_dispatch_id: process.argv[4],
+      dispatch_id: ${JSON.stringify(successorId)},
+    });
+  `, modulePath, storeDir, JSON.stringify(base.receipt), base.dispatch_id], { encoding: 'utf8' });
+  assert.equal(child.status, 73, child.stderr);
 
+  const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
   const restarted = boundaryModule.createDurableRecorder(storeDir);
   assert.deepStrictEqual(restarted.claim(base.dispatch_id, 'recorded-replay-contender'), { claimed: false });
   assert.equal(fs.existsSync(path.join(storeDir, `consumed-${digest(base.dispatch_id)}.json`)), false);
+  assert.equal(restarted.getReceipt(successorId).dispatch_id, successorId);
   assert.throws(
     () => boundaryModule.createDispatchBoundary({
       adapters: { codex: fakeAdapter() },
