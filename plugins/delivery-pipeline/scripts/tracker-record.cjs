@@ -783,7 +783,10 @@ function override(graphDir, input) {
         'tracker facts may be overridden only after a complete current-generation tracker observation'
       );
     }
-    if (reusable.override === true && (statusProvided || assigneeProvided) && !recovered) {
+    const recoveredForThisTicket = recovered && recovered.event
+      && recovered.event.ticket === ticket
+      && recovered.event.jira_key === jiraKey;
+    if (reusable.override === true && (statusProvided || assigneeProvided) && !recoveredForThisTicket) {
       throw new Error('tracker facts cannot be replaced on an existing exact-ticket override; read Jira again first');
     }
 
