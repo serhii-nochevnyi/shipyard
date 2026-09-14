@@ -462,6 +462,49 @@ test('recovery refuses an override appended after a torn journal prefix', () => 
   assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl')), journal);
 });
 
+test('recovery refuses a completed override followed by a torn journal tail', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const afterStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  const tornTail = Buffer.from('{"event":"interrupted"');
+  stagePendingOverride(graph, beforeStore, afterStore, eventLine, Buffer.alloc(0),
+    Buffer.concat([eventLine, tornTail]));
+  const journal = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+
+  const r = spawnSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /around the completed override contains an incomplete JSONL line/);
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'tracker.json')), beforeStore);
+  assert.ok(fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl')), journal);
+});
+
+test('completed recovery is not reused after the delivery generation advances', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const afterStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  stagePendingOverride(graph, beforeStore, afterStore, eventLine, Buffer.alloc(0), eventLine);
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
+
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /requires a current-generation tracker observation/);
+  assert.strictEqual(stored(graph).tickets['T-01'].generation, 1);
+  assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
+});
+
 test('recovery of another ticket does not reopen an existing exact-ticket override', () => {
   const { project, graph } = scratch();
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
