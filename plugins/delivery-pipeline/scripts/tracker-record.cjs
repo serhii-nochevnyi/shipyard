@@ -103,7 +103,7 @@ function requireGeneration(graphDir) {
   return generation;
 }
 
-function activeRecords(graphDir, generation = currentGeneration(graphDir)) {
+function activeRecordsAt(graphDir, generation) {
   if (!Number.isInteger(generation) || generation < 0) return {};
   const out = {};
   for (const [ticket, record] of Object.entries(readStore(graphDir).tickets)) {
@@ -112,6 +112,21 @@ function activeRecords(graphDir, generation = currentGeneration(graphDir)) {
     out[ticket] = { ...record };
   }
   return out;
+}
+
+function activeRecords(graphDir) {
+  return activeRecordsAt(graphDir, currentGeneration(graphDir));
+}
+
+// Tracker observations are recorded against the snapshot that was current
+// when the external read happened. The next state-sync publishes the next
+// generation, so front readers need this narrow, internally-derived bridge
+// across that publish boundary. Callers cannot choose an arbitrary generation.
+function activePreviousTrackers(graphDir) {
+  const generation = currentGeneration(graphDir);
+  return Number.isInteger(generation) && generation > 0
+    ? activeRecordsAt(graphDir, generation - 1)
+    : {};
 }
 
 // The flat view is convenient for callers that only need the current record;
@@ -261,7 +276,7 @@ function override(graphDir, input) {
   const { ticket, jiraKey } = validateTicket(graphDir, input.ticket, input.jiraKey);
   const overrideReason = requireNonEmpty(input.reason, 'override reason');
   return mutateRecord(graphDir, (store) => {
-    const generation = currentGenerationStrict(graphDir);
+    const generation = requireGeneration(graphDir);
     const existing = store.tickets[ticket];
     const reusable = existing && existing.generation === generation && existing.jira_key === jiraKey
       ? existing
@@ -457,6 +472,7 @@ module.exports = {
   readStore,
   currentGeneration,
   activeRecords,
+  activePreviousTrackers,
   activeTrackers,
   observe,
   unknown,

@@ -142,6 +142,18 @@ test('an override without a current observation stays unknown instead of fabrica
   assert.match(record.reason, /no current tracker observation/);
 });
 
+test('an override refuses a malformed delivery generation', () => {
+  const { project, graph } = scratch();
+  fs.writeFileSync(path.join(graph, 'delivery-front.json'), JSON.stringify({ generation: 7 }));
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), '{not-json');
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-02', 'MYD-2', '--reason', 'urgent named ticket', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0, 'a corrupt generation cannot authorize an override');
+  assert.match(r.stderr, /delivery-state generation is unreadable/);
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
+});
+
 test('an override expires with its delivery generation', () => {
   const { project, graph } = scratch(1);
   execFileSync('node', [
@@ -170,6 +182,17 @@ test('activeRecords omits a record after the delivery generation advances', () =
   assert.ok(require(RECORD).activeRecords(graph)['T-01']);
   fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
   assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
+});
+
+test('the previous-generation reader is derived internally and cannot be caller-selected', () => {
+  const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
+  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
+  const record = require(RECORD);
+  assert.deepStrictEqual(Object.keys(record.activePreviousTrackers(graph)), ['T-01']);
+  assert.deepStrictEqual(Object.keys(record.activeRecords(graph)), ['T-02']);
+  assert.deepStrictEqual(record.activeRecords(graph, 1), record.activeRecords(graph));
 });
 
 test('a malformed metadata file never falls back to the advisory front generation', () => {
