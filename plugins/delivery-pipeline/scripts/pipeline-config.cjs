@@ -1294,6 +1294,13 @@ function selectionConfig(raw) {
     .filter((key) => Object.prototype.hasOwnProperty.call(object, key))
     .map((key) => [key, object[key]]));
   const result = pick(raw);
+  // GSD's Codex remap namespaces are not pipeline configuration, but they are
+  // still launch inputs. Keep the raw values so a later routed call cannot
+  // validate a sanitized pipeline view while the Codex adapter reads these
+  // entries independently.
+  for (const namespace of ['model_policy', 'model_profile_overrides']) {
+    if (Object.prototype.hasOwnProperty.call(raw, namespace)) result[namespace] = raw[namespace];
+  }
   for (const namespace of ['pipeline', 'delivery_pipeline', 'gsd']) {
     if (raw[namespace] && typeof raw[namespace] === 'object') result[namespace] = pick(raw[namespace]);
   }
@@ -1312,11 +1319,41 @@ const GSD_ROLE_KEYS = Object.freeze({
   'review-fix': ['execution', 'gsd-code-fixer'],
 });
 
-function configurationSelections(raw, role) {
+function codexRemapSelection(value) {
+  const object = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  const model = typeof value === 'string'
+    ? value.trim()
+    : object && typeof object.model === 'string'
+      ? object.model.trim()
+      : null;
+  // codex-model-remap accepts a string or {model}; keep any effort fields so a
+  // contradictory compound GSD entry cannot hide behind its matching model.
+  return object ? { ...object, model } : { model: model || value };
+}
+
+function configurationSelections(raw, role, runtime) {
   const selections = [];
-  const add = (source, field, value) => {
-    if (value !== undefined) selections.push({ source, selection: { [field]: value } });
+  const addSelection = (source, selection) => {
+    if (selection !== undefined) selections.push({ source, selection });
   };
+  const add = (source, field, value) => {
+    addSelection(source, value === undefined ? undefined : { [field]: value });
+  };
+  if (runtime === 'codex') {
+    for (const [source, values] of [
+      ['model_policy.runtime_tiers.codex', raw.model_policy?.runtime_tiers?.codex],
+      ['model_profile_overrides.codex', raw.model_profile_overrides?.codex],
+    ]) {
+      if (values === undefined) continue;
+      if (!values || typeof values !== 'object' || Array.isArray(values)) {
+        addSelection(`config.${source}`, { model: values });
+        continue;
+      }
+      for (const [tier, value] of Object.entries(values)) {
+        addSelection(`config.${source}.${tier}`, codexRemapSelection(value));
+      }
+    }
+  }
   for (const [prefix, cfg] of [['config', raw], ...['pipeline', 'delivery_pipeline', 'gsd']
     .filter((key) => raw[key]).map((key) => [key, raw[key]])]) {
     const keys = new Set([role, ...(prefix === 'config' || prefix === 'gsd' ? GSD_ROLE_KEYS[role] || [] : [])]);
@@ -1403,13 +1440,13 @@ function resolveDispatch(input) {
   const request = { ...input, config: undefined, runtime: runtime.runtime };
   if (runtime.dispatch_id !== undefined && input.dispatch_id === undefined) request.dispatch_id = runtime.dispatch_id;
   const resolution = modelPolicy.resolveDispatch(request);
-  const selections = configurationSelections(context.configuration, resolution.role);
+  const selections = configurationSelections(context.configuration, resolution.role, runtime.runtime);
   if (cfg.gsd?.runtime !== runtime.runtime) {
     throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'config.gsd.runtime conflicts with runtime context', { source: 'config.gsd.runtime' });
   }
   // Also validate current parsed values, so edits made after loadConfig cannot
   // bypass checks against the original configuration.
-  selections.push(...configurationSelections({ pipeline: cfg }, resolution.role));
+  selections.push(...configurationSelections({ pipeline: cfg }, resolution.role, runtime.runtime));
   for (const field of ['inline', 'inherit', 'session_inherited']) {
     if (input[field] !== undefined) selections.push({ source: `input.${field}`, selection: { [field]: input[field] } });
   }

@@ -2345,6 +2345,48 @@ test('a compatibility load retains rejected model input for a later routed call'
   refusesSource(() => resolveDispatch({ config, role: 'executor' }), 'pipeline.models.executor');
 });
 
+test('captures and validates Codex remap namespaces at the routed boundary', () => {
+  const cases = [
+    [{ model_policy: { runtime_tiers: { codex: { sonnet: 'remapped-agent' } } } },
+      'config.model_policy.runtime_tiers.codex.sonnet'],
+    [{ model_profile_overrides: { codex: { sonnet: { model: 'remapped-agent' } } } },
+      'config.model_profile_overrides.codex.sonnet'],
+  ];
+  for (const [raw, source] of cases) {
+    const { config } = routedConfig(raw);
+    assert.deepStrictEqual(config.dispatch_context.configuration.model_policy, raw.model_policy);
+    assert.deepStrictEqual(config.dispatch_context.configuration.model_profile_overrides, raw.model_profile_overrides);
+    refusesSource(() => resolveDispatch({ config, role: 'executor' }), source);
+  }
+});
+
+test('matching Codex remaps are accepted while contradictory entries fail closed', () => {
+  for (const remap of [
+    { model_policy: { runtime_tiers: { codex: { sonnet: 'gpt-5.6-luna' } } } },
+    { model_profile_overrides: { codex: { sonnet: { model: 'gpt-5.6-luna' } } } },
+  ]) {
+    const { config } = routedConfig(remap);
+    assert.equal(resolveDispatch({ config, role: 'executor' }).model, 'gpt-5.6-luna');
+  }
+  const { config } = routedConfig({
+    model_policy: { runtime_tiers: { codex: { sonnet: 'gpt-5.6-luna' } } },
+    model_profile_overrides: { codex: { sonnet: 'remapped-agent' } },
+  });
+  refusesSource(() => resolveDispatch({ config, role: 'executor' }),
+    'config.model_profile_overrides.codex.sonnet');
+});
+
+test('Codex remaps remain inert for Claude routed dispatches and compatibility loads', () => {
+  const raw = { model_profile_overrides: { codex: { sonnet: 'remapped-agent' } } };
+  const { config: claude } = routedConfig(raw, 'claude');
+  assert.equal(resolveDispatch({ config: claude, role: 'executor' }).model, 'sonnet');
+  const { config: compatibility } = withRawOptions(raw, { runtime: 'codex', env: {} });
+  assert.deepStrictEqual(compatibility.dispatch_context.configuration.model_profile_overrides,
+    raw.model_profile_overrides);
+  refusesSource(() => resolveDispatch({ config: compatibility, role: 'executor' }),
+    'config.model_profile_overrides.codex.sonnet');
+});
+
 test('refuses post-load selection changes, stale fingerprints and identity conflicts', () => {
   const { config } = routedConfig({}, 'codex', { dispatch_id: 'first' });
   config.models.executor = 'opus';

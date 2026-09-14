@@ -2645,7 +2645,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/deliver.md",
         "tests/unit/delivery-cold-start-contract.test.cjs"
@@ -2702,7 +2702,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/tracker-eligibility.cjs",
         "tests/unit/tracker-eligibility.test.cjs"
@@ -2729,7 +2729,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/tracker-record.cjs",
         "tests/unit/tracker-record.test.cjs",
@@ -2784,7 +2784,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/tracker-record.cjs",
         "plugins/delivery-pipeline/scripts/log-event.cjs",
@@ -2815,7 +2815,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
         "plugins/delivery-pipeline/scripts/front.cjs",
@@ -3460,7 +3460,14 @@
         "scripts/gen-codex-shipyard.cjs",
         "scripts/install-shipyard-codex.sh",
         "plugins/delivery-pipeline/scripts/gsd-tune.cjs",
+        "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
+        "README.md",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/references/pr-sentinel.md",
+        "docs/audits/2026-09-08-models-autonomy-probes.cjs",
         "tests/unit/gsd-tune.test.cjs",
+        "tests/unit/gen-codex-shipyard.test.cjs",
+        "tests/unit/dispatch-record.test.cjs",
         "tests/smoke/codex-shipyard-smoke.sh"
       ],
       "risk": "high",

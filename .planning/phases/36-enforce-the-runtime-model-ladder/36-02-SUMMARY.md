@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2728601387c170
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7f3cc7049166fe3efc866a6ed8d60b7ea0e7c6a1326133238795a59f52f99126
 phase: 36-enforce-the-runtime-model-ladder
 plan: 02
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2728601387c170
+shipyard_source_fingerprint: 7f3cc7049166fe3efc866a6ed8d60b7ea0e7c6a1326133238795a59f52f99126
 ---
 
 # Phase 36: Authoritative configuration bridge and override refusal — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: 21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2
 ## Delivery Evidence
 
 - Ticket: T-36-02
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #137
 - Source plan: .planning/phases/36-enforce-the-runtime-model-ladder/36-02-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
