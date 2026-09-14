@@ -171,6 +171,18 @@ test('an override refuses a malformed delivery generation', () => {
   assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
 });
 
+test('an override refuses an invalid observed timestamp before opening its transaction', () => {
+  const { project, graph } = scratch();
+  const r = spawnSync('node', [
+    RECORD, 'override', 'T-02', 'MYD-2', '--reason', 'urgent named ticket',
+    '--observed-at', 'not-a-date', '--graph', graph,
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /observed-at must be a valid date\/time string/);
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
+  assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
+});
+
 test('an override expires with its delivery generation', () => {
   const { project, graph } = scratch(1);
   execFileSync('node', [
