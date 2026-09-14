@@ -349,8 +349,17 @@ Codex):
 
 ```bash
 git clone https://github.com/serhii-nochevnyi/shipyard && cd shipyard
+export SHIPYARD_CODEX_CAPABILITIES_FILE=/absolute/path/to/measured/codex-capabilities.json
 make install-shipyard-codex        # or: bash scripts/install-shipyard-codex.sh
 ```
+
+`SHIPYARD_CODEX_CAPABILITIES_FILE` is required host evidence, not an optional
+default. It must be a JSON document measured for this Codex installation with
+`supportedModels`, `supportedEfforts`, and, when the host exposes pair-level
+support, `supportedSelections`. The installer refuses missing, malformed or
+insufficient evidence; it never turns the ADR-014 requirements into a claim
+about what the host supports. The exact supplied bytes are copied to
+`$CODEX_HOME/shipyard/codex-capabilities.json` for later selector calls.
 
 This generates Codex skills from the Claude commands (via gsd-core's own
 converter — `$shipyard-route`, `$shipyard-investigate`, `$shipyard-decompose`,
@@ -383,16 +392,20 @@ configuration consumers. It is an ordered `model[:effort][@min_cli]` list:
 - The emitted static variants include the repair `repeat`/`deep` files and the
   judgment `shipyard-arch-review-critical` and
   `shipyard-integrator-critical` files. `shipyard-pr-sentinel` is the only
-  sentinel file. Use `node $CODEX_HOME/shipyard/scripts/codex-agent.cjs select
-  <role> --json [--project-dir <project>]` with the dispatch signals and pass its
+  sentinel file. Use `node "$CODEX_HOME/shipyard/scripts/codex-agent.cjs" select
+  <role> --json --capabilities-file "$CODEX_HOME/shipyard/codex-capabilities.json"
+  [--project-dir <project>]` with the dispatch signals and pass its
   exact `agent_file` to the record; for dynamic roles pass its concrete
   `model`/`effort` to the supported `spawn_agent` or `codex exec` call and omit
   `--agent-file`. The selector also reports a fallback when a requested rung is
   not a static file.
 - The installer/generator validates the complete required capability set before
-  replacing destinations. A bare installer provisions the canonical capability
-  contract; `SHIPYARD_CODEX_CAPABILITIES_FILE` may instead supply explicit host
-  evidence and is never used to alter the ADR-014 selections.
+  replacing destinations. The compatibility palette is not host evidence and
+  never tunes the ADR-014 files. The adjacent selector contract also validates
+  any explicitly declared compatibility palette against the model it resolves;
+  routed Codex projects should omit that legacy palette or keep it consistent
+  with the canonical policy. This boundary belongs to the Codex adapter, while
+  the T-36-04 bundle supplies the durable evidence file it consumes.
 
 <!-- keep in sync with commands/decompose.md -->
 **One config detail matters on both runtimes.** The delivery-rules contract reaches

@@ -153,6 +153,7 @@ instead, and the front reads it back by itself:
   than naming a file nothing ships. Naming a file the role does not claim is
   refused. For static Codex roles select the file from the same signals with
   `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json
+  --capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"
   [--project-dir <project>] [--risk …] [--files …] [--checkpoint]
   [--signature-state …]`; pass its `agent_file` and `route` fields unchanged.
   Run it from the conveyor project, or pass `--project-dir <project>` when the
@@ -474,8 +475,10 @@ CEILING — fable, only under `pipeline.fable: auto`, only via these routes:
                   returned needs-fix on this epic before
   shut ceiling    every route above → opus at max effort, with the reason
                   (`pipeline.fable` off, or a runtime whose tier vocabulary has no
-                  such alias — where an agent is a static file, the SAME two
-                  triggers select a `-deep` agent instead; see below)
+                  such alias). On Codex, static files follow the policy-specific
+                  variant: repair `repeat_exhausted` uses `-deep`, critical or
+                  contested judgement uses `-critical` where emitted, and the
+                  sentinel stays on its base file.
 ```
 
 **PASS THE SIGNALS THE TABLE READS, or the row is decoration.** This was measured
@@ -564,14 +567,16 @@ On Codex, static `$shipyard-<role>` agents run under their own
 `~/.codex/agents/<name>.toml`, which carries the canonical ADR-014 model and
 effort ALREADY — written at install time from the policy module, not from the
 compatibility `pipeline.codex_models` palette. Resolve a static file at dispatch
-time with `codex-agent.cjs select <role> --json [--project-dir <project>]`;
+time with `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json --capabilities-file
+"${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json" [--project-dir <project>];
 if it runs from a ticket worktree, `--project-dir` must point at the conveyor
 root so the adaptive policy is loaded rather than the conservative defaults.
 Do not hand the Codex
 spawn a tier alias, because the static file is the field that carries the
 concrete model. `executor` is the one deliberate exception: it has no static
-file, so `codex-agent.cjs select executor --json` resolves the concrete palette
-model at runtime and has `agent_file: null`. Pass that model and effort to
+file, so `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select executor --json
+--capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"` resolves the
+concrete palette model at runtime and has `agent_file: null`. Pass that model and effort to
 `spawn_agent`/`codex exec` when the schema supports them; otherwise the active
 session model is an explicit, measurable fallback. For the dispatch record, use
 the selector's `route`/`model_tier`; use its concrete `model` as
@@ -600,7 +605,8 @@ The Codex integrator has a base file and the emitted
 `$shipyard-integrator-critical` file; use the latter for its critical or
 contested rung. On Claude, the same role reaches the ceiling only through an
 earned route. The compatibility palette does not remove canonical files, and
-the installer refuses a host that cannot satisfy the required capability pairs.
+the installer requires explicit host evidence and refuses a host that cannot
+satisfy the required capability pairs.
 
 Scripts (the deterministic layer — do NOT improvise git/gh by hand where a script
 exists):
@@ -1504,8 +1510,10 @@ may be dispatched at all: fix the file.
    model from `pipeline-config.cjs model executor --json --explain --risk <risk>
    --type <type> --files <n> [--checkpoint]` and pass the returned `model`,
    `effort` and `task_level` verbatim. On the Codex path, call
-   `codex-agent.cjs select executor --json --project-dir <project> --risk <risk>
-   --type <type> --files <n> [--checkpoint]` with the same signals. Pass its
+   `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select executor --json --capabilities-file
+   "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json" --project-dir <project>
+   --risk <risk> --type <type> --files <n> [--checkpoint]` with the same signals.
+   Pass its
    concrete `model` and `effort` when the host supports those
    overrides; when `model` is `null`, omit `--model` and let the Codex CLI default
    apply. In both runtimes keep the selector's `route`, `model_tier` and
@@ -1686,7 +1694,8 @@ for every ticket on the guarded list, taking all three resolver fields from the
     is known absent, `unknown` when the host did not expose what ran, or omit the flag
     when neither fact is available;
     on the Codex path also pass `--agent-file <agent_file>` from the same
-    `codex-agent.cjs select pr-sentinel` call, so the ordinary or recovery lane is
+    `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select pr-sentinel --json --capabilities-file
+    "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"` call, so the ordinary or recovery lane is
     recorded; omit that field for the Agent path.
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
 one when the guard's report comes back for it — a `pr-sentinel` record also lifts
