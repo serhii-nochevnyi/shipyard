@@ -204,14 +204,28 @@ function recoverPendingLocked(graphDir) {
     throw new Error(`cannot recover tracker override: the journal prefix changed while the transaction was pending`);
   }
   const suffix = current.data.subarray(marker.journal_offset);
+  const prefix = current.data.subarray(0, marker.journal_offset);
   if (marker.journal_offset > 0 && current.data[marker.journal_offset - 1] !== 0x0a) {
     throw new Error(
       `cannot recover tracker override: the journal prefix ends with an incomplete JSONL line — repair the journal and retry`
     );
   }
+  if (prefix.length > 0 && !completeJsonl(prefix)) {
+    throw new Error(
+      `cannot recover tracker override: the journal prefix contains an incomplete JSONL line — repair the journal and retry`
+    );
+  }
   const eventLine = Buffer.from(marker.event_line, 'utf8');
   const eventAt = suffix.indexOf(eventLine);
   if (eventAt >= 0 && (eventAt === 0 || suffix[eventAt - 1] === 0x0a)) {
+    const beforeEvent = suffix.subarray(0, eventAt);
+    const afterEvent = suffix.subarray(eventAt + eventLine.length);
+    if ((beforeEvent.length > 0 && !completeJsonl(beforeEvent))
+        || (afterEvent.length > 0 && !completeJsonl(afterEvent))) {
+      throw new Error(
+        `cannot recover tracker override: the journal around the completed override contains an incomplete JSONL line — repair the journal and retry`
+      );
+    }
     // Validate both payloads before replacing the cache or removing the
     // recovery marker. A structurally valid marker with corrupt base64/JSON
     // must remain pending and preserve the pre-transaction store.
@@ -658,6 +672,12 @@ function sameRecoveredOperation(recovered, operation) {
   return fields.every((field) => recovered.operation[field] === operation[field]);
 }
 
+function recoveredRecordIsCurrent(graphDir, recovered) {
+  if (!recovered || !recovered.record) return false;
+  return recovered.record.generation === currentGeneration(graphDir)
+    && recovered.record.generation_identity === metadataIdentity(graphDir);
+}
+
 function mutateRecord(graphDir, operation, fn) {
   if (!hasGraph(graphDir)) throw new Error(`no ticket graph at ${graphDir}`);
   fs.mkdirSync(graphDir, { recursive: true });
@@ -671,7 +691,8 @@ function mutateRecord(graphDir, operation, fn) {
       // result instead of running the override callback a second time. A
       // different operation may still proceed after recovery has removed the
       // marker.
-      if (recovered && sameRecoveredOperation(recovered, operation)) return recovered.record;
+      if (recovered && recoveredRecordIsCurrent(graphDir, recovered)
+          && sameRecoveredOperation(recovered, operation)) return recovered.record;
       const beforeStore = fileSnapshot(graphStore(graphDir));
       const store = readStore(graphDir);
       const result = fn(store, recovered);
