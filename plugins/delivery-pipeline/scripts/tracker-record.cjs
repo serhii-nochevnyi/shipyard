@@ -433,8 +433,9 @@ function writeRecord(graphDir, ticket, record) {
   return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
     recoverPendingLocked(graphDir);
     // Bind the observation while holding the same lock as state-sync. A read
-    // that queued behind a publish must belong to the newly current generation,
-    // otherwise the next state-sync would never consume it.
+    // that queued behind a publish must use one coherent generation/identity
+    // pair and belong to the newly current generation, otherwise the next
+    // state-sync or active-reader pass can drop the record.
     const boundRecord = {
       ...record,
       generation: requireGeneration(graphDir),

@@ -123,6 +123,19 @@ test('a tracker hold keeps a board with no other work out of fixpoint', () => {
   assert.strictEqual(f.fixpoint, false, 'the pending ticket still needs a tracker read or exact-ticket decision');
 });
 
+test('formatFront names a tracker-only hold instead of sending it to ci-wait', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: ['To Do'], trackerRecords: {} }
+  );
+  const line = formatFront(f).find((entry) => /^fixpoint:/.test(entry));
+  assert.match(line, /held by tracker eligibility/);
+  assert.match(line, /Read each ticket once from Jira at cold start/);
+  assert.match(line, /exact ticket/);
+  assert.doesNotMatch(line, /run ci-wait/);
+});
+
 test('missing Jira key and a key-mismatched record fail closed', () => {
   const missing = computeFront(
     { T: trackerTicket(null) },
