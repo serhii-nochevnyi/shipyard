@@ -208,18 +208,18 @@ function requireGeneration(graphDir) {
   return generation;
 }
 
-function recordsForGeneration(store, generation) {
+function recordsForGeneration(store, generation, configuredStatuses) {
   if (!Number.isInteger(generation) || generation < 1) return {};
   const out = {};
   for (const [ticket, record] of Object.entries(store.tickets)) {
     if (!record || record.ticket !== ticket || record.generation !== generation) continue;
-    if (!validRecord(record)) continue;
+    if (!validRecord(record, configuredStatuses)) continue;
     out[ticket] = { ...record };
   }
   return out;
 }
 
-function validRecord(record) {
+function validRecord(record, configuredStatuses) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
   if (typeof record.ticket !== 'string' || !record.ticket.trim()) return false;
   if (typeof record.jira_key !== 'string' || !record.jira_key.trim()) return false;
@@ -239,6 +239,10 @@ function validRecord(record) {
     || (typeof record.assignee_observed !== 'boolean'
       && Object.prototype.hasOwnProperty.call(record, 'assignee'));
   if (!assigneeObserved) return false;
+  if (Array.isArray(configuredStatuses)) {
+    const current = evaluateEligibility(record.status, record.assignee, configuredStatuses);
+    if (current.verdict !== record.verdict || current.eligible !== record.eligible) return false;
+  }
   return typeof record.eligible === 'boolean'
     && record.eligible === (record.verdict === 'eligible')
     && (record.assignee === null || (typeof record.assignee === 'string' && !!record.assignee.trim()));
@@ -247,7 +251,7 @@ function validRecord(record) {
 function activeRecords(graphDir) {
   if (fs.existsSync(pendingPath(graphDir))) return {};
   const store = readStore(graphDir);
-  return recordsForGeneration(store, currentGeneration(graphDir));
+  return recordsForGeneration(store, currentGeneration(graphDir), readConfigStatuses(projectRootOf(graphDir)));
 }
 
 // Tracker observations are recorded against the snapshot that was current
@@ -259,7 +263,7 @@ function activePreviousTrackers(graphDir) {
   const store = readStore(graphDir);
   const generation = currentGeneration(graphDir);
   return Number.isInteger(generation) && generation > 1
-    ? recordsForGeneration(store, generation - 1)
+    ? recordsForGeneration(store, generation - 1, readConfigStatuses(projectRootOf(graphDir)))
     : {};
 }
 
