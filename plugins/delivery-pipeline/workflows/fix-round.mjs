@@ -29,13 +29,19 @@ export const meta = {
 //                        // dispatch boundary (never inherited or defaulted here)
 //       effort,          // caller-resolved reasoning effort; required at the
 //                        // dispatch boundary (never inherited or defaulted here)
+//       signals,         // exact ADR-014 signals used to resolve model/effort;
+//                        // never infer a repair rung from the pair alone
 //     } ],
 //     ciFixRefPath,      // abs path to references/ci-fix.md
 //     reviewFixRefPath,  // abs path to references/review-fix.md
 //     reinitScript,      // abs path to scripts/reviewers.cjs
 //     artifactLanguage,  // optional; language for shipped artifacts (default English)
+//     claudeCapabilities,       // explicit capabilities from the Claude host
+//     dispatchRecorder,          // durable receipt recorder from the host
+//     claudeApplicationEvidence, // host callback returning actual launch_id/applied_model/applied_effort
+//     claudeHost,                // optional host object carrying the same fields
 //   }
-// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis } ]
+// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis, receipt } ]
 //
 // A fresh agent per attempt is right for context hygiene and is exactly why
 // attempt 3 can re-propose attempt 1's failed fix. `attemptHistory` in, and
@@ -78,6 +84,15 @@ const OUT = {
       description: 'one sentence: what you believed was wrong and what the fix targets; for no-op or escalate, why. Required — it is recorded on the attempt and handed to the next fixer as the record of what has already been tried',
     },
   },
+}
+
+// A receipt is boundary-owned provenance, not an agent result field. Keep a
+// non-conforming/stubbed agent from smuggling a lookalike through the spread;
+// only the receipt returned by createClaudeWorkflowDispatch may cross out.
+const withoutAgentReceipt = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const { receipt: ignoredReceipt, ...safe } = value
+  return safe
 }
 
 // The Workflow runtime may hand `args` over as a JSON STRING rather than an
@@ -251,13 +266,20 @@ return await parallel(
     // `hypothesis` included — and an invented one would be worse than none: it
     // would enter the record as something that was tried and ruled out. Say what
     // is actually known instead.
-    const fixFallback = (why, hypothesis) => ({ id: p.id, pr: p.pr, pushed: false, status: 'escalate', notes: why, hypothesis })
+    const fixFallback = (why, hypothesis, receipt) => ({
+      id: p.id, pr: p.pr, pushed: false, status: 'escalate', notes: why, hypothesis,
+      ...(receipt ? { receipt } : {}),
+    })
     try {
       const role = p.needsCiFix ? 'ci-fix' : p.needsReviewFix ? 'review-fix' : null
       if (!role) throw new Error('fixer dispatch requires needsCiFix or needsReviewFix')
-      const signals = p.signals === undefined && p.signatureState !== undefined
-        ? { signatureState: p.signatureState }
-        : p.signals
+      const signals = p.signals === undefined
+        ? (p.signatureState === undefined ? undefined : { signatureState: p.signatureState })
+        : p.signatureState === undefined
+          ? p.signals
+          : p.signals.signatureState !== undefined && p.signals.signatureState !== p.signatureState
+            ? (() => { throw new Error('fixer dispatch received contradictory signatureState signals') })()
+            : { ...p.signals, signatureState: p.signatureState }
       return createClaudeWorkflowDispatch({
         agent,
         prompt: buildPrompt(p),
@@ -271,7 +293,8 @@ return await parallel(
         previousDispatchId: p.previous_dispatch_id || p.previousDispatchId,
         capabilities: argv.claudeCapabilities,
         recorder: argv.dispatchRecorder,
-        launchId: p.launch_id || p.launchId,
+        applicationEvidence: argv.claudeApplicationEvidence,
+        host: argv.claudeHost,
         label: `fix:${p.id}#${p.pr}`,
         agentOptions: {
           label: `fix:${p.id}#${p.pr}`,
@@ -280,9 +303,9 @@ return await parallel(
           schema: OUT,
         },
       })
-        .then(({ result: r }) => (r
-          ? { ...r, id: p.id, pr: p.pr }
-        : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one')))
+        .then(({ result: r, receipt }) => (r
+          ? { ...withoutAgentReceipt(r), id: p.id, pr: p.pr, ...(receipt ? { receipt } : {}) }
+          : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one', receipt)))
         .catch((e) => fixFallback(
           `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
           'unknown — the fixer errored before reporting one'

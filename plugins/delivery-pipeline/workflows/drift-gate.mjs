@@ -6,9 +6,11 @@ export const meta = {
 
 // ── args contract (built by /shipyard:deliver before invocation) ────────────
 //   args = {
-//     tickets: [ { id, planPath, baseRef, model, effort } ],  // all three
+//     tickets: [ { id, planPath, baseRef, model, effort, signals } ],  // all three
 //                        // model/effort values are caller-resolved and pass
 //                        // through unchanged; no runtime or CLI default here.
+//                        // `signals` is the exact resolver input; never infer
+//                        // a rung from the model/effort pair alone.
 //                        // `baseRef` falls back to the round-level one.
 //                        //
 //                        // PER TICKET, because the base is a per-ticket fact: in
@@ -37,8 +39,12 @@ export const meta = {
 //                        // when given, a `drifted` judge persists its own verdict
 //                        // instead of leaving it in a reply that dies with the run
 //     graphDir: "<project>/.planning/graph",  // where that record belongs
+//     claudeCapabilities,       // explicit capabilities from the Claude host
+//     dispatchRecorder,          // durable receipt recorder from the host
+//     claudeApplicationEvidence, // host callback returning actual launch_id/applied_model/applied_effort
+//     claudeHost,                // optional host object carrying the same fields
 //   }
-// returns: [ { id, verdict: 'fresh'|'drifted', moved: [string], reuse_candidates: [string], evidence: [string], recorded?: string } ]
+// returns: [ { id, verdict: 'fresh'|'drifted', moved: [string], reuse_candidates: [string], evidence: [string], recorded?: string, receipt } ]
 //
 // `reuse_candidates` is ADVISORY and orthogonal to the verdict: a `fresh`
 // ticket carries it into the executor prompt so the implementation builds on
@@ -81,6 +87,14 @@ const VERDICT = {
       description: 'For a drifted verdict, whether drift-record.cjs persisted it: "yes" or "no (reason)".',
     },
   },
+}
+
+// The agent's verdict is data; application provenance belongs to the routed
+// boundary. Strip any lookalike before the verified boundary receipt is added.
+const withoutAgentReceipt = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const { receipt: ignoredReceipt, ...safe } = value
+  return safe
 }
 
 // The Workflow runtime may hand `args` over as a JSON STRING rather than an
@@ -203,7 +217,8 @@ const results = await parallel(
         dispatchId: t.dispatch_id || t.dispatchId,
         capabilities: argv.claudeCapabilities,
         recorder: argv.dispatchRecorder,
-        launchId: t.launch_id || t.launchId,
+        applicationEvidence: argv.claudeApplicationEvidence,
+        host: argv.claudeHost,
         label: `drift:${t.id}`,
         agentOptions: {
           label: `drift:${t.id}`,
@@ -212,7 +227,9 @@ const results = await parallel(
           schema: VERDICT,
         },
       })
-        .then(({ result: v }) => (v ? { ...v, id: t.id } : driftFallback(t.id, 'judge returned no verdict — treat as drifted')))
+        .then(({ result: v, receipt }) => (v
+          ? { ...withoutAgentReceipt(v), id: t.id, ...(receipt ? { receipt } : {}) }
+          : { ...driftFallback(t.id, 'judge returned no verdict — treat as drifted'), ...(receipt ? { receipt } : {}) }))
         .catch((e) => driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`))
     } catch (e) {
       return Promise.resolve(driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`))

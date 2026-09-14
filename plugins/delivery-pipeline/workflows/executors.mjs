@@ -19,6 +19,8 @@ export const meta = {
 //                      // dispatch boundary (never inherited or defaulted here)
 //       effort,        // caller-resolved reasoning effort; required at the
 //                      // dispatch boundary (never inherited or defaulted here)
+//       signals,       // exact ADR-014 signals used to resolve model/effort;
+//                      // never infer a critical rung from the pair alone
 //       reuseCandidates, // optional [string]; drift-check's `reuse_candidates` for
 //                      // this ticket — existing implementations to build on. Advisory
 //                      // context, NOT a scope change: it never widens files_modified.
@@ -26,8 +28,12 @@ export const meta = {
 //     deliveryRulesHint, // short reminder of the delivery-block/scope contract
 //     prBodyGuide,       // one-line reminder of the PR body sections
 //     artifactLanguage,  // optional; language for shipped artifacts (default English)
+//     claudeCapabilities,       // explicit capabilities from the Claude host
+//     dispatchRecorder,          // durable receipt recorder from the host
+//     claudeApplicationEvidence, // host callback returning actual launch_id/applied_model/applied_effort
+//     claudeHost,                // optional host object carrying the same fields
 //   }
-// returns: [ { id, branch, status: 'committed'|'blocked', prBodyPath, evidencePath, summary } ]
+// returns: [ { id, branch, status: 'committed'|'blocked', prBodyPath, evidencePath, summary, receipt } ]
 //
 // T-26-14 — A WORKFLOW RETURNS A REFERENCE, NOT A DOCUMENT. Measured on the
 // session that ran this exact ticket, 2026-09-07: the orchestrator's
@@ -126,7 +132,7 @@ const cap = (s, n = 500) => {
 // `prBodyPath`/`evidencePath` carry NO such cap — they are `worktreePath`
 // plus a fixed suffix, so their length follows the worktree's own path,
 // which this script neither controls nor needs to bound).
-const toResult = (t, r) => {
+const toResult = (t, r, receipt) => {
   const committed = !!r && r.status === 'committed'
   const paths = committed ? docPaths(t) : { prBodyPath: '', evidencePath: '' }
   const rawSummary = r && typeof r.summary === 'string' ? r.summary : ''
@@ -137,6 +143,7 @@ const toResult = (t, r) => {
     prBodyPath: paths.prBodyPath,
     evidencePath: paths.evidencePath,
     summary: cap(rawSummary || (committed ? '' : 'blocked — agent returned no reason')),
+    ...(receipt ? { receipt } : {}),
   }
 }
 
@@ -226,13 +233,14 @@ phase('Execute')
 // that ticket only — the parallel run and the other tickets are unaffected.
 // No worktreePath is required here: a dead ticket wrote nothing, so there is
 // no file to point at.
-const execFallback = (t, why) => ({
+const execFallback = (t, why, receipt) => ({
   id: t.id,
   branch: t.branch,
   status: 'blocked',
   prBodyPath: '',
   evidencePath: '',
   summary: cap(why),
+  ...(receipt ? { receipt } : {}),
 })
 
 const results = await parallel(
@@ -285,7 +293,8 @@ const results = await parallel(
         previousDispatchId: t.previous_dispatch_id || t.previousDispatchId,
         capabilities: argv.claudeCapabilities,
         recorder: argv.dispatchRecorder,
-        launchId: t.launch_id || t.launchId,
+        applicationEvidence: argv.claudeApplicationEvidence,
+        host: argv.claudeHost,
         label: `exec:${t.id}`,
         agentOptions: {
           label: `exec:${t.id}`,
@@ -294,7 +303,9 @@ const results = await parallel(
           schema: OUT,
         },
       })
-        .then(({ result }) => (result ? toResult(t, result) : execFallback(t, 'executor agent died — re-dispatch via /shipyard:deliver')))
+        .then(({ result, receipt }) => (result
+          ? toResult(t, result, receipt)
+          : execFallback(t, 'executor agent died — re-dispatch via /shipyard:deliver', receipt)))
         .catch((e) => execFallback(t, `executor errored (${e && e.message ? e.message : e}) — re-dispatch via /shipyard:deliver`))
     } catch (e) {
       return Promise.resolve(execFallback(t, `executor errored (${e && e.message ? e.message : e}) — re-dispatch via /shipyard:deliver`))

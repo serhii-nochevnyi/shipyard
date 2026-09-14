@@ -9,12 +9,6 @@ const { CLAUDE_MODEL_ALIASES } = require('./runtime-adapters.cjs');
 const { createDispatchBoundary } = require('./dispatch-boundary.cjs');
 
 const REPAIR = 'Install an ADR-014-capable Claude host with explicit workflow model and effort support; provide current host capabilities and retry the exact selection.';
-const WORKFLOW_CAPABILITIES = Object.freeze({
-  supportedModels: Object.freeze(Object.values(CLAUDE_MODEL_ALIASES)),
-  supportedEfforts: Object.freeze(['high', 'medium', 'max']),
-  observedModel: false,
-  observedEffort: false,
-});
 
 function refuse(code, message) {
   throw policy.policyError(code, message + '. ' + REPAIR);
@@ -22,6 +16,15 @@ function refuse(code, message) {
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function durableRecorder(value) {
+  return object(value)
+    && Object.isFrozen(value)
+    && typeof value.storeDir === 'string'
+    && value.storeDir.trim() !== ''
+    && ['reserve', 'record', 'finalize', 'getVerifiedRecord', 'getLatestReceipt', 'claim', 'release', 'renewClaim', 'consume']
+      .every((method) => typeof value[method] === 'function');
 }
 
 function validateAvailability(resolution, capabilities) {
@@ -168,36 +171,14 @@ function createClaudeDispatchAdapter(options = {}) {
   return Object.freeze(adapter);
 }
 
-function createInProcessRecorder() {
-  const reserved = new Set();
-  const records = new Map();
-  return Object.freeze({
-    reserve(dispatchId) {
-      if (reserved.has(dispatchId) || records.has(dispatchId)) return false;
-      reserved.add(dispatchId);
-      return { reserved: true };
-    },
-    record(record) {
-      if (!object(record) || typeof record.dispatch_id !== 'string') return false;
-      records.set(record.dispatch_id, record);
-      return { recorded: true };
-    },
-    finalize(record) {
-      if (!object(record) || typeof record.dispatch_id !== 'string') return false;
-      records.set(record.dispatch_id, record);
-      return { finalized: true };
-    },
-    getRecord(dispatchId) {
-      return records.get(dispatchId) || null;
-    },
-  });
-}
-
 // Workflow scripts receive the native `agent` callback but do not receive a
 // policy resolver. Keep the host callback behind the same adapter and boundary
 // used by direct callers so the agent is invoked only after resolve, validate,
 // and reservation, and its application receipt is recorded before the result
-// is returned to the workflow.
+// is returned to the workflow. The native callback returns the agent's output,
+// not proof of what the host applied, so the host must inject an evidence
+// callback separately; requested values are never promoted to application
+// evidence here.
 function createClaudeWorkflowDispatch(options = {}) {
   if (!object(options)) refuse('INVALID_INPUT', 'Claude workflow dispatch options must be an object');
   if (typeof options.agent !== 'function') refuse('MISSING_ADAPTER', 'Claude workflow dispatch requires the native agent callback');
@@ -208,26 +189,31 @@ function createClaudeWorkflowDispatch(options = {}) {
     refuse('INVALID_INPUT', 'Claude workflow dispatch requires explicit model and effort');
   }
 
-  const capabilities = options.capabilities === undefined
-    ? WORKFLOW_CAPABILITIES
+  const suppliedHost = object(options.host) ? options.host : null;
+  const capabilities = options.capabilities === undefined && suppliedHost
+    ? suppliedHost.capabilities
     : options.capabilities;
-  const recorder = options.recorder === undefined ? createInProcessRecorder() : options.recorder;
-  if (!(typeof recorder === 'function'
-      || (recorder && typeof recorder === 'object' && typeof recorder.record === 'function'))) {
-    refuse('RECORD_UNAVAILABLE', 'Claude workflow dispatch requires a receipt recorder');
+  const recorder = options.recorder === undefined && suppliedHost
+    ? suppliedHost.recorder
+    : options.recorder;
+  const applicationEvidence = options.applicationEvidence === undefined && suppliedHost
+    ? suppliedHost.applicationEvidence
+    : options.applicationEvidence;
+  if (capabilities === undefined) {
+    refuse('UNSUPPORTED_SELECTION', 'Claude workflow dispatch requires explicit host capabilities');
+  }
+  if (!durableRecorder(recorder)) {
+    refuse('RECORD_UNAVAILABLE', 'Claude workflow dispatch requires a durable receipt recorder');
+  }
+  if (typeof applicationEvidence !== 'function') {
+    refuse('MISSING_RECEIPT', 'Claude workflow dispatch requires host application evidence');
   }
   const agentOptions = object(options.agentOptions) ? { ...options.agentOptions } : {};
-  const launchId = options.launchId === undefined
-    ? `workflow-${options.role}-${String(options.label || 'dispatch').replace(/[^A-Za-z0-9_.:-]+/g, '_')}`
-    : options.launchId;
-  if (typeof launchId !== 'string' || !launchId || /\s/.test(launchId)) {
-    refuse('INVALID_INPUT', 'Claude workflow dispatch requires a whitespace-free launch id');
-  }
 
   let agentResult;
   const host = {
     capabilities,
-    launch(selection) {
+    launch(selection, context) {
       const result = options.agent(options.prompt, {
         ...agentOptions,
         model: selection.model,
@@ -235,11 +221,10 @@ function createClaudeWorkflowDispatch(options = {}) {
       });
       const capture = (value) => {
         agentResult = value;
-        return {
-          launch_id: launchId,
-          applied_model: selection.model,
-          applied_effort: selection.effort,
-        };
+        // This callback is host-owned. It must report what the host actually
+        // applied; the requested selection is intentionally not passed in, so
+        // this adapter cannot turn its own input into application evidence.
+        return applicationEvidence.call(suppliedHost || host, { result: value, context });
       };
       return result && typeof result.then === 'function' ? result.then(capture) : capture(result);
     },

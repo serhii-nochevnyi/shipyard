@@ -30,10 +30,14 @@ const os = require('os');
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const {
+  createDispatchBoundary,
+  createDurableRecorder,
+} = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const {
   CLAUDE_MODEL_ALIASES,
   createClaudeDispatchAdapter,
+  createClaudeWorkflowDispatch,
 } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
 
 const WORKFLOWS = path.join(
@@ -42,12 +46,43 @@ const WORKFLOWS = path.join(
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
+const WORKFLOW_CAPABILITIES = Object.freeze({
+  supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
+  supportedEfforts: ['high', 'medium', 'max'],
+  observedModel: false,
+  observedEffort: false,
+});
+const workflowStores = [fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-dispatch-'))];
+const WORKFLOW_RECORDER = createDurableRecorder(workflowStores[0]);
+const hostEvidence = new WeakMap();
+let workflowLaunch = 0;
+const workflowApplicationEvidence = ({ result }) => {
+  const evidence = hostEvidence.get(result);
+  if (!evidence) throw new Error('test Claude host returned no application evidence');
+  return evidence;
+};
+const testDispatchFactory = (options) => createClaudeWorkflowDispatch({
+  ...options,
+  capabilities: options.capabilities === undefined ? WORKFLOW_CAPABILITIES : options.capabilities,
+  recorder: options.recorder === undefined ? WORKFLOW_RECORDER : options.recorder,
+  applicationEvidence: options.applicationEvidence === undefined
+    ? workflowApplicationEvidence
+    : options.applicationEvidence,
+});
+process.on('exit', () => {
+  for (const store of workflowStores) {
+    try { fs.rmSync(store, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+  }
+});
+
 function load(name) {
   const src = fs.readFileSync(path.join(WORKFLOWS, `${name}.mjs`), 'utf8')
     // the one module-level construct the runtime's wrap strips, mirrored from
     // the smoke test's canary (`sed 's/^export const meta/const meta/'`)
     .replace(/^export const meta/m, 'const meta');
-  return new AsyncFunction('agent', 'parallel', 'phase', 'log', 'args', '__require', src);
+  return new AsyncFunction(
+    'agent', 'parallel', 'phase', 'log', 'args', '__require', '__createClaudeWorkflowDispatch', src
+  );
 }
 
 // `results` rewrites what the fan-out hands back AFTER every thunk has run.
@@ -62,7 +97,15 @@ function harness({ agent, results = (all) => all } = {}) {
     calls,
     agent: async (prompt, opts) => {
       calls.push({ prompt, opts });
-      return agent ? agent(prompt, opts) : {};
+      const value = agent ? await agent(prompt, opts) : {};
+      if (value && typeof value === 'object') {
+        hostEvidence.set(value, {
+          launch_id: `test-workflow-launch-${++workflowLaunch}`,
+          applied_model: opts.model,
+          applied_effort: opts.effort,
+        });
+      }
+      return value;
     },
     parallel: async (thunks) => results(await Promise.all(thunks.map((f) => f()))),
     phase: () => {},
@@ -72,7 +115,12 @@ function harness({ agent, results = (all) => all } = {}) {
 
 async function run(name, args, opts) {
   const h = harness(opts);
-  const value = await load(name)(h.agent, h.parallel, h.phase, h.log, args, require);
+  const dispatchFactory = opts && opts.noDispatchFactory
+    ? undefined
+    : opts && opts.dispatchFactory
+      ? opts.dispatchFactory
+      : testDispatchFactory;
+  const value = await load(name)(h.agent, h.parallel, h.phase, h.log, args, require, dispatchFactory);
   return { value, calls: h.calls };
 }
 
@@ -358,18 +406,18 @@ const DISPATCH = [
   },
 ];
 
-const recorderFor = (records) => (record) => {
-  records.push(record);
-  return true;
-};
-
 for (const spec of DISPATCH) {
   const runSpec = async (over = {}, withRecorder = false) => {
-    const records = [];
     const args = spec.args(over);
-    if (withRecorder) args.dispatchRecorder = recorderFor(records);
+    let recorder = WORKFLOW_RECORDER;
+    if (withRecorder) {
+      const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-dispatch-'));
+      workflowStores.push(storeDir);
+      recorder = createDurableRecorder(storeDir);
+      args.dispatchRecorder = recorder;
+    }
     const result = await run(spec.name, args);
-    return { ...result, records };
+    return { ...result, recorder };
   };
 
   test(`${spec.name}.mjs applies the caller-resolved model and effort only after boundary validation`, async () => {
@@ -380,12 +428,15 @@ for (const spec of DISPATCH) {
   });
 
   test(`${spec.name}.mjs records a boundary-verified application receipt before returning`, async () => {
-    const { calls, records } = await runSpec({}, true);
+    const { calls, value, recorder } = await runSpec({}, true);
     assert.strictEqual(calls.length, 1, `${spec.name}: expected one host launch`);
-    assert.strictEqual(records.length, 1, `${spec.name}: expected one persisted dispatch record`);
-    assert.strictEqual(records[0].receipt.compliance, 'verified');
-    assert.strictEqual(records[0].receipt.applied_model, spec.resolved.model);
-    assert.strictEqual(records[0].receipt.applied_effort, spec.resolved.effort);
+    assert.ok(value[0].receipt, `${spec.name}: workflow must return its boundary receipt`);
+    assert.strictEqual(value[0].receipt.compliance, 'verified');
+    assert.strictEqual(value[0].receipt.applied_model, spec.resolved.model);
+    assert.strictEqual(value[0].receipt.applied_effort, spec.resolved.effort);
+    const stored = recorder.getVerifiedRecord(value[0].receipt.dispatch_id);
+    assert.ok(stored, `${spec.name}: receipt must be durably stored`);
+    assert.deepStrictEqual(stored.receipt, value[0].receipt);
   });
 
   test(`${spec.name}.mjs refuses omitted launch values without invoking the host`, async () => {
@@ -426,6 +477,48 @@ test('unsupported or contradictory workflow selections fail closed before agent(
   });
   assert.strictEqual(fix.calls.length, 0);
   assert.strictEqual(fix.value[0].status, 'escalate');
+});
+
+test('workflow dispatch has no implicit host resources and rejects self-attested application evidence', async () => {
+  const strict = await run('executors', { tickets: [TICKETS[0]] }, {
+    dispatchFactory: createClaudeWorkflowDispatch,
+  });
+  assert.strictEqual(strict.calls.length, 0);
+  assert.strictEqual(strict.value[0].status, 'blocked');
+  assert.match(strict.value[0].summary, /explicit host capabilities/);
+
+  const base = {
+    agent: () => ({}),
+    prompt: 'test prompt',
+    role: 'executor',
+    model: 'sonnet',
+    effort: 'max',
+    capabilities: WORKFLOW_CAPABILITIES,
+  };
+  assert.throws(
+    () => createClaudeWorkflowDispatch(base),
+    (error) => error.code === 'RECORD_UNAVAILABLE',
+  );
+
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-dispatch-'));
+  workflowStores.push(storeDir);
+  const recorder = createDurableRecorder(storeDir);
+  assert.throws(
+    () => createClaudeWorkflowDispatch({ ...base, recorder }),
+    (error) => error.code === 'MISSING_RECEIPT',
+  );
+  assert.throws(
+    () => createClaudeWorkflowDispatch({
+      ...base,
+      recorder,
+      applicationEvidence: () => ({
+        launch_id: 'host-launch',
+        applied_model: 'opus',
+        applied_effort: 'medium',
+      }),
+    }),
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+  );
 });
 
 suite('strict Claude adapter — native aliases and explicit application evidence (T-36-05)');
