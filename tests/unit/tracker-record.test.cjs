@@ -420,6 +420,28 @@ test('recovery validates a completed marker before replacing the cache', () => {
   assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl')), eventLine);
 });
 
+test('recovery refuses a corrupt before-store payload before replacing the cache', () => {
+  const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
+  execFileSync('node', [
+    RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
+  ], { cwd: project });
+  const eventLine = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'));
+  stagePendingOverride(graph, beforeStore, beforeStore, eventLine, Buffer.alloc(0), Buffer.alloc(0));
+  const markerFile = path.join(graph, '.tracker-override.pending.json');
+  const marker = JSON.parse(fs.readFileSync(markerFile, 'utf8'));
+  marker.before_store = Buffer.from('{not-json').toString('base64');
+  fs.writeFileSync(markerFile, JSON.stringify(marker) + '\n');
+
+  const r = spawnSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /before_store payload is corrupt/);
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'tracker.json')), beforeStore);
+  assert.ok(fs.existsSync(markerFile), 'the corrupt marker remains for operator recovery');
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'delivery-log.jsonl')), Buffer.alloc(0));
+});
+
 test('recovery refuses an override appended after a torn journal prefix', () => {
   const { project, graph } = scratch();
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1', 'user-5'), { cwd: project });
