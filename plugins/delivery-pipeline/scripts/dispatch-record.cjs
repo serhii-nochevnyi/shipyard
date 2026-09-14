@@ -82,7 +82,7 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 const {
   ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime, loadConfig,
 } = require(path.join(__dirname, 'pipeline-config.cjs'));
-const { activePreviousTrackers, activeTrackers } = require(path.join(__dirname, 'tracker-record.cjs'));
+const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -1030,16 +1030,16 @@ function refreshFront(cwd) {
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
   // A tracker read made after the last published snapshot is recorded against
   // that snapshot and consumed by the next one. Refresh must match the
-  // standalone front reader, so use the cache's current and immediately
-  // preceding readers; current wins if both exist for a ticket.
+  // standalone front reader, so use the same single coherent cache snapshot.
   const trackerRecordsForFront = () => {
-    return {
-      ...activePreviousTrackers(dir),
-      ...activeTrackers(dir),
-    };
+    return activeTrackerSnapshotLocked(dir);
   };
   try {
-    return withLock(lockDirFor(cwd), 'state', () => {
+    // Keep the global lock order tracker-record -> state. State-sync uses the
+    // same order, while tracker-record writers never acquire state; taking the
+    // locks in the opposite order here would make a refresh deadlock with a
+    // concurrent snapshot publish.
+    return withLock(lockDirFor(cwd), 'tracker-record', () => withLock(lockDirFor(cwd), 'state', () => {
       let previous;
       let tickets;
       let state;
@@ -1070,7 +1070,7 @@ function refreshFront(cwd) {
         ...front,
       }, null, 2) + '\n');
       return front;
-    }, { label: 'dispatch-record', waitMs: 20_000 });
+    }, { label: 'dispatch-record', waitMs: 20_000 }), { label: 'dispatch tracker snapshot', waitMs: 20_000 });
   } catch (e) {
     process.stderr.write(
       `dispatch-record: the record is stored, but delivery-front.json could not be refreshed (${e.message}).\n` +

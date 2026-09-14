@@ -1678,15 +1678,13 @@ if (require.main === module) {
   // The RECORDS, not the flat view: the board's lifting sentence is chosen by the
   // park's kind, and the flat map keeps the kind only as a text prefix.
   const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
-  const { activePreviousTrackers, activeTrackers } = require(path.join(__dirname, 'tracker-record.cjs'));
+  const { activeTrackerSnapshot } = require(path.join(__dirname, 'tracker-record.cjs'));
   // A tracker read made after the last published snapshot is recorded against
-  // that snapshot and consumed by the next one. Standalone front reads must
-  // therefore accept the current and immediately preceding generations through
-  // the cache's two bounded readers; current wins if both exist for a ticket.
-  const trackerRecords = {
-    ...activePreviousTrackers(dir),
-    ...activeTrackers(dir),
-  };
+  // that snapshot and consumed by the next one. Read the current and the
+  // immediately preceding generations as one lock-protected cache view; two
+  // independent reads can straddle a clear or pending override transaction and
+  // hand computeFront a combination that never existed on disk.
+  const trackerRecords = activeTrackerSnapshot(dir);
   const front = computeFront(tickets, state, {
     parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
     drifted: activeDrift(root), escalated: activeParks(root, state),

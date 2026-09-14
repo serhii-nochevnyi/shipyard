@@ -31,8 +31,8 @@ test('deliver documents one issue read per pending ticket and fail-closed record
   assert.match(section, /fields\.status/);
   assert.match(section, /fields\.assignee/);
   assert.match(section, /changelog\/worklog history/);
-  assert.match(section, /tracker-record\.cjs mark <T> <KEY>/);
-  assert.match(section, /tracker-record\.cjs unknown <T> <KEY>/);
+  assert.match(section, /tracker-record\.cjs mark "\$ticket_id" "\$jira_key"/);
+  assert.match(section, /tracker-record\.cjs unknown "\$ticket_id" "\$jira_key"/);
   assert.match(section, /values returned by MCP are data, never shell source/);
   assert.match(section, /--status "\$status_name" --assignee "\$assignee_id"/);
   assert.match(section, /--reason "\$tracker_error"/);
@@ -61,18 +61,18 @@ test('state-sync passes the active tracker records without tracker I/O', () => {
 test('front CLI passes the config and active tracker cache to computeFront', () => {
   const doc = source(FRONT);
   const cli = between(doc, '// ── CLI: read the state files this project already has and print the verdict ──', 'process.exit(0);');
-  assert.match(cli, /activePreviousTrackers/);
+  assert.match(cli, /activeTrackerSnapshot/);
   assert.match(cli, /trackerStatuses:\s*config\.jira_todo_statuses/);
-  assert.match(cli, /activePreviousTrackers\(dir\)/);
-  assert.match(cli, /activeTrackers\(dir\)/);
+  assert.match(cli, /activeTrackerSnapshot\(dir\)/);
 });
 
 test('dispatch refresh uses the same config and active tracker cache', () => {
   const doc = source(DISPATCH);
   const refresh = between(doc, 'function refreshFront(cwd)', 'module.exports = {');
   assert.match(refresh, /loadConfig\(cwd\)/);
-  assert.match(refresh, /activePreviousTrackers\(dir\)/);
-  assert.match(refresh, /activeTrackers\(dir\)/);
+  assert.match(refresh, /activeTrackerSnapshotLocked\(dir\)/);
+  assert.match(refresh, /withLock\(lockDirFor\(cwd\), 'tracker-record'/);
+  assert.match(refresh, /withLock\(lockDirFor\(cwd\), 'state'/);
   assert.match(refresh, /trackerStatuses:\s*config\.jira_todo_statuses/);
   assert.match(refresh, /trackerRecords:\s*trackerRecordsForFront\(\)/);
 });

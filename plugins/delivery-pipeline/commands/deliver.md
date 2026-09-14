@@ -897,9 +897,12 @@ id and its Jira key, preserve the observation, and state why the bypass is
 intentional:
 
 ```bash
-project_graph="$PROJECT_ROOT/.planning/graph"
-override_reason="$OPERATOR_REASON"
-node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs override <T> <KEY> \
+# The orchestrator passes these four values as separate argv/data values:
+ticket_id="$1"
+jira_key="$2"
+override_reason="$3"
+project_graph="$4"
+node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs override "$ticket_id" "$jira_key" \
   --reason "$override_reason" --graph "$project_graph"
 ```
 
@@ -1283,10 +1286,15 @@ quoted argument, as below. This preserves exact tracker error text without
 letting tracker data become command syntax.
 
   ```bash
-  project_graph="$PROJECT_ROOT/.planning/graph"
-  status_name="$MCP_STATUS_NAME"
-  assignee_id="$MCP_ASSIGNEE_ID"   # set to "none" when MCP returned literal null
-  node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs mark <T> <KEY> \
+  # The orchestrator passes ticket-id, Jira key, status NAME, assignee identity,
+  # and graph directory as five separate argv/data values. Set assignee_id to
+  # "none" before this call when MCP returned literal null.
+  ticket_id="$1"
+  jira_key="$2"
+  status_name="$3"
+  assignee_id="$4"
+  project_graph="$5"
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs mark "$ticket_id" "$jira_key" \
     --status "$status_name" --assignee "$assignee_id" \
     --graph "$project_graph"
   ```
@@ -1295,8 +1303,13 @@ letting tracker data become command syntax.
   tracker's error words and record the fail-closed result instead:
 
   ```bash
-  tracker_error="$MCP_ERROR_TEXT"
-  node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs unknown <T> <KEY> \
+  # The orchestrator passes ticket-id, Jira key, error text, and graph directory
+  # as four separate argv/data values.
+  ticket_id="$1"
+  jira_key="$2"
+  tracker_error="$3"
+  project_graph="$4"
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/tracker-record.cjs unknown "$ticket_id" "$jira_key" \
     --reason "$tracker_error" --graph "$project_graph"
   ```
 
