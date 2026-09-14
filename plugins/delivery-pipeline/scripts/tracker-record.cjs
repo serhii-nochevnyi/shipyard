@@ -217,6 +217,11 @@ function recoverPendingLocked(graphDir) {
   }
   const eventLine = Buffer.from(marker.event_line, 'utf8');
   const eventAt = suffix.indexOf(eventLine);
+  if (eventAt > 0 && suffix[eventAt - 1] !== 0x0a) {
+    throw new Error(
+      `cannot recover tracker override: the journal has an incomplete line before the completed override — repair the journal and retry`
+    );
+  }
   if (eventAt >= 0 && (eventAt === 0 || suffix[eventAt - 1] === 0x0a)) {
     const beforeEvent = suffix.subarray(0, eventAt);
     const afterEvent = suffix.subarray(eventAt + eventLine.length);
@@ -395,11 +400,6 @@ function recordsForGeneration(store, generation, configuredStatuses, identity, o
     // here would let a named bypass survive the next snapshot.
     if (options.excludeOverrides && record.override === true) continue;
     if (!recordMatchesTicketGraph(record, options.tickets)) continue;
-    // The predecessor bridge keeps an external observation alive across the
-    // publish boundary, but a direct override is not an observation to carry
-    // forward. Its contract is one current-generation exception; including it
-    // here would let a named bypass survive the next snapshot.
-    if (options.excludeOverrides && record.override === true) continue;
     if (!validRecord(record, configuredStatuses, identity)) continue;
     out[ticket] = { ...record };
   }
