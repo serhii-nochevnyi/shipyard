@@ -227,6 +227,15 @@ const TRACKER_PROJECTION_CALL = {
   end: /^\*\*A pending projection is not actionable/m,
 };
 
+// The holding-gate escape hatch is a single-ticket call, not a set-level
+// configuration. Keep its invocation in the eligibility paragraph's bounded
+// slice so deleting the caller cannot be hidden by the surrounding explanation.
+const TRACKER_ELIGIBILITY_CALL = {
+  name: 'deliver.md § tracker eligibility — exact-ticket override',
+  start: /^\*\*Tracker eligibility is opt-in by status NAME\.\*\*/m,
+  end: /^Each emitted item carries/m,
+};
+
 // The invocation template a log line writes and a sentence about the field does
 // not: `effort_applied=<level|unknown>` in the command, versus "the honest
 // record is `effort_applied=unknown`" in the paragraph beside it — which is
@@ -318,6 +327,13 @@ const WIRED = [
       + 'it computes nothing, the watermark never moves, and the whole acting half under it is a '
       + 'procedure nobody is ever told to begin. A tested, complete, inert mechanism is ADR-007\'s '
       + 'entire subject and the exact defect phase 28 shipped a fix for',
+  },
+  {
+    kind: 'wired',
+    mechanism: '`tracker-record.cjs override` — the exact-ticket eligibility escape hatch',
+    reader: '`front.cjs` — the pending → execute boundary that consumes the generation-bound record',
+    homes: [{ doc: DELIVER, slice: TRACKER_ELIGIBILITY_CALL, caller: [/tracker-record\.cjs override <T> <KEY>/] }],
+    why: 'the bypass is valid only for one named ticket and must retain the tracker observation; a set-level shortcut would silently turn the holding rule off for every pending ticket',
   },
   {
     kind: 'decided',
@@ -542,5 +558,30 @@ for (const row of WIRED.filter((r) => r.kind === 'decided')) {
     );
   });
 }
+
+suite('tracker override — exact-ticket scope is documented and owned');
+
+test('the scope-selection section keeps the override out of every set scope', () => {
+  const full = fs.readFileSync(DELIVER, 'utf8');
+  const scope = section({
+    doc: DELIVER,
+    start: /^## Step 1 — Scope selection/m,
+    end: /^## Step 2 — Drift-gate/m,
+  }, full).text;
+  assert.match(scope, /Only a single exact ticket id/);
+  assert.match(scope, /set scopes never bypass\s+tracker eligibility/);
+  const normalizedScope = scope.replace(/\s+/g, ' ');
+  for (const label of ['whole phase N', 'everything reachable', 'all ready']) {
+    assert.ok(normalizedScope.includes(label), `scope options must still name ${label}`);
+  }
+});
+
+test('the recorder, not log-event, owns tracker_override', () => {
+  const recorder = fs.readFileSync(path.join(PLUGIN, 'scripts', 'tracker-record.cjs'), 'utf8');
+  const journal = fs.readFileSync(path.join(PLUGIN, 'scripts', 'log-event.cjs'), 'utf8');
+  assert.match(recorder, /event:\s*'tracker_override'/);
+  assert.match(recorder, /delivery-log\.jsonl/);
+  assert.match(journal, /tracker_override[\s\S]{0,500}tracker-record\.cjs override/);
+});
 
 done();

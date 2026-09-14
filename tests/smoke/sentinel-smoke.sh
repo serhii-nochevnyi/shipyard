@@ -1728,7 +1728,7 @@ case "\$argv" in
  {"number":602,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","baseRefName":"ticket/T-06-01-root","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/602","title":"T-06-02: child"}]'
     fi ;;
   # SMOKE_PARENT_UNSTARTED is the third fact the board can be in: nothing of this
-  # phase exists on the remote yet, so the parent's status is `pending` — which is
+  # phase exists on the remote yet, so the parent's status is \`pending\` — which is
   # NOT "the parent is early", it is "no branch was observed", and a base that
   # does not exist is not a base.
   "api repos/{owner}/{repo}/branches"*)
@@ -1936,6 +1936,254 @@ fi
 ( cd "$rproj" && PATH="$W/bin9:$PATH" node "$SCRIPTS/sentinel.cjs" merge T-06-02 > "$W/r-merge2.txt" 2>/dev/null ) || true
 has "the merge line carries the ALARM and the path" "$W/r-merge2.txt" "ALARM"
 has "…and names the file that never reached the epic" "$W/r-merge2.txt" "src/child.txt"
+
+# ── tracker eligibility: one MCP-shaped read, one local cache, three readers ─
+# The MCP itself is an orchestrator concern, so this fixture models its two
+# documented response shapes (top-level fields and `fields.*`) and lets the
+# recorder/front/state-sync path prove the durable boundary without credentials
+# or network access. A pending ticket is read once; a resumed PR is never read.
+trproj="$W/trackerproj"
+mkdir -p "$trproj/.planning/graph"
+cat > "$trproj/.planning/graph/tickets.json" <<'JSON'
+{
+  "epics": { "7": { "branch": "epic/07-tracker", "repos": [null] } },
+  "tickets": {
+    "T-07-01": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-01-eligible",
+                 "title": "eligible", "depends_on": [], "jira": "MYD-701", "risk": "low" },
+    "T-07-02": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-02-assigned",
+                 "title": "assigned", "depends_on": [], "jira": "MYD-702", "risk": "low" },
+    "T-07-03": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-03-unknown",
+                 "title": "unknown", "depends_on": [], "jira": "MYD-703", "risk": "low" },
+    "T-07-04": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-04-expiring",
+                 "title": "expiring", "depends_on": [], "jira": "MYD-704", "risk": "low" },
+    "T-07-05": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-01-01-root",
+                 "title": "resumed PR", "depends_on": [], "jira": "MYD-705", "risk": "low" }
+  }
+}
+JSON
+cat > "$trproj/.planning/config.json" <<'JSON'
+{"pipeline":{"jira_todo_statuses":"To Do"}}
+JSON
+cat > "$trproj/.planning/PROJECT.md" <<'MD'
+# Tracker fixture
+
+## Core Value
+
+Keep pending work limited to tickets available in the tracker.
+MD
+cat > "$trproj/.planning/ROADMAP.md" <<'MD'
+# Roadmap: tracker fixture
+
+## Requirements
+
+- **TRACKER-01** — Pending delivery observes tracker eligibility.
+
+## Phases
+
+### Phase 7: Tracker
+**Requirements**: TRACKER-01
+MD
+mkdir -p "$trproj/.planning/phases/07-tracker"
+for ticket in 07-01 07-02 07-03 07-04 07-05; do
+  cat > "$trproj/.planning/phases/07-tracker/${ticket}-PLAN.md" <<MD
+---
+phase: 7
+plan: ${ticket#07-}
+title: "${ticket} tracker fixture"
+files_modified: [src/${ticket}.js]
+requirements: [TRACKER-01]
+delivery:
+  ticket: T-${ticket}
+  risk: low
+---
+
+## Goal
+
+Keep the tracker fixture executable.
+MD
+done
+
+trlog="$trproj/.planning/graph/jira-projection.json"
+echo '{"marker":"outbound watermark must remain untouched"}' > "$trlog"
+trbefore="$(shasum -a 256 "$trlog" | awk '{print $1}')"
+trinitial="$W/tracker-initial.txt"
+( cd "$trproj" && PATH="$W/bin:$PATH" node "$SCRIPTS/state-sync.cjs" > "$trinitial" 2>"$W/tracker-initial.err" ) \
+  || bad "tracker fixture state-sync runs before observations" "$(cat "$W/tracker-initial.err")"
+
+cat > "$W/tracker-mcp-responses.json" <<'JSON'
+{
+  "T-07-01": {"key":"MYD-701","status":{"name":"To Do"},"assignee":null},
+  "T-07-02": {"key":"MYD-702","fields":{"status":{"name":"To Do"},"assignee":{"accountId":"user-5"}}},
+  "T-07-03": {"key":"MYD-703","error":"Jira API timed out"},
+  "T-07-04": {"key":"MYD-704","fields":{"status":{"name":"To Do"},"assignee":null}}
+}
+JSON
+
+# This is the documented adapter boundary: the orchestrator has already made
+# one issue read per pending ticket and converts only status NAME + assignee
+# into the recorder's CLI vocabulary. The resumed PR T-07-05 is intentionally
+# absent, proving the gate is only on pending → execute.
+node - "$W/tracker-mcp-responses.json" "$trproj" "$SCRIPTS/tracker-record.cjs" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const [responsesFile, project, recorder] = process.argv.slice(2);
+const responses = JSON.parse(fs.readFileSync(responsesFile, 'utf8'));
+const graph = path.join(project, '.planning', 'graph');
+let reads = 0;
+for (const [ticket, issue] of Object.entries(responses)) {
+  reads += 1;
+  const key = issue.key;
+  if (issue.error) {
+    const r = spawnSync('node', [recorder, 'unknown', ticket, key, '--reason', issue.error, '--graph', graph], { encoding: 'utf8' });
+    if (r.status !== 0) process.exit(r.status || 1);
+    continue;
+  }
+  const fields = issue.fields || issue;
+  const status = fields.status && fields.status.name;
+  const assignee = fields.assignee;
+  const identity = assignee === null ? 'none' : assignee && (assignee.accountId || assignee.id || assignee.name);
+  if (!status || !identity) {
+    const r = spawnSync('node', [recorder, 'unknown', ticket, key, '--reason', 'MCP response omitted status or assignee', '--graph', graph], { encoding: 'utf8' });
+    if (r.status !== 0) process.exit(r.status || 1);
+    continue;
+  }
+  const r = spawnSync('node', [recorder, 'mark', ticket, key, '--status', status, '--assignee', identity, '--graph', graph], { encoding: 'utf8' });
+  if (r.status !== 0) process.exit(r.status || 1);
+}
+if (reads !== 4) process.exit(2);
+NODE
+
+trboard="$W/tracker-board.txt"
+( cd "$trproj" && PATH="$W/bin:$PATH" node "$SCRIPTS/state-sync.cjs" > "$trboard" 2>"$W/tracker-sync.err" ) \
+  || bad "tracker fixture state-sync consumes the cache" "$(cat "$W/tracker-sync.err")"
+trfront="$trproj/.planning/graph/delivery-front.json"
+if node -e '
+const f = require(process.argv[1]);
+const execute = (f.actionable || {}).execute || [];
+const blocked = (f.parked || {}).blocked || [];
+if (!execute.includes("T-07-01") || !execute.includes("T-07-04")) {
+  console.error("execute=" + JSON.stringify(execute)); process.exit(1);
+}
+if (!blocked.includes("T-07-02") || !blocked.includes("T-07-03")) {
+  console.error("blocked=" + JSON.stringify(blocked)); process.exit(1);
+}
+if (execute.includes("T-07-05") || blocked.includes("T-07-05")) {
+  console.error("resumed PR was gated=" + JSON.stringify(f)); process.exit(1);
+}
+if (!/user-5/.test(f.why["T-07-02"] || "") || !/Jira API timed out/.test(f.why["T-07-03"] || "")) {
+  console.error("why=" + JSON.stringify(f.why)); process.exit(1);
+}
+process.exit(0);
+' "$trfront" 2>"$W/tracker-front.err"; then
+  ok "eligible pending tickets execute; assigned and unknown tickets park individually"
+else
+  bad "tracker eligibility gates only pending tickets" "$(cat "$W/tracker-front.err")"
+fi
+if node -e '
+const fs = require("fs");
+const f = require(process.argv[1]);
+const s = require(process.argv[2]);
+const active = (f.actionable || {}).execute || [];
+const resumed = s["T-07-05"] || {};
+if (active.includes("T-07-05") || resumed.status !== "pr-open") process.exit(1);
+const records = JSON.parse(fs.readFileSync(process.argv[3], "utf8")).tickets;
+if (records["T-07-01"].generation !== 1 || records["T-07-03"].verdict !== "unknown") process.exit(1);
+' "$trfront" "$trproj/.planning/graph/delivery-state.json" "$trproj/.planning/graph/tracker.json"; then
+  ok "the generation-bound cache records MCP facts and leaves resumed PR work ungated"
+else
+  bad "tracker records preserve generation and resumed PR behavior"
+fi
+
+# The standalone front reader must agree with the state-sync writer immediately
+# after publication. Its cache window includes the published generation and the
+# preceding generation because the observation was recorded before this sync.
+trcli="$W/tracker-cli.json"
+if ( cd "$trproj" && PATH="$W/bin:$PATH" node "$SCRIPTS/front.cjs" --json > "$trcli" 2>"$W/tracker-cli.err" ); then
+  if node -e '
+const f = require(process.argv[1]);
+const execute = (f.actionable || {}).execute || [];
+const blocked = (f.parked || {}).blocked || [];
+if (!execute.includes("T-07-01") || !execute.includes("T-07-04")) process.exit(1);
+if (!blocked.includes("T-07-02") || !blocked.includes("T-07-03")) process.exit(1);
+if (execute.includes("T-07-05") || blocked.includes("T-07-05")) process.exit(1);
+process.exit(0);
+' "$trcli" 2>"$W/tracker-cli-front.err"; then
+    ok "standalone front agrees with state-sync's tracker eligibility"
+  else
+    bad "standalone front agrees with state-sync's tracker eligibility" "$(cat "$W/tracker-cli-front.err")"
+  fi
+else
+  bad "standalone front reads the generation-bound tracker cache" "$(cat "$W/tracker-cli.err")"
+fi
+
+# `dispatch-record` is the third front writer. Marking and then clearing the
+# resumed PR changes only its dispatch overlay; the pending tracker buckets
+# must remain identical before and after both refreshes.
+tdispatch="$W/tracker-dispatch.txt"
+if ( cd "$trproj" && PATH="$W/bin:$PATH" node "$SCRIPTS/dispatch-record.cjs" mark T-07-05 executor --graph "$trproj/.planning/graph" > "$tdispatch" 2>"$W/tracker-dispatch.err" ); then
+  tdispatch_id="$(sed -n 's/.*dispatch_id=\([^ ]*\).*/\1/p' "$tdispatch" | head -n 1)"
+  if [[ -z "$tdispatch_id" ]]; then
+    bad "dispatch-record returns a dispatch id for its refresh"
+  elif node -e '
+const f = require(process.argv[1]);
+const execute = (f.actionable || {}).execute || [];
+const blocked = (f.parked || {}).blocked || [];
+const dispatched = ((f.waiting || {}).dispatched || []).map((x) => typeof x === "string" ? x : x.ticket);
+if (!execute.includes("T-07-01") || !execute.includes("T-07-04")) process.exit(1);
+if (!blocked.includes("T-07-02") || !blocked.includes("T-07-03")) process.exit(1);
+if (!dispatched.includes("T-07-05")) process.exit(1);
+process.exit(0);
+' "$trfront" 2>"$W/tracker-dispatch-front.err"; then
+    ok "dispatch-record refresh preserves tracker buckets while overlaying its dispatch"
+  else
+    bad "dispatch-record refresh preserves tracker buckets" "$(cat "$W/tracker-dispatch-front.err")"
+  fi
+  if ( cd "$trproj" && PATH="$W/bin:$PATH" node "$SCRIPTS/dispatch-record.cjs" clear T-07-05 "$tdispatch_id" --graph "$trproj/.planning/graph" > "$W/tracker-clear.txt" 2>"$W/tracker-clear.err" ); then
+    if node -e '
+const f = require(process.argv[1]);
+const execute = (f.actionable || {}).execute || [];
+const blocked = (f.parked || {}).blocked || [];
+const dispatched = ((f.waiting || {}).dispatched || []).map((x) => typeof x === "string" ? x : x.ticket);
+if (!execute.includes("T-07-01") || !execute.includes("T-07-04")) process.exit(1);
+if (!blocked.includes("T-07-02") || !blocked.includes("T-07-03")) process.exit(1);
+if (dispatched.includes("T-07-05")) process.exit(1);
+process.exit(0);
+' "$trfront" 2>"$W/tracker-clear-front.err"; then
+      ok "dispatch-record clear refresh restores the same tracker buckets"
+    else
+      bad "dispatch-record clear refresh restores tracker buckets" "$(cat "$W/tracker-clear-front.err")"
+    fi
+  else
+    bad "dispatch-record clears the smoke dispatch" "$(cat "$W/tracker-clear.err")"
+  fi
+else
+  bad "dispatch-record refreshes the front with the tracker cache" "$(cat "$W/tracker-dispatch.err")"
+fi
+
+# A new delivery snapshot expires the records from the prior one. No fresh MCP
+# adapter run is made here, so the pending tickets must fail closed again while
+# the resumed PR remains guardable.
+trexpired="$W/tracker-expired.txt"
+( cd "$trproj" && PATH="$W/bin:$PATH" node "$SCRIPTS/state-sync.cjs" > "$trexpired" 2>"$W/tracker-expired.err" ) \
+  || bad "tracker fixture state-sync publishes the expiry snapshot" "$(cat "$W/tracker-expired.err")"
+if node -e '
+const f = require(process.argv[1]);
+const execute = (f.actionable || {}).execute || [];
+const blocked = (f.parked || {}).blocked || [];
+if (execute.some((id) => /^T-07-0[1-4]$/.test(id))) process.exit(1);
+if (!blocked.includes("T-07-01") || !/no current-generation observation/.test(f.why["T-07-01"] || "")) process.exit(1);
+process.exit(0);
+' "$trfront" 2>"$W/tracker-expired-front.err"; then
+  ok "old tracker observations expire at the next delivery generation"
+else
+  bad "old tracker observations expire" "$(cat "$W/tracker-expired-front.err")"
+fi
+traft="$(shasum -a 256 "$trlog" | awk '{print $1}')"
+[[ "$trbefore" == "$traft" ]] \
+  && ok "eligibility reads leave jira-projection.json untouched" \
+  || bad "eligibility reads leave the outbound projection untouched"
 
 echo
 echo "$pass passed, $fail failed"
