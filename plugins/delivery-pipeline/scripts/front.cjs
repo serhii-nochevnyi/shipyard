@@ -523,6 +523,7 @@ function computeFront(tickets, state, opts = {}) {
   const waiting = { ci: [], dispatched: [], parent: [], merge_human: [], human: [] };
   const parked = { blocked: [], done: [] };
   const why = {};
+  let trackerBlockedCount = 0;
   // Which parent each `waiting.parent` child is held behind. The FRONT decides
   // who that is, so `ci-wait.cjs` can watch the parent's pipeline without
   // re-deriving graph semantics from tickets.json — the board is the one place
@@ -815,6 +816,7 @@ function computeFront(tickets, state, opts = {}) {
             ? `ready — explicit tracker override for ${jiraKey}; worktree + executor`
             : `ready — tracker ${jiraKey} is eligible; worktree + executor`;
         } else {
+          trackerBlockedCount += 1;
           parked.blocked.push(id);
           why[id] = trackerBlockedWhy(id, jiraKey, record);
         }
@@ -848,9 +850,12 @@ function computeFront(tickets, state, opts = {}) {
   // hand the human a summary written before the answers came back. A child held
   // behind a moving parent is the same class of fact: the parent is being driven,
   // and when it lands this ticket becomes work again — so the round has to come
-  // back for it.
+  // back for it. A ready ticket held only by the tracker gate is also not done:
+  // the loop still owes one issue read (or an exact-ticket decision) before it
+  // can conclude that there is no executable work.
   const fixpoint = actionableCount === 0 && waiting.ci.length === 0
-    && waiting.dispatched.length === 0 && waiting.parent.length === 0;
+    && waiting.dispatched.length === 0 && waiting.parent.length === 0
+    && trackerBlockedCount === 0;
   // What a wave may take NOW. The cap is a TRUNCATION of the order below, never
   // a filter: nothing is moved out of `actionable`, and that is what keeps the
   // fixpoint honest without touching its formula — `actionable_count` is
@@ -1054,7 +1059,21 @@ function computeFront(tickets, state, opts = {}) {
   const actionableIds = ORDER.flatMap((k) => actionable[k]);
   const leftBehindCount = actionableIds.filter((id) => leftBehind(id)).length;
 
-  return { actionable, waiting, parked, why, counts, parent_of: parentOf, actionable_count: actionableCount, left_behind_count: leftBehindCount, fixpoint, capacity, sentinel, roles: BUCKET_ROLES };
+  return {
+    actionable,
+    waiting,
+    parked,
+    why,
+    counts,
+    parent_of: parentOf,
+    actionable_count: actionableCount,
+    tracker_blocked_count: trackerBlockedCount,
+    left_behind_count: leftBehindCount,
+    fixpoint,
+    capacity,
+    sentinel,
+    roles: BUCKET_ROLES,
+  };
 }
 
 // The arch-review verdict is recorded as a `gate_status:` trailer in the PR body
