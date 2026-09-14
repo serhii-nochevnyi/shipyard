@@ -127,7 +127,8 @@ function validRecord(record) {
   if (!['eligible', 'ineligible'].includes(record.verdict)) return false;
   if (typeof record.status !== 'string' || !record.status.trim()) return false;
   const assigneeObserved = record.assignee_observed === true
-    || Object.prototype.hasOwnProperty.call(record, 'assignee');
+    || (typeof record.assignee_observed !== 'boolean'
+      && Object.prototype.hasOwnProperty.call(record, 'assignee'));
   if (!assigneeObserved) return false;
   return typeof record.eligible === 'boolean'
     && record.eligible === (record.verdict === 'eligible')
