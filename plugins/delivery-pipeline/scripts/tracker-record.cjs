@@ -277,16 +277,24 @@ function writeRecord(graphDir, ticket, record) {
   if (!hasGraph(graphDir)) throw new Error(`no ticket graph at ${graphDir}`);
   fs.mkdirSync(graphDir, { recursive: true });
   return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
+    // Bind the observation while holding the same lock as state-sync. A read
+    // that queued behind a publish must use one coherent generation/identity
+    // pair, otherwise the next active-reader pass can drop the record.
+    const boundRecord = {
+      ...record,
+      generation: requireGeneration(graphDir),
+      generation_identity: requireMetadataIdentity(graphDir),
+    };
     const store = readStore(graphDir);
     const previous = store.tickets[ticket];
-    const sameEpoch = previous && previous.generation_identity === record.generation_identity;
+    const sameEpoch = previous && previous.generation_identity === boundRecord.generation_identity;
     const previousGeneration = previous && Number.isInteger(previous.generation) ? previous.generation : -1;
-    const incomingGeneration = Number.isInteger(record.generation) ? record.generation : -1;
+    const incomingGeneration = Number.isInteger(boundRecord.generation) ? boundRecord.generation : -1;
     const previousAt = previous && typeof previous.observed_at === 'string'
       ? Date.parse(previous.observed_at)
       : NaN;
-    const incomingAt = typeof record.observed_at === 'string'
-      ? Date.parse(record.observed_at)
+    const incomingAt = typeof boundRecord.observed_at === 'string'
+      ? Date.parse(boundRecord.observed_at)
       : NaN;
     // The lock orders writers, not the observations they captured before
     // queueing for it. Generation is the primary ordering key: a late result
@@ -298,7 +306,7 @@ function writeRecord(graphDir, ticket, record) {
         && (!Number.isFinite(incomingAt) || previousAt > incomingAt)));
     const stored = previousWins
       ? previous
-      : record;
+      : boundRecord;
     store.tickets[ticket] = stored;
     writeAtomic(graphStore(graphDir), JSON.stringify(store, null, 2) + '\n');
     return stored;
@@ -313,8 +321,6 @@ function observe(graphDir, input) {
   const assignee = normalizeCliAssignee(input.assignee);
   const result = evaluateEligibility(status, assignee, readConfigStatuses(projectRootOf(graphDir)));
   const observedAt = observedTimestamp(input.observedAt);
-  const generation = requireGeneration(graphDir);
-  const generationIdentity = requireMetadataIdentity(graphDir);
   const record = {
     ticket,
     jira_key: jiraKey,
@@ -325,8 +331,6 @@ function observe(graphDir, input) {
     reason: result.reason,
     assignee_observed: true,
     observed_at: observedAt,
-    generation,
-    generation_identity: generationIdentity,
   };
   return writeRecord(graphDir, ticket, record);
 }
@@ -351,8 +355,6 @@ function unknown(graphDir, input) {
     reason,
     assignee_observed: !!input.assigneeProvided,
     observed_at: observedTimestamp(input.observedAt),
-    generation: requireGeneration(graphDir),
-    generation_identity: requireMetadataIdentity(graphDir),
   };
   return writeRecord(graphDir, ticket, record);
 }
