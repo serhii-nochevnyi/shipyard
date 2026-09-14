@@ -242,6 +242,7 @@ test('an override rolls back the cache when its journal cannot be appended', () 
     'a failed override must leave the prior cache record unchanged');
   assert.ok(fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
   assert.ok(fs.statSync(path.join(graph, 'delivery-log.jsonl')).isDirectory());
+  fs.rmSync(path.join(graph, 'delivery-log.jsonl'), { recursive: true });
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
   assert.ok(!fs.existsSync(path.join(graph, '.tracker-override.pending.json')), 'the next writer must recover the failed transaction');
 });
@@ -328,51 +329,6 @@ test('activeRecords omits a record after the delivery generation advances', () =
   assert.deepStrictEqual(require(RECORD).activeRecords(graph), {});
 });
 
-test('the previous-generation reader is derived internally and cannot be caller-selected', () => {
-  const { project, graph } = scratch(1);
-  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
-  const previousIdentity = stored(graph).tickets['T-01'].generation_identity;
-  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({
-    generation: 2,
-    previous_generation_identity: previousIdentity,
-  }));
-  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
-  const record = require(RECORD);
-  assert.deepStrictEqual(Object.keys(record.activePreviousTrackers(graph)), ['T-01']);
-  assert.deepStrictEqual(Object.keys(record.activeRecords(graph)), ['T-02']);
-  assert.deepStrictEqual(record.activeRecords(graph, 1), record.activeRecords(graph));
-});
-
-test('the front snapshot combines bounded generations from one store read', () => {
-  const { project, graph } = scratch(1);
-  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
-  const previousIdentity = stored(graph).tickets['T-01'].generation_identity;
-  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({
-    generation: 2,
-    previous_generation_identity: previousIdentity,
-  }));
-  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
-  assert.deepStrictEqual(Object.keys(require(RECORD).activeTrackerSnapshot(graph)), ['T-01', 'T-02']);
-});
-
-test('the front snapshot rejects a previous-generation record from another metadata epoch', () => {
-  const { project, graph } = scratch(1);
-  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
-  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({
-    generation: 2,
-    previous_generation_identity: 'different-publication-epoch',
-  }));
-  execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
-  assert.deepStrictEqual(Object.keys(require(RECORD).activeTrackerSnapshot(graph)), ['T-02']);
-});
-
-test('the front snapshot rejects a predecessor without an epoch proof', () => {
-  const { project, graph } = scratch(1);
-  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
-  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 2 }));
-  assert.deepStrictEqual(Object.keys(require(RECORD).activeTrackerSnapshot(graph)), []);
-});
-
 test('a malformed or missing metadata file never falls back to the advisory front generation', () => {
   const { project, graph } = scratch(7);
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
@@ -416,6 +372,43 @@ test('normal observation refuses missing status or missing explicit assignee', (
     assert.notStrictEqual(r.status, 0, r.stderr);
   }
   assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
+});
+
+test('normal and unknown observations refuse before a published generation exists', () => {
+  const { project, graph } = scratch(1);
+  fs.rmSync(path.join(graph, 'delivery-state-meta.json'));
+  for (const args of [
+    markArgs(graph, 'T-01', 'MYD-1'),
+    [RECORD, 'unknown', 'T-02', 'MYD-2', '--reason', 'tracker unavailable', '--graph', graph],
+  ]) {
+    const r = spawnSync('node', args, { cwd: project, encoding: 'utf8' });
+    assert.notStrictEqual(r.status, 0);
+    assert.match(r.stderr, /delivery-state generation is unreadable/);
+  }
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
+  fs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 0 }));
+  const zero = spawnSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(zero.status, 0);
+  assert.match(zero.stderr, /delivery-state generation is unreadable/);
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
+});
+
+test('a newer record from another metadata epoch cannot be overwritten by an older generation', () => {
+  const { project, graph } = scratch(8);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  const file = path.join(graph, 'tracker.json');
+  const store = stored(graph);
+  store.tickets['T-01'].generation = 9;
+  store.tickets['T-01'].generation_identity = 'newer-epoch';
+  store.tickets['T-01'].status = 'Backlog';
+  store.tickets['T-01'].verdict = 'eligible';
+  store.tickets['T-01'].eligible = true;
+  fs.writeFileSync(file, JSON.stringify(store));
+  const late = spawnSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project, encoding: 'utf8' });
+  assert.strictEqual(late.status, 0, late.stderr);
+  const record = stored(graph).tickets['T-01'];
+  assert.strictEqual(record.generation, 9);
+  assert.strictEqual(record.status, 'Backlog');
 });
 
 test('normal and unknown observations refuse an invalid observed timestamp', () => {

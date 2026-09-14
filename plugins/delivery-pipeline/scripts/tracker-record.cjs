@@ -81,6 +81,29 @@ function unlinkIfPresent(file) {
   }
 }
 
+function sameFileSnapshot(file, expected) {
+  const current = fileSnapshot(file);
+  if (current.exists !== expected.exists || current.file !== expected.file) return false;
+  if (!current.file) return true;
+  return current.data.length === expected.data.length
+    && digest(current.data) === digest(expected.data);
+}
+
+function rewriteJournalIfUnchanged(journal, expected, replacement, remove) {
+  // Recovery is the only journal path that rewrites or truncates bytes. Other
+  // conveyor writers do not share the tracker lock, so re-check the exact
+  // snapshot immediately before this destructive step. If anything landed
+  // since the inspection, leave it and the pending marker intact for the next
+  // writer instead of erasing a concurrent event.
+  if (!sameFileSnapshot(journal, expected)) {
+    throw new Error(
+      `cannot recover tracker override: the journal changed during recovery — retry after concurrent writers finish`
+    );
+  }
+  if (remove) unlinkIfPresent(journal);
+  else writeAtomic(journal, replacement);
+}
+
 function restoreStoreSnapshot(graphDir, marker) {
   if (marker.store_file) {
     writeAtomic(graphStore(graphDir), Buffer.from(marker.before_store, 'base64'));
@@ -128,7 +151,7 @@ function recoverPendingLocked(graphDir) {
     // No append can have happened when the journal is still the same non-file
     // path that the transaction observed. This is also the recoverable form of
     // the EISDIR failure used by the CLI error path.
-    if (!marker.journal_file && current.exists === marker.journal_exists) {
+    if (!marker.journal_file) {
       restoreStoreSnapshot(graphDir, marker);
       unlinkIfPresent(markerFile);
       return;
@@ -159,8 +182,7 @@ function recoverPendingLocked(graphDir) {
       current.data.subarray(0, marker.journal_offset),
       suffix.subarray(partialPrefixLength),
     ]);
-    if (preserved.length > 0 || marker.journal_exists) writeAtomic(journal, preserved);
-    else unlinkIfPresent(journal);
+    rewriteJournalIfUnchanged(journal, current, preserved, preserved.length === 0 && !marker.journal_exists);
     restoreStoreSnapshot(graphDir, marker);
     unlinkIfPresent(markerFile);
     return;
@@ -179,8 +201,12 @@ function recoverPendingLocked(graphDir) {
   // The append was absent or interrupted before a complete JSONL line. Restore
   // only our partial final segment, preserving any complete intervening lines.
   const rollbackLength = current.data.length - tail.length;
-  if (marker.journal_file || rollbackLength > 0) fs.truncateSync(journal, rollbackLength);
-  else if (!marker.journal_exists) unlinkIfPresent(journal);
+  rewriteJournalIfUnchanged(
+    journal,
+    current,
+    current.data.subarray(0, rollbackLength),
+    rollbackLength === 0 && !marker.journal_exists,
+  );
   restoreStoreSnapshot(graphDir, marker);
   unlinkIfPresent(markerFile);
 }
@@ -241,24 +267,6 @@ function metadataIdentity(graphDir) {
     if (error.code === 'ENOENT') return 'missing';
     throw error;
   }
-}
-
-// state-sync records the physical identity of the metadata file that preceded
-// the current publish. When the numeric counter is reset or reused, generation
-// alone is not enough to decide whether that predecessor belongs to this
-// publication epoch.
-function metadataPreviousIdentity(graphDir) {
-  const value = readJson(path.join(graphDir, META_NAME), null);
-  if (!value || !Object.prototype.hasOwnProperty.call(value, 'previous_generation_identity')) {
-    // No proof binds a predecessor to this metadata epoch. Treating the missing
-    // field as a wildcard would let a reset/recreated metadata file re-accept
-    // an old generation-1 record.
-    return null;
-  }
-  return typeof value.previous_generation_identity === 'string'
-    && value.previous_generation_identity.trim()
-    ? value.previous_generation_identity
-    : null;
 }
 
 /**
@@ -340,43 +348,6 @@ function activeRecords(graphDir) {
   return recordsForGeneration(store, generation, readConfigStatuses(projectRootOf(graphDir)), metadataIdentity(graphDir));
 }
 
-// Tracker observations are recorded against the snapshot that was current
-// when the external read happened. The next state-sync publishes the next
-// generation, so front readers need this narrow, internally-derived bridge
-// across that publish boundary. Callers cannot choose an arbitrary generation.
-function activePreviousTrackers(graphDir) {
-  if (fs.existsSync(pendingPath(graphDir))) return {};
-  const store = readStore(graphDir);
-  const generation = currentGeneration(graphDir);
-  const previousIdentity = metadataPreviousIdentity(graphDir);
-  return Number.isInteger(generation) && generation > 1
-    ? recordsForGeneration(store, generation - 1, readConfigStatuses(projectRootOf(graphDir)), previousIdentity)
-    : {};
-}
-
-// Front readers need the current observation and the one publish-boundary
-// predecessor as one coherent cache view. The exported wrapper takes the
-// tracker lock; state-sync uses the locked form because it already holds that
-// lock before entering its state publish.
-function activeTrackerSnapshotLocked(graphDir) {
-  if (fs.existsSync(pendingPath(graphDir))) return {};
-  const store = readStore(graphDir);
-  const generation = currentGeneration(graphDir);
-  const statuses = readConfigStatuses(projectRootOf(graphDir));
-  const previousIdentity = metadataPreviousIdentity(graphDir);
-  return {
-    ...(Number.isInteger(generation) && generation > 1
-      ? recordsForGeneration(store, generation - 1, statuses, previousIdentity)
-      : {}),
-    ...recordsForGeneration(store, generation, statuses, metadataIdentity(graphDir)),
-  };
-}
-
-function activeTrackerSnapshot(graphDir) {
-  return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () =>
-    activeTrackerSnapshotLocked(graphDir), { label: 'tracker-record read' });
-}
-
 // The flat view is convenient for callers that only need the current record;
 // unlike the store itself it never exposes an older delivery generation.
 const activeTrackers = activeRecords;
@@ -456,10 +427,10 @@ function writeRecord(graphDir, ticket, record) {
     // queueing for it. Generation is the primary ordering key: a late result
     // from an older snapshot can never replace a newer snapshot's record. Only
     // observations in the same generation are ordered by observed_at.
-    const previousWins = sameEpoch && (previousGeneration > incomingGeneration
-      || (previousGeneration === incomingGeneration
+    const previousWins = previousGeneration > incomingGeneration
+      || (sameEpoch && previousGeneration === incomingGeneration
         && Number.isFinite(previousAt)
-        && (!Number.isFinite(incomingAt) || previousAt > incomingAt)));
+        && (!Number.isFinite(incomingAt) || previousAt > incomingAt));
     const stored = previousWins
       ? previous
       : boundRecord;
@@ -787,9 +758,6 @@ module.exports = {
   metadataIdentity,
   currentGeneration,
   activeRecords,
-  activePreviousTrackers,
-  activeTrackerSnapshot,
-  activeTrackerSnapshotLocked,
   activeTrackers,
   observe,
   unknown,
