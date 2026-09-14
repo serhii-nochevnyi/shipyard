@@ -2356,6 +2356,29 @@ test('refuses post-load selection changes, stale fingerprints and identity confl
   refusesSource(() => resolveDispatch({ config, role: 'executor' }), 'config.policy_hash');
 });
 
+test('refuses incomplete or stale policy pairs in config and runtime context', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const source of ['config', 'config.dispatch_context.runtime']) {
+      for (const field of ['policy_version', 'policy_hash']) {
+        for (const value of ['stale', null, undefined, 42]) {
+          const { config } = routedConfig({}, runtime);
+          const target = source === 'config' ? config : { ...config.dispatch_context.runtime };
+          if (value === undefined) delete target[field];
+          else target[field] = value;
+          if (source !== 'config') {
+            config.dispatch_context = { ...config.dispatch_context, runtime: target };
+          }
+          const expectedSource = `${source}.${field}`;
+          assert.throws(() => resolveDispatch({ config, role: 'executor' }), (error) =>
+            error.name === 'DispatchPolicyError' && error.code === 'INVALID_CONFIG'
+              && error.details.source === expectedSource && error.message.includes(expectedSource),
+          `${runtime}: ${expectedSource}=${JSON.stringify(value)}`);
+        }
+      }
+    }
+  }
+});
+
 test('repair escalation never gains receipt authority through configuration', () => {
   const { config } = routedConfig();
   assert.throws(() => resolveDispatch({ config, role: 'ci-fix', signals: { signatureState: 'repeat' } }), { code: 'MISSING_RECEIPT' });

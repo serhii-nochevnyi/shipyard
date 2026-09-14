@@ -1386,8 +1386,13 @@ function resolveDispatch(input) {
   if (!context) throw modelPolicy.policyError('INVALID_CONFIG', 'config must come from loadConfig', { source: 'config' });
   if (context.error) throw modelPolicy.policyError(context.error.code, context.error.message, context.error.details);
   const runtime = context.runtime;
-  if (!runtime || runtime.policy_hash !== modelPolicy.POLICY_HASH || cfg.policy_hash !== modelPolicy.POLICY_HASH) {
-    throw modelPolicy.policyError('INVALID_CONFIG', 'config.policy_hash has a missing or stale policy fingerprint', { source: 'config.policy_hash' });
+  for (const [source, identity] of [['config', cfg], ['config.dispatch_context.runtime', runtime]]) {
+    for (const [field, expected] of [['policy_version', modelPolicy.POLICY_VERSION], ['policy_hash', modelPolicy.POLICY_HASH]]) {
+      if (identity?.[field] !== expected) {
+        const location = `${source}.${field}`;
+        throw modelPolicy.policyError('INVALID_CONFIG', `${location} has a missing or stale policy fingerprint`, { source: location });
+      }
+    }
   }
   if (input.runtime !== undefined) {
     resolveRuntime(null, { runtime: input.runtime, runtimeMarker: runtime.runtime, env: {}, routed: true });
