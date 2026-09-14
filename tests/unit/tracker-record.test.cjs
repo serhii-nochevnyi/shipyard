@@ -153,18 +153,15 @@ test('an override that supplies one tracker fact recomputes the complete observa
   assert.strictEqual(record.eligible, false);
 });
 
-test('an override without a current observation stays unknown instead of fabricating eligibility', () => {
+test('an override without a current observation is refused', () => {
   const { project, graph } = scratch();
-  execFileSync('node', [
+  const r = spawnSync('node', [
     RECORD, 'override', 'T-02', 'MYD-2', '--reason', 'urgent named ticket', '--graph', graph,
-  ], { cwd: project });
-  const record = stored(graph).tickets['T-02'];
-  assert.strictEqual(record.override, true);
-  assert.strictEqual(record.verdict, 'unknown');
-  assert.strictEqual(record.eligible, null);
-  assert.strictEqual(record.status, null);
-  assert.strictEqual(record.assignee, null);
-  assert.match(record.reason, /no current tracker observation/);
+  ], { cwd: project, encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /requires a current-generation tracker observation/);
+  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
+  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')));
 });
 
 test('an override cannot invent tracker facts without a current observation', () => {
@@ -174,7 +171,7 @@ test('an override cannot invent tracker facts without a current observation', ()
     '--reason', 'urgent named ticket', '--graph', graph,
   ], { cwd: project, encoding: 'utf8' });
   assert.notStrictEqual(r.status, 0);
-  assert.match(r.stderr, /only after a complete current-generation tracker observation/);
+  assert.match(r.stderr, /requires a current-generation tracker observation/);
   assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')));
   assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')));
 });
@@ -222,6 +219,7 @@ test('an override refuses an invalid observed timestamp before opening its trans
 
 test('an override expires with its delivery generation', () => {
   const { project, graph } = scratch(1);
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
   execFileSync('node', [
     RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
   ], { cwd: project });
@@ -232,13 +230,16 @@ test('an override expires with its delivery generation', () => {
 
 test('an override rolls back the cache when its journal cannot be appended', () => {
   const { project, graph } = scratch();
+  execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });
+  const beforeStore = fs.readFileSync(path.join(graph, 'tracker.json'));
   fs.mkdirSync(path.join(graph, 'delivery-log.jsonl'));
   const r = spawnSync('node', [
     RECORD, 'override', 'T-01', 'MYD-1', '--reason', 'operator choice', '--graph', graph,
   ], { cwd: project, encoding: 'utf8' });
   assert.notStrictEqual(r.status, 0, 'the failed journal append must refuse the operation');
   assert.match(r.stderr, /transaction is pending and remains recoverable/);
-  assert.ok(!fs.existsSync(path.join(graph, 'tracker.json')), 'a cache without its audit line is not durable');
+  assert.deepStrictEqual(fs.readFileSync(path.join(graph, 'tracker.json')), beforeStore,
+    'a failed override must leave the prior cache record unchanged');
   assert.ok(fs.existsSync(path.join(graph, '.tracker-override.pending.json')));
   assert.ok(fs.statSync(path.join(graph, 'delivery-log.jsonl')).isDirectory());
   execFileSync('node', markArgs(graph, 'T-01', 'MYD-1'), { cwd: project });

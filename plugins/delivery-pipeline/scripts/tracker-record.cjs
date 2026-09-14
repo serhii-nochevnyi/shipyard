@@ -237,18 +237,12 @@ function currentGeneration(graphDir) {
 
 function currentGenerationStrict(graphDir) {
   const meta = readGeneration(path.join(graphDir, META_NAME));
-  if (meta.present) return meta.generation;
-  // Keep the writer usable for a freshly created graph. A real state-sync will
-  // move to generation 1 on its first publish, so generation 0 cannot survive
-  // across the first cold start.
-  return 0;
+  if (meta.present && Number.isInteger(meta.generation) && meta.generation >= 1) return meta.generation;
+  throw new Error('delivery-state generation is unreadable — run state-sync.cjs before recording a tracker observation');
 }
 
 function requireGeneration(graphDir) {
   const generation = currentGenerationStrict(graphDir);
-  if (!Number.isInteger(generation)) {
-    throw new Error('delivery-state generation is unreadable — run state-sync.cjs before recording a tracker observation');
-  }
   return generation;
 }
 
@@ -398,16 +392,24 @@ function writeRecord(graphDir, ticket, record) {
   fs.mkdirSync(graphDir, { recursive: true });
   return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () => {
     recoverPendingLocked(graphDir);
+    // Bind the observation while holding the same lock as state-sync. A read
+    // that queued behind a publish must belong to the newly current generation,
+    // otherwise the next state-sync would never consume it.
+    const boundRecord = {
+      ...record,
+      generation: requireGeneration(graphDir),
+      generation_identity: requireMetadataIdentity(graphDir),
+    };
     const store = readStore(graphDir);
     const previous = store.tickets[ticket];
-    const sameEpoch = previous && previous.generation_identity === record.generation_identity;
+    const sameEpoch = previous && previous.generation_identity === boundRecord.generation_identity;
     const previousGeneration = previous && Number.isInteger(previous.generation) ? previous.generation : -1;
-    const incomingGeneration = Number.isInteger(record.generation) ? record.generation : -1;
+    const incomingGeneration = Number.isInteger(boundRecord.generation) ? boundRecord.generation : -1;
     const previousAt = previous && typeof previous.observed_at === 'string'
       ? Date.parse(previous.observed_at)
       : NaN;
-    const incomingAt = typeof record.observed_at === 'string'
-      ? Date.parse(record.observed_at)
+    const incomingAt = typeof boundRecord.observed_at === 'string'
+      ? Date.parse(boundRecord.observed_at)
       : NaN;
     // The lock orders writers, not the observations they captured before
     // queueing for it. Generation is the primary ordering key: a late result
@@ -419,7 +421,7 @@ function writeRecord(graphDir, ticket, record) {
         && (!Number.isFinite(incomingAt) || previousAt > incomingAt)));
     const stored = previousWins
       ? previous
-      : record;
+      : boundRecord;
     store.tickets[ticket] = stored;
     writeAtomic(graphStore(graphDir), JSON.stringify(store, null, 2) + '\n');
     return stored;
@@ -483,8 +485,6 @@ function observe(graphDir, input) {
   const assignee = normalizeCliAssignee(input.assignee);
   const result = evaluateEligibility(status, assignee, readConfigStatuses(projectRootOf(graphDir)));
   const observedAt = observedTimestamp(input.observedAt);
-  const generation = requireGeneration(graphDir);
-  const generationIdentity = requireMetadataIdentity(graphDir);
   const record = {
     ticket,
     jira_key: jiraKey,
@@ -495,8 +495,6 @@ function observe(graphDir, input) {
     reason: result.reason,
     assignee_observed: true,
     observed_at: observedAt,
-    generation,
-    generation_identity: generationIdentity,
   };
   return writeRecord(graphDir, ticket, record);
 }
@@ -521,8 +519,6 @@ function unknown(graphDir, input) {
     reason,
     assignee_observed: !!input.assigneeProvided,
     observed_at: observedTimestamp(input.observedAt),
-    generation: requireGeneration(graphDir),
-    generation_identity: requireMetadataIdentity(graphDir),
   };
   return writeRecord(graphDir, ticket, record);
 }
@@ -539,10 +535,14 @@ function override(graphDir, input) {
     const reusable = existing && existing.generation === generation
       && existing.generation_identity === generationIdentity
       && existing.jira_key === jiraKey
+      && validRecord(existing, readConfigStatuses(projectRootOf(graphDir)), generationIdentity)
       ? existing
       : null;
 
-    if ((input.statusProvided || input.assigneeProvided) && (!reusable || reusable.verdict === 'unknown')) {
+    if (!reusable) {
+      throw new Error('tracker override requires a current-generation tracker observation');
+    }
+    if (reusable.verdict === 'unknown' && (input.statusProvided || input.assigneeProvided)) {
       throw new Error(
         'tracker facts may be overridden only after a complete current-generation tracker observation'
       );
@@ -556,10 +556,7 @@ function override(graphDir, input) {
     let eligible = reusable && Object.prototype.hasOwnProperty.call(reusable, 'eligible')
       ? reusable.eligible
       : null;
-    let assigneeObserved = reusable && typeof reusable.assignee_observed === 'boolean'
-      ? reusable.assignee_observed
-      : !!(reusable && reusable.verdict !== 'unknown'
-        && Object.prototype.hasOwnProperty.call(reusable, 'assignee'));
+    let assigneeObserved = reusable.assignee_observed === true;
     let observationReason = reusable && reusable.reason
       ? reusable.reason
       : 'no current tracker observation was available';
