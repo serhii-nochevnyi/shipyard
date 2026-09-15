@@ -371,6 +371,14 @@ CI fix, review fix, architecture review, and integrator — MUST cross one
 records the requested, applied, and observed selection. There is no direct
 model call beside it, no inline launch, and no inherited guard or session.
 
+**Cardinality is per work item.** For executors, decomposition, drift-check,
+integrator, architecture review, and each CI/review fix, resolve and launch
+separately for every ticket or PR, and keep that item's receipt and dispatch
+record with its own result. Build batch arguments from those per-item
+selections; never reuse one ticket's model, effort, signals, or receipt for
+another. The only intentional shared dispatch is a round-scoped `pr-sentinel`
+guard over its guarded PR batch.
+
 Initialize one `createDispatchBoundary` with the active runtime adapter and a
 `createDurableRecorder`. The Codex adapter validates generated files; the
 Workflow bridge uses `createClaudeWorkflowDispatch` to carry the Workflow
@@ -963,6 +971,9 @@ adapter that explicitly applies model and effort and returns a concrete
 application receipt; if none exists, hard-refuse before prompt construction,
 spawning, or recording and continue only with the duty pass's mechanical work.
 Routed repair remains `repair blocked` without that adapter.
+The obsolete instruction “`false` — force the Agent fallback only for non-repair
+roles, and return `repair blocked`” is forbidden: it would authorize a launch
+that cannot prove the applied effort.
 
 **Typed Agent adapter: prompt discipline (anti-injection).** If a host offers a
 typed Agent adapter, its prompt is assembled by the adapter — which is exactly
@@ -1515,9 +1526,10 @@ may be dispatched at all: fix the file.
     filed. The launch id is now RECORDED as well as kept:
     the record stores the ticket, the role, the time, the resolved pair and the agent
     id, because the cap counts DISTINCT agents and the id is the only thing that tells
-    two of them apart. On the Workflow path one task id covers the whole batch, and
-    that is correct — an executor is one agent per ticket whatever the id says, so
-    there the id is provenance and not a count. The recorder also prints a generated
+    two of them apart. The Workflow host may expose one enclosing task id for a
+    batch, but that id is provenance only: each ticket still has its own boundary
+    dispatch, receipt, and generated `dispatch_id`, and its own recorder mark. The
+    recorder also prints a generated
     `dispatch_id`; capture that value from the `mark` result and keep it in your turn.
     The launch `agent_id` identifies the holder, while the generated `dispatch_id`
     is the compare-and-delete identity used to clear this ticket safely.
