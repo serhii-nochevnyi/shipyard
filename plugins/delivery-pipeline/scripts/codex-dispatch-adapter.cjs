@@ -11,8 +11,8 @@ const crypto = require('crypto');
 const policy = require('./model-policy.cjs');
 const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
 const { generatedAgentEvidence } = require('./dispatch-boundary.cjs');
+const { REPAIR, verifiedCodexRemap } = require('./codex-model-remap.cjs');
 
-const REPAIR = 'Install an ADR-014-capable Codex host and regenerate agents with install-shipyard-codex.sh --phase 2; provide current host capabilities and retry the exact selection.';
 const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
 function refuse(code, message) {
   throw policy.policyError(code, message + '. ' + REPAIR);
@@ -21,21 +21,16 @@ function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-// A selector may carry an operator remap alongside the immutable ADR-014
-// resolution. Keep the canonical view available when the selection is passed
-// through JSON, where the non-enumerable in-process reference is lost.
 function canonicalView(resolution) {
   if (!object(resolution)) return resolution;
-  if (object(resolution.canonical_resolution)) return resolution.canonical_resolution;
-  if (typeof resolution.canonical_model === 'string'
-      && typeof resolution.effective_model === 'string'
-      && resolution.model === resolution.effective_model
-      && resolution.model !== resolution.canonical_model) {
-    const candidate = { ...resolution, model: resolution.canonical_model, requested_model: resolution.canonical_model };
-    if (object(candidate.launch_arguments) && (candidate.agent_file === null || candidate.agent_file === undefined)) {
-      candidate.launch_arguments = { ...candidate.launch_arguments, model: resolution.canonical_model };
-    }
-    return candidate;
+  const binding = verifiedCodexRemap(resolution);
+  if (binding) return binding.canonical;
+  if (resolution.canonical_resolution !== undefined
+      || resolution.canonical_model !== undefined
+      || resolution.effective_model !== undefined
+      || resolution.model_source !== undefined
+      || resolution.remap_key !== undefined) {
+    refuse('CONFLICTING_OVERRIDE', 'Codex remap provenance was not issued by the configuration loader');
   }
   return resolution;
 }
@@ -141,7 +136,7 @@ function createCodexDispatchAdapter(options = {}) {
     // Retain only evidence already accepted by canonical validation, and reuse
     // that identity only for an otherwise byte-equivalent dispatch resolution.
     const view = canonicalView(resolution);
-    if (object(resolution?.canonical_resolution)) {
+    if (verifiedCodexRemap(resolution)) {
       for (const field of [
         'policy_version', 'policy_hash', 'runtime', 'role', 'model_key', 'logical_model',
         'logical_rung', 'rung', 'rung_index', 'effort', 'requested_effort', 'route',

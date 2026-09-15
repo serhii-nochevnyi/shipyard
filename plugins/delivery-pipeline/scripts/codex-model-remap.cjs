@@ -8,7 +8,9 @@ const os = require('os');
 const path = require('path');
 const policy = require('./model-policy.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
-const { REPAIR } = require('./codex-dispatch-adapter.cjs');
+
+const REPAIR = 'Install an ADR-014-capable Codex host and regenerate agents with install-shipyard-codex.sh --phase 2; provide current host capabilities and retry the exact selection.';
+const VERIFIED_CODEX_REMAPS = new WeakMap();
 
 function refuse(message, code = 'CONFLICTING_OVERRIDE') {
   throw policy.policyError(code, message + '. Remove the conflicting Codex override. ' + REPAIR);
@@ -109,13 +111,41 @@ function loadCodexRemap({ cwd = process.cwd(), config, codexHome, env = process.
     if (typeof key !== 'string' || !key.trim()) return null;
     return mapped.get(key.trim())?.model || null;
   };
+  const bindResolution = (resolution, canonical, key) => {
+    const normalizedKey = typeof key === 'string' ? key.trim() : '';
+    const entry = mapped.get(normalizedKey);
+    policy.validateResolution(canonical);
+    if (!resolution || typeof resolution !== 'object' || Array.isArray(resolution)
+        || !canonical || typeof canonical !== 'object' || Array.isArray(canonical)
+        || !entry || resolution.effective_model !== entry.model
+        || (resolution.model !== canonical.model && resolution.model !== entry.model)) {
+      refuse('Codex remap binding does not match the loader-validated model and canonical resolution');
+    }
+    VERIFIED_CODEX_REMAPS.set(resolution, Object.freeze({
+      canonical, effective_model: entry.model, remap_key: normalizedKey,
+    }));
+    return resolution;
+  };
+  Object.defineProperty(remapper, 'bindResolution', { value: bindResolution });
   // Return provenance explicitly so every consumer can validate the exact
   // project or inherited GSD object that supplied the effective model.
-  return Object.freeze({ remap: remapper, sourceConfig });
+  return Object.freeze({ remap: remapper, sourceConfig, bindResolution });
 }
 
 function createCodexRemapper(options) {
   return loadCodexRemap(options).remap;
+}
+
+function verifiedCodexRemap(resolution) {
+  const binding = resolution && VERIFIED_CODEX_REMAPS.get(resolution);
+  if (!binding
+      || resolution.effective_model !== binding.effective_model
+      || (resolution.model !== binding.canonical.model && resolution.model !== binding.effective_model)
+      || (resolution.canonical_resolution !== undefined && resolution.canonical_resolution !== binding.canonical)
+      || (resolution.canonical_model !== undefined && resolution.canonical_model !== binding.canonical.model)
+      || (resolution.model_source !== undefined && resolution.model_source !== 'gsd-remap')
+      || (resolution.remap_key !== undefined && resolution.remap_key !== binding.remap_key)) return null;
+  return binding;
 }
 
 function compareVersions(left, right) {
@@ -194,5 +224,6 @@ function validateCodexConfiguration(resolution, config = {}, capabilities = {}, 
 }
 
 module.exports = Object.freeze({
-  createCodexRemapper, loadCodexRemap, normalizeModel, readProjectConfig, validateCodexConfiguration,
+  REPAIR, createCodexRemapper, loadCodexRemap, normalizeModel, readProjectConfig,
+  validateCodexConfiguration, verifiedCodexRemap,
 });

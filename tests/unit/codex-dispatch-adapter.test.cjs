@@ -8,6 +8,7 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createCodexDispatchAdapter, CODEX_MODEL_IDS } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
+const { loadCodexRemap } = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
 
 const capabilities = {
   supportedModels: Object.values(CODEX_MODEL_IDS), supportedEfforts: ['high', 'medium', 'max'],
@@ -198,7 +199,10 @@ test('a dynamic remap records canonical requested values beside the applied mode
   });
   try {
     const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
-    const selected = { ...resolution, effective_model: model };
+    const loaded = loadCodexRemap({
+      config: { model_policy: { runtime_tiers: { codex: { sonnet: model } } } },
+    });
+    const selected = loaded.bindResolution({ ...resolution, effective_model: model }, resolution, 'sonnet');
     const result = f.adapter.launch(selected);
     assert.equal(f.calls.at(-1).model, model);
     assert.equal(f.calls.at(-1).reasoning_effort, 'medium');
@@ -220,12 +224,15 @@ test('a forged outer model cannot borrow a canonical resolution without an expli
   } finally { clean(f); }
 });
 
-test('an explicit remap beside a canonical resolution preserves requested and applied receipt values', () => {
+test('a loader-bound remap beside a canonical resolution preserves requested and applied receipt values', () => {
   const f = setup();
   try {
     const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
     const remapped = { ...resolution, model: 'gpt-6-astra', effective_model: 'gpt-6-astra' };
     Object.defineProperty(remapped, 'canonical_resolution', { value: resolution });
+    loadCodexRemap({
+      config: { model_policy: { runtime_tiers: { codex: { sonnet: 'gpt-6-astra' } } } },
+    }).bindResolution(remapped, resolution, 'sonnet');
     const result = f.adapter.launch(remapped);
     assert.equal(f.calls.at(-1).model, 'gpt-6-astra');
     assert.equal(f.calls.at(-1).reasoning_effort, resolution.effort);
@@ -236,6 +243,27 @@ test('an explicit remap beside a canonical resolution preserves requested and ap
   } finally { clean(f); }
 });
 
+test('caller-constructed canonical and remap provenance cannot authorize an effective model', () => {
+  const model = 'vendor/forged-sol';
+  const f = setup({
+    capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
+  });
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
+    const forged = {
+      ...resolution,
+      model,
+      canonical_model: resolution.model,
+      effective_model: model,
+      model_source: 'gsd-remap',
+      remap_key: 'sonnet',
+    };
+    Object.defineProperty(forged, 'canonical_resolution', { value: resolution });
+    rejected(() => f.adapter.launch(forged), 'CONFLICTING_OVERRIDE');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
 test('static generated evidence cannot be bypassed by an effective remap', () => {
   const model = 'vendor/codex-static-model';
   const f = setup({
@@ -243,7 +271,10 @@ test('static generated evidence cannot be bypassed by an effective remap', () =>
   });
   try {
     const resolution = f.boundary.resolve({ runtime: 'codex', role: 'research' });
-    assert.throws(() => f.adapter.validate({ ...resolution, effective_model: model }),
+    const selected = loadCodexRemap({
+      config: { model_policy: { runtime_tiers: { codex: { terra: model } } } },
+    }).bindResolution({ ...resolution, effective_model: model }, resolution, 'terra');
+    assert.throws(() => f.adapter.validate(selected),
       (error) => error.code === 'CONFLICTING_OVERRIDE' && /static Codex selections/.test(error.message));
   } finally { clean(f); }
 });

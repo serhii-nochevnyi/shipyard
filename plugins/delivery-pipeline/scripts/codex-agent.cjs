@@ -175,13 +175,13 @@ function remapKeysForResolution(resolution) {
 }
 
 function effectiveRemapFor(resolution, config, { cwd, env } = {}) {
-  const { remap, sourceConfig } = loadCodexRemap({ config, cwd, env });
+  const { remap, sourceConfig, bindResolution } = loadCodexRemap({ config, cwd, env });
   const keys = remapKeysForResolution(resolution);
   for (const key of keys) {
     const model = remap(key);
-    if (model) return { model, key, keys, sourceConfig };
+    if (model) return { model, key, keys, sourceConfig, bindResolution };
   }
-  return { model: resolution.model, key: null, keys, sourceConfig };
+  return { model: resolution.model, key: null, keys, sourceConfig, bindResolution };
 }
 
 function selectionWithEffectiveRemap(selection, effective) {
@@ -200,11 +200,11 @@ function selectionWithEffectiveRemap(selection, effective) {
     model_source: 'gsd-remap',
     remap_key: effective.key,
   };
-  // Keep a non-enumerable canonical reference for in-process callers. The
-  // adapter can reconstruct the same view from canonical_model/effective_model
-  // after a JSON round trip.
+  // Keep a non-enumerable canonical reference for diagnostics. Trust comes
+  // from the loader's private object-identity binding, not this forgeable field.
   Object.defineProperty(result, 'canonical_resolution', { value: selection });
-  return Object.freeze(result);
+  Object.freeze(result);
+  return effective.bindResolution(result, selection, effective.key);
 }
 
 function selectAgentInternal(role, options) {
@@ -229,7 +229,8 @@ function selectAgentInternal(role, options) {
   const agentsDir = path.resolve(options.agentDir || agentDirFrom(flags, env));
   const adapter = createCodexDispatchAdapter({ agentsDir, agentManifest: options.agentManifest, capabilities });
   const adapterResolution = effective.model === resolution.model
-    ? resolution : { ...resolution, effective_model: effective.model };
+    ? resolution
+    : effective.bindResolution({ ...resolution, effective_model: effective.model }, resolution, effective.key);
   boundary.validateDispatch(adapterResolution, { adapters: { codex: adapter } });
   const evidence = resolution.agent_file ? adapter.validateGeneratedAgent(resolution) : null;
   const selected = selectionWithEffectiveRemap({
