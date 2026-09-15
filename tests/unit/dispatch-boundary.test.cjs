@@ -113,6 +113,7 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   });
   assert.deepStrictEqual(calls[0].context, { ticket: 'T-36-01' });
   assert.equal(result.requested_model, 'gpt-5.6-luna');
+  assert.equal(result.resolution.task_level, 'complex');
   assert.equal(result.applied_model, 'gpt-5.6-luna');
   assert.equal(result.observed_effort, 'max');
   assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'record', 'receipt']);
@@ -140,6 +141,7 @@ test('reconciliation requires authenticated current receipt evidence across boun
     const reader = boundaryModule.createDispatchBoundary({ recorder });
     const facts = reader.reconcile(result.dispatch_id);
     assert.equal(facts.applied_model, result.receipt.applied_model);
+    assert.equal(facts.task_level, result.resolution.task_level);
     assert.deepStrictEqual(facts.application_receipt, result.receipt);
     assert.deepStrictEqual(facts.launch_arguments, result.resolution.launch_arguments);
     assert.throws(() => reader.reconcile('absent'), /compliant applied receipt/);
@@ -157,6 +159,12 @@ test('reconciliation requires authenticated current receipt evidence across boun
     }
     fs.writeFileSync(file, JSON.stringify(original.payload));
     assert.throws(() => reader.reconcile(result.dispatch_id), /compliant applied receipt/);
+    fs.writeFileSync(file, JSON.stringify(original));
+    const claim = recorder.claim(result.dispatch_id, 'repair-dispatch');
+    assert.equal(claim.claimed, true);
+    assert.deepStrictEqual(recorder.consume(result.dispatch_id, 'repair-dispatch', claim), { consumed: true });
+    assert.ok(recorder.getReceipt(result.dispatch_id), 'consumed receipt remains durable history');
+    assert.throws(() => reader.reconcile(result.dispatch_id), /already consumed/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
