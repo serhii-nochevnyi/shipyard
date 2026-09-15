@@ -266,6 +266,7 @@ return await parallel(
         priorReceipt: p.priorReceipt,
         dispatchId: p.dispatch_id || p.dispatchId,
         previousDispatchId: p.previous_dispatch_id || p.previousDispatchId,
+        context: { ticket: p.id },
         capabilities: argv.claudeCapabilities,
         recorder: argv.dispatchRecorder,
         applicationEvidence: argv.claudeApplicationEvidence,
