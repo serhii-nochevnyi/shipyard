@@ -101,7 +101,7 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role> --model <recorder tier alias> --effort <level> --effort-applied <receipt applied effort> --task-level <recorder-task-level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<recorder route>"` — an agent
+- `dispatch-record.cjs mark <T> <role> --boundary-store <receipt store> --dispatch-id <dispatch id> --task-level <rung> --graph <project>/.planning/graph` — an agent
   is working on it RIGHT NOW. The one fact here that is motion rather than a
   verdict, and the one the board could not see at all: nothing is pushed yet, so
   the live state still reads `execute`/`fix` and the stop gate refuses turns over
@@ -1510,7 +1510,7 @@ may be dispatched at all: fix the file.
     before.** The receipt carries the launch identity (the Workflow task id or
     typed Agent id); once it exists, and only then, for every ticket you just
     handed out:
-    `dispatch-record.cjs mark <T> executor --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <receipt-applied-effort> --route "<recorder-route>" --task-level <recorder-task-level> --runtime <claude|codex> --backend <workflow|agent|codex-agent> --agent-id <launch id>`
+    `dispatch-record.cjs mark <T> executor --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <rung> --graph <project>/.planning/graph`
     The recorder adapter provides the compatibility tier/effort/route
     projection; it is not the canonical boundary route. Keep the concrete
     selector `model` for `--observed-model` when the host reports it.
@@ -1650,9 +1650,9 @@ The boundary resolves the fixed Codex Luna/medium or Workflow runtime Sonnet/hig
 selection, validates the generated `shipyard-pr-sentinel.toml` or the native
 Workflow-runtime alias plus explicit effort, launches the typed guard, and returns a
 verified receipt. Only after that receipt exists may the overlay be updated:
-`dispatch-record.cjs mark <T> pr-sentinel --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <recorder-task-level> --runtime <runtime> --backend <workflow|agent|codex-agent> --agent-id <launch id>` for
-every ticket on the guarded list, with the same returned launch id and the exact
-Codex `--agent-file` when applicable. Never create a mark for a refused or
+`dispatch-record.cjs mark <T> pr-sentinel --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <rung> --graph <project>/.planning/graph` for
+every ticket on the guarded list, using the returned boundary receipt and the
+exact Codex `--agent-file` when applicable. Never create a mark for a refused or
 phantom launch. Clear each record when the guard's report comes back; a
 `pr-sentinel` record also lifts when the PR merges or its base moves. New PRs get
 the same boundary call or the existing typed guard context, never an inherited
