@@ -811,6 +811,10 @@ test('delivery launch docs route every role through the boundary and the generat
   ]) {
     assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
   }
+  for (const [name, doc] of [['deliver', deliver], ['pr-sentinel', sentinel]]) {
+    assert.ok(doc.includes('Workflow runtime'), `${name} must name the Workflow runtime by mechanism`);
+    assert.ok(!/\bClaude\b/.test(doc), `${name} must not use converter-rewritten Claude prose`);
+  }
 
   for (const variant of codexStaticVariants(2)) {
     assert.ok(source.includes(variant.file), `delivery docs must name generated Codex variant ${variant.file}`);

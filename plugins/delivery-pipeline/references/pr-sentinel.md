@@ -58,7 +58,7 @@ boundary.dispatch(
 ```
 
 The boundary is the only resolver and launcher. It validates the policy
-fingerprint, concrete selection, generated Codex file or Claude native
+fingerprint, concrete selection, generated Codex file or Workflow-runtime native
 arguments, and application receipt before it records success. A missing runtime,
 adapter, recorder, model, effort, typed capability, or receipt is a refusal.
 Literal model strings, omitted effort, inline callbacks, inherited guards or
@@ -81,7 +81,7 @@ first requires the config-aware routed resolver to confirm `pipeline.fable: auto
 the default `off` refuses an unconsented Fable selection before the config-blind
 boundary is called.
 
-| Duty | Codex | Claude |
+| Duty | Codex | Workflow runtime |
 | --- | --- | --- |
 | sentinel | Luna/medium, fixed | Sonnet/high, fixed |
 | ci-fix / review-fix | Luna/max → Astra/low on verified `repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
@@ -182,7 +182,7 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   receipt-verified rung. On `repeat_exhausted`, only the receipt-verified ceiling
   rung is allowed; one more failure is a human escalation, not another launch.
   Codex resolves and validates `shipyard-ci-fix.toml` →
-  `shipyard-ci-fix-repeat.toml` → `shipyard-ci-fix-deep.toml`; Claude resolves
+  `shipyard-ci-fix-repeat.toml` → `shipyard-ci-fix-deep.toml`; the Workflow runtime resolves
   Opus/medium → Opus/max with explicit native effort. The boundary refuses a
   missing predecessor receipt, undocumented escalation, literal model, omitted
   effort, inline callback, or inherited session.
@@ -258,7 +258,7 @@ boundary.dispatch(
 ```
 
 Codex uses `shipyard-review-fix.toml` → `shipyard-review-fix-repeat.toml` →
-`shipyard-review-fix-deep.toml`; Claude uses Opus/medium → Opus/max with
+`shipyard-review-fix-deep.toml`; the Workflow runtime uses Opus/medium → Opus/max with
 explicit native effort. No fixer may launch or record an attempt until the
 boundary returns a verified receipt.
 
