@@ -1759,17 +1759,17 @@ tickets:
     pr_base: ticket/T-36-02-authoritative-configuration-bridge-and-o
     jira: null
   T-36-04:
-    title: Generate and validate the complete Codex agent bundle
+    title: Generate and validate the Codex bundle with the amended model ladder
     plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-04-PLAN.md'
     phase: '36'
     repo: null
     wave: 13
     depends_on: [T-36-03]
-    files: [scripts/gen-codex-shipyard.cjs, scripts/install-shipyard-codex.sh, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, README.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, docs/audits/2026-09-08-models-autonomy-probes.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/dispatch-record.test.cjs, tests/smoke/codex-shipyard-smoke.sh]
+    files: [CLAUDE.md, '.planning/architecture/ADR-014-DATA-MODEL.md', '.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md', capabilities/delivery-pipeline/capability.json, docs/gsd_multilevel_delivery_pipeline.md, plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, scripts/gen-codex-shipyard.cjs, scripts/install-shipyard-codex.sh, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, README.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, docs/audits/2026-09-08-models-autonomy-probes.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/codex-agent.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/model-policy.test.cjs, tests/unit/pipeline-config.test.cjs, tests/smoke/codex-shipyard-smoke.sh, '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-PLAN.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-PLAN.md']
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-36-04-generate-and-validate-the-complete-codex
+    branch: ticket/T-36-04-generate-and-validate-the-codex-bundle-w
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-03
     pr_base: ticket/T-36-03-strict-codex-adapter-and-named-model-pal
@@ -1788,7 +1788,7 @@ tickets:
     branch: ticket/T-36-05-claude-adapter-and-explicit-workflow-lau
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-04
-    pr_base: ticket/T-36-04-generate-and-validate-the-complete-codex
+    pr_base: ticket/T-36-04-generate-and-validate-the-codex-bundle-w
     jira: null
   T-36-06:
     title: Route GSD decomposition through the mandatory boundary
