@@ -81,9 +81,9 @@ The runtime grids are independent and explicit:
 | Duty | Codex | Claude |
 | --- | --- | --- |
 | sentinel | Luna/medium, fixed | Sonnet/high, fixed |
-| ci-fix / review-fix | Luna/max → Sol/medium on verified `repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
-| arch-review | Sol/medium → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/max for critical/contested/checkpoint evidence → Fable/medium for a measured window |
-| integrator | Sol/medium → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/high for the same evidence |
+| ci-fix / review-fix | Luna/max → Astra/low on verified `repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+| arch-review | Astra/low → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/max for critical/contested/checkpoint evidence → Fable/medium for a measured window |
+| integrator | Astra/low → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/high for the same evidence |
 
 Codex static duties use the generated files named by the selector:
 `shipyard-pr-sentinel.toml`, `shipyard-ci-fix.toml`,
@@ -155,9 +155,10 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   mandatory boundary. Read the prior-attempt record before settling on an
   explanation (`attempt-history.cjs <T> --graph <project>/.planning/graph`): a
   hypothesis already in it was tried and did not hold, so it is EXCLUDED.
-  Hard-refuse before prompt, spawn, or record without a concrete applied
-  model-and-effort receipt; no Agent, prompt, session, or in-process fallback
-  may perform or record this ci-fix.
+  Require a typed boundary adapter that explicitly applies the resolved model
+  and effort and returns a concrete application receipt. Otherwise hard-refuse
+  before constructing a prompt, spawning, or recording; no Agent, prompt,
+  session, or in-process fallback may perform or record this ci-fix.
   Supply the failure log, signature, strategy, full ticket evidence, and the
   signed `signatureState` to:
 
@@ -303,7 +304,7 @@ points here instead of creating a second launch protocol.
    )
    ```
 
-   Codex resolves Sol/medium → Astra/medium for measured-window, contested,
+   Codex resolves Astra/low → Astra/medium for measured-window, contested,
    critical, or checkpoint evidence and validates the generated
    `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
    Claude resolves Opus/medium → Opus/max for critical/contested/checkpoint
