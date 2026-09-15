@@ -22,7 +22,7 @@
     },
     "T-36-07": {
       "role": "ci-fix",
-      "at": "2026-09-15T11:42:54.004Z",
+      "at": "2026-09-15T11:46:05.963Z",
       "model": "sonnet",
       "effort": "high",
       "effort_applied": "low",
@@ -31,9 +31,9 @@
       "backend": "agent",
       "observed_model": "gpt-6-astra",
       "observed_effort": "low",
-      "agent_id": "01a0a4e0-5d72-7ac2-9bd7-9c668af2356b",
+      "agent_id": "01a0a4e3-62fe-71c0-8b0b-049d5cd40754",
       "reason": "tier=level:critical+cap:codex(sonnet) effort=flat:codex(high)",
-      "dispatch_id": "dispatch-mu2lrn07-0cd85700-6677-43ce-855c-4e58757aa608",
+      "dispatch_id": "dispatch-mu2lvr4e-8429c596-990a-44ec-be24-19660cebddae",
       "fingerprint": "0bfe0aa9466bf85d",
       "fingerprint_kind": "role",
       "pr": 142

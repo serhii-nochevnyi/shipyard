@@ -1202,8 +1202,8 @@
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T20:35:18Z",
     "head_sha": "7c1b72faab3d8efc36a784f6a5fb3a9c7ae82b2a",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
+    "merge_state": "UNKNOWN",
+    "behind_by": 2,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1294,8 +1294,8 @@
     "behind_by": 0,
     "checks": {
       "total": 1,
-      "failing": 0,
-      "pending": 1,
+      "failing": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
