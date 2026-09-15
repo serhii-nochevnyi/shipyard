@@ -1893,7 +1893,7 @@ tickets:
     repo: null
     wave: 20
     depends_on: [T-36-10, T-30-09, T-31-02]
-    files: ['.planning/phases/36-enforce-the-runtime-model-ladder/36-12-PLAN.md', CLAUDE.md, '.planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md', '.planning/architecture/ADR-012-task-level-model-ladder.md', README.md, docs/gsd_multilevel_delivery_pipeline.md, tests/unit/source-contract.test.cjs]
+    files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/36-enforce-the-runtime-model-ladder/36-12-PLAN.md', CLAUDE.md, '.planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md', '.planning/architecture/ADR-012-task-level-model-ladder.md', README.md, docs/gsd_multilevel_delivery_pipeline.md, tests/unit/source-contract.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false

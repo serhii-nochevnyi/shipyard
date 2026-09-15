@@ -3894,6 +3894,8 @@
       "unreachable_paths": false,
       "missing_paths": false,
       "files": [
+        ".planning/graph/tickets.json",
+        ".planning/graph/tickets.yaml",
         ".planning/phases/36-enforce-the-runtime-model-ladder/36-12-PLAN.md",
         "CLAUDE.md",
         ".planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md",
