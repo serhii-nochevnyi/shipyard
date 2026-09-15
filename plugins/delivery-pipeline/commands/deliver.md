@@ -293,10 +293,10 @@ SENTINEL    ci-fix / base-merge / review-fix / arch-review / undraft / merge
   )
   ```
 
-  The resolver fixes the sentinel at Luna/medium on Codex and Sonnet/high on
-  Claude; guard risk, checkpoint, signature, and prior-applied facts are retained
+  The resolver fixes the sentinel at Luna/medium on Codex and Sonnet/high on the
+  Workflow runtime; guard risk, checkpoint, signature, and prior-applied facts are retained
   in the receipt but cannot promote this fixed role. Codex validates the generated
-  `shipyard-pr-sentinel.toml`; Claude passes its native alias and explicit effort.
+  `shipyard-pr-sentinel.toml`; the Workflow runtime passes its native alias and explicit effort.
   A missing typed host, effort, or verified receipt is a refusal, not permission to
   inherit the current guard or session. Re-post a guard for PRs opened after it
   started through the same boundary (or add them to the existing typed guard
@@ -464,7 +464,7 @@ gate outcomes, not model promotions.
 
 Refuse before launch when runtime is missing or ambiguous, a model or effort is
 literal/omitted/conflicting, the selected Codex file is missing or stale, a
-Claude native pair is unsupported, a guard/session is inherited, a launch is
+Workflow-runtime native pair is unsupported, a guard/session is inherited, a launch is
 inline, an escalation signal is absent or undocumented, the prior applied
 receipt is missing or phantom, the recorder cannot acknowledge the record, or
 the host omits applied/observed receipt evidence. Never create a dispatch
@@ -1287,11 +1287,11 @@ boundary.dispatch(
 )
 ```
 
-`drift-check` is fixed at Codex Luna/max and Claude Opus/max; risk, checkpoint,
+`drift-check` is fixed at Codex Luna/max and Workflow runtime Opus/max; risk, checkpoint,
 window size, and other global context are retained as evidence but cannot
 promote it. The returned receipt must be `verified` before the drift result is
 accepted. On Codex the boundary validates the generated
-`shipyard-drift-check.toml` and uses `launchStatic`; on Claude it passes the
+`shipyard-drift-check.toml` and uses `launchStatic`; on the Workflow runtime it passes the
 native alias and explicit effort through the workflow adapter. If the host
 cannot apply the selection or return the receipt, refuse the judge and treat
 the ticket as needing drift handling; do not use a generic or inherited Agent.
@@ -1417,7 +1417,7 @@ may be dispatched at all: fix the file.
    changed-file count plus any `reuseCandidates` in fenced context; do not
    summarize away a signal. The executor resolves to
    Codex Luna/max or, only for explicit `critical`/`checkpoint` evidence,
-   Astra/low. Claude uses its independent Sonnet/max or evidence-based
+   Astra/low. The Workflow runtime uses its independent Sonnet/max or evidence-based
    Opus/high native selection.
 
    ```text
@@ -1602,9 +1602,9 @@ boundary.dispatch(
 )
 ```
 
-The boundary resolves the fixed Codex Luna/medium or Claude Sonnet/high
+The boundary resolves the fixed Codex Luna/medium or Workflow runtime Sonnet/high
 selection, validates the generated `shipyard-pr-sentinel.toml` or the native
-Claude alias plus explicit effort, launches the typed guard, and returns a
+Workflow-runtime alias plus explicit effort, launches the typed guard, and returns a
 verified receipt. Only after that receipt exists may the overlay be updated:
 `dispatch-record.cjs mark <T> pr-sentinel --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <workflow|agent|codex-agent> --agent-id <launch id>` for
 every ticket on the guarded list, with the same returned launch id and the exact
@@ -1711,7 +1711,7 @@ loop:
          boundary result. The boundary validates the ordered receipt chain. Codex uses the generated
          `shipyard-ci-fix.toml` → `shipyard-ci-fix-repeat.toml` →
          `shipyard-ci-fix-deep.toml` files for base → verified `repeat` →
-         verified `repeat_exhausted`; Claude uses Opus/medium → Opus/max with
+         verified `repeat_exhausted`; the Workflow runtime uses Opus/medium → Opus/max with
          explicit native effort. A repeat is refused without the prior receipt,
          and another failure after the ceiling is a human escalation, not an
          undocumented third launch. The host must carry the resolved selection;
@@ -1756,7 +1756,7 @@ loop:
 
        Codex uses `shipyard-review-fix.toml` →
        `shipyard-review-fix-repeat.toml` → `shipyard-review-fix-deep.toml`
-       for the verified repair chain; Claude uses Opus/medium → Opus/max with
+       for the verified repair chain; the Workflow runtime uses Opus/medium → Opus/max with
        explicit native effort. The boundary receipt is required before the
        fixer may push or the attempt may be recorded. An inline, inherited,
        literal-model, or omitted-effort fallback is refused. Require a typed
@@ -1789,7 +1789,7 @@ loop:
      Codex resolves Astra/low or, only for measured/contested/critical/
      checkpoint evidence, Astra/medium and validates the generated
      `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
-     Claude independently resolves Opus/medium, Opus/max for critical evidence,
+     The Workflow runtime independently resolves Opus/medium, Opus/max for critical evidence,
      or Fable/medium for the measured ceiling, always with explicit effort.
      Record the verdict only after the boundary receipt is verified; a missing
      measurement, typed host, or documented escalation is a
@@ -2162,7 +2162,7 @@ driving PRs hands the user a half-truth.
      Codex resolves Astra/low and escalates to Astra/medium only for the
      measured-window, contested, critical, or checkpoint evidence, validating
      `shipyard-integrator.toml` or `shipyard-integrator-critical.toml`.
-     Claude independently resolves Opus/medium or Opus/high with explicit
+     The Workflow runtime independently resolves Opus/medium or Opus/high with explicit
      effort. The receipt must be verified before accepting `INTEGRATION.md` or
      `passed`/`needs-fix`; no literal model, omitted effort, inherited session,
      or undocumented escalation is permitted.
