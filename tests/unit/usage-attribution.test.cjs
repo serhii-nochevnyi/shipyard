@@ -420,6 +420,79 @@ test('policy-aware attribution retains provenance and compares nested facts idem
   }
 });
 
+test('nested provenance accepts only bounded schema fields', () => {
+  assert.throws(
+    () => normalizeRecord(base({ receipt: { prompt: 'secret' } })),
+    /receipt\.prompt is not supported/
+  );
+  assert.throws(
+    () => normalizeRecord(base({ receipt: Object.fromEntries([
+      'receipt_type', 'runtime', 'role', 'dispatch_id', 'launch_id', 'requested_model',
+      'requested_effort', 'applied_model', 'applied_effort', 'observed_model', 'observed_effort',
+      'policy_id', 'policy_version', 'policy_hash', 'backend', 'mechanism', 'agent_file',
+      'agent_file_digest', 'logical_rung', 'rung', 'compliance',
+    ].map((field) => [field, 'a'.repeat(900)])) })),
+    /receipt exceeds 16384 bytes/
+  );
+});
+
+test('reconciliation rejects conflicting application copies and unsupported provenance', () => {
+  const resolution = routed('claude', 'executor', {}, 'conflicting-copies');
+  const application = applicationReceipt(resolution);
+  const copies = reconcileTelemetry({
+    ...resolution,
+    application_receipt: application,
+    receipt: { ...application, applied_model: 'opus' },
+    applied_model: 'opus',
+  });
+  assert.equal(copies.application_status, 'contradictory');
+  assert.ok(copies.findings.includes('contradictory_application'));
+
+  const unsupported = reconcileTelemetry({
+    ...resolution,
+    runtime: 'unsupported-runtime',
+    application_receipt: { ...application, runtime: 'unsupported-runtime' },
+  });
+  assert.equal(unsupported.resolution_status, 'contradictory');
+  assert.ok(unsupported.policy_resolution.contradictions.includes('unsupported_runtime'));
+  assert.equal(unsupported.compliant, false);
+});
+
+test('policy reconciliation requires complete resolver provenance and reconciles its full signal route', () => {
+  const resolution = routed('codex', 'executor', { critical: true }, 'complete-signals');
+  const incomplete = { ...resolution, application_receipt: applicationReceipt(resolution) };
+  delete incomplete.logical_model;
+  delete incomplete.signals;
+  const incompleteFacts = reconcileTelemetry(incomplete);
+  assert.equal(incompleteFacts.policy_resolution.current, false);
+  assert.ok(incompleteFacts.policy_resolution.missing_fields.includes('logical_model'));
+  assert.ok(incompleteFacts.policy_resolution.missing_fields.includes('signals'));
+
+  const mismatched = reconcileTelemetry({
+    ...resolution,
+    route: resolution.route.replace('critical->critical', 'base'),
+    application_receipt: applicationReceipt(resolution),
+  });
+  assert.equal(mismatched.resolution_status, 'contradictory');
+  assert.ok(mismatched.policy_resolution.contradictions.includes('signals'));
+
+  const wrongIndex = reconcileTelemetry({
+    ...resolution, rung_index: 99, application_receipt: applicationReceipt(resolution),
+  });
+  assert.ok(wrongIndex.policy_resolution.contradictions.includes('rung_index'));
+});
+
+test('static Codex application receipts require a lowercase SHA-256 agent digest', () => {
+  const resolution = routed('codex', 'arch-review', {}, 'digest-shape');
+  const facts = reconcileTelemetry({
+    ...resolution,
+    application_receipt: applicationReceipt(resolution, { agent_file_digest: 'not-a-digest' }),
+  });
+  assert.equal(facts.application_status, 'unverifiable');
+  assert.ok(facts.runtime_application.missing_fields.includes('agent_file_digest'));
+  assert.equal(facts.compliant, false);
+});
+
 test('reconciliation reports independent findings and never marks stale or legacy history compliant', () => {
   const currentResolution = modelPolicy.resolveDispatch({
     runtime: 'claude', role: 'executor', signals: {}, dispatch_id: 'current',
