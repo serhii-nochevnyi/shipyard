@@ -564,21 +564,22 @@ exists. (Phrased without naming the runtime on purpose — the Codex generator
 substitutes that name in prose, which would inflect this sentence into saying
 the opposite where it matters most.)
 On Codex, static `$shipyard-<role>` agents run under their own
-`~/.codex/agents/<name>.toml`, which carries the canonical ADR-014 model and
-effort ALREADY — written at install time from the policy module, not from the
-compatibility `pipeline.codex_models` palette. Resolve a static file at dispatch
+`~/.codex/agents/<name>.toml`, which records the canonical ADR-014 model and
+effort written at install time from the policy module, not from the compatibility
+`pipeline.codex_models` palette. Resolve a static file at dispatch
 time with `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json --capabilities-file
 "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json" [--project-dir <project>];
 if it runs from a ticket worktree, `--project-dir` must point at the conveyor
 root so the adaptive policy is loaded rather than the conservative defaults.
-Do not hand the Codex
-spawn a tier alias, because the static file is the field that carries the
-concrete model. `executor` is the one deliberate exception: it has no static
-file, so `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select executor --json
+Do not hand the Codex spawn a tier alias. The selected file is policy evidence,
+not a substitute for applying its concrete model and effort: every launch must
+pass both explicitly to `spawn_agent`/`codex exec`. `executor` is the one
+deliberate exception: it has no static file, so `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select executor --json
 --capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"` resolves the
-concrete palette model at runtime and has `agent_file: null`. Pass that model and effort to
-`spawn_agent`/`codex exec` when the schema supports them; otherwise the active
-session model is an explicit, measurable fallback. For the dispatch record, use
+concrete palette model at runtime and has `agent_file: null`. If the selector
+does not return both values, or the host cannot apply both explicit overrides,
+hard-refuse the dispatch; do not fall back to a session model, CLI default, or
+a compliant dispatch record. For the dispatch record, use
 the selector's `route`/`model_tier`; use its concrete `model` as
 `--observed-model` when the host reports it.
 
@@ -1513,15 +1514,14 @@ may be dispatched at all: fix the file.
    `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select executor --json --capabilities-file
    "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json" --project-dir <project>
    --risk <risk> --type <type> --files <n> [--checkpoint]` with the same signals.
-   Pass its
-   concrete `model` and `effort` when the host supports those
-   overrides; when `model` is `null`, omit `--model` and let the Codex CLI default
-   apply. In both runtimes keep the selector's `route`, `model_tier` and
-   `task_level` for dispatch recording. On the Agent fallback, which has no
-   `effort` argument, add `Resolved effort: <effort>. Think and work at this
-   effort level throughout the task.` to the fenced prompt. That instruction
-   is advisory; record `effort_applied=unsupported` rather than claiming the
-   resolver's effort was carried by the spawn.
+   Require the selector to return non-empty concrete `model` and `effort`, and
+   require the host to apply both as explicit overrides. If either requirement
+   is unavailable, hard-refuse the launch: do not omit either override, use a
+   CLI/session default, or write a compliant dispatch record. In both runtimes
+   keep the selector's `route`, `model_tier` and `task_level` for dispatch
+   recording. An Agent fallback with no explicit effort argument cannot satisfy
+   ADR-014: hard-refuse it rather than treating an advisory prompt as applied
+   effort or recording `effort_applied=unsupported` as a compliant dispatch.
    Assemble the prompt PER THE ANTI-INJECTION DISCIPLINE (see the Workflow section
    above): within `<TICKET-CONTRACT>…</TICKET-CONTRACT>` — the full text of the ticket's
    plan + Context reads + the rule "work ONLY within files_modified; commit atomically
@@ -1537,10 +1537,10 @@ may be dispatched at all: fix the file.
      `{id, status: committed|blocked, prBodyPath, evidencePath, summary}` per ticket.
      `reuseCandidates` is that ticket's `reuse_candidates` from Step 2 (omit when the
      ticket skipped drift-check or the list was empty).
-   - **Fallback**: several executor `Agent`s in one message. Independent tickets —
-     IN PARALLEL. Put the ticket's `reuse_candidates` INSIDE `<TICKET-CONTRACT>` with
-     the instruction to read each one before writing and to build on it rather than
-     add a parallel layer — outside the bounds the agent is told to ignore it.
+   - **Fallback**: if the available Agent surface cannot apply the selected
+     concrete model and effort explicitly, return the ticket as blocked and
+     hard-refuse the launch. Do not substitute an advisory prompt, a session
+     default, or a compliant dispatch record.
 4a. **Record the dispatch — AFTER the launch returned, never before.** The launch
     above returns immediately with an id (the Workflow tool a task id, the Agent
     tool an agent id); once you hold that id the agent exists, and only then, for
@@ -1549,10 +1549,10 @@ may be dispatched at all: fix the file.
     For a Codex selection, use its `model_tier` for `--model` and its
     `requested_effort` for `--effort`; keep the concrete selector `model` for
     `--observed-model` when the host reports it.
-    (add `--effort-applied <effort>` when you took the Workflow path — it carries an
-    effort into the spawn. If the selected backend cannot support effort, record
-    `unsupported`; if it ran but did not expose the value, record `unknown`. Otherwise
-    omit the flag, never guess; add `--graph <project>/.planning/graph` when you are
+    (add `--effort-applied <effort>` only when the selected backend explicitly
+    carried the effort into the spawn. If it cannot, hard-refuse before marking;
+    do not record `unsupported` or `unknown` as a compliant executor dispatch.
+    Otherwise omit the flag, never guess; add `--graph <project>/.planning/graph` when you are
     not standing in the project). `<model>`, `<effort>` and `<route>` are all three
     fields the runtime-specific selector call above already returned — nothing is
     re-derived and nothing is paraphrased here, or the record
