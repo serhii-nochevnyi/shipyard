@@ -1212,13 +1212,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/140",
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T21:26:23Z",
-    "head_sha": "195cc46ccb0b90eee5b2faf141ba9138fe05c943",
-    "merge_state": "UNKNOWN",
-    "behind_by": 17,
+    "head_sha": "70ac26b6ff7a4e3ef8dc6c00efe077c4462789f0",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
@@ -1239,8 +1239,8 @@
     "pr_base": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
     "pr_created_at": "2026-09-14T21:57:13Z",
     "head_sha": "825ba638ca0d09ca9b78584a32d389af803ea501",
-    "merge_state": "CLEAN",
-    "behind_by": 11,
+    "merge_state": "UNKNOWN",
+    "behind_by": 31,
     "gate": {
       "arch-review": "conform",
       "drift-check": "fresh",

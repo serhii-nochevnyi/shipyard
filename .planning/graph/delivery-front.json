@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-09-15T14:11:53.104Z",
-  "observed_at": "2026-09-15T14:11:53.104Z",
-  "generation": 305,
+  "generated_at": "2026-09-15T14:23:36.572Z",
+  "observed_at": "2026-09-15T14:23:36.572Z",
+  "generation": 306,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-15T14:11:53.104Z",
+  "dispatches_applied_at": "2026-09-15T14:23:36.572Z",
   "actionable": {
     "execute": [],
     "publish": [],
@@ -19,9 +19,10 @@
     "merge": []
   },
   "waiting": {
-    "ci": [],
+    "ci": [
+      "T-36-05"
+    ],
     "dispatched": [
-      "T-36-05",
       "T-36-10"
     ],
     "parent": [],
@@ -145,12 +146,12 @@
     ]
   },
   "why": {
-    "T-36-05": "dispatched to ci-fix 2m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (the PR's head moves (a push)) or after 90m; `dispatch-record.cjs clear T-36-05 <dispatch_id>` returns it now.",
-    "T-36-06": "PR #141: the base moved: `ticket/T-36-05-claude-adapter-and-explicit-workflow-lau` is 11 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
+    "T-36-05": "PR #140: 1 check(s) still running",
+    "T-36-06": "PR #141: the base moved: `ticket/T-36-05-claude-adapter-and-explicit-workflow-lau` is 31 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-36-07": "PR #142: green and still a draft — threads, arch-review, conform gate",
     "T-36-08": "PR #143: green and still a draft — threads, arch-review, conform gate",
     "T-36-09": "PR #144: green and still a draft — threads, arch-review, conform gate",
-    "T-36-10": "dispatched to executor 5m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (a branch or a PR appears) or after 90m; `dispatch-record.cjs clear T-36-10 <dispatch_id>` returns it now.",
+    "T-36-10": "dispatched to executor 17m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (a branch or a PR appears) or after 90m; `dispatch-record.cjs clear T-36-10 <dispatch_id>` returns it now.",
     "T-36-11": "T-36-10 (parent has no branch yet (nothing to cascade from))",
     "T-36-12": "T-36-10 (parent has no branch yet (nothing to cascade from))"
   },
@@ -160,8 +161,8 @@
     "fix": 1,
     "finalize": 3,
     "merge": 0,
-    "ci": 0,
-    "dispatched": 2,
+    "ci": 1,
+    "dispatched": 1,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
@@ -175,8 +176,8 @@
   "fixpoint": false,
   "capacity": {
     "max": 4,
-    "in_flight": 2,
-    "free": 2
+    "in_flight": 1,
+    "free": 3
   },
   "sentinel": {
     "duty": [
@@ -185,11 +186,11 @@
       "T-36-08",
       "T-36-09"
     ],
-    "waiting_ci": [],
-    "waiting_parent": [],
-    "dispatched": [
+    "waiting_ci": [
       "T-36-05"
     ],
+    "waiting_parent": [],
+    "dispatched": [],
     "clear": false
   },
   "roles": {
