@@ -67,6 +67,14 @@ refused. Do not call a compatibility model command, `Agent`, `Workflow`, or a
 Codex command as a second launch path; those are adapter internals reached only
 by the boundary.
 
+This is the host-orchestrator protocol, not a self-contained static Codex launch
+recipe. A generated Codex agent file has no host-injected adapter, generated-agent
+capabilities, durable recorder, or application-evidence callback with which to
+instantiate this boundary or launch a follow-on duty. It must not attempt a direct
+model call or pretend to provide the boundary; it can only return its evidence to
+the host orchestrator. The host adapter must perform the boundary dispatch, and a
+missing host bridge is a refusal/parked outcome.
+
 Pass the complete evidence, not a summary: `risk`, `type`, `complexity`,
 `critical`, `checkpoint`, `contested`, measured `inputTokens`, signed
 `signatureState`, and boundary-issued `priorApplied` where applicable. A repair
@@ -88,7 +96,7 @@ boundary is called.
 | arch-review | Astra/low → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/max for critical/contested/checkpoint evidence → Fable/medium for a measured window |
 | integrator | Astra/low → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/high for the same evidence |
 
-Codex static duties use the generated files named by the selector:
+When a host boundary dispatches a Codex static duty, it uses the generated files named by the selector:
 `shipyard-pr-sentinel.toml`, `shipyard-ci-fix.toml`,
 `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml`,
 `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`,
