@@ -1749,7 +1749,7 @@ tickets:
     repo: null
     wave: 12
     depends_on: [T-36-02]
-    files: [plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/codex-agent.cjs, plugins/delivery-pipeline/scripts/codex-model-remap.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/codex-agent.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/codex-agent.cjs, plugins/delivery-pipeline/scripts/codex-model-remap.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/codex-agent.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: true
