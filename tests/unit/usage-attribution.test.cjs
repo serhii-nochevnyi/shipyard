@@ -8,7 +8,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   normalizeRecord, readLedger, latestRecords, recordBatch,
+  reconcileTelemetry, summarizeTelemetry, POLICY_HASH, POLICY_VERSION,
 } = require('../../plugins/delivery-pipeline/scripts/usage-attribution.cjs');
+const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { report } = require('../../plugins/delivery-pipeline/scripts/usage-report.cjs');
 
 const CLI = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/usage-attribution.cjs');
@@ -39,6 +41,54 @@ const base = (over = {}) => ({
   observed_effort: 'high',
   ...over,
 });
+
+function applicationReceipt(resolution, over = {}) {
+  const receipt = {
+    receipt_type: 'adr-014.application',
+    runtime: resolution.runtime,
+    role: resolution.role,
+    dispatch_id: resolution.dispatch_id,
+    launch_id: `launch-${resolution.dispatch_id}`,
+    requested_model: resolution.requested_model,
+    requested_effort: resolution.requested_effort,
+    applied_model: resolution.requested_model,
+    applied_effort: resolution.requested_effort,
+    observed_model: resolution.requested_model,
+    observed_effort: resolution.requested_effort,
+    policy_hash: resolution.policy_hash,
+    compliance: 'verified',
+    compliance_proof: {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: resolution.policy_hash,
+      dispatch_id: resolution.dispatch_id,
+      launch_id: `launch-${resolution.dispatch_id}`,
+    },
+    ...(resolution.agent_file ? {
+      agent_file: resolution.agent_file,
+      agent_file_digest: 'a'.repeat(64),
+    } : {}),
+    ...over,
+  };
+  if (!over.compliance_proof) {
+    receipt.compliance_proof = {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: receipt.policy_hash,
+      dispatch_id: receipt.dispatch_id,
+      launch_id: receipt.launch_id,
+    };
+  }
+  return receipt;
+}
+
+function routed(runtime, role, signals, dispatch_id, over = {}) {
+  const resolution = modelPolicy.resolveDispatch({ runtime, role, signals, dispatch_id });
+  return {
+    ...resolution,
+    ...over,
+  };
+}
 
 test('usage attribution keeps provider/runtime pairs explicit', () => {
   const record = normalizeRecord(base());
@@ -324,4 +374,132 @@ test('unknown observed effort stays visible but is excluded from eligible rows',
   assert.equal(result.efficiency.ineligible_rows, 1);
   assert.equal(result.efficiency.rows[0].eligible, false);
   assert.deepEqual(result.efficiency.rows[0].exclusion_reasons, ['missing_or_nonconcrete_effort']);
+});
+
+test('policy-aware attribution retains provenance and compares nested facts idempotently', () => {
+  const resolution = modelPolicy.resolveDispatch({
+    runtime: 'codex', role: 'executor', signals: { critical: true }, dispatch_id: 'policy-dispatch',
+  });
+  const receipt = applicationReceipt(resolution, {
+    observed_model: 'unknown', observed_effort: 'unknown',
+  });
+  const record = normalizeRecord(base({
+    observation_id: 'policy-observation', dispatch_id: resolution.dispatch_id,
+    runtime: 'codex', provider: 'openai', session_id: 'codex-policy-session',
+    model: 'sonnet', effort: 'low', effort_applied: 'low',
+    observed_model: 'unknown', observed_effort: 'unknown',
+    policy_id: 'ADR-014', policy_version: POLICY_VERSION, policy_hash: POLICY_HASH,
+    logical_model: resolution.logical_model, logical_rung: resolution.logical_rung,
+    rung: resolution.rung, rung_index: resolution.rung_index, route: resolution.route,
+    mechanism: resolution.mechanism, launch_id: 'launch-policy-dispatch',
+    launch_arguments: resolution.launch_arguments, signals: resolution.signals,
+    signals_fired: resolution.signals_fired, requested_model: resolution.requested_model,
+    requested_effort: resolution.requested_effort, applied_model: resolution.requested_model,
+    applied_effort: resolution.effort, receipt, application_receipt: receipt,
+    resolution,
+  }));
+  assert.equal(record.policy_hash, POLICY_HASH);
+  assert.equal(record.resolution.rung, 'critical');
+  assert.deepEqual(record.application_receipt.compliance_proof, receipt.compliance_proof);
+
+  const reordered = normalizeRecord({
+    ...record,
+    launch_arguments: { ...record.launch_arguments },
+    signals: { ...record.signals },
+    receipt: { ...record.receipt, compliance_proof: { ...record.receipt.compliance_proof } },
+    application_receipt: { ...record.application_receipt, compliance_proof: { ...record.application_receipt.compliance_proof } },
+    resolution: { ...record.resolution, signals: { ...record.resolution.signals } },
+  });
+  const { graph } = project();
+  try {
+    assert.equal(recordBatch(graph, [record]).recorded.length, 1);
+    assert.equal(recordBatch(graph, [reordered]).recorded.length, 0,
+      'nested policy objects with different insertion order are the same observation');
+  } finally {
+    fs.rmSync(path.resolve(graph, '..', '..'), { recursive: true, force: true });
+  }
+});
+
+test('reconciliation reports independent findings and never marks stale or legacy history compliant', () => {
+  const currentResolution = modelPolicy.resolveDispatch({
+    runtime: 'claude', role: 'executor', signals: {}, dispatch_id: 'current',
+  });
+  const good = {
+    ...currentResolution,
+    application_receipt: applicationReceipt(currentResolution),
+    session_id: 'joined-session',
+  };
+  const stale = {
+    ...currentResolution,
+    dispatch_id: 'stale', policy_version: 'adr-014.v2', policy_hash: 'old-hash',
+    application_receipt: applicationReceipt(
+      { ...currentResolution, dispatch_id: 'stale', policy_hash: 'old-hash' },
+      { observed_model: 'unknown', observed_effort: 'unknown' },
+    ),
+    observed_model: 'unknown', observed_effort: 'unknown',
+  };
+  const contradictory = {
+    ...currentResolution,
+    dispatch_id: 'contradictory',
+    application_receipt: applicationReceipt(
+      { ...currentResolution, dispatch_id: 'contradictory' },
+      { applied_model: 'opus', observed_model: 'opus' },
+    ),
+  };
+  const missing = { ...currentResolution, dispatch_id: 'missing' };
+  const legacy = base({ dispatch_id: 'legacy', observed_model: 'unknown', observed_effort: 'unknown' });
+
+  const goodFacts = reconcileTelemetry(good, { usageJoined: true });
+  assert.equal(goodFacts.resolution_status, 'resolved');
+  assert.equal(goodFacts.application_status, 'applied');
+  assert.equal(goodFacts.observation_status, 'observed');
+  assert.equal(goodFacts.usage_join_status, 'joined');
+  assert.equal(goodFacts.compliant, true);
+  assert.equal(goodFacts.comparison_ready, true);
+
+  const facts = [
+    goodFacts,
+    reconcileTelemetry(stale),
+    reconcileTelemetry(contradictory),
+    reconcileTelemetry(missing),
+    reconcileTelemetry(legacy),
+  ];
+  assert.equal(facts[1].resolution_status, 'stale');
+  assert.equal(facts[1].compliant, false);
+  assert.ok(facts[1].findings.includes('stale_policy'));
+  assert.equal(facts[2].application_status, 'contradictory');
+  assert.ok(facts[2].findings.includes('contradictory_application'));
+  assert.equal(facts[3].application_status, 'missing_receipt');
+  assert.ok(facts[3].findings.includes('missing_receipt'));
+  assert.ok(facts[3].findings.includes('unknown_observation'));
+  assert.equal(facts[4].legacy, true);
+  assert.equal(facts[4].compliant, false);
+
+  const summary = summarizeTelemetry(facts);
+  assert.deepEqual(summary.coverage.policy_resolution, {
+    total: 5, resolved: 4, current: 3, stale: 1, missing: 0, contradictory: 0, legacy: 1,
+  });
+  assert.equal(summary.findings.stale_policy, 1);
+  assert.equal(summary.findings.contradictory_application, 1);
+  assert.equal(summary.findings.missing_receipt, 2);
+  assert.equal(summary.findings.unknown_observation, 3);
+  assert.equal(summary.findings.legacy, 1);
+  assert.equal(summary.compliant, 1);
+  assert.equal(summary.comparison_ready, 1);
+});
+
+test('Codex and Claude retain separate concrete model palettes in policy dimensions', () => {
+  const codex = routed('codex', 'executor', { critical: true }, 'codex-palette');
+  const claude = routed('claude', 'research', { complexity: 'very-complex' }, 'claude-palette');
+  const summary = summarizeTelemetry([
+    reconcileTelemetry({ ...codex, application_receipt: applicationReceipt(codex) }),
+    reconcileTelemetry({ ...claude, application_receipt: applicationReceipt(claude) }),
+  ]);
+  assert.deepEqual(summary.by_runtime, { claude: 1, codex: 1 });
+  assert.deepEqual(summary.by_rung, { 'very-complex': 1, critical: 1 });
+  assert.equal(summary.by_concrete_model['gpt-6-astra'], 1);
+  assert.equal(summary.by_concrete_model.fable, 1);
+  assert.equal(summary.by_concrete_model.astra, undefined);
+  assert.equal(claude.requested_model, 'fable', 'Claude keeps its native Fable alias');
+  assert.equal(codex.requested_model, 'gpt-6-astra', 'Codex uses its concrete Astra id');
 });

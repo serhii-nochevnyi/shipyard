@@ -34,6 +34,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 
 const SCRIPT = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-stats.cjs'
@@ -97,12 +98,18 @@ function stubGh(dir, prs, unreachableRepo = null) {
 }
 
 // tickets → journal lines → PR rows, in one temp project.
-function project({ tickets, journal, prs, config, configRaw, unreachableRepo }) {
+function project({ tickets, journal, prs, config, configRaw, unreachableRepo, attributions }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-stats-'));
   const g = path.join(dir, '.planning', 'graph');
   fs.mkdirSync(g, { recursive: true });
   fs.writeFileSync(path.join(g, 'tickets.json'), JSON.stringify({ tickets }));
   fs.writeFileSync(path.join(g, 'delivery-log.jsonl'), journal.map((l) => `${l}\n`).join(''));
+  if (Array.isArray(attributions)) {
+    fs.writeFileSync(
+      path.join(g, 'usage-attribution.jsonl'),
+      attributions.map((record) => `${JSON.stringify(record)}\n`).join(''),
+    );
+  }
   if (config !== undefined || configRaw !== undefined) {
     fs.writeFileSync(
       path.join(dir, '.planning', 'config.json'),
@@ -125,6 +132,62 @@ const asJson = (fixture) => {
   const r = run(fixture, ['--json']);
   return { code: r.code, json: JSON.parse(r.out) };
 };
+
+function adrReceipt(resolution, over = {}) {
+  const receipt = {
+    receipt_type: 'adr-014.application',
+    runtime: resolution.runtime,
+    role: resolution.role,
+    dispatch_id: resolution.dispatch_id,
+    launch_id: `launch-${resolution.dispatch_id}`,
+    requested_model: resolution.requested_model,
+    requested_effort: resolution.requested_effort,
+    applied_model: resolution.requested_model,
+    applied_effort: resolution.requested_effort,
+    observed_model: resolution.requested_model,
+    observed_effort: resolution.requested_effort,
+    policy_hash: resolution.policy_hash,
+    compliance: 'verified',
+    compliance_proof: {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: resolution.policy_hash,
+      dispatch_id: resolution.dispatch_id,
+      launch_id: `launch-${resolution.dispatch_id}`,
+    },
+    ...(resolution.agent_file ? {
+      agent_file: resolution.agent_file,
+      agent_file_digest: 'a'.repeat(64),
+    } : {}),
+    ...over,
+  };
+  if (!over.compliance_proof) {
+    receipt.compliance_proof = {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: receipt.policy_hash,
+      dispatch_id: receipt.dispatch_id,
+      launch_id: receipt.launch_id,
+    };
+  }
+  return receipt;
+}
+
+function adrDispatch({ runtime, role, signals = {}, dispatch_id, receipt = true, receipt_over = {}, ...over }) {
+  const resolution = modelPolicy.resolveDispatch({ runtime, role, signals, dispatch_id });
+  const event = {
+    ts: recently,
+    event: 'dispatch',
+    ticket: `T-36-${dispatch_id}`,
+    task_level: 'complex',
+    reason: resolution.route,
+    ...resolution,
+    launch_id: `launch-${dispatch_id}`,
+    ...(receipt ? { application_receipt: adrReceipt(resolution, receipt_over) } : {}),
+    ...over,
+  };
+  return event;
+}
 
 // The line, not the whole report: an assertion over the full output cannot tell
 // which line named a ticket, and "which line" is the entire subject here.
@@ -446,6 +509,66 @@ test('Codex agent-file coverage is required only when the runtime is known', () 
   assert.strictEqual(json.ladder.usage_join_comparable, 0, 'observed model without observed effort is not join-ready');
   assert.strictEqual(json.ladder.missing_dispatch_id, 1);
   assert.deepStrictEqual(json.ladder.by_attribution_status, { incomplete: 1, requested_complete: 1 });
+});
+
+test('ADR-014 reconciliation keeps resolution, application, observation and join facts independent', () => {
+  const good = adrDispatch({ runtime: 'claude', role: 'executor', dispatch_id: 'good' });
+  const codex = adrDispatch({ runtime: 'codex', role: 'executor', signals: { critical: true }, dispatch_id: 'codex' });
+  const stale = adrDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'stale', receipt: false });
+  stale.policy_version = 'adr-014.v2';
+  stale.policy_hash = 'old-policy-fingerprint';
+  const contradictory = adrDispatch({
+    runtime: 'claude', role: 'executor', dispatch_id: 'contradictory',
+    receipt_over: { applied_model: 'opus', observed_model: 'opus' },
+  });
+  const legacy = {
+    ts: recently, event: 'dispatch', ticket: 'T-36-legacy', role: 'executor',
+    model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
+    task_level: 'complex', runtime: 'claude', backend: 'workflow', dispatch_id: 'legacy',
+  };
+  const { code, json } = asJson({
+    tickets: {},
+    journal: [good, codex, stale, contradictory, legacy].map(JSON.stringify),
+    attributions: [{
+      observation_id: 'joined-good', dispatch_id: 'good', runtime: 'claude', provider: 'anthropic',
+      session_id: 'session-good', model: 'sonnet', effort: 'max',
+      observed_model: 'sonnet', observed_effort: 'max',
+    }],
+    prs: [],
+  });
+  assert.strictEqual(code, 0);
+
+  const reconciliation = json.ladder.reconciliation;
+  assert.strictEqual(reconciliation.total, 5);
+  assert.deepStrictEqual(reconciliation.coverage.policy_resolution, {
+    total: 5, resolved: 4, current: 3, stale: 1, missing: 0, contradictory: 0, legacy: 1,
+  });
+  assert.deepStrictEqual(reconciliation.coverage.runtime_application, {
+    total: 5, applied: 2, verified: 2, missing_receipt: 2, unverifiable: 0, contradictory: 1,
+  });
+  assert.deepStrictEqual(reconciliation.coverage.provider_observation, {
+    total: 5, observed: 3, unknown: 2, missing: 2,
+  });
+  assert.deepStrictEqual(reconciliation.coverage.usage_join, {
+    total: 5, joined: 1, unjoined: 4, ambiguous: 0, missing_dispatch_id: 0,
+  });
+  assert.deepStrictEqual(reconciliation.findings, {
+    stale_policy: 1,
+    contradictory_application: 1,
+    missing_receipt: 2,
+    unknown_observation: 2,
+    legacy: 1,
+  });
+  assert.deepStrictEqual(reconciliation.by_runtime, { claude: 3, codex: 2 });
+  assert.deepStrictEqual(reconciliation.by_rung, { base: 3, critical: 1 });
+  assert.deepStrictEqual(reconciliation.by_concrete_model, {
+    'gpt-6-astra': 1, opus: 1, sonnet: 1,
+  });
+  assert.deepStrictEqual(reconciliation.by_fired_signal, { critical: 1 });
+  assert.strictEqual(reconciliation.records.find((r) => r.dispatch_id === 'stale').compliant, false);
+  assert.strictEqual(reconciliation.records.find((r) => r.dispatch_id === 'contradictory').application_status, 'contradictory');
+  assert.strictEqual(reconciliation.records.find((r) => r.dispatch_id === 'legacy').legacy, true);
+  assert.deepStrictEqual(json.reconciliation.findings, reconciliation.findings);
 });
 
 done();

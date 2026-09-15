@@ -21,6 +21,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { withLock } = require('./lock.cjs');
 const pipeline = require('./pipeline-config.cjs');
+const policy = require('./model-policy.cjs');
 
 const LEDGER_NAME = 'usage-attribution.jsonl';
 const MAX_TEXT = 1000;
@@ -35,7 +36,40 @@ const FIELDS = new Set([
   'runtime', 'provider', 'backend', 'kind', 'source', 'session_id',
   'request_id', 'message_id', 'pass_id', 'model', 'effort', 'effort_applied',
   'observed_model', 'observed_effort', 'completion_status',
+  // ADR-014 resolution/application provenance. These are deliberately stored
+  // as facts supplied by the boundary; this ledger never upgrades a legacy
+  // observation or manufactures a receipt.
+  'policy_id', 'policy_version', 'policy_hash', 'logical_model', 'logical_rung',
+  'rung', 'rung_index', 'route', 'mechanism', 'agent_file', 'agent_file_digest', 'launch_id',
+  'launch_arguments', 'signals', 'signals_fired', 'requested_model',
+  'requested_effort', 'applied_model', 'applied_effort', 'receipt',
+  'application_receipt', 'resolution',
 ]);
+
+const POLICY_ID = policy.POLICY?.id || 'ADR-014';
+const POLICY_VERSION = policy.POLICY_VERSION;
+const POLICY_HASH = policy.POLICY_HASH;
+const UNKNOWN_EVIDENCE = new Set(['unknown', 'unsupported']);
+
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+const present = (value) => value !== undefined && value !== null && value !== '';
+const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
+
+function clone(value) {
+  if (Array.isArray(value)) return value.map(clone);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, clone(child)]));
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+}
+
+function stableStringify(value) {
+  return JSON.stringify(stableValue(value));
+}
 
 function fail(message, code = 1) {
   const error = new Error(message);
@@ -142,6 +176,22 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
   ]) {
     if (raw[key] !== undefined) record[key] = raw[key];
   }
+  for (const key of [
+    'policy_id', 'policy_version', 'policy_hash', 'logical_model', 'logical_rung',
+    'rung', 'route', 'mechanism', 'agent_file', 'agent_file_digest', 'launch_id', 'requested_model',
+    'applied_model',
+  ]) {
+    if (raw[key] !== undefined) record[key] = raw[key];
+  }
+  for (const key of ['requested_effort', 'applied_effort']) {
+    if (raw[key] !== undefined) record[key] = raw[key];
+  }
+  for (const key of ['rung_index']) {
+    if (raw[key] !== undefined) record[key] = raw[key];
+  }
+  for (const key of ['launch_arguments', 'signals', 'signals_fired', 'receipt', 'application_receipt', 'resolution']) {
+    if (raw[key] !== undefined) record[key] = clone(raw[key]);
+  }
 
   const date = typeof record.observed_at === 'string' ? Date.parse(record.observed_at) : NaN;
   if (!Number.isFinite(date)) {
@@ -155,6 +205,30 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
     if (record[key] === undefined) continue;
     const issue = textIssue(record[key], key, { whitespace: key === 'dispatch_id' });
     if (issue) fail(issue);
+  }
+  for (const key of [
+    'policy_id', 'policy_version', 'policy_hash', 'logical_model', 'logical_rung',
+    'rung', 'route', 'mechanism', 'agent_file', 'agent_file_digest', 'launch_id', 'requested_model',
+    'applied_model',
+  ]) {
+    if (record[key] === undefined) continue;
+    const issue = textIssue(record[key], key, { whitespace: key === 'launch_id' });
+    if (issue) fail(issue);
+  }
+  if (record.rung_index !== undefined
+      && (!Number.isSafeInteger(record.rung_index) || record.rung_index < 0)) {
+    fail('rung_index must be a non-negative safe integer');
+  }
+  for (const key of ['signals', 'launch_arguments', 'receipt', 'application_receipt', 'resolution']) {
+    if (record[key] !== undefined && !object(record[key])) {
+      fail(`${key} must be an object`);
+    }
+  }
+  if (record.signals_fired !== undefined) {
+    if (!Array.isArray(record.signals_fired)
+        || record.signals_fired.some((value) => textIssue(value, 'signals_fired') !== null)) {
+      fail('signals_fired must be an array of non-empty strings');
+    }
   }
   if (record.dispatch_id === undefined) fail('dispatch_id is required — usage must be tied to one launch');
   if (!record.session_id && !record.request_id && !record.message_id) {
@@ -183,6 +257,12 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
       fail(`${key} "${record[key]}" is not a supported effort or evidence state`);
     }
   }
+  for (const key of ['requested_effort', 'applied_effort']) {
+    if (record[key] === undefined) continue;
+    if (!EFFORT_STATES.has(record[key])) {
+      fail(`${key} "${record[key]}" is not a supported effort or evidence state`);
+    }
+  }
   if (record.completion_status !== undefined && !COMPLETION_STATES.has(record.completion_status)) {
     fail(`completion_status must be one of ${[...COMPLETION_STATES].join(', ')}`);
   }
@@ -201,6 +281,730 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
     record.revision = raw.revision;
   }
   return record;
+}
+
+// ── ADR-014 telemetry reconciliation ──────────────────────────────────────
+//
+// Dispatch records and usage-attribution rows deliberately have different
+// lifetimes. A dispatch journal line is a launch fact; an attribution row is a
+// later transcript join. Keep the reconciliation reader in this module so both
+// producers use the same vocabulary without making either one rewrite history.
+// In particular, a row without policy provenance is not upgraded merely
+// because its old model alias happens to resemble today's policy.
+
+function firstValue(sources, field) {
+  for (const source of sources) {
+    if (source && hasOwn(source, field) && source[field] !== undefined) return source[field];
+  }
+  return undefined;
+}
+
+function receiptOf(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (object(raw.application_receipt)) return raw.application_receipt;
+  if (object(raw.receipt)) return raw.receipt;
+  if (raw.receipt_type === 'adr-014.application') return raw;
+  return null;
+}
+
+function resolutionOf(raw) {
+  return raw && object(raw.resolution) ? raw.resolution : raw;
+}
+
+function unknownEvidence(value) {
+  return typeof value === 'string' && UNKNOWN_EVIDENCE.has(value.trim().toLowerCase());
+}
+
+function concreteValue(value) {
+  return typeof value === 'string' && value.trim() !== '' && !unknownEvidence(value);
+}
+
+function effortValue(value) {
+  return typeof value === 'string' && Array.isArray(pipeline.EFFORTS)
+    && pipeline.EFFORTS.includes(value);
+}
+
+function identityPresent(value) {
+  return Boolean(value && (present(value.session_id) || present(value.request_id) || present(value.message_id)));
+}
+
+function policyMarkerPresent(raw, resolution, receipt) {
+  // Older dispatch rows already contain some of the same-shaped facts (for
+  // example `agent_file` and `launch_id`). Only an explicit policy fingerprint,
+  // receipt or nested resolution can prove that a row is from the ADR-014
+  // schema; otherwise it stays legacy even when today's policy could happen to
+  // produce the same model.
+  const fields = [
+    'policy_id', 'policy_version', 'policy_hash', 'resolution', 'receipt',
+    'application_receipt',
+  ];
+  return Boolean(receipt)
+    || fields.some((field) => hasOwn(raw, field) || hasOwn(resolution, field) || hasOwn(receipt, field));
+}
+
+function expectedSelection(runtime, role, rung) {
+  const grids = policy.RUNTIME_ROLE_RUNG_DEFINITIONS || {};
+  const entries = grids[runtime] && grids[runtime][role];
+  if (!Array.isArray(entries)) return null;
+  const definition = entries.find((entry) => entry && entry.name === rung);
+  if (!definition) return null;
+  const modelMap = runtime === 'codex' ? policy.CODEX_MODEL_IDS : policy.CLAUDE_MODEL_ALIASES;
+  const model = modelMap && modelMap[definition.model_key];
+  if (!model) return null;
+  const staticCodex = runtime === 'codex'
+    && Array.isArray(policy.CODEX_STATIC_ROLES)
+    && policy.CODEX_STATIC_ROLES.includes(role);
+  if (runtime === 'claude') {
+    return {
+      model_key: definition.model_key,
+      logical_model: definition.logical_model || definition.model_key,
+      model,
+      effort: definition.effort,
+      backend: 'workflow',
+      mechanism: 'workflow-explicit-selection',
+      launch_arguments: { model, effort: definition.effort },
+      agent_file: null,
+    };
+  }
+  if (staticCodex) {
+    return {
+      model_key: definition.model_key,
+      logical_model: definition.logical_model || definition.model_key,
+      model,
+      effort: definition.effort,
+      backend: 'codex-agent',
+      mechanism: 'generated-agent-file',
+      agent_file: typeof policy.codexAgentFile === 'function'
+        ? policy.codexAgentFile(role, rung)
+        : null,
+      launch_arguments: null,
+    };
+  }
+  return {
+    model_key: definition.model_key,
+    logical_model: definition.logical_model || definition.model_key,
+    model,
+    effort: definition.effort,
+    backend: 'agent',
+    mechanism: 'explicit-launch-arguments',
+    launch_arguments: { model, reasoning_effort: definition.effort },
+    agent_file: null,
+  };
+}
+
+function canonicalRouteParts(route) {
+  if (typeof route !== 'string') return null;
+  const match = /^role=([^\s]+)\s+rung=([^\s]+)\s+model=([^\s]+)\s+signals=(\S+)$/.exec(route.trim());
+  return match ? { role: match[1], rung: match[2], model_key: match[3], signals: match[4] } : null;
+}
+
+function conflictBetween(sources, field) {
+  const values = sources
+    .filter((source) => source && hasOwn(source, field) && source[field] !== undefined)
+    .map((source) => source[field]);
+  return values.length > 1 && values.some((value) => stableStringify(value) !== stableStringify(values[0]));
+}
+
+function reconcileTelemetry(raw, options = {}) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {
+      resolution_status: 'missing',
+      application_status: 'missing_receipt',
+      observation_status: 'unknown',
+      usage_join_status: 'missing_dispatch_id',
+      policy_resolution: { status: 'missing', resolved: false, current: false, complete: false },
+      runtime_application: { status: 'missing_receipt', applied: false, verified: false, receipt_present: false },
+      provider_observation: { status: 'unknown', observed: false, unknown: true, missing: true },
+      usage_join: { status: 'missing_dispatch_id', joined: false },
+      findings: ['missing_receipt', 'unknown_observation'],
+      legacy: false,
+      compliant: false,
+      comparison_ready: false,
+    };
+  }
+  if (!options || typeof options !== 'object' || Array.isArray(options)) options = {};
+
+  const resolution = resolutionOf(raw);
+  const receipt = receiptOf(raw);
+  const receiptClaimed = hasOwn(raw, 'receipt') || hasOwn(raw, 'application_receipt')
+    || raw.receipt_type === 'adr-014.application';
+  const resolutionSources = [resolution, resolution === raw ? null : raw];
+  const allSources = [resolution, resolution === raw ? null : raw, receipt];
+  const runtime = firstValue(allSources, 'runtime');
+  const role = firstValue(allSources, 'role');
+  const dispatchId = firstValue(allSources, 'dispatch_id');
+  const policyId = firstValue(allSources, 'policy_id');
+  const policyVersion = firstValue(allSources, 'policy_version');
+  const policyHash = firstValue(allSources, 'policy_hash');
+  const logicalModel = firstValue(resolutionSources, 'logical_model');
+  const logicalRung = firstValue(resolutionSources, 'logical_rung') ?? firstValue(resolutionSources, 'rung');
+  const rung = firstValue(resolutionSources, 'rung') ?? logicalRung;
+  const rungIndex = firstValue(resolutionSources, 'rung_index');
+  const route = firstValue(resolutionSources, 'route') ?? firstValue(resolutionSources, 'reason');
+  const backend = firstValue(allSources, 'backend');
+  const mechanism = firstValue(allSources, 'mechanism');
+  const agentFile = firstValue(allSources, 'agent_file');
+  const agentFileDigest = firstValue(allSources, 'agent_file_digest');
+  const launchId = firstValue(allSources, 'launch_id') ?? firstValue(allSources, 'agent_id');
+  const launchArguments = firstValue(resolutionSources, 'launch_arguments');
+  const signals = firstValue(resolutionSources, 'signals');
+  const signalsFired = firstValue(resolutionSources, 'signals_fired');
+  const requestedModel = firstValue(resolutionSources, 'requested_model')
+    ?? firstValue(resolutionSources, 'model');
+  const requestedEffort = firstValue(resolutionSources, 'requested_effort')
+    ?? firstValue(resolutionSources, 'effort');
+  const appliedModel = firstValue([receipt, resolution, resolution === raw ? null : raw], 'applied_model')
+    ?? firstValue([resolution, resolution === raw ? null : raw], 'model_applied');
+  const appliedEffort = firstValue([receipt, resolution, resolution === raw ? null : raw], 'applied_effort')
+    ?? firstValue([resolution, resolution === raw ? null : raw], 'effort_applied');
+  const observedModel = firstValue([receipt, resolution, resolution === raw ? null : raw], 'observed_model');
+  const observedEffort = firstValue([receipt, resolution, resolution === raw ? null : raw], 'observed_effort');
+  const policyAware = policyMarkerPresent(raw, resolution, receipt);
+  const legacy = !policyAware;
+
+  const expected = expectedSelection(runtime, role, rung);
+  const resolutionMissing = [];
+  if (!present(runtime)) resolutionMissing.push('runtime');
+  if (!present(role)) resolutionMissing.push('role');
+  if (!present(policyVersion)) resolutionMissing.push('policy_version');
+  if (!present(policyHash)) resolutionMissing.push('policy_hash');
+  if (!present(rung) || !present(logicalRung)) resolutionMissing.push('rung');
+  if (!present(requestedModel)) resolutionMissing.push('requested_model');
+  if (!present(requestedEffort)) resolutionMissing.push('requested_effort');
+  if (!present(route)) resolutionMissing.push('route');
+  if (!present(backend)) resolutionMissing.push('backend');
+  if (!present(mechanism)) resolutionMissing.push('mechanism');
+  if (!Array.isArray(signalsFired)) resolutionMissing.push('signals_fired');
+  if (runtime === 'codex' && expected && expected.agent_file && !present(agentFile)) resolutionMissing.push('agent_file');
+  if (expected && !expected.agent_file && (!launchArguments || !object(launchArguments))) {
+    resolutionMissing.push('launch_arguments');
+  }
+  const resolutionContradictions = [];
+  for (const field of [
+    'runtime', 'role', 'policy_id', 'policy_version', 'policy_hash', 'logical_model',
+    'logical_rung', 'rung', 'rung_index', 'route', 'backend', 'mechanism',
+    'agent_file', 'launch_arguments', 'signals', 'signals_fired', 'requested_model',
+    'requested_effort',
+  ]) {
+    if (conflictBetween(resolutionSources, field)) resolutionContradictions.push(`${field}_conflict`);
+  }
+  const stalePolicy = policyAware && (
+    (present(policyVersion) && policyVersion !== POLICY_VERSION)
+    || (present(policyHash) && policyHash !== POLICY_HASH)
+  );
+  const currentPolicy = policyAware && policyVersion === POLICY_VERSION && policyHash === POLICY_HASH;
+  const reportedPolicyId = policyId ?? (currentPolicy ? POLICY_ID : null);
+  if (policyAware && policyId !== undefined && policyId !== POLICY_ID) {
+    resolutionContradictions.push('policy_id');
+  }
+  if (expected && !stalePolicy) {
+    if (expected && requestedModel !== undefined && requestedModel !== expected.model) {
+      resolutionContradictions.push('requested_model');
+    }
+    if (expected && requestedEffort !== undefined && requestedEffort !== expected.effort) {
+      resolutionContradictions.push('requested_effort');
+    }
+    if (expected && logicalModel !== undefined && logicalModel !== expected.logical_model) {
+      resolutionContradictions.push('logical_model');
+    }
+    const routeParts = canonicalRouteParts(route);
+    if (!routeParts || routeParts.role !== role || routeParts.rung !== rung || routeParts.model_key !== expected.model_key) {
+      resolutionContradictions.push('route');
+    }
+    if (expected && backend !== expected.backend) resolutionContradictions.push('backend');
+    if (expected && mechanism !== expected.mechanism) resolutionContradictions.push('mechanism');
+    if (expected && expected.agent_file && agentFile !== expected.agent_file) resolutionContradictions.push('agent_file');
+    if (expected && !expected.agent_file && agentFile !== undefined && agentFile !== null) {
+      resolutionContradictions.push('agent_file');
+    }
+    if (expected && expected.launch_arguments && object(launchArguments)
+        && stableStringify(launchArguments) !== stableStringify(expected.launch_arguments)) {
+      resolutionContradictions.push('launch_arguments');
+    }
+  } else if (policyAware && runtime && role && !expected) {
+    resolutionContradictions.push('runtime_role_rung');
+  }
+  const uniqueResolutionContradictions = [...new Set(resolutionContradictions)];
+  const resolutionComplete = policyAware && resolutionMissing.length === 0;
+  const resolutionResolved = resolutionComplete && uniqueResolutionContradictions.length === 0;
+  const resolutionStatus = !policyAware
+    ? 'legacy'
+    : uniqueResolutionContradictions.length
+      ? 'contradictory'
+      : resolutionMissing.length
+        ? 'missing'
+        : stalePolicy
+          ? 'stale'
+          : 'resolved';
+  const policyResolution = {
+    status: resolutionStatus,
+    resolved: resolutionResolved,
+    current: resolutionResolved && currentPolicy,
+    complete: resolutionComplete,
+    stale: stalePolicy,
+    contradictory: uniqueResolutionContradictions.length > 0,
+    legacy,
+    policy_id: reportedPolicyId,
+    policy_version: policyVersion ?? null,
+    policy_hash: policyHash ?? null,
+    runtime: runtime ?? null,
+    role: role ?? null,
+    logical_model: logicalModel ?? null,
+    rung: rung ?? null,
+    rung_index: rungIndex ?? null,
+    requested_model: requestedModel ?? null,
+    requested_effort: requestedEffort ?? null,
+    signals: object(signals) ? clone(signals) : null,
+    signals_fired: Array.isArray(signalsFired) ? [...signalsFired] : [],
+    route: route ?? null,
+    backend: backend ?? null,
+    mechanism: mechanism ?? null,
+    missing_fields: resolutionMissing,
+    contradictions: uniqueResolutionContradictions,
+  };
+
+  const applicationMissing = [];
+  const applicationContradictions = [];
+  let receiptStalePolicy = false;
+  if (policyAware && appliedModel !== undefined && requestedModel !== undefined && appliedModel !== requestedModel) {
+    applicationContradictions.push('applied_model');
+  }
+  if (policyAware && appliedEffort !== undefined && requestedEffort !== undefined && appliedEffort !== requestedEffort) {
+    applicationContradictions.push('applied_effort');
+  }
+  if (expected && currentPolicy && appliedModel !== undefined && appliedModel !== expected.model) {
+    applicationContradictions.push('applied_model');
+  }
+  if (expected && currentPolicy && appliedEffort !== undefined && appliedEffort !== expected.effort) {
+    applicationContradictions.push('applied_effort');
+  }
+  const receiptFields = [
+    'receipt_type', 'runtime', 'role', 'dispatch_id', 'launch_id',
+    'requested_model', 'requested_effort', 'applied_model', 'applied_effort',
+    'policy_hash', 'compliance', 'compliance_proof',
+  ];
+  if (expected && expected.agent_file) receiptFields.push('agent_file', 'agent_file_digest');
+  if (!receipt) {
+    applicationMissing.push('receipt');
+  } else {
+    for (const field of receiptFields) {
+      if (!hasOwn(receipt, field)) applicationMissing.push(field);
+    }
+    if (receipt.receipt_type !== undefined && receipt.receipt_type !== 'adr-014.application') {
+      applicationContradictions.push('receipt_type');
+    }
+    if (receipt.runtime !== undefined && runtime !== undefined && receipt.runtime !== runtime) {
+      applicationContradictions.push('runtime');
+    }
+    if (receipt.role !== undefined && role !== undefined && receipt.role !== role) {
+      applicationContradictions.push('role');
+    }
+    if (receipt.dispatch_id !== undefined && dispatchId !== undefined && receipt.dispatch_id !== dispatchId) {
+      applicationContradictions.push('dispatch_id');
+    }
+    if (receipt.policy_hash !== undefined && policyHash !== undefined && receipt.policy_hash !== policyHash) {
+      applicationContradictions.push('policy_hash');
+    }
+    if (receipt.policy_version !== undefined && policyVersion !== undefined
+        && receipt.policy_version !== policyVersion) {
+      applicationContradictions.push('policy_version');
+    }
+    if (receipt.policy_version !== undefined && receipt.policy_version !== POLICY_VERSION) {
+      receiptStalePolicy = true;
+    }
+    if (receipt.policy_id !== undefined && receipt.policy_id !== POLICY_ID) {
+      applicationContradictions.push('policy_id');
+    }
+    if (receipt.policy_hash !== undefined && receipt.policy_hash !== POLICY_HASH) {
+      // A receipt from a different policy is both an application mismatch and
+      // a stale-policy fact. The finding is added below without collapsing the
+      // two dimensions into one status.
+      receiptStalePolicy = true;
+    }
+    if (receipt.requested_model !== undefined && requestedModel !== undefined
+        && receipt.requested_model !== requestedModel) applicationContradictions.push('requested_model');
+    if (receipt.requested_effort !== undefined && requestedEffort !== undefined
+        && receipt.requested_effort !== requestedEffort) applicationContradictions.push('requested_effort');
+    if (receipt.applied_model !== undefined && appliedModel !== undefined
+        && receipt.applied_model !== appliedModel) applicationContradictions.push('applied_model');
+    if (receipt.applied_effort !== undefined && appliedEffort !== undefined
+        && receipt.applied_effort !== appliedEffort) applicationContradictions.push('applied_effort');
+    if (receipt.backend !== undefined && backend !== undefined && receipt.backend !== backend) {
+      applicationContradictions.push('backend');
+    }
+    if (receipt.mechanism !== undefined && mechanism !== undefined && receipt.mechanism !== mechanism) {
+      applicationContradictions.push('mechanism');
+    }
+    if (receipt.agent_file !== undefined && agentFile !== undefined
+        && receipt.agent_file !== agentFile) applicationContradictions.push('agent_file');
+    if (receipt.agent_file_digest !== undefined && agentFileDigest !== undefined
+        && receipt.agent_file_digest !== agentFileDigest) {
+      applicationContradictions.push('agent_file_digest');
+    }
+    if (receipt.compliance === 'verified' && object(receipt.compliance_proof)) {
+      const proof = receipt.compliance_proof;
+      if (proof.status !== 'verified'
+          || proof.boundary !== 'adr-014.dispatch-boundary'
+          || proof.policy_hash !== receipt.policy_hash
+          || proof.dispatch_id !== receipt.dispatch_id
+          || proof.launch_id !== receipt.launch_id) {
+        applicationContradictions.push('compliance_proof');
+      }
+    }
+    if (expected && currentPolicy) {
+      if (receipt.applied_model !== undefined && receipt.applied_model !== expected.model) {
+        applicationContradictions.push('applied_model');
+      }
+      if (receipt.applied_effort !== undefined && receipt.applied_effort !== expected.effort) {
+        applicationContradictions.push('applied_effort');
+      }
+      if (receipt.mechanism !== undefined && receipt.mechanism !== expected.mechanism) {
+        applicationContradictions.push('mechanism');
+      }
+      if (receipt.backend !== undefined && receipt.backend !== expected.backend) {
+        applicationContradictions.push('backend');
+      }
+      if (expected.agent_file && receipt.agent_file !== undefined && receipt.agent_file !== expected.agent_file) {
+        applicationContradictions.push('agent_file');
+      }
+      if (expected.agent_file && receipt.agent_file_digest !== undefined
+          && agentFileDigest !== undefined && receipt.agent_file_digest !== agentFileDigest) {
+        applicationContradictions.push('agent_file_digest');
+      }
+      if (!expected.agent_file && receipt.agent_file !== undefined && receipt.agent_file !== null) {
+        applicationContradictions.push('agent_file');
+      }
+      if (receipt.launch_arguments !== undefined && object(receipt.launch_arguments)
+          && expected.launch_arguments
+          && stableStringify(receipt.launch_arguments) !== stableStringify(expected.launch_arguments)) {
+        applicationContradictions.push('launch_arguments');
+      }
+    }
+  }
+  if (receipt && !concreteValue(receipt.applied_model)) applicationMissing.push('applied_model');
+  if (receipt && !effortValue(receipt.applied_effort)) applicationMissing.push('applied_effort');
+  const proofPresent = Boolean(receipt && receipt.compliance === 'verified' && object(receipt.compliance_proof));
+  const applicationVerified = Boolean(
+    receipt
+      && applicationMissing.length === 0
+      && applicationContradictions.length === 0
+      && proofPresent
+  );
+  const uniqueApplicationMissing = [...new Set(applicationMissing)];
+  const uniqueApplicationContradictions = [...new Set(applicationContradictions)];
+  const applicationStatus = !receipt
+    ? (receiptClaimed ? 'unverifiable' : 'missing_receipt')
+    : uniqueApplicationContradictions.length
+      ? 'contradictory'
+      : uniqueApplicationMissing.length || !proofPresent
+        ? 'unverifiable'
+        : 'applied';
+  const runtimeApplication = {
+    status: applicationStatus,
+    applied: applicationVerified,
+    verified: applicationVerified,
+    receipt_present: Boolean(receipt),
+    receipt_type: receipt?.receipt_type ?? null,
+    launch_id: launchId ?? null,
+    agent_file_digest: agentFileDigest ?? null,
+    applied_model: appliedModel ?? null,
+    applied_effort: appliedEffort ?? null,
+    missing_fields: uniqueApplicationMissing,
+    contradictions: uniqueApplicationContradictions,
+    stale_policy: receiptStalePolicy,
+  };
+
+  const observedModelMissing = !present(observedModel);
+  const observedEffortMissing = !present(observedEffort);
+  const observationUnknown = observedModelMissing || observedEffortMissing
+    || unknownEvidence(observedModel) || unknownEvidence(observedEffort)
+    || !concreteValue(observedModel) || !effortValue(observedEffort);
+  const observationStatus = observationUnknown ? 'unknown' : 'observed';
+  const providerObservation = {
+    status: observationStatus,
+    observed: !observationUnknown,
+    unknown: observationUnknown,
+    missing: observedModelMissing || observedEffortMissing,
+    unavailable: Boolean(raw.observation_unavailable),
+    model: observedModel ?? null,
+    effort: observedEffort ?? null,
+  };
+
+  let usageJoinStatus;
+  let usageMatches = [];
+  if (!present(dispatchId)) {
+    usageJoinStatus = 'missing_dispatch_id';
+  } else if (options.usage_join_status) {
+    usageJoinStatus = String(options.usage_join_status);
+  } else if (options.usageJoined === true || options.usage_joined === true) {
+    usageJoinStatus = 'joined';
+  } else if (options.usageJoined === false || options.usage_joined === false) {
+    usageJoinStatus = 'unjoined';
+  } else if (Array.isArray(options.usageMatches)) {
+    usageMatches = options.usageMatches;
+    usageJoinStatus = usageMatches.length > 1 && options.usageAmbiguous === true
+      ? 'ambiguous'
+      : usageMatches.length ? 'joined' : 'unjoined';
+  } else if (Array.isArray(options.usageRecords)) {
+    usageMatches = options.usageRecords.filter((candidate) => candidate
+      && candidate.dispatch_id === dispatchId && identityPresent(candidate));
+    usageJoinStatus = usageMatches.length > 1 && options.usageAmbiguous === true
+      ? 'ambiguous'
+      : usageMatches.length ? 'joined' : 'unjoined';
+  } else {
+    usageJoinStatus = identityPresent(raw) ? 'joined' : 'unjoined';
+  }
+  if (!['joined', 'unjoined', 'ambiguous', 'missing_dispatch_id'].includes(usageJoinStatus)) {
+    usageJoinStatus = 'unjoined';
+  }
+  const usageJoin = {
+    status: usageJoinStatus,
+    joined: usageJoinStatus === 'joined',
+    ambiguous: usageJoinStatus === 'ambiguous',
+    dispatch_id: dispatchId ?? null,
+    matches: usageMatches.length,
+  };
+
+  const findings = [];
+  if (stalePolicy || receiptStalePolicy) findings.push('stale_policy');
+  if (uniqueApplicationContradictions.length) findings.push('contradictory_application');
+  if (!receipt && !receiptClaimed) findings.push('missing_receipt');
+  if (observationUnknown) findings.push('unknown_observation');
+  if (legacy) findings.push('legacy');
+  const uniqueFindings = [...new Set(findings)];
+
+  const compliant = policyResolution.current && runtimeApplication.verified && !receiptStalePolicy;
+  const comparisonReady = compliant && providerObservation.observed && usageJoin.joined;
+  return {
+    dispatch_id: dispatchId ?? null,
+    runtime: runtime ?? null,
+    role: role ?? null,
+    policy_id: reportedPolicyId,
+    policy_version: policyVersion ?? null,
+    policy_hash: policyHash ?? null,
+    logical_model: logicalModel ?? null,
+    logical_rung: logicalRung ?? null,
+    rung: rung ?? null,
+    rung_index: rungIndex ?? null,
+    route: route ?? null,
+    mechanism: mechanism ?? null,
+    agent_file: agentFile ?? null,
+    agent_file_digest: agentFileDigest ?? null,
+    launch_id: launchId ?? null,
+    launch_arguments: object(launchArguments) ? clone(launchArguments) : null,
+    signals: object(signals) ? clone(signals) : null,
+    signals_fired: Array.isArray(signalsFired) ? [...signalsFired] : [],
+    requested_model: requestedModel ?? null,
+    requested_effort: requestedEffort ?? null,
+    applied_model: appliedModel ?? null,
+    applied_effort: appliedEffort ?? null,
+    observed_model: observedModel ?? null,
+    observed_effort: observedEffort ?? null,
+    resolution_status: resolutionStatus,
+    application_status: applicationStatus,
+    observation_status: observationStatus,
+    usage_join_status: usageJoinStatus,
+    policy_resolution_status: resolutionStatus,
+    runtime_application_status: applicationStatus,
+    provider_observation_status: observationStatus,
+    usage_join_coverage: usageJoinStatus,
+    policy_resolution: policyResolution,
+    runtime_application: runtimeApplication,
+    provider_observation: providerObservation,
+    usage_join: usageJoin,
+    findings: uniqueFindings,
+    legacy,
+    resolved: policyResolution.resolved,
+    applied: runtimeApplication.applied,
+    observed: providerObservation.observed,
+    usage_joined: usageJoin.joined,
+    compliant,
+    comparison_ready: comparisonReady,
+  };
+}
+
+function countValues(values) {
+  const counts = new Map();
+  for (const value of values) {
+    if (!present(value)) continue;
+    const key = String(value);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return Object.fromEntries([...counts.entries()].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+function factsFor(records, options = {}) {
+  return (Array.isArray(records) ? records : []).map((record) =>
+    record && object(record.policy_resolution) && object(record.runtime_application)
+      ? record
+      : reconcileTelemetry(record, options)
+  );
+}
+
+function compactTelemetryFact(fact) {
+  return {
+    dispatch_id: fact.dispatch_id,
+    runtime: fact.runtime,
+    role: fact.role,
+    policy_id: fact.policy_id,
+    policy_version: fact.policy_version,
+    policy_hash: fact.policy_hash,
+    logical_model: fact.logical_model,
+    logical_rung: fact.logical_rung,
+    rung: fact.rung,
+    rung_index: fact.rung_index,
+    backend: fact.policy_resolution?.backend ?? null,
+    mechanism: fact.mechanism,
+    agent_file: fact.agent_file,
+    agent_file_digest: fact.agent_file_digest,
+    signals_fired: fact.signals_fired,
+    requested_model: fact.requested_model,
+    requested_effort: fact.requested_effort,
+    applied_model: fact.applied_model,
+    applied_effort: fact.applied_effort,
+    observed_model: fact.observed_model,
+    observed_effort: fact.observed_effort,
+    resolution_status: fact.resolution_status,
+    application_status: fact.application_status,
+    observation_status: fact.observation_status,
+    usage_join_status: fact.usage_join_status,
+    resolved: fact.resolved,
+    applied: fact.applied,
+    observed: fact.observed,
+    usage_joined: fact.usage_joined,
+    policy_resolution: {
+      status: fact.policy_resolution?.status ?? null,
+      resolved: fact.policy_resolution?.resolved === true,
+      current: fact.policy_resolution?.current === true,
+      complete: fact.policy_resolution?.complete === true,
+      stale: fact.policy_resolution?.stale === true,
+      contradictory: fact.policy_resolution?.contradictory === true,
+    },
+    runtime_application: {
+      status: fact.runtime_application?.status ?? null,
+      applied: fact.runtime_application?.applied === true,
+      verified: fact.runtime_application?.verified === true,
+      receipt_present: fact.runtime_application?.receipt_present === true,
+      agent_file_digest: fact.runtime_application?.agent_file_digest ?? null,
+      stale_policy: fact.runtime_application?.stale_policy === true,
+    },
+    provider_observation: {
+      status: fact.provider_observation?.status ?? null,
+      observed: fact.provider_observation?.observed === true,
+      unknown: fact.provider_observation?.unknown === true,
+      missing: fact.provider_observation?.missing === true,
+    },
+    usage_join: {
+      status: fact.usage_join?.status ?? null,
+      joined: fact.usage_join?.joined === true,
+      ambiguous: fact.usage_join?.ambiguous === true,
+    },
+    findings: fact.findings,
+    legacy: fact.legacy,
+    compliant: fact.compliant,
+    comparison_ready: fact.comparison_ready,
+  };
+}
+
+function summarizeTelemetry(records, options = {}) {
+  const facts = factsFor(records, options);
+  const count = (predicate) => facts.filter(predicate).length;
+  const statusCounts = (selector) => countValues(facts.map(selector));
+  const findings = [
+    'stale_policy', 'contradictory_application', 'missing_receipt',
+    'unknown_observation', 'legacy',
+  ];
+  const findingCounts = Object.fromEntries(findings.map((name) => [
+    name, count((fact) => Array.isArray(fact.findings) && fact.findings.includes(name)),
+  ]));
+  const concreteModels = facts
+    .map((fact) => concreteValue(fact.observed_model)
+      ? fact.observed_model
+      : concreteValue(fact.applied_model) ? fact.applied_model : undefined);
+  const concreteModelsWithUnknown = concreteModels.map((value) => value || 'unknown');
+  const appliedModels = facts.map((fact) => fact.applied_model);
+  const observedModels = facts.map((fact) => fact.observed_model);
+  const requestedModels = facts.map((fact) => fact.requested_model);
+  const requestedEfforts = facts.map((fact) => fact.requested_effort);
+  const appliedEfforts = facts.map((fact) => fact.applied_effort);
+  const observedEfforts = facts.map((fact) => fact.observed_effort);
+  const firedSignals = facts.flatMap((fact) => Array.isArray(fact.signals_fired) ? fact.signals_fired : []);
+  const coverage = {
+    policy_resolution: {
+      total: facts.length,
+      resolved: count((fact) => fact.policy_resolution?.resolved === true),
+      current: count((fact) => fact.policy_resolution?.current === true),
+      stale: count((fact) => fact.policy_resolution?.stale === true),
+      missing: count((fact) => fact.policy_resolution?.status === 'missing'),
+      contradictory: count((fact) => fact.policy_resolution?.contradictory === true),
+      legacy: count((fact) => fact.policy_resolution?.legacy === true),
+    },
+    runtime_application: {
+      total: facts.length,
+      applied: count((fact) => fact.runtime_application?.applied === true),
+      verified: count((fact) => fact.runtime_application?.verified === true),
+      missing_receipt: count((fact) => fact.application_status === 'missing_receipt'),
+      unverifiable: count((fact) => fact.application_status === 'unverifiable'),
+      contradictory: count((fact) => fact.application_status === 'contradictory'),
+    },
+    provider_observation: {
+      total: facts.length,
+      observed: count((fact) => fact.provider_observation?.observed === true),
+      unknown: count((fact) => fact.provider_observation?.unknown === true),
+      missing: count((fact) => fact.provider_observation?.missing === true),
+    },
+    usage_join: {
+      total: facts.length,
+      joined: count((fact) => fact.usage_join?.joined === true),
+      unjoined: count((fact) => fact.usage_join_status === 'unjoined'),
+      ambiguous: count((fact) => fact.usage_join_status === 'ambiguous'),
+      missing_dispatch_id: count((fact) => fact.usage_join_status === 'missing_dispatch_id'),
+    },
+  };
+  const byStatus = {
+    policy_resolution: statusCounts((fact) => fact.resolution_status),
+    runtime_application: statusCounts((fact) => fact.application_status),
+    provider_observation: statusCounts((fact) => fact.observation_status),
+    usage_join: statusCounts((fact) => fact.usage_join_status),
+  };
+  return {
+    total: facts.length,
+    resolved: coverage.policy_resolution.resolved,
+    applied: coverage.runtime_application.applied,
+    observed: coverage.provider_observation.observed,
+    usage_joined: coverage.usage_join.joined,
+    compliant: count((fact) => fact.compliant === true),
+    comparison_ready: count((fact) => fact.comparison_ready === true),
+    coverage,
+    findings: findingCounts,
+    finding_counts: findingCounts,
+    by_finding: findingCounts,
+    by_status: byStatus,
+    // Short aliases keep the four claims easy to consume for callers that do
+    // not need the longer provenance names. They remain separate objects.
+    policy_resolution: coverage.policy_resolution,
+    runtime_application: coverage.runtime_application,
+    provider_observation: coverage.provider_observation,
+    usage_join: coverage.usage_join,
+    resolution: coverage.policy_resolution,
+    application: coverage.runtime_application,
+    observation: coverage.provider_observation,
+    by_runtime: countValues(facts.map((fact) => fact.runtime)),
+    by_role: countValues(facts.map((fact) => fact.role)),
+    by_rung: countValues(facts.map((fact) => fact.rung)),
+    by_concrete_model: countValues(concreteModels),
+    by_concrete_model_with_unknown: countValues(concreteModelsWithUnknown),
+    by_applied_model: countValues(appliedModels.filter(concreteValue)),
+    by_observed_model: countValues(observedModels.filter(concreteValue)),
+    by_model: countValues(requestedModels),
+    by_requested_model: countValues(requestedModels),
+    by_effort: countValues(requestedEfforts),
+    by_requested_effort: countValues(requestedEfforts),
+    by_applied_effort: countValues(appliedEfforts),
+    by_observed_effort: countValues(observedEfforts),
+    by_fired_signal: countValues(firedSignals),
+    records: facts.map(compactTelemetryFact),
+  };
 }
 
 function parseLedger(raw, file = LEDGER_NAME) {
@@ -251,10 +1055,7 @@ function sameRecord(a, b) {
     delete copy.observed_at;
     return copy;
   };
-  const left = clean(a);
-  const right = clean(b);
-  const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
-  return keys.every((key) => Object.is(left[key], right[key]));
+  return stableStringify(clean(a)) === stableStringify(clean(b));
 }
 
 function recordBatch(graphDir, raw) {
@@ -331,8 +1132,16 @@ module.exports = {
   KINDS,
   COMPLETION_STATES,
   EFFORT_STATES,
+  POLICY_ID,
+  POLICY_VERSION,
+  POLICY_HASH,
   graphGuard,
   normalizeRecord,
+  reconcileTelemetry,
+  reconcileRecord: reconcileTelemetry,
+  reconcileAttribution: reconcileTelemetry,
+  summarizeTelemetry,
+  aggregateTelemetry: summarizeTelemetry,
   parseLedger,
   readLedger,
   latestRecords,
