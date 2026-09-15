@@ -11,7 +11,7 @@ const SCRIPT = path.join(ROOT, 'plugins/delivery-pipeline/scripts/codex-agent.cj
 const { selectAgent, parseArgs, signalsFrom, projectDirFrom } = require(SCRIPT);
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const {
-  createCodexRemapper, readProjectConfig, validateCodexConfiguration,
+  createCodexRemapper, loadCodexRemap, readProjectConfig, validateCodexConfiguration,
 } = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
 
 const capabilities = {
@@ -202,6 +202,9 @@ test('an absent project config stays undefined and loads an inherited GSD remap 
   ].join('\n'));
   try {
     assert.equal(readProjectConfig(root), undefined);
+    const inherited = loadCodexRemap({ cwd: root, env: { CODEX_HOME: codexHome } });
+    assert.equal(inherited.remap('sonnet'), model);
+    assert.equal(inherited.sourceConfig.model_policy.runtime_tiers.codex.sonnet, model);
     const result = selectAgent('decomposition', {
       cwd: root, agentDir, capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model], supportedEfforts: ['medium'] },
       env: { CODEX_HOME: codexHome },

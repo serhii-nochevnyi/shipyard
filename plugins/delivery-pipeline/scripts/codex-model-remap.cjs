@@ -85,7 +85,7 @@ function loadGsdConfig(codexHome, cwd) {
   }
 }
 
-function createCodexRemapper({ cwd = process.cwd(), config, codexHome, env = process.env } = {}) {
+function loadCodexRemap({ cwd = process.cwd(), config, codexHome, env = process.env } = {}) {
   let sourceConfig = config;
   if (sourceConfig === undefined) {
     const projectFile = path.join(cwd, '.planning', 'config.json');
@@ -109,11 +109,13 @@ function createCodexRemapper({ cwd = process.cwd(), config, codexHome, env = pro
     if (typeof key !== 'string' || !key.trim()) return null;
     return mapped.get(key.trim())?.model || null;
   };
-  // Keep the exact project or inherited GSD object beside the callable
-  // compatibility API. The selector must validate the source that supplied an
-  // applied remap, not only the absent project file it initially inspected.
-  Object.defineProperty(remapper, 'sourceConfig', { value: sourceConfig, enumerable: false });
-  return remapper;
+  // Return provenance explicitly so every consumer can validate the exact
+  // project or inherited GSD object that supplied the effective model.
+  return Object.freeze({ remap: remapper, sourceConfig });
+}
+
+function createCodexRemapper(options) {
+  return loadCodexRemap(options).remap;
 }
 
 function compareVersions(left, right) {
@@ -191,4 +193,6 @@ function validateCodexConfiguration(resolution, config = {}, capabilities = {}, 
   return true;
 }
 
-module.exports = Object.freeze({ createCodexRemapper, normalizeModel, readProjectConfig, validateCodexConfiguration });
+module.exports = Object.freeze({
+  createCodexRemapper, loadCodexRemap, normalizeModel, readProjectConfig, validateCodexConfiguration,
+});

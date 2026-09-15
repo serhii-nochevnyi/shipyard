@@ -11,7 +11,7 @@ const pc = require('./pipeline-config.cjs');
 const boundary = require('./dispatch-boundary.cjs');
 const policy = require('./model-policy.cjs');
 const { createCodexDispatchAdapter, REPAIR } = require('./codex-dispatch-adapter.cjs');
-const { createCodexRemapper, readProjectConfig, validateCodexConfiguration } = require('./codex-model-remap.cjs');
+const { loadCodexRemap, readProjectConfig, validateCodexConfiguration } = require('./codex-model-remap.cjs');
 
 const ROLE_ALIASES = Object.freeze({ 'inv-research': 'research' });
 const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json> (supportedModels and supportedEfforts)';
@@ -175,13 +175,13 @@ function remapKeysForResolution(resolution) {
 }
 
 function effectiveRemapFor(resolution, config, { cwd, env } = {}) {
-  const remapFor = createCodexRemapper({ config, cwd, env });
+  const { remap, sourceConfig } = loadCodexRemap({ config, cwd, env });
   const keys = remapKeysForResolution(resolution);
   for (const key of keys) {
-    const model = remapFor(key);
-    if (model) return { model, key, keys, sourceConfig: remapFor.sourceConfig };
+    const model = remap(key);
+    if (model) return { model, key, keys, sourceConfig };
   }
-  return { model: resolution.model, key: null, keys, sourceConfig: remapFor.sourceConfig };
+  return { model: resolution.model, key: null, keys, sourceConfig };
 }
 
 function selectionWithEffectiveRemap(selection, effective) {
