@@ -439,7 +439,7 @@ function codexAgentFiles(dir = codexAgentDir()) {
  * recorded silently is worse than no field, because it would be counted later as
  * fact.
  */
-function parseMarkFlags(argv, role) {
+function parseMarkFlags(argv, role, ticket) {
   const given = new Map();
   for (let i = 0; i < argv.length;) {
     const arg = String(argv[i]);
@@ -491,7 +491,7 @@ function parseMarkFlags(argv, role) {
       ACTIVE_RECONCILIATION_LEASES.add(lease);
       installReconciliationExitHandler();
       const facts = createDispatchBoundary({ recorder })
-        .reconcile(given.get('dispatch-id'));
+        .reconcile(given.get('dispatch-id'), { ticket });
       if (facts.role !== role) throw new Error('boundary receipt role contradicts the dispatch role');
       for (const field of ['dispatch_id', 'launch_id']) {
         const issue = opaqueDispatchValueIssue(facts[field]);
@@ -841,7 +841,7 @@ function parseBatchEntries(raw) {
     return {
       ticket: item.ticket,
       role: item.role,
-      decided: parseMarkFlags(flags, item.role),
+      decided: parseMarkFlags(flags, item.role, item.ticket),
     };
   });
 }
@@ -1320,7 +1320,7 @@ if (require.main === module) {
     // Parsed and validated BEFORE the state lookup and before anything is
     // written: a usage error must cost no lock and must never leave half a
     // record behind.
-    const decided = parseMarkFlags(rest.slice(2), role);
+    const decided = parseMarkFlags(rest.slice(2), role, ticket);
     const at = new Date().toISOString();
     let dispatchId;
     try {
