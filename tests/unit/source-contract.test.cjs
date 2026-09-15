@@ -684,8 +684,7 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'gsd-phase-researcher',
     'gsd-planner',
     'gsd-plan-checker',
-    'Terra/high',
-    'Sol/medium',
+    'Astra/low',
     'Astra/medium',
     'receipt.compliance',
     'generic-agent',
@@ -743,8 +742,8 @@ test('decompose selects runtime before tuning and establishes context before one
   );
   assert.ok(
     normalized(boundarySection).includes(normalized('Tuning drift is harmless and MUST NOT block decomposition'))
-      && normalized(boundarySection).includes(normalized('only required delivery-contract or projection failures block')),
-    'tuning-only drift must not block while required contract/projection failures still do'
+      && normalized(boundarySection).includes(normalized('required delivery-contract or projection failures and every entry in the report\'s `blockers` array do block')),
+    'tuning-only drift must not block while required contract/projection and blocker failures do'
   );
 
   const chain = source.slice(
@@ -824,6 +823,35 @@ test('delivery launch docs route every role through the boundary and the generat
       !/node[^\n]*pipeline-config\.cjs\s+model\s+/.test(source),
       'delivery docs must not execute the compatibility model command'
     );
+});
+
+test('delivery docs project selector, recorder, and workflow contracts without inventing fields', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
+  const source = `${deliver}\n${sentinel}`;
+
+  for (const phrase of [
+    '--capabilities-file <current-host-capabilities.json>',
+    'concrete `model`, `model_key`, `effort`/`requested_effort`',
+    'compatibility recorder route',
+    'recorder projection',
+    'name without its `.toml` suffix',
+    'tickets: [{ id, planPath, baseRef, model, effort, signals }]',
+    'priorReceipt, previous_dispatch_id, dispatch_id',
+    'pipeline.fable: auto',
+    'Codex research has no alternatives rung',
+    'shipyard-inv-research-critical.toml',
+  ]) {
+    assert.ok(source.includes(phrase), `delivery docs must state the actual contract: ${phrase}`);
+  }
+
+  for (const stale of ['model_tier', 'boundaryReceipt', 'shipyard-inv-research-alternatives.toml']) {
+    assert.ok(!source.includes(stale), `delivery docs must not invent stale contract field/variant ${stale}`);
+  }
+  assert.ok(
+    !source.includes('The resolver returns `strategy: fix|continue|rethink`'),
+    'strategy must remain a failure-verdict input, not an invented boundary result'
+  );
 });
 
 test('research and decomposition use the canonical runtime ladders and only declared escalation signals', () => {

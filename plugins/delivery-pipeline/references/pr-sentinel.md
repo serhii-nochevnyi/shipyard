@@ -76,7 +76,10 @@ receipt must be `compliance: verified` and durably issued by this boundary.
 overlay only after the receipt returns a real launch identity; a refused launch
 must never leave a dispatch record behind.
 
-The runtime grids are independent and explicit:
+The runtime grids are independent and explicit. A Workflow-runtime Fable route
+first requires the config-aware routed resolver to confirm `pipeline.fable: auto`;
+the default `off` refuses an unconsented Fable selection before the config-blind
+boundary is called.
 
 | Duty | Codex | Claude |
 | --- | --- | --- |
@@ -93,11 +96,11 @@ Codex static duties use the generated files named by the selector:
 `shipyard-arch-review-critical.toml`, `shipyard-integrator.toml`, and
 `shipyard-integrator-critical.toml`. No sentinel recovery variant or additional
 architecture-review `repeat_exhausted` variant is generated. Codex dynamic roles,
-when handed back by the main loop, receive explicit model and effort arguments from
-the same receipt; Claude
-always receives its native alias and explicit effort. Never invent a file,
-translate a logical Codex name into a Claude alias, or inherit the caller's
-session.
+when handed back by the main loop, receive explicit model and effort arguments
+from the same receipt. The Workflow adapter receives its independent native
+alias and explicit effort; a native Agent surface without an effort parameter
+must refuse. Never invent a file, translate a logical Codex name into a Workflow
+native alias, or inherit the caller's session.
 
 ## The loop (repeat until your duty list is clear)
 
@@ -295,9 +298,8 @@ points here instead of creating a second launch protocol.
    ```text
    boundary.dispatch(
      { runtime, role: "arch-review",
-       signals: { risk, type, critical, checkpoint, contested, inputTokens,
-                  priorApplied },
-       dispatch_id, previous_dispatch_id },
+       signals: { risk, type, critical, checkpoint, contested, inputTokens },
+       dispatch_id },
      { promptPath: "$SHIPYARD_ROOT/references/arch-review.md", ticket, pr,
        head, diff, architecturePath, measuredInputTokens, contestedEvidence,
        worktreePath, graphPath }
@@ -307,10 +309,12 @@ points here instead of creating a second launch protocol.
    Codex resolves Astra/low → Astra/medium for measured-window, contested,
    critical, or checkpoint evidence and validates the generated
    `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
-   Claude resolves Opus/medium → Opus/max for critical/contested/checkpoint
-   evidence → Fable/medium for a measured window, with explicit native effort.
+   The Workflow runtime resolves Opus/medium → Opus/max for
+   critical/contested/checkpoint evidence → Fable/medium for a measured window,
+   with explicit native effort and routed Fable consent. The judge's measured
+   input is the diff plus the architecture corpus, not the diff alone.
    Threads are serviced by `review-fix` before this duty. A missing measurement,
-   typed capability, predecessor receipt, or documented signal is a refusal; no
+   typed capability, or documented signal is a refusal; no
    architecture-review ceiling variant beyond the generated critical file is a
    valid target. The judge's prompt is
    `references/arch-review.md` plus the measured diff and architecture corpus.
@@ -518,7 +522,7 @@ reinit is not optional.
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
   delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
-  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --effort-applied <applied-effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend> --graph <project>/.planning/graph`
+  `dispatch-record.cjs mark <T> <role> --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <backend> --graph <project>/.planning/graph`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as
@@ -532,17 +536,19 @@ reinit is not optional.
   `codex-agent.cjs` launches, and keep concrete observed model/effort separate
   from the requested tier/effort. Missing observations remain unknown and are
   excluded from efficiency comparisons.
-  **The pair AND the route are the ones the boundary resolution just gave you**, including the `rethink` deepening — re-deriving either here
-  would record the ladder's opinion instead of your dispatch, and recording
-  nothing is why the journal cannot today say what any fix round ran at. A routed
+  **Keep the boundary and recorder representations separate.** The boundary
+  receipt keeps its canonical `role=… rung=… model=… signals=…` route. The
+  recorder adapter supplies its separately validated compatibility tier/effort/
+  route projection; do not pass the boundary route to `--route` or re-derive a
+  ladder decision here. A routed
   fixer must launch only through a surface that explicitly applies the resolved
   model and effort and returns that application receipt; record its concrete
   `--effort-applied <effort>`. If that surface is unavailable, hard-refuse before
   constructing a prompt, spawning, or recording — no Agent, prompt, or session
   fallback may turn `unsupported`, `unknown`, or an omitted receipt into a routed
   dispatch. Historical rows may retain those states as telemetry only. On the
-  Codex bundle add the selector's exact `agent_file`, which is
-  where that runtime's model choice lives — `node $SHIPYARD_ROOT/scripts/codex-agent.cjs
+  Codex bundle add the selector's `agent_file` name without its `.toml` suffix,
+  which is where that runtime's model choice lives — `node $SHIPYARD_ROOT/scripts/codex-agent.cjs
   select <role> --json --capabilities-file "$SHIPYARD_ROOT/codex-capabilities.json"
   [--project-dir <project>]` gives the exact file. A dispatch that does not name
   the selected file does not record the

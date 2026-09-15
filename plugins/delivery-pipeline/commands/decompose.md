@@ -56,12 +56,15 @@ Initialize it before starting the GSD chain:
 2. With `runtime` fixed, preflight the project-relative delivery contract. Run
    `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-tune.cjs --check --runtime "$runtime"`
    and inspect the report by category. Tuning drift is harmless and MUST NOT
-   block decomposition; only required delivery-contract or projection failures
-   block. A required failure includes the conveyor setting, or a missing,
-   stale, foreign, or unreadable `.shipyard/generated/gsd-delivery-rules/SKILL.md`
-   projection needed by the planner and executor. A hard preflight refusal is
-   still fail-closed. Do not apply tuning automatically, and do not treat the
-   aggregate non-zero status caused only by tuning drift as a block. The
+   block decomposition; required delivery-contract or projection failures and
+   every entry in the report's `blockers` array do block. A required failure
+   includes the conveyor setting, or a missing, stale, foreign, or unreadable
+   `.shipyard/generated/gsd-delivery-rules/SKILL.md` projection needed by the
+   planner and executor. A blocker is a non-remediable runtime/model floor or
+   equivalent REQUIRED refusal, so it must stop the chain until the runtime is
+   made capable. A hard preflight refusal is still fail-closed. Do not apply
+   tuning automatically, and do not treat the aggregate non-zero status caused
+   only by tuning drift as a block. The
    explicit `--runtime "$runtime"` keeps a dual-runtime host from checking the
    wrong install or reporting ambiguity; this preflight does not replace a
    dispatch receipt.
@@ -84,9 +87,9 @@ ladder into the other.
 
 | GSD launch | Boundary role | Base selection | Escalation selections | Declared escalation signals |
 | --- | --- | --- | --- | --- |
-| `gsd-phase-researcher` | `research` | Terra/high | Sol/medium → Astra/medium | `type: alternatives` → `complexity: very-complex` |
-| `gsd-planner` | `decomposition` | Sol/medium | Astra/medium | `critical: true` or `checkpoint: true` |
-| `gsd-plan-checker` | `decomposition` | Sol/medium | Astra/medium | `critical: true` or `checkpoint: true` |
+| `gsd-phase-researcher` | `research` | Astra/low | Astra/medium | `complexity: very-complex` |
+| `gsd-planner` | `decomposition` | Astra/low | Astra/medium | `critical: true` or `checkpoint: true` |
+| `gsd-plan-checker` | `decomposition` | Astra/low | Astra/medium | `critical: true` or `checkpoint: true` |
 
 **Workflow-native alias runtime — native alias ladder**
 
@@ -96,9 +99,9 @@ ladder into the other.
 | `gsd-planner` | `decomposition` | opus/medium | fable/medium | `critical: true` or `checkpoint: true` |
 | `gsd-plan-checker` | `decomposition` | opus/medium | fable/medium | `critical: true` or `checkpoint: true` |
 
-On the Codex ladder, research starts at Terra/high and may move through
-Sol/medium to Astra/medium only for the two declared research signals.
-Decomposition starts at Sol/medium and may escalate to Astra/medium only for
+On the Codex ladder, research and decomposition start at Astra/low. Research
+may escalate to Astra/medium only for `complexity: very-complex`; `type:
+alternatives` is inert. Decomposition may escalate to Astra/medium only for
 the declared critical or checkpoint signal. On the native alias ladder,
 research starts at sonnet/high and may move through opus/medium to fable/medium;
 decomposition starts at opus/medium and may escalate to fable/medium under the

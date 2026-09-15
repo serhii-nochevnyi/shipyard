@@ -141,6 +141,9 @@ function loadClaudeWorkflowDispatch() {
 
 const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
 
+const isBoundaryFailure = (error) => !!error
+  && (error.name === 'DispatchBoundaryError' || error.name === 'DispatchPolicyError')
+
 phase('Drift')
 
 // fail-safe: a dead (null) OR throwing agent is treated as `drifted` so the
@@ -203,8 +206,12 @@ const results = await parallel(
         .then(({ result: v, receipt }) => (v
           ? { ...withoutAgentReceipt(v), id: t.id, ...(receipt ? { receipt } : {}) }
           : { ...driftFallback(t.id, 'judge returned no verdict — treat as drifted'), ...(receipt ? { receipt } : {}) }))
-        .catch((e) => driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`))
+        .catch((e) => {
+          if (isBoundaryFailure(e)) throw e
+          return driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`)
+        })
     } catch (e) {
+      if (isBoundaryFailure(e)) throw e
       return Promise.resolve(driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`))
     }
   })
