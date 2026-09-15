@@ -846,7 +846,7 @@ test('observed model ids reject whitespace and controls but keep opaque ids flex
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const ok = run([
     'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--route', ROUTE,
-    '--observed-model', 'claude-opus-5.1-preview', '--observed-effort', 'unknown',
+    '--effort-applied', 'high', '--observed-model', 'claude-opus-5.1-preview', '--observed-effort', 'unknown',
   ], project);
   assert.equal(ok.status, 0, ok.stderr);
   assert.equal(store(graph)['T-01-01'].observed_model, 'claude-opus-5.1-preview');
@@ -922,7 +922,7 @@ test('--agent-file records the Codex file that ran, and refuses one nothing prod
   const claude = scratch({ 'T-01-02': { ...OPEN_PR } });
   const impossible = run([
     'mark', 'T-01-02', 'arch-review', '--runtime', 'claude',
-    '--agent-file', 'shipyard-arch-review', '--route', ROUTE,
+    '--agent-file', 'shipyard-arch-review', '--route', ROUTE, '--effort-applied', 'high',
   ], claude.project);
   assert.equal(impossible.status, 1, impossible.stderr);
   assert.match(impossible.stderr, /Codex-only/);
@@ -1065,13 +1065,13 @@ test('a hand-composed reason is REFUSED, and the message names where the value c
 
 test('--route records the resolver\'s route VERBATIM, in the store and the journal', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE], project);
+  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE, '--effort-applied', 'high'], project);
   assert.equal(r.status, 0, `must succeed (${r.stderr})`);
   assert.equal(store(graph)['T-01-01'].reason, ROUTE, 'verbatim, under the key the query already reads');
   assert.equal(lastDispatch(graph).reason, ROUTE);
 });
 
-test('--route alone fills model/effort from its own parse, rather than leaving them absent', () => {
+test('a routed receipt fills model/effort from its route, rather than leaving them absent', () => {
   // Copilot: a `--route`-only mark used to store a `reason` that NAMES a model
   // and effort while leaving the structured `model`/`effort` fields empty — a
   // record self-inconsistent in exactly the way the pair/route cross-check
@@ -1080,15 +1080,28 @@ test('--route alone fills model/effort from its own parse, rather than leaving t
   // which stay deliberately un-cross-filled because they measure different
   // things), so the parse backfills what the flags did not supply.
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE], project);
+  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE, '--effort-applied', 'high'], project);
   assert.equal(r.status, 0, `must succeed (${r.stderr})`);
   const rec = store(graph)['T-01-01'];
   assert.equal(rec.model, parseRoute(ROUTE).tier.model, 'model is read out of the route, not left absent');
   assert.equal(rec.effort, parseRoute(ROUTE).effort.effort, 'same for effort');
   assert.equal(rec.reason, ROUTE);
   // Disagreement is still refused — backfill only fires when a flag is ABSENT.
-  const bad = run(['mark', 'T-01-01', 'executor', '--model', 'sonnet', '--route', ROUTE], project);
+  const bad = run(['mark', 'T-01-01', 'executor', '--model', 'sonnet', '--route', ROUTE, '--effort-applied', 'high'], project);
   assert.equal(bad.status, 1, 'an explicit --model that disagrees with the route must still refuse');
+});
+
+test('routed dispatches refuse an absent, unsupported, or unknown applied-effort receipt', () => {
+  for (const receipt of [undefined, 'unsupported', 'unknown']) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const flags = ['--route', ROUTE];
+    if (receipt !== undefined) flags.push('--effort-applied', receipt);
+    const r = run(['mark', 'T-01-01', 'review-fix', ...flags], project);
+    assert.equal(r.status, 1, `${receipt || 'absent'} receipt must refuse (${r.stderr})`);
+    assert.match(r.stderr, /concrete --effort-applied receipt/, r.stderr);
+    assert.deepStrictEqual(store(graph), {}, 'the refusal must not hide a ticket');
+    assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'the refusal must not journal a dispatch');
+  }
 });
 
 test('a sentence posted through the new flag is refused too — the grammar is the check', () => {
@@ -1363,6 +1376,29 @@ test('the PR-sentinel refuses an Agent fallback without explicit applied effort'
     'prompt-only effort must not be offered as a sentinel fallback');
   assert.match(sentinel, /Do not substitute[\s\S]*effort_applied=unsupported/,
     'unsupported effort must be prohibited for a routed sentinel launch');
+});
+
+test('complete sentinel and fixer guidance require a concrete receipt, not a fallback', () => {
+  const sentinel = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 'utf8');
+  const sentinelLaunch = sentinel.slice(sentinel.indexOf('Hand a ticket back to the board'), sentinel.indexOf('One PR blocked'));
+  assert.match(sentinelLaunch, /--effort-applied <applied-effort>/, 'sentinel fixer marks must carry applied effort');
+  assert.match(sentinelLaunch, /hard-refuse before[\s\S]*constructing a prompt, spawning, or recording/, 'sentinel fixer fallback must refuse before side effects');
+  assert.doesNotMatch(sentinelLaunch, /pass `unsupported`|`unknown`\s+when the host|omit the flag/, 'sentinel fixer guidance must not authorize non-receipts');
+
+  const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
+  for (const [start, end, role] of [
+    ['first | progress | repeat | repeat_exhausted', "'escalate' from the agent", 'ci-fix'],
+    ['there is feedback → review-fix agent', 'the agent either fixes', 'review-fix'],
+  ]) {
+    const section = deliver.slice(deliver.indexOf(start), deliver.indexOf(end, deliver.indexOf(start)));
+    assert.match(section, /explicitly applies the resolved[\s\S]*application receipt/, `${role} requires an application receipt`);
+    assert.match(section, /hard-refuse\s+before constructing a prompt, spawning, or recording/, `${role} refuses before side effects`);
+    assert.doesNotMatch(section, /Resolved effort: <effort>|On the Agent fallback/, `${role} has no executable Agent fallback`);
+  }
+
+  const attempts = deliver.slice(deliver.indexOf('d. after EACH push:'), deliver.indexOf('e. no push:', deliver.indexOf('d. after EACH push:')));
+  assert.match(attempts, /New routed attempts accept only[\s\S]*low\|medium\|high\|xhigh\|max/, 'attempt logging accepts concrete applied effort only');
+  assert.doesNotMatch(attempts, /honest record is `effort_applied=unsupported`|or `unknown` when the host/, 'attempt logging must not authorize receipt sentinels');
 });
 
 test('delivery docs prefer one mark/clear batch per fan-out', () => {

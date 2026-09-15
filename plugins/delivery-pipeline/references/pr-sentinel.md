@@ -443,7 +443,7 @@ reinit is not optional.
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
   delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
-  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend> --graph <project>/.planning/graph`
+  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --effort-applied <applied-effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend> --graph <project>/.planning/graph`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as
@@ -460,12 +460,14 @@ reinit is not optional.
   **The pair AND the route are the ones `pipeline-config.cjs model <role> --json …`
   just gave you**, including the `rethink` deepening — re-deriving either here
   would record the ladder's opinion instead of your dispatch, and recording
-  nothing is why the journal cannot today say what any fix round ran at. Add
-  `--effort-applied <effort>` only when the
-  Workflow tool carried the fixer (its `agent()` takes an effort); an `Agent`-spawned
-  fixer has no such parameter, so pass `unsupported` when that is known, `unknown`
-  when the host did not expose what ran, or omit the flag when no observation is
-  available. On the Codex bundle add the selector's exact `agent_file`, which is
+  nothing is why the journal cannot today say what any fix round ran at. A routed
+  fixer must launch only through a surface that explicitly applies the resolved
+  model and effort and returns that application receipt; record its concrete
+  `--effort-applied <effort>`. If that surface is unavailable, hard-refuse before
+  constructing a prompt, spawning, or recording — no Agent, prompt, or session
+  fallback may turn `unsupported`, `unknown`, or an omitted receipt into a routed
+  dispatch. Historical rows may retain those states as telemetry only. On the
+  Codex bundle add the selector's exact `agent_file`, which is
   where that runtime's model choice lives — `node $SHIPYARD_ROOT/scripts/codex-agent.cjs
   select <role> --json --capabilities-file "$SHIPYARD_ROOT/codex-capabilities.json"
   [--project-dir <project>]` gives the exact file. A dispatch that does not name

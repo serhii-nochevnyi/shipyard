@@ -1795,10 +1795,11 @@ loop:
          - the failure log (gh run view --log-failed) and its signature
          - the resolved `strategy`
          - the prior-attempt record: the output of `attempt-history.cjs <T>`
-         - on the Agent fallback, the prompt instruction `Resolved effort:
-           <effort>. Think and work at this effort level throughout the fix.`
-           The Agent tool has no effort parameter, so record
-           `effort_applied=unsupported` rather than copying the resolver value.
+         - launch only through a surface that explicitly applies the resolved
+           model and effort and returns an application receipt. If unavailable,
+           hard-refuse before constructing a prompt, spawning, or recording;
+           Agent/prompt/session fallback and absent, `unsupported`, or `unknown`
+           applied-effort evidence cannot authorize a routed ci-fix.
        'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
        a push happened → step d
      pending → nobody watches this PR: leave it in `waiting: ci`, EXIT this PR's
@@ -1829,10 +1830,11 @@ loop:
         threads + the prior-attempt record, `attempt-history.cjs <T>` — the
         reference tells the fixer to treat a hypothesis already in that record as
         EXCLUDED, which it can only do if you pass the record)
-       On the Agent fallback, add `Resolved effort: <effort>. Think and work at
-       this effort level throughout the fix.` to that prompt. The Agent tool has
-       no effort parameter, so record `effort_applied=unsupported`; only the
-       Workflow path may claim the resolved value was carried by the spawn.
+       Launch only through a surface that explicitly applies the resolved model
+       and effort and returns an application receipt. If unavailable, hard-refuse
+       before constructing a prompt, spawning, or recording; Agent/prompt/session
+       fallback and absent, `unsupported`, or `unknown` applied-effort evidence
+       cannot authorize a routed review-fix.
        the agent either fixes (push → step d), or replies to invalid ones
        (no push → mark the threads processed, b again)
 
@@ -1924,7 +1926,7 @@ loop:
        `attempt-history.cjs <T> --json` → `next_n`
      log the round with the keys the NEXT round reads back:
        `log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<role> model=<tier>
-        effort_applied=<the level the spawn actually carried, "unsupported" or "unknown">
+        effort_applied=<the concrete level the spawn explicitly applied>
         outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha>
         hypothesis="<the fixer's own one sentence, verbatim>"`
        `signature`+`head` are what the next `verdict` compares; `hypothesis` is
@@ -1932,22 +1934,18 @@ loop:
        this one already ruled out. Never invent a hypothesis the fixer did not
        report — an invented one enters the record as something tried and excluded.
        **`effort_applied` is what the SPAWN carried, never what the resolver
-       decided.** On the Workflow path that is the `effort` you put in
-       `args.prs[].effort` — the script passes it into `agent()`, so it is a fact
-       about the dispatch. On the Agent path there is no effort parameter at all, so
-       the honest record is `effort_applied=unsupported` when the backend has no
-       effort parameter, or `unknown` when the host did not expose what ran. Never
-       copy the resolved value across —
-       that turns a check into a synonym, which is the entire reason the two fields
-       are separate. This is not bookkeeping: `failure-signature.cjs` will only
+       decided.** Record a new routed attempt only after a launch surface explicitly
+       applied the resolved model and effort and returned that receipt. If the
+       surface cannot do so, hard-refuse before prompt construction, spawning, or
+       recording; do not use an Agent/prompt/session fallback or copy the resolved
+       value across. Historical `unsupported` and `unknown` telemetry stays readable,
+       but cannot authorize or represent a new routed attempt. This is not
+       bookkeeping: `failure-signature.cjs` will only
        claim `repeat_exhausted` — the rung that opens the ceiling model and then
        spends a person's attention — off a prior round whose row NAMES a real level,
        so an unrecorded depth reads as not-yet-spent and the loop rethinks once more
-       instead of escalating early. Levels: the resolver's own vocabulary
-       (`low|medium|high|xhigh|max`), or `unsupported`/`unknown`; `log-event.cjs` WARNS on anything
-       else and still logs the row as written — an unrecognised level is read
-       exactly like absence by the rethink rule above, so nothing downstream is
-       silently misled, but nothing refuses the write either.
+       instead of escalating early. New routed attempts accept only the resolver's
+       concrete effort vocabulary (`low|medium|high|xhigh|max`).
      **A base merge in that round is journalled SEPARATELY, and it is not an
        attempt.** For each PR you passed `needsBaseMerge: true` whose push you just
        confirmed: `log-event.cjs base_merge ticket=<T> pr=<N> base=<the base ref you
