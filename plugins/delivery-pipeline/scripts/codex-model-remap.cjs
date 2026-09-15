@@ -105,10 +105,15 @@ function createCodexRemapper({ cwd = process.cwd(), config, codexHome, env = pro
   const entries = remapEntries(sourceConfig || {});
   assertNoConflictingRemaps(entries);
   const mapped = new Map(entries.map((entry) => [entry.key, entry]));
-  return (key) => {
+  const remapper = (key) => {
     if (typeof key !== 'string' || !key.trim()) return null;
     return mapped.get(key.trim())?.model || null;
   };
+  // Keep the exact project or inherited GSD object beside the callable
+  // compatibility API. The selector must validate the source that supplied an
+  // applied remap, not only the absent project file it initially inspected.
+  Object.defineProperty(remapper, 'sourceConfig', { value: sourceConfig, enumerable: false });
+  return remapper;
 }
 
 function compareVersions(left, right) {

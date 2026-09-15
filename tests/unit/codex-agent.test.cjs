@@ -150,6 +150,39 @@ test('an effective GSD remap survives selection and keeps the canonical effort',
   } finally { clean(f); }
 });
 
+test('remap lookup follows the canonical Codex model key to its GSD tier', () => {
+  const model = 'vendor/codex-opus-v2';
+  const f = fixture({
+    model_policy: { runtime_tiers: { codex: {
+      sonnet: 'vendor/codex-wrong-tier', opus: { model, effort: 'medium' },
+    } } },
+    delivery_pipeline: { codex_models: [{ model, effort: 'medium' }] },
+  });
+  try {
+    const result = selectAgent('executor', {
+      ...f.options,
+      signals: { critical: true },
+      capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
+    });
+    assert.equal(result.model, model);
+    assert.equal(result.canonical_model, 'gpt-6-astra');
+    assert.equal(result.effective_model, model);
+    assert.equal(result.remap_key, 'opus');
+  } finally { clean(f); }
+});
+
+test('a Terra resolution ignores an unrelated Sonnet remap instead of applying it', () => {
+  const f = fixture({
+    model_policy: { runtime_tiers: { codex: { sonnet: 'vendor/codex-wrong-tier' } } },
+  });
+  try {
+    const result = selectAgent('research', f.options);
+    assert.equal(result.model, 'gpt-5.6-terra');
+    assert.equal(result.effective_model, undefined);
+    assert.equal(result.model_source, undefined);
+  } finally { clean(f); }
+});
+
 test('an absent project config stays undefined and loads an inherited GSD remap with cwd/env', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-'));
   const agentDir = path.join(root, 'agents');
@@ -182,6 +215,70 @@ test('an absent project config stays undefined and loads an inherited GSD remap 
   }
 });
 
+for (const [label, entry] of [
+  ['invalid inherited effort', { model: 'vendor/codex-inherited-invalid', effort: 'bogus' }],
+  ['below-canonical inherited effort', { model: 'vendor/codex-inherited-low', effort: 'low' }],
+]) {
+  test(label + ' is validated before its model is applied', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-validation-'));
+    const agentDir = path.join(root, 'agents');
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-home-'));
+    const loader = path.join(codexHome, 'gsd-core', 'bin', 'lib', 'config-loader.cjs');
+    fs.mkdirSync(path.join(root, '.planning'));
+    fs.mkdirSync(agentDir);
+    fs.mkdirSync(path.dirname(loader), { recursive: true });
+    fs.writeFileSync(loader, [
+      'module.exports = {',
+      '  loadConfig() {',
+      `    return { model_policy: { runtime_tiers: { codex: { sonnet: ${JSON.stringify(entry)} } } } };`,
+      '  },',
+      '};',
+    ].join('\n'));
+    try {
+      assert.throws(() => selectAgent('decomposition', {
+        cwd: root, agentDir,
+        capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, entry.model] },
+        env: { CODEX_HOME: codexHome },
+      }), (error) => error.code === 'CONFLICTING_OVERRIDE'
+        && (label === 'invalid inherited effort'
+          ? /is not a valid effort/.test(error.message)
+          : /below the canonical decomposition\/base effort medium/.test(error.message)));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+}
+
+test('a conflicting inherited GSD runtime is validated before its remap is applied', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-runtime-'));
+  const agentDir = path.join(root, 'agents');
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-home-'));
+  const model = 'vendor/codex-inherited-runtime-conflict';
+  const loader = path.join(codexHome, 'gsd-core', 'bin', 'lib', 'config-loader.cjs');
+  fs.mkdirSync(path.join(root, '.planning'));
+  fs.mkdirSync(agentDir);
+  fs.mkdirSync(path.dirname(loader), { recursive: true });
+  fs.writeFileSync(loader, [
+    'module.exports = {',
+    '  loadConfig() {',
+    `    return { model_policy: { runtime: 'claude', runtime_tiers: { codex: { sonnet: ${JSON.stringify(model)} } } } };`,
+    '  },',
+    '};',
+  ].join('\n'));
+  try {
+    assert.throws(() => selectAgent('decomposition', {
+      cwd: root, agentDir,
+      capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
+      env: { CODEX_HOME: codexHome },
+    }), (error) => error.code === 'CONFLICTING_OVERRIDE'
+      && /model_policy\.runtime contradicts the Codex dispatch/.test(error.message));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test('an unavailable inherited GSD loader refuses instead of falling back to the canonical model', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-loader-failure-'));
   const missingHome = path.join(root, 'missing-codex-home');
@@ -206,7 +303,7 @@ test('an effective remap is refused when the host does not advertise its model',
 
 test('a static remap refuses instead of bypassing generated-file evidence', () => {
   const model = 'vendor/codex-static-remap';
-  const f = fixture({ model_policy: { runtime_tiers: { codex: { sonnet: model } } } });
+  const f = fixture({ model_policy: { runtime_tiers: { codex: { haiku: model } } } });
   try {
     assert.throws(() => selectAgent('research', {
       ...f.options,

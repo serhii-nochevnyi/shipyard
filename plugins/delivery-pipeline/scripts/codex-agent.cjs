@@ -15,10 +15,13 @@ const { createCodexRemapper, readProjectConfig, validateCodexConfiguration } = r
 
 const ROLE_ALIASES = Object.freeze({ 'inv-research': 'research' });
 const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json> (supportedModels and supportedEfforts)';
-// The GSD compatibility tier that the Codex selector historically passed to
-// its remapper. The ADR-014 resolver owns the concrete rung; this alias only
-// identifies which operator remap is effective for a dynamic Codex launch.
-const CODEX_GSD_REMAP_TIER = 'sonnet';
+// Keep this translation aligned with pipeline-config's routed bridge: GSD's
+// compatibility tiers are not the Codex model keys themselves. The ADR-014
+// resolver owns the concrete rung; this map only identifies which operator
+// remap is effective for that resolved Codex model.
+const GSD_REMAP_TIER_BY_CODEX_MODEL_KEY = Object.freeze({
+  terra: 'haiku', sol: 'sonnet', luna: 'sonnet', astra: 'opus',
+});
 
 function fail(message, code = 'INVALID_INPUT') {
   throw policy.policyError(code, message + '. ' + REPAIR);
@@ -162,10 +165,12 @@ function routedConfigForCodexResolution(config, cwd, env) {
 
 function remapKeysForResolution(resolution) {
   // Static files cannot be rewritten at dispatch time. Still inspect the
-  // shared GSD tier for them so an effective custom remap is refused rather
-  // than silently ignored behind a canonical generated artifact.
-  const keys = [CODEX_GSD_REMAP_TIER];
-  if (typeof resolution.model_key === 'string') keys.push(resolution.model_key);
+  // model's mapped GSD tier for them so an effective custom remap is refused
+  // rather than silently ignored behind a canonical generated artifact.
+  const modelKey = typeof resolution.model_key === 'string' ? resolution.model_key : null;
+  const gsdTier = modelKey && GSD_REMAP_TIER_BY_CODEX_MODEL_KEY[modelKey];
+  const keys = gsdTier ? [gsdTier] : [];
+  if (modelKey) keys.push(modelKey);
   return [...new Set(keys)];
 }
 
@@ -174,9 +179,9 @@ function effectiveRemapFor(resolution, config, { cwd, env } = {}) {
   const keys = remapKeysForResolution(resolution);
   for (const key of keys) {
     const model = remapFor(key);
-    if (model) return { model, key, keys };
+    if (model) return { model, key, keys, sourceConfig: remapFor.sourceConfig };
   }
-  return { model: resolution.model, key: null, keys };
+  return { model: resolution.model, key: null, keys, sourceConfig: remapFor.sourceConfig };
 }
 
 function selectionWithEffectiveRemap(selection, effective) {
@@ -217,7 +222,7 @@ function selectAgentInternal(role, options) {
   });
   const projectConfig = readProjectConfig(cwd, loaded.file);
   const effective = effectiveRemapFor(resolution, projectConfig, { cwd, env });
-  validateCodexConfiguration(resolution, projectConfig, capabilities, {
+  validateCodexConfiguration(resolution, effective.sourceConfig, capabilities, {
     remapKeys: effective.keys,
     effectiveModel: effective.model,
   });
