@@ -3,6 +3,19 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 bash tests/smoke/model-ladder-runtime-smoke.sh
+
+[[ -f docker-compose.yml ]] || { echo "missing docker-compose.yml"; exit 1; }
+[[ -f Makefile ]] || { echo "missing Makefile"; exit 1; }
+
+[[ -x scripts/bootstrap-atlassian-rovo-oauth.sh ]] || { echo "missing scripts/bootstrap-atlassian-rovo-oauth.sh"; exit 1; }
+make -n bootstrap-atlassian-oauth >/dev/null
+
+# Bootstrap must refuse to run inside the container.
+if HOME=/home/dev ./scripts/bootstrap-atlassian-rovo-oauth.sh >/dev/null 2>&1; then
+  echo "expected bootstrap to refuse when HOME=/home/dev"
+  exit 1
+fi
+
 if [[ "${CI:-}" != true && "${CI:-}" != 1 ]]; then
   if ! command -v docker >/dev/null 2>&1 ||
      ! docker image inspect claude-shipyard:test claude-shipyard-base:test >/dev/null 2>&1; then
@@ -10,9 +23,6 @@ if [[ "${CI:-}" != true && "${CI:-}" != 1 ]]; then
     exit 0
   fi
 fi
-
-[[ -f docker-compose.yml ]] || { echo "missing docker-compose.yml"; exit 1; }
-[[ -f Makefile ]] || { echo "missing Makefile"; exit 1; }
 
 # `make build-base` below hard-fails without it; the exported vars satisfy the
 # Makefile's `?=` defaults.
@@ -25,15 +35,6 @@ export COMPOSE_PROJECT_NAME="shipyard-runtime-smoke-$$"
 mkdir -p "$RUNTIME_WORK/workspace" "$RUNTIME_WORK/.cache-home" "$STATE_DIR" \
   "$RUNTIME_WORK/home/.config/gh" "$RUNTIME_WORK/ssh"
 trap 'docker compose down >/dev/null 2>&1 || true; rm -rf "$RUNTIME_WORK"' EXIT
-
-[[ -x scripts/bootstrap-atlassian-rovo-oauth.sh ]] || { echo "missing scripts/bootstrap-atlassian-rovo-oauth.sh"; exit 1; }
-make -n bootstrap-atlassian-oauth >/dev/null
-
-# Bootstrap must refuse to run inside the container.
-if HOME=/home/dev ./scripts/bootstrap-atlassian-rovo-oauth.sh >/dev/null 2>&1; then
-  echo "expected bootstrap to refuse when HOME=/home/dev"
-  exit 1
-fi
 
 if [[ "${CI:-}" == true || "${CI:-}" == 1 ]]; then
   make build-base sync-karpathy-skills build-dev-image >/dev/null
