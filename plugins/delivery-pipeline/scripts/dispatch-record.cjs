@@ -82,6 +82,9 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 const {
   ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime, loadConfig,
 } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const {
+  CODEX_STATIC_ROLES, CODEX_ROLE_RUNG_DEFINITIONS, codexAgentFile, variantSuffix,
+} = require(path.join(__dirname, 'model-policy.cjs'));
 const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
@@ -277,28 +280,39 @@ function opaqueDispatchValueIssue(value) {
 // ── the Codex half: which FILE was invoked ───────────────────────────────────
 //
 // An agent on Codex is a static `.toml`, so the dispatch's real decision is the
-// file: `shipyard-<reference>` at the palette's floor, or its `-deep` twin at the
-// ceiling. Recording the role alone loses exactly the distinction the palette
-// exists to express.
+// exact file generated for the canonical policy rung. Recording the role alone
+// loses the distinction between base, alternatives, repeat and ceiling work.
 //
-// The accepted names are derived from the plugin's OWN `references/` directory,
-// which is the generator's source of truth for "which agents exist" and which
-// ships inside the bundle — `scripts/gen-codex-shipyard.cjs` does not, so it
-// cannot be required here.
-//
-// `-deep` is written for four roles only; the set is a local copy of that
-// generator's `DEEP_ROLES` (there is nothing exported inside the plugin to read
-// it from), and tests/unit/dispatch-record.test.cjs asserts the two are equal so
-// the copy cannot drift.
-const CODEX_DEEP_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel', 'arch-review']);
-const CODEX_DEEP_SUFFIX = '-deep';
-// Critical variants are first-attempt premium files. They are also a local copy
-// of the generator's set; the unit test keeps both surfaces in lockstep.
-const CODEX_CRITICAL_ROLES = new Set(['inv-research', 'arch-review', 'ci-fix', 'review-fix']);
-const CODEX_CRITICAL_SUFFIX = '-critical';
+// Keep this reader on the policy module that the generator and bundle validator
+// already use. Requiring the repository-level generator from this plugin would
+// fail once the plugin is installed without the repository checkout beside it.
+// The installed agents directory is still checked below: policy names alone do
+// not prove that the selected file exists on this host.
 const CODEX_AGENT_PREFIX = 'shipyard-';
+const CODEX_DEEP_SUFFIX = variantSuffix('ci-fix', 'repeat_exhausted');
+const CODEX_CRITICAL_SUFFIX = variantSuffix('arch-review', 'critical');
 
-// The ladder's roles and the generator's agent files are NOT one-to-one, and the
+const agentRoleName = (role) => codexAgentFile(role, 'base')
+  .replace(new RegExp(`^${CODEX_AGENT_PREFIX}`), '')
+  .replace(/\.toml$/, '');
+
+const rolesWithVariantSuffix = (suffix) => new Set(
+  CODEX_STATIC_ROLES
+    .filter((role) => CODEX_ROLE_RUNG_DEFINITIONS[role]
+      .some((rung) => variantSuffix(role, rung.name) === suffix))
+    .map(agentRoleName)
+);
+
+// Compatibility views retained for callers that group the generated names by
+// suffix. They are derived from the same canonical rung metadata as
+// `agentFilesFor`: only ci-fix/review-fix have a deep recovery file, while the
+// critical set includes research, integrator and arch-review. In particular,
+// the emitted integrator-critical file cannot be omitted or replaced by a
+// retired fixed-role recovery name.
+const CODEX_DEEP_ROLES = rolesWithVariantSuffix(CODEX_DEEP_SUFFIX);
+const CODEX_CRITICAL_ROLES = rolesWithVariantSuffix(CODEX_CRITICAL_SUFFIX);
+
+// The ladder's roles and the generated agent files are NOT one-to-one, and the
 // cross-check below is wrong in both directions if it assumes they are:
 //
 //   * `research`'s reference ships as `inv-research.md` — the investigation loop's
@@ -308,19 +322,16 @@ const CODEX_AGENT_PREFIX = 'shipyard-';
 //     loop rather than by a `.toml`. So `--agent-file` on an executor mark cannot
 //     name a file anybody can look at, whatever the value.
 //
-// Both facts are derived from `references/` rather than declared twice:
-// `agentFilesFor` intersects the role's candidate names with the files that
-// actually ship, so a reference added or renamed changes this with no edit here,
-// and tests/unit/dispatch-record.test.cjs pins that every shipped file is claimed
-// by exactly one role.
-const CODEX_AGENT_ROLE_NAME = { research: 'inv-research' };
-const agentRoleName = (role) => CODEX_AGENT_ROLE_NAME[role] || role;
+// `agentFilesFor` enumerates every canonical rung and intersects it with the
+// files that actually exist, so a policy variant added or renamed changes this
+// contract in one place. The unit contract pins that every shipped file is
+// claimed by exactly one static role.
 
 function agentFilesFor(role, known) {
-  const name = agentRoleName(role);
-  const candidates = [`${CODEX_AGENT_PREFIX}${name}`];
-  if (CODEX_DEEP_ROLES.has(name)) candidates.push(`${CODEX_AGENT_PREFIX}${name}${CODEX_DEEP_SUFFIX}`);
-  if (CODEX_CRITICAL_ROLES.has(name)) candidates.push(`${CODEX_AGENT_PREFIX}${name}${CODEX_CRITICAL_SUFFIX}`);
+  if (!CODEX_STATIC_ROLES.includes(role)) return new Set();
+  const candidates = CODEX_ROLE_RUNG_DEFINITIONS[role].map((rung) =>
+    codexAgentFile(role, rung.name).replace(/\.toml$/, '')
+  );
   return new Set(candidates.filter((f) => known.has(f)));
 }
 
@@ -537,6 +548,19 @@ function parseMarkFlags(argv, role) {
     // refused above, before this ever runs.
     if (decided.model === undefined) decided.model = parsed.tier.model;
     if (decided.effort === undefined) decided.effort = parsed.effort.effort;
+    // A route makes this a new ladder-routed dispatch, not merely a legacy
+    // ownership mark. It must carry the launch receipt's concrete effort: an
+    // absent value, `unsupported`, or `unknown` proves that the launch surface
+    // did not apply the selected pair and must fail before this record can hide
+    // the ticket from the front. Older rows remain readable as telemetry; this
+    // is a write-time rule only.
+    if (!EFFORTS.includes(decided.effort_applied)) {
+      fail(
+        'a routed dispatch requires a concrete --effort-applied receipt from a launch that explicitly applied ' +
+        'the resolved model and effort; absent, unsupported, and unknown are historical telemetry, not evidence for a new dispatch.\n' +
+        `  efforts: ${EFFORTS.join(', ')}`
+      );
+    }
     decided.reason = route;
   }
   if (runtime !== undefined && decided.model !== undefined
@@ -573,17 +597,17 @@ function parseMarkFlags(argv, role) {
       );
     }
     // A KNOWN file belonging to a DIFFERENT role is the case the flag was blind
-    // to, and it was found by reproduction: `mark T-01-01 executor --agent-file
-    // shipyard-arch-review-deep` was accepted. Either the dispatch went to the
+    // to, and it was found by reproduction: a dispatch could name an
+    // arch-review recovery file for an executor. Either the dispatch went to the
     // wrong agent or the record names the wrong file, and the journal must not
     // quietly hold it under either reading — the whole point of the field is that
-    // the ordinary/`-deep` choice IS the dispatch's decision on Codex, so a file
+    // the ordinary/rung choice IS the dispatch's decision on Codex, so a file
     // from another role makes the model recorded beside it fiction.
     //
     // Built from the ROLE rather than parsed out of the file name: five role names
-    // contain a hyphen, and `-deep` is a suffix, so splitting the name is where an
-    // off-by-one lives. Never compared against itself — the mutation test asserts
-    // that a known file for another role still refuses.
+    // contain a hyphen, and a rung suffix is part of the file name, so splitting
+    // the name is where an off-by-one lives. Never compared against itself — the
+    // mutation test asserts that a known file for another role still refuses.
     const mine = agentFilesFor(role, known);
     if (!mine.size) {
       fail(

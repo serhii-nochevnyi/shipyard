@@ -60,6 +60,243 @@ const { spawnSync } = require('child_process');
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { resolveRuntime } = require(path.join(__dirname, 'runtime-context.cjs'));
 
+// Bundle construction and inspection share metadata, never a second model grid.
+const policy = require('./model-policy.cjs');
+const digest = (content) => require('crypto').createHash('sha256').update(content).digest('hex');
+const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const IGNORED_PAYLOAD = /\.(bak|orig|rej|swp)$|^\.DS_Store$|~$/;
+const CODEX_CAPABILITIES_BUNDLE_FILE = 'codex-capabilities.json';
+
+function sortedJson(value) {
+  if (Array.isArray(value)) return value.map(sortedJson);
+  if (object(value)) {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortedJson(value[key])]));
+  }
+  return value;
+}
+
+// The installer copies these trees wholesale. Keep their inventory in the
+// manifest so validation covers nested references, templates, workflows and
+// skill payloads rather than only the three policy scripts.
+function payloadFiles(root) {
+  const files = [];
+  const walk = (current, prefix = '') => {
+    if (!fs.existsSync(current) || !fs.statSync(current).isDirectory()) {
+      throw new Error(`missing Codex payload directory: ${current}`);
+    }
+    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (IGNORED_PAYLOAD.test(entry.name)) continue;
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const file = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(file, relative);
+      else if (entry.isFile()) files.push(relative);
+      else throw new Error(`unsafe Codex payload entry: ${relative}`);
+    }
+  };
+  walk(root);
+  return files.sort();
+}
+
+function payloadDigests(root, files) {
+  return Object.fromEntries(files.map((file) => [file, digest(fs.readFileSync(path.join(root, file)))]));
+}
+
+function codexSkillNames(phase) {
+  return ['route', 'investigate', 'decompose', ...(phase === 2 ? ['deliver'] : []), 'bench', 'delivery-rules']
+    .map((name) => `shipyard-${name}`);
+}
+
+function codexStaticVariants(phase = 2) {
+  if (![1, 2].includes(phase)) throw new Error('Codex bundle phase must be 1 or 2');
+  return policy.CODEX_STATIC_ROLES.filter((role) => phase === 2 || role === 'research')
+    .flatMap((role) => policy.CODEX_ROLE_RUNG_DEFINITIONS[role].map((rung) => ({
+      role, rung: rung.name, model: policy.CODEX_MODEL_IDS[rung.model_key], effort: rung.effort,
+      file: policy.codexAgentFile(role, rung.name),
+      reference: role === 'research' ? 'inv-research' : role,
+      sandbox: ['research', 'arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write',
+    })));
+}
+
+function validateCodexCapabilities(capabilities, phase = 2) {
+  if (!object(capabilities)) throw new Error('missing Codex host capabilities; set SHIPYARD_CODEX_CAPABILITIES_FILE');
+  // Include dynamic roles: an install must not claim a usable delivery runtime
+  // when the host cannot apply the executor/decomposition selections.
+  for (const role of policy.ROLES.filter((role) => phase === 2 || ['research', 'decomposition'].includes(role))) {
+    for (const rung of policy.CODEX_ROLE_RUNG_DEFINITIONS[role]) {
+      const model = policy.CODEX_MODEL_IDS[rung.model_key];
+      const effort = rung.effort;
+      if (!model || !Array.isArray(capabilities.supportedModels) || !capabilities.supportedModels.includes(model)
+          || !Array.isArray(capabilities.supportedEfforts) || !capabilities.supportedEfforts.includes(effort)
+          || (capabilities.supportedSelections !== undefined
+            && (!Array.isArray(capabilities.supportedSelections)
+              || !capabilities.supportedSelections.some((entry) => object(entry) && entry.model === model && entry.effort === effort)))) {
+        throw new Error(`Codex host cannot apply required ${role}/${rung.name}: ${model}/${effort}`);
+      }
+    }
+  }
+}
+
+function validateCodexBundle(root, { codexHome, phase = 2, capabilities } = {}) {
+  const read = (relative) => {
+    const file = path.join(root, relative);
+    const resolved = path.relative(fs.realpathSync(root), fs.realpathSync(file));
+    if (resolved.startsWith('..') || path.isAbsolute(resolved) || !fs.lstatSync(file).isFile()) {
+      throw new Error(`unsafe Codex bundle file: ${relative}`);
+    }
+    return fs.readFileSync(file, 'utf8');
+  };
+  const manifest = JSON.parse(read('manifest.json'));
+  const variants = codexStaticVariants(phase);
+  const sameSet = (actual, expected, label) => {
+    if (!Array.isArray(actual) || actual.length !== expected.length
+        || new Set(actual).size !== actual.length || expected.some((entry) => !actual.includes(entry))) {
+      throw new Error(`incomplete or unexpected Codex bundle ${label}`);
+    }
+  };
+  if (!object(manifest) || manifest.phase !== phase || manifest.policy_id !== policy.POLICY.id
+      || manifest.policy_version !== policy.POLICY_VERSION || manifest.policy_hash !== policy.POLICY_HASH
+      || manifest.codexHome !== codexHome || manifest.config_invalid) throw new Error('stale Codex bundle policy or destination');
+  sameSet(manifest.agent_files, variants.map((v) => v.file), 'agent files');
+  sameSet(manifest.dynamic_roles, policy.DYNAMIC_ROLES, 'dynamic roles');
+  sameSet(manifest.agents, variants.map((v) => v.file.replace(/\.toml$/, '')), 'agents');
+  sameSet(manifest.registrations, manifest.agents.map((name) => `agents.${name}`), 'registrations');
+  sameSet(fs.readdirSync(path.join(root, 'agents')), manifest.agent_files, 'directory');
+  if (!object(manifest.agent_digests)) throw new Error('missing Codex bundle digests');
+  sameSet(Object.keys(manifest.agent_digests), manifest.agent_files, 'digests');
+  const skills = codexSkillNames(phase);
+  sameSet(manifest.skills, skills, 'skills');
+  sameSet(fs.readdirSync(path.join(root, 'skills')), skills, 'skill directory');
+  if (!object(manifest.skill_digests)) throw new Error('missing Codex skill digests');
+  sameSet(Object.keys(manifest.skill_digests), skills, 'skill digests');
+  for (const skill of skills) {
+    if (digest(read(`skills/${skill}/SKILL.md`)) !== manifest.skill_digests[skill]) {
+      throw new Error(`stale Codex skill: ${skill}`);
+    }
+  }
+  const skillRoot = path.join(root, 'skills');
+  const actualSkillFiles = payloadFiles(skillRoot);
+  if (!Array.isArray(manifest.skill_files) || !object(manifest.skill_file_digests)) {
+    throw new Error('missing Codex skill payload manifest');
+  }
+  sameSet(manifest.skill_files, actualSkillFiles, 'skill payload files');
+  sameSet(Object.keys(manifest.skill_file_digests), actualSkillFiles, 'skill payload digests');
+  for (const file of actualSkillFiles) {
+    if (digest(read(`skills/${file}`)) !== manifest.skill_file_digests[file]) {
+      throw new Error(`stale Codex skill payload: ${file}`);
+    }
+  }
+  const bundleRoot = path.join(root, 'bundle');
+  const actualBundleFiles = payloadFiles(bundleRoot);
+  if (!Array.isArray(manifest.bundle_files) || !object(manifest.bundle_digests)) {
+    throw new Error('missing Codex bundle payload manifest');
+  }
+  sameSet(manifest.bundle_files, actualBundleFiles, 'payload files');
+  sameSet(Object.keys(manifest.bundle_digests), actualBundleFiles, 'payload digests');
+  for (const file of actualBundleFiles) {
+    if (digest(read(`bundle/${file}`)) !== manifest.bundle_digests[file]) {
+      throw new Error(`stale Codex bundle payload: ${file}`);
+    }
+  }
+  if (manifest.capabilities_file !== CODEX_CAPABILITIES_BUNDLE_FILE
+      || typeof manifest.capabilities_digest !== 'string') {
+    throw new Error('missing durable Codex capability evidence');
+  }
+  const bundledCapabilitiesRaw = read(`bundle/${CODEX_CAPABILITIES_BUNDLE_FILE}`);
+  if (digest(bundledCapabilitiesRaw) !== manifest.capabilities_digest) {
+    throw new Error('stale durable Codex capability evidence');
+  }
+  let bundledCapabilities;
+  try { bundledCapabilities = JSON.parse(bundledCapabilitiesRaw); }
+  catch (error) { throw new Error(`invalid durable Codex capability evidence: ${error.message}`); }
+  validateCodexCapabilities(bundledCapabilities, phase);
+  validateCodexCapabilities(capabilities, phase);
+  if (JSON.stringify(sortedJson(bundledCapabilities)) !== JSON.stringify(sortedJson(capabilities))) {
+    throw new Error('durable Codex capability evidence does not match the supplied host evidence');
+  }
+  const converterPath = manifest.gsd_lib;
+  const converterDigest = manifest.gsd_lib_digest;
+  if (typeof converterPath !== 'string' || typeof converterDigest !== 'string'
+      || manifest.gsdLib !== converterPath) {
+    throw new Error('missing GSD converter binding');
+  }
+  try {
+    if (digest(fs.readFileSync(converterPath)) !== converterDigest) throw new Error('digest mismatch');
+  } catch (error) {
+    throw new Error(`stale or missing GSD converter: ${converterPath}`);
+  }
+  let expectedFragment = '# shipyard-agents:begin — delivery-pipeline agents, managed by install-shipyard-codex.sh\n';
+  for (const variant of variants) {
+    const content = read(`agents/${variant.file}`);
+    if (digest(content) !== manifest.agent_digests[variant.file]) throw new Error(`stale Codex file digest: ${variant.file}`);
+    // Parse only the generated flat prefix. Instructions consume the remainder;
+    // neither model-looking prose nor trailing TOML may supply configuration.
+    const split = content.indexOf('developer_instructions = ');
+    if (split < 0) throw new Error(`missing Codex instructions: ${variant.file}`);
+    const prefix = content.slice(0, split);
+    const fields = {};
+    for (const line of prefix.trimEnd().split('\n')) {
+      const match = line.match(/^(# shipyard-policy-[a-z]+|name|description|sandbox_mode|model|model_reasoning_effort) = ("(?:[^"\\]|\\.)*")$/);
+      if (!match || Object.hasOwn(fields, match[1])) throw new Error(`invalid Codex configuration: ${variant.file}`);
+      fields[match[1]] = JSON.parse(match[2]);
+    }
+    const name = variant.file.replace(/\.toml$/, '');
+    const expected = {
+      '# shipyard-policy-id': policy.POLICY.id, '# shipyard-policy-version': policy.POLICY_VERSION,
+      '# shipyard-policy-hash': policy.POLICY_HASH, '# shipyard-policy-runtime': 'codex',
+      '# shipyard-policy-role': variant.role, '# shipyard-policy-rung': variant.rung,
+      name, sandbox_mode: variant.sandbox, model: variant.model, model_reasoning_effort: variant.effort,
+    };
+    if (typeof fields.description !== 'string' || !fields.description.trim()
+        || Object.entries(expected).some(([key, value]) => !value || fields[key] !== value)
+        || Object.keys(fields).length !== Object.keys(expected).length + 1) throw new Error(`noncanonical Codex selection: ${variant.file}`);
+    const instructions = content.slice(split + 'developer_instructions = '.length).trim();
+    if (instructions.startsWith("'''")) {
+      const end = instructions.indexOf("'''", 3);
+      if (end < 0 || instructions.slice(end + 3).trim()) throw new Error(`invalid Codex instructions: ${variant.file}`);
+    } else if (typeof JSON.parse(instructions) !== 'string') throw new Error(`invalid Codex instructions: ${variant.file}`);
+    expectedFragment += `\n[agents.${name}]\ndescription = ${JSON.stringify(fields.description)}\nconfig_file = ${JSON.stringify(path.join(codexHome, 'agents', variant.file))}\n`;
+  }
+  expectedFragment += '\n# shipyard-agents:end\n';
+  const fragment = read('config.fragment.toml');
+  if (fragment !== expectedFragment || digest(fragment) !== manifest.config_digest) throw new Error('unregistered or stale Codex config fragment');
+  // Validate the shipped policy against the source used by this validator.
+  for (const file of ['model-policy.cjs', 'model-policy-internal.cjs', 'runtime-adapters.cjs']) {
+    if (read(`bundle/scripts/${file}`) !== fs.readFileSync(path.join(__dirname, file), 'utf8')) {
+      throw new Error(`stale bundled Codex policy: ${file}`);
+    }
+  }
+  return manifest;
+}
+
+module.exports = {
+  codexSkillNames, codexStaticVariants, validateCodexCapabilities, validateCodexBundle,
+  payloadFiles, payloadDigests, CODEX_CAPABILITIES_BUNDLE_FILE,
+};
+
+function main() {
+if (process.argv.includes('--validate-codex-bundle')) {
+  try {
+    const value = (flag) => {
+      const index = process.argv.indexOf(flag);
+      return index === -1 ? undefined : process.argv[index + 1];
+    };
+    const capabilitiesFile = value('--capabilities') || value('--capabilities-file')
+      || process.env.SHIPYARD_CODEX_CAPABILITIES_FILE;
+    if (!capabilitiesFile) throw new Error('missing Codex host capabilities; pass --capabilities or set SHIPYARD_CODEX_CAPABILITIES_FILE');
+    const capabilities = JSON.parse(fs.readFileSync(capabilitiesFile, 'utf8'));
+    const phaseArg = value('--phase');
+    const phase = phaseArg === undefined ? 2 : Number(phaseArg);
+    validateCodexBundle(value('--validate-codex-bundle'), {
+      codexHome: value('--codex-home'), phase, capabilities,
+    });
+    console.log('Codex bundle policy, completeness, registrations and capabilities: valid');
+    process.exit(0);
+  } catch (error) {
+    console.error(`gsd-tune: Codex bundle refused: ${error.message}`);
+    process.exit(1);
+  }
+}
+
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
 const AS_JSON = argv.includes('--json');
@@ -655,8 +892,13 @@ if (codexToml && !CONFIG_REFUSAL) {
     });
   }
   const codexHave = cliVersion('codex');
+  const paletteFloors = new Map();
   for (const entry of Array.isArray(pipeline.codex_models) ? pipeline.codex_models : []) {
     if (!entry || !entry.min_cli || !entry.model) continue;
+    const known = paletteFloors.get(entry.model);
+    if (!known || cmpVersion(entry.min_cli, known.min_cli) > 0) paletteFloors.set(entry.model, entry);
+  }
+  for (const entry of paletteFloors.values()) {
     // One palette entry is ONE finding however many files name it — the report is
     // about the model's floor, and the files are the evidence for it.
     const named = codexModelSources.filter((s) => s.text.includes(entry.model));
@@ -878,3 +1120,6 @@ if (!AS_JSON) {
 // Everything writable was written; the floors are still unmet, so the exit code
 // must not report success.
 process.exit(blockers.length ? 1 : 0);
+}
+
+if (require.main === module) main();

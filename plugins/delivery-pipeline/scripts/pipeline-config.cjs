@@ -266,13 +266,12 @@ function taskLevelRoute(role, signals = {}, cfg = {}) {
 // — so an unknown id cannot be distinguished from a new one, and a hardcoded
 // allowlist here would go stale faster than the models do.
 //
-// `gpt-5.6-sol` is deliberately absent: with `xhigh`/`max` retired on that
-// runtime its only distinguishing property (advertising `ultra`) buys nothing, so
-// no built-in path selects it. It stays a value a person may configure — see the
-// capability's declared default, which mirrors this list.
+// Astra is the compatibility workhorse and ceiling. Routed Codex dispatch reads
+// ADR-014 directly; this palette remains a compatibility input for callers that
+// do not request a routed decision.
 const DEFAULT_CODEX_MODELS = [
-  { model: 'gpt-5.6-terra', effort: 'high' },
-  { model: 'gpt-6-astra', effort: 'high', min_cli: '0.153.1' },
+  { model: 'gpt-6-astra', effort: 'low', min_cli: '0.153.1' },
+  { model: 'gpt-6-astra', effort: 'medium', min_cli: '0.153.1' },
 ];
 const CODEX_MODEL_KEYS = new Set(['model', 'effort', 'min_cli']);
 
@@ -1403,7 +1402,7 @@ function configurationSelections(raw, role, runtime, modelKey) {
         addSelection(`config.${source}`, { model: values });
         continue;
       }
-      const tier = { terra: 'haiku', sol: 'sonnet', luna: 'sonnet', astra: 'opus' }[modelKey];
+      const tier = { luna: 'sonnet', astra: 'opus' }[modelKey];
       if (tier && Object.prototype.hasOwnProperty.call(values, tier)) {
         addSelection(`config.${source}.${tier}`, codexRemapSelection(values[tier]));
       }

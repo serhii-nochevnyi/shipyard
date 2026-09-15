@@ -36,18 +36,9 @@ const run = (args, cwd, env = {}) => spawnSync('node', [DISPATCH, ...args], {
   cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '', ...env },
 });
 
-const DEFAULT_CODEX_AGENT_FILES = (() => {
-  const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
-    .filter((f) => f.endsWith('.md'))
-    .map((f) => f.slice(0, -3));
-  const files = new Set();
-  for (const role of refs) {
-    files.add(`shipyard-${role}`);
-    if (gen.DEEP_ROLES.has(role)) files.add(`shipyard-${role}${gen.DEEP_SUFFIX}`);
-    if (gen.CRITICAL_ROLES.has(role)) files.add(`shipyard-${role}${gen.CRITICAL_SUFFIX}`);
-  }
-  return [...files].sort();
-})();
+const DEFAULT_CODEX_AGENT_FILES = gen.codexStaticVariants()
+  .map(({ file }) => file.replace(/\.toml$/, ''))
+  .sort();
 
 function writeCodexAgents(dir, files = DEFAULT_CODEX_AGENT_FILES) {
   fs.mkdirSync(dir, { recursive: true });
@@ -855,7 +846,7 @@ test('observed model ids reject whitespace and controls but keep opaque ids flex
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const ok = run([
     'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--route', ROUTE,
-    '--observed-model', 'claude-opus-5.1-preview', '--observed-effort', 'unknown',
+    '--effort-applied', 'high', '--observed-model', 'claude-opus-5.1-preview', '--observed-effort', 'unknown',
   ], project);
   assert.equal(ok.status, 0, ok.stderr);
   assert.equal(store(graph)['T-01-01'].observed_model, 'claude-opus-5.1-preview');
@@ -915,29 +906,35 @@ test('an unknown flag, a duplicate and a missing value are all refused', () => {
 });
 
 test('--agent-file records the Codex file that ran, and refuses one nothing produces', () => {
-  // On Codex the model lives IN the file, so the ordinary/-deep choice IS the
+  // On Codex the model lives IN the file, so the canonical rung filename IS the
   // dispatch's decision. A name the generator does not produce is unverifiable,
   // and an unverifiable name is worse than none.
   const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
   const ok = run(
-    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-deep'],
+    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-critical'],
     project,
     { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
   );
   assert.equal(ok.status, 0, `must succeed (${ok.stderr})`);
-  assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-deep', 'verbatim');
-  assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-deep');
+  assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-critical', 'verbatim');
+  assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-critical');
 
   const claude = scratch({ 'T-01-02': { ...OPEN_PR } });
   const impossible = run([
     'mark', 'T-01-02', 'arch-review', '--runtime', 'claude',
-    '--agent-file', 'shipyard-arch-review', '--route', ROUTE,
+    '--agent-file', 'shipyard-arch-review', '--route', ROUTE, '--effort-applied', 'high',
   ], claude.project);
   assert.equal(impossible.status, 1, impossible.stderr);
   assert.match(impossible.stderr, /Codex-only/);
   assert.deepStrictEqual(store(claude.graph), {});
 
-  for (const bad of ['shipyard-nope', 'arch-review', 'shipyard-integrator-deep']) {
+  for (const bad of [
+    'shipyard-nope',
+    'shipyard-arch-review-deep',
+    'shipyard-pr-sentinel-deep',
+    'shipyard-integrator-deep',
+    'shipyard-ci-fix-critical',
+  ]) {
     const s = scratch({ 'T-01-02': { ...OPEN_PR } });
     const r = run(
       ['mark', 'T-01-02', 'arch-review', '--agent-file', bad],
@@ -956,20 +953,24 @@ test('the accepted agent files are read from the generated Codex agents director
     CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
   } = require(DISPATCH);
   assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), [...gen.DEEP_ROLES].sort(),
-    'the deep-eligible roles must be the generator\'s own');
+    'only canonical repair roles may select a deep recovery file');
   assert.equal(CODEX_DEEP_SUFFIX, gen.DEEP_SUFFIX);
   assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), [...gen.CRITICAL_ROLES].sort(),
-    'the critical-eligible roles must be the generator\'s own');
+    'the critical roles must include every canonical critical rung');
   assert.equal(CODEX_CRITICAL_SUFFIX, gen.CRITICAL_SUFFIX);
+  assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), ['ci-fix', 'review-fix']);
+  assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), ['arch-review', 'integrator', 'inv-research']);
 
-  // And the ordinary names are one per shipped reference — the generator's own
-  // filter — so a reference added there is accepted here without an edit.
+  // Every canonical variant is present, including research alternatives and the
+  // repeat rung that used to be absent from this contract.
   const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
     .filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agents-'));
   const files = codexAgentFiles(writeCodexAgents(dir));
+  assert.ok(files.has('shipyard-integrator-critical'), 'integrator-critical is a canonical file');
   for (const role of refs) assert.ok(files.has(`shipyard-${role}`), `shipyard-${role} must be accepted`);
-  assert.equal(files.size, refs.length + gen.DEEP_ROLES.size + gen.CRITICAL_ROLES.size, 'and nothing else is');
+  const expected = gen.codexStaticVariants().map(({ file }) => file.replace(/\.toml$/, '')).sort();
+  assert.deepStrictEqual([...files].sort(), expected, 'and nothing else is');
 });
 
 test('a stale critical file is refused when the installed Codex agents directory did not generate it', () => {
@@ -1064,13 +1065,13 @@ test('a hand-composed reason is REFUSED, and the message names where the value c
 
 test('--route records the resolver\'s route VERBATIM, in the store and the journal', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE], project);
+  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE, '--effort-applied', 'high'], project);
   assert.equal(r.status, 0, `must succeed (${r.stderr})`);
   assert.equal(store(graph)['T-01-01'].reason, ROUTE, 'verbatim, under the key the query already reads');
   assert.equal(lastDispatch(graph).reason, ROUTE);
 });
 
-test('--route alone fills model/effort from its own parse, rather than leaving them absent', () => {
+test('a routed receipt fills model/effort from its route, rather than leaving them absent', () => {
   // Copilot: a `--route`-only mark used to store a `reason` that NAMES a model
   // and effort while leaving the structured `model`/`effort` fields empty — a
   // record self-inconsistent in exactly the way the pair/route cross-check
@@ -1079,15 +1080,28 @@ test('--route alone fills model/effort from its own parse, rather than leaving t
   // which stay deliberately un-cross-filled because they measure different
   // things), so the parse backfills what the flags did not supply.
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE], project);
+  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE, '--effort-applied', 'high'], project);
   assert.equal(r.status, 0, `must succeed (${r.stderr})`);
   const rec = store(graph)['T-01-01'];
   assert.equal(rec.model, parseRoute(ROUTE).tier.model, 'model is read out of the route, not left absent');
   assert.equal(rec.effort, parseRoute(ROUTE).effort.effort, 'same for effort');
   assert.equal(rec.reason, ROUTE);
   // Disagreement is still refused — backfill only fires when a flag is ABSENT.
-  const bad = run(['mark', 'T-01-01', 'executor', '--model', 'sonnet', '--route', ROUTE], project);
+  const bad = run(['mark', 'T-01-01', 'executor', '--model', 'sonnet', '--route', ROUTE, '--effort-applied', 'high'], project);
   assert.equal(bad.status, 1, 'an explicit --model that disagrees with the route must still refuse');
+});
+
+test('routed dispatches refuse an absent, unsupported, or unknown applied-effort receipt', () => {
+  for (const receipt of [undefined, 'unsupported', 'unknown']) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const flags = ['--route', ROUTE];
+    if (receipt !== undefined) flags.push('--effort-applied', receipt);
+    const r = run(['mark', 'T-01-01', 'review-fix', ...flags], project);
+    assert.equal(r.status, 1, `${receipt || 'absent'} receipt must refuse (${r.stderr})`);
+    assert.match(r.stderr, /concrete --effort-applied receipt/, r.stderr);
+    assert.deepStrictEqual(store(graph), {}, 'the refusal must not hide a ticket');
+    assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'the refusal must not journal a dispatch');
+  }
 });
 
 test('a sentence posted through the new flag is refused too — the grammar is the check', () => {
@@ -1137,17 +1151,15 @@ test('--effort-applied is NOT cross-checked, because it is the OTHER claim', () 
 });
 
 test('a KNOWN agent file belonging to another role is refused, and names both', () => {
-  // Reproduced before it was a rule: `mark T-01-01 executor --agent-file
-  // shipyard-arch-review-deep` was accepted. On Codex the model lives IN the file,
-  // so a file from another role makes the model recorded beside it fiction —
-  // either the dispatch ran the wrong agent or the record names the wrong file,
-  // and the journal must not quietly hold it under either reading.
+  // On Codex the model lives IN the file, so a file from another role makes the
+  // model recorded beside it fiction — either the dispatch ran the wrong agent
+  // or the record names the wrong file, and the journal must not quietly hold it
+  // under either reading.
   const cases = [
     ['arch-review', 'shipyard-ci-fix'],
     ['arch-review', 'shipyard-ci-fix-deep'],
     ['ci-fix', 'shipyard-review-fix'],
-    // The role's own file at the WRONG depth is fine — the palette's two rungs are
-    // both this role's — so the refusal is about the role, never about `-deep`.
+    ['integrator', 'shipyard-inv-research-critical'],
     ['pr-sentinel', 'shipyard-arch-review'],
   ];
   for (const [role, file] of cases) {
@@ -1346,6 +1358,79 @@ test('every mark deliver.md documents passes the agent identity too', () => {
     assert.ok(/--agent-id /.test(l),
       `a documented mark that records no holder: ${l.trim()}`);
   }
+});
+
+test('the PR-sentinel refuses an Agent fallback without explicit applied effort', () => {
+  const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
+  const sentinel = deliver.slice(
+    deliver.indexOf('## Step 4 — Post the sentinel'),
+    deliver.indexOf('Then **return to Step 3 immediately.**')
+  );
+
+  assert.ok(sentinel.length > 0, 'cannot isolate the PR-sentinel launch contract');
+  assert.match(sentinel, /hard-refuse[\s\S]*before constructing a prompt,\s+spawning, or recording/,
+    'the sentinel must refuse an unsupported launch before either side effect');
+  assert.match(sentinel, /--effort-applied <applied-effort>/,
+    'a compliant sentinel record must name the effort the launch applied');
+  assert.doesNotMatch(sentinel, /Resolved effort: <effort>/,
+    'prompt-only effort must not be offered as a sentinel fallback');
+  assert.match(sentinel, /Do not substitute[\s\S]*effort_applied=unsupported/,
+    'unsupported effort must be prohibited for a routed sentinel launch');
+});
+
+test('the generic Agent fallback excludes routed fixers before any side effect', () => {
+  const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
+  const genericFallback = deliver.slice(
+    deliver.indexOf('before starting (e.g. unavailable)'),
+    deliver.indexOf('## Step 0 — Cold start')
+  );
+
+  assert.ok(genericFallback.length > 0, 'cannot isolate the generic Agent fallback block');
+  assert.match(genericFallback, /Routed `ci-fix` and\s+`review-fix` are excluded/,
+    'routed fixers must be excluded when Workflow cannot start');
+  assert.match(genericFallback, /not eligible for that generic Agent fallback/,
+    'path selection must not restore routed fixers through generic Agent');
+  assert.match(genericFallback, /hard-refuse and return `repair blocked` before constructing a\s+prompt, using a\s+session or in-process fallback, spawning, or recording/,
+    'the generic block must refuse repair before prompt, fallback, spawn, or record');
+  assert.match(genericFallback, /`false` — force the Agent fallback only for non-repair\s+roles, and return `repair blocked`/,
+    'forcing the non-Workflow path must still block routed repair');
+  assert.doesNotMatch(genericFallback, /EVERY Agent spawn \(executor, drift-check, ci-fix\/review-fix/,
+    'the generic Agent spawn list must not include routed fixers');
+});
+
+test('complete sentinel and fixer guidance require a concrete receipt, not a fallback', () => {
+  const sentinel = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 'utf8');
+  const sentinelLaunch = sentinel.slice(sentinel.indexOf('Hand a ticket back to the board'), sentinel.indexOf('One PR blocked'));
+  assert.match(sentinelLaunch, /--effort-applied <applied-effort>/, 'sentinel fixer marks must carry applied effort');
+  assert.match(sentinelLaunch, /hard-refuse before[\s\S]*constructing a prompt, spawning, or recording/, 'sentinel fixer fallback must refuse before side effects');
+  assert.doesNotMatch(sentinelLaunch, /pass `unsupported`|`unknown`\s+when the host|omit the flag/, 'sentinel fixer guidance must not authorize non-receipts');
+
+  // The post-push block is a separate executable path: it previously permitted
+  // unknown applied effort for Agent and in-process fixes even after the launch
+  // contract above had been tightened. Scan the COMPLETE block, not a convenient
+  // prefix, so a fallback appended beside attempt logging cannot escape review.
+  const postPush = sentinel.slice(sentinel.indexOf('## After EVERY push'), sentinel.indexOf('## Hard rules'));
+  assert.ok(postPush.length > 0, 'cannot isolate the complete sentinel post-push contract');
+  assert.match(postPush, /mandatory boundary[\s\S]*concrete applied model-and-effort receipt/, 'post-push guidance requires the boundary receipt');
+  assert.match(postPush, /hard-refuse before prompt, spawn, or record/, 'post-push guidance refuses before side effects');
+  assert.match(postPush, /only\s+`low\|medium\|high\|xhigh\|max`/, 'new routed attempts accept concrete effort only');
+  assert.match(postPush, /Existing historical\s+telemetry may contain `unsupported` or `unknown`, but it is non-compliant history/, 'legacy telemetry is explicitly historical');
+  assert.doesNotMatch(postPush, /Agent tool spawned|fix you made in-process|honest value is then|anything else is WARNED/, 'the complete block has no executable non-receipt fallback');
+
+  const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
+  for (const [start, end, role] of [
+    ['first | progress | repeat | repeat_exhausted', "'escalate' from the agent", 'ci-fix'],
+    ['there is feedback → review-fix agent', 'the agent either fixes', 'review-fix'],
+  ]) {
+    const section = deliver.slice(deliver.indexOf(start), deliver.indexOf(end, deliver.indexOf(start)));
+    assert.match(section, /explicitly applies the resolved[\s\S]*application receipt/, `${role} requires an application receipt`);
+    assert.match(section, /hard-refuse\s+before constructing a prompt, spawning, or recording/, `${role} refuses before side effects`);
+    assert.doesNotMatch(section, /Resolved effort: <effort>|On the Agent fallback/, `${role} has no executable Agent fallback`);
+  }
+
+  const attempts = deliver.slice(deliver.indexOf('d. after EACH push:'), deliver.indexOf('e. no push:', deliver.indexOf('d. after EACH push:')));
+  assert.match(attempts, /New routed attempts accept only[\s\S]*low\|medium\|high\|xhigh\|max/, 'attempt logging accepts concrete applied effort only');
+  assert.doesNotMatch(attempts, /honest record is `effort_applied=unsupported`|or `unknown` when the host/, 'attempt logging must not authorize receipt sentinels');
 });
 
 test('delivery docs prefer one mark/clear batch per fan-out', () => {
