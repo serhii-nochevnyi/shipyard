@@ -1360,6 +1360,14 @@ const memberCallOpensAt = (tokens, index) => {
     && tokens[computedStart + 1]?.value === ']'
     && memberInvocationOpensAt(tokens, computedStart + 2);
 };
+const indirectApplyAt = (tokens, index, launchers) => {
+  if (tokens[index]?.value !== 'Reflect'
+      || tokens[index + 1]?.value !== '.'
+      || tokens[index + 2]?.value !== 'apply'
+      || tokens[index + 3]?.value !== '(') return false;
+  const callback = launcherReferenceAt(tokens, index + 4, launchers);
+  return callback !== null;
+};
 const launcherReferenceAt = (tokens, index, launchers) => {
   if (launchers.has(tokens[index]?.value)) return index;
   if (tokens[index]?.value === '('
@@ -1402,13 +1410,14 @@ const launcherAliases = (tokens) => {
 const directLaunchCalls = (source) => {
   const tokens = executableTokens(source);
   const launchers = launcherAliases(tokens);
-  return tokens.filter((token, index) => {
+  const direct = tokens.filter((token, index) => {
     if (!launchers.has(token.value) || tokens[index - 1]?.value === '.') return false;
     if (callOpensAt(tokens, index + 1) || memberCallOpensAt(tokens, index + 1)) return true;
     return tokens[index - 1]?.value === '('
       && tokens[index + 1]?.value === ')'
       && (callOpensAt(tokens, index + 2) || memberCallOpensAt(tokens, index + 2));
   });
+  return direct.concat(tokens.filter((token, index) => indirectApplyAt(tokens, index, launchers)));
 };
 const directLaunchOffenders = (root, rels) => rels.flatMap((rel) => {
   const source = fs.readFileSync(path.join(root, rel), 'utf8');
@@ -1441,19 +1450,21 @@ test('the routed-launch source sweep rejects direct, optional, and parenthesized
     'const grouped = (prompt) => (agent)(prompt);',
     'const spawned = (prompt) => spawn_agent?.(prompt);',
     'const groupedSpawn = (prompt) => (spawnAgent)(prompt);',
+    'const reflected = (prompt) => Reflect.apply(agent, null, [prompt]);',
     '// agent(prompt) is forbidden outside the boundary.',
     'const prose = "agent(prompt)";',
     'const allowed = (prompt) => createClaudeWorkflowDispatch({ prompt });',
     '',
   ].join('\n'));
   const offenders = directLaunchOffenders(dir, ['outside.mjs']);
-  assert.equal(offenders.length, 5, `the fixture must exercise every native-launch call form: ${offenders.join('\n')}`);
+  assert.equal(offenders.length, 6, `the fixture must exercise every native-launch call form: ${offenders.join('\n')}`);
   assert.match(offenders[0], /outside\.mjs:1/);
   assert.match(offenders[0], /agent\(prompt\)/);
   assert.match(offenders[1], /agent\?\.\(prompt\)/);
   assert.match(offenders[2], /\(agent\)\(prompt\)/);
   assert.match(offenders[3], /spawn_agent\?\.\(prompt\)/);
   assert.match(offenders[4], /\(spawnAgent\)\(prompt\)/);
+  assert.match(offenders[5], /Reflect\.apply\(agent/);
 });
 
 test('the routed-launch source sweep recursively scans template interpolations', () => {
