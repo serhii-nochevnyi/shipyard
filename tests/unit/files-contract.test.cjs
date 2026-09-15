@@ -522,7 +522,8 @@ test('delivery docs name the generated Codex variants and no retired recovery ta
   for (const variant of variants) {
     assert.ok(source.includes(variant.file), `docs omit generator output ${variant.file}`);
   }
-  assert.ok(source.includes('shipyard-inv-research-alternatives.toml'), 'research alternatives must use the emitted suffix');
+  assert.ok(source.includes('shipyard-inv-research-critical.toml'), 'research ceiling must use the emitted suffix');
+  assert.ok(!source.includes('shipyard-inv-research-alternatives.toml'), 'Codex research has no generated alternatives variant');
   assert.ok(source.includes('shipyard-integrator-critical.toml'), 'integrator critical must use the emitted suffix');
   assert.ok(source.includes('shipyard-ci-fix-repeat.toml'), 'repair repeat must use the emitted suffix');
   assert.ok(!source.includes('pr-sentinel-deep'), 'sentinel has no generated recovery variant');

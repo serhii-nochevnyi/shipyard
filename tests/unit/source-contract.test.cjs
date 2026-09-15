@@ -806,7 +806,7 @@ test('delivery launch docs route every role through the boundary and the generat
   }
 
   for (const pair of [
-    'Luna/max', 'Luna/medium', 'Sol/medium', 'Astra/medium',
+    'Luna/max', 'Luna/medium', 'Astra/low', 'Astra/medium',
     'Sonnet/max', 'Sonnet/high', 'Opus/medium', 'Opus/high', 'Opus/max',
     'Fable/medium',
   ]) {
@@ -834,7 +834,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
 
   assert.deepStrictEqual(
     [codexResearch.model, codexResearch.effort, codexResearch.rung],
-    [policy.CODEX_MODEL_IDS.terra, 'high', 'base']
+    [policy.CODEX_MODEL_IDS.astra, 'low', 'base']
   );
   assert.deepStrictEqual(
     [claudeResearch.model, claudeResearch.effort, claudeResearch.rung],
@@ -842,7 +842,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
   assert.deepStrictEqual(
     [codexDecomposition.model, codexDecomposition.effort, codexDecomposition.rung],
-    [policy.CODEX_MODEL_IDS.sol, 'medium', 'base']
+    [policy.CODEX_MODEL_IDS.astra, 'low', 'base']
   );
   assert.deepStrictEqual(
     [claudeDecomposition.model, claudeDecomposition.effort, claudeDecomposition.rung],
@@ -851,7 +851,8 @@ test('research and decomposition use the canonical runtime ladders and only decl
 
   assert.equal(
     dispatchResolution('codex', 'research', { type: 'alternatives' }, 'contract-research-alternatives').rung,
-    'alternatives'
+    'base',
+    'Codex research has no alternatives rung; the undeclared signal must not promote it'
   );
   assert.equal(
     dispatchResolution('codex', 'research', { complexity: 'very-complex' }, 'contract-research-complex').rung,
@@ -869,6 +870,18 @@ test('research and decomposition use the canonical runtime ladders and only decl
     dispatchResolution('claude', 'decomposition', { checkpoint: true }, 'contract-claude-decomposition-checkpoint').rung,
     'critical'
   );
+
+  // Decomposition's critical effort differs from the executor's critical effort.
+  for (const [role, signals, model, effort, rung] of [
+    ['research', { complexity: 'very-complex' }, policy.CODEX_MODEL_IDS.astra, 'medium', 'very-complex'],
+    ['decomposition', { critical: true }, policy.CODEX_MODEL_IDS.astra, 'medium', 'critical'],
+    ['executor', {}, policy.CODEX_MODEL_IDS.luna, 'max', 'base'],
+    ['executor', { critical: true }, policy.CODEX_MODEL_IDS.astra, 'low', 'critical'],
+    ['executor', { checkpoint: true }, policy.CODEX_MODEL_IDS.astra, 'low', 'critical'],
+  ]) {
+    const selection = dispatchResolution('codex', role, signals, `contract-${role}-${Object.keys(signals).join('-') || 'base'}`);
+    assert.deepStrictEqual([selection.model, selection.effort, selection.rung], [model, effort, rung]);
+  }
 
   assert.equal(
     dispatchResolution('codex', 'research', {

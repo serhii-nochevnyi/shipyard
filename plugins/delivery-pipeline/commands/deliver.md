@@ -385,15 +385,15 @@ boundary or to launch a different file.
 
 | Role | Base | Evidence-based escalation | Codex launch form |
 | --- | --- | --- | --- |
-| `research` | Terra/high | `type: alternatives` → Sol/medium; `complexity: very-complex` → Astra/medium | generated `shipyard-inv-research.toml`, `shipyard-inv-research-alternatives.toml`, `shipyard-inv-research-critical.toml` |
-| `decomposition` | Sol/medium | `critical` or `checkpoint` → Astra/medium | explicit model + `reasoning_effort` |
-| `executor` | Luna/max | `critical` or `checkpoint` → Astra/medium | explicit model + `reasoning_effort` |
+| `research` | Astra/low | `complexity: very-complex` → Astra/medium; `type: alternatives` alone stays at base | generated `shipyard-inv-research.toml`, `shipyard-inv-research-critical.toml` |
+| `decomposition` | Astra/low | `critical` or `checkpoint` → Astra/medium | explicit model + `reasoning_effort` |
+| `executor` | Luna/max | `critical` or `checkpoint` → Astra/low | explicit model + `reasoning_effort` |
 | `pr-sentinel` | Luna/medium | none; gate strategy only | generated `shipyard-pr-sentinel.toml` |
 | `drift-check` | Luna/max | none; gate strategy only | generated `shipyard-drift-check.toml` |
-| `integrator` | Sol/medium | measured window, `contested`, `critical`, or `checkpoint` → Astra/medium | generated `shipyard-integrator.toml` or `shipyard-integrator-critical.toml` |
-| `arch-review` | Sol/medium | measured window, `contested`, `critical`, or `checkpoint` → Astra/medium | generated `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml` |
-| `ci-fix` | Luna/max | verified `repeat` → Sol/medium → verified `repeat_exhausted` → Astra/medium | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
-| `review-fix` | Luna/max | verified `repeat` → Sol/medium → verified `repeat_exhausted` → Astra/medium | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
+| `integrator` | Astra/low | measured window, `contested`, `critical`, or `checkpoint` → Astra/medium | generated `shipyard-integrator.toml` or `shipyard-integrator-critical.toml` |
+| `arch-review` | Astra/low | measured window, `contested`, `critical`, or `checkpoint` → Astra/medium | generated `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml` |
+| `ci-fix` | Luna/max | verified `repeat` → Astra/low → verified `repeat_exhausted` → Astra/medium | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
+| `review-fix` | Luna/max | verified `repeat` → Astra/low → verified `repeat_exhausted` → Astra/medium | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
 
 The Codex `executor` is dynamic and has `agent_file: null`; pass its selected
 concrete `model` and `effort` explicitly to the host. Every other delivery
@@ -893,6 +893,10 @@ Rules:
   and returns a verified receipt. Otherwise hard-refuse before prompt, spawn,
   or record; routed repair returns `repair blocked`, with no session or
   in-process fallback.
+  Routed `ci-fix` and `review-fix` are excluded from the generic Agent fallback.
+  They are not eligible for that generic Agent fallback: without a compliant
+  typed boundary adapter, hard-refuse and return `repair blocked` before constructing a
+  prompt, using a session or in-process fallback, spawning, or recording.
 - **Worktrees are created by the main loop SERIALLY** (`ticket-worktree.sh create`)
   BEFORE the Workflow invocation and it passes the ready paths in
   `args.tickets[].worktreePath`. `git worktree add` writes to the shared `.git` —
@@ -925,9 +929,10 @@ is assembled by an LLM from its own context), keep it ONLY when the Workflow too
 genuinely absent from the session; when switching, tell the user explicitly
 (`⚠ Workflow tool unavailable → typed boundary adapter or refusal`). The
 `pipeline.use_workflow` flag in `.planning/config.json` defaults to auto
-(Workflow when available); `false` selects a typed boundary adapter only if it
-can explicitly apply model and effort and return a concrete receipt. Otherwise
-refuse the dispatch; routed repair returns `repair blocked`.
+(Workflow when available); `false` — force the Agent fallback only for non-repair
+roles, and return `repair blocked` for routed repair without a compliant typed
+boundary adapter. Every eligible adapter must explicitly apply model and effort
+and return a concrete application receipt; otherwise refuse the dispatch.
 
 **Agent fallback: prompt discipline (anti-injection).** On the Agent path you
 assemble the subagent's prompt — which is exactly where foreign content leaks in.
@@ -1395,7 +1400,7 @@ may be dispatched at all: fix the file.
    changed-file count plus any `reuseCandidates` in fenced context; do not
    summarize away a signal. The executor resolves to
    Codex Luna/max or, only for explicit `critical`/`checkpoint` evidence,
-   Astra/medium. Claude uses its independent Sonnet/max or evidence-based
+   Astra/low. Claude uses its independent Sonnet/max or evidence-based
    Opus/high native selection.
 
    ```text
@@ -1592,7 +1597,7 @@ phantom launch. Clear each record when the guard's report comes back; a
 the same boundary call or the existing typed guard context, never an inherited
 guard/session.
 
-Before constructing a prompt, spawning, or recording, the mandatory boundary must support explicit model and effort application and return a concrete application receipt. Otherwise hard-refuse; absent, `unsupported`, or `unknown` evidence and Agent, prompt, session, or in-process fallback cannot authorize a routed launch.
+The mandatory boundary must support explicit model and effort application and return a concrete application receipt. Otherwise hard-refuse before constructing a prompt, spawning, or recording. Do not substitute `effort_applied=unsupported`, `unknown`, or absent evidence; Agent, prompt, session, or in-process fallback cannot authorize a routed launch.
 When no compliant background surface exists, use the documented inline sentinel
 duty pass. Each ticket added to a running guard gets a mark with that guard's
 same launch id; a newly launched guard has its own id.
@@ -1692,8 +1697,9 @@ loop:
          undocumented third launch. The host must carry the resolved selection;
          an inline, inherited, or effort-omitting Agent fallback is refused.
 
-         Hard-refuse before prompt, spawn, or record without a concrete applied
-         model-and-effort receipt. Absent, `unsupported`, or `unknown` evidence
+         Require a typed boundary adapter that explicitly applies the resolved
+         model and effort and returns a concrete application receipt. Otherwise hard-refuse
+         before constructing a prompt, spawning, or recording. Absent, `unsupported`, or `unknown` evidence
          cannot authorize ci-fix. On rethink, re-read the plan and use a different
          hypothesis; provide references/ci-fix.md and the full ticket contract.
        'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
@@ -1712,7 +1718,7 @@ loop:
      verdicts + engagement — `unresolved` alone is only half of what CodeRabbit
      and Copilot actually said, and the half they file as issue comments is the
      half that silently went unaddressed)
-     there is feedback → dispatch `review-fix` in the worktree through the same
+     there is feedback → review-fix agent dispatched in the worktree through the same
        boundary. Pass `code-change`/`no-code-change`, every thread and bot
        comment, the prior-attempt record, signed `signatureState`, and the
        immediately preceding verified receipt when this is a repeat:
@@ -1733,8 +1739,11 @@ loop:
        for the verified repair chain; Claude uses Opus/medium → Opus/max with
        explicit native effort. The boundary receipt is required before the
        fixer may push or the attempt may be recorded. An inline, inherited,
-       literal-model, or omitted-effort fallback is refused. The fixer either
-       fixes (push → step d), or replies to invalid feedback (no push → mark the
+       literal-model, or omitted-effort fallback is refused. Require a typed
+       boundary adapter that explicitly applies the resolved model and effort
+       and returns a concrete application receipt. Otherwise hard-refuse
+       before constructing a prompt, spawning, or recording. Then
+       the agent either fixes (push → step d), or replies to invalid feedback (no push → mark the
        threads processed, b again).
 
   c. arch-review agent — judgment, never cheapened. Read the canonical
@@ -1757,7 +1766,7 @@ loop:
      )
      ```
 
-     Codex resolves Sol/medium or, only for measured/contested/critical/
+     Codex resolves Astra/low or, only for measured/contested/critical/
      checkpoint evidence, Astra/medium and validates the generated
      `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
      Claude independently resolves Opus/medium, Opus/max for critical evidence,
@@ -2132,7 +2141,7 @@ driving PRs hands the user a half-truth.
      )
      ```
 
-     Codex resolves Sol/medium and escalates to Astra/medium only for the
+     Codex resolves Astra/low and escalates to Astra/medium only for the
      measured-window, contested, critical, or checkpoint evidence, validating
      `shipyard-integrator.toml` or `shipyard-integrator-critical.toml`.
      Claude independently resolves Opus/medium or Opus/high with explicit
