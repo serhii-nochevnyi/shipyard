@@ -1213,8 +1213,8 @@
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T21:26:23Z",
     "head_sha": "70ac26b6ff7a4e3ef8dc6c00efe077c4462789f0",
-    "merge_state": "CLEAN",
-    "behind_by": 3,
+    "merge_state": "UNKNOWN",
+    "behind_by": 4,
     "checks": {
       "total": 1,
       "failing": 0,
