@@ -1228,3 +1228,5 @@
 {"ts":"2026-09-15T12:59:16.810Z","event":"base_merge","ticket":"T-36-05","pr":140,"base":"ticket/T-36-04-generate-and-validate-the-complete-codex","head":"195cc46ccb0b90eee5b2faf141ba9138fe05c943"}
 {"ts":"2026-09-15T13:07:49.291Z","event":"base_merge","ticket":"T-36-09","pr":144,"base":"ticket/T-36-08-application-receipts-and-dispatch-record","head":"2afe11ed7208e14764add9538d769f0a5f4477b7"}
 {"ts":"2026-09-15T13:08:01.515Z","event":"status_change","ticket":"T-36-09","from":"pending","to":"pr-open","pr":144}
+{"ts":"2026-09-15T14:07:02.565Z","event":"dispatch","ticket":"T-36-10","role":"executor","pr":null,"effort_applied":"max","observed_model":"gpt-5.6-luna","observed_effort":"max","agent_id":"01a0a560-82d2-7c53-8c14-34069b0c8a3d","dispatch_id":"t36-10-executor-20260915-01","by":"dispatch-record"}
+{"ts":"2026-09-15T14:07:06.774Z","event":"status_change","ticket":"T-36-04","from":"pr-open","to":"merged","pr":139}

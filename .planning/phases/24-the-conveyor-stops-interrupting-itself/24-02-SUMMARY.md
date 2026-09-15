@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5d538988aa2d3daa160fb31a50d5f4ced0799347cfa7707e4c8bc3033dc2614d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a09c81a347b2dea309d1780ad0d06fd62d5891680f45160b5290c131c660ed48
 phase: 24-the-conveyor-stops-interrupting-itself
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 5d538988aa2d3daa160fb31a50d5f4ced0799347cfa7707e4c8bc3033dc2614d
+shipyard_source_fingerprint: a09c81a347b2dea309d1780ad0d06fd62d5891680f45160b5290c131c660ed48
 ---
 
 # Phase 24: Check state has one vocabulary — Delivery Projection

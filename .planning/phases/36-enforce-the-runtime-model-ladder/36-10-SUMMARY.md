@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5d538988aa2d3daa160fb31a50d5f4ced0799347cfa7707e4c8bc3033dc2614d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a09c81a347b2dea309d1780ad0d06fd62d5891680f45160b5290c131c660ed48
 phase: 36-enforce-the-runtime-model-ladder
 plan: 10
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 5d538988aa2d3daa160fb31a50d5f4ced0799347cfa7707e4c8bc3033dc2614d
+shipyard_source_fingerprint: a09c81a347b2dea309d1780ad0d06fd62d5891680f45160b5290c131c660ed48
 ---
 
 # Phase 36: Exhaustive signal matrix and negative bypass suite — Delivery Projection

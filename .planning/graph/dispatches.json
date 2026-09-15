@@ -37,6 +37,18 @@
       "fingerprint": "e1f6c4274ee2f6d7",
       "fingerprint_kind": "role",
       "pr": null
+    },
+    "T-36-10": {
+      "role": "executor",
+      "at": "2026-09-15T14:07:02.565Z",
+      "effort_applied": "max",
+      "observed_model": "gpt-5.6-luna",
+      "observed_effort": "max",
+      "agent_id": "01a0a560-82d2-7c53-8c14-34069b0c8a3d",
+      "dispatch_id": "t36-10-executor-20260915-01",
+      "fingerprint": "d5c895f86628242c",
+      "fingerprint_kind": "role",
+      "pr": null
     }
   }
 }

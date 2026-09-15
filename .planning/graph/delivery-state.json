@@ -1193,30 +1193,15 @@
   "T-36-04": {
     "branch": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
     "pr": 139,
-    "status": "pr-open",
+    "status": "merged",
     "matched_by": "marker",
     "pr_branch": "ticket/T-36-04-generate-and-validate-the-complete-codex",
-    "draft": true,
-    "review_decision": null,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/139",
-    "pr_base": "epic/36-enforce-the-runtime-model-ladder",
-    "pr_created_at": "2026-09-14T20:35:18Z",
-    "head_sha": "65f82a3681877303d64ebe7f8877f395e4e54269",
-    "merge_state": "UNKNOWN",
-    "behind_by": 3,
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false,
-      "unavailable": false
-    },
     "base": "epic/36-enforce-the-runtime-model-ladder",
     "base_reason": "T-36-03 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-14T20:35:26.658Z"
+    "reapable": true,
+    "since": "2026-09-15T14:07:06.774Z"
   },
   "T-36-05": {
     "branch": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
@@ -1225,11 +1210,11 @@
     "draft": true,
     "review_decision": null,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/140",
-    "pr_base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
+    "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T21:26:23Z",
     "head_sha": "195cc46ccb0b90eee5b2faf141ba9138fe05c943",
     "merge_state": "CLEAN",
-    "behind_by": 6,
+    "behind_by": 11,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1237,10 +1222,10 @@
       "none_reported": false,
       "unavailable": false
     },
-    "base": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
-    "base_reason": "T-36-04 is pr-open — cascade off ticket/T-36-04-generate-and-validate-the-codex-bundle-w; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-04 lands",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-04 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "merge_scope": "integration",
+    "merge_scope": "stacked",
     "reapable": false,
     "since": "2026-09-14T21:26:55.563Z"
   },
