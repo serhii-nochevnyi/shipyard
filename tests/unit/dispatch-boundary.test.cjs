@@ -119,6 +119,7 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'record', 'receipt']);
   assert.equal(result.trace.at(-1).status, 'passed');
   assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].ticket, 'T-36-01');
   assert.equal(recorded[0].receipt.compliance, 'verified');
   assert.equal(recorded[0].launch_id, result.receipt.launch_id);
   assert.deepStrictEqual(recorded[0].launch_arguments, calls[0].resolution.launch_arguments);
