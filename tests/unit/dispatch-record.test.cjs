@@ -156,6 +156,71 @@ test('boundary receipts reconcile into the existing store and journal without re
   }
 });
 
+test('boundary-store reconciliation refuses a stale or missing receipt without creating a legacy record', () => {
+  const { dir, project, graph } = scratch({ 'T-01-01': READY });
+  try {
+    const boundary = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
+    const boundaryStore = path.join(dir, 'receipts');
+    const recorder = boundary.createDurableRecorder(boundaryStore);
+    const result = boundary.createDispatchBoundary({
+      recorder,
+      adapters: {
+        codex: {
+          launch: (resolution) => ({
+            receipt_type: 'adr-014.application',
+            runtime: resolution.runtime,
+            role: resolution.role,
+            dispatch_id: resolution.dispatch_id,
+            launch_id: 'stale-policy-launch',
+            requested_model: resolution.requested_model,
+            requested_effort: resolution.requested_effort,
+            applied_model: resolution.model,
+            applied_effort: resolution.effort,
+            observed_model: resolution.model,
+            observed_effort: resolution.effort,
+            policy_hash: resolution.policy_hash,
+          }),
+        },
+      },
+    }).dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-record-stale-policy' });
+    const recordPath = path.join(
+      boundaryStore,
+      `record-${require('crypto').createHash('sha256').update(result.dispatch_id).digest('hex')}.json`,
+    );
+    const original = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+    const stale = JSON.parse(JSON.stringify(original));
+    stale.payload.receipt.policy_hash = 'stale-policy-hash';
+    fs.writeFileSync(recordPath, JSON.stringify(stale));
+    const staleMark = run([
+      'mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
+      '--dispatch-id', result.dispatch_id,
+    ], project);
+    assert.notEqual(staleMark.status, 0);
+    assert.match(staleMark.stderr, /boundary receipt reconciliation failed/);
+    assert.equal(store(graph)['T-01-01'], undefined, 'stale boundary evidence cannot hide a ticket');
+
+    fs.writeFileSync(recordPath, JSON.stringify(original));
+    fs.unlinkSync(recordPath);
+    const missingMark = run([
+      'mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
+      '--dispatch-id', result.dispatch_id,
+    ], project);
+    assert.notEqual(missingMark.status, 0);
+    assert.match(missingMark.stderr, /boundary receipt reconciliation failed/);
+    assert.equal(store(graph)['T-01-01'], undefined, 'missing boundary evidence cannot hide a ticket');
+
+    const absentStore = run([
+      'mark', 'T-01-01', 'executor', '--boundary-store', path.join(dir, 'does-not-exist'),
+      '--dispatch-id', 'missing-boundary-store',
+    ], project);
+    assert.notEqual(absentStore.status, 0);
+    assert.match(absentStore.stderr, /boundary receipt reconciliation failed/);
+    assert.equal(store(graph)['T-01-01'], undefined, 'a missing boundary store cannot create a legacy record');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('reconciled records hold the receipt lease and normalize static Codex agent files', () => {
   const { dir, project, graph, codexAgentDir } = scratch({ 'T-01-01': READY, 'T-01-02': READY });
   try {
@@ -209,6 +274,24 @@ test('reconciled records hold the receipt lease and normalize static Codex agent
     assert.equal(event.agent_file, publicAgentFile);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('dispatch-record refuses ambiguous runtime and models outside the native runtime grids', () => {
+  const { project, graph } = scratch({ 'T-01-01': READY });
+  try {
+    for (const [index, args] of [
+      ['--runtime', 'both', '--model', 'opus', '--effort', 'high'],
+      ['--runtime', 'codex', '--model', 'fable', '--effort', 'medium'],
+      ['--runtime', 'claude', '--model', 'gpt-6-astra', '--effort', 'medium'],
+    ].entries()) {
+      const result = run(['mark', 'T-01-01', 'executor', ...args], project);
+      assert.notEqual(result.status, 0, `runtime grid refusal ${index}`);
+      assert.ok(/runtime|available|supported|tier|alias|model/.test(result.stderr), result.stderr);
+      assert.deepStrictEqual(store(graph), {}, `runtime grid refusal ${index} creates no record`);
+    }
+  } finally {
+    fs.rmSync(path.dirname(project), { recursive: true, force: true });
   }
 });
 // `head_sha` is what a fixer's push moves. state-sync starts recording it in
