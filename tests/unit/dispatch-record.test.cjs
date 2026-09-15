@@ -74,6 +74,62 @@ const store = (graph) => {
 };
 
 const READY = { status: 'pending', ready: true };
+
+test('boundary receipts reconcile into the existing store and journal without rewriting legacy rows', () => {
+  const { dir, project, graph } = scratch({ 'T-01-01': READY, 'T-01-02': READY });
+  try {
+    assert.equal(run(['mark', 'T-01-02', 'executor'], project).status, 0);
+    const legacy = store(graph)['T-01-02'];
+    const boundaryStore = path.join(dir, 'receipts');
+    const boundary = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
+    const result = boundary.createDispatchBoundary({
+      recorder: boundary.createDurableRecorder(boundaryStore),
+      adapters: { codex: { launch: (r) => ({
+        receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role,
+        dispatch_id: r.dispatch_id, launch_id: 'runtime-launch-1', policy_hash: r.policy_hash,
+        requested_model: r.requested_model, requested_effort: r.requested_effort,
+        applied_model: r.model, applied_effort: r.effort,
+        observed_model: r.model, observed_effort: r.effort,
+      }) } },
+    }).dispatch({ runtime: 'codex', role: 'executor' });
+    const args = ['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
+      '--dispatch-id', result.dispatch_id];
+    const missingId = run(['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore], project);
+    assert.notEqual(missingId.status, 0);
+    const batch = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
+      cwd: project, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '' },
+      input: JSON.stringify([
+        { ticket: 'T-01-01', role: 'executor', boundary_store: boundaryStore, dispatch_id: result.dispatch_id },
+        { ticket: 'T-01-02', role: 'executor', boundary_store: boundaryStore, dispatch_id: 'absent' },
+      ]),
+    });
+    assert.notEqual(batch.status, 0);
+    assert.equal(store(graph)['T-01-01'], undefined);
+    assert.deepStrictEqual(store(graph)['T-01-02'], legacy);
+    for (const extra of [['--effort-applied', 'low'], ['--runtime', 'claude'], ['--agent-id', 'wrong']]) {
+      const refused = run([...args, ...extra], project);
+      assert.notEqual(refused.status, 0);
+      assert.match(refused.stderr, /reconciliation failed/);
+      assert.equal(store(graph)['T-01-01'], undefined);
+    }
+    const marked = run(args, project);
+    assert.equal(marked.status, 0, marked.stderr);
+    const rec = store(graph)['T-01-01'];
+    assert.equal(rec.applied_model, result.receipt.applied_model);
+    assert.equal(rec.applied_effort, result.receipt.applied_effort);
+    assert.deepStrictEqual(rec.application_receipt, result.receipt);
+    assert.deepStrictEqual(rec.launch_arguments, result.resolution.launch_arguments);
+    assert.deepStrictEqual(store(graph)['T-01-02'], legacy);
+    const events = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepStrictEqual(events.at(-1).application_receipt, result.receipt);
+    const absent = run(['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
+      '--dispatch-id', 'absent'], project);
+    assert.notEqual(absent.status, 0);
+    assert.deepStrictEqual(store(graph)['T-01-01'], rec);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 // `head_sha` is what a fixer's push moves. state-sync starts recording it in
 // T-24-04, so every case here must hold with it and without it.
 const OPEN_PR = {

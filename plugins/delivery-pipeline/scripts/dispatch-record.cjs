@@ -178,6 +178,7 @@ const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
 const MARK_FLAGS = [
   'model', 'effort', 'effort-applied', 'route', 'task-level', 'runtime', 'backend',
   'observed-model', 'observed-effort', 'agent-file', 'agent-id', 'dispatch-id',
+  'boundary-store',
 ];
 
 // ── `reason` is the RESOLVER's route, never the caller's sentence ────────────
@@ -218,6 +219,7 @@ const MARK_FIELD = {
   'agent-file': 'agent_file',
   'agent-id': 'agent_id',
   'dispatch-id': 'dispatch_id',
+  'boundary-store': 'boundary_store',
 };
 
 // ── WHO holds it, not just WHAT it is (ADR-007 D1) ───────────────────────────
@@ -393,6 +395,40 @@ function parseMarkFlags(argv, role) {
     i += 2;
   }
 
+  // ADR-014 writes reconcile a dispatch id against boundary-owned storage.
+  // The legacy flags below remain unverified telemetry; they cannot populate
+  // applied_* or mint an application_receipt by themselves.
+  if (given.has('boundary-store')) {
+    try {
+      const { createDurableRecorder, createDispatchBoundary } = require('./dispatch-boundary.cjs');
+      const storeDir = given.get('boundary-store');
+      if (!storeDir.trim() || !fs.statSync(storeDir).isDirectory()) throw new Error('boundary store must exist');
+      const facts = createDispatchBoundary({ recorder: createDurableRecorder(storeDir) })
+        .reconcile(given.get('dispatch-id'));
+      if (facts.role !== role) throw new Error('boundary receipt role contradicts the dispatch role');
+      for (const field of ['dispatch_id', 'launch_id']) {
+        const issue = opaqueDispatchValueIssue(facts[field]);
+        if (issue) throw new Error(`boundary receipt ${field} cannot be recorded: ${issue}`);
+      }
+      const aliases = {
+        model: facts.requested_model, effort: facts.requested_effort,
+        'effort-applied': facts.applied_effort, route: facts.route,
+        runtime: facts.runtime, backend: facts.backend,
+        'observed-model': facts.observed_model, 'observed-effort': facts.observed_effort,
+        'agent-file': facts.agent_file, 'agent-id': facts.launch_id,
+      };
+      for (const [flag, value] of given) {
+        if (['boundary-store', 'dispatch-id'].includes(flag)) continue;
+        if (!Object.prototype.hasOwnProperty.call(aliases, flag) || aliases[flag] !== value) {
+          throw new Error(`--${flag} contradicts or is absent from the boundary receipt`);
+        }
+      }
+      return { ...facts, model: facts.requested_model, effort: facts.requested_effort,
+        effort_applied: facts.applied_effort, reason: facts.route, agent_id: facts.launch_id };
+    } catch (error) {
+      fail(`boundary receipt reconciliation failed: ${error.message}`);
+    }
+  }
   const decided = {};
   const model = given.get('model');
   if (model !== undefined) {
@@ -633,6 +669,7 @@ const BATCH_FIELDS = new Map([
   ['agent_file', 'agent-file'],
   ['agent_id', 'agent-id'],
   ['dispatch_id', 'dispatch-id'],
+  ['boundary_store', 'boundary-store'],
 ]);
 
 function parseBatchEntries(raw) {

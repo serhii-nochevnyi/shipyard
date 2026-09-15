@@ -1205,6 +1205,12 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
   if (receipt.mechanism !== undefined && receipt.mechanism !== resolution.mechanism) {
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt mechanism does not match the resolved mechanism', { expected: resolution.mechanism, actual: receipt.mechanism });
   }
+  for (const field of ['launch_arguments', 'logical_rung', 'rung', 'signals']) {
+    if (Object.prototype.hasOwnProperty.call(receipt, field)
+        && canonicalStableStringify(receipt[field]) !== canonicalStableStringify(resolution[field] === undefined ? null : resolution[field])) {
+      refuse('NONCOMPLIANT_RECEIPT', `application receipt ${field} contradicts the resolution`, { field });
+    }
+  }
   if (options.requireComplianceProof !== false) {
     if (receipt.compliance !== 'verified' || !isObject(receipt.compliance_proof)) {
       refuse('NONCOMPLIANT_RECEIPT', 'application receipt must carry boundary compliance proof');
@@ -1713,6 +1719,38 @@ function createDispatchBoundary(options = {}) {
     return deepFreeze(snapshot(withoutBoundaryClaims(evidence)));
   }
 
+  // Reconciliation consumes authenticated storage, never caller-supplied proof.
+  function reconcile(dispatchId) {
+    nonEmpty(dispatchId, 'dispatch_id');
+    const trusted = trustedRecordFor(options.recorder, dispatchId);
+    if (!trusted) refuse('UNVERIFIED_RECEIPT', 'dispatch has no current compliant applied receipt', { dispatch_id: dispatchId });
+    const { resolution, receipt: applied } = trusted;
+    return deepFreeze(snapshot({
+      dispatch_id: dispatchId,
+      policy_version: resolution.policy_version,
+      policy_hash: resolution.policy_hash,
+      role: resolution.role,
+      logical_rung: resolution.logical_rung,
+      rung: resolution.rung,
+      signals: resolution.signals,
+      signals_fired: resolution.signals_fired,
+      route: resolution.route,
+      runtime: resolution.runtime,
+      backend: resolution.backend,
+      mechanism: resolution.mechanism,
+      launch_id: applied.launch_id,
+      agent_file: resolution.agent_file,
+      launch_arguments: resolution.launch_arguments || null,
+      requested_model: resolution.requested_model,
+      requested_effort: resolution.requested_effort,
+      applied_model: applied.applied_model,
+      applied_effort: applied.applied_effort,
+      observed_model: applied.observed_model,
+      observed_effort: applied.observed_effort,
+      application_receipt: applied,
+    }));
+  }
+
   function dispatch(input, context = {}) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
     const runtime = typeof input.runtime === 'string' ? input.runtime.trim() : input.runtime;
@@ -1779,6 +1817,11 @@ function createDispatchBoundary(options = {}) {
         route: validatedResolution.route,
         backend: validatedResolution.backend,
         mechanism: validatedResolution.mechanism,
+        signals: validatedResolution.signals,
+        signals_fired: validatedResolution.signals_fired,
+        launch_id: applicationReceipt.launch_id,
+        agent_file: validatedResolution.agent_file,
+        launch_arguments: validatedResolution.launch_arguments || null,
         resolution: validatedResolution,
         requested: { model: validatedResolution.requested_model, effort: validatedResolution.requested_effort },
         applied: { model: applicationReceipt.applied_model, effort: applicationReceipt.applied_effort },
@@ -1849,7 +1892,7 @@ function createDispatchBoundary(options = {}) {
     }
   }
 
-  return Object.freeze({ resolve, validate, receipt, dispatch });
+  return Object.freeze({ resolve, validate, receipt, reconcile, dispatch });
 }
 
 function resolveDispatch(input) {
