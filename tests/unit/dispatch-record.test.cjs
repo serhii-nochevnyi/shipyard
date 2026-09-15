@@ -1378,6 +1378,26 @@ test('the PR-sentinel refuses an Agent fallback without explicit applied effort'
     'unsupported effort must be prohibited for a routed sentinel launch');
 });
 
+test('the generic Agent fallback excludes routed fixers before any side effect', () => {
+  const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
+  const genericFallback = deliver.slice(
+    deliver.indexOf('before starting (e.g. unavailable)'),
+    deliver.indexOf('## Step 0 — Cold start')
+  );
+
+  assert.ok(genericFallback.length > 0, 'cannot isolate the generic Agent fallback block');
+  assert.match(genericFallback, /Routed `ci-fix` and\s+`review-fix` are excluded/,
+    'routed fixers must be excluded when Workflow cannot start');
+  assert.match(genericFallback, /not eligible for that generic Agent fallback/,
+    'path selection must not restore routed fixers through generic Agent');
+  assert.match(genericFallback, /hard-refuse and return `repair blocked` before constructing a\s+prompt, using a\s+session or in-process fallback, spawning, or recording/,
+    'the generic block must refuse repair before prompt, fallback, spawn, or record');
+  assert.match(genericFallback, /`false` — force the Agent fallback only for non-repair\s+roles, and return `repair blocked`/,
+    'forcing the non-Workflow path must still block routed repair');
+  assert.doesNotMatch(genericFallback, /EVERY Agent spawn \(executor, drift-check, ci-fix\/review-fix/,
+    'the generic Agent spawn list must not include routed fixers');
+});
+
 test('complete sentinel and fixer guidance require a concrete receipt, not a fallback', () => {
   const sentinel = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 'utf8');
   const sentinelLaunch = sentinel.slice(sentinel.indexOf('Hand a ticket back to the board'), sentinel.indexOf('One PR blocked'));
