@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 14dc25c7a62475d8d31e9791906d9ba72debbd7baacea2893590ae5c14303a59
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a8f92510271d38ad2bcf2b4e83ff245a0daa67169b56cc80811e3e0d946d719b
 phase: 30-a-ticket-you-cannot-reach-is-not-deliverable
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-12
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 14dc25c7a62475d8d31e9791906d9ba72debbd7baacea2893590ae5c14303a59
+shipyard_source_fingerprint: a8f92510271d38ad2bcf2b4e83ff245a0daa67169b56cc80811e3e0d946d719b
 ---
 
 # Phase 30: Validate repository destinations with the existing nesting rule — Delivery Projection
