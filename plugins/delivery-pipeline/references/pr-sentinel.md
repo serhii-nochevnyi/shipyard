@@ -58,7 +58,7 @@ boundary.dispatch(
 ```
 
 The boundary is the only resolver and launcher. It validates the policy
-fingerprint, concrete selection, generated Codex file or Claude native
+fingerprint, concrete selection, generated Codex file or Workflow-runtime native
 arguments, and application receipt before it records success. A missing runtime,
 adapter, recorder, model, effort, typed capability, or receipt is a refusal.
 Literal model strings, omitted effort, inline callbacks, inherited guards or
@@ -66,6 +66,14 @@ sessions, copied/stale/phantom records, and undocumented escalation are all
 refused. Do not call a compatibility model command, `Agent`, `Workflow`, or a
 Codex command as a second launch path; those are adapter internals reached only
 by the boundary.
+
+This is the host-orchestrator protocol, not a self-contained static Codex launch
+recipe. A generated Codex agent file has no host-injected adapter, generated-agent
+capabilities, durable recorder, or application-evidence callback with which to
+instantiate this boundary or launch a follow-on duty. It must not attempt a direct
+model call or pretend to provide the boundary; it can only return its evidence to
+the host orchestrator. The host adapter must perform the boundary dispatch, and a
+missing host bridge is a refusal/parked outcome.
 
 Pass the complete evidence, not a summary: `risk`, `type`, `complexity`,
 `critical`, `checkpoint`, `contested`, measured `inputTokens`, signed
@@ -81,23 +89,23 @@ first requires the config-aware routed resolver to confirm `pipeline.fable: auto
 the default `off` refuses an unconsented Fable selection before the config-blind
 boundary is called.
 
-| Duty | Codex | Claude |
+| Duty | Codex | Workflow runtime |
 | --- | --- | --- |
 | sentinel | Luna/medium, fixed | Sonnet/high, fixed |
 | ci-fix / review-fix | Luna/max → Astra/low on verified `repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
 | arch-review | Astra/low → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/max for critical/contested/checkpoint evidence → Fable/medium for a measured window |
 | integrator | Astra/low → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/high for the same evidence |
 
-Codex static duties use the generated files named by the selector:
+When a host boundary dispatches a Codex static duty, it uses the generated files named by the selector:
 `shipyard-pr-sentinel.toml`, `shipyard-ci-fix.toml`,
 `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml`,
 `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`,
 `shipyard-review-fix-deep.toml`, `shipyard-arch-review.toml`,
 `shipyard-arch-review-critical.toml`, `shipyard-integrator.toml`, and
 `shipyard-integrator-critical.toml`. No sentinel recovery variant or additional
-architecture-review `repeat_exhausted` variant is generated. Codex dynamic roles,
-when handed back by the main loop, receive explicit model and effort arguments
-from the same receipt. The Workflow adapter receives its independent native
+architecture-review `repeat_exhausted` variant is generated. Codex dynamic roles
+`decomposition` and `executor`, when handed back by the main loop, receive
+explicit model and effort arguments from the same receipt. The Workflow adapter receives its independent native
 alias and explicit effort; a native Agent surface without an effort parameter
 must refuse. Never invent a file, translate a logical Codex name into a Workflow
 native alias, or inherit the caller's session.
@@ -162,7 +170,10 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   and effort and returns a concrete application receipt. Otherwise hard-refuse
   before constructing a prompt, spawning, or recording; no Agent, prompt,
   session, or in-process fallback may perform or record this ci-fix.
-  Supply the failure log, signature, strategy, full ticket evidence, and the
+  `failure-signature.cjs verdict` returns verdict/history facts, not a strategy.
+  Derive the caller-owned fixer strategy before this call: `first` → `fix`,
+  `progress` → `continue`, and `repeat`/`repeat_exhausted` → `rethink`. Supply
+  the failure log, signature, that derived strategy, full ticket evidence, and the
   signed `signatureState` to:
 
   ```text
@@ -179,7 +190,7 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   receipt-verified rung. On `repeat_exhausted`, only the receipt-verified ceiling
   rung is allowed; one more failure is a human escalation, not another launch.
   Codex resolves and validates `shipyard-ci-fix.toml` →
-  `shipyard-ci-fix-repeat.toml` → `shipyard-ci-fix-deep.toml`; Claude resolves
+  `shipyard-ci-fix-repeat.toml` → `shipyard-ci-fix-deep.toml`; the Workflow runtime resolves
   Opus/medium → Opus/max with explicit native effort. The boundary refuses a
   missing predecessor receipt, undocumented escalation, literal model, omitted
   effort, inline callback, or inherited session.
@@ -255,7 +266,7 @@ boundary.dispatch(
 ```
 
 Codex uses `shipyard-review-fix.toml` → `shipyard-review-fix-repeat.toml` →
-`shipyard-review-fix-deep.toml`; Claude uses Opus/medium → Opus/max with
+`shipyard-review-fix-deep.toml`; the Workflow runtime uses Opus/medium → Opus/max with
 explicit native effort. No fixer may launch or record an attempt until the
 boundary returns a verified receipt.
 
@@ -522,7 +533,7 @@ reinit is not optional.
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
   delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
-  `dispatch-record.cjs mark <T> <role> --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <backend> --graph <project>/.planning/graph`
+  `dispatch-record.cjs mark <T> <role> --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <backend> --agent-id <launch-id> --graph <project>/.planning/graph`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as

@@ -333,7 +333,8 @@ const routeValid = (event) => {
     return Boolean(parsed)
       && (!present(event, 'role') || parsed.role === event.role)
       && (!present(event, 'rung') || parsed.rung === event.rung)
-      && (!present(event, 'logical_rung') || parsed.rung === event.logical_rung);
+      && (!present(event, 'logical_rung') || parsed.rung === event.logical_rung)
+      && (!present(event, 'logical_model') || parsed.model_key === event.logical_model);
   }
   if (!present(event, 'reason')) return false;
   const route = parseRoute(event.reason);

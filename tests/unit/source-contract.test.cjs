@@ -811,6 +811,10 @@ test('delivery launch docs route every role through the boundary and the generat
   ]) {
     assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
   }
+  for (const [name, doc] of [['deliver', deliver], ['pr-sentinel', sentinel]]) {
+    assert.ok(doc.includes('Workflow runtime'), `${name} must name the Workflow runtime by mechanism`);
+    assert.ok(!/\bClaude\b/.test(doc), `${name} must not use converter-rewritten Claude prose`);
+  }
 
   for (const variant of codexStaticVariants(2)) {
     assert.ok(source.includes(variant.file), `delivery docs must name generated Codex variant ${variant.file}`);
@@ -836,6 +840,10 @@ test('delivery docs project selector, recorder, and workflow contracts without i
     'compatibility recorder route',
     'recorder projection',
     'name without its `.toml` suffix',
+    'Codex dynamic roles are `decomposition` and `executor`',
+    '--effort-applied <receipt-applied-effort>',
+    '`failure-signature.cjs verdict` supplies only verdict/history facts',
+    '`repeat`/`repeat_exhausted` → `rethink`',
     'tickets: [{ id, planPath, baseRef, model, effort, signals }]',
     'priorReceipt, previous_dispatch_id, dispatch_id',
     'pipeline.fable: auto',
@@ -1246,24 +1254,76 @@ const executableTokens = (source) => {
   const advance = () => {
     if (source[index++] === '\n') line++;
   };
+  const skipLineComment = () => {
+    while (index < source.length && source[index] !== '\n') advance();
+  };
+  const skipBlockComment = () => {
+    advance(); advance();
+    while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) advance();
+    if (index < source.length) { advance(); advance(); }
+  };
+  const skipQuoted = (quote) => {
+    advance();
+    while (index < source.length && source[index] !== quote) {
+      if (source[index] === '\\') advance();
+      advance();
+    }
+    if (index < source.length) advance();
+  };
+  const skipTemplateLiteral = () => {
+    advance();
+    while (index < source.length) {
+      if (source[index] === '\\') { advance(); advance(); }
+      else if (source[index] === '`') { advance(); return; }
+      else if (source[index] === '$' && source[index + 1] === '{') {
+        advance(); advance();
+        skipTemplateExpression();
+      } else advance();
+    }
+  };
+  const skipTemplateExpression = () => {
+    let depth = 1;
+    while (index < source.length && depth > 0) {
+      const ch = source[index];
+      if (ch === '/' && source[index + 1] === '/') skipLineComment();
+      else if (ch === '/' && source[index + 1] === '*') skipBlockComment();
+      else if (ch === '\'' || ch === '"') skipQuoted(ch);
+      else if (ch === '`') skipTemplateLiteral();
+      else if (ch === '{') { depth++; advance(); }
+      else if (ch === '}') { depth--; advance(); }
+      else advance();
+    }
+  };
+  const tokenizeTemplate = () => {
+    advance();
+    while (index < source.length) {
+      if (source[index] === '\\') { advance(); advance(); }
+      else if (source[index] === '`') { advance(); return; }
+      else if (source[index] === '$' && source[index + 1] === '{') {
+        advance(); advance();
+        const expressionStart = index;
+        const expressionLine = line;
+        skipTemplateExpression();
+        const expression = source.slice(expressionStart, index - 1);
+        tokens.push(...executableTokens(expression).map((token) => ({
+          ...token,
+          line: token.line + expressionLine - 1,
+        })));
+      } else advance();
+    }
+  };
   while (index < source.length) {
     const ch = source[index];
     if (/\s/.test(ch)) {
       advance();
     } else if (ch === '/' && source[index + 1] === '/') {
-      while (index < source.length && source[index] !== '\n') advance();
+      skipLineComment();
     } else if (ch === '/' && source[index + 1] === '*') {
-      advance(); advance();
-      while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) advance();
-      if (index < source.length) { advance(); advance(); }
-    } else if (ch === '\'' || ch === '"' || ch === '`') {
-      const quote = ch;
-      advance();
-      while (index < source.length && source[index] !== quote) {
-        if (source[index] === '\\') advance();
-        advance();
-      }
-      if (index < source.length) advance();
+      skipBlockComment();
+    } else if (ch === '\'' || ch === '"') {
+      skipQuoted(ch);
+    } else if (ch === '`') {
+      tokenizeTemplate();
     } else if (/[A-Za-z_$]/.test(ch)) {
       const start = index;
       const tokenLine = line;
@@ -1279,14 +1339,75 @@ const executableTokens = (source) => {
 };
 const callOpensAt = (tokens, index) => tokens[index]?.value === '('
   || (tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' && tokens[index + 2]?.value === '(');
+const NATIVE_MEMBER_METHODS = new Set(['call', 'apply', 'bind']);
+const memberInvocationOpensAt = (tokens, index) => callOpensAt(tokens, index)
+  || (tokens[index]?.value === ')' && callOpensAt(tokens, index + 1));
+const memberCallOpensAt = (tokens, index) => {
+  const memberStart = tokens[index]?.value === '.' ? index + 1
+    : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' ? index + 2 : null;
+  if (memberStart !== null
+      && NATIVE_MEMBER_METHODS.has(tokens[memberStart]?.value)
+      && memberInvocationOpensAt(tokens, memberStart + 1)) return true;
+  const computedStart = tokens[index]?.value === '[' ? index
+    : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.'
+      && tokens[index + 2]?.value === '[' ? index + 2 : null;
+  // Quoted computed property names are skipped by the lexer, so a native
+  // callback's `['call'](...)`, `['apply'](...)`, or `['bind'](...)` has the
+  // compact `[ ] (` shape.
+  // Treating any computed member call as a violation is deliberately
+  // conservative: a routed native callback must not be invoked indirectly.
+  return computedStart !== null
+    && tokens[computedStart + 1]?.value === ']'
+    && memberInvocationOpensAt(tokens, computedStart + 2);
+};
+const launcherReferenceAt = (tokens, index, launchers) => {
+  if (launchers.has(tokens[index]?.value)) return index;
+  if (tokens[index]?.value === '('
+      && launchers.has(tokens[index + 1]?.value)
+      && tokens[index + 2]?.value === ')') return index + 1;
+  return null;
+};
+const boundMemberCallOpensAt = (tokens, index) => {
+  const memberStart = tokens[index]?.value === '.' ? index + 1
+    : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' ? index + 2 : null;
+  if (memberStart !== null) {
+    return tokens[memberStart]?.value === 'bind'
+      && callOpensAt(tokens, memberStart + 1);
+  }
+  const computedStart = tokens[index]?.value === '[' ? index
+    : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.'
+      && tokens[index + 2]?.value === '[' ? index + 2 : null;
+  // Quoted computed property names are skipped by the lexer, so a bound
+  // callback's `['bind'](...)` has the compact `[ ] (` shape.
+  return computedStart !== null
+    && tokens[computedStart + 1]?.value === ']'
+    && callOpensAt(tokens, computedStart + 2);
+};
+const launcherAliases = (tokens) => {
+  const launchers = new Set(NATIVE_LAUNCHERS);
+  for (let index = 0; index + 3 < tokens.length; index++) {
+    if (!['const', 'let', 'var'].includes(tokens[index]?.value)
+        || tokens[index + 1]?.value === undefined
+        || tokens[index + 2]?.value !== '=') continue;
+    const source = launcherReferenceAt(tokens, index + 3, launchers);
+    if (source === null) continue;
+    const sourceEnd = source + 1;
+    const isDirect = tokens[sourceEnd]?.value === ';' || tokens[sourceEnd]?.value === ','
+      || tokens[sourceEnd]?.value === ')';
+    const isBound = boundMemberCallOpensAt(tokens, sourceEnd);
+    if (isDirect || isBound) launchers.add(tokens[index + 1].value);
+  }
+  return launchers;
+};
 const directLaunchCalls = (source) => {
   const tokens = executableTokens(source);
+  const launchers = launcherAliases(tokens);
   return tokens.filter((token, index) => {
-    if (!NATIVE_LAUNCHERS.has(token.value) || tokens[index - 1]?.value === '.') return false;
-    if (callOpensAt(tokens, index + 1)) return true;
+    if (!launchers.has(token.value) || tokens[index - 1]?.value === '.') return false;
+    if (callOpensAt(tokens, index + 1) || memberCallOpensAt(tokens, index + 1)) return true;
     return tokens[index - 1]?.value === '('
       && tokens[index + 1]?.value === ')'
-      && callOpensAt(tokens, index + 2);
+      && (callOpensAt(tokens, index + 2) || memberCallOpensAt(tokens, index + 2));
   });
 };
 const directLaunchOffenders = (root, rels) => rels.flatMap((rel) => {
@@ -1333,6 +1454,75 @@ test('the routed-launch source sweep rejects direct, optional, and parenthesized
   assert.match(offenders[2], /\(agent\)\(prompt\)/);
   assert.match(offenders[3], /spawn_agent\?\.\(prompt\)/);
   assert.match(offenders[4], /\(spawnAgent\)\(prompt\)/);
+});
+
+test('the routed-launch source sweep recursively scans template interpolations', () => {
+  const dir = fixture('template-outside.mjs', [
+    'const interpolated = `launch: ${agent(prompt)}`;',
+    'const nested = `outer ${`inner ${spawn_agent?.(prompt)}`}`;',
+    'const prose = `agent(prompt)`;',
+    '',
+  ].join('\n'));
+  const offenders = directLaunchOffenders(dir, ['template-outside.mjs']);
+  assert.equal(offenders.length, 2, `template interpolations must be scanned recursively: ${offenders.join('\n')}`);
+  assert.match(offenders[0], /template-outside\.mjs:1/);
+  assert.match(offenders[0], /\$\{agent\(prompt\)\}/);
+  assert.match(offenders[1], /template-outside\.mjs:2/);
+  assert.match(offenders[1], /spawn_agent\?\.\(prompt\)/);
+});
+
+test('the routed-launch source sweep rejects native call and apply member forms', () => {
+  const dir = fixture('member-outside.mjs', [
+    'const called = agent.call(null, prompt);',
+    'const applied = agent.apply(null, [prompt]);',
+    'const grouped = (spawnAgent).call(null, prompt);',
+    'const property = worker.agent.call(null, prompt);',
+    'const computedCalled = agent[\'call\'](null, prompt);',
+    'const optionalComputedApplied = agent?.[\'apply\'](null, [prompt]);',
+    'const parenthesizedCalled = (agent.call)(prompt);',
+    'const parenthesizedComputedApplied = (agent[\'apply\'])(null, [prompt]);',
+    '',
+  ].join('\n'));
+  const offenders = directLaunchOffenders(dir, ['member-outside.mjs']);
+  assert.equal(offenders.length, 7, `native call/apply member forms must be rejected: ${offenders.join('\n')}`);
+  assert.match(offenders[0], /member-outside\.mjs:1/);
+  assert.match(offenders[0], /agent\.call/);
+  assert.match(offenders[1], /member-outside\.mjs:2/);
+  assert.match(offenders[1], /agent\.apply/);
+  assert.match(offenders[2], /member-outside\.mjs:3/);
+  assert.match(offenders[2], /\(spawnAgent\)\.call/);
+  assert.match(offenders[3], /member-outside\.mjs:5/);
+  assert.match(offenders[3], /agent\['call'\]/);
+  assert.match(offenders[4], /member-outside\.mjs:6/);
+  assert.match(offenders[4], /agent\?\.\['apply'\]/);
+  assert.match(offenders[5], /member-outside\.mjs:7/);
+  assert.match(offenders[5], /\(agent\.call\)/);
+  assert.match(offenders[6], /member-outside\.mjs:8/);
+  assert.match(offenders[6], /\(agent\['apply'\]\)/);
+});
+
+test('the routed-launch source sweep rejects direct and bound native launcher aliases', () => {
+  const dir = fixture('alias-outside.mjs', [
+    'const launch = agent;',
+    'const directAlias = (prompt) => launch(prompt);',
+    'const bound = agent.bind(null);',
+    'const boundAlias = (prompt) => bound(prompt);',
+    'const computedBound = agent[\'bind\'](null);',
+    'const computedBoundAlias = (prompt) => computedBound(prompt);',
+    '',
+  ].join('\n'));
+  const offenders = directLaunchOffenders(dir, ['alias-outside.mjs']);
+  assert.equal(offenders.length, 5, `native launcher aliases must be rejected: ${offenders.join('\n')}`);
+  assert.match(offenders[0], /alias-outside\.mjs:2/);
+  assert.match(offenders[0], /launch\(prompt\)/);
+  assert.match(offenders[1], /alias-outside\.mjs:3/);
+  assert.match(offenders[1], /agent\.bind/);
+  assert.match(offenders[2], /alias-outside\.mjs:4/);
+  assert.match(offenders[2], /bound\(prompt\)/);
+  assert.match(offenders[3], /alias-outside\.mjs:5/);
+  assert.match(offenders[3], /agent\['bind'\]/);
+  assert.match(offenders[4], /alias-outside\.mjs:6/);
+  assert.match(offenders[4], /computedBound\(prompt\)/);
 });
 
 test('the routed-launch source sweep rejects native launches in shipped Markdown fenced blocks', () => {

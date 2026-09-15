@@ -101,7 +101,7 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role> --model <recorder tier alias> --effort <level> --task-level <level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<recorder route>"` — an agent
+- `dispatch-record.cjs mark <T> <role> --model <recorder tier alias> --effort <level> --effort-applied <receipt applied effort> --task-level <level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<recorder route>"` — an agent
   is working on it RIGHT NOW. The one fact here that is motion rather than a
   verdict, and the one the board could not see at all: nothing is pushed yet, so
   the live state still reads `execute`/`fix` and the stop gate refuses turns over
@@ -157,16 +157,21 @@ instead, and the front reads it back by itself:
   static Codex roles select the file from the same signals with
   `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json
   --capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"
-  [--project-dir <project>] [--risk …] [--files …] [--checkpoint]
-  [--signature-state …]`. Its `agent_file` is a `.toml` path for the launch;
+  [--project-dir <project>] [--risk …] [--type …] [--complexity …]
+  [--input-tokens …] [--contested] [--critical] [--checkpoint]
+  [--signature-state …] [--files …]`. The `--files` flag is retained only
+  for compatibility; it does not select an ADR-014 rung. Its `agent_file` is
+  a `.toml` path for the launch;
   project it to the suffixless recorder name, and retain its canonical `route`
   in the boundary receipt rather than passing it to the recorder.
   Run it from the conveyor project, or pass `--project-dir <project>` when the
   caller is in a ticket worktree; generated agent files and project policy do
-  not have to live in the same directory. For `executor`, run the same
-  selector and pass its concrete `model` and `effort` to `spawn_agent` (or
-  `codex exec`) when that host surface advertises those overrides; its JSON
-  intentionally has `agent_file: null` and uses the project palette directly.
+  not have to live in the same directory. For `executor`, the boundary's Codex
+  adapter consumes the selector's concrete `model` and `effort` internally;
+  callers must not pass selector output directly to `spawn_agent` or `codex
+  exec`. Those host calls are adapter internals reached only through
+  `boundary.dispatch`. The selector JSON intentionally has `agent_file: null`
+  and uses the project palette directly.
   The selector's `model` is the concrete id: record it as
   `--observed-model <model>`, while `route` supplies the shared tier alias and
   requested effort. Do not pass the concrete id to `dispatch-record.cjs
@@ -293,10 +298,10 @@ SENTINEL    ci-fix / base-merge / review-fix / arch-review / undraft / merge
   )
   ```
 
-  The resolver fixes the sentinel at Luna/medium on Codex and Sonnet/high on
-  Claude; guard risk, checkpoint, signature, and prior-applied facts are retained
+  The resolver fixes the sentinel at Luna/medium on Codex and Sonnet/high on the
+  Workflow runtime; guard risk, checkpoint, signature, and prior-applied facts are retained
   in the receipt but cannot promote this fixed role. Codex validates the generated
-  `shipyard-pr-sentinel.toml`; Claude passes its native alias and explicit effort.
+  `shipyard-pr-sentinel.toml`; the Workflow runtime passes its native alias and explicit effort.
   A missing typed host, effort, or verified receipt is a refusal, not permission to
   inherit the current guard or session. Re-post a guard for PRs opened after it
   started through the same boundary (or add them to the existing typed guard
@@ -403,21 +408,22 @@ to bypass the boundary or to launch a different file.
 | `ci-fix` | Luna/max | verified `repeat` → Astra/low → verified `repeat_exhausted` → Astra/medium | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
 | `review-fix` | Luna/max | verified `repeat` → Astra/low → verified `repeat_exhausted` → Astra/medium | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
 
-The Codex `executor` is dynamic and has `agent_file: null`; pass its selected
-concrete `model` and `effort` explicitly to the host. Every other delivery role
-in this table is static and MUST use the generated file named by the selector.
+The Codex dynamic roles are `decomposition` and `executor`; both have
+`agent_file: null` and receive their selected concrete `model` and `effort`
+explicitly from the host. Every other delivery role in this table is static and
+MUST use the generated file named by the selector.
 Codex research has no alternatives rung; its `very-complex` rung uses the
 emitted `-critical` suffix. The generator emits `-repeat` for a repair repeat
 rung and `-deep` only for `ci-fix`/`review-fix` `repeat_exhausted`. No sentinel
 recovery variant or additional architecture-review `repeat_exhausted` variant is
 generated; neither role accepts an invented target.
 
-### Workflow runtime policy and native workflow arguments
+### Workflow-native alias policy and native workflow arguments
 
-The Workflow runtime (Claude) has an independent native grid; never translate
-the Codex logical names into its launch arguments. Its Workflow adapter receives
-the selected native alias and explicit effort from `resolution.launch_arguments`,
-and the host must return application evidence for that exact pair:
+The Workflow-native alias runtime has an independent grid; never translate the
+Codex logical names into its launch arguments. Its Workflow adapter receives the
+selected native alias and explicit effort from `resolution.launch_arguments`, and
+the host must return application evidence for that exact pair:
 
 | Role | Base | Evidence-based escalation |
 | --- | --- | --- |
@@ -430,7 +436,7 @@ and the host must return application evidence for that exact pair:
 | `arch-review` | Opus/medium | critical/contested/checkpoint → Opus/max; measured window → Fable/medium |
 | `ci-fix` / `review-fix` | Opus/medium | verified `repeat` or `repeat_exhausted` → Opus/max |
 
-**The native Agent tool takes no `effort` parameter**: only Workflow's `agent()`
+**The native Agent tool takes no `effort` parameter**: only the Workflow-native `agent()`
 carries the explicit pair. It cannot launch a routed background guard under
 ADR-014. Do not turn resolved effort into prompt text or rely on the active
 session; hard-refuse that launch and run the documented sentinel duty pass
@@ -447,8 +453,11 @@ without a boundary-verified receipt is a failed dispatch, not a fallback.
 
 The boundary receives the full ticket/PR evidence, not a summary invented by
 the caller. Keep its `route`, `signals_fired`, signal reasons, `rung`, model,
-effort, and receipt verbatim. `strategy` is a compatibility failure-verdict
-input for a fixer prompt; it is not a field returned by the boundary. `risk`,
+effort, and receipt verbatim. `strategy` is caller-owned fixer context, not a
+field returned by the boundary or `failure-signature.cjs verdict`: derive it
+from that verdict as `first` → `fix`, `progress` → `continue`, and
+`repeat`/`repeat_exhausted` → `rethink` before constructing the fixer prompt.
+`risk`,
 `type`, available `complexity`,
 and checkpoint signals are passed on every executor, while declared files and
 changed-file evidence remain in context; `inputTokens` is measured for both
@@ -460,7 +469,7 @@ gate outcomes, not model promotions.
 
 Refuse before launch when runtime is missing or ambiguous, a model or effort is
 literal/omitted/conflicting, the selected Codex file is missing or stale, a
-Claude native pair is unsupported, a guard/session is inherited, a launch is
+Workflow-runtime native pair is unsupported, a guard/session is inherited, a launch is
 inline, an escalation signal is absent or undocumented, the prior applied
 receipt is missing or phantom, the recorder cannot acknowledge the record, or
 the host omits applied/observed receipt evidence. Never create a dispatch
@@ -1270,24 +1279,31 @@ attempts and landing nothing. When the script cannot measure, it says `needed`
 for exactly this reason: the failure it prevents is the most expensive one there
 is.
 
-Before either launch path, dispatch each needed judge through the one boundary:
+For the Workflow runtime, dispatch each needed judge through the host-injected
+bridge and the one boundary:
 
 ```text
 boundary.dispatch(
-  { runtime, role: "drift-check", signals: { risk, type, complexity, checkpoint, critical }, dispatch_id },
+  { runtime: "claude", role: "drift-check",
+    signals: { risk, type, complexity, checkpoint, critical }, dispatch_id },
   { scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/drift-gate.mjs",
-   args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
-           driftRefPath, recordCmd, graphDir,
-           claudeCapabilities, dispatchRecorder, claudeApplicationEvidence,
-           claudeHost } }
+    args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
+            driftRefPath, recordCmd, graphDir } }
 )
 ```
 
-`drift-check` is fixed at Codex Luna/max and Claude Opus/max; risk, checkpoint,
+The `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`,
+and `claudeHost` values are host-injected Workflow bridge resources, not
+serializable `args`; the active Workflow adapter supplies them. On Codex,
+there is no `drift-gate.mjs` bridge: the Codex adapter selects and validates
+the generated `shipyard-drift-check.toml` and invokes `launchStatic` through
+the boundary.
+
+`drift-check` is fixed at Codex Luna/max and Workflow runtime Opus/max; risk, checkpoint,
 window size, and other global context are retained as evidence but cannot
 promote it. The returned receipt must be `verified` before the drift result is
 accepted. On Codex the boundary validates the generated
-`shipyard-drift-check.toml` and uses `launchStatic`; on Claude it passes the
+`shipyard-drift-check.toml` and uses `launchStatic`; on the Workflow runtime it passes the
 native alias and explicit effort through the workflow adapter. If the host
 cannot apply the selection or return the receipt, refuse the judge and treat
 the ticket as needing drift handling; do not use a generic or inherited Agent.
@@ -1413,20 +1429,28 @@ may be dispatched at all: fix the file.
    changed-file count plus any `reuseCandidates` in fenced context; do not
    summarize away a signal. The executor resolves to
    Codex Luna/max or, only for explicit `critical`/`checkpoint` evidence,
-   Astra/low. Claude uses its independent Sonnet/max or evidence-based
+   Astra/low. The Workflow runtime uses its independent Sonnet/max or evidence-based
    Opus/high native selection.
 
    ```text
    executors.mjs args: { tickets: [{ id, planPath, branch, worktreePath, prBase,
      model, effort, signals, risk, critical, checkpoint, reuseCandidates }],
-     deliveryRulesHint, prBodyGuide, artifactLanguage, claudeCapabilities,
-     dispatchRecorder, claudeApplicationEvidence, claudeHost }
+     deliveryRulesHint, prBodyGuide, artifactLanguage }
    ```
 
+   `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`, and
+   `claudeHost` are host-injected Workflow bridge resources, not serializable
+   `args`; the active adapter supplies them. The Codex adapter receives its
+   generated-agent directory and capabilities through the boundary context.
+
    On Codex, `codex-agent.cjs select executor --json --capabilities-file
-   <current-host-capabilities.json> --project-dir <project>` is selection
-   preflight only: the result's concrete `model` and `effort` are passed as
-   explicit dynamic launch arguments because executor has `agent_file: null`.
+   <current-host-capabilities.json> --project-dir <project> [--risk <risk>]
+   [--type <type>] [--complexity <complexity>] [--input-tokens <inputTokens>]
+   [--contested] [--critical] [--checkpoint]
+   [--signature-state <signatureState>]` is selection preflight only. Pass the
+   same complete signal set to the boundary; its Codex adapter consumes the
+   selected concrete `model` and `effort` internally because executor has
+   `agent_file: null`.
    On the Workflow runtime, the adapter passes the selected native alias and
    explicit effort. There is no omitted-model or CLI-default branch, and an
    Agent fallback that cannot carry the explicit selection is a refusal, not
@@ -1463,15 +1487,15 @@ may be dispatched at all: fix the file.
     before.** The receipt carries the launch identity (the Workflow task id or
     typed Agent id); once it exists, and only then, for every ticket you just
     handed out:
-    `dispatch-record.cjs mark <T> executor --model <recorder-tier-alias> --effort <recorder-effort> --route "<recorder-route>" --task-level <rung> --runtime <claude|codex> --backend <workflow|agent|codex-agent> --agent-id <launch id>`
+    `dispatch-record.cjs mark <T> executor --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <receipt-applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <claude|codex> --backend <workflow|agent|codex-agent> --agent-id <launch id>`
     The recorder adapter provides the compatibility tier/effort/route
     projection; it is not the canonical boundary route. Keep the concrete
     selector `model` for `--observed-model` when the host reports it.
-    (add `--effort-applied <effort>` only when the selected backend explicitly
-    carried the effort into the spawn. If it cannot, hard-refuse before marking;
-    do not record `unsupported` or `unknown` as a compliant executor dispatch.
-    Otherwise omit the flag, never guess; add `--graph <project>/.planning/graph` when you are
-    not standing in the project). The selector supplies the concrete observation;
+    The verified receipt supplies `--effort-applied <receipt-applied-effort>`.
+    If it has no concrete applied effort, the boundary refused the launch and
+    there is no mark; never substitute `unsupported`, `unknown`, or an omitted
+    flag. Add `--graph <project>/.planning/graph` when you are not standing in
+    the project. The selector supplies the concrete observation;
     the recorder adapter supplies the separate compatibility projection. Neither is
     hand-composed or paraphrased, so the record holds the dispatch facts rather
     than the caller's reading of the ladder. The recorder checks its route against
@@ -1598,9 +1622,9 @@ boundary.dispatch(
 )
 ```
 
-The boundary resolves the fixed Codex Luna/medium or Claude Sonnet/high
+The boundary resolves the fixed Codex Luna/medium or Workflow runtime Sonnet/high
 selection, validates the generated `shipyard-pr-sentinel.toml` or the native
-Claude alias plus explicit effort, launches the typed guard, and returns a
+Workflow-runtime alias plus explicit effort, launches the typed guard, and returns a
 verified receipt. Only after that receipt exists may the overlay be updated:
 `dispatch-record.cjs mark <T> pr-sentinel --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <workflow|agent|codex-agent> --agent-id <launch id>` for
 every ticket on the guarded list, with the same returned launch id and the exact
@@ -1700,11 +1724,14 @@ loop:
          )
          ```
 
-         The failure-signature verdict supplies `strategy: fix|continue|rethink`;
-         the boundary validates the ordered receipt chain. Codex uses the generated
+         `failure-signature.cjs verdict` supplies only verdict/history facts.
+         Before this call, derive the caller-owned fixer strategy as `first` →
+         `fix`, `progress` → `continue`, and `repeat`/`repeat_exhausted` →
+         `rethink`; pass that value as prompt context, never as a claimed
+         boundary result. The boundary validates the ordered receipt chain. Codex uses the generated
          `shipyard-ci-fix.toml` → `shipyard-ci-fix-repeat.toml` →
          `shipyard-ci-fix-deep.toml` files for base → verified `repeat` →
-         verified `repeat_exhausted`; Claude uses Opus/medium → Opus/max with
+         verified `repeat_exhausted`; the Workflow runtime uses Opus/medium → Opus/max with
          explicit native effort. A repeat is refused without the prior receipt,
          and another failure after the ceiling is a human escalation, not an
          undocumented third launch. The host must carry the resolved selection;
@@ -1749,7 +1776,7 @@ loop:
 
        Codex uses `shipyard-review-fix.toml` →
        `shipyard-review-fix-repeat.toml` → `shipyard-review-fix-deep.toml`
-       for the verified repair chain; Claude uses Opus/medium → Opus/max with
+       for the verified repair chain; the Workflow runtime uses Opus/medium → Opus/max with
        explicit native effort. The boundary receipt is required before the
        fixer may push or the attempt may be recorded. An inline, inherited,
        literal-model, or omitted-effort fallback is refused. Require a typed
@@ -1782,7 +1809,7 @@ loop:
      Codex resolves Astra/low or, only for measured/contested/critical/
      checkpoint evidence, Astra/medium and validates the generated
      `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
-     Claude independently resolves Opus/medium, Opus/max for critical evidence,
+     The Workflow runtime independently resolves Opus/medium, Opus/max for critical evidence,
      or Fable/medium for the measured ceiling, always with explicit effort.
      Record the verdict only after the boundary receipt is verified; a missing
      measurement, typed host, or documented escalation is a
@@ -1943,9 +1970,13 @@ itself. The round order:
      needsCiFix, needsReviewFix, needsBaseMerge, base, model, effort, signals,
      priorReceipt, previous_dispatch_id, dispatch_id, attemptHistory, strategy,
      signatureState }], ciFixRefPath, reviewFixRefPath, reinitScript,
-     artifactLanguage, claudeCapabilities, dispatchRecorder,
-     claudeApplicationEvidence, claudeHost }
+     artifactLanguage }
    ```
+
+   `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`, and
+   `claudeHost` are host-injected Workflow bridge resources, not serializable
+   `args`; the active adapter supplies them. The Codex adapter receives its
+   generated-agent directory and capabilities through the boundary context.
 
    The per-item boundary selection resolves the canonical ladder, validates the
    Codex generated file or the Workflow runtime's native alias plus explicit
@@ -2155,7 +2186,7 @@ driving PRs hands the user a half-truth.
      Codex resolves Astra/low and escalates to Astra/medium only for the
      measured-window, contested, critical, or checkpoint evidence, validating
      `shipyard-integrator.toml` or `shipyard-integrator-critical.toml`.
-     Claude independently resolves Opus/medium or Opus/high with explicit
+     The Workflow runtime independently resolves Opus/medium or Opus/high with explicit
      effort. The receipt must be verified before accepting `INTEGRATION.md` or
      `passed`/`needs-fix`; no literal model, omitted effort, inherited session,
      or undocumented escalation is permitted.
