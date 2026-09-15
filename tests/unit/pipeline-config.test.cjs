@@ -2279,10 +2279,16 @@ test('routed readers reject a replacement context before compatibility fallback'
 for (const [name, copy] of [
   ['spread', (config) => ({ ...config })],
   ['serialized', (config) => JSON.parse(JSON.stringify(config))],
+  ['context-omitted', (config) => {
+    const { dispatch_context, ...copy } = config;
+    return copy;
+  }],
+  ['context-null', (config) => ({ ...config, dispatch_context: null })],
 ]) {
   test(`routed readers reject an unbound ${name} copy before compatibility fallback`, () => {
     const original = routedConfig().config;
     const config = copy(original);
+    assert.equal(config.routed, true);
     assert.equal(resolveModel('executor', {}, original), 'gpt-5.6-luna');
     for (const read of [
       () => resolveModel('executor', {}, config),
@@ -2300,8 +2306,32 @@ for (const [name, copy] of [
     }
     const compatibility = copy(withRawOptions({}, { runtime: 'codex', env: {} }).config);
     assert.equal(resolveModel('executor', {}, compatibility), 'sonnet');
+    assert.equal(resolveEffort('executor', 'sonnet', compatibility), 'high');
+    assert.ok(parseRoute(routeOf('executor', {}, compatibility)));
   });
 }
+
+test('routeOf is compatibility-only and routed decisions retain the complete canonical contract', () => {
+  for (const runtime of ['claude', 'codex']) {
+    const { config } = routedConfig({}, runtime, { dispatch_id: 'route-contract' });
+    for (const signals of [undefined, {}, { checkpoint: true }, null, false, []]) {
+      assert.throws(() => routeOf('executor', signals, config), (error) =>
+        error.code === 'UNSUPPORTED_SELECTION' && error.details.source === 'routeOf'
+        && error.message.includes('complete resolveDispatch result'));
+    }
+    const decision = resolveDispatch({ config, role: 'executor' });
+    assert.deepStrictEqual(decision, canonicalPolicy.resolveDispatch({
+      runtime, role: 'executor', dispatch_id: 'route-contract',
+    }));
+    assert.equal(parseRoute(decision.route), null);
+    const compatibility = withRawOptions({}, { runtime, env: {} }).config;
+    const model = resolveModel('executor', {}, compatibility);
+    const effort = resolveEffort('executor', model, compatibility);
+    const parsed = parseRoute(routeOf('executor', {}, compatibility));
+    assert.equal(parsed.tier.model, model);
+    assert.equal(parsed.effort.effort, effort);
+  }
+});
 
 test('compatibility parsing cannot hide a conflicting routed decomposition override', () => {
   for (const [key, value] of [['models', 'opus'], ['effort', 'low']]) {
@@ -2330,7 +2360,9 @@ test('every runtime and role delegates base and escalation decisions with full i
         assert.ok(Object.isFrozen(got));
         assert.equal(resolveModel(role, signals, config), got.model);
         assert.equal(resolveEffort(role, got.model, config, signals), got.effort);
-        assert.equal(routeOf(role, signals, config), got.route);
+        assert.throws(() => routeOf(role, signals, config), (error) =>
+          error.code === 'UNSUPPORTED_SELECTION' && error.details.source === 'routeOf'
+          && error.message.includes('resolveDispatch'));
       }
     }
   }
@@ -2625,7 +2657,6 @@ test('every routed reader rejects explicit malformed signals but accepts omissio
         () => resolveDispatch({ config, role: 'executor', signals }),
         () => resolveModel('executor', signals, config),
         () => resolveEffort('executor', model, config, signals),
-        () => routeOf('executor', signals, config),
       ]) assert.throws(read, { code: signals && !Array.isArray(signals) && typeof signals === 'object'
         ? 'INVALID_SIGNAL' : 'INVALID_INPUT' });
     }

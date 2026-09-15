@@ -1468,10 +1468,10 @@ function boundDispatchContext(cfg) {
   if (!context) {
     // Copies retain routed intent but lose the loader's private binding. Never
     // interpret that loss of provenance as permission to use compatibility.
-    if (cfg.dispatch_context?.mode === 'routed' || cfg.dispatch_context?.routed === true) {
+    if (cfg.routed === true || cfg.dispatch_context?.mode === 'routed' || cfg.dispatch_context?.routed === true) {
       throw modelPolicy.policyError(
         'INVALID_CONFIG',
-        'config.dispatch_context is routed but config is not bound to loadConfig; reload with routed: true',
+        'config.dispatch_context lacks a loadConfig binding for routed intent; reload with routed: true',
         { source: 'config.dispatch_context' },
       );
     }
@@ -2043,7 +2043,15 @@ function resolveTaskLevel(role, signals = {}, cfg = DEFAULTS) {
 const ROUTE_RE = /^tier=([a-z][a-z0-9:+-]*)\(([a-z]+)\) effort=([a-z][a-z0-9:+-]*)\(([a-z]+)\)$/;
 
 function routeOf(role, signals = {}, cfg = DEFAULTS) {
-  if (routedConfig(cfg)) return resolveDispatch({ role, signals, config: cfg }).route;
+  // Legacy consumers parse tier/effort aliases; a canonical route alone loses
+  // the dispatch identity and cannot be recorded through that grammar.
+  if (routedConfig(cfg)) {
+    throw modelPolicy.policyError(
+      'UNSUPPORTED_SELECTION',
+      'routeOf is compatibility-only; routed callers must use the complete resolveDispatch result',
+      { source: 'routeOf' },
+    );
+  }
   const m = modelRoute(role, signals, cfg);
   const e = effortRoute(role, m.value, cfg, signals);
   return `tier=${m.rule}(${m.value}) effort=${e.rule}(${e.value})`;
