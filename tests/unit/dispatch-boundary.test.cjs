@@ -1654,8 +1654,10 @@ test('the boundary launches every native base and escalation tuple for both runt
     const escalations = [
       ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6-astra', 'medium'],
       ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6-astra', 'medium'],
+      ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
       ['codex', 'executor', { critical: true }, 'critical', 'gpt-6-astra', 'low'],
       ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6-astra', 'medium'],
+      ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
       ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
       ['claude', 'research', { type: 'alternatives' }, 'alternatives', 'opus', 'medium'],
       ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'fable', 'medium'],
@@ -1710,7 +1712,13 @@ test('the boundary launches every native base and escalation tuple for both runt
       }
     }
     for (const [runtime, role, signals, rung, model, effort] of escalations) {
-      dispatchAndAssert(runtime, role, signals, [rung, model, effort], `matrix-${runtime}-${role}-${rung}`);
+      dispatchAndAssert(
+        runtime,
+        role,
+        signals,
+        [rung, model, effort],
+        `matrix-${runtime}-${role}-${rung}-${Object.keys(signals).join('-')}`,
+      );
     }
 
     for (const runtime of policy.SUPPORTED_RUNTIMES) {

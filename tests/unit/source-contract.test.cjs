@@ -1205,7 +1205,9 @@ test('runtime adapters refuse inline and inherited-session launch contexts', () 
 // The Workflow files deliberately receive the native `agent` callback, so a
 // simple `agent` token sweep would reject the injection point itself. The
 // executable-call shape below catches a new direct invocation such as
-// `if (ready) agent(prompt)` while ignoring explanatory line comments. The
+// `if (ready) agent(prompt)`, `agent?.(prompt)`, or `(agent)(prompt)` while
+// ignoring explanatory prose. The scan tokenizes executable source instead of
+// relying on one spelling of `agent(`. The
 // manifest comes from every tracked Workflow, command, and delivery reference:
 // a new routed surface therefore joins the sweep without an accompanying edit
 // to this test. Boundary-bearing sources are checked separately below; the
@@ -1225,24 +1227,72 @@ const BOUNDARY_LAUNCH_SOURCES = ROUTED_LAUNCH_SOURCES.filter((rel) => {
     || source.includes('createDispatchBoundary')
     || source.includes('boundary.dispatch');
 });
-const directLaunchCall = /(?:^|[=;{}(,:]|=>|&&)\s*(?:(?:return|await)\s+)?(?:agent|spawn_agent|spawnAgent)\s*\(/;
-const launchableLines = (rel, source) => {
+const NATIVE_LAUNCHERS = new Set(['agent', 'spawn_agent', 'spawnAgent']);
+const launchableSource = (rel, source) => {
   let fenced = !rel.endsWith('.md');
-  return source.split('\n').flatMap((line, index) => {
+  return source.split('\n').map((line) => {
     if (rel.endsWith('.md') && /^\s*```/.test(line)) {
       fenced = !fenced;
-      return [];
+      return '';
     }
-    return fenced ? [[line, index]] : [];
+    return fenced ? line : '';
+  }).join('\n');
+};
+const executableTokens = (source) => {
+  const tokens = [];
+  let index = 0;
+  let line = 1;
+  const advance = () => {
+    if (source[index++] === '\n') line++;
+  };
+  while (index < source.length) {
+    const ch = source[index];
+    if (/\s/.test(ch)) {
+      advance();
+    } else if (ch === '/' && source[index + 1] === '/') {
+      while (index < source.length && source[index] !== '\n') advance();
+    } else if (ch === '/' && source[index + 1] === '*') {
+      advance(); advance();
+      while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) advance();
+      if (index < source.length) { advance(); advance(); }
+    } else if (ch === '\'' || ch === '"' || ch === '`') {
+      const quote = ch;
+      advance();
+      while (index < source.length && source[index] !== quote) {
+        if (source[index] === '\\') advance();
+        advance();
+      }
+      if (index < source.length) advance();
+    } else if (/[A-Za-z_$]/.test(ch)) {
+      const start = index;
+      const tokenLine = line;
+      advance();
+      while (index < source.length && /[A-Za-z0-9_$]/.test(source[index])) advance();
+      tokens.push({ value: source.slice(start, index), line: tokenLine });
+    } else {
+      tokens.push({ value: ch, line });
+      advance();
+    }
+  }
+  return tokens;
+};
+const callOpensAt = (tokens, index) => tokens[index]?.value === '('
+  || (tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' && tokens[index + 2]?.value === '(');
+const directLaunchCalls = (source) => {
+  const tokens = executableTokens(source);
+  return tokens.filter((token, index) => {
+    if (!NATIVE_LAUNCHERS.has(token.value) || tokens[index - 1]?.value === '.') return false;
+    if (callOpensAt(tokens, index + 1)) return true;
+    return tokens[index - 1]?.value === '('
+      && tokens[index + 1]?.value === ')'
+      && callOpensAt(tokens, index + 2);
   });
 };
-const directLaunchOffenders = (root, rels) => rels.flatMap((rel) => launchableLines(
-  rel,
-  fs.readFileSync(path.join(root, rel), 'utf8'),
-)
-  .flatMap(([line, index]) => directLaunchCall.test(line.replace(/\/\/[^\n]*/g, ''))
-    ? [`${rel}:${index + 1}: ${line.trim()}`]
-    : []));
+const directLaunchOffenders = (root, rels) => rels.flatMap((rel) => {
+  const source = fs.readFileSync(path.join(root, rel), 'utf8');
+  return directLaunchCalls(launchableSource(rel, source)).map(({ line }) =>
+    `${rel}:${line}: ${source.split('\n')[line - 1].trim()}`);
+});
 
 test('every routed launch surface names the boundary and has no direct launch call outside it', () => {
   assert.ok(ROUTED_LAUNCH_SOURCES.includes('plugins/delivery-pipeline/workflows/executors.mjs'), 'the tracked routed-source manifest must include Workflow launchers');
@@ -1262,27 +1312,37 @@ test('every routed launch surface names the boundary and has no direct launch ca
   );
 });
 
-test('the routed-launch source sweep rejects a newly added direct agent launch', () => {
+test('the routed-launch source sweep rejects direct, optional, and parenthesized native launches', () => {
   const dir = fixture('outside.mjs', [
     'const direct = (prompt) => agent(prompt);',
+    'const optional = (prompt) => agent?.(prompt);',
+    'const grouped = (prompt) => (agent)(prompt);',
+    'const spawned = (prompt) => spawn_agent?.(prompt);',
+    'const groupedSpawn = (prompt) => (spawnAgent)(prompt);',
+    '// agent(prompt) is forbidden outside the boundary.',
+    'const prose = "agent(prompt)";',
     'const allowed = (prompt) => createClaudeWorkflowDispatch({ prompt });',
     '',
   ].join('\n'));
   const offenders = directLaunchOffenders(dir, ['outside.mjs']);
-  assert.equal(offenders.length, 1, `the fixture must exercise the direct-launch arm: ${offenders.join('\n')}`);
+  assert.equal(offenders.length, 5, `the fixture must exercise every native-launch call form: ${offenders.join('\n')}`);
   assert.match(offenders[0], /outside\.mjs:1/);
   assert.match(offenders[0], /agent\(prompt\)/);
+  assert.match(offenders[1], /agent\?\.\(prompt\)/);
+  assert.match(offenders[2], /\(agent\)\(prompt\)/);
+  assert.match(offenders[3], /spawn_agent\?\.\(prompt\)/);
+  assert.match(offenders[4], /\(spawnAgent\)\(prompt\)/);
 });
 
-test('Claude palette and provider adapter sources remain byte-identical and native', () => {
-  const files = [
-    'plugins/delivery-pipeline/scripts/runtime-adapters.cjs',
-    'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs',
-  ];
-  for (const rel of files) {
-    const current = fs.readFileSync(path.join(REPO, rel));
-    const committed = execFileSync('git', ['show', `HEAD:${rel}`], { cwd: REPO });
-    assert.deepStrictEqual(current, committed, `${rel} is a runtime-owned palette/provider file and must remain untouched by the matrix suite`);
+const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
+  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '6fd1478f8b6a26098e4b86485541cf20be371675aa2cf424b8dd7902433540bc',
+  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '70d299ec3587706202d6cafcb238d844353d19dbecaeead97dfdd409841522b6',
+});
+
+test('Claude palette and provider adapter sources match their checked-in baselines and remain native', () => {
+  for (const [rel, expectedDigest] of Object.entries(RUNTIME_OWNED_FILE_DIGESTS)) {
+    const actualDigest = crypto.createHash('sha256').update(fs.readFileSync(path.join(REPO, rel))).digest('hex');
+    assert.equal(actualDigest, expectedDigest, `${rel} is a runtime-owned palette/provider file and must match its checked-in baseline`);
   }
   assert.deepStrictEqual(CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'opus', fable: 'fable' });
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('runtime: \'claude\''), true);
