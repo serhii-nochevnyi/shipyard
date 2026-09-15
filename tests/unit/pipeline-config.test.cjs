@@ -2877,6 +2877,34 @@ test('JSON dispatch validates the complete invocation including empty and traili
   }
 });
 
+test('JSON dispatch rejects unknown top-level fields instead of losing escalation signals', () => {
+  const { dir } = routedConfig();
+  const cli = (args, input) => spawnSync(process.execPath, [mod, 'dispatch', ...args],
+    { cwd: dir, env: {}, input, encoding: 'utf8' });
+  const typo = JSON.stringify({
+    runtime: 'codex', role: 'executor', singals: { critical: true },
+  });
+  for (const [args, input] of [[[typo], undefined], [[], typo]]) {
+    const result = cli(args, input);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /INVALID_INPUT/);
+    assert.match(result.stderr, /singals/);
+  }
+
+  const valid = JSON.stringify({
+    runtime: 'codex', role: 'executor', signals: { critical: true }, dispatch_id: 'critical-json',
+  });
+  for (const [args, input] of [[[valid], undefined], [[], valid]]) {
+    const result = cli(args, input);
+    assert.equal(result.status, 0, result.stderr);
+    const decision = JSON.parse(result.stdout);
+    assert.equal(decision.rung, 'critical');
+    assert.equal(decision.model, 'gpt-6-astra');
+    assert.equal(decision.dispatch_id, 'critical-json');
+  }
+});
+
 test('custom or malformed palettes cannot be sanitized or mutated into routed selection', () => {
   for (const namespace of ['pipeline', 'delivery_pipeline']) {
     for (const value of [null, [], 'bogus', ['custom-model'], [{ model: 'custom-model', effort: 'high' }]]) {

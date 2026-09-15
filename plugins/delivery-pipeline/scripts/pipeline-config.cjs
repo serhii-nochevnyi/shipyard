@@ -1759,6 +1759,36 @@ function resolveDispatch(input) {
   return resolution;
 }
 
+// JSON dispatch is an input boundary, so an unknown top-level field must not be
+// mistaken for an omitted signal or override. Keep this allowlist aligned with
+// the fields the bridge and canonical resolver inspect; nested signals retain
+// their own canonical validation.
+const DISPATCH_INPUT_KEYS = new Set([
+  'root', 'runtime', 'role', 'signals', 'dispatch_id', 'dispatchId', 'config',
+  'model_profile', 'model', 'requested_model', 'applied_model',
+  'effort', 'requested_effort', 'applied_effort', 'reasoning_effort',
+  'backend', 'mechanism', 'agent_file', 'logical_model', 'logical_rung', 'rung', 'rung_index',
+  'override', 'overrides', 'selection', 'launch_arguments',
+  'gsdOverride', 'perRoleOverride', 'configOverride',
+  'inline', 'inherit', 'session_inherited',
+  'inlineOverride', 'session', 'sessionOverride', 'inherited',
+]);
+
+function validateJsonDispatchInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw modelPolicy.policyError('INVALID_INPUT', 'dispatch input must be an object', { source: 'input' });
+  }
+  const unknown = Object.keys(input).filter((key) => !DISPATCH_INPUT_KEYS.has(key));
+  if (unknown.length) {
+    throw modelPolicy.policyError(
+      'INVALID_INPUT',
+      `dispatch input has unsupported top-level field(s): ${unknown.join(', ')}`,
+      { source: 'input', fields: unknown },
+    );
+  }
+  return input;
+}
+
 function requireCompatibility(cfg, source) {
   if (routedConfig(cfg)) {
     throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
@@ -2194,7 +2224,7 @@ if (require.main === module) {
       let input;
       if (cmd === 'dispatch') {
         if (rest.length > 1) throw new Error('dispatch accepts one JSON argument and no trailing arguments');
-        input = JSON.parse(rest.length === 1 ? rest[0] : fs.readFileSync(0, 'utf8'));
+        input = validateJsonDispatchInput(JSON.parse(rest.length === 1 ? rest[0] : fs.readFileSync(0, 'utf8')));
       } else {
         if (cmd !== 'model') throw new Error('--routed requires model <role> or dispatch <json>');
         input = { role: rest[0], signals: {} };
