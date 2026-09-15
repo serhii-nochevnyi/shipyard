@@ -104,7 +104,12 @@ function provenanceIssue(value, field, allowed, { arrays = {} } = {}) {
       if (!Number.isSafeInteger(child) || child < 0) return `${field}.${key} must be a non-negative safe integer`;
     } else if (type === 'boolean') {
       if (typeof child !== 'boolean') return `${field}.${key} must be boolean`;
-    } else if (type === 'scalar') {
+    } else if (type === 'scalar' || type === 'scalar_or_receipt') {
+      if (type === 'scalar_or_receipt' && object(child)) {
+        const issue = provenanceIssue(child, `${field}.${key}`, RECEIPT_FIELDS);
+        if (issue) return issue;
+        continue;
+      }
       if (typeof child === 'string') {
         const issue = textIssue(child, `${field}.${key}`);
         if (issue) return issue;
@@ -149,7 +154,7 @@ const RESOLUTION_FIELDS = Object.freeze({
   signal_reasons: 'array', selected_signals: 'array', prior_applied: 'object',
 });
 const SIGNAL_REASON_FIELDS = Object.freeze({
-  signal: 'text', source: 'text', value: 'scalar', applies: 'boolean', rung: 'nullable_text', reason: 'text',
+  signal: 'text', source: 'text', value: 'scalar_or_receipt', applies: 'boolean', rung: 'nullable_text', reason: 'text',
 });
 const SELECTED_SIGNAL_FIELDS = Object.freeze({ signal: 'text', rung: 'text', reason: 'text' });
 const PRIOR_APPLIED_FIELDS = Object.freeze({
@@ -213,6 +218,9 @@ function validateProvenance(record) {
         nested[nestedField].forEach((item, index) => {
           const nestedIssue = provenanceIssue(item, `${field}.${nestedField}[${index}]`, schemaForItem);
           if (nestedIssue) fail(nestedIssue);
+          if (nestedField === 'signal_reasons' && object(item.value)) {
+            validateReceiptProvenance(item.value, `${field}.${nestedField}[${index}].value`);
+          }
         });
       }
     }
@@ -548,6 +556,11 @@ function expectedSelection(runtime, role, rung) {
   };
 }
 
+function canonicalAgentFile(value) {
+  if (!present(value)) return value;
+  return value.endsWith('.toml') ? value : `${value}.toml`;
+}
+
 function canonicalRouteParts(route) {
   if (typeof route !== 'string') return null;
   const match = /^role=([^\s]+)\s+rung=([^\s]+)\s+model=([^\s]+)\s+signals=(\S+)$/.exec(route.trim());
@@ -586,7 +599,7 @@ function boundaryProjection(receipt, values, expected) {
 function conflictBetween(sources, field) {
   const values = sources
     .filter((source) => source && hasOwn(source, field) && source[field] !== undefined)
-    .map((source) => source[field]);
+    .map((source) => field === 'agent_file' ? canonicalAgentFile(source[field]) : source[field]);
   return values.length > 1 && values.some((value) => stableStringify(value) !== stableStringify(values[0]));
 }
 
@@ -764,7 +777,10 @@ function reconcileTelemetry(raw, options = {}) {
     if (rungIndex !== undefined && rungIndex !== expected.rung_index) resolutionContradictions.push('rung_index');
     if (expected && backend !== expected.backend) resolutionContradictions.push('backend');
     if (expected && mechanism !== expected.mechanism) resolutionContradictions.push('mechanism');
-    if (expected && expected.agent_file && agentFile !== expected.agent_file) resolutionContradictions.push('agent_file');
+    if (expected && expected.agent_file
+        && canonicalAgentFile(agentFile) !== canonicalAgentFile(expected.agent_file)) {
+      resolutionContradictions.push('agent_file');
+    }
     if (expected && !expected.agent_file && agentFile !== undefined && agentFile !== null) {
       resolutionContradictions.push('agent_file');
     }
@@ -895,6 +911,14 @@ function reconcileTelemetry(raw, options = {}) {
         && receipt.applied_model !== appliedModel) applicationContradictions.push('applied_model');
     if (effortValue(receipt.applied_effort) && effortValue(appliedEffort)
         && receipt.applied_effort !== appliedEffort) applicationContradictions.push('applied_effort');
+    if (concreteValue(receipt.observed_model) && concreteValue(receipt.applied_model)
+        && receipt.observed_model !== receipt.applied_model) {
+      applicationContradictions.push('observed_model');
+    }
+    if (effortValue(receipt.observed_effort) && effortValue(receipt.applied_effort)
+        && receipt.observed_effort !== receipt.applied_effort) {
+      applicationContradictions.push('observed_effort');
+    }
     if (receipt.backend !== undefined && backend !== undefined && receipt.backend !== backend) {
       applicationContradictions.push('backend');
     }
@@ -902,7 +926,9 @@ function reconcileTelemetry(raw, options = {}) {
       applicationContradictions.push('mechanism');
     }
     if (receipt.agent_file !== undefined && agentFile !== undefined
-        && receipt.agent_file !== agentFile) applicationContradictions.push('agent_file');
+        && canonicalAgentFile(receipt.agent_file) !== canonicalAgentFile(agentFile)) {
+      applicationContradictions.push('agent_file');
+    }
     if (receipt.agent_file_digest !== undefined && agentFileDigest !== undefined
         && receipt.agent_file_digest !== agentFileDigest) {
       applicationContradictions.push('agent_file_digest');
@@ -930,7 +956,8 @@ function reconcileTelemetry(raw, options = {}) {
       if (receipt.backend !== undefined && receipt.backend !== expected.backend) {
         applicationContradictions.push('backend');
       }
-      if (expected.agent_file && receipt.agent_file !== undefined && receipt.agent_file !== expected.agent_file) {
+      if (expected.agent_file && receipt.agent_file !== undefined
+          && canonicalAgentFile(receipt.agent_file) !== canonicalAgentFile(expected.agent_file)) {
         applicationContradictions.push('agent_file');
       }
       if (expected.agent_file && receipt.agent_file_digest !== undefined
