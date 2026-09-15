@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a09c81a347b2dea309d1780ad0d06fd62d5891680f45160b5290c131c660ed48
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1e4a32da9889469b0b2c0f57f4ba96d07e636577d56270c8ba125876c5d91c91
 phase: 36-enforce-the-runtime-model-ladder
 plan: 10
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: a09c81a347b2dea309d1780ad0d06fd62d5891680f45160b5290c131c660ed48
+shipyard_source_fingerprint: 1e4a32da9889469b0b2c0f57f4ba96d07e636577d56270c8ba125876c5d91c91
 ---
 
 # Phase 36: Exhaustive signal matrix and negative bypass suite — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: a09c81a347b2dea309d1780ad0d06fd62d5891680f45160b529
 ## Delivery Evidence
 
 - Ticket: T-36-10
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #145
 - Source plan: .planning/phases/36-enforce-the-runtime-model-ladder/36-10-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
