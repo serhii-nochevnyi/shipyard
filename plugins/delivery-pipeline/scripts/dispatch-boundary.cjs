@@ -14,6 +14,7 @@ const canonicalPolicy = require('./model-policy-internal.cjs');
 const canonicalResolveDispatch = canonicalPolicy.resolveDispatch;
 const canonicalValidateResolution = canonicalPolicy.validateResolution;
 const canonicalStableStringify = canonicalPolicy.stableStringify;
+const { resolveTaskLevel } = require('./pipeline-config.cjs');
 
 const OBSERVATION_UNKNOWN = 'unknown';
 const CLAIM_TTL_MS = 60 * 60 * 1000;
@@ -638,6 +639,13 @@ function createDurableRecorder(storeDir) {
     getLatestReceipt(runtime, role) {
       const stored = readStored(latestFile(runtime, role));
       return stored ? stored.payload : null;
+    },
+    isConsumed(dispatchId) {
+      // The record remains readable as audit history after a repair consumes
+      // it, but it can no longer authorize another consumer. A repair commit
+      // has the same terminal meaning while recovering a partially completed
+      // repair: claim() already treats it as consumed before a marker exists.
+      return fs.existsSync(consumedFile(dispatchId)) || Boolean(recoverRepairCommit(dispatchId));
     },
     claim(dispatchId, consumerId) {
       try {
@@ -1517,6 +1525,15 @@ function recorderConsume(recorder, dispatchId, consumerId, claimAuthority) {
   state.consumed.add(dispatchId);
 }
 
+function recorderIsConsumed(recorder, dispatchId) {
+  const target = recorderMethod(recorder, ['isConsumed', 'isReceiptConsumed']);
+  if (target) {
+    return affirmative(invokeSync(target.fn, target.receiver, [dispatchId], 'receipt consumption lookup'), 'consumed');
+  }
+  const state = sharedRecorderState(recorder);
+  return Boolean(state && state.consumed.has(dispatchId));
+}
+
 function receiptFromStoredRecord(value) {
   if (isObject(value) && isObject(value.receipt)) return value.receipt;
   if (isObject(value) && isObject(value.application_receipt)) return value.application_receipt;
@@ -1731,11 +1748,15 @@ function createDispatchBoundary(options = {}) {
       };
     }
     const resolved = canonicalResolveDispatch(canonicalInput);
-    const output = snapshot(prior ? { ...resolved, prior_applied: {
+    // Task level is a policy decision used by the legacy telemetry readers,
+    // not a runtime-selected model value. Keep it boundary-owned alongside the
+    // canonical resolution so reconciliation cannot accept a caller's claim.
+    const task_level = resolveTaskLevel(resolved.role, resolved.signals);
+    const output = snapshot(prior ? { ...resolved, task_level, prior_applied: {
       dispatch_id: prior.dispatch_id,
       model: prior.model,
       effort: prior.effort,
-    } } : resolved);
+    } } : { ...resolved, task_level });
     // snapshot() deliberately severs every other caller reference. Rebrand
     // this one cloned predecessor only because `prior` was re-read from the
     // durable recorder immediately above.
@@ -1772,6 +1793,9 @@ function createDispatchBoundary(options = {}) {
   // Reconciliation consumes authenticated storage, never caller-supplied proof.
   function reconcile(dispatchId) {
     nonEmpty(dispatchId, 'dispatch_id');
+    if (consumedReceiptIds.has(dispatchId) || recorderIsConsumed(options.recorder, dispatchId)) {
+      refuse('UNVERIFIED_RECEIPT', 'dispatch receipt was already consumed by another repair dispatch', { dispatch_id: dispatchId });
+    }
     const trusted = trustedRecordFor(options.recorder, dispatchId);
     if (!trusted) refuse('UNVERIFIED_RECEIPT', 'dispatch has no current compliant applied receipt', { dispatch_id: dispatchId });
     const { resolution, receipt: applied } = trusted;
@@ -1780,6 +1804,7 @@ function createDispatchBoundary(options = {}) {
       policy_version: resolution.policy_version,
       policy_hash: resolution.policy_hash,
       role: resolution.role,
+      task_level: resolution.task_level,
       logical_rung: resolution.logical_rung,
       rung: resolution.rung,
       signals: resolution.signals,
@@ -1862,6 +1887,7 @@ function createDispatchBoundary(options = {}) {
         policy_hash: validatedResolution.policy_hash,
         runtime: validatedResolution.runtime,
         role: validatedResolution.role,
+        task_level: validatedResolution.task_level,
         logical_rung: validatedResolution.logical_rung,
         rung: validatedResolution.rung,
         route: validatedResolution.route,

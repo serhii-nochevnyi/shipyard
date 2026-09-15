@@ -172,10 +172,14 @@ const baseMergeCommand = (p) =>
   `   node ${baseMergeScript} ${p.id} --worktree ${p.worktreePath} `
   + `--base ${p.base || '<the PR\'s base branch — `gh pr view ' + p.pr + ' --json baseRefName`>'}`
 
+const isBoundaryFailure = (error) => !!error
+  && (error.name === 'DispatchBoundaryError' || error.name === 'DispatchPolicyError')
+
 // The prompt, as a function, so it can be asserted on without launching
 // anything: this file cannot be imported (top-level `return`), so a test
 // evaluates it the way the Workflow runtime does and stubs `agent` to capture
-// what a fixer is actually told.
+// what a fixer is actually told. The dispatch adapter invokes it only after
+// resolve/validate has accepted the explicit launch inputs.
 function buildPrompt(p) {
   const steps = [
     `You are fixing PR #${p.pr} for ticket ${p.id}. Your working directory is the worktree: ${p.worktreePath} (branch "${p.branch}"). cd into it.`,
@@ -249,7 +253,7 @@ return await parallel(
       if (!role) throw new Error('fixer dispatch requires needsCiFix or needsReviewFix')
       return createClaudeWorkflowDispatch({
         agent,
-        prompt: buildPrompt(p),
+        prompt: () => buildPrompt(p),
         role,
         model: p.model,
         effort: p.effort,
@@ -277,11 +281,15 @@ return await parallel(
         .then(({ result: r, receipt }) => (r
           ? { ...withoutAgentReceipt(r), id: p.id, pr: p.pr, ...(receipt ? { receipt } : {}) }
           : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one', receipt)))
-        .catch((e) => fixFallback(
-          `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
-          'unknown — the fixer errored before reporting one'
-        ))
+        .catch((e) => {
+          if (isBoundaryFailure(e)) throw e
+          return fixFallback(
+            `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
+            'unknown — the fixer errored before reporting one'
+          )
+        })
     } catch (e) {
+      if (isBoundaryFailure(e)) throw e
       return Promise.resolve(fixFallback(
         `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
         'unknown — the fixer errored before reporting one'
