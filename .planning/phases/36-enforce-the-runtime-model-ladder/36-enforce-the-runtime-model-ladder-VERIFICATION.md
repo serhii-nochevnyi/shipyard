@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a8f92510271d38ad2bcf2b4e83ff245a0daa67169b56cc80811e3e0d946d719b
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6e6553cb5991b1789142ad5ffc589984cb06c5293ce7819e31a7a4a1192e2497
 phase: 36
 status: human_needed
-shipyard_source_fingerprint: a8f92510271d38ad2bcf2b4e83ff245a0daa67169b56cc80811e3e0d946d719b
+shipyard_source_fingerprint: 6e6553cb5991b1789142ad5ffc589984cb06c5293ce7819e31a7a4a1192e2497
 ---
 
 # Phase 36: Enforce the runtime model ladder — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: a8f92510271d38ad2bcf2b4e83ff245a0daa67169b56cc80811
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 1/12 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 3/12 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -22,8 +22,8 @@ shipyard_source_fingerprint: a8f92510271d38ad2bcf2b4e83ff245a0daa67169b56cc80811
 | Ticket | Delivery | Plan status |
 |---|---|---|
 | T-36-01 | merged | ✓ VERIFIED |
-| T-36-02 | pr-open | ? UNCERTAIN |
-| T-36-03 | pr-open | ? UNCERTAIN |
+| T-36-02 | merged | ✓ VERIFIED |
+| T-36-03 | merged | ✓ VERIFIED |
 | T-36-04 | pr-open | ? UNCERTAIN |
 | T-36-05 | pr-open | ? UNCERTAIN |
 | T-36-06 | pr-open | ? UNCERTAIN |
@@ -41,4 +41,4 @@ shipyard_source_fingerprint: a8f92510271d38ad2bcf2b4e83ff245a0daa67169b56cc80811
 
 ## Gaps Summary
 
-**Not green:** 11 plan(s) are not merged.
+**Not green:** 9 plan(s) are not merged.
