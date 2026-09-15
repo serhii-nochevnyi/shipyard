@@ -1203,11 +1203,11 @@
     "pr_created_at": "2026-09-14T20:35:18Z",
     "head_sha": "65f82a3681877303d64ebe7f8877f395e4e54269",
     "merge_state": "UNKNOWN",
-    "behind_by": 1,
+    "behind_by": 2,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
