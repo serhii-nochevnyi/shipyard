@@ -541,6 +541,7 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
     },
   };
   const escalations = [
+    ['codex', 'research', { type: 'alternatives' }, 'base', 'gpt-6-astra', 'low'],
     ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6-astra', 'medium'],
     ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6-astra', 'medium'],
     ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
@@ -594,8 +595,13 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
         : source === 'type' && runtime === 'claude' && signals[source] === 'alternatives' ? 'alternatives'
           : source === 'complexity' && signals[source] === 'very-complex' ? 'very-complex' : source;
       assert.ok(result.signals_fired.includes(signal), `${runtime}/${role} retains ${source}`);
-      assert.ok(result.signal_reasons.some((reason) => reason.source === `signals.${source}`), `${runtime}/${role} explains ${source}`);
-      assert.ok(result.selected_signals.some((selected) => selected.signal === signal), `${runtime}/${role} selects ${source}`);
+      const reason = result.signal_reasons.find((item) => item.source === `signals.${source}`);
+      assert.ok(reason, `${runtime}/${role} explains ${source}`);
+      assert.equal(
+        result.selected_signals.some((selected) => selected.signal === signal),
+        reason.applies,
+        `${runtime}/${role} selects ${source} only when it applies`,
+      );
     }
   }
 });
