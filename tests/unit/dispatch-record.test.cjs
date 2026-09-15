@@ -43,6 +43,16 @@ const DEFAULT_CODEX_AGENT_FILES = gen.codexStaticVariants()
   .map(({ file }) => file.replace(/\.toml$/, ''))
   .sort();
 
+test('requiring dispatch-record does not install a process-wide exit handler', () => {
+  const probe = spawnSync(process.execPath, ['-e', [
+    'const before = process.listenerCount(\'exit\');',
+    `require(${JSON.stringify(DISPATCH)});`,
+    'process.stdout.write(String(process.listenerCount(\'exit\') - before));',
+  ].join('')], { encoding: 'utf8' });
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.equal(probe.stdout, '0', 'the reconciliation cleanup hook is installed only after a claim exists');
+});
+
 function writeCodexAgents(dir, files = DEFAULT_CODEX_AGENT_FILES) {
   fs.mkdirSync(dir, { recursive: true });
   for (const name of files) {
