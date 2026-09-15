@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f0ed654daca31827bfdbb6bdd35a1c10f33c18eadd151ec0b95beacb4ba02752
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5e69e81d79e05a4e1c51045794d474ded535d6114e8d8299ab54a029a3bf5151
 phase: 36
 status: human_needed
-shipyard_source_fingerprint: f0ed654daca31827bfdbb6bdd35a1c10f33c18eadd151ec0b95beacb4ba02752
+shipyard_source_fingerprint: 5e69e81d79e05a4e1c51045794d474ded535d6114e8d8299ab54a029a3bf5151
 ---
 
 # Phase 36: Enforce the runtime model ladder — Verification Projection
@@ -28,7 +28,7 @@ shipyard_source_fingerprint: f0ed654daca31827bfdbb6bdd35a1c10f33c18eadd151ec0b95
 | T-36-05 | pr-open | ? UNCERTAIN |
 | T-36-06 | pr-open | ? UNCERTAIN |
 | T-36-07 | pr-open | ? UNCERTAIN |
-| T-36-08 | pending | ? UNCERTAIN |
+| T-36-08 | pr-open | ? UNCERTAIN |
 | T-36-09 | pending | ? UNCERTAIN |
 | T-36-10 | pending | ? UNCERTAIN |
 | T-36-11 | pending | ? UNCERTAIN |
