@@ -1216,3 +1216,23 @@
 {"ts":"2026-09-15T12:14:41.588Z","event":"base_merge","ticket":"T-36-08","pr":143,"base":"ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches","head":"7e8ce30734d252dc56550a54adf386bdb6ac168f"}
 {"ts":"2026-09-15T12:14:53.156Z","event":"status_change","ticket":"T-36-08","from":"pending","to":"pr-open","pr":143}
 {"ts":"2026-09-15T12:17:35.854Z","event":"dispatch","ticket":"T-36-09","role":"executor","pr":null,"model":"sonnet","effort":"high","effort_applied":"max","task_level":"complex","runtime":"codex","backend":"agent","observed_model":"gpt-5.6-luna","observed_effort":"max","agent_id":"01a0a500-360a-7893-bd25-f5b60953ca46","reason":"tier=floor+cap:codex(sonnet) effort=flat:codex(high)","dispatch_id":"dispatch-mu2n09de-b8aa492e-ec9e-49d6-9bf7-861653414437","by":"dispatch-record"}
+{"ts":"2026-09-15T12:19:56.355Z","event":"base_merge","ticket":"T-36-04","pr":139,"base":"epic/36-enforce-the-runtime-model-ladder","head":"746a67201f8cb0aadc4c76aa6464c6615171abc4"}
+{"ts":"2026-09-15T12:21:14.561Z","event":"base_merge","ticket":"T-36-05","pr":140,"base":"ticket/T-36-04-generate-and-validate-the-complete-codex","head":"b0e3513f9695ff5b647809633c7a4ceae7620b6b"}
+{"ts":"2026-09-15T12:22:48.114Z","event":"base_merge","ticket":"T-36-06","pr":141,"base":"ticket/T-36-05-claude-adapter-and-explicit-workflow-lau","head":"6f6dc4f161e5306f9e2f7059eb468354c06932a2"}
+{"ts":"2026-09-15T12:24:17.443Z","event":"base_merge","ticket":"T-36-07","pr":142,"base":"ticket/T-36-06-route-gsd-decomposition-through-the-mand","head":"623f523b169ba5e4f67bb641e804d4a7d1d3ad22"}
+{"ts":"2026-09-15T12:38:51.857Z","event":"base_merge","ticket":"T-36-05","pr":140,"base":"ticket/T-36-04-generate-and-validate-the-complete-codex","head":"23f4883fcb9e955e5d70ed3b0964c5374f2b9272"}
+{"ts":"2026-09-15T12:45:10.405Z","event":"base_merge","ticket":"T-36-06","pr":141,"base":"ticket/T-36-05-claude-adapter-and-explicit-workflow-lau","head":"825ba638ca0d09ca9b78584a32d389af803ea501"}
+{"ts":"2026-09-15T12:51:48.606Z","event":"base_merge","ticket":"T-36-07","pr":142,"base":"ticket/T-36-06-route-gsd-decomposition-through-the-mand","head":"c85dd2a4567c34c6d8e1a47816df76c77b5e1695"}
+{"ts":"2026-09-15T12:53:28.279Z","event":"base_merge","ticket":"T-36-08","pr":143,"base":"ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches","head":"426c3ef955623c436585e2fb5e2037ce9082756f"}
+{"ts":"2026-09-15T12:57:56.055Z","event":"base_merge","ticket":"T-36-04","pr":139,"base":"epic/36-enforce-the-runtime-model-ladder","head":"b32f2656ba2df64ee2421f2b927040e764d1a29f"}
+{"ts":"2026-09-15T12:59:16.810Z","event":"base_merge","ticket":"T-36-05","pr":140,"base":"ticket/T-36-04-generate-and-validate-the-complete-codex","head":"195cc46ccb0b90eee5b2faf141ba9138fe05c943"}
+{"ts":"2026-09-15T13:07:49.291Z","event":"base_merge","ticket":"T-36-09","pr":144,"base":"ticket/T-36-08-application-receipts-and-dispatch-record","head":"2afe11ed7208e14764add9538d769f0a5f4477b7"}
+{"ts":"2026-09-15T13:08:01.515Z","event":"status_change","ticket":"T-36-09","from":"pending","to":"pr-open","pr":144}
+{"ts":"2026-09-15T14:07:02.565Z","event":"dispatch","ticket":"T-36-10","role":"executor","pr":null,"effort_applied":"max","observed_model":"gpt-5.6-luna","observed_effort":"max","agent_id":"01a0a560-82d2-7c53-8c14-34069b0c8a3d","dispatch_id":"t36-10-executor-20260915-01","by":"dispatch-record"}
+{"ts":"2026-09-15T14:07:06.774Z","event":"status_change","ticket":"T-36-04","from":"pr-open","to":"merged","pr":139}
+{"ts":"2026-09-15T14:10:36.255Z","event":"dispatch","ticket":"T-36-05","role":"ci-fix","pr":140,"effort_applied":"max","observed_model":"gpt-5.6-luna","observed_effort":"max","agent_id":"01a0a567-ab6d-7da2-bea0-5a2c077f7292","dispatch_id":"t36-05-ci-fix-20260915-01","by":"dispatch-record"}
+{"ts":"2026-09-15T14:26:39.389Z","event":"status_change","ticket":"T-36-10","from":"pending","to":"pr-open","pr":145}
+{"ts":"2026-09-15T14:29:57.973Z","event":"dispatch","ticket":"T-36-12","role":"executor","pr":null,"effort_applied":"max","observed_model":"gpt-5.6-luna","observed_effort":"max","agent_id":"01a0a579-53e5-78f3-a482-dcd2500a6cb0","dispatch_id":"t36-12-executor-20260915-01","by":"dispatch-record"}
+{"ts":"2026-09-15T14:29:57.973Z","event":"dispatch","ticket":"T-36-11","role":"executor","pr":null,"effort_applied":"low","observed_model":"gpt-6-astra","observed_effort":"low","agent_id":"01a0a579-557a-7cb3-b43c-2254d806839d","dispatch_id":"t36-11-executor-20260915-01","by":"dispatch-record"}
+{"ts":"2026-09-15T14:45:05.271Z","event":"status_change","ticket":"T-36-12","from":"pending","to":"pr-open","pr":147}
+{"ts":"2026-09-15T14:47:14.238Z","event":"status_change","ticket":"T-36-11","from":"pending","to":"pr-open","pr":146}
