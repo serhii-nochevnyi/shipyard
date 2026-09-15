@@ -198,6 +198,9 @@ function loadClaudeWorkflowDispatch() {
 
 const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
 
+const isBoundaryFailure = (error) => !!error
+  && (error.name === 'DispatchBoundaryError' || error.name === 'DispatchPolicyError')
+
 phase('Execute')
 
 // fail-safe: a dead (null) OR throwing executor becomes a `blocked` verdict for
@@ -280,8 +283,12 @@ const results = await parallel(
         .then(({ result, receipt }) => (result
           ? toResult(t, result, receipt)
           : execFallback(t, 'executor agent died — re-dispatch via /shipyard:deliver', receipt)))
-        .catch((e) => execFallback(t, `executor errored (${e && e.message ? e.message : e}) — re-dispatch via /shipyard:deliver`))
+        .catch((e) => {
+          if (isBoundaryFailure(e)) throw e
+          return execFallback(t, `executor errored (${e && e.message ? e.message : e}) — re-dispatch via /shipyard:deliver`)
+        })
     } catch (e) {
+      if (isBoundaryFailure(e)) throw e
       return Promise.resolve(execFallback(t, `executor errored (${e && e.message ? e.message : e}) — re-dispatch via /shipyard:deliver`))
     }
   })

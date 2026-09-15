@@ -27,7 +27,7 @@ const { activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DI
 // One role vocabulary for the whole conveyor — the same list `mark` validates
 // against. The per-role subject table below is checked against IT, not against a
 // second list written out here.
-const { ROLES } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
+const { ROLES, parseRoute: parseLegacyRoute } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
 const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
 
 // SHIPYARD_GRAPH_DIR is the other explicit channel for "which graph"; a value
@@ -93,7 +93,7 @@ test('boundary receipts reconcile into the existing store and journal without re
       }) } },
     }).dispatch({ runtime: 'codex', role: 'executor' });
     const args = ['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
-      '--dispatch-id', result.dispatch_id];
+      '--dispatch-id', result.dispatch_id, '--task-level', result.resolution.task_level];
     const missingId = run(['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore], project);
     assert.notEqual(missingId.status, 0);
     const batch = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
@@ -117,6 +117,10 @@ test('boundary receipts reconcile into the existing store and journal without re
     const rec = store(graph)['T-01-01'];
     assert.equal(rec.applied_model, result.receipt.applied_model);
     assert.equal(rec.applied_effort, result.receipt.applied_effort);
+    assert.equal(rec.task_level, result.resolution.task_level);
+    assert.notEqual(rec.model, result.requested_model, 'legacy tier projection is distinct from the concrete receipt model');
+    assert.equal(parseLegacyRoute(rec.reason).tier.model, rec.model);
+    assert.equal(parseLegacyRoute(rec.reason).effort.effort, rec.effort);
     assert.deepStrictEqual(rec.application_receipt, result.receipt);
     assert.deepStrictEqual(rec.launch_arguments, result.resolution.launch_arguments);
     assert.deepStrictEqual(store(graph)['T-01-02'], legacy);

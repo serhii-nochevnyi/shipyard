@@ -363,8 +363,20 @@ const attributionStatus = (event) => {
 // mutated, and a dispatch with no attribution record remains unjoined even if
 // it contains an observed provider model. Multiple current records for one
 // dispatch are kept visible as ambiguous rather than selecting one silently.
+// Build the durable-ledger index once: the journal window is bounded but the
+// append-only attribution ledger is not, so scanning it per dispatch makes the
+// report slower as history grows.
+const attributionsByDispatch = new Map();
+for (const record of attributionRecords) {
+  if (!record || !present(record, 'dispatch_id') || !present(record, 'runtime')
+      || !usageAttribution.hasTranscriptIdentity(record)) continue;
+  const matches = attributionsByDispatch.get(record.dispatch_id) || [];
+  matches.push(record);
+  attributionsByDispatch.set(record.dispatch_id, matches);
+}
 const ladderFacts = ladderEvents.map((event) => {
-  const matches = attributionRecords.filter((record) => record.dispatch_id === event.dispatch_id);
+  const matches = (attributionsByDispatch.get(event.dispatch_id) || [])
+    .filter((record) => present(event, 'runtime') && record.runtime === event.runtime);
   return usageAttribution.reconcileTelemetry(event, {
     usageMatches: matches,
     usageAmbiguous: matches.length > 1,
