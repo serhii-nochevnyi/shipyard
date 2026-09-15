@@ -10,7 +10,9 @@ const ROOT = path.join(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'plugins/delivery-pipeline/scripts/codex-agent.cjs');
 const { selectAgent, parseArgs, signalsFrom, projectDirFrom } = require(SCRIPT);
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-const { createCodexRemapper, readProjectConfig } = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
+const {
+  createCodexRemapper, readProjectConfig, validateCodexConfiguration,
+} = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
 
 const capabilities = {
   supportedModels: ['gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-astra'],
@@ -110,11 +112,8 @@ for (const raw of [
   { pipeline: { models: { executor: 'gpt-5.6-terra' } } },
   { delivery_pipeline: { effort: { executor: 'high' } } },
   { model_overrides: { 'gsd-executor': 'gpt-5.6-terra' } },
-  { model_policy: { runtime_tiers: { codex: { luna: 'gpt-6-astra' } } } },
-  { model_profile_overrides: { codex: { sonnet: 'gpt-5.6-luna' } } },
   { model_policy: { runtime_tiers: { codex: { luna: { model: 'gpt-5.6-luna', effort: 'medium' } } } } },
   { delivery_pipeline: { codex_models: [] } },
-  { delivery_pipeline: { codex_models: [{ model: 'gpt-5.6-terra' }] } },
   { delivery_pipeline: { codex_models: [{ model: 'gpt-5.6-luna', effort: 'high' }] } },
 ]) {
   test('configuration conflicts are not normalized away: ' + JSON.stringify(raw), () => {
@@ -124,6 +123,53 @@ for (const raw of [
     } finally { clean(f); }
   });
 }
+
+for (const [source, inherited, raw] of [
+  ['project runtime tier', false, { model_policy: { runtime_tiers: { codex: { sol: 'vendor/codex-sonnet-v2' } } } }],
+  ['project profile override', false, { model_profile_overrides: { codex: { luna: 'vendor/codex-luna-v2' } } }],
+  ['inherited runtime tier', true, { model_policy: { runtime_tiers: { codex: { astra: 'vendor/codex-astra-v2' } } } }],
+  ['inherited profile override', true, { model_profile_overrides: { codex: { terra: 'vendor/codex-terra-v2' } } }],
+]) {
+  test(source + ' arbitrary Codex id fails closed before a routed launch', () => {
+    const f = fixture(raw);
+    const gsdHome = inherited ? fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-')) : null;
+    try {
+      if (inherited) {
+        fs.rmSync(path.join(f.root, '.planning'), { recursive: true, force: true });
+        fs.mkdirSync(path.join(gsdHome, '.gsd'));
+        fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(raw));
+      }
+      assert.throws(() => selectAgent('decomposition', inherited
+        ? { ...f.options, env: { GSD_HOME: gsdHome } }
+        : f.options), (error) =>
+        error.code === 'CONFLICTING_OVERRIDE' && /cannot replace canonical/.test(error.message));
+    } finally {
+      clean(f);
+      if (gsdHome) fs.rmSync(gsdHome, { recursive: true, force: true });
+    }
+  });
+}
+
+test('an arbitrary Codex palette id fails closed while named palette assertions remain valid', () => {
+  const f = fixture({ delivery_pipeline: { codex_models: [{ model: 'vendor/codex-luna-v2' }] } });
+  try {
+    assert.throws(() => selectAgent('executor', f.options), (error) =>
+      error.code === 'CONFLICTING_OVERRIDE' && /outside the named ADR-014 Codex palette/.test(error.message));
+  } finally { clean(f); }
+});
+
+test('a configured effort above the canonical effort is accepted but the host receives canonical effort', () => {
+  const f = fixture({ delivery_pipeline: { codex_models: [
+    { model: 'gpt-5.6-sol', effort: 'high' },
+  ] } });
+  try {
+    const resolution = policy.resolveDispatch({ runtime: 'codex', role: 'decomposition' });
+    assert.equal(validateCodexConfiguration(resolution, readProjectConfig(f.root), capabilities), true);
+    const result = selectAgent('decomposition', f.options);
+    assert.equal(result.effort, 'medium');
+    assert.deepEqual(result.launch_arguments, { model: 'gpt-5.6-sol', reasoning_effort: 'medium' });
+  } finally { clean(f); }
+});
 
 test('matching named configuration is an assertion, independent of palette order', () => {
   const f = fixture({
@@ -214,15 +260,18 @@ test('malformed project config does not fall through to defaults or the GSD cata
   } finally { clean(f); }
 });
 
-test('named remapper exposes exactly the canonical palette without loading GSD', () => {
+test('named remapper accepts only canonical named assertions and never returns a replacement', () => {
   const f = fixture();
   try {
-    const remap = createCodexRemapper({ cwd: f.root, codexHome: '/nonexistent-gsd' });
-    assert.equal(remap('terra'), 'gpt-5.6-terra');
-    assert.equal(remap('sol'), 'gpt-5.6-sol');
-    assert.equal(remap('luna'), 'gpt-5.6-luna');
-    assert.equal(remap('astra'), 'gpt-6-astra');
-    for (const key of ['sonnet', 'unknown', '', undefined]) assert.throws(() => remap(key), /unknown named Codex model/);
+    const remap = createCodexRemapper({
+      cwd: f.root,
+      config: { model_policy: { runtime_tiers: { codex: { sol: 'gpt-5.6-sol' } } } },
+    });
+    assert.equal(remap('sol'), null);
+    assert.equal(remap('unknown'), null);
+    assert.throws(() => createCodexRemapper({
+      config: { model_policy: { runtime_tiers: { codex: { sol: 'vendor/model@2026' } } } },
+    }), /cannot replace canonical/);
   } finally { clean(f); }
 });
 

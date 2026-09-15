@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c5f6a2e520c151618dfc8d36be79e0672b2f21a4ab2a540fadb5db1abefef9d7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6e6553cb5991b1789142ad5ffc589984cb06c5293ce7819e31a7a4a1192e2497
 phase: 36-enforce-the-runtime-model-ladder
 plan: 07
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: c5f6a2e520c151618dfc8d36be79e0672b2f21a4ab2a540fadb5db1abefef9d7
+shipyard_source_fingerprint: 6e6553cb5991b1789142ad5ffc589984cb06c5293ce7819e31a7a4a1192e2497
 ---
 
 # Phase 36: Enforce the boundary across Shipyard delivery launches — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: c5f6a2e520c151618dfc8d36be79e0672b2f21a4ab2a540fadb
 ## Delivery Evidence
 
 - Ticket: T-36-07
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #142
 - Source plan: .planning/phases/36-enforce-the-runtime-model-ladder/36-07-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 

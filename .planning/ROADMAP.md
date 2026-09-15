@@ -631,8 +631,8 @@ existing Claude palette is a read-only compatibility surface.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `c5f6a2e520c151618dfc8d36be79e0672b2f21a4ab2a540fadb5db1abefef9d7`
-- Plans merged: 105/116
+- Source fingerprint: `6e6553cb5991b1789142ad5ffc589984cb06c5293ce7819e31a7a4a1192e2497`
+- Plans merged: 107/116
 - Phases verified: 4/17
 - Current phase: 20
 
@@ -654,6 +654,6 @@ existing Claude palette is a read-only compatibility surface.
 | 33 — Reduce orchestration context and transfer sessions safely | 0 | 0 | pending |
 | 34 — Improve convergence and tune from measured outcomes | 0 | 0 | pending |
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
-| 36 — Enforce the runtime model ladder | 12 | 1 | pending |
+| 36 — Enforce the runtime model ladder | 12 | 3 | pending |
 
 <!-- shipyard:gsd-sync:end -->

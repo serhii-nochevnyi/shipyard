@@ -2263,6 +2263,76 @@ test('the routed mode marker is frozen and outranks a mutable compatibility flag
   assert.equal(resolveModel('executor', {}, routed), 'gpt-5.6-luna');
 });
 
+test('routed readers reject a replacement context before compatibility fallback', () => {
+  const { config } = routedConfig();
+  config.dispatch_context = { mode: 'compatibility', routed: false };
+  for (const read of [
+    () => resolveDispatch({ config, role: 'executor' }),
+    () => resolveModel('executor', {}, config),
+    () => resolveEffort('executor', 'gpt-5.6-luna', config),
+    () => routeOf('executor', {}, config),
+  ]) {
+    refusesSource(read, 'config.dispatch_context');
+  }
+});
+
+for (const [name, copy] of [
+  ['spread', (config) => ({ ...config })],
+  ['serialized', (config) => JSON.parse(JSON.stringify(config))],
+  ['context-omitted', (config) => {
+    const { dispatch_context, ...copy } = config;
+    return copy;
+  }],
+  ['context-null', (config) => ({ ...config, dispatch_context: null })],
+]) {
+  test(`routed readers reject an unbound ${name} copy before compatibility fallback`, () => {
+    const original = routedConfig().config;
+    const config = copy(original);
+    assert.equal(config.routed, true);
+    assert.equal(resolveModel('executor', {}, original), 'gpt-5.6-luna');
+    for (const read of [
+      () => resolveModel('executor', {}, config),
+      () => resolveEffort('executor', 'gpt-5.6-luna', config),
+      () => routeOf('executor', {}, config),
+      () => resolveDispatch({ config, role: 'executor' }),
+      () => taskLevelRoute('executor', {}, config),
+      () => fableRoute('executor', {}, config),
+      () => signalGaps('executor', {}, config),
+    ]) {
+      assert.throws(read, (error) => error.name === 'DispatchPolicyError'
+        && error.code === 'INVALID_CONFIG'
+        && error.details.source === 'config.dispatch_context'
+        && error.message.includes('config.dispatch_context'));
+    }
+    const compatibility = copy(withRawOptions({}, { runtime: 'codex', env: {} }).config);
+    assert.equal(resolveModel('executor', {}, compatibility), 'sonnet');
+    assert.equal(resolveEffort('executor', 'sonnet', compatibility), 'high');
+    assert.ok(parseRoute(routeOf('executor', {}, compatibility)));
+  });
+}
+
+test('routeOf is compatibility-only and routed decisions retain the complete canonical contract', () => {
+  for (const runtime of ['claude', 'codex']) {
+    const { config } = routedConfig({}, runtime, { dispatch_id: 'route-contract' });
+    for (const signals of [undefined, {}, { checkpoint: true }, null, false, []]) {
+      assert.throws(() => routeOf('executor', signals, config), (error) =>
+        error.code === 'UNSUPPORTED_SELECTION' && error.details.source === 'routeOf'
+        && error.message.includes('complete resolveDispatch result'));
+    }
+    const decision = resolveDispatch({ config, role: 'executor' });
+    assert.deepStrictEqual(decision, canonicalPolicy.resolveDispatch({
+      runtime, role: 'executor', dispatch_id: 'route-contract',
+    }));
+    assert.equal(parseRoute(decision.route), null);
+    const compatibility = withRawOptions({}, { runtime, env: {} }).config;
+    const model = resolveModel('executor', {}, compatibility);
+    const effort = resolveEffort('executor', model, compatibility);
+    const parsed = parseRoute(routeOf('executor', {}, compatibility));
+    assert.equal(parsed.tier.model, model);
+    assert.equal(parsed.effort.effort, effort);
+  }
+});
+
 test('compatibility parsing cannot hide a conflicting routed decomposition override', () => {
   for (const [key, value] of [['models', 'opus'], ['effort', 'low']]) {
     const { config, warnings } = withRawOptions({ pipeline: { [key]: { decomposition: value } } },
@@ -2290,7 +2360,9 @@ test('every runtime and role delegates base and escalation decisions with full i
         assert.ok(Object.isFrozen(got));
         assert.equal(resolveModel(role, signals, config), got.model);
         assert.equal(resolveEffort(role, got.model, config, signals), got.effort);
-        assert.equal(routeOf(role, signals, config), got.route);
+        assert.throws(() => routeOf(role, signals, config), (error) =>
+          error.code === 'UNSUPPORTED_SELECTION' && error.details.source === 'routeOf'
+          && error.message.includes('resolveDispatch'));
       }
     }
   }
@@ -2334,6 +2406,63 @@ test('model_profile must match the normalized pipeline policy at the routed boun
   refusesSource(() => resolveDispatch({ config: missing.config, role: 'executor' }), 'config.model_profile');
 });
 
+test('routed profile controls reject raw nested values hidden by compatibility normalization', () => {
+  for (const namespace of ['pipeline', 'delivery_pipeline', 'gsd']) {
+    for (const value of ['bogus', null, false, 0, '', {}, []]) {
+      const { config } = routedConfig({ [namespace]: { model_policy: value } });
+      assert.throws(() => resolveDispatch({ config, role: 'executor' }), (error) =>
+        error.code === 'UNSUPPORTED_SELECTION' && error.details.source === `${namespace}.model_policy`);
+    }
+  }
+});
+
+test('raw GSD model policy must match the normalized routed policy', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const [policy, model_profile, alias] of [
+      ['balanced', 'balanced', 'adaptive'], ['economy', 'budget', 'budget'], ['premium', 'quality', 'quality'],
+    ]) {
+      for (const value of [policy, alias]) {
+        const { config } = routedConfig({
+          model_profile, pipeline: { model_policy: policy }, gsd: { model_policy: value },
+        }, runtime);
+        assert.deepStrictEqual(resolveDispatch({ config, role: 'executor' }),
+          canonicalPolicy.resolveDispatch({ runtime, role: 'executor' }));
+      }
+      for (const value of ['balanced', 'economy', 'premium'].filter((value) => value !== policy)) {
+        const { config } = routedConfig({
+          model_profile, pipeline: { model_policy: policy }, gsd: { model_policy: value },
+        }, runtime);
+        assert.throws(() => resolveDispatch({ config, role: 'executor' }), (error) =>
+          error.code === 'CONFLICTING_OVERRIDE' && error.details.source === 'gsd.model_policy'
+          && error.details.expected === policy && error.details.actual === value);
+      }
+    }
+    const { config } = routedConfig({ gsd: { model_policy: 'economy' } }, runtime);
+    refusesSource(() => resolveDispatch({ config, role: 'executor' }), 'gsd.model_policy');
+  }
+});
+
+test('routed Codex CLI refuses malformed or conflicting GSD model policies without a decision', () => {
+  for (const [value, code] of [
+    ['bogus', 'UNSUPPORTED_SELECTION'], [null, 'UNSUPPORTED_SELECTION'], ['economy', 'CONFLICTING_OVERRIDE'],
+    ['balanced', null],
+  ]) {
+    const { dir } = routedConfig({ gsd: { model_policy: value } });
+    const result = spawnSync(process.execPath, [mod, 'dispatch', JSON.stringify({ runtime: 'codex', role: 'executor' })],
+      { cwd: dir, env: {}, encoding: 'utf8' });
+    if (code) {
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout, '');
+      assert.ok(result.stderr.includes(code) && result.stderr.includes('gsd.model_policy'), result.stderr);
+    } else {
+      assert.equal(result.status, 0, result.stderr);
+      const decision = JSON.parse(result.stdout);
+      assert.equal(decision.model, 'gpt-5.6-luna');
+      assert.equal(decision.effort, 'max');
+    }
+  }
+});
+
 test('routed Fable controls are normalized, carried, and cannot be bypassed', () => {
   const shut = routedConfig({}, 'claude');
   assert.deepStrictEqual(shut.config.dispatch_context.normalized, {
@@ -2367,10 +2496,10 @@ test('refuses original overrides before compatibility parsing or namespace mergi
     [{ pipeline: { effort: { executor: 'ultra' } } }, 'pipeline.effort.executor'],
     [{ pipeline: { models: { executor: 'opus' } }, delivery_pipeline: { models: {} } }, 'pipeline.models.executor'],
     [{ delivery_pipeline: { models: { executor: 'opus' } } }, 'delivery_pipeline.models.executor'],
-    [{ models: { execution: 'opus' } }, 'config.models.execution'],
+    [{ models: { execution: 'gpt-6-astra' } }, 'config.models.execution'],
     [{ model_overrides: { 'gsd-executor': 'opus' } }, 'config.model_overrides.gsd-executor'],
     [{ effort: { agent_overrides: { 'gsd-executor': 'low' } } }, 'config.effort.agent_overrides.gsd-executor'],
-    [{ effort: { routing_tier_defaults: { standard: 'low' } } }, 'config.effort.routing_tier_defaults.standard'],
+    [{ effort: { routing_tier_defaults: { standard: 'ultra' } } }, 'config.effort.routing_tier_defaults.standard'],
     [{ gsd: { models: { executor: 'opus' } } }, 'gsd.models.executor'],
     [{ pipeline: { models: null } }, 'pipeline.models'],
     [{ pipeline: { inline: true } }, 'pipeline.inline'],
@@ -2378,6 +2507,96 @@ test('refuses original overrides before compatibility parsing or namespace mergi
   for (const [raw, source] of cases) {
     const { config } = routedConfig(raw);
     refusesSource(() => resolveDispatch({ role: 'executor', config }), source);
+  }
+});
+
+test('GSD tuning tiers and defaults defer to both runtime ladders for every role', () => {
+  const tuning = {
+    models: { planning: 'opus', execution: 'opus', research: 'sonnet', verification: 'sonnet' },
+    effort: { routing_tier_defaults: { light: 'low', standard: 'high', heavy: 'xhigh' } },
+  };
+  for (const runtime of ['codex', 'claude']) {
+    for (const raw of [tuning, { gsd: tuning }]) {
+      const { config } = routedConfig({ ...raw, pipeline: { fable: 'auto' } }, runtime);
+      for (const role of ROUTED_ROLES) {
+        for (const signals of [{}, { checkpoint: true }]) {
+          assert.deepStrictEqual(resolveDispatch({ config, role, signals }),
+            canonicalPolicy.resolveDispatch({ runtime, role, signals }));
+        }
+      }
+    }
+    // gsd-tune also writes these concrete Claude overrides when Fable is off.
+    const raw = { ...tuning, model_profile: 'balanced', ...(runtime === 'claude' ? {
+      model_overrides: { 'gsd-planner': 'opus', 'gsd-code-reviewer': 'opus' },
+    } : {}) };
+    const { config } = routedConfig(raw, runtime);
+    for (const role of ROUTED_ROLES) {
+      assert.deepStrictEqual(resolveDispatch({ config, role }),
+        canonicalPolicy.resolveDispatch({ runtime, role }));
+    }
+  }
+});
+
+test('minimal is harmless only as a generic GSD routing tier default', () => {
+  const tuning = {
+    effort: { routing_tier_defaults: { light: 'minimal', standard: 'high', heavy: 'xhigh' } },
+  };
+  for (const runtime of ['codex', 'claude']) {
+    for (const raw of [tuning, { gsd: tuning }]) {
+      const { config } = routedConfig(raw, runtime);
+      assert.deepStrictEqual(resolveDispatch({ config, role: 'executor' }),
+        canonicalPolicy.resolveDispatch({ runtime, role: 'executor' }));
+    }
+  }
+});
+
+test('only GSD stage tier aliases are exempt, not concrete or inherited selections', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const prefix of ['config', 'gsd']) {
+      const wrap = (value) => prefix === 'config' ? value : { gsd: value };
+      for (const alias of ['haiku', 'sonnet', 'opus']) {
+        const { config } = routedConfig(wrap({ models: { execution: alias } }), runtime);
+        assert.deepStrictEqual(resolveDispatch({ config, role: 'executor' }),
+          canonicalPolicy.resolveDispatch({ runtime, role: 'executor' }));
+      }
+      for (const [value, source] of [
+        [{ models: { execution: 'inherit' } }, 'models.execution'],
+        [{ models: { execution: 'not-a-model' } }, 'models.execution'],
+        [{ models: { executor: 'haiku' } }, 'models.executor'],
+        [{ models: { 'gsd-executor': 'haiku' } }, 'models.gsd-executor'],
+        [{ model_overrides: { execution: 'haiku' } }, 'model_overrides.execution'],
+        [{ model_overrides: { 'gsd-executor': 'haiku' } }, 'model_overrides.gsd-executor'],
+        [{ effort: { execution: 'low' } }, 'effort.execution'],
+        [{ effort: { agent_overrides: { 'gsd-executor': 'low' } } }, 'effort.agent_overrides.gsd-executor'],
+      ]) {
+        const { config } = routedConfig(wrap(value), runtime);
+        refusesSource(() => resolveDispatch({ config, role: 'executor' }), `${prefix}.${source}`);
+      }
+    }
+  }
+  for (const role of ['decomposition', 'arch-review']) {
+    const agent = role === 'decomposition' ? 'gsd-planner' : 'gsd-code-reviewer';
+    const { config } = routedConfig({ pipeline: { fable: 'auto' },
+      model_overrides: { [agent]: 'fable' } }, 'claude');
+    refusesSource(() => resolveDispatch({ config, role }), `config.model_overrides.${agent}`);
+  }
+});
+
+test('inherited GSD tuning defaults retain the canonical selections on both runtimes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-tuning-root-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-tuning-home-'));
+  fs.mkdirSync(path.join(home, '.gsd'));
+  fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify({
+    model_profile: 'balanced',
+    models: { planning: 'opus', execution: 'opus', research: 'sonnet', verification: 'sonnet' },
+    effort: { routing_tier_defaults: { light: 'minimal', standard: 'high', heavy: 'xhigh' } },
+  }));
+  for (const runtime of ['codex', 'claude']) {
+    const { config } = loadConfig(root, { runtime, routed: true, env: { GSD_HOME: home } });
+    for (const role of ROUTED_ROLES) {
+      assert.deepStrictEqual(resolveDispatch({ config, role }),
+        canonicalPolicy.resolveDispatch({ runtime, role }));
+    }
   }
 });
 
@@ -2392,11 +2611,11 @@ test('matching configured selections are harmless and cannot pin a later rung', 
     const expected = canonicalPolicy.resolveDispatch({ runtime, role: 'executor' });
     const { config } = routedConfig({
       pipeline: { models: { executor: expected.model }, effort: { executor: expected.effort } },
-      models: { execution: expected.model },
+      model_overrides: { 'gsd-executor': expected.model },
       effort: { agent_overrides: { 'gsd-executor': expected.effort } },
     }, runtime);
     assert.deepStrictEqual(resolveDispatch({ config, role: 'executor' }), expected);
-    refusesSource(() => resolveDispatch({ config, role: 'executor', signals: { checkpoint: true } }), 'config.models.execution');
+    refusesSource(() => resolveDispatch({ config, role: 'executor', signals: { checkpoint: true } }), 'config.effort.agent_overrides.gsd-executor');
   }
 });
 
@@ -2495,7 +2714,9 @@ test('refuses incomplete or stale policy pairs in config and runtime context', (
           if (source !== 'config') {
             config.dispatch_context = { ...config.dispatch_context, runtime: target };
           }
-          const expectedSource = `${source}.${field}`;
+          const expectedSource = source === 'config'
+            ? `${source}.${field}`
+            : 'config.dispatch_context';
           assert.throws(() => resolveDispatch({ config, role: 'executor' }), (error) =>
             error.name === 'DispatchPolicyError' && error.code === 'INVALID_CONFIG'
               && error.details.source === expectedSource && error.message.includes(expectedSource),
@@ -2534,6 +2755,201 @@ test('routed CLI returns full decisions and exits nonzero without stdout on inva
   const json = cli(['dispatch', JSON.stringify({ runtime: 'claude', role: 'executor', dispatch_id: 'json-launch' })]);
   assert.equal(json.status, 0, json.stderr);
   assert.equal(JSON.parse(json.stdout).dispatch_id, 'json-launch');
+});
+
+test('routed CLI preserves explicit whitespace input tokens for canonical rejection', () => {
+  const { dir } = routedConfig();
+  const args = ['model', 'arch-review', '--routed', '--runtime', 'codex', '--input-tokens', '   '];
+  const api = routedConfig({}, 'codex').config;
+  assert.throws(() => resolveDispatch({ config: api, role: 'arch-review', signals: { inputTokens: '   ' } }),
+    { code: 'INVALID_SIGNAL' });
+  const result = spawnSync(process.execPath, [mod, ...args], { cwd: dir, env: {}, encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /INVALID_SIGNAL/);
+  assert.match(result.stderr, /inputTokens/);
+});
+
+test('routed loading reports malformed configuration before missing runtime evidence', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-routed-invalid-config-'));
+  const file = path.join(dir, '.planning', 'config.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '{');
+  assert.throws(() => loadConfig(dir, { routed: true, env: {} }), (error) =>
+    error.code === 'INVALID_CONFIG' && error.details.source === file);
+});
+
+suite('T-36-02 escalated boundary reproductions');
+
+test('raw Fable controls fail closed in both namespaces and runtimes', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const namespace of ['pipeline', 'delivery_pipeline']) {
+      for (const [field, values] of [
+        ['fable', ['bogus', 0, false, true, null, '', {}, []]],
+        ['fable_window_tokens', [0, -1, 1000, 'garbage', '250000', 250000.9, false, null, {}, []]],
+      ]) {
+        for (const value of values) {
+          const raw = { [namespace]: { [field]: value } };
+          const { config } = routedConfig(raw, runtime);
+          refusesSource(() => resolveDispatch({ config, role: 'executor' }), `${namespace}.${field}`);
+          assert.doesNotThrow(() => resolveModel('executor', {}, withRaw(raw).config));
+          // A higher-precedence valid value cannot hide malformed input.
+          if (namespace === 'pipeline') {
+            raw.delivery_pipeline = { [field]: field === 'fable' ? 'off' : 250000 };
+            const shadowed = routedConfig(raw, runtime).config;
+            refusesSource(() => resolveDispatch({ config: shadowed, role: 'executor' }), `${namespace}.${field}`);
+          }
+        }
+      }
+      for (const fable of ['auto', 'off']) {
+        const { config } = routedConfig({ [namespace]: { fable, fable_window_tokens: 250000 } }, runtime);
+        assert.equal(resolveDispatch({ config, role: 'executor' }).rung, 'base');
+      }
+    }
+  }
+});
+
+test('routed Fable controls reject contradictory namespace values before precedence hides them', () => {
+  const { config } = routedConfig({
+    pipeline: { fable: 'off' },
+    delivery_pipeline: { fable: 'auto' },
+  }, 'claude');
+  refusesSource(() => resolveDispatch({
+    config,
+    role: 'arch-review',
+    signals: { inputTokens: canonicalPolicy.WINDOW_THRESHOLD_TOKENS + 1 },
+  }), 'pipeline.fable');
+});
+
+test('every routed reader rejects explicit malformed signals but accepts omission', () => {
+  for (const runtime of ['claude', 'codex']) {
+    const { config } = routedConfig({}, runtime);
+    const model = resolveModel('executor', {}, config);
+    assert.equal(resolveEffort('executor', model, config), 'max');
+    for (const signals of [null, false, 0, '', 'garbage', [], { critical: 'yes' }]) {
+      for (const read of [
+        () => resolveDispatch({ config, role: 'executor', signals }),
+        () => resolveModel('executor', signals, config),
+        () => resolveEffort('executor', model, config, signals),
+      ]) assert.throws(read, { code: signals && !Array.isArray(signals) && typeof signals === 'object'
+        ? 'INVALID_SIGNAL' : 'INVALID_INPUT' });
+    }
+  }
+  for (const signals of [undefined, null, false, 0, '']) {
+    assert.doesNotThrow(() => resolveEffort('executor', 'opus', DEFAULTS, signals));
+  }
+});
+
+test('effective profiles from inputs and mutable or nested config cannot escape validation', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const value of ['inherit', 'adaptive', 'quality', 'budget', 'bogus', null, false, 0, '', {}, []]) {
+      const { config } = routedConfig({}, runtime);
+      refusesSource(() => resolveDispatch({ config, role: 'executor', model_profile: value }), 'input.model_profile');
+      config.model_profile = value;
+      refusesSource(() => resolveDispatch({ config, role: 'executor' }), 'config.model_profile');
+      for (const namespace of ['pipeline', 'delivery_pipeline', 'gsd']) {
+        const nested = routedConfig({ [namespace]: { model_profile: value } }, runtime).config;
+        refusesSource(() => resolveDispatch({ config: nested, role: 'executor' }), `${namespace}.model_profile`);
+      }
+    }
+    const { config } = routedConfig({}, runtime);
+    config.model_profile = 'balanced';
+    assert.equal(resolveDispatch({ config, role: 'executor', model_profile: 'balanced' }).rung, 'base');
+  }
+});
+
+test('JSON dispatch validates the complete invocation including empty and trailing arguments', () => {
+  const { dir } = routedConfig();
+  const request = JSON.stringify({ runtime: 'codex', role: 'executor' });
+  const cli = (args, input = request) => spawnSync(process.execPath, [mod, 'dispatch', ...args],
+    { cwd: dir, env: {}, input, encoding: 'utf8' });
+  for (const args of [[request, '--runtime', 'claude'], [request, '--model', 'opus'],
+    [request, request], [request, ''], [''], [request, '--routed']]) {
+    const result = cli(args);
+    assert.equal(result.status, 1, JSON.stringify(args));
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /INVALID_INPUT/);
+  }
+  for (const args of [[], [request]]) {
+    const result = cli(args);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).model, 'gpt-5.6-luna');
+  }
+});
+
+test('JSON dispatch rejects unknown top-level fields instead of losing escalation signals', () => {
+  const { dir } = routedConfig();
+  const cli = (args, input) => spawnSync(process.execPath, [mod, 'dispatch', ...args],
+    { cwd: dir, env: {}, input, encoding: 'utf8' });
+  const typo = JSON.stringify({
+    runtime: 'codex', role: 'executor', singals: { critical: true },
+  });
+  for (const [args, input] of [[[typo], undefined], [[], typo]]) {
+    const result = cli(args, input);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /INVALID_INPUT/);
+    assert.match(result.stderr, /singals/);
+  }
+
+  const valid = JSON.stringify({
+    runtime: 'codex', role: 'executor', signals: { critical: true }, dispatch_id: 'critical-json',
+  });
+  for (const [args, input] of [[[valid], undefined], [[], valid]]) {
+    const result = cli(args, input);
+    assert.equal(result.status, 0, result.stderr);
+    const decision = JSON.parse(result.stdout);
+    assert.equal(decision.rung, 'critical');
+    assert.equal(decision.model, 'gpt-6-astra');
+    assert.equal(decision.dispatch_id, 'critical-json');
+  }
+});
+
+test('custom or malformed palettes cannot be sanitized or mutated into routed selection', () => {
+  for (const namespace of ['pipeline', 'delivery_pipeline']) {
+    for (const value of [null, [], 'bogus', ['custom-model'], [{ model: 'custom-model', effort: 'high' }]]) {
+      const raw = { [namespace]: { codex_models: value } };
+      const { config } = routedConfig(raw);
+      refusesSource(() => resolveDispatch({ config, role: 'executor' }), `${namespace}.codex_models`);
+      assert.doesNotThrow(() => resolveModel('executor', {}, withRaw(raw).config));
+      const claude = routedConfig(raw, 'claude').config;
+      assert.equal(resolveDispatch({ config: claude, role: 'executor' }).model, 'sonnet');
+    }
+  }
+  const { config } = routedConfig();
+  config.codex_models[0].model = 'custom-model';
+  refusesSource(() => resolveDispatch({ config, role: 'executor' }), 'config.codex_models');
+});
+
+test('Codex remaps validate the selected tier without rejecting unrelated tiers', () => {
+  for (const namespace of ['model_policy', 'model_profile_overrides']) {
+    const tiers = { sonnet: 'gpt-5.6-luna', opus: 'gpt-6-astra', haiku: 'unrelated' };
+    const raw = namespace === 'model_policy'
+      ? { model_policy: { runtime_tiers: { codex: tiers } } }
+      : { model_profile_overrides: { codex: tiers } };
+    const { config } = routedConfig(raw);
+    assert.equal(resolveDispatch({ config, role: 'executor' }).model, 'gpt-5.6-luna');
+    assert.equal(resolveDispatch({ config, role: 'executor', signals: { critical: true } }).model, 'gpt-6-astra');
+    refusesSource(() => resolveDispatch({ config, role: 'research' }),
+      namespace === 'model_policy' ? 'config.model_policy.runtime_tiers.codex.haiku' : 'config.model_profile_overrides.codex.haiku');
+  }
+});
+
+test('unconfigured projects inspect inherited GSD selection and reject conflicting defaults', () => {
+  for (const raw of [{ model_profile: 'inherit' }, { model_overrides: { 'gsd-planner': 'opus' } },
+    { model_profile: 'balanced' }]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-inherited-project-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-inherited-home-'));
+    fs.mkdirSync(path.join(home, '.gsd'));
+    fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify(raw));
+    const { config } = loadConfig(dir, { routed: true, runtime: 'codex', env: { GSD_HOME: home } });
+    if (raw.model_profile === 'balanced') {
+      assert.equal(resolveDispatch({ config, role: 'decomposition' }).model, 'gpt-5.6-sol');
+    } else {
+      refusesSource(() => resolveDispatch({ config, role: 'decomposition' }),
+        raw.model_profile ? 'config.model_profile' : 'config.model_overrides.gsd-planner');
+    }
+  }
 });
 
 done();

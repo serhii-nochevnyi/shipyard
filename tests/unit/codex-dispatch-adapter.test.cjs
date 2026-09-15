@@ -191,6 +191,109 @@ test('unavailable model, effort or pair never selects a lower tuple', () => {
   }
 });
 
+test('a dynamic launch and receipt use the resolver canonical concrete model', () => {
+  const f = setup();
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
+    const result = f.adapter.launch(resolution);
+    assert.equal(f.calls.at(-1).model, resolution.model);
+    assert.equal(f.calls.at(-1).reasoning_effort, 'medium');
+    assert.equal(result.requested_model, resolution.requested_model);
+    assert.equal(result.requested_effort, resolution.requested_effort);
+    assert.equal(result.applied_model, resolution.model);
+    assert.equal(result.applied_effort, 'medium');
+  } finally { clean(f); }
+});
+
+test('the boundary rejects a Codex adapter effective-model substitution', () => {
+  const f = setup();
+  try {
+    const substituted = Object.freeze({
+      ...f.adapter,
+      effectiveResolution: (resolution) => ({ canonical: resolution, effective_model: 'gpt-6-astra' }),
+    });
+    const boundary = createDispatchBoundary({ adapters: { codex: substituted }, recorder: () => true });
+    assert.throws(() => boundary.dispatch({ runtime: 'codex', role: 'decomposition' }),
+      (error) => error.code === 'INVALID_RESOLUTION' && /canonical concrete model/.test(error.message));
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('the adapter exposes immutable static-artifact configuration to the boundary', () => {
+  const f = fixture();
+  const customManifest = path.join(f.root, 'custom-manifest.json');
+  fs.renameSync(path.join(f.root, '.shipyard-manifest.json'), customManifest);
+  const host = {
+    capabilities,
+    launch: (selection) => applied(selection),
+    launchStatic: (selection) => applied(selection),
+  };
+  const adapter = createCodexDispatchAdapter({
+    agentsDir: f.root,
+    agentManifest: customManifest,
+    capabilities,
+    host,
+  });
+  try {
+    assert.equal(adapter.agentsDir, f.root);
+    assert.equal(adapter.agentManifest, customManifest);
+    const boundary = createDispatchBoundary({ adapters: { codex: adapter }, recorder: () => true });
+    assert.equal(boundary.dispatch({ runtime: 'codex', role: 'research' }).receipt.agent_file, 'shipyard-inv-research.toml');
+  } finally { clean(f); }
+});
+
+test('a forged outer model cannot borrow a canonical resolution without an explicit remap', () => {
+  const f = setup();
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'executor' });
+    const forged = { ...resolution, model: 'gpt-6-astra' };
+    Object.defineProperty(forged, 'canonical_resolution', { value: resolution });
+    rejected(() => f.adapter.launch(forged), 'CONFLICTING_OVERRIDE');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('effective-model provenance is rejected before the host is called', () => {
+  const f = setup();
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
+    const remapped = { ...resolution, model: 'gpt-6-astra', effective_model: 'gpt-6-astra' };
+    rejected(() => f.adapter.launch(remapped), 'CONFLICTING_OVERRIDE');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('caller-constructed canonical and remap provenance cannot authorize an effective model', () => {
+  const model = 'vendor/forged-sol';
+  const f = setup({
+    capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
+  });
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
+    const forged = {
+      ...resolution,
+      model,
+      canonical_model: resolution.model,
+      effective_model: model,
+      model_source: 'gsd-remap',
+      remap_key: 'sonnet',
+    };
+    Object.defineProperty(forged, 'canonical_resolution', { value: resolution });
+    rejected(() => f.adapter.launch(forged), 'CONFLICTING_OVERRIDE');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('static generated evidence cannot be bypassed by effective-model provenance', () => {
+  const f = setup();
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'research' });
+    const selected = { ...resolution, effective_model: 'gpt-6-astra' };
+    assert.throws(() => f.adapter.validate(selected),
+      (error) => error.code === 'CONFLICTING_OVERRIDE' && /cannot use model remap provenance/.test(error.message));
+  } finally { clean(f); }
+});
+
 test('missing native launch method refuses without any ordinary-agent fallback', () => {
   const f = setup({ host: { launch: undefined } });
   try {

@@ -11,7 +11,7 @@ const pc = require('./pipeline-config.cjs');
 const boundary = require('./dispatch-boundary.cjs');
 const policy = require('./model-policy.cjs');
 const { createCodexDispatchAdapter, REPAIR } = require('./codex-dispatch-adapter.cjs');
-const { readProjectConfig, validateCodexConfiguration } = require('./codex-model-remap.cjs');
+const { validateCodexConfiguration } = require('./codex-model-remap.cjs');
 
 const ROLE_ALIASES = Object.freeze({ 'inv-research': 'research' });
 const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json> (supportedModels and supportedEfforts)';
@@ -97,27 +97,61 @@ function capabilitiesFrom(options, flags) {
 function configForCodexResolution(config) {
   const original = config.dispatch_context.configuration;
   const configuration = { ...original };
-  // The bridge treats these named entries as per-rung launch overrides. They
-  // are assertions about the canonical palette instead, so remove only these
-  // two namespaces from the bridge input and validate the raw project config
-  // separately below. This keeps matching lower-precedence assertions from
-  // changing an otherwise canonical rung, while contradictory values still
-  // fail strict validation.
+  let changed = false;
+  // The canonical resolver must not consume generic Codex/GSD configuration as
+  // launch input. The original loaded configuration is validated afterwards as
+  // a named-palette assertion, so arbitrary IDs fail closed rather than remap.
   const modelPolicy = configuration.model_policy;
   if (isObject(modelPolicy) && isObject(modelPolicy.runtime_tiers)) {
     const runtimeTiers = { ...modelPolicy.runtime_tiers };
-    delete runtimeTiers.codex;
-    configuration.model_policy = { ...modelPolicy, runtime_tiers: runtimeTiers };
+    if (Object.prototype.hasOwnProperty.call(runtimeTiers, 'codex')) {
+      delete runtimeTiers.codex;
+      configuration.model_policy = { ...modelPolicy, runtime_tiers: runtimeTiers };
+      changed = true;
+    }
   }
   const profileOverrides = configuration.model_profile_overrides;
-  if (isObject(profileOverrides)) {
+  if (isObject(profileOverrides)
+      && Object.prototype.hasOwnProperty.call(profileOverrides, 'codex')) {
     configuration.model_profile_overrides = { ...profileOverrides };
     delete configuration.model_profile_overrides.codex;
+    changed = true;
   }
-  return {
-    ...config,
-    dispatch_context: { ...config.dispatch_context, configuration },
-  };
+  // `codex_models` is a compatibility palette. Let the selector's strict
+  // validator inspect the original project value, while the canonical routed
+  // bridge resolves against its immutable ADR-014 grid.
+  for (const namespace of ['pipeline', 'delivery_pipeline']) {
+    const values = configuration[namespace];
+    if (isObject(values) && Object.prototype.hasOwnProperty.call(values, 'codex_models')) {
+      configuration[namespace] = { ...values };
+      delete configuration[namespace].codex_models;
+      changed = true;
+    }
+  }
+  // A spread copy of a routed config loses pipeline-config's private loader
+  // binding. Keep the original object whenever no Codex-only namespace needs
+  // projection; callers that do need one reload the projection through the
+  // strict routed loader below.
+  return changed ? configuration : config;
+}
+
+function routedConfigForCodexResolution(config, cwd, env) {
+  const projected = configForCodexResolution(config);
+  if (projected === config) return config;
+
+  // pipeline-config intentionally binds routed provenance by object identity.
+  // The projection therefore has to be loaded as a real routed config; a
+  // hand-built `{ ...config, dispatch_context: ... }` would be rejected by the
+  // parent bridge and must never become a compatibility fallback.
+  const shadowRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-routed-'));
+  try {
+    const planningDir = path.join(shadowRoot, '.planning');
+    fs.mkdirSync(planningDir);
+    fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify(projected));
+    return pc.loadConfig(shadowRoot, { runtime: 'codex', env, routed: true }).config;
+  } finally {
+    fs.rmSync(shadowRoot, { recursive: true, force: true });
+  }
 }
 
 function selectAgentInternal(role, options) {
@@ -127,22 +161,23 @@ function selectAgentInternal(role, options) {
   if (options.runtime !== undefined && options.runtime !== 'codex') fail('Codex selector cannot launch another runtime');
   const loaded = pc.loadConfig(cwd, { runtime: 'codex', env, routed: true });
   const capabilities = capabilitiesFrom(options, flags);
-  const resolutionConfig = configForCodexResolution(loaded.config);
+  const resolutionConfig = routedConfigForCodexResolution(loaded.config, cwd, env);
   const resolution = pc.resolveDispatch({
     ...options, config: resolutionConfig, runtime: 'codex',
     role: ROLE_ALIASES[role] || role, signals: options.signals || {},
     dispatch_id: options.dispatch_id === undefined ? boundary.newDispatchId() : options.dispatch_id,
   });
-  validateCodexConfiguration(resolution, readProjectConfig(cwd, loaded.file), capabilities);
+  validateCodexConfiguration(resolution, loaded.config.dispatch_context.configuration, capabilities);
   const agentsDir = path.resolve(options.agentDir || agentDirFrom(flags, env));
   const adapter = createCodexDispatchAdapter({ agentsDir, agentManifest: options.agentManifest, capabilities });
   boundary.validateDispatch(resolution, { adapters: { codex: adapter } });
   const evidence = resolution.agent_file ? adapter.validateGeneratedAgent(resolution) : null;
-  return Object.freeze({
+  const selected = {
     ...resolution, project_dir: cwd,
     agent_path: resolution.agent_file ? path.join(agentsDir, resolution.agent_file) : null,
     ...(evidence ? { agent_file_digest: evidence.agent_file_digest } : {}),
-  });
+  };
+  return Object.isFrozen(selected) ? selected : Object.freeze(selected);
 }
 
 function selectAgent(role, options = {}) {
