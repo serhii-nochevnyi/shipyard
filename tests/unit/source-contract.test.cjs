@@ -610,9 +610,9 @@ test('the comment exemption is per file type — and markdown gets none', () => 
 // planner, or checker was spawned by a generic/inherited path. The fixtures
 // below use the real runtime adapters and boundary, so the assertions cover
 // the selection and receipt fields those adapters currently enforce without
-// contacting either runtime. Named GSD-role and launch-mechanism attestation
-// remains a T-36-03/T-36-05 host/receipt dependency; these fixtures deliberately
-// do not treat context.gsd_role, agentType, or self-asserted evidence as proof.
+// contacting either runtime. The typed callback and its host-owned receipt
+// attestation are part of the executable contract; context.gsd_role, agentType,
+// or self-asserted evidence alone never count as proof.
 const dispatchResolution = (runtime, role, signals, dispatchId) =>
   policy.resolveDispatch({ runtime, role, signals, dispatch_id: dispatchId });
 
@@ -633,13 +633,21 @@ const expectCode = (fn, code) => {
   );
 };
 
-const applicationEvidence = (selection, launchId, effort = selection.effort) => ({
+const applicationEvidence = (selection, launchId, effort = selection.effort, extra = {}) => ({
   launch_id: launchId,
   applied_model: selection.model,
   applied_effort: effort,
   observed_model: selection.model,
   observed_effort: effort,
+  ...extra,
 });
+
+const codexApplicationEvidence = (selection, launchId, extra = {}) => applicationEvidence(
+  { model: selection.model, effort: selection.reasoning_effort },
+  launchId,
+  selection.reasoning_effort,
+  extra,
+);
 
 function writeGeneratedResearchAgent(agentsDir, resolution) {
   const content = [
@@ -694,11 +702,13 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'pipeline-config.cjs',
     'resolveDispatch',
     'pipeline.fable: auto',
-    'T-36-03/T-36-05',
     'context.gsd_role',
     'agentType',
     'agent_type',
-    'fixtures must not simulate',
+    'launchTypedGsd',
+    'typedGsdCallback',
+    'gsd_launch_mechanism',
+    'source-contract fixtures exercise',
   ]) {
     assert.ok(boundarySection.includes(phrase), `decompose.md must state the boundary contract: ${phrase}`);
   }
@@ -937,9 +947,9 @@ test('Codex GSD researcher, planner, and checker use runtime selections and dura
   const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
   const calls = [];
   const cases = [
-    { role: 'research', signals: {}, id: 'codex-gsd-research' },
-    { role: 'decomposition', signals: { critical: true }, id: 'codex-gsd-planner' },
-    { role: 'decomposition', signals: { checkpoint: true }, id: 'codex-gsd-checker' },
+    { role: 'research', gsdRole: 'gsd-phase-researcher', signals: {}, id: 'codex-gsd-research' },
+    { role: 'decomposition', gsdRole: 'gsd-planner', signals: { critical: true }, id: 'codex-gsd-planner' },
+    { role: 'decomposition', gsdRole: 'gsd-plan-checker', signals: { checkpoint: true }, id: 'codex-gsd-checker' },
   ];
   const resolutions = cases.map(({ role, signals, id }) => dispatchResolution('codex', role, signals, id));
   writeGeneratedResearchAgent(agentsDir, resolutions[0]);
@@ -953,9 +963,21 @@ test('Codex GSD researcher, planner, and checker use runtime selections and dura
     launchStatic(selection, context) {
       calls.push({ kind: 'static', selection, context });
       return {
-        ...applicationEvidence(selection, `codex-static-${calls.length}`, selection.reasoning_effort),
+        ...codexApplicationEvidence(selection, `codex-static-${calls.length}`),
         agent_file_digest: selection.agent_file_digest,
       };
+    },
+    launchTypedGsd(selection, context) {
+      calls.push({ kind: 'typed', selection, context });
+      return codexApplicationEvidence(
+        selection,
+        `codex-typed-${calls.length}`,
+        {
+          gsd_role: context.gsd_role,
+          gsd_launch_mechanism: context.gsd_launch_mechanism,
+          ...(selection.agent_file ? { agent_file_digest: selection.agent_file_digest } : {}),
+        },
+      );
     },
   };
   const adapter = createCodexDispatchAdapter({ host, agentsDir, capabilities });
@@ -967,23 +989,26 @@ test('Codex GSD researcher, planner, and checker use runtime selections and dura
   try {
     for (const [index, item] of cases.entries()) {
       const result = boundary.dispatch({
-        runtime: 'codex', role: item.role, signals: item.signals, dispatch_id: item.id,
+        runtime: 'codex', role: item.role, signals: item.signals,
+        gsd_role: item.gsdRole, dispatch_id: item.id,
       }, {});
       assert.equal(result.receipt.compliance, 'verified');
       assert.equal(result.receipt.dispatch_id, item.id);
       assert.equal(result.receipt.role, item.role);
       assert.equal(result.receipt.applied_model, resolutions[index].model);
       assert.equal(result.receipt.applied_effort, resolutions[index].effort);
+      assert.equal(result.receipt.gsd_role, item.gsdRole);
+      assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
       assert.deepStrictEqual(recorder.getVerifiedRecord(item.id).receipt, result.receipt);
     }
-    assert.equal(calls[0].kind, 'static');
+    assert.equal(calls[0].kind, 'typed');
     assert.deepStrictEqual(
       [calls[0].selection.model, calls[0].selection.reasoning_effort, calls[0].selection.agent_file],
       [resolutions[0].model, resolutions[0].effort, resolutions[0].agent_file]
     );
-    assert.equal(calls[1].kind, 'dynamic');
+    assert.equal(calls[1].kind, 'typed');
     assert.deepStrictEqual(calls[1].selection, resolutions[1].launch_arguments);
-    assert.equal(calls[2].kind, 'dynamic');
+    assert.equal(calls[2].kind, 'typed');
     assert.deepStrictEqual(calls[2].selection, resolutions[2].launch_arguments);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -995,9 +1020,9 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
   const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
   const calls = [];
   const cases = [
-    { role: 'research', signals: {}, id: 'claude-gsd-research' },
-    { role: 'decomposition', signals: {}, id: 'claude-gsd-planner' },
-    { role: 'decomposition', signals: { checkpoint: true }, id: 'claude-gsd-checker' },
+    { role: 'research', gsdRole: 'gsd-phase-researcher', signals: {}, id: 'claude-gsd-research' },
+    { role: 'decomposition', gsdRole: 'gsd-planner', signals: {}, id: 'claude-gsd-planner' },
+    { role: 'decomposition', gsdRole: 'gsd-plan-checker', signals: { checkpoint: true }, id: 'claude-gsd-checker' },
   ];
   const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-claude-config-'));
   fs.mkdirSync(path.join(configRoot, '.planning'), { recursive: true });
@@ -1020,6 +1045,13 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
       calls.push({ selection, context });
       return applicationEvidence(selection, `claude-gsd-${calls.length}`);
     },
+    launchTypedGsd(selection, context) {
+      calls.push({ selection, context, typed: true });
+      return applicationEvidence(selection, `claude-gsd-typed-${calls.length}`, selection.effort, {
+        gsd_role: context.gsd_role,
+        gsd_launch_mechanism: context.gsd_launch_mechanism,
+      });
+    },
   };
   const adapter = createClaudeDispatchAdapter({ host, capabilities });
   const boundary = boundaryModule.createDispatchBoundary({
@@ -1040,6 +1072,7 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
       dispatch_id: item.id,
       model: resolution.model,
       effort: resolution.effort,
+      gsd_role: item.gsdRole,
     }, {});
   };
 
@@ -1059,6 +1092,8 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
       assert.equal(result.receipt.compliance, 'verified');
       assert.equal(result.receipt.dispatch_id, item.id);
       assert.equal(result.receipt.role, item.role);
+      assert.equal(result.receipt.gsd_role, item.gsdRole);
+      assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
       assert.deepStrictEqual(calls[index].selection, resolutions[index].launch_arguments);
       assert.deepStrictEqual(recorder.getVerifiedRecord(item.id).receipt, result.receipt);
     }
@@ -1068,6 +1103,114 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(configRoot, { recursive: true, force: true });
+  }
+});
+
+test('Claude workflow coordinator selects the typed callback and refuses its absence', async () => {
+  const evidence = new WeakMap();
+  let genericCalls = 0;
+  let typedCalls = 0;
+  const result = await createClaudeWorkflowDispatch({
+    agent: () => {
+      genericCalls++;
+      throw new Error('generic callback must not run for a GSD dispatch');
+    },
+    typedGsdCallback: async (prompt, options, gsdRole) => {
+      typedCalls++;
+      const value = { prompt };
+      evidence.set(value, {
+        launch_id: 'claude-workflow-gsd-typed',
+        applied_model: options.model,
+        applied_effort: options.effort,
+        observed_model: options.model,
+        observed_effort: options.effort,
+        gsd_role: gsdRole,
+        gsd_launch_mechanism: options.gsd_launch_mechanism,
+      });
+      return value;
+    },
+    applicationEvidence: ({ result: value }) => evidence.get(value),
+    capabilities: sourceDispatchCapabilities,
+    recorder: sourceDispatchRecorder,
+    prompt: 'typed GSD coordinator prompt',
+    role: 'decomposition',
+    model: 'opus',
+    effort: 'medium',
+    gsdRole: 'gsd-planner',
+    dispatchId: 'claude-gsd-workflow-coordinator',
+  });
+  assert.equal(typedCalls, 1);
+  assert.equal(genericCalls, 0);
+  assert.equal(result.receipt.gsd_role, 'gsd-planner');
+  assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
+  assert.throws(
+    () => createClaudeWorkflowDispatch({
+      agent: () => ({}),
+      applicationEvidence: () => ({}),
+      capabilities: sourceDispatchCapabilities,
+      recorder: sourceDispatchRecorder,
+      prompt: 'missing typed callback',
+      role: 'decomposition',
+      model: 'opus',
+      effort: 'medium',
+      gsdRole: 'gsd-planner',
+      dispatchId: 'claude-gsd-workflow-missing-typed',
+    }),
+    (error) => error && error.code === 'MISSING_ADAPTER',
+    'Claude coordinator must refuse before launch when typed GSD wiring is absent'
+  );
+});
+
+test('GSD callback wiring refuses generic launches and mismatched host attestation on both runtimes', () => {
+  const runRefusal = (runtime, host, id, expectedCode) => {
+    const resolution = dispatchResolution(runtime, 'decomposition', {}, id);
+    const capabilities = capabilitiesFor([resolution]);
+    const adapter = runtime === 'codex'
+      ? createCodexDispatchAdapter({ host, capabilities })
+      : createClaudeDispatchAdapter({ host, capabilities });
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { [runtime]: adapter },
+      recorder: () => true,
+    });
+    expectCode(() => boundary.dispatch({
+      runtime,
+      role: 'decomposition',
+      gsd_role: 'gsd-planner',
+      dispatch_id: id,
+    }), expectedCode);
+  };
+
+  let genericLaunches = 0;
+  const codexResolution = dispatchResolution('codex', 'decomposition', {}, 'codex-gsd-missing-typed');
+  const codexCapabilities = capabilitiesFor([codexResolution]);
+  runRefusal('codex', {
+    capabilities: codexCapabilities,
+    launch() { genericLaunches++; return codexApplicationEvidence({ model: codexResolution.model, reasoning_effort: codexResolution.effort }, 'codex-generic'); },
+  }, 'codex-gsd-missing-typed', 'MISSING_ADAPTER');
+  const claudeResolution = dispatchResolution('claude', 'decomposition', {}, 'claude-gsd-missing-typed');
+  const claudeCapabilities = capabilitiesFor([claudeResolution]);
+  runRefusal('claude', {
+    capabilities: claudeCapabilities,
+    launch() { genericLaunches++; return applicationEvidence({ model: claudeResolution.model, effort: claudeResolution.effort }, 'claude-generic'); },
+  }, 'claude-gsd-missing-typed', 'MISSING_ADAPTER');
+  assert.equal(genericLaunches, 0, 'a generic callback must not run when typed GSD wiring is absent');
+
+  for (const [runtime, resolution, capabilities, makeEvidence] of [
+    ['codex', codexResolution, codexCapabilities, (selection) => codexApplicationEvidence(selection, 'codex-gsd-wrong-attestation', {
+      gsd_role: 'gsd-plan-checker', gsd_launch_mechanism: boundaryModule.GSD_LAUNCH_MECHANISM,
+    })],
+    ['claude', claudeResolution, claudeCapabilities, (selection) => applicationEvidence(selection, 'claude-gsd-wrong-attestation', selection.effort, {
+      gsd_role: 'gsd-plan-checker', gsd_launch_mechanism: boundaryModule.GSD_LAUNCH_MECHANISM,
+    })],
+  ]) {
+    let typedLaunches = 0;
+    const host = {
+      capabilities,
+      launch() { throw new Error('generic callback must not be selected'); },
+      launchTypedGsd(selection) { typedLaunches++; return makeEvidence(selection); },
+    };
+    runRefusal(runtime, host, `${runtime}-gsd-wrong-attestation`, 'NONCOMPLIANT_RECEIPT');
+    assert.equal(typedLaunches, 1, `${runtime} must invoke the typed callback before checking its host evidence`);
   }
 });
 

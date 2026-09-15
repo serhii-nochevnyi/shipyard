@@ -150,15 +150,16 @@ callback as unavailable. The callback may run the named GSD role, but it must
 not replace it with a `generic-agent`, a bare Agent/Task launch, or a direct
 inline call. It must not inherit a model, effort, runtime, or session selection.
 
-**Cross-ticket integration dependency (T-36-03/T-36-05):** This command
-declares the callback contract; it does not construct the adapters, Workflow
-host, capabilities, or receipt schema. Those tickets must provide and enforce
-the named-role and launch-mechanism attestations, then invoke
-`boundary.dispatch` for the three callbacks. Until that integration exists,
-treat the callback as unavailable and stop before launch. `context.gsd_role`,
+The runtime adapters and the Workflow host enforce this contract. Codex routes
+through the host-owned `launchTypedGsd` method; Claude routes through the
+host-owned `typedGsdCallback`. Both methods receive the exact `gsd_role`, and
+their host application evidence must attest that same role together with
+`gsd_launch_mechanism: "typed-gsd-callback"` before the boundary receipt is
+accepted. If either typed method, its attestation, or the durable recorder is
+unavailable, the boundary refuses before launch. `context.gsd_role`,
 `agentType`, `agent_type`, bare Agent/Task markers, and self-asserted
-application evidence are not attestation; this command and its source-contract
-fixtures must not simulate them.
+application evidence are not attestation; source-contract fixtures exercise
+the missing and mismatched cases as well as the successful typed path.
 
 Treat a dispatch as successful only when the returned record contains a
 boundary-verified receipt (`receipt.compliance` is `verified`) and the durable

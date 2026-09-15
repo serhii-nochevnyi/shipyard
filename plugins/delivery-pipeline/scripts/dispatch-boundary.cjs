@@ -29,6 +29,41 @@ const AUTHORITY_KEY_BYTES = 32;
 // predicate deliberately exposes verification but no way to mint membership.
 const BOUNDARY_VERIFIED_RECEIPTS = new WeakSet();
 
+// GSD's decomposition callbacks are a narrower contract than the logical
+// research/decomposition policy roles.  The coordinator supplies the exact
+// typed role, while the runtime host proves that it actually used the typed
+// callback.  A context field alone is intentionally insufficient evidence.
+const GSD_TYPED_ROLES = Object.freeze({
+  research: Object.freeze(['gsd-phase-researcher']),
+  decomposition: Object.freeze(['gsd-planner', 'gsd-plan-checker']),
+});
+const GSD_LAUNCH_MECHANISM = 'typed-gsd-callback';
+
+function validateGsdRole(resolution) {
+  if (!isObject(resolution) || resolution.gsd_role === undefined) return undefined;
+  const role = resolution.gsd_role;
+  const allowed = GSD_TYPED_ROLES[resolution.role];
+  if (typeof role !== 'string' || role.trim() === '' || !allowed || !allowed.includes(role)) {
+    refuse('INVALID_RESOLUTION', `GSD typed role ${JSON.stringify(role)} is not valid for ${resolution && resolution.role}`, {
+      role: resolution && resolution.role,
+      gsd_role: role,
+      allowed: allowed || [],
+    });
+  }
+  return role;
+}
+
+function gsdRoleFromInput(input, resolution) {
+  if (Object.prototype.hasOwnProperty.call(input, 'gsdRole')) {
+    refuse('UNSUPPORTED_SELECTION', 'gsdRole is not part of the ADR-014 resolver interface; use gsd_role');
+  }
+  if (!Object.prototype.hasOwnProperty.call(input, 'gsd_role')) return undefined;
+  if (typeof input.gsd_role !== 'string' || input.gsd_role.trim() === '') {
+    refuse('INVALID_INPUT', 'gsd_role must be a non-empty typed GSD role');
+  }
+  return validateGsdRole({ ...resolution, gsd_role: input.gsd_role });
+}
+
 function markBoundaryVerifiedReceipt(receipt) {
   if (isObject(receipt)) BOUNDARY_VERIFIED_RECEIPTS.add(receipt);
   return receipt;
@@ -1077,6 +1112,10 @@ function revalidateGeneratedAgent(resolution, adapter) {
 }
 
 function validateWithAdapter(resolution, adapter) {
+  // The logical policy role and the typed GSD callback role are separate
+  // facts.  Validate the latter at the boundary before any adapter can
+  // reserve an id or invoke a generic launch method.
+  validateGsdRole(resolution);
   // A Codex adapter may hold loader-private provenance for a dynamic effective
   // model.  Validate its canonical ADR-014 selection, while preserving the
   // effective model as the expected application result.  Other adapters (and
@@ -1190,6 +1229,7 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
   const receipt = unwrapReceipt(rawReceipt);
   const expectedSelection = expectedSelectionForReceipt(resolution, options.adapter);
   const canonical = expectedSelection.canonical;
+  const gsdRole = validateGsdRole(resolution);
   if (!isObject(receipt)) {
     refuse('MISSING_RECEIPT', 'launch did not return an application receipt; a successful process exit is not evidence of application');
   }
@@ -1205,6 +1245,7 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
     'applied_effort',
     'policy_hash',
   ];
+  if (gsdRole !== undefined) requiredFields.push('gsd_role', 'gsd_launch_mechanism');
   if (options.requireComplianceProof !== false) {
     requiredFields.push('compliance', 'compliance_proof');
   }
@@ -1230,6 +1271,18 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt dispatch_id does not match the boundary dispatch', { expected: resolution.dispatch_id, actual: receipt.dispatch_id });
   }
   nonEmpty(receipt.launch_id, 'launch_id');
+  if (gsdRole !== undefined) {
+    nonEmpty(receipt.gsd_role, 'gsd_role');
+    nonEmpty(receipt.gsd_launch_mechanism, 'gsd_launch_mechanism');
+    if (receipt.gsd_role !== gsdRole || receipt.gsd_launch_mechanism !== GSD_LAUNCH_MECHANISM) {
+      refuse('NONCOMPLIANT_RECEIPT', 'GSD application receipt does not attest the exact typed callback role and launch mechanism', {
+        expected: { gsd_role: gsdRole, gsd_launch_mechanism: GSD_LAUNCH_MECHANISM },
+        actual: { gsd_role: receipt.gsd_role, gsd_launch_mechanism: receipt.gsd_launch_mechanism },
+      });
+    }
+  } else if (receipt.gsd_role !== undefined || receipt.gsd_launch_mechanism !== undefined) {
+    refuse('NONCOMPLIANT_RECEIPT', 'a non-GSD launch cannot claim typed GSD callback attestation');
+  }
   if (receipt.requested_model !== canonical.requested_model || receipt.requested_effort !== canonical.requested_effort) {
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt requested values do not match the immutable resolution', {
       expected: { model: canonical.requested_model, effort: canonical.requested_effort },
@@ -1725,11 +1778,12 @@ function createDispatchBoundary(options = {}) {
       };
     }
     const resolved = canonicalResolveDispatch(canonicalInput);
-    const output = snapshot(prior ? { ...resolved, prior_applied: {
+    const gsdRole = gsdRoleFromInput(withId, resolved);
+    const output = snapshot(prior ? { ...resolved, ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}), prior_applied: {
       dispatch_id: prior.dispatch_id,
       model: prior.model,
       effort: prior.effort,
-    } } : resolved);
+    } } : { ...resolved, ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}) });
     // snapshot() deliberately severs every other caller reference. Rebrand
     // this one cloned predecessor only because `prior` was re-read from the
     // durable recorder immediately above.
@@ -1842,6 +1896,10 @@ function createDispatchBoundary(options = {}) {
         observed_effort: applicationReceipt.observed_effort,
         application_evidence: strippedEvidence,
         receipt: applicationReceipt,
+        ...(validatedResolution.gsd_role !== undefined ? {
+          gsd_role: validatedResolution.gsd_role,
+          gsd_launch_mechanism: applicationReceipt.gsd_launch_mechanism,
+        } : {}),
         ...(prior ? {
           predecessor_dispatch_id: prior.dispatch_id,
           predecessor_consumer_id: claimConsumerId,
@@ -1916,10 +1974,13 @@ function dispatch(input, options = {}) {
 
 module.exports = Object.freeze({
   OBSERVATION_UNKNOWN,
+  GSD_TYPED_ROLES,
+  GSD_LAUNCH_MECHANISM,
   newDispatchId,
   createDurableRecorder,
   createDispatchBoundary,
   generatedAgentEvidence,
+  validateGsdRole,
   isBoundaryVerifiedReceipt,
   resolveDispatch,
   validateDispatch,

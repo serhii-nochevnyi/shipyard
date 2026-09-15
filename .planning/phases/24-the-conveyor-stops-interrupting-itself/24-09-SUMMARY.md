@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c09daaf638005df5c95b674e9f5a10463f5dadce0c8dfc4386444301d1752f3f
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a38cc43313c30318d51fdae21663ec020810b0532a0c11097dd7916c40af4dc8
 phase: 24-the-conveyor-stops-interrupting-itself
 plan: 09
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: c09daaf638005df5c95b674e9f5a10463f5dadce0c8dfc4386444301d1752f3f
+shipyard_source_fingerprint: a38cc43313c30318d51fdae21663ec020810b0532a0c11097dd7916c40af4dc8
 ---
 
 # Phase 24: The stop gate blocks as often as the cascade needs — Delivery Projection

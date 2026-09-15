@@ -3700,6 +3700,9 @@
       "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/decompose.md",
+        "plugins/delivery-pipeline/scripts/dispatch-boundary.cjs",
+        "plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs",
+        "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         ".planning/graph/tickets.json",
         ".planning/graph/tickets.yaml",
