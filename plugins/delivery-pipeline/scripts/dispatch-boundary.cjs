@@ -816,6 +816,17 @@ function nonEmpty(value, label) {
   return value;
 }
 
+function ticketFromContext(context) {
+  const ticket = typeof context === 'string'
+    ? context
+    : isObject(context) ? context.ticket : undefined;
+  if (ticket === undefined) return undefined;
+  if (typeof ticket !== 'string' || ticket.trim() === '' || /[\s\u0000-\u001f\u007f]/.test(ticket)) {
+    refuse('INVALID_INPUT', 'launch context ticket must be a non-empty, whitespace-free string');
+  }
+  return ticket;
+}
+
 function newDispatchId() {
   const suffix = typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -1596,12 +1607,20 @@ function createDispatchBoundary(options = {}) {
       const memoryResolution = memoryResolutionEntry && memoryResolutionEntry.recorder === recorder
         ? memoryResolutionEntry.value
         : null;
+      const memoryTicket = memoryResolutionEntry && memoryResolutionEntry.recorder === recorder
+        ? memoryResolutionEntry.ticket
+        : undefined;
       if (memoryReceipt
           && memoryReceipt.dispatch_id === dispatchId
           && memoryResolution
           && memoryResolution.dispatch_id === dispatchId) {
         return {
-          record: { dispatch_id: dispatchId, receipt: memoryReceipt, resolution: memoryResolution },
+          record: {
+            dispatch_id: dispatchId,
+            ...(memoryTicket !== undefined ? { ticket: memoryTicket } : {}),
+            receipt: memoryReceipt,
+            resolution: memoryResolution,
+          },
           receipt: memoryReceipt,
           resolution: memoryResolution,
         };
@@ -1645,7 +1664,7 @@ function createDispatchBoundary(options = {}) {
     }
   }
 
-  function verifyPriorReceipt(input, recorder) {
+  function verifyPriorReceipt(input, recorder, ticket) {
     const prerequisite = repairPrerequisiteFor(input);
     if (!prerequisite) return null;
     const raw = priorReceiptFor(input);
@@ -1664,6 +1683,14 @@ function createDispatchBoundary(options = {}) {
     const receipt = receiptFromStoredRecord(raw) || raw;
     if (!trusted || !isObject(receipt) || stableReceipt(receipt) !== stableReceipt(trusted.receipt)) {
       refuse('UNVERIFIED_RECEIPT', `${prerequisite.role} ${prerequisite.signatureState} escalation requires the receipt returned by the durable dispatch boundary`, { dispatch_id: previousDispatchId });
+    }
+    const predecessorTicket = trusted.record && trusted.record.ticket;
+    if (predecessorTicket !== ticket) {
+      refuse(
+        'NONCOMPLIANT_RECEIPT',
+        'the preceding receipt ticket does not match the repair dispatch ticket',
+        { expected_ticket: ticket || null, actual_ticket: predecessorTicket || null, dispatch_id: previousDispatchId },
+      );
     }
     const runtime = String(input.runtime || '').trim();
     const expectedModel = prerequisite.model;
@@ -1697,7 +1724,11 @@ function createDispatchBoundary(options = {}) {
       refuse('DUPLICATE_DISPATCH_ID', 'dispatch id was already registered; replay cannot be recorded twice', { dispatch_id: stored.dispatch_id });
     }
     trustedReceipts.set(stored.dispatch_id, { recorder, value: stored });
-    trustedResolutions.set(stored.dispatch_id, { recorder, value: deepFreeze(snapshot(resolution)) });
+    trustedResolutions.set(stored.dispatch_id, {
+      recorder,
+      value: deepFreeze(snapshot(resolution)),
+      ...(recordInput && recordInput.ticket !== undefined ? { ticket: recordInput.ticket } : {}),
+    });
     recorderRecordRemember(recorder, recordInput);
     return stored;
   }
@@ -1732,13 +1763,13 @@ function createDispatchBoundary(options = {}) {
     return safe;
   }
 
-  function resolve(input, recorder) {
+  function resolve(input, recorder, ticket) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
     const withId = Object.prototype.hasOwnProperty.call(input, 'dispatch_id')
       || Object.prototype.hasOwnProperty.call(input, 'dispatchId')
       ? input
       : { ...input, dispatch_id: newDispatchId() };
-    const prior = verifyPriorReceipt(withId, recorder);
+    const prior = verifyPriorReceipt(withId, recorder, ticket);
     const canonicalInput = inputWithoutReceipt(withId);
     if (prior) {
       markBoundaryVerifiedReceipt(prior.receipt);
@@ -1791,9 +1822,13 @@ function createDispatchBoundary(options = {}) {
   }
 
   // Reconciliation consumes authenticated storage, never caller-supplied proof.
-  function reconcile(dispatchId) {
+  function reconcile(dispatchId, context = {}) {
     if (!options.recorder) {
       refuse('RECORD_UNAVAILABLE', 'reconcile requires an explicitly configured durable dispatch recorder');
+    }
+    const ticket = ticketFromContext(context);
+    if (ticket === undefined) {
+      refuse('INVALID_INPUT', 'reconcile requires the ticket from the boundary launch context');
     }
     nonEmpty(dispatchId, 'dispatch_id');
     if (consumedReceiptIds.has(dispatchId) || recorderIsConsumed(options.recorder, dispatchId)) {
@@ -1801,9 +1836,17 @@ function createDispatchBoundary(options = {}) {
     }
     const trusted = trustedRecordFor(options.recorder, dispatchId);
     if (!trusted) refuse('UNVERIFIED_RECEIPT', 'dispatch has no current compliant applied receipt', { dispatch_id: dispatchId });
+    if (!trusted.record || trusted.record.ticket !== ticket) {
+      refuse(
+        'NONCOMPLIANT_RECEIPT',
+        'dispatch receipt ticket does not match the reconciliation ticket',
+        { expected_ticket: ticket, actual_ticket: trusted.record && trusted.record.ticket || null, dispatch_id: dispatchId },
+      );
+    }
     const { resolution, receipt: applied } = trusted;
     return deepFreeze(snapshot({
       dispatch_id: dispatchId,
+      ticket,
       policy_version: resolution.policy_version,
       policy_hash: resolution.policy_hash,
       role: resolution.role,
@@ -1831,10 +1874,11 @@ function createDispatchBoundary(options = {}) {
 
   function dispatch(input, context = {}) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
+    const ticket = ticketFromContext(context);
     const runtime = typeof input.runtime === 'string' ? input.runtime.trim() : input.runtime;
     const adapter = adapterFor(adapters, runtime);
     const record = recorderFor(options, adapter);
-    const resolution = resolve(input, record);
+    const resolution = resolve(input, record, ticket);
     if (!record) {
       refuse('RECORD_UNAVAILABLE', 'durable dispatch recording is mandatory; refusing to launch without a recorder');
     }
@@ -1886,6 +1930,7 @@ function createDispatchBoundary(options = {}) {
       const applicationReceipt = finalizeApplicationReceipt(validatedResolution, applicationEvidence, adapter, observationCapabilities);
       const baseTrace = {
         dispatch_id: validatedResolution.dispatch_id,
+        ...(ticket !== undefined ? { ticket } : {}),
         policy_version: validatedResolution.policy_version,
         policy_hash: validatedResolution.policy_hash,
         runtime: validatedResolution.runtime,

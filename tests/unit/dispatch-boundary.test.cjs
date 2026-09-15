@@ -119,6 +119,7 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'record', 'receipt']);
   assert.equal(result.trace.at(-1).status, 'passed');
   assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].ticket, 'T-36-01');
   assert.equal(recorded[0].receipt.compliance, 'verified');
   assert.equal(recorded[0].launch_id, result.receipt.launch_id);
   assert.deepStrictEqual(recorded[0].launch_arguments, calls[0].resolution.launch_arguments);
@@ -137,14 +138,15 @@ test('reconciliation requires authenticated current receipt evidence across boun
   try {
     const recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
     const writer = boundaryModule.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
-    const result = writer.dispatch({ runtime: 'codex', role: 'executor' });
+    const result = writer.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-36-08' });
     const reader = boundaryModule.createDispatchBoundary({ recorder });
-    const facts = reader.reconcile(result.dispatch_id);
+    const facts = reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' });
     assert.equal(facts.applied_model, result.receipt.applied_model);
+    assert.equal(facts.ticket, 'T-36-08');
     assert.equal(facts.task_level, result.resolution.task_level);
     assert.deepStrictEqual(facts.application_receipt, result.receipt);
     assert.deepStrictEqual(facts.launch_arguments, result.resolution.launch_arguments);
-    assert.throws(() => reader.reconcile('absent'), /compliant applied receipt/);
+    assert.throws(() => reader.reconcile('absent', { ticket: 'T-36-08' }), /compliant applied receipt/);
     // A recorder claim is the lease used by dispatch-record reconciliation.
     // A repair cannot consume the receipt while the record writer still owns
     // that lease between its trusted read and durable record write.
@@ -163,16 +165,16 @@ test('reconciliation requires authenticated current receipt evidence across boun
       const envelope = JSON.parse(JSON.stringify(original));
       mutate(envelope.payload);
       fs.writeFileSync(file, JSON.stringify(envelope));
-      assert.throws(() => reader.reconcile(result.dispatch_id), /compliant applied receipt/);
+      assert.throws(() => reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' }), /compliant applied receipt/);
     }
     fs.writeFileSync(file, JSON.stringify(original.payload));
-    assert.throws(() => reader.reconcile(result.dispatch_id), /compliant applied receipt/);
+    assert.throws(() => reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' }), /compliant applied receipt/);
     fs.writeFileSync(file, JSON.stringify(original));
     const claim = recorder.claim(result.dispatch_id, 'repair-dispatch');
     assert.equal(claim.claimed, true);
     assert.deepStrictEqual(recorder.consume(result.dispatch_id, 'repair-dispatch', claim), { consumed: true });
     assert.ok(recorder.getReceipt(result.dispatch_id), 'consumed receipt remains durable history');
-    assert.throws(() => reader.reconcile(result.dispatch_id), /already consumed/);
+    assert.throws(() => reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' }), /already consumed/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -185,6 +187,40 @@ test('reconciliation refuses without an explicitly configured recorder', () => {
     (error) => error.code === 'RECORD_UNAVAILABLE'
       && /explicitly configured durable dispatch recorder/.test(error.message),
   );
+});
+
+test('receipts and repair predecessors remain bound to their launch ticket', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-ticket-binding-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter() },
+      recorder,
+    });
+    const base = boundary.dispatch({
+      runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' },
+    }, { ticket: 'T-36-A' });
+    assert.throws(
+      () => boundary.reconcile(base.dispatch_id, { ticket: 'T-36-B' }),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /ticket/.test(error.message),
+    );
+    assert.throws(
+      () => boundary.dispatch({
+        runtime: 'codex', role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: base.receipt },
+        previous_dispatch_id: base.dispatch_id,
+      }, { ticket: 'T-36-B' }),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /ticket/.test(error.message),
+    );
+    const sameTicketRepair = boundary.dispatch({
+      runtime: 'codex', role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+    }, { ticket: 'T-36-A' });
+    assert.equal(sameTicketRepair.ticket, 'T-36-A');
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
 });
 
 test('executor critical dispatch uses the Astra/low escalation rung', () => {
