@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5e69e81d79e05a4e1c51045794d474ded535d6114e8d8299ab54a029a3bf5151
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a3604de9591740498ad92ff7824355c02f227971aa5495655f032582948f911
 gsd_state_version: '1.0'
 status: planning
 progress:
@@ -74,7 +74,7 @@ Review and resolve phase integration findings shown in the phase artifacts.
 - T-36-06: delivery status is pr-open
 - T-36-07: delivery status is pr-open
 - T-36-08: delivery status is pr-open
-- T-36-09: delivery status is pending
+- T-36-09: delivery status is pr-open
 - T-36-10: delivery status is pending
 - T-36-11: delivery status is pending
 
@@ -86,6 +86,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-15 12:14
+Last session: 2026-09-15 13:08
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None
