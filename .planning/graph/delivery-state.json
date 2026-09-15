@@ -1191,16 +1191,19 @@
     "since": "2026-09-15T07:39:31.619Z"
   },
   "T-36-04": {
-    "branch": "ticket/T-36-04-generate-and-validate-the-complete-codex",
+    "branch": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
     "pr": 139,
     "status": "pr-open",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-36-04-generate-and-validate-the-complete-codex",
     "draft": true,
     "review_decision": null,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/139",
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T20:35:18Z",
-    "head_sha": "a583e17c1cbdf89b5d5f0e45990ac4a09464d7f2",
-    "merge_state": "DIRTY",
+    "head_sha": "7c1b72faab3d8efc36a784f6a5fb3a9c7ae82b2a",
+    "merge_state": "CLEAN",
+    "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1224,7 +1227,7 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/140",
     "pr_base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
     "pr_created_at": "2026-09-14T21:26:23Z",
-    "head_sha": "19faf4b25f2d0ae76e5b7aee503bbd28a5ca9f76",
+    "head_sha": "ab647d6e13a0b616ecbdde4e40a5e7dbb24bf0ad",
     "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
@@ -1234,10 +1237,10 @@
       "none_reported": false,
       "unavailable": false
     },
-    "base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
-    "base_reason": "T-36-04 is pr-open — cascade off ticket/T-36-04-generate-and-validate-the-complete-codex; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-04 lands",
+    "base": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
+    "base_reason": "T-36-04 is pr-open — cascade off ticket/T-36-04-generate-and-validate-the-codex-bundle-w; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-04 lands",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "merge_scope": "stacked",
+    "merge_scope": "integration",
     "reapable": false,
     "since": "2026-09-14T21:26:55.563Z"
   },
@@ -1250,8 +1253,8 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/141",
     "pr_base": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
     "pr_created_at": "2026-09-14T21:57:13Z",
-    "head_sha": "bc4a20704bdda630820a43f8dce563beebd3ebff",
-    "merge_state": "CLEAN",
+    "head_sha": "63fa92282b2db45bc99bc9c2243c66e506f445b4",
+    "merge_state": "UNSTABLE",
     "behind_by": 0,
     "gate": {
       "arch-review": "conform",
@@ -1263,7 +1266,7 @@
     },
     "checks": {
       "total": 1,
-      "failing": 0,
+      "failing": 1,
       "pending": 0,
       "none_reported": false,
       "unavailable": false
@@ -1286,12 +1289,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/142",
     "pr_base": "ticket/T-36-06-route-gsd-decomposition-through-the-mand",
     "pr_created_at": "2026-09-14T22:55:34Z",
-    "head_sha": "3bbe6738f4422d765370ebd8885fb51d90585753",
-    "merge_state": "DIRTY",
+    "head_sha": "4b9a49f23a0c929e8d26b2db4bd7dbdaf6447672",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "checks": {
       "total": 1,
-      "failing": 1,
-      "pending": 0,
+      "failing": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },

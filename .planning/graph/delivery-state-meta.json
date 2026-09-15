@@ -1,9 +1,7 @@
 {
-  "generation": 270,
-  "generation_identity": "32a6b031-66c1-4530-af25-9b02f05329bd",
-  "previous_generation_identity": "16777244:12912190899:1789458009817036500:d85c27e13267dc84e74c3e171c68429443783c162948e9c5bef79a8de19035f1",
-  "observed_at": "2026-09-15T07:40:58.523Z",
-  "generated_at": "2026-09-15T07:40:58.523Z",
+  "generation": 275,
+  "observed_at": "2026-09-15T11:38:23.115Z",
+  "generated_at": "2026-09-15T11:38:23.115Z",
   "by": "state-sync",
-  "pid": 67771
+  "pid": 76899
 }

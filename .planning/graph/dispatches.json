@@ -19,6 +19,24 @@
       "fingerprint": "881718480094d741",
       "fingerprint_kind": "role",
       "pr": 125
+    },
+    "T-36-08": {
+      "role": "integrator",
+      "at": "2026-09-15T11:39:30.175Z",
+      "model": "sonnet",
+      "effort": "high",
+      "effort_applied": "low",
+      "task_level": "critical",
+      "runtime": "codex",
+      "backend": "agent",
+      "observed_model": "gpt-6-astra",
+      "observed_effort": "low",
+      "agent_id": "01a0a4dd-52a7-7903-846d-fc8c38cb7f09",
+      "reason": "tier=level:critical+cap:codex(sonnet) effort=flat:codex(high)",
+      "dispatch_id": "dispatch-mu2ln9qa-1e10ec15-4372-40e1-9b40-9805e406d5d5",
+      "fingerprint": "660004820329a235",
+      "fingerprint_kind": "role",
+      "pr": null
     }
   }
 }
