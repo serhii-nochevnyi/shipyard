@@ -102,6 +102,14 @@ policy choose the highest applicable rung and retain the signal evidence.
 Pass signals as policy inputs; never compose a model, effort, alias, or literal
 fallback in this command.
 
+For the native alias ladder, `fable/medium` is an ADR-014 policy result, not a
+literal route composed by this command. A Fable result is usable only after the
+routed `pipeline-config.cjs` `resolveDispatch` bridge has validated the explicit
+runtime and explicit `pipeline.fable: auto` consent. If that bridge is
+unavailable or consent is `off`, refuse before launch; do not use the
+compatibility `fableRoute` or model readers, bypass consent, or invent an
+Opus/Fable fallback here.
+
 Runtime-specific launch handling is also fixed:
 
 - The static generated-agent route used by Codex uses the boundary's validated
@@ -123,6 +131,16 @@ callback as unavailable. The callback may run the named GSD role, but it must
 not replace it with a `generic-agent`, a bare Agent/Task launch, or a direct
 inline call. It must not inherit a model, effort, runtime, or session selection.
 
+**Cross-ticket integration dependency (T-36-03/T-36-05):** This command
+declares the callback contract; it does not construct the adapters, Workflow
+host, capabilities, or receipt schema. Those tickets must provide and enforce
+the named-role and launch-mechanism attestations, then invoke
+`boundary.dispatch` for the three callbacks. Until that integration exists,
+treat the callback as unavailable and stop before launch. `context.gsd_role`,
+`agentType`, `agent_type`, bare Agent/Task markers, and self-asserted
+application evidence are not attestation; this command and its source-contract
+fixtures must not simulate them.
+
 Treat a dispatch as successful only when the returned record contains a
 boundary-verified receipt (`receipt.compliance` is `verified`) and the durable
 recorder has acknowledged the record. Retain the dispatch id, receipt, and
@@ -131,8 +149,8 @@ checker launch. Host exit status or self-asserted application evidence alone
 is not a receipt. Missing or failed evidence is a refusal, not a fallback.
 
 If configuration must be loaded, use the routed `pipeline-config.cjs`
-`resolveDispatch` bridge only for canonical preflight with the explicit active
-runtime. Its compatibility tier/model readers, GSD `models` or
+`resolveDispatch` bridge for canonical preflight and selection validation with
+the explicit active runtime. Its compatibility tier/model readers, GSD `models` or
 `model_overrides`, `model_profile`, and session defaults cannot select or
 authorize a launch, and they cannot replace the boundary receipt.
 

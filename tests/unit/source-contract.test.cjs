@@ -74,6 +74,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const pipelineConfig = require('../../plugins/delivery-pipeline/scripts/pipeline-config.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createDurableRecorder } = boundaryModule;
 const { createCodexDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
@@ -608,8 +609,10 @@ test('the comment exemption is per file type — and markdown gets none', () => 
 // launch shape: the GSD coordinator can look successful while its researcher,
 // planner, or checker was spawned by a generic/inherited path. The fixtures
 // below use the real runtime adapters and boundary, so the assertions cover
-// the complete resolve -> validate -> launch -> recorded-receipt path without
-// contacting either runtime.
+// the selection and receipt fields those adapters currently enforce without
+// contacting either runtime. Named GSD-role and launch-mechanism attestation
+// remains a T-36-03/T-36-05 host/receipt dependency; these fixtures deliberately
+// do not treat context.gsd_role, agentType, or self-asserted evidence as proof.
 const dispatchResolution = (runtime, role, signals, dispatchId) =>
   policy.resolveDispatch({ runtime, role, signals, dispatch_id: dispatchId });
 
@@ -686,6 +689,14 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'receipt.compliance',
     'generic-agent',
     'inherited',
+    'pipeline-config.cjs',
+    'resolveDispatch',
+    'pipeline.fable: auto',
+    'T-36-03/T-36-05',
+    'context.gsd_role',
+    'agentType',
+    'agent_type',
+    'fixtures must not simulate',
   ]) {
     assert.ok(boundarySection.includes(phrase), `decompose.md must state the boundary contract: ${phrase}`);
   }
@@ -775,15 +786,53 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
 });
 
-test('Codex GSD researcher, planner, and checker use named callback roles and durable receipts', () => {
+test('Claude Fable decomposition escalation stays behind routed consent', () => {
+  const roots = [];
+  const loadRouted = (raw) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-fable-contract-'));
+    roots.push(root);
+    fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
+    if (raw !== undefined) {
+      fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
+    }
+    return pipelineConfig.loadConfig(root, { runtime: 'claude', env: {}, routed: true }).config;
+  };
+
+  try {
+    const withoutConsent = loadRouted({});
+    assert.throws(
+      () => pipelineConfig.resolveDispatch({
+        config: withoutConsent,
+        role: 'decomposition',
+        signals: { checkpoint: true },
+      }),
+      (error) => error && error.code === 'CONFLICTING_OVERRIDE'
+        && error.details && error.details.source === 'pipeline.fable',
+      'a Fable decomposition result must be refused without routed consent'
+    );
+
+    const consented = loadRouted({ pipeline: { fable: 'auto' } });
+    const resolution = pipelineConfig.resolveDispatch({
+      config: consented,
+      role: 'decomposition',
+      signals: { checkpoint: true },
+    });
+    assert.equal(resolution.model, CLAUDE_MODEL_ALIASES.fable);
+    assert.equal(resolution.effort, 'medium');
+  } finally {
+    for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Codex GSD researcher, planner, and checker use runtime selections and durable receipts', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-codex-contract-'));
   const agentsDir = path.join(root, 'agents');
   const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
   const calls = [];
   const cases = [
-    { gsdRole: 'gsd-phase-researcher', role: 'research', signals: {}, id: 'codex-gsd-research' },
-    { gsdRole: 'gsd-planner', role: 'decomposition', signals: { critical: true }, id: 'codex-gsd-planner' },
-    { gsdRole: 'gsd-plan-checker', role: 'decomposition', signals: { checkpoint: true }, id: 'codex-gsd-checker' },
+    { role: 'research', signals: {}, id: 'codex-gsd-research' },
+    { role: 'decomposition', signals: { critical: true }, id: 'codex-gsd-planner' },
+    { role: 'decomposition', signals: { checkpoint: true }, id: 'codex-gsd-checker' },
   ];
   const resolutions = cases.map(({ role, signals, id }) => dispatchResolution('codex', role, signals, id));
   writeGeneratedResearchAgent(agentsDir, resolutions[0]);
@@ -812,13 +861,12 @@ test('Codex GSD researcher, planner, and checker use named callback roles and du
     for (const [index, item] of cases.entries()) {
       const result = boundary.dispatch({
         runtime: 'codex', role: item.role, signals: item.signals, dispatch_id: item.id,
-      }, { gsd_role: item.gsdRole });
+      }, {});
       assert.equal(result.receipt.compliance, 'verified');
       assert.equal(result.receipt.dispatch_id, item.id);
       assert.equal(result.receipt.role, item.role);
       assert.equal(result.receipt.applied_model, resolutions[index].model);
       assert.equal(result.receipt.applied_effort, resolutions[index].effort);
-      assert.equal(calls[index].context.gsd_role, item.gsdRole);
       assert.deepStrictEqual(recorder.getVerifiedRecord(item.id).receipt, result.receipt);
     }
     assert.equal(calls[0].kind, 'static');
@@ -840,9 +888,9 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
   const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
   const calls = [];
   const cases = [
-    { gsdRole: 'gsd-phase-researcher', role: 'research', signals: {}, id: 'claude-gsd-research' },
-    { gsdRole: 'gsd-planner', role: 'decomposition', signals: {}, id: 'claude-gsd-planner' },
-    { gsdRole: 'gsd-plan-checker', role: 'decomposition', signals: { checkpoint: true }, id: 'claude-gsd-checker' },
+    { role: 'research', signals: {}, id: 'claude-gsd-research' },
+    { role: 'decomposition', signals: {}, id: 'claude-gsd-planner' },
+    { role: 'decomposition', signals: { checkpoint: true }, id: 'claude-gsd-checker' },
   ];
   const resolutions = cases.map(({ role, signals, id }) => dispatchResolution('claude', role, signals, id));
   const capabilities = capabilitiesFor(resolutions);
@@ -863,11 +911,10 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
     for (const [index, item] of cases.entries()) {
       const result = boundary.dispatch({
         runtime: 'claude', role: item.role, signals: item.signals, dispatch_id: item.id,
-      }, { gsd_role: item.gsdRole });
+      }, {});
       assert.equal(result.receipt.compliance, 'verified');
       assert.equal(result.receipt.dispatch_id, item.id);
       assert.equal(result.receipt.role, item.role);
-      assert.equal(calls[index].context.gsd_role, item.gsdRole);
       assert.deepStrictEqual(calls[index].selection, resolutions[index].launch_arguments);
       assert.deepStrictEqual(recorder.getVerifiedRecord(item.id).receipt, result.receipt);
     }
