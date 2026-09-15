@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd "$(dirname "$0")/../.."
+bash tests/smoke/model-ladder-runtime-smoke.sh
+
 [[ -f docker-compose.yml ]] || { echo "missing docker-compose.yml"; exit 1; }
 [[ -f Makefile ]] || { echo "missing Makefile"; exit 1; }
-
-# `make build-base` below hard-fails without it; the exported vars satisfy the
-# Makefile's `?=` defaults.
-# shellcheck source=lib/git-identity.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib/git-identity.sh"
-
-STATE_DIR="$(pwd)/.claude-state"
-mkdir -p workspace .cache-home "$STATE_DIR" "$HOME/.config/gh"
-trap 'docker compose down >/dev/null 2>&1 || true' EXIT
 
 [[ -x scripts/bootstrap-atlassian-rovo-oauth.sh ]] || { echo "missing scripts/bootstrap-atlassian-rovo-oauth.sh"; exit 1; }
 make -n bootstrap-atlassian-oauth >/dev/null
@@ -22,14 +16,39 @@ if HOME=/home/dev ./scripts/bootstrap-atlassian-rovo-oauth.sh >/dev/null 2>&1; t
   exit 1
 fi
 
-make build-base sync-karpathy-skills build-dev-image >/dev/null
+if [[ "${CI:-}" != true && "${CI:-}" != 1 ]]; then
+  if ! command -v docker >/dev/null 2>&1 ||
+     ! docker image inspect claude-shipyard:test claude-shipyard-base:test >/dev/null 2>&1; then
+    echo "runtime smoke: SKIP image checks (test images unavailable; image builds run in CI)"
+    exit 0
+  fi
+fi
+
+# `make build-base` below hard-fails without it; the exported vars satisfy the
+# Makefile's `?=` defaults.
+# shellcheck source=lib/git-identity.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/git-identity.sh"
+
+RUNTIME_WORK="$(mktemp -d)"
+STATE_DIR="$RUNTIME_WORK/.claude-state"
+export COMPOSE_PROJECT_NAME="shipyard-runtime-smoke-$$"
+mkdir -p "$RUNTIME_WORK/workspace" "$RUNTIME_WORK/.cache-home" "$STATE_DIR" \
+  "$RUNTIME_WORK/home/.config/gh" "$RUNTIME_WORK/ssh"
+trap 'docker compose down >/dev/null 2>&1 || true; rm -rf "$RUNTIME_WORK"' EXIT
+
+if [[ "${CI:-}" == true || "${CI:-}" == 1 ]]; then
+  make build-base sync-karpathy-skills build-dev-image >/dev/null
+fi
 
 COMPOSE_ENV=(
   DEV_IMAGE=claude-shipyard:test
   BASE_IMAGE=claude-shipyard-base:test
-  WORKSPACE_DIR="$(pwd)/workspace"
-  HOME_CACHE_DIR="$(pwd)/.cache-home"
+  WORKSPACE_DIR="$RUNTIME_WORK/workspace"
+  HOME_CACHE_DIR="$RUNTIME_WORK/.cache-home"
   CLAUDE_STATE_DIR="$STATE_DIR"
+  DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}"
+  HOME="$RUNTIME_WORK/home"
+  SSH_DIR="$RUNTIME_WORK/ssh"
 )
 
 # ── credential persistence: seed the store, assert the entrypoint restores it ──
@@ -38,8 +57,12 @@ COMPOSE_ENV=(
 # asserts the round trip that layout exists for.
 printf '{"seeded":true}' > "$STATE_DIR/credentials.json"
 
-env "${COMPOSE_ENV[@]}" docker compose run --rm dev bash -lc '
+env "${COMPOSE_ENV[@]}" docker compose run --rm \
+  -e SHIPYARD_EXPECTED_POLICY_HASH="$(node -p 'require("./plugins/delivery-pipeline/scripts/model-policy.cjs").POLICY_HASH')" dev bash -lc '
   set -euo pipefail
+  test -f /opt/delivery-pipeline/scripts/model-policy.cjs \
+    || { echo "runtime smoke: image lacks ADR-014 model policy; rebuild in CI" >&2; exit 1; }
+  node -e "require(\"assert/strict\").equal(require(\"/opt/delivery-pipeline/scripts/model-policy.cjs\").POLICY_HASH, process.env.SHIPYARD_EXPECTED_POLICY_HASH)"
   id -un | grep -qx dev
   test -d /workspace
   test -d "$HOME/.cache"
