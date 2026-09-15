@@ -237,6 +237,41 @@ function recorderAgentFile(agentFile) {
 // receipt between reconciliation and the dispatch-record mutation.
 const RECONCILIATION_CLAIM = Symbol('reconciliation claim');
 const ACTIVE_RECONCILIATION_LEASES = new Set();
+let reconciliationExitHandlerInstalled = false;
+
+function newReconciliationConsumerId() {
+  const uniqueId = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
+  return `dispatch-record:${process.pid}:${uniqueId}`;
+}
+
+function errorMessage(error) {
+  return error && typeof error.message === 'string' && error.message
+    ? error.message
+    : String(error);
+}
+
+function warnReconciliationReleaseFailure(subject, error) {
+  process.stderr.write(
+    `dispatch-record: warning — ${subject} was durably recorded and journalled, ` +
+    `but the boundary receipt claim could not be released (${errorMessage(error)}). ` +
+    'Do not retry solely because of this warning; the claim remains fenced until it is released or expires.\n'
+  );
+}
+
+function installReconciliationExitHandler() {
+  if (reconciliationExitHandlerInstalled) return;
+  reconciliationExitHandlerInstalled = true;
+  // `fail()` exits the CLI directly, so a later malformed item in mark-many
+  // would otherwise strand an earlier item's lease until its TTL. Exit handlers
+  // are synchronous; release the same fenced claims before the process leaves.
+  process.on('exit', () => {
+    for (const lease of [...ACTIVE_RECONCILIATION_LEASES]) {
+      try { releaseReconciliationClaim({ [RECONCILIATION_CLAIM]: lease }); } catch (_) { /* lease TTL remains the backstop */ }
+    }
+  });
+}
 
 function releaseReconciliationClaim(decided) {
   const lease = decided && decided[RECONCILIATION_CLAIM];
@@ -252,15 +287,6 @@ function releaseReconciliationClaim(decided) {
 function releaseReconciliationClaims(decidedRecords) {
   for (const decided of decidedRecords) releaseReconciliationClaim(decided);
 }
-
-// `fail()` exits the CLI directly, so a later malformed item in mark-many
-// would otherwise strand an earlier item's lease until its TTL. Exit handlers
-// are synchronous; release the same fenced claims before the process leaves.
-process.on('exit', () => {
-  for (const lease of [...ACTIVE_RECONCILIATION_LEASES]) {
-    try { releaseReconciliationClaim({ [RECONCILIATION_CLAIM]: lease }); } catch (_) { /* lease TTL remains the backstop */ }
-  }
-});
 
 // ── WHO holds it, not just WHAT it is (ADR-007 D1) ───────────────────────────
 //
@@ -456,13 +482,14 @@ function parseMarkFlags(argv, role) {
       if (!storeDir.trim() || !fs.statSync(storeDir).isDirectory()) throw new Error('boundary store must exist');
       const recorder = createDurableRecorder(storeDir);
       const dispatchId = given.get('dispatch-id');
-      const consumerId = `dispatch-record:${process.pid}:${crypto.randomUUID()}`;
+      const consumerId = newReconciliationConsumerId();
       const claim = recorder.claim(dispatchId, consumerId);
       if (!claim || !claim.claimed) {
         throw new Error('boundary receipt is currently claimed by another repair or recorder');
       }
       lease = { recorder, dispatchId, consumerId, claim, released: false };
       ACTIVE_RECONCILIATION_LEASES.add(lease);
+      installReconciliationExitHandler();
       const facts = createDispatchBoundary({ recorder })
         .reconcile(given.get('dispatch-id'));
       if (facts.role !== role) throw new Error('boundary receipt role contradicts the dispatch role');
@@ -505,7 +532,7 @@ function parseMarkFlags(argv, role) {
       if (lease) {
         try { releaseReconciliationClaim({ [RECONCILIATION_CLAIM]: lease }); } catch (_) { /* preserve the refusal */ }
       }
-      fail(`boundary receipt reconciliation failed: ${error.message}`);
+      fail(`boundary receipt reconciliation failed: ${errorMessage(error)}`);
     }
   }
   const decided = {};
@@ -1336,7 +1363,7 @@ if (require.main === module) {
     try {
       releaseReconciliationClaim(decided);
     } catch (e) {
-      fail(e && e.message ? e.message : e);
+      warnReconciliationReleaseFailure(`dispatch for ${ticket}`, e);
     }
     // The record is durable the instant `mutate` above returns — that alone is
     // what `activeDispatches` reads. `refreshFront` only decides whether the
@@ -1425,7 +1452,7 @@ if (require.main === module) {
       try {
         releaseReconciliationClaims(entries.map((entry) => entry.decided));
       } catch (e) {
-        fail(e && e.message ? e.message : e);
+        warnReconciliationReleaseFailure(`dispatch batch for ${entries.length} ticket(s)`, e);
       }
       const refreshed = refreshFront(cwd) !== null;
       console.log(
