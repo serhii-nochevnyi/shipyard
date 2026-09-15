@@ -3,11 +3,9 @@
 // Runtime-owned concrete palettes. The canonical policy owns the role grids and
 // evidence rules; each runtime names its own native model keys. Claude's keys
 // are the existing aliases themselves and are intentionally not translations of
-// Codex's Terra/Sol/Luna/Astra vocabulary.
+// Codex's Luna/Astra vocabulary.
 
 const CODEX_MODEL_IDS = Object.freeze({
-  terra: 'gpt-5.6-terra',
-  sol: 'gpt-5.6-sol',
   luna: 'gpt-5.6-luna',
   astra: 'gpt-6-astra',
 });
