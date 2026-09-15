@@ -1201,9 +1201,9 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/139",
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T20:35:18Z",
-    "head_sha": "7c1b72faab3d8efc36a784f6a5fb3a9c7ae82b2a",
+    "head_sha": "cc78d3a94152bf88bb0a194ca77012b2a01afdab",
     "merge_state": "UNKNOWN",
-    "behind_by": 6,
+    "behind_by": 8,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1227,7 +1227,7 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/140",
     "pr_base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
     "pr_created_at": "2026-09-14T21:26:23Z",
-    "head_sha": "ab647d6e13a0b616ecbdde4e40a5e7dbb24bf0ad",
+    "head_sha": "23f4883fcb9e955e5d70ed3b0964c5374f2b9272",
     "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
@@ -1253,7 +1253,7 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/141",
     "pr_base": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
     "pr_created_at": "2026-09-14T21:57:13Z",
-    "head_sha": "63f27fada89ec3797e137d16a4f8cfffe11682af",
+    "head_sha": "825ba638ca0d09ca9b78584a32d389af803ea501",
     "merge_state": "CLEAN",
     "behind_by": 0,
     "gate": {
@@ -1289,7 +1289,7 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/142",
     "pr_base": "ticket/T-36-06-route-gsd-decomposition-through-the-mand",
     "pr_created_at": "2026-09-14T22:55:34Z",
-    "head_sha": "738cc7aa4ae721973731289b3f152b527cd3024a",
+    "head_sha": "c85dd2a4567c34c6d8e1a47816df76c77b5e1695",
     "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
@@ -1315,13 +1315,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/143",
     "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
     "pr_created_at": "2026-09-15T12:14:35Z",
-    "head_sha": "7e8ce30734d252dc56550a54adf386bdb6ac168f",
-    "merge_state": "CLEAN",
+    "head_sha": "426c3ef955623c436585e2fb5e2037ce9082756f",
+    "merge_state": "UNSTABLE",
     "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
