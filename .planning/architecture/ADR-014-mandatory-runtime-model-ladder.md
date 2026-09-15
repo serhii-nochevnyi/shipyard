@@ -1,7 +1,7 @@
 # ADR-014 — mandatory runtime model ladder
 
 - **Status:** accepted
-- **Date:** 2026-09-12; amended 2026-09-14
+- **Date:** 2026-09-12; amended 2026-09-15
 - **Decision owner:** repository operator
 - **Scope:** Shipyard roles dispatched through Claude Code and Codex
 - **Supersedes:** ADR-005 and ADR-012 where they define model/effort selection
@@ -78,9 +78,9 @@ aliases as its model keys:
 
 | Role | Base selection | Escalation 1 | Escalation 2 | Escalation signals |
 |---|---|---|---|---|
-| research | Sonnet/high | Opus/medium | Fable/medium | `alternatives`; explicit `very-complex` |
-| decomposition | Opus/medium | — | Fable/medium | explicit `critical` or `checkpoint` |
-| executor | Sonnet/max | Opus/high | — | explicit `critical` or `checkpoint` |
+| research | Opus/medium | Opus/max | — | explicit `very-complex` |
+| decomposition | Opus/medium | Opus/max | — | explicit `critical` or `checkpoint` |
+| executor | Sonnet/max | Opus/low | — | explicit `critical` or `checkpoint` |
 | pr-sentinel | Sonnet/high | — | — | gate strategy only |
 | integrator | Opus/medium | Opus/high | — | `contested`, explicit `critical`/`checkpoint`, measured window |
 | drift-check | Opus/max | — | — | evidence/gate strategy only |
@@ -91,6 +91,11 @@ aliases as its model keys:
 For Claude architecture review, explicit critical/checkpoint/contested evidence
 selects Opus/max. Measured input above the policy window threshold selects the
 Fable/medium ceiling; when both classes of evidence fire, the ceiling wins.
+Research's `alternatives` classification is retained as evidence but does not
+promote the base Opus/medium rung; only an explicit `very-complex` classification
+selects Opus/max. Decomposition's explicit critical/checkpoint escalation also
+stays within the Opus palette at max effort, and executor's critical/checkpoint
+escalation uses Opus/low as its second rung.
 Claude repair roles require a boundary-verified receipt from the immediately
 preceding Claude rung. `repeat_exhausted` records a distinct receipt-chain
 state but remains at the requested Opus/max ceiling; it does not add a Fable
