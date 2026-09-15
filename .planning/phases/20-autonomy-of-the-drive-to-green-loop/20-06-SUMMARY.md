@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 98886a14cbc0abf61370a69fa577bb9a0715f3aa6c8bc9e3fc9721912c361a54
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5b7180b3a36bf635cb86cff2845b0a0fde673158d6c0246c1f6218bbcfa4af25
 phase: 20-autonomy-of-the-drive-to-green-loop
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 98886a14cbc0abf61370a69fa577bb9a0715f3aa6c8bc9e3fc9721912c361a54
+shipyard_source_fingerprint: 5b7180b3a36bf635cb86cff2845b0a0fde673158d6c0246c1f6218bbcfa4af25
 ---
 
 # Phase 20: Wire the babysit loop to signature verdicts — Delivery Projection

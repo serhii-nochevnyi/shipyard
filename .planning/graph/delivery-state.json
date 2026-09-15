@@ -1203,7 +1203,7 @@
     "pr_created_at": "2026-09-14T20:35:18Z",
     "head_sha": "7c1b72faab3d8efc36a784f6a5fb3a9c7ae82b2a",
     "merge_state": "UNKNOWN",
-    "behind_by": 4,
+    "behind_by": 5,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1290,12 +1290,12 @@
     "pr_base": "ticket/T-36-06-route-gsd-decomposition-through-the-mand",
     "pr_created_at": "2026-09-14T22:55:34Z",
     "head_sha": "738cc7aa4ae721973731289b3f152b527cd3024a",
-    "merge_state": "UNSTABLE",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -1308,29 +1308,38 @@
   },
   "T-36-08": {
     "branch": "ticket/T-36-08-application-receipts-and-dispatch-record",
-    "pr": null,
-    "status": "pending",
+    "pr": 143,
+    "status": "pr-open",
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/143",
+    "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
+    "pr_created_at": "2026-09-15T12:14:35Z",
+    "head_sha": "7e8ce30734d252dc56550a54adf386bdb6ac168f",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
+    "checks": {
+      "total": 1,
+      "failing": 0,
+      "pending": 1,
+      "none_reported": false,
+      "unavailable": false
+    },
     "base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-del",
     "base_reason": "T-36-07 is pr-open — cascade off ticket/T-36-07-enforce-the-boundary-across-shipyard-del; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-07 lands",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "ready": true,
+    "merge_scope": "integration",
     "reapable": false,
-    "since": "2026-09-12T19:57:33.322Z"
+    "since": "2026-09-15T12:14:53.156Z"
   },
   "T-36-09": {
     "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio",
     "pr": null,
     "status": "pending",
-    "base": "epic/36-enforce-the-runtime-model-ladder",
-    "base_reason": "T-36-08 has no branch on the remote yet (status pending) — ticket/T-36-08-application-receipts-and-dispatch-record is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "base": "ticket/T-36-08-application-receipts-and-dispatch-record",
+    "base_reason": "T-36-08 is pr-open — cascade off ticket/T-36-08-application-receipts-and-dispatch-record; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-08 lands",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "ready": false,
-    "blocked_by": [
-      "T-36-08"
-    ],
-    "blocked_reasons": {
-      "T-36-08": "parent has no branch yet (nothing to cascade from)"
-    },
+    "ready": true,
     "reapable": false,
     "since": "2026-09-12T19:57:33.322Z"
   },

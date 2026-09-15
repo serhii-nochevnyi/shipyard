@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 98886a14cbc0abf61370a69fa577bb9a0715f3aa6c8bc9e3fc9721912c361a54
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5b7180b3a36bf635cb86cff2845b0a0fde673158d6c0246c1f6218bbcfa4af25
 phase: 36-enforce-the-runtime-model-ladder
 plan: 08
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 98886a14cbc0abf61370a69fa577bb9a0715f3aa6c8bc9e3fc9721912c361a54
+shipyard_source_fingerprint: 5b7180b3a36bf635cb86cff2845b0a0fde673158d6c0246c1f6218bbcfa4af25
 ---
 
 # Phase 36: Application receipts and dispatch-record reconciliation — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: 98886a14cbc0abf61370a69fa577bb9a0715f3aa6c8bc9e3fc9
 ## Delivery Evidence
 
 - Ticket: T-36-08
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #143
 - Source plan: .planning/phases/36-enforce-the-runtime-model-ladder/36-08-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
