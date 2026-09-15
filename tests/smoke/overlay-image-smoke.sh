@@ -18,7 +18,8 @@ for f in commands/route.md commands/investigate.md commands/decompose.md command
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
          scripts/usage-attribution.cjs scripts/usage-report.cjs \
          scripts/frontmatter.cjs scripts/pipeline-config.cjs scripts/front.cjs \
-         workflows/drift-gate.mjs workflows/executors.mjs workflows/fix-round.mjs; do
+         workflows/drift-gate.mjs workflows/executors.mjs workflows/fix-round.mjs \
+         workflows/investigation-research.mjs; do
   [[ -f "plugins/delivery-pipeline/$f" ]] || { echo "missing delivery-pipeline $f"; exit 1; }
 done
 bash -n plugins/delivery-pipeline/scripts/epic-branch.sh || { echo "epic-branch.sh syntax error"; exit 1; }
@@ -47,7 +48,7 @@ NODE
 # is expected to fail with "Illegal return statement". The runtime wraps the body
 # in an async function — replicate that wrap, THEN check, to catch real syntax
 # errors (typos) without false-failing on the intended top-level return.
-for wf in drift-gate executors fix-round; do
+for wf in drift-gate executors fix-round investigation-research; do
   f="plugins/delivery-pipeline/workflows/$wf.mjs"
   {
     echo "let agent,parallel,phase,log,args;"
@@ -137,6 +138,7 @@ docker run --rm \
   test -f /opt/delivery-pipeline/workflows/executors.mjs
   test -f /opt/delivery-pipeline/workflows/drift-gate.mjs
   test -f /opt/delivery-pipeline/workflows/fix-round.mjs
+  test -f /opt/delivery-pipeline/workflows/investigation-research.mjs
   test -x /usr/local/bin/install-claude-plugins.sh
   test -x /usr/local/bin/shipyard-trust
   command -v claude >/dev/null

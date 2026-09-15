@@ -10,6 +10,7 @@ allowed-tools:
   - Grep
   - Glob
   - Agent
+  - Workflow
   - AskUserQuestion
 ---
 
@@ -49,24 +50,31 @@ Read `.planning/investigations/` (may not exist):
    AskUserQuestion the questions that are missing for PROBLEM.md: for whom / current
    pain / what success will be / what is definitely out of scope. Ask only what you
    cannot derive from the statement. Fill in PROBLEM.md.
-5. **Research fan-out**: launch 4 agents IN PARALLEL (Agent tool, in a single
-   message) with the brief `${CLAUDE_PLUGIN_ROOT}/references/inv-research.md` —
-   lines: system state / alternatives / constraints / risks+unknowns.
-   Models — ask the resolver, do not invent a value:
-   `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs model research --type alternatives`
-   (→ `opus` at `xhigh` effort — designing options is the heavy line) and
-   `… model research --type facts` (→ `opus` at `high` effort, for system state /
-   constraints / risks+unknowns). The tier is the same on both lines because the
-   floor is `opus`; what `--type alternatives` buys is DEPTH, not a tier step, so
-   do not substitute a cheaper tier for the fact lines.
-   Override per role via `pipeline.models` in `.planning/config.json`.
-   **Only tier aliases are valid `model` values** — `opus`, `sonnet`, `haiku`,
-   `fable` — and the Agent tool rejects full model IDs and suffixed aliases like
-   `opus[1m]`. Full model ids and `inherit` belong to a subagent DEFINITION's own
-   `model:` frontmatter, a different surface from the tool parameter these spawns
-   pass.
-   Pass each of them the problem statement and the path to the INV directory. Bring their results
-   into RESEARCH.md, OPTIONS.md, RISKS.md, OPEN-QUESTIONS.md.
+5. **Research fan-out**: resolve the runtime and all four line selections through
+   the routed `pipeline-config.cjs` `resolveDispatch` bridge before launching.
+   Never call the compatibility `pipeline-config.cjs model` reader, compose a
+   model or effort in this command, or let a session/default selection leak into
+   the launch. For Claude, the base is Opus/medium and only an explicit
+   `complexity: very-complex` signal escalates research to Opus/max; the
+   `alternatives` line does not promote the rung. For Codex, the base is
+   Astra/low and the same explicit very-complex signal escalates to Astra/medium.
+   Keep the resolved `{ model, effort, signals }` on every line.
+
+   For Claude, invoke `${CLAUDE_PLUGIN_ROOT}/workflows/investigation-research.mjs`
+   through the Workflow host. It must receive the host-injected typed
+   `createClaudeWorkflowDispatch` bridge, durable recorder, capabilities, and
+   application-evidence callback; the workflow dispatches all four lines through
+   that bridge in parallel and refuses if any host dependency is absent. Do not
+   use the native Agent tool, a generic session, an in-process fallback, or a
+   direct `agent()` call. For Codex, use the generated agent selected by
+   `codex-agent.cjs select research --json --capabilities-file
+   ${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json` and the same dispatch boundary
+   via `createCodexDispatchAdapter`; do not call `spawn_agent` directly.
+
+   Accept a research result only after its durable boundary receipt is verified.
+   Pass each line the problem statement, the INV path, and the brief
+   `${CLAUDE_PLUGIN_ROOT}/references/inv-research.md`. Bring verified results
+   into RESEARCH.md, OPTIONS.md, RISKS.md, and OPEN-QUESTIONS.md.
 6. Show the user a summary: how many options, key risks, the list of
    open questions. Next — Step 2.
 

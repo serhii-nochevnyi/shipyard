@@ -47,7 +47,7 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
 const WORKFLOW_CAPABILITIES = Object.freeze({
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
-  supportedEfforts: ['high', 'medium', 'max'],
+  supportedEfforts: ['low', 'high', 'medium', 'max'],
   observedModel: false,
   observedEffort: false,
 });
@@ -450,13 +450,13 @@ for (const spec of DISPATCH) {
   });
 }
 
-test('executor critical selection is resolved by signals and preserves Claude Sonnet/max → Opus/high', async () => {
+test('executor critical selection is resolved by signals and preserves Claude Sonnet/max → Opus/low', async () => {
   const { calls } = await run('executors', {
-    tickets: [{ ...TICKETS[0], model: 'opus', effort: 'high', signals: { critical: true } }],
+    tickets: [{ ...TICKETS[0], model: 'opus', effort: 'low', signals: { critical: true } }],
   });
   assert.strictEqual(calls.length, 1);
   assert.strictEqual(calls[0].opts.model, 'opus');
-  assert.strictEqual(calls[0].opts.effort, 'high');
+  assert.strictEqual(calls[0].opts.effort, 'low');
 });
 
 test('workflow fan-outs retain combined signal evidence and never infer an omitted promotion signal', async () => {
@@ -548,7 +548,7 @@ test('executor preserves canonical risk/checkpoint facts and rejects contradicto
     { signals: { risk: 'high', checkpoint: true }, risk: 'high', checkpoint: true },
   ]) {
     const { calls, value } = await run('executors', DISPATCH[0].args({
-      ...facts, model: 'opus', effort: 'high',
+      ...facts, model: 'opus', effort: 'low',
     }));
     assert.strictEqual(calls.length, 1);
     const record = WORKFLOW_RECORDER.getVerifiedRecord(value[0].receipt.dispatch_id);

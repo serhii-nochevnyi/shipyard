@@ -718,9 +718,8 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
   for (const phrase of [
     '**Codex runtime — logical model ladder**',
     '**Workflow-native alias runtime — native alias ladder**',
-    'sonnet/high',
     'opus/medium',
-    'fable/medium',
+    'opus/max',
   ]) {
     assert.ok(source.includes(phrase), `decompose.md must state the runtime-specific ladder: ${phrase}`);
   }
@@ -1045,7 +1044,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
   assert.deepStrictEqual(
     [claudeResearch.model, claudeResearch.effort, claudeResearch.rung],
-    [CLAUDE_MODEL_ALIASES.sonnet, 'high', 'base']
+    [CLAUDE_MODEL_ALIASES.opus, 'medium', 'base']
   );
   assert.deepStrictEqual(
     [codexDecomposition.model, codexDecomposition.effort, codexDecomposition.rung],
@@ -1067,7 +1066,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
   assert.equal(
     dispatchResolution('claude', 'research', { type: 'alternatives' }, 'contract-claude-research-alternatives').rung,
-    'alternatives'
+    'base'
   );
   assert.equal(
     dispatchResolution('codex', 'decomposition', { critical: true }, 'contract-decomposition-critical').rung,
@@ -1106,7 +1105,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
 });
 
-test('Claude Fable decomposition escalation stays behind routed consent', () => {
+test('Claude decomposition escalation stays on Opus max regardless of Fable consent', () => {
   const roots = [];
   const loadRouted = (raw) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-fable-contract-'));
@@ -1119,26 +1118,16 @@ test('Claude Fable decomposition escalation stays behind routed consent', () => 
   };
 
   try {
-    const withoutConsent = loadRouted({});
-    assert.throws(
-      () => pipelineConfig.resolveDispatch({
-        config: withoutConsent,
+    for (const raw of [{}, { pipeline: { fable: 'auto' } }]) {
+      const config = loadRouted(raw);
+      const resolution = pipelineConfig.resolveDispatch({
+        config,
         role: 'decomposition',
         signals: { checkpoint: true },
-      }),
-      (error) => error && error.code === 'CONFLICTING_OVERRIDE'
-        && error.details && error.details.source === 'pipeline.fable',
-      'a Fable decomposition result must be refused without routed consent'
-    );
-
-    const consented = loadRouted({ pipeline: { fable: 'auto' } });
-    const resolution = pipelineConfig.resolveDispatch({
-      config: consented,
-      role: 'decomposition',
-      signals: { checkpoint: true },
-    });
-    assert.equal(resolution.model, CLAUDE_MODEL_ALIASES.fable);
-    assert.equal(resolution.effort, 'medium');
+      });
+      assert.equal(resolution.model, CLAUDE_MODEL_ALIASES.opus);
+      assert.equal(resolution.effort, 'max');
+    }
   } finally {
     for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
   }
@@ -1218,7 +1207,7 @@ test('Codex GSD researcher, planner, and checker use runtime selections and dura
   }
 });
 
-test('Claude GSD researcher, planner, and checker use explicit native selections with routed consent and durable receipts', () => {
+test('Claude GSD researcher, planner, and checker use explicit native selections and durable receipts', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-claude-contract-'));
   const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
   const calls = [];
@@ -1235,6 +1224,16 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
   };
   const withoutConsent = loadRoutedConfig({});
   const consented = loadRoutedConfig({ pipeline: { fable: 'auto' } });
+  const offResolution = pipelineConfig.resolveDispatch({
+    config: withoutConsent,
+    role: 'decomposition',
+    signals: { checkpoint: true },
+  });
+  assert.deepStrictEqual(
+    [offResolution.model, offResolution.effort],
+    [CLAUDE_MODEL_ALIASES.opus, 'max'],
+    'decomposition must use the canonical Opus/max escalation even with Fable consent off'
+  );
   const resolutions = cases.map(({ role, signals, id }) => pipelineConfig.resolveDispatch({
     config: consented,
     role,
@@ -1280,16 +1279,6 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
   };
 
   try {
-    assert.throws(
-      () => dispatchRouted(withoutConsent, {
-        role: 'decomposition', signals: { checkpoint: true }, id: 'claude-gsd-checker-off',
-      }),
-      (error) => error && error.code === 'CONFLICTING_OVERRIDE'
-        && error.details && error.details.source === 'pipeline.fable',
-      'Claude checkpoint dispatch must refuse before launch when routed Fable consent is off'
-    );
-    assert.equal(calls.length, 0, 'unconsented routed Fable selection must not reach the Claude host');
-
     for (const [index, item] of cases.entries()) {
       const result = dispatchRouted(consented, item);
       assert.equal(result.receipt.compliance, 'verified');
@@ -1300,9 +1289,9 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
       assert.deepStrictEqual(calls[index].selection, resolutions[index].launch_arguments);
       assert.deepStrictEqual(recorder.getVerifiedRecord(item.id).receipt, result.receipt);
     }
-    assert.equal(calls[0].selection.model, CLAUDE_MODEL_ALIASES.sonnet);
+    assert.equal(calls[0].selection.model, CLAUDE_MODEL_ALIASES.opus);
     assert.equal(calls[1].selection.model, CLAUDE_MODEL_ALIASES.opus);
-    assert.equal(calls[2].selection.model, CLAUDE_MODEL_ALIASES.fable);
+    assert.equal(calls[2].selection.model, CLAUDE_MODEL_ALIASES.opus);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(configRoot, { recursive: true, force: true });
