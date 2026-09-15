@@ -2537,6 +2537,19 @@ test('GSD tuning tiers and defaults defer to both runtime ladders for every role
   }
 });
 
+test('minimal is harmless only as a generic GSD routing tier default', () => {
+  const tuning = {
+    effort: { routing_tier_defaults: { light: 'minimal', standard: 'high', heavy: 'xhigh' } },
+  };
+  for (const runtime of ['codex', 'claude']) {
+    for (const raw of [tuning, { gsd: tuning }]) {
+      const { config } = routedConfig(raw, runtime);
+      assert.deepStrictEqual(resolveDispatch({ config, role: 'executor' }),
+        canonicalPolicy.resolveDispatch({ runtime, role: 'executor' }));
+    }
+  }
+});
+
 test('only GSD stage tier aliases are exempt, not concrete or inherited selections', () => {
   for (const runtime of ['codex', 'claude']) {
     for (const prefix of ['config', 'gsd']) {
@@ -2576,7 +2589,7 @@ test('inherited GSD tuning defaults retain the canonical selections on both runt
   fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify({
     model_profile: 'balanced',
     models: { planning: 'opus', execution: 'opus', research: 'sonnet', verification: 'sonnet' },
-    effort: { routing_tier_defaults: { light: 'low', standard: 'high', heavy: 'xhigh' } },
+    effort: { routing_tier_defaults: { light: 'minimal', standard: 'high', heavy: 'xhigh' } },
   }));
   for (const runtime of ['codex', 'claude']) {
     const { config } = loadConfig(root, { runtime, routed: true, env: { GSD_HOME: home } });
@@ -2744,6 +2757,28 @@ test('routed CLI returns full decisions and exits nonzero without stdout on inva
   assert.equal(JSON.parse(json.stdout).dispatch_id, 'json-launch');
 });
 
+test('routed CLI preserves explicit whitespace input tokens for canonical rejection', () => {
+  const { dir } = routedConfig();
+  const args = ['model', 'arch-review', '--routed', '--runtime', 'codex', '--input-tokens', '   '];
+  const api = routedConfig({}, 'codex').config;
+  assert.throws(() => resolveDispatch({ config: api, role: 'arch-review', signals: { inputTokens: '   ' } }),
+    { code: 'INVALID_SIGNAL' });
+  const result = spawnSync(process.execPath, [mod, ...args], { cwd: dir, env: {}, encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /INVALID_SIGNAL/);
+  assert.match(result.stderr, /inputTokens/);
+});
+
+test('routed loading reports malformed configuration before missing runtime evidence', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-routed-invalid-config-'));
+  const file = path.join(dir, '.planning', 'config.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '{');
+  assert.throws(() => loadConfig(dir, { routed: true, env: {} }), (error) =>
+    error.code === 'INVALID_CONFIG' && error.details.source === file);
+});
+
 suite('T-36-02 escalated boundary reproductions');
 
 test('raw Fable controls fail closed in both namespaces and runtimes', () => {
@@ -2772,6 +2807,18 @@ test('raw Fable controls fail closed in both namespaces and runtimes', () => {
       }
     }
   }
+});
+
+test('routed Fable controls reject contradictory namespace values before precedence hides them', () => {
+  const { config } = routedConfig({
+    pipeline: { fable: 'off' },
+    delivery_pipeline: { fable: 'auto' },
+  }, 'claude');
+  refusesSource(() => resolveDispatch({
+    config,
+    role: 'arch-review',
+    signals: { inputTokens: canonicalPolicy.WINDOW_THRESHOLD_TOKENS + 1 },
+  }), 'pipeline.fable');
 });
 
 test('every routed reader rejects explicit malformed signals but accepts omission', () => {

@@ -945,6 +945,10 @@ function loadConfig(root, options = {}) {
   // loadConfig() in the same process returns.
   const runtimeContext = resolveRuntime(base, {
     ...options,
+    // Parse/configuration validity is the first refusal for routed loads. The
+    // strict runtime context is resolved below, after malformed project and
+    // inherited configuration can be reported with their own source.
+    routed: false,
     scriptPath: options.scriptPath || __filename,
   });
   // Keep a strict context even for compatibility loads. A later routed caller
@@ -1430,7 +1434,7 @@ function configurationSelections(raw, role, runtime, modelKey) {
         // Preserve validation of unknown tiers/values and concrete overrides.
         for (const [tier, effort] of Object.entries(values.routing_tier_defaults || {})) {
           if (gsdNamespace && ['light', 'standard', 'heavy'].includes(tier)
-              && ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) continue;
+              && ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) continue;
           add(`${prefix}.effort.routing_tier_defaults.${tier}`, field, effort);
         }
       }
@@ -1533,6 +1537,15 @@ function normalizedRoutedControls(cfg, context) {
         const source = `${namespace}.${field}`;
         throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
           `${source} ${JSON.stringify(values[field])} is not a canonical routed control`, { source });
+      }
+      if (field === 'fable' && Object.prototype.hasOwnProperty.call(values, field)
+          && values[field] !== normalized.fable) {
+        const source = `${namespace}.${field}`;
+        throw modelPolicy.policyError(
+          'CONFLICTING_OVERRIDE',
+          `${source} selects "${values[field]}", but pipeline.fable requires "${normalized.fable}"`,
+          { source, expected: normalized.fable, actual: values[field] },
+        );
       }
     }
     if (!Object.prototype.hasOwnProperty.call(values, 'model_policy')) continue;
@@ -2206,7 +2219,9 @@ if (require.main === module) {
             const value = rest[++i];
             if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`);
             const [target, key] = flags[flag];
-            target[key] = flag === '--input-tokens' ? Number(value) : value;
+            // Preserve the raw token text so the canonical signal validator can
+            // distinguish an explicit blank from numeric zero.
+            target[key] = value;
           } else {
             throw new Error(`unsupported routed flag ${flag}`);
           }
