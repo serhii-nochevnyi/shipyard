@@ -734,6 +734,14 @@ pr-sentinel   opus     max      --signature-state repeat_exhausted
 pr-sentinel   opus     max      --input-tokens over pipeline.fable_window_tokens
 ```
 
+For the compatibility reader, `repeat` deepens only the effort route and does
+not enter `fableRoute`; therefore `pr-sentinel --signature-state repeat` retains
+its `sonnet` exemption at `max`. `repeat_exhausted` is the distinct ceiling
+signal, so it is the first repair state that resolves to `opus`/`max` when the
+legacy Fable consent is closed. These rows describe the current
+`pipeline-config.cjs` compatibility branch only; ADR-014 does not promote the
+fixed routed `pr-sentinel` role for either signal.
+
 ### 7.5.1. Runtime-native model grids
 
 The logical Codex keys resolve to concrete IDs only in the Codex adapter. Claude
@@ -761,6 +769,15 @@ The canonical role/rung/signal ladder is:
 | `arch-review` | Astra/low → Astra/medium on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/max on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
 | `ci-fix` | Luna/max → Astra/low on verified `signatureState: repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
 | `review-fix` | Luna/max → Astra/low on verified `signatureState: repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+
+**Canonical-table assertion.** This table is a normative transcription of
+`plugins/delivery-pipeline/scripts/model-policy.cjs`, not of the compatibility
+reader above: for every listed runtime/role pair, its base model/effort and each
+named escalation signal must equal the result of `model-policy.cjs resolve`.
+`node plugins/delivery-pipeline/scripts/model-policy.cjs fingerprint` identifies
+the policy revision being asserted. A change to either runtime grid, a role, or
+an escalation signal requires changing this table in the same review; the
+compatibility `pipeline-config.cjs model` rows cannot validate or override it.
 
 The canonical signal vocabulary is `type`, `complexity`, `risk`, `critical`,
 `checkpoint`, `contested`, measured `inputTokens`, `signatureState`, and the
