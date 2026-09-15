@@ -15,6 +15,17 @@ function refuse(code, message) {
   throw policy.policyError(code, message + '. ' + REPAIR);
 }
 
+function isBoundaryFailure(error) {
+  return !!error && (error.name === 'DispatchBoundaryError' || error.name === 'DispatchPolicyError');
+}
+
+function boundaryFailure(code, message, cause) {
+  const error = policy.policyError(code, message + '. ' + REPAIR);
+  error.name = 'DispatchBoundaryError';
+  if (cause !== undefined) error.cause = cause;
+  return error;
+}
+
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -185,7 +196,9 @@ function createClaudeDispatchAdapter(options = {}) {
 function createClaudeWorkflowDispatch(options = {}) {
   if (!object(options)) refuse('INVALID_INPUT', 'Claude workflow dispatch options must be an object');
   if (typeof options.agent !== 'function') refuse('MISSING_ADAPTER', 'Claude workflow dispatch requires the native agent callback');
-  if (typeof options.prompt !== 'string') refuse('INVALID_INPUT', 'Claude workflow dispatch requires a prompt');
+  if (typeof options.prompt !== 'string' && typeof options.prompt !== 'function') {
+    refuse('INVALID_INPUT', 'Claude workflow dispatch requires a prompt or prompt factory');
+  }
   if (typeof options.role !== 'string' || !options.role.trim()) refuse('INVALID_INPUT', 'Claude workflow dispatch requires a role');
   if (typeof options.model !== 'string' || !options.model.trim()
       || typeof options.effort !== 'string' || !options.effort.trim()) {
@@ -239,7 +252,21 @@ function createClaudeWorkflowDispatch(options = {}) {
   const host = {
     capabilities,
     launch(selection, context) {
-      const result = options.agent(options.prompt, {
+      let prompt;
+      try {
+        prompt = typeof options.prompt === 'function' ? options.prompt() : options.prompt;
+      } catch (error) {
+        if (isBoundaryFailure(error)) throw error;
+        throw boundaryFailure(
+          'INVALID_INPUT',
+          `Claude workflow prompt construction failed: ${error && error.message ? error.message : error}`,
+          error,
+        );
+      }
+      if (typeof prompt !== 'string') {
+        throw boundaryFailure('INVALID_INPUT', 'Claude workflow prompt factory must return a string');
+      }
+      const result = options.agent(prompt, {
         ...agentOptions,
         model: selection.model,
         effort: selection.effort,
@@ -249,7 +276,16 @@ function createClaudeWorkflowDispatch(options = {}) {
         // This callback is host-owned. It must report what the host actually
         // applied; the requested selection is intentionally not passed in, so
         // this adapter cannot turn its own input into application evidence.
-        return applicationEvidence.call(suppliedHost || host, { result: value, context });
+        try {
+          return applicationEvidence.call(suppliedHost || host, { result: value, context });
+        } catch (error) {
+          if (isBoundaryFailure(error)) throw error;
+          throw boundaryFailure(
+            'MISSING_RECEIPT',
+            `Claude host application evidence failed: ${error && error.message ? error.message : error}`,
+            error,
+          );
+        }
       };
       return result && typeof result.then === 'function' ? result.then(capture) : capture(result);
     },
