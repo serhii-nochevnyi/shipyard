@@ -208,7 +208,7 @@ pc_tier="$( cd "$WORK" && node "$CODEX_HOME/shipyard/scripts/pipeline-config.cjs
 # ${CLAUDE_PLUGIN_ROOT} is rewritten to the bundle root, so every path the skills
 # reference must actually EXIST there — including workflows/, which used to be
 # omitted from the bundle while the deliver skill still pointed into it.
-for wf in drift-gate executors fix-round; do
+for wf in drift-gate executors fix-round investigation-research; do
   [[ -f "$CODEX_HOME/shipyard/workflows/$wf.mjs" ]] || { echo "bundle missing workflows/$wf.mjs"; exit 1; }
 done
 missing_paths=0

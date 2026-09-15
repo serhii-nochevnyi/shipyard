@@ -95,28 +95,32 @@ ladder into the other.
 
 | GSD launch | Boundary role | Base selection | Escalation selections | Declared escalation signals |
 | --- | --- | --- | --- | --- |
-| `gsd-phase-researcher` | `research` | sonnet/high | opus/medium → fable/medium | `type: alternatives` → `complexity: very-complex` |
-| `gsd-planner` | `decomposition` | opus/medium | fable/medium | `critical: true` or `checkpoint: true` |
-| `gsd-plan-checker` | `decomposition` | opus/medium | fable/medium | `critical: true` or `checkpoint: true` |
+| `gsd-phase-researcher` | `research` | opus/medium | opus/max | `complexity: very-complex` |
+| `gsd-planner` | `decomposition` | opus/medium | opus/max | `critical: true` or `checkpoint: true` |
+| `gsd-plan-checker` | `decomposition` | opus/medium | opus/max | `critical: true` or `checkpoint: true` |
 
 On the Codex ladder, research and decomposition start at Astra/low. Research
 may escalate to Astra/medium only for `complexity: very-complex`; `type:
 alternatives` is inert. Decomposition may escalate to Astra/medium only for
 the declared critical or checkpoint signal. On the native alias ladder,
-research starts at sonnet/high and may move through opus/medium to fable/medium;
-decomposition starts at opus/medium and may escalate to fable/medium under the
-same declared signals. If both declared signals are present, let the canonical
+research starts at opus/medium and escalates to opus/max only for the declared
+`complexity: very-complex` signal; `type: alternatives` is inert. Decomposition
+starts at opus/medium and escalates to opus/max under the declared critical or
+checkpoint signal. If both declared signals are present, let the canonical
 policy choose the highest applicable rung and retain the signal evidence.
 Pass signals as policy inputs; never compose a model, effort, alias, or literal
 fallback in this command.
 
-For the native alias ladder, `fable/medium` is an ADR-014 policy result, not a
-literal route composed by this command. A Fable result is usable only after the
-routed `pipeline-config.cjs` `resolveDispatch` bridge has validated the explicit
-runtime and explicit `pipeline.fable: auto` consent. If that bridge is
-unavailable or consent is `off`, refuse before launch; do not use the
-compatibility `fableRoute` or model readers, bypass consent, or invent an
+For the native alias ladder, `opus/max` is the ADR-014 policy result for these
+research and decomposition escalations. Fable is not a valid rung for either
+role. The routed `pipeline-config.cjs` `resolveDispatch` bridge must validate the
+explicit runtime, the canonical role, and the declared signals before launch.
+If that bridge or the durable recorder is unavailable, refuse before launch; do
+not use the compatibility `model` reader, bypass the boundary, or invent an
 Opus/Fable fallback here.
+The `pipeline.fable: auto` consent remains relevant only to canonical roles that
+actually expose a Fable ceiling, such as the measured-window architecture
+review; it cannot add a rung to research or decomposition.
 
 Runtime-specific launch handling is also fixed:
 

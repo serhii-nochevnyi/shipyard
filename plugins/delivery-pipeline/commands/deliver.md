@@ -427,9 +427,9 @@ the host must return application evidence for that exact pair:
 
 | Role | Base | Evidence-based escalation |
 | --- | --- | --- |
-| `research` | Sonnet/high | `alternatives` → Opus/medium; `very-complex` → Fable/medium |
-| `decomposition` | Opus/medium | `critical` or `checkpoint` → Fable/medium |
-| `executor` | Sonnet/max | `critical` or `checkpoint` → Opus/high |
+| `research` | Opus/medium | `very-complex` → Opus/max; `alternatives` is inert |
+| `decomposition` | Opus/medium | `critical` or `checkpoint` → Opus/max |
+| `executor` | Sonnet/max | `critical` or `checkpoint` → Opus/low |
 | `pr-sentinel` | Sonnet/high | none |
 | `drift-check` | Opus/max | none |
 | `integrator` | Opus/medium | measured window, `contested`, `critical`, or `checkpoint` → Opus/high |
@@ -1430,7 +1430,7 @@ may be dispatched at all: fix the file.
    summarize away a signal. The executor resolves to
    Codex Luna/max or, only for explicit `critical`/`checkpoint` evidence,
    Astra/low. The Workflow runtime uses its independent Sonnet/max or evidence-based
-   Opus/high native selection.
+   Opus/low native selection.
 
    ```text
    executors.mjs args: { tickets: [{ id, planPath, branch, worktreePath, prBase,
