@@ -209,6 +209,33 @@ test('a dynamic remap records canonical requested values beside the applied mode
   } finally { clean(f); }
 });
 
+test('a forged outer model cannot borrow a canonical resolution without an explicit remap', () => {
+  const f = setup();
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'executor' });
+    const forged = { ...resolution, model: 'gpt-6-astra' };
+    Object.defineProperty(forged, 'canonical_resolution', { value: resolution });
+    rejected(() => f.adapter.launch(forged), 'CONFLICTING_OVERRIDE');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('an explicit remap beside a canonical resolution preserves requested and applied receipt values', () => {
+  const f = setup();
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
+    const remapped = { ...resolution, model: 'gpt-6-astra', effective_model: 'gpt-6-astra' };
+    Object.defineProperty(remapped, 'canonical_resolution', { value: resolution });
+    const result = f.adapter.launch(remapped);
+    assert.equal(f.calls.at(-1).model, 'gpt-6-astra');
+    assert.equal(f.calls.at(-1).reasoning_effort, resolution.effort);
+    assert.equal(result.requested_model, resolution.requested_model);
+    assert.equal(result.requested_effort, resolution.requested_effort);
+    assert.equal(result.applied_model, 'gpt-6-astra');
+    assert.equal(result.applied_effort, resolution.effort);
+  } finally { clean(f); }
+});
+
 test('static generated evidence cannot be bypassed by an effective remap', () => {
   const model = 'vendor/codex-static-model';
   const f = setup({

@@ -42,6 +42,9 @@ function canonicalView(resolution) {
 
 function effectiveModelFor(resolution, canonical) {
   const explicit = resolution && resolution.effective_model;
+  if (resolution && resolution.model !== canonical.model && explicit === undefined) {
+    refuse('CONFLICTING_OVERRIDE', 'outer Codex model changes require an explicit effective_model');
+  }
   const model = explicit === undefined
     ? (resolution && resolution.model !== canonical.model ? resolution.model : canonical.model)
     : explicit;
