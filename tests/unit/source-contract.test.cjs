@@ -1205,26 +1205,51 @@ test('runtime adapters refuse inline and inherited-session launch contexts', () 
 // The Workflow files deliberately receive the native `agent` callback, so a
 // simple `agent` token sweep would reject the injection point itself. The
 // executable-call shape below catches a new direct invocation such as
-// `return agent(prompt)` while ignoring the explanatory comments and prompt
-// prose that document why that invocation is forbidden. The live files are
-// swept and the detector is independently exercised against a mutation
-// fixture, so a source list or regex that quietly matches nothing cannot pass.
-const ROUTED_LAUNCH_SOURCES = [
-  ...PROMPT_BUILDERS,
-  'plugins/delivery-pipeline/commands/decompose.md',
-  'plugins/delivery-pipeline/commands/deliver.md',
-  'plugins/delivery-pipeline/references/pr-sentinel.md',
+// `if (ready) agent(prompt)` while ignoring explanatory line comments. The
+// manifest comes from every tracked Workflow, command, and delivery reference:
+// a new routed surface therefore joins the sweep without an accompanying edit
+// to this test. Boundary-bearing sources are checked separately below; the
+// wider sweep is what catches a newly added source that bypasses the boundary
+// altogether.
+const ROUTED_LAUNCH_ROOTS = [
+  'plugins/delivery-pipeline/workflows',
+  'plugins/delivery-pipeline/commands',
+  'plugins/delivery-pipeline/references',
 ];
+const routedLaunchSources = () => tracked(...ROUTED_LAUNCH_ROOTS)
+  .filter((rel) => /\.(?:mjs|md)$/.test(rel));
+const ROUTED_LAUNCH_SOURCES = routedLaunchSources();
+const BOUNDARY_LAUNCH_SOURCES = ROUTED_LAUNCH_SOURCES.filter((rel) => {
+  const source = readRepo(rel);
+  return source.includes('createClaudeWorkflowDispatch')
+    || source.includes('createDispatchBoundary')
+    || source.includes('boundary.dispatch');
+});
 const directLaunchCall = /(?:^|[=;{}(,:]|=>|&&)\s*(?:(?:return|await)\s+)?(?:agent|spawn_agent|spawnAgent)\s*\(/;
-const directLaunchOffenders = (root, rels) => rels.flatMap((rel) => fs.readFileSync(path.join(root, rel), 'utf8')
-  .split('\n')
-  .flatMap((line, index) => directLaunchCall.test(line.replace(/\/\/[^\n]*/g, ''))
+const launchableLines = (rel, source) => {
+  let fenced = !rel.endsWith('.md');
+  return source.split('\n').flatMap((line, index) => {
+    if (rel.endsWith('.md') && /^\s*```/.test(line)) {
+      fenced = !fenced;
+      return [];
+    }
+    return fenced ? [[line, index]] : [];
+  });
+};
+const directLaunchOffenders = (root, rels) => rels.flatMap((rel) => launchableLines(
+  rel,
+  fs.readFileSync(path.join(root, rel), 'utf8'),
+)
+  .flatMap(([line, index]) => directLaunchCall.test(line.replace(/\/\/[^\n]*/g, ''))
     ? [`${rel}:${index + 1}: ${line.trim()}`]
     : []));
 
 test('every routed launch surface names the boundary and has no direct launch call outside it', () => {
-  assert.ok(ROUTED_LAUNCH_SOURCES.length >= 6, 'the routed source sweep must cover workflows and delivery prompts');
-  for (const rel of ROUTED_LAUNCH_SOURCES) {
+  assert.ok(ROUTED_LAUNCH_SOURCES.includes('plugins/delivery-pipeline/workflows/executors.mjs'), 'the tracked routed-source manifest must include Workflow launchers');
+  assert.ok(ROUTED_LAUNCH_SOURCES.includes('plugins/delivery-pipeline/commands/deliver.md'), 'the tracked routed-source manifest must include delivery commands');
+  assert.ok(ROUTED_LAUNCH_SOURCES.includes('plugins/delivery-pipeline/references/pr-sentinel.md'), 'the tracked routed-source manifest must include delivery references');
+  assert.ok(BOUNDARY_LAUNCH_SOURCES.length >= 6, 'the tracked routed-source manifest must discover the current boundary-bearing surfaces');
+  for (const rel of BOUNDARY_LAUNCH_SOURCES) {
     const source = readRepo(rel);
     assert.ok(source.includes('createClaudeWorkflowDispatch') || source.includes('createDispatchBoundary'), `${rel} must name its boundary entry point`);
     assert.ok(source.includes('boundary.dispatch') || source.includes('createClaudeWorkflowDispatch'), `${rel} must use the boundary launch shape`);
