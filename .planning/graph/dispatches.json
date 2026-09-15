@@ -49,6 +49,42 @@
       "fingerprint": "d5c895f86628242c",
       "fingerprint_kind": "role",
       "pr": null
+    },
+    "T-36-05": {
+      "role": "ci-fix",
+      "at": "2026-09-15T14:10:36.255Z",
+      "effort_applied": "max",
+      "observed_model": "gpt-5.6-luna",
+      "observed_effort": "max",
+      "agent_id": "01a0a567-ab6d-7da2-bea0-5a2c077f7292",
+      "dispatch_id": "t36-05-ci-fix-20260915-01",
+      "fingerprint": "6e820aed842b51fb",
+      "fingerprint_kind": "role",
+      "pr": 140
+    },
+    "T-36-12": {
+      "role": "executor",
+      "at": "2026-09-15T14:29:57.973Z",
+      "effort_applied": "max",
+      "observed_model": "gpt-5.6-luna",
+      "observed_effort": "max",
+      "agent_id": "01a0a579-53e5-78f3-a482-dcd2500a6cb0",
+      "dispatch_id": "t36-12-executor-20260915-01",
+      "fingerprint": "4df012c3eb1f931f",
+      "fingerprint_kind": "role",
+      "pr": null
+    },
+    "T-36-11": {
+      "role": "executor",
+      "at": "2026-09-15T14:29:57.973Z",
+      "effort_applied": "low",
+      "observed_model": "gpt-6-astra",
+      "observed_effort": "low",
+      "agent_id": "01a0a579-557a-7cb3-b43c-2254d806839d",
+      "dispatch_id": "t36-11-executor-20260915-01",
+      "fingerprint": "bf58a3feba478331",
+      "fingerprint_kind": "role",
+      "pr": null
     }
   }
 }

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a09c81a347b2dea309d1780ad0d06fd62d5891680f45160b5290c131c660ed48
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 07f55d7eeb6fa58d1aa281703e9372d40d17b48f2385882fac27d36189d19924
 phase: 26-positive-evidence-before-a-mutation
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: a09c81a347b2dea309d1780ad0d06fd62d5891680f45160b5290c131c660ed48
+shipyard_source_fingerprint: 07f55d7eeb6fa58d1aa281703e9372d40d17b48f2385882fac27d36189d19924
 ---
 
 # Phase 26: One ownership matcher, exact by construction — Delivery Projection
