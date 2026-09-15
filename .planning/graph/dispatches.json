@@ -21,8 +21,8 @@
       "pr": 125
     },
     "T-36-07": {
-      "role": "ci-fix",
-      "at": "2026-09-15T11:46:05.963Z",
+      "role": "integrator",
+      "at": "2026-09-15T12:06:17.831Z",
       "model": "sonnet",
       "effort": "high",
       "effort_applied": "low",
@@ -31,10 +31,10 @@
       "backend": "agent",
       "observed_model": "gpt-6-astra",
       "observed_effort": "low",
-      "agent_id": "01a0a4e3-62fe-71c0-8b0b-049d5cd40754",
+      "agent_id": "01a0a4f5-d79b-7143-85b5-55ea01b16ec0",
       "reason": "tier=level:critical+cap:codex(sonnet) effort=flat:codex(high)",
-      "dispatch_id": "dispatch-mu2lvr4e-8429c596-990a-44ec-be24-19660cebddae",
-      "fingerprint": "0bfe0aa9466bf85d",
+      "dispatch_id": "dispatch-mu2mlq7f-edd08747-4742-45b1-9daa-3bdbc59f5733",
+      "fingerprint": "00b3e80161c22b9c",
       "fingerprint_kind": "role",
       "pr": 142
     }
