@@ -3428,6 +3428,7 @@
       "missing_paths": true,
       "files": [
         "plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs",
+        "plugins/delivery-pipeline/scripts/dispatch-boundary.cjs",
         "plugins/delivery-pipeline/scripts/codex-agent.cjs",
         "plugins/delivery-pipeline/scripts/codex-model-remap.cjs",
         "tests/unit/codex-dispatch-adapter.test.cjs",
