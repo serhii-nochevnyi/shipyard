@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-09-15T14:08:27.203Z",
-  "observed_at": "2026-09-15T14:08:27.203Z",
-  "generation": 301,
+  "generated_at": "2026-09-15T14:09:00.571Z",
+  "observed_at": "2026-09-15T14:09:00.571Z",
+  "generation": 302,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-15T14:08:27.203Z",
+  "dispatches_applied_at": "2026-09-15T14:09:00.571Z",
   "actionable": {
     "execute": [],
     "publish": [],
@@ -145,7 +145,7 @@
     ]
   },
   "why": {
-    "T-36-05": "PR #140: the base moved: `epic/36-enforce-the-runtime-model-ladder` is 13 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
+    "T-36-05": "PR #140: the base moved: `epic/36-enforce-the-runtime-model-ladder` is 14 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-36-06": "PR #141: the base moved: `ticket/T-36-05-claude-adapter-and-explicit-workflow-lau` is 11 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-36-07": "PR #142: green and still a draft — threads, arch-review, conform gate",
     "T-36-08": "PR #143: green and still a draft — threads, arch-review, conform gate",
