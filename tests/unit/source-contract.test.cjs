@@ -74,6 +74,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const pipelineConfig = require('../../plugins/delivery-pipeline/scripts/pipeline-config.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createDurableRecorder } = boundaryModule;
@@ -859,6 +860,126 @@ test('decompose selects runtime before tuning and establishes context before one
   );
 });
 
+test('delivery launch docs route every role through the boundary and the generated Codex names', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
+  const source = `${deliver}\n${sentinel}`;
+  const compact = normalized(source);
+
+  for (const phrase of [
+    'resolve → validate → launch → receipt',
+    'createDispatchBoundary',
+    'createCodexDispatchAdapter',
+    'createClaudeDispatchAdapter',
+    'createDurableRecorder',
+    'boundary.dispatch',
+    'priorApplied',
+    'previous_dispatch_id',
+    'literal model',
+    'omitted effort',
+    'inline',
+    'inherited',
+    'phantom',
+    'receipt',
+  ]) {
+    assert.ok(compact.includes(normalized(phrase)), `delivery docs must state the boundary contract: ${phrase}`);
+  }
+
+  for (const role of [
+    'executor', 'pr-sentinel', 'drift-check', 'ci-fix', 'review-fix',
+    'arch-review', 'integrator',
+  ]) {
+    assert.ok(compact.includes(normalized(role)), `delivery docs must name routed role ${role}`);
+  }
+
+  for (const pair of [
+    'Luna/max', 'Luna/medium', 'Astra/low', 'Astra/medium',
+    'Sonnet/max', 'Sonnet/high', 'Opus/medium', 'Opus/high', 'Opus/max',
+    'Fable/medium',
+  ]) {
+    assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
+  }
+  for (const [name, doc] of [['deliver', deliver], ['pr-sentinel', sentinel]]) {
+    assert.ok(doc.includes('Workflow runtime'), `${name} must name the Workflow runtime by mechanism`);
+    assert.ok(!/\bClaude\b/.test(doc), `${name} must not use converter-rewritten Claude prose`);
+  }
+
+  for (const variant of codexStaticVariants(2)) {
+    assert.ok(source.includes(variant.file), `delivery docs must name generated Codex variant ${variant.file}`);
+  }
+  for (const retired of ['pr-sentinel-deep', 'arch-review-deep']) {
+    assert.ok(!source.includes(retired), `delivery docs must not reintroduce retired variant ${retired}`);
+  }
+  assert.ok(!/--backend[^\n]*\|inline/.test(source), 'delivery docs must not authorize an inline backend');
+    assert.ok(
+      !/node[^\n]*pipeline-config\.cjs\s+model\s+/.test(source),
+      'delivery docs must not execute the compatibility model command'
+    );
+});
+
+test('delivery docs project selector, recorder, and workflow contracts without inventing fields', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
+  const source = `${deliver}\n${sentinel}`;
+
+  for (const phrase of [
+    '--capabilities-file <current-host-capabilities.json>',
+    'concrete `model`, `model_key`, `effort`/`requested_effort`',
+    'compatibility recorder route',
+    'recorder projection',
+    'name without its `.toml` suffix',
+    'Codex dynamic roles are `decomposition` and `executor`',
+    '--effort-applied <receipt-applied-effort>',
+    '`failure-signature.cjs verdict` supplies only verdict/history facts',
+    '`repeat`/`repeat_exhausted` → `rethink`',
+    'tickets: [{ id, planPath, baseRef, model, effort, signals }]',
+    'priorReceipt, previous_dispatch_id, dispatch_id',
+    '`false` disables the Workflow path',
+    '**Cardinality is per work item.**',
+    'round-scoped `pr-sentinel`',
+    'pipeline.fable: auto',
+    'Codex research has no alternatives rung',
+    'shipyard-inv-research-critical.toml',
+  ]) {
+    assert.ok(source.includes(phrase), `delivery docs must state the actual contract: ${phrase}`);
+  }
+
+  for (const stale of ['model_tier', 'boundaryReceipt', 'shipyard-inv-research-alternatives.toml']) {
+    assert.ok(!source.includes(stale), `delivery docs must not invent stale contract field/variant ${stale}`);
+  }
+  assert.ok(normalized(source).includes(normalized('obsolete instruction')),
+    'delivery docs must identify the retired native Agent fallback rule');
+  assert.ok(normalized(source).includes(normalized('never authorizes a native Agent fallback')),
+    'delivery docs must reject the native Agent fallback explicitly');
+  assert.ok(
+    !source.includes('The resolver returns `strategy: fix|continue|rethink`'),
+    'strategy must remain a failure-verdict input, not an invented boundary result'
+  );
+});
+
+test('recorder task levels are projected separately from boundary rungs', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
+  const source = `${deliver}\n${sentinel}`;
+  assert.ok(source.includes('taskLevelRoute'), 'recorder marks must use the task-level projection');
+  assert.ok(source.includes('mechanical|routine|complex|critical|recovery'), 'docs must name recorder task levels');
+  assert.ok(!source.includes('--task-level <rung>'), 'canonical boundary rung must not be passed to the recorder');
+
+  const adaptive = { ...pipelineConfig.DEFAULTS, model_ladder: 'adaptive' };
+  for (const [role, signals, expected] of [
+    ['pr-sentinel', {}, 'mechanical'],
+    ['drift-check', {}, 'mechanical'],
+    ['executor', { risk: 'low', files: 2 }, 'routine'],
+    ['executor', { risk: 'high' }, 'critical'],
+    ['ci-fix', { signatureState: 'repeat_exhausted' }, 'recovery'],
+    ['arch-review', { contested: true }, 'recovery'],
+  ]) {
+    const level = pipelineConfig.resolveTaskLevel(role, signals, adaptive);
+    assert.ok(pipelineConfig.TASK_LEVELS.includes(level), `${role} projection must be recorder-compatible`);
+    assert.equal(level, expected, `${role} must project its evidence to the expected recorder task level`);
+  }
+});
+
 test('every GSD callback requires routed configuration validation on both runtimes', () => {
   const roots = [];
   const writeConfig = (runtime, raw) => {
@@ -957,6 +1078,17 @@ test('research and decomposition use the canonical runtime ladders and only decl
     'critical'
   );
 
+  // Decomposition's critical effort differs from the executor's critical effort.
+  for (const [role, signals, model, effort, rung] of [
+    ['research', { complexity: 'very-complex' }, policy.CODEX_MODEL_IDS.astra, 'medium', 'very-complex'],
+    ['decomposition', { critical: true }, policy.CODEX_MODEL_IDS.astra, 'medium', 'critical'],
+    ['executor', {}, policy.CODEX_MODEL_IDS.luna, 'max', 'base'],
+    ['executor', { critical: true }, policy.CODEX_MODEL_IDS.astra, 'low', 'critical'],
+    ['executor', { checkpoint: true }, policy.CODEX_MODEL_IDS.astra, 'low', 'critical'],
+  ]) {
+    const selection = dispatchResolution('codex', role, signals, `contract-${role}-${Object.keys(signals).join('-') || 'base'}`);
+    assert.deepStrictEqual([selection.model, selection.effort, selection.rung], [model, effort, rung]);
+  }
   assert.equal(
     dispatchResolution('codex', 'research', {
       risk: 'high', critical: true, checkpoint: true, contested: true, inputTokens: 1,
