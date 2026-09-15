@@ -1340,12 +1340,14 @@ const executableTokens = (source) => {
 const callOpensAt = (tokens, index) => tokens[index]?.value === '('
   || (tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' && tokens[index + 2]?.value === '(');
 const NATIVE_MEMBER_METHODS = new Set(['call', 'apply', 'bind']);
+const memberInvocationOpensAt = (tokens, index) => callOpensAt(tokens, index)
+  || (tokens[index]?.value === ')' && callOpensAt(tokens, index + 1));
 const memberCallOpensAt = (tokens, index) => {
   const memberStart = tokens[index]?.value === '.' ? index + 1
     : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' ? index + 2 : null;
   if (memberStart !== null
       && NATIVE_MEMBER_METHODS.has(tokens[memberStart]?.value)
-      && callOpensAt(tokens, memberStart + 1)) return true;
+      && memberInvocationOpensAt(tokens, memberStart + 1)) return true;
   const computedStart = tokens[index]?.value === '[' ? index
     : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.'
       && tokens[index + 2]?.value === '[' ? index + 2 : null;
@@ -1356,7 +1358,7 @@ const memberCallOpensAt = (tokens, index) => {
   // conservative: a routed native callback must not be invoked indirectly.
   return computedStart !== null
     && tokens[computedStart + 1]?.value === ']'
-    && callOpensAt(tokens, computedStart + 2);
+    && memberInvocationOpensAt(tokens, computedStart + 2);
 };
 const launcherReferenceAt = (tokens, index, launchers) => {
   if (launchers.has(tokens[index]?.value)) return index;
@@ -1477,10 +1479,12 @@ test('the routed-launch source sweep rejects native call and apply member forms'
     'const property = worker.agent.call(null, prompt);',
     'const computedCalled = agent[\'call\'](null, prompt);',
     'const optionalComputedApplied = agent?.[\'apply\'](null, [prompt]);',
+    'const parenthesizedCalled = (agent.call)(prompt);',
+    'const parenthesizedComputedApplied = (agent[\'apply\'])(null, [prompt]);',
     '',
   ].join('\n'));
   const offenders = directLaunchOffenders(dir, ['member-outside.mjs']);
-  assert.equal(offenders.length, 5, `native call/apply member forms must be rejected: ${offenders.join('\n')}`);
+  assert.equal(offenders.length, 7, `native call/apply member forms must be rejected: ${offenders.join('\n')}`);
   assert.match(offenders[0], /member-outside\.mjs:1/);
   assert.match(offenders[0], /agent\.call/);
   assert.match(offenders[1], /member-outside\.mjs:2/);
@@ -1491,6 +1495,10 @@ test('the routed-launch source sweep rejects native call and apply member forms'
   assert.match(offenders[3], /agent\['call'\]/);
   assert.match(offenders[4], /member-outside\.mjs:6/);
   assert.match(offenders[4], /agent\?\.\['apply'\]/);
+  assert.match(offenders[5], /member-outside\.mjs:7/);
+  assert.match(offenders[5], /\(agent\.call\)/);
+  assert.match(offenders[6], /member-outside\.mjs:8/);
+  assert.match(offenders[6], /\(agent\['apply'\]\)/);
 });
 
 test('the routed-launch source sweep rejects direct and bound native launcher aliases', () => {
