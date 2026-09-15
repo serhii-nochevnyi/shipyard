@@ -70,13 +70,17 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
-const {
-  createDurableRecorder,
-} = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const pipelineConfig = require('../../plugins/delivery-pipeline/scripts/pipeline-config.cjs');
+const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { createDurableRecorder } = boundaryModule;
+const { createCodexDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 const {
   CLAUDE_MODEL_ALIASES,
+  createClaudeDispatchAdapter,
   createClaudeWorkflowDispatch,
 } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
 
@@ -526,8 +530,8 @@ async function renderedPrompt(name) {
   const source = readRepo(`plugins/delivery-pipeline/workflows/${name}.mjs`)
     .replace(/^export const meta/m, 'const meta');
   const calls = [];
-  const agent = async (prompt, opts) => {
-    calls.push(prompt);
+  const agent = async (prompt, opts = {}) => {
+    calls.push({ prompt, opts });
     const result = name === 'executors'
       ? { id: 'T-30-01', status: 'blocked', summary: 'test' }
       : name === 'drift-gate'
@@ -545,7 +549,17 @@ async function renderedPrompt(name) {
     'agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch', source
   )(agent, parallel, () => {}, () => {}, workflowArgs[name], sourceDispatchFactory);
   assert.strictEqual(calls.length, 1, `${name} must dispatch one prompt in the rendered-contract fixture`);
-  return calls[0];
+  const expectedSelection = {
+    executors: { model: 'sonnet', effort: 'max' },
+    'drift-gate': { model: 'opus', effort: 'max' },
+    'fix-round': { model: 'opus', effort: 'medium' },
+  }[name];
+  assert.deepStrictEqual(
+    { model: calls[0].opts.model, effort: calls[0].opts.effort },
+    expectedSelection,
+    `${name} must pass caller-resolved model and effort into its callback`
+  );
+  return calls[0].prompt;
 }
 
 test('the runtime-rendered prompt carries command-backed evidence requirements', async () => {
@@ -587,6 +601,837 @@ test('the comment exemption is per file type — and markdown gets none', () => 
     ].sort(),
     'exactly the three uncommented occurrences are findings — the two comment lines are not'
   );
+});
+
+// ── ADR-014 is the only GSD launch path ─────────────────────────────────────
+//
+// These are source-contract tests because the failure this ticket closes is a
+// launch shape: the GSD coordinator can look successful while its researcher,
+// planner, or checker was spawned by a generic/inherited path. The fixtures
+// below use the real runtime adapters and boundary, so the assertions cover
+// the selection and receipt fields those adapters currently enforce without
+// contacting either runtime. The typed callback and its host-owned receipt
+// attestation are part of the executable contract; context.gsd_role, agentType,
+// or self-asserted evidence alone never count as proof.
+const dispatchResolution = (runtime, role, signals, dispatchId) =>
+  policy.resolveDispatch({ runtime, role, signals, dispatch_id: dispatchId });
+
+const capabilitiesFor = (resolutions) => ({
+  supportedModels: [...new Set(resolutions.map((resolution) => resolution.model))],
+  supportedEfforts: [...new Set(resolutions.map((resolution) => resolution.effort))],
+  supportedSelections: resolutions.map((resolution) => ({
+    model: resolution.model,
+    effort: resolution.effort,
+  })),
+});
+
+const expectCode = (fn, code) => {
+  assert.throws(
+    fn,
+    (error) => error && error.code === code,
+    `expected dispatch refusal ${code}`
+  );
+};
+
+const applicationEvidence = (selection, launchId, effort = selection.effort, extra = {}) => ({
+  launch_id: launchId,
+  applied_model: selection.model,
+  applied_effort: effort,
+  observed_model: selection.model,
+  observed_effort: effort,
+  ...extra,
+});
+
+const codexApplicationEvidence = (selection, launchId, extra = {}) => applicationEvidence(
+  { model: selection.model, effort: selection.reasoning_effort },
+  launchId,
+  selection.reasoning_effort,
+  extra,
+);
+
+function writeGeneratedResearchAgent(agentsDir, resolution) {
+  const content = [
+    `# shipyard-policy-id = "${policy.POLICY.id}"`,
+    `# shipyard-policy-version = "${resolution.policy_version}"`,
+    `# shipyard-policy-hash = "${resolution.policy_hash}"`,
+    '# shipyard-policy-runtime = "codex"',
+    `# shipyard-policy-role = "${resolution.role}"`,
+    `# shipyard-policy-rung = "${resolution.rung}"`,
+    `name = "${resolution.agent_file.replace(/\.toml$/, '')}"`,
+    `model = "${resolution.model}"`,
+    `model_reasoning_effort = "${resolution.effort}"`,
+    "developer_instructions = '''\nagent\n'''",
+    '',
+  ].join('\n');
+  fs.mkdirSync(agentsDir, { recursive: true });
+  fs.writeFileSync(path.join(agentsDir, resolution.agent_file), content);
+  fs.writeFileSync(path.join(agentsDir, '.shipyard-manifest.json'), JSON.stringify({
+    policy_id: policy.POLICY.id,
+    policy_version: resolution.policy_version,
+    policy_hash: resolution.policy_hash,
+    agent_files: [resolution.agent_file],
+    agent_digests: {
+      [resolution.agent_file]: crypto.createHash('sha256').update(content).digest('hex'),
+    },
+  }) + '\n');
+}
+
+test('decompose documents the three explicit boundary dispatches and refusal rules', () => {
+  const source = readRepo('plugins/delivery-pipeline/commands/decompose.md');
+  const boundarySection = source.slice(
+    source.indexOf('## Step 0.5 — Mandatory GSD runtime dispatch'),
+    source.indexOf('## Step 1 — Clarify the mode and the ticket size')
+  );
+  for (const phrase of [
+    'createDispatchBoundary',
+    'createCodexDispatchAdapter',
+    'createClaudeDispatchAdapter',
+    'createDurableRecorder',
+    'requireGsdRole',
+    'boundary.dispatch',
+    'pipelineConfig.resolveDispatch',
+    'Before every researcher, planner, or checker callback',
+    'configuration-free fallback',
+    'gsd-phase-researcher',
+    'gsd-planner',
+    'gsd-plan-checker',
+    'Astra/low',
+    'Astra/medium',
+    'receipt.compliance',
+    'generic-agent',
+    'inherited',
+    'pipeline-config.cjs',
+    'resolveDispatch',
+    'pipeline.fable: auto',
+    'context.gsd_role',
+    'agentType',
+    'agent_type',
+    'launchTypedGsd',
+    'typedGsdCallback',
+    'gsd_launch_mechanism',
+    'source-contract fixtures exercise',
+  ]) {
+    assert.ok(boundarySection.includes(phrase), `decompose.md must state the boundary contract: ${phrase}`);
+  }
+  assert.ok(/direct\s+inline/.test(boundarySection), 'decompose.md must refuse direct inline launches');
+  for (const phrase of [
+    '**Codex runtime — logical model ladder**',
+    '**Workflow-native alias runtime — native alias ladder**',
+    'sonnet/high',
+    'opus/medium',
+    'fable/medium',
+  ]) {
+    assert.ok(source.includes(phrase), `decompose.md must state the runtime-specific ladder: ${phrase}`);
+  }
+  for (const phrase of ['role: research', 'role: decomposition']) {
+    assert.ok(source.includes(phrase), `decompose.md must route the GSD role explicitly: ${phrase}`);
+  }
+  assert.ok(
+    !boundarySection.includes('"model_profile"') && !boundarySection.includes('"models"'),
+    'GSD model profiles and model maps must not be launch authority'
+  );
+  assert.ok(
+    normalized(source).includes(normalized('If GSD, the Skill, callback wiring, or the durable recorder is unavailable, refuse before launching'))
+      && normalized(source).includes(normalized('do not run the Skill opaquely')),
+    'an opaque GSD Skill invocation must be refused'
+  );
+  assert.ok(normalized(source).includes(normalized('do not prompt the user to run an external command')), 'Skill fallback must not escape the receipt boundary');
+  assert.ok(normalized(source).includes(normalized('there is no receipt-bound decomposition fallback')), 'missing receipts must fail closed');
+});
+
+test('the documented GSD boundary call selects typed callbacks and refuses a missing role', () => {
+  const cases = [
+    { runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner' },
+    { runtime: 'claude', role: 'decomposition', gsd_role: 'gsd-planner' },
+  ];
+
+  for (const item of cases) {
+    const resolution = dispatchResolution(item.runtime, item.role, {}, `documented-${item.runtime}`);
+    const calls = [];
+    const application = item.runtime === 'codex'
+      ? codexApplicationEvidence
+      : (selection, launchId, extra = {}) => applicationEvidence(selection, launchId, selection.effort, extra);
+    const host = {
+      capabilities: capabilitiesFor([resolution]),
+      launch(selection) {
+        calls.push('generic');
+        return application(selection, `${item.runtime}-generic`);
+      },
+      launchTypedGsd(selection, context) {
+        calls.push(context.gsd_role);
+        return application(selection, `${item.runtime}-typed`, {
+          gsd_role: context.gsd_role,
+          gsd_launch_mechanism: context.gsd_launch_mechanism,
+        });
+      },
+    };
+    const adapter = item.runtime === 'codex'
+      ? createCodexDispatchAdapter({ host, capabilities: host.capabilities })
+      : createClaudeDispatchAdapter({ host, capabilities: host.capabilities });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-doc-call-'));
+    const recorder = createDurableRecorder(path.join(root, 'receipts'));
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { [item.runtime]: adapter }, recorder, requireGsdRole: true,
+    });
+
+    try {
+      const result = boundary.dispatch({
+        runtime: item.runtime,
+        role: item.role,
+        gsd_role: item.gsd_role,
+        signals: {},
+        dispatch_id: `documented-${item.runtime}`,
+        model: resolution.model,
+        effort: resolution.effort,
+      }, {});
+      assert.equal(result.receipt.gsd_role, item.gsd_role);
+      assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
+      assert.deepStrictEqual(calls, [item.gsd_role]);
+
+      const missing = boundaryModule.createDispatchBoundary({
+        adapters: { [item.runtime]: adapter },
+        recorder: createDurableRecorder(path.join(root, 'missing-receipts')),
+        requireGsdRole: true,
+      });
+      expectCode(() => missing.dispatch({
+        runtime: item.runtime,
+        role: item.role,
+        signals: {},
+        dispatch_id: `missing-${item.runtime}`,
+        model: resolution.model,
+        effort: resolution.effort,
+      }, {}), 'INVALID_INPUT');
+      assert.deepStrictEqual(calls, [item.gsd_role], 'missing gsd_role must not reach either host launch method');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('decompose selects runtime before tuning and establishes context before one callback set', () => {
+  const source = readRepo('plugins/delivery-pipeline/commands/decompose.md');
+  const boundarySection = source.slice(
+    source.indexOf('## Step 0.5 — Mandatory GSD runtime dispatch'),
+    source.indexOf('## Step 1 — Clarify the mode and the ticket size')
+  );
+  const runtimeAt = boundarySection.indexOf('1. Identify the active host runtime');
+  const tuneAt = boundarySection.indexOf('gsd-tune.cjs --check');
+  const configAt = boundarySection.indexOf('Before every researcher, planner, or checker callback');
+  const boundaryAt = boundarySection.indexOf('5. Use the canonical boundary call for each role');
+  assert.ok(
+    runtimeAt >= 0 && tuneAt > runtimeAt && configAt > tuneAt && boundaryAt > configAt,
+    'the active runtime, tuning, and routed configuration must precede every boundary callback'
+  );
+  assert.match(
+    boundarySection,
+    /gsd-tune\.cjs --check --runtime "\$runtime"/,
+    'gsd-tune --check must receive the already-selected runtime explicitly'
+  );
+  assert.ok(
+    normalized(boundarySection).includes(normalized('Tuning drift is harmless and MUST NOT block decomposition'))
+      && normalized(boundarySection).includes(normalized('required delivery-contract or projection failures and every entry in the report\'s `blockers` array do block')),
+    'tuning-only drift must not block while required contract/projection and blocker failures do'
+  );
+
+  const chain = source.slice(
+    source.indexOf('## Step 2 — GSD chain'),
+    source.indexOf('## Step 3 — Delivery frontmatter extension')
+  );
+  const phaseAt = chain.indexOf('Pick the phase number');
+  const contextAt = chain.indexOf('/gsd-plan-phase <N> --ingest <adr-paths>');
+  const researcherAt = chain.indexOf('`gsd-phase-researcher` →');
+  const plannerAt = chain.indexOf('`gsd-planner` →');
+  const checkerAt = chain.indexOf('`gsd-plan-checker` →');
+  assert.ok(
+    phaseAt >= 0 && phaseAt < contextAt && contextAt < researcherAt
+      && researcherAt < plannerAt && plannerAt < checkerAt,
+    'phase/ADR context must precede the researcher, planner, and checker callbacks'
+  );
+  assert.ok(normalized(chain).includes(normalized('exactly one set of three typed, boundary-owned callbacks')));
+  assert.ok(normalized(chain).includes(normalized('same explicit context')));
+  assert.ok(normalized(chain).includes(normalized('exactly three verified durable receipts')));
+  assert.ok(normalized(chain).includes(normalized('same checker receipt')));
+  assert.ok(normalized(chain).includes(normalized('must not dispatch or record a second `gsd-plan-checker`')));
+  assert.equal(
+    (chain.match(/`gsd-plan-checker` →/g) || []).length,
+    1,
+    'convergence must not add a second checker callback or receipt'
+  );
+});
+
+test('every GSD callback requires routed configuration validation on both runtimes', () => {
+  const roots = [];
+  const writeConfig = (runtime, raw) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-config-contract-'));
+    roots.push(root);
+    fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
+    return pipelineConfig.loadConfig(root, { runtime, env: {}, routed: true }).config;
+  };
+
+  try {
+    for (const runtime of ['codex', 'claude']) {
+      const consent = runtime === 'claude' ? { pipeline: { fable: 'auto' } } : {};
+      const config = writeConfig(runtime, consent);
+      for (const [index, item] of [
+        { role: 'research', signals: {} },
+        { role: 'decomposition', signals: { critical: true } },
+        { role: 'decomposition', signals: { checkpoint: true } },
+      ].entries()) {
+        const resolution = pipelineConfig.resolveDispatch({
+          config,
+          runtime,
+          role: item.role,
+          signals: item.signals,
+          dispatch_id: `config-contract-${runtime}-${index}`,
+        });
+        assert.equal(resolution.runtime, runtime);
+        assert.ok(resolution.model, `${runtime} callback must receive a routed model`);
+        assert.ok(resolution.effort, `${runtime} callback must receive a routed effort`);
+      }
+
+      const conflicting = runtime === 'codex'
+        ? { pipeline: { models: { research: 'sonnet' } } }
+        : { pipeline: { fable: 'auto', models: { research: 'opus' } } };
+      const badConfig = writeConfig(runtime, conflicting);
+      assert.throws(
+        () => pipelineConfig.resolveDispatch({
+          config: badConfig,
+          runtime,
+          role: 'research',
+          signals: {},
+          dispatch_id: `config-conflict-${runtime}`,
+        }),
+        (error) => error && error.code === 'CONFLICTING_OVERRIDE'
+          && error.details && error.details.source === 'pipeline.models.research',
+        `${runtime} must refuse a conflicting project model override before launch`
+      );
+    }
+  } finally {
+    for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('research and decomposition use the canonical runtime ladders and only declared escalation signals', () => {
+  const codexResearch = dispatchResolution('codex', 'research', {}, 'contract-codex-research');
+  const claudeResearch = dispatchResolution('claude', 'research', {}, 'contract-claude-research');
+  const codexDecomposition = dispatchResolution('codex', 'decomposition', {}, 'contract-codex-decomposition');
+  const claudeDecomposition = dispatchResolution('claude', 'decomposition', {}, 'contract-claude-decomposition');
+
+  assert.deepStrictEqual(
+    [codexResearch.model, codexResearch.effort, codexResearch.rung],
+    [policy.CODEX_MODEL_IDS.astra, 'low', 'base']
+  );
+  assert.deepStrictEqual(
+    [claudeResearch.model, claudeResearch.effort, claudeResearch.rung],
+    [CLAUDE_MODEL_ALIASES.sonnet, 'high', 'base']
+  );
+  assert.deepStrictEqual(
+    [codexDecomposition.model, codexDecomposition.effort, codexDecomposition.rung],
+    [policy.CODEX_MODEL_IDS.astra, 'low', 'base']
+  );
+  assert.deepStrictEqual(
+    [claudeDecomposition.model, claudeDecomposition.effort, claudeDecomposition.rung],
+    [CLAUDE_MODEL_ALIASES.opus, 'medium', 'base']
+  );
+
+  assert.equal(
+    dispatchResolution('codex', 'research', { type: 'alternatives' }, 'contract-research-alternatives').rung,
+    'base',
+    'Codex research has no alternatives rung; the undeclared signal must not promote it'
+  );
+  assert.equal(
+    dispatchResolution('codex', 'research', { complexity: 'very-complex' }, 'contract-research-complex').rung,
+    'very-complex'
+  );
+  assert.equal(
+    dispatchResolution('claude', 'research', { type: 'alternatives' }, 'contract-claude-research-alternatives').rung,
+    'alternatives'
+  );
+  assert.equal(
+    dispatchResolution('codex', 'decomposition', { critical: true }, 'contract-decomposition-critical').rung,
+    'critical'
+  );
+  assert.equal(
+    dispatchResolution('claude', 'decomposition', { checkpoint: true }, 'contract-claude-decomposition-checkpoint').rung,
+    'critical'
+  );
+
+  assert.equal(
+    dispatchResolution('codex', 'research', {
+      risk: 'high', critical: true, checkpoint: true, contested: true, inputTokens: 1,
+    }, 'contract-research-noise').rung,
+    'base',
+    'undeclared research signals must not promote the researcher'
+  );
+  assert.equal(
+    dispatchResolution('claude', 'decomposition', {
+      type: 'alternatives', complexity: 'very-complex', risk: 'high', contested: true, inputTokens: 1,
+    }, 'contract-decomposition-noise').rung,
+    'base',
+    'undeclared decomposition signals must not promote the planner or checker'
+  );
+});
+
+test('Claude Fable decomposition escalation stays behind routed consent', () => {
+  const roots = [];
+  const loadRouted = (raw) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-fable-contract-'));
+    roots.push(root);
+    fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
+    if (raw !== undefined) {
+      fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
+    }
+    return pipelineConfig.loadConfig(root, { runtime: 'claude', env: {}, routed: true }).config;
+  };
+
+  try {
+    const withoutConsent = loadRouted({});
+    assert.throws(
+      () => pipelineConfig.resolveDispatch({
+        config: withoutConsent,
+        role: 'decomposition',
+        signals: { checkpoint: true },
+      }),
+      (error) => error && error.code === 'CONFLICTING_OVERRIDE'
+        && error.details && error.details.source === 'pipeline.fable',
+      'a Fable decomposition result must be refused without routed consent'
+    );
+
+    const consented = loadRouted({ pipeline: { fable: 'auto' } });
+    const resolution = pipelineConfig.resolveDispatch({
+      config: consented,
+      role: 'decomposition',
+      signals: { checkpoint: true },
+    });
+    assert.equal(resolution.model, CLAUDE_MODEL_ALIASES.fable);
+    assert.equal(resolution.effort, 'medium');
+  } finally {
+    for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Codex GSD researcher, planner, and checker use runtime selections and durable receipts', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-codex-contract-'));
+  const agentsDir = path.join(root, 'agents');
+  const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
+  const calls = [];
+  const cases = [
+    { role: 'research', gsdRole: 'gsd-phase-researcher', signals: {}, id: 'codex-gsd-research' },
+    { role: 'decomposition', gsdRole: 'gsd-planner', signals: { critical: true }, id: 'codex-gsd-planner' },
+    { role: 'decomposition', gsdRole: 'gsd-plan-checker', signals: { checkpoint: true }, id: 'codex-gsd-checker' },
+  ];
+  const resolutions = cases.map(({ role, signals, id }) => dispatchResolution('codex', role, signals, id));
+  writeGeneratedResearchAgent(agentsDir, resolutions[0]);
+  const capabilities = capabilitiesFor(resolutions);
+  const host = {
+    capabilities,
+    launch(selection, context) {
+      calls.push({ kind: 'dynamic', selection, context });
+      return applicationEvidence(selection, `codex-dynamic-${calls.length}`, selection.reasoning_effort);
+    },
+    launchStatic(selection, context) {
+      calls.push({ kind: 'static', selection, context });
+      return {
+        ...codexApplicationEvidence(selection, `codex-static-${calls.length}`),
+        agent_file_digest: selection.agent_file_digest,
+      };
+    },
+    launchTypedGsd(selection, context) {
+      calls.push({ kind: 'typed', selection, context });
+      return codexApplicationEvidence(
+        selection,
+        `codex-typed-${calls.length}`,
+        {
+          gsd_role: context.gsd_role,
+          gsd_launch_mechanism: context.gsd_launch_mechanism,
+          ...(selection.agent_file ? { agent_file_digest: selection.agent_file_digest } : {}),
+        },
+      );
+    },
+  };
+  const adapter = createCodexDispatchAdapter({ host, agentsDir, capabilities });
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: adapter },
+    recorder,
+  });
+
+  try {
+    for (const [index, item] of cases.entries()) {
+      const result = boundary.dispatch({
+        runtime: 'codex', role: item.role, signals: item.signals,
+        gsd_role: item.gsdRole, dispatch_id: item.id,
+      }, {});
+      assert.equal(result.receipt.compliance, 'verified');
+      assert.equal(result.receipt.dispatch_id, item.id);
+      assert.equal(result.receipt.role, item.role);
+      assert.equal(result.receipt.applied_model, resolutions[index].model);
+      assert.equal(result.receipt.applied_effort, resolutions[index].effort);
+      assert.equal(result.receipt.gsd_role, item.gsdRole);
+      assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
+      assert.deepStrictEqual(recorder.getVerifiedRecord(item.id).receipt, result.receipt);
+    }
+    assert.equal(calls[0].kind, 'typed');
+    assert.deepStrictEqual(
+      [calls[0].selection.model, calls[0].selection.reasoning_effort, calls[0].selection.agent_file],
+      [resolutions[0].model, resolutions[0].effort, resolutions[0].agent_file]
+    );
+    assert.equal(calls[1].kind, 'typed');
+    assert.deepStrictEqual(calls[1].selection, resolutions[1].launch_arguments);
+    assert.equal(calls[2].kind, 'typed');
+    assert.deepStrictEqual(calls[2].selection, resolutions[2].launch_arguments);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Claude GSD researcher, planner, and checker use explicit native selections with routed consent and durable receipts', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-claude-contract-'));
+  const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
+  const calls = [];
+  const cases = [
+    { role: 'research', gsdRole: 'gsd-phase-researcher', signals: {}, id: 'claude-gsd-research' },
+    { role: 'decomposition', gsdRole: 'gsd-planner', signals: {}, id: 'claude-gsd-planner' },
+    { role: 'decomposition', gsdRole: 'gsd-plan-checker', signals: { checkpoint: true }, id: 'claude-gsd-checker' },
+  ];
+  const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-claude-config-'));
+  fs.mkdirSync(path.join(configRoot, '.planning'), { recursive: true });
+  const loadRoutedConfig = (raw) => {
+    fs.writeFileSync(path.join(configRoot, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
+    return pipelineConfig.loadConfig(configRoot, { runtime: 'claude', env: {}, routed: true }).config;
+  };
+  const withoutConsent = loadRoutedConfig({});
+  const consented = loadRoutedConfig({ pipeline: { fable: 'auto' } });
+  const resolutions = cases.map(({ role, signals, id }) => pipelineConfig.resolveDispatch({
+    config: consented,
+    role,
+    signals,
+    dispatch_id: id,
+  }));
+  const capabilities = capabilitiesFor(resolutions);
+  const host = {
+    capabilities,
+    launch(selection, context) {
+      calls.push({ selection, context });
+      return applicationEvidence(selection, `claude-gsd-${calls.length}`);
+    },
+    launchTypedGsd(selection, context) {
+      calls.push({ selection, context, typed: true });
+      return applicationEvidence(selection, `claude-gsd-typed-${calls.length}`, selection.effort, {
+        gsd_role: context.gsd_role,
+        gsd_launch_mechanism: context.gsd_launch_mechanism,
+      });
+    },
+  };
+  const adapter = createClaudeDispatchAdapter({ host, capabilities });
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { claude: adapter },
+    recorder,
+  });
+  const dispatchRouted = (config, item) => {
+    const resolution = pipelineConfig.resolveDispatch({
+      config,
+      role: item.role,
+      signals: item.signals,
+      dispatch_id: item.id,
+    });
+    return boundary.dispatch({
+      runtime: 'claude',
+      role: item.role,
+      signals: item.signals,
+      dispatch_id: item.id,
+      model: resolution.model,
+      effort: resolution.effort,
+      gsd_role: item.gsdRole,
+    }, {});
+  };
+
+  try {
+    assert.throws(
+      () => dispatchRouted(withoutConsent, {
+        role: 'decomposition', signals: { checkpoint: true }, id: 'claude-gsd-checker-off',
+      }),
+      (error) => error && error.code === 'CONFLICTING_OVERRIDE'
+        && error.details && error.details.source === 'pipeline.fable',
+      'Claude checkpoint dispatch must refuse before launch when routed Fable consent is off'
+    );
+    assert.equal(calls.length, 0, 'unconsented routed Fable selection must not reach the Claude host');
+
+    for (const [index, item] of cases.entries()) {
+      const result = dispatchRouted(consented, item);
+      assert.equal(result.receipt.compliance, 'verified');
+      assert.equal(result.receipt.dispatch_id, item.id);
+      assert.equal(result.receipt.role, item.role);
+      assert.equal(result.receipt.gsd_role, item.gsdRole);
+      assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
+      assert.deepStrictEqual(calls[index].selection, resolutions[index].launch_arguments);
+      assert.deepStrictEqual(recorder.getVerifiedRecord(item.id).receipt, result.receipt);
+    }
+    assert.equal(calls[0].selection.model, CLAUDE_MODEL_ALIASES.sonnet);
+    assert.equal(calls[1].selection.model, CLAUDE_MODEL_ALIASES.opus);
+    assert.equal(calls[2].selection.model, CLAUDE_MODEL_ALIASES.fable);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(configRoot, { recursive: true, force: true });
+  }
+});
+
+test('Claude workflow coordinator selects the typed callback and refuses its absence', async () => {
+  const evidence = new WeakMap();
+  let genericCalls = 0;
+  let typedCalls = 0;
+  const result = await createClaudeWorkflowDispatch({
+    agent: () => {
+      genericCalls++;
+      throw new Error('generic callback must not run for a GSD dispatch');
+    },
+    typedGsdCallback: async (prompt, options, gsdRole) => {
+      typedCalls++;
+      const value = { prompt };
+      evidence.set(value, {
+        launch_id: 'claude-workflow-gsd-typed',
+        applied_model: options.model,
+        applied_effort: options.effort,
+        observed_model: options.model,
+        observed_effort: options.effort,
+        gsd_role: gsdRole,
+        gsd_launch_mechanism: options.gsd_launch_mechanism,
+      });
+      return value;
+    },
+    applicationEvidence: ({ result: value }) => evidence.get(value),
+    capabilities: sourceDispatchCapabilities,
+    recorder: sourceDispatchRecorder,
+    prompt: 'typed GSD coordinator prompt',
+    role: 'decomposition',
+    model: 'opus',
+    effort: 'medium',
+    gsdRole: 'gsd-planner',
+    dispatchId: 'claude-gsd-workflow-coordinator',
+  });
+  assert.equal(typedCalls, 1);
+  assert.equal(genericCalls, 0);
+  assert.equal(result.receipt.gsd_role, 'gsd-planner');
+  assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
+  assert.throws(
+    () => createClaudeWorkflowDispatch({
+      agent: () => ({}),
+      applicationEvidence: () => ({}),
+      capabilities: sourceDispatchCapabilities,
+      recorder: sourceDispatchRecorder,
+      prompt: 'missing typed callback',
+      role: 'decomposition',
+      model: 'opus',
+      effort: 'medium',
+      gsdRole: 'gsd-planner',
+      dispatchId: 'claude-gsd-workflow-missing-typed',
+    }),
+    (error) => error && error.code === 'MISSING_ADAPTER',
+    'Claude coordinator must refuse before launch when typed GSD wiring is absent'
+  );
+});
+
+test('Claude workflow coordinator accepts an explicit typed-only host and preflights its role', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-typed-host-'));
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  const evidence = new WeakMap();
+  let typedCalls = 0;
+  const host = {
+    capabilities: sourceDispatchCapabilities,
+    recorder,
+    typedGsdCallback: async (_prompt, launchOptions, gsdRole) => {
+      typedCalls++;
+      const value = {};
+      evidence.set(value, {
+        launch_id: 'claude-host-typed-only',
+        applied_model: launchOptions.model,
+        applied_effort: launchOptions.effort,
+        gsd_role: gsdRole,
+        gsd_launch_mechanism: launchOptions.gsd_launch_mechanism,
+      });
+      return value;
+    },
+    applicationEvidence: ({ result }) => evidence.get(result),
+  };
+
+  try {
+    const result = await createClaudeWorkflowDispatch({
+      host,
+      prompt: 'typed-only host prompt',
+      role: 'decomposition',
+      model: 'opus',
+      effort: 'medium',
+      gsdRole: 'gsd-planner',
+      dispatchId: 'claude-host-typed-only',
+    });
+    assert.equal(result.receipt.gsd_role, 'gsd-planner');
+    assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
+    assert.equal(typedCalls, 1);
+
+    assert.throws(
+      () => createClaudeWorkflowDispatch({
+        host,
+        prompt: 'typed-only host without role',
+        role: 'decomposition',
+        model: 'opus',
+        effort: 'medium',
+        dispatchId: 'claude-host-typed-only-missing-role',
+      }),
+      (error) => error && error.code === 'INVALID_INPUT',
+      'a typed-only GSD host must reject a missing gsdRole before dispatch reservation'
+    );
+    assert.equal(typedCalls, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('GSD callback wiring refuses generic launches and mismatched host attestation on both runtimes', () => {
+  const runRefusal = (runtime, host, id, expectedCode) => {
+    const resolution = dispatchResolution(runtime, 'decomposition', {}, id);
+    const capabilities = capabilitiesFor([resolution]);
+    const adapter = runtime === 'codex'
+      ? createCodexDispatchAdapter({ host, capabilities })
+      : createClaudeDispatchAdapter({ host, capabilities });
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { [runtime]: adapter },
+      recorder: () => true,
+    });
+    expectCode(() => boundary.dispatch({
+      runtime,
+      role: 'decomposition',
+      gsd_role: 'gsd-planner',
+      dispatch_id: id,
+    }), expectedCode);
+  };
+
+  let genericLaunches = 0;
+  const codexResolution = dispatchResolution('codex', 'decomposition', {}, 'codex-gsd-missing-typed');
+  const codexCapabilities = capabilitiesFor([codexResolution]);
+  runRefusal('codex', {
+    capabilities: codexCapabilities,
+    launch() { genericLaunches++; return codexApplicationEvidence({ model: codexResolution.model, reasoning_effort: codexResolution.effort }, 'codex-generic'); },
+  }, 'codex-gsd-missing-typed', 'MISSING_ADAPTER');
+  const claudeResolution = dispatchResolution('claude', 'decomposition', {}, 'claude-gsd-missing-typed');
+  const claudeCapabilities = capabilitiesFor([claudeResolution]);
+  runRefusal('claude', {
+    capabilities: claudeCapabilities,
+    launch() { genericLaunches++; return applicationEvidence({ model: claudeResolution.model, effort: claudeResolution.effort }, 'claude-generic'); },
+  }, 'claude-gsd-missing-typed', 'MISSING_ADAPTER');
+  assert.equal(genericLaunches, 0, 'a generic callback must not run when typed GSD wiring is absent');
+
+  for (const [runtime, resolution, capabilities, makeEvidence] of [
+    ['codex', codexResolution, codexCapabilities, (selection) => codexApplicationEvidence(selection, 'codex-gsd-wrong-attestation', {
+      gsd_role: 'gsd-plan-checker', gsd_launch_mechanism: boundaryModule.GSD_LAUNCH_MECHANISM,
+    })],
+    ['claude', claudeResolution, claudeCapabilities, (selection) => applicationEvidence(selection, 'claude-gsd-wrong-attestation', selection.effort, {
+      gsd_role: 'gsd-plan-checker', gsd_launch_mechanism: boundaryModule.GSD_LAUNCH_MECHANISM,
+    })],
+  ]) {
+    let typedLaunches = 0;
+    const host = {
+      capabilities,
+      launch() { throw new Error('generic callback must not be selected'); },
+      launchTypedGsd(selection) { typedLaunches++; return makeEvidence(selection); },
+    };
+    runRefusal(runtime, host, `${runtime}-gsd-wrong-attestation`, 'NONCOMPLIANT_RECEIPT');
+    assert.equal(typedLaunches, 1, `${runtime} must invoke the typed callback before checking its host evidence`);
+  }
+});
+
+test('boundary refuses missing or ambiguous runtime before any GSD launch', () => {
+  let launches = 0;
+  const adapter = { launch: () => { launches++; } };
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { undefined: adapter, both: adapter },
+    recorder: () => true,
+  });
+  for (const input of [
+    { role: 'research' },
+    { runtime: 'both', role: 'research' },
+  ]) {
+    expectCode(() => boundary.dispatch(input), 'UNKNOWN_RUNTIME');
+  }
+  assert.equal(launches, 0);
+});
+
+test('boundary refuses a missing recorder, unsupported selection, and missing application receipt', () => {
+  const resolution = dispatchResolution('claude', 'research', {}, 'contract-refusal');
+  const capabilities = capabilitiesFor([resolution]);
+  let launches = 0;
+  const host = {
+    capabilities,
+    launch() {
+      launches++;
+      return undefined;
+    },
+  };
+  const adapter = createClaudeDispatchAdapter({ host, capabilities });
+  const withoutRecorder = boundaryModule.createDispatchBoundary({ adapters: { claude: adapter } });
+  expectCode(() => withoutRecorder.dispatch({
+    runtime: 'claude', role: 'research', dispatch_id: 'contract-no-recorder',
+  }), 'RECORD_UNAVAILABLE');
+  assert.equal(launches, 0, 'no recorder must refuse before launch');
+
+  const unsupportedHost = {
+    capabilities: { supportedModels: [], supportedEfforts: [], supportedSelections: [] },
+    launch() { launches++; },
+  };
+  const unsupportedAdapter = createClaudeDispatchAdapter({
+    host: unsupportedHost,
+    capabilities: unsupportedHost.capabilities,
+  });
+  const unsupportedBoundary = boundaryModule.createDispatchBoundary({
+    adapters: { claude: unsupportedAdapter },
+    recorder: () => true,
+  });
+  expectCode(() => unsupportedBoundary.dispatch({
+    runtime: 'claude', role: 'research', dispatch_id: 'contract-unsupported',
+  }), 'UNSUPPORTED_SELECTION');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-receipt-contract-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(root);
+    const missingReceiptBoundary = boundaryModule.createDispatchBoundary({
+      adapters: { claude: adapter },
+      recorder,
+    });
+    expectCode(() => missingReceiptBoundary.dispatch({
+      runtime: 'claude', role: 'research', dispatch_id: 'contract-missing-receipt',
+    }), 'MISSING_RECEIPT');
+    assert.equal(recorder.getVerifiedRecord('contract-missing-receipt'), null);
+    assert.equal(launches, 1, 'the host was called, but its unsubstantiated result was refused');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runtime adapters refuse inline and inherited-session launch contexts', () => {
+  const resolution = dispatchResolution('claude', 'decomposition', {}, 'contract-context');
+  const capabilities = capabilitiesFor([resolution]);
+  let launches = 0;
+  const host = {
+    capabilities,
+    launch() {
+      launches++;
+      return applicationEvidence({ model: resolution.model, effort: resolution.effort }, 'never');
+    },
+  };
+  const adapter = createClaudeDispatchAdapter({ host, capabilities });
+  for (const [index, context] of [
+    { inline: true },
+    { inherit: true },
+    { session_inherited: true },
+  ].entries()) {
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { claude: adapter },
+      recorder: () => true,
+    });
+    expectCode(() => boundary.dispatch({
+      runtime: 'claude', role: 'decomposition', dispatch_id: `contract-context-${index}`,
+    }, context), 'UNSUPPORTED_SELECTION');
+  }
+  assert.equal(launches, 0, 'inline and inherited-session contexts must never reach the host');
 });
 
 done();

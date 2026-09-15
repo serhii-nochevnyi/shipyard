@@ -2510,6 +2510,23 @@ test('refuses original overrides before compatibility parsing or namespace mergi
   }
 });
 
+test('decomposition validates planner and checker GSD override keys for both runtimes', () => {
+  for (const runtime of ['codex', 'claude']) {
+    const effort = runtime === 'codex' ? 'high' : 'low';
+    const cases = [
+      [{ model_overrides: { 'gsd-plan-checker': 'haiku' } }, 'config.model_overrides.gsd-plan-checker'],
+      [{ effort: { agent_overrides: { 'gsd-plan-checker': effort } } }, 'config.effort.agent_overrides.gsd-plan-checker'],
+    ];
+    for (const [raw, source] of cases) {
+      const { config } = routedConfig(
+        runtime === 'claude' ? { ...raw, pipeline: { fable: 'auto' } } : raw,
+        runtime,
+      );
+      refusesSource(() => resolveDispatch({ config, role: 'decomposition', dispatch_id: `checker-${runtime}` }), source);
+    }
+  }
+});
+
 test('GSD tuning tiers and defaults defer to both runtime ladders for every role', () => {
   const tuning = {
     models: { planning: 'opus', execution: 'opus', research: 'sonnet', verification: 'sonnet' },
