@@ -852,7 +852,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   assert.equal(
     dispatchResolution('codex', 'research', { type: 'alternatives' }, 'contract-research-alternatives').rung,
     'base',
-    'alternatives alone does not promote Codex research'
+    'Codex research has no alternatives rung; the undeclared signal must not promote it'
   );
   assert.equal(
     dispatchResolution('codex', 'research', { complexity: 'very-complex' }, 'contract-research-complex').rung,
