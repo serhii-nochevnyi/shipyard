@@ -191,7 +191,7 @@ test('unavailable model, effort or pair never selects a lower tuple', () => {
   }
 });
 
-test('a dynamic remap uses the advertised concrete model and canonical effort', () => {
+test('a dynamic remap records canonical requested values beside the applied model', () => {
   const model = 'vendor/codex-runtime-model';
   const f = setup({
     capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
@@ -202,8 +202,8 @@ test('a dynamic remap uses the advertised concrete model and canonical effort', 
     const result = f.adapter.launch(selected);
     assert.equal(f.calls.at(-1).model, model);
     assert.equal(f.calls.at(-1).reasoning_effort, 'medium');
-    assert.equal(result.requested_model, model);
-    assert.equal(result.requested_effort, 'medium');
+    assert.equal(result.requested_model, resolution.requested_model);
+    assert.equal(result.requested_effort, resolution.requested_effort);
     assert.equal(result.applied_model, model);
     assert.equal(result.applied_effort, 'medium');
   } finally { clean(f); }

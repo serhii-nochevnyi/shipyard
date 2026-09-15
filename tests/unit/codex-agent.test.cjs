@@ -140,12 +140,59 @@ test('an effective GSD remap survives selection and keeps the canonical effort',
       },
     });
     assert.equal(result.model, model);
-    assert.equal(result.requested_model, model);
+    assert.equal(result.requested_model, 'gpt-5.6-sol');
+    assert.equal(result.canonical_model, 'gpt-5.6-sol');
+    assert.equal(result.effective_model, model);
     assert.equal(result.model_source, 'gsd-remap');
     assert.equal(result.remap_key, 'sonnet');
     assert.equal(result.effort, 'medium');
     assert.deepEqual(result.launch_arguments, { model, reasoning_effort: 'medium' });
   } finally { clean(f); }
+});
+
+test('an absent project config stays undefined and loads an inherited GSD remap with cwd/env', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-'));
+  const agentDir = path.join(root, 'agents');
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-home-'));
+  const model = 'vendor/codex-inherited-sonnet';
+  const loader = path.join(codexHome, 'gsd-core', 'bin', 'lib', 'config-loader.cjs');
+  fs.mkdirSync(path.join(root, '.planning'));
+  fs.mkdirSync(agentDir);
+  fs.mkdirSync(path.dirname(loader), { recursive: true });
+  fs.writeFileSync(loader, [
+    'module.exports = {',
+    '  loadConfig(cwd) {',
+    `    if (cwd !== ${JSON.stringify(root)}) throw new Error('unexpected project cwd');`,
+    `    return { model_policy: { runtime_tiers: { codex: { sonnet: ${JSON.stringify(model)} } } } };`,
+    '  },',
+    '};',
+  ].join('\n'));
+  try {
+    assert.equal(readProjectConfig(root), undefined);
+    const result = selectAgent('decomposition', {
+      cwd: root, agentDir, capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model], supportedEfforts: ['medium'] },
+      env: { CODEX_HOME: codexHome },
+    });
+    assert.equal(result.model, model);
+    assert.equal(result.requested_model, 'gpt-5.6-sol');
+    assert.equal(result.effective_model, model);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('an unavailable inherited GSD loader refuses instead of falling back to the canonical model', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-loader-failure-'));
+  const missingHome = path.join(root, 'missing-codex-home');
+  fs.mkdirSync(path.join(root, '.planning'));
+  try {
+    assert.equal(readProjectConfig(root), undefined);
+    assert.throws(() => createCodexRemapper({ cwd: root, codexHome: missingHome, env: { CODEX_HOME: missingHome } }),
+      (error) => error.code === 'UNSUPPORTED_SELECTION'
+        && /cannot load GSD model configuration/.test(error.message)
+        && /install-shipyard-codex/.test(error.message));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('an effective remap is refused when the host does not advertise its model', () => {

@@ -101,6 +101,7 @@ function capabilitiesFrom(options, flags) {
 function configForCodexResolution(config) {
   const original = config.dispatch_context.configuration;
   const configuration = { ...original };
+  let changed = false;
   // The bridge treats these named entries as per-rung launch overrides. Resolve
   // the ADR-014 rung first, then apply the effective Codex remap below; keep
   // the raw namespaces out of the bridge input so an operator model id cannot
@@ -109,18 +110,54 @@ function configForCodexResolution(config) {
   const modelPolicy = configuration.model_policy;
   if (isObject(modelPolicy) && isObject(modelPolicy.runtime_tiers)) {
     const runtimeTiers = { ...modelPolicy.runtime_tiers };
-    delete runtimeTiers.codex;
-    configuration.model_policy = { ...modelPolicy, runtime_tiers: runtimeTiers };
+    if (Object.prototype.hasOwnProperty.call(runtimeTiers, 'codex')) {
+      delete runtimeTiers.codex;
+      configuration.model_policy = { ...modelPolicy, runtime_tiers: runtimeTiers };
+      changed = true;
+    }
   }
   const profileOverrides = configuration.model_profile_overrides;
-  if (isObject(profileOverrides)) {
+  if (isObject(profileOverrides)
+      && Object.prototype.hasOwnProperty.call(profileOverrides, 'codex')) {
     configuration.model_profile_overrides = { ...profileOverrides };
     delete configuration.model_profile_overrides.codex;
+    changed = true;
   }
-  return {
-    ...config,
-    dispatch_context: { ...config.dispatch_context, configuration },
-  };
+  // `codex_models` is a compatibility palette. Let the selector's strict
+  // validator inspect the original project value, while the canonical routed
+  // bridge resolves against its immutable ADR-014 grid.
+  for (const namespace of ['pipeline', 'delivery_pipeline']) {
+    const values = configuration[namespace];
+    if (isObject(values) && Object.prototype.hasOwnProperty.call(values, 'codex_models')) {
+      configuration[namespace] = { ...values };
+      delete configuration[namespace].codex_models;
+      changed = true;
+    }
+  }
+  // A spread copy of a routed config loses pipeline-config's private loader
+  // binding. Keep the original object whenever no Codex-only namespace needs
+  // projection; callers that do need one reload the projection through the
+  // strict routed loader below.
+  return changed ? configuration : config;
+}
+
+function routedConfigForCodexResolution(config, cwd, env) {
+  const projected = configForCodexResolution(config);
+  if (projected === config) return config;
+
+  // pipeline-config intentionally binds routed provenance by object identity.
+  // The projection therefore has to be loaded as a real routed config; a
+  // hand-built `{ ...config, dispatch_context: ... }` would be rejected by the
+  // parent bridge and must never become a compatibility fallback.
+  const shadowRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-routed-'));
+  try {
+    const planningDir = path.join(shadowRoot, '.planning');
+    fs.mkdirSync(planningDir);
+    fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify(projected));
+    return pc.loadConfig(shadowRoot, { runtime: 'codex', env, routed: true }).config;
+  } finally {
+    fs.rmSync(shadowRoot, { recursive: true, force: true });
+  }
 }
 
 function remapKeysForResolution(resolution) {
@@ -132,8 +169,8 @@ function remapKeysForResolution(resolution) {
   return [...new Set(keys)];
 }
 
-function effectiveRemapFor(resolution, config) {
-  const remapFor = createCodexRemapper({ config });
+function effectiveRemapFor(resolution, config, { cwd, env } = {}) {
+  const remapFor = createCodexRemapper({ config, cwd, env });
   const keys = remapKeysForResolution(resolution);
   for (const key of keys) {
     const model = remapFor(key);
@@ -150,7 +187,8 @@ function selectionWithEffectiveRemap(selection, effective) {
   const result = {
     ...selection,
     model: effective.model,
-    requested_model: effective.model,
+    requested_model: selection.requested_model,
+    requested_effort: selection.requested_effort,
     launch_arguments: { ...selection.launch_arguments, model: effective.model },
     canonical_model: selection.model,
     effective_model: effective.model,
@@ -171,14 +209,14 @@ function selectAgentInternal(role, options) {
   if (options.runtime !== undefined && options.runtime !== 'codex') fail('Codex selector cannot launch another runtime');
   const loaded = pc.loadConfig(cwd, { runtime: 'codex', env, routed: true });
   const capabilities = capabilitiesFrom(options, flags);
-  const resolutionConfig = configForCodexResolution(loaded.config);
+  const resolutionConfig = routedConfigForCodexResolution(loaded.config, cwd, env);
   const resolution = pc.resolveDispatch({
     ...options, config: resolutionConfig, runtime: 'codex',
     role: ROLE_ALIASES[role] || role, signals: options.signals || {},
     dispatch_id: options.dispatch_id === undefined ? boundary.newDispatchId() : options.dispatch_id,
   });
   const projectConfig = readProjectConfig(cwd, loaded.file);
-  const effective = effectiveRemapFor(resolution, projectConfig);
+  const effective = effectiveRemapFor(resolution, projectConfig, { cwd, env });
   validateCodexConfiguration(resolution, projectConfig, capabilities, {
     remapKeys: effective.keys,
     effectiveModel: effective.model,

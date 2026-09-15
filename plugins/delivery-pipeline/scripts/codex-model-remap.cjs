@@ -10,8 +10,8 @@ const policy = require('./model-policy.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const { REPAIR } = require('./codex-dispatch-adapter.cjs');
 
-function refuse(message) {
-  throw policy.policyError('CONFLICTING_OVERRIDE', message + '. Remove the conflicting Codex override. ' + REPAIR);
+function refuse(message, code = 'CONFLICTING_OVERRIDE') {
+  throw policy.policyError(code, message + '. Remove the conflicting Codex override. ' + REPAIR);
 }
 
 function normalizeModel(value) {
@@ -37,7 +37,7 @@ function readProjectConfig(cwd, file = path.join(cwd, '.planning', 'config.json'
   let raw;
   try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (error) {
-    if (error.code === 'ENOENT') return {};
+    if (error.code === 'ENOENT') return undefined;
     refuse('cannot read project model configuration ' + file + ': ' + error.message);
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) refuse('project model configuration must be an object');
@@ -85,7 +85,7 @@ function loadGsdConfig(codexHome, cwd) {
   }
 }
 
-function createCodexRemapper({ cwd = process.cwd(), config, codexHome, env = process.env, log = () => {} } = {}) {
+function createCodexRemapper({ cwd = process.cwd(), config, codexHome, env = process.env } = {}) {
   let sourceConfig = config;
   if (sourceConfig === undefined) {
     const projectFile = path.join(cwd, '.planning', 'config.json');
@@ -94,12 +94,11 @@ function createCodexRemapper({ cwd = process.cwd(), config, codexHome, env = pro
     // and an absent project file, even when GSD would fall back to defaults.
     sourceConfig = fs.existsSync(projectFile) ? readProjectConfig(cwd) : undefined;
     if (sourceConfig === undefined) {
-      const home = codexHome || env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+      const home = codexHome || env.CODEX_HOME || path.join(os.homedir(), '.codex');
       try {
         sourceConfig = loadGsdConfig(home, cwd);
       } catch (error) {
-        log(`codex-agent: could not load GSD's model remap (${error.message}); using project keys\n`);
-        sourceConfig = readProjectConfig(cwd);
+        refuse(`cannot load GSD model configuration from ${home}: ${error.message}`, 'UNSUPPORTED_SELECTION');
       }
     }
   }

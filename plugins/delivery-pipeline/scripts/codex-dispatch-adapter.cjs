@@ -244,7 +244,10 @@ function createCodexDispatchAdapter(options = {}) {
     return Object.freeze({
       receipt_type: 'adr-014.application', runtime: 'codex', role: resolution.role,
       dispatch_id: resolution.dispatch_id, launch_id: applied.launch_id,
-      requested_model: selection.model, requested_effort: selection.reasoning_effort,
+      // A dynamic remap is the concrete model applied by the host, not a new
+      // policy request. Keep the canonical request here so the boundary's
+      // durable receipt can distinguish requested from applied values.
+      requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
       applied_model: applied.applied_model, applied_effort: applied.applied_effort,
       ...observations, policy_hash: resolution.policy_hash,
       backend: resolution.backend, mechanism: resolution.mechanism,
