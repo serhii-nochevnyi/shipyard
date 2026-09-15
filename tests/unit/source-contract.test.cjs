@@ -480,14 +480,14 @@ test('command-backed verification rule reaches every delivery boundary', () => {
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const workflowArgs = {
   executors: {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01', model: 'sonnet', effort: 'max' }],
   },
   'drift-gate': {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', model: 'opus', effort: 'max' }],
     driftRefPath: '/p/drift-check.md',
   },
   'fix-round': {
-    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false }],
+    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'opus', effort: 'medium' }],
     ciFixRefPath: '/p/ci-fix.md',
     reviewFixRefPath: '/p/review-fix.md',
     reinitScript: '/p/reviewers.cjs',
@@ -498,16 +498,38 @@ async function renderedPrompt(name) {
   const source = readRepo(`plugins/delivery-pipeline/workflows/${name}.mjs`)
     .replace(/^export const meta/m, 'const meta');
   const calls = [];
-  const agent = async (prompt) => {
-    calls.push(prompt);
-    if (name === 'executors') return { id: 'T-30-01', status: 'blocked', summary: 'test' };
-    if (name === 'drift-gate') return { id: 'T-30-01', verdict: 'fresh', moved: [], reuse_candidates: [], evidence: ['git status --short — /repo — exit 0'] };
-    return { id: 'T-30-01', pr: 109, pushed: false, status: 'no-op', notes: '', hypothesis: 'none' };
+  const agent = async (prompt, opts = {}) => {
+    calls.push({ prompt, opts });
+    const result = name === 'executors'
+      ? { id: 'T-30-01', status: 'blocked', summary: 'test' }
+      : name === 'drift-gate'
+        ? { id: 'T-30-01', verdict: 'fresh', moved: [], reuse_candidates: [], evidence: ['git status --short — /repo — exit 0'] }
+        : { id: 'T-30-01', pr: 109, pushed: false, status: 'no-op', notes: '', hypothesis: 'none' };
+    return result;
   };
+  // This fixture only renders workflow prompts. It deliberately does not
+  // stand in for the runtime adapter or claim role attestation; that contract
+  // belongs to the adjacent adapter files and their host integration.
+  const sourceWorkflowDispatch = async ({ agent: dispatchAgent, prompt, model, effort, agentOptions }) => ({
+    result: await dispatchAgent(prompt, { ...agentOptions, model, effort }),
+    receipt: null,
+  });
   const parallel = async (thunks) => Promise.all(thunks.map((thunk) => thunk()));
-  await new AsyncFunction('agent', 'parallel', 'phase', 'log', 'args', source)(agent, parallel, () => {}, () => {}, workflowArgs[name]);
+  await new AsyncFunction(
+    'agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch', source
+  )(agent, parallel, () => {}, () => {}, workflowArgs[name], sourceWorkflowDispatch);
   assert.strictEqual(calls.length, 1, `${name} must dispatch one prompt in the rendered-contract fixture`);
-  return calls[0];
+  const expectedSelection = {
+    executors: { model: 'sonnet', effort: 'max' },
+    'drift-gate': { model: 'opus', effort: 'max' },
+    'fix-round': { model: 'opus', effort: 'medium' },
+  }[name];
+  assert.deepStrictEqual(
+    { model: calls[0].opts.model, effort: calls[0].opts.effort },
+    expectedSelection,
+    `${name} must pass caller-resolved model and effort into its callback`
+  );
+  return calls[0].prompt;
 }
 
 test('the runtime-rendered prompt carries command-backed evidence requirements', async () => {
@@ -634,10 +656,19 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'Astra/medium',
     'receipt.compliance',
     'generic-agent',
-    'direct inline',
     'inherited',
   ]) {
     assert.ok(boundarySection.includes(phrase), `decompose.md must state the boundary contract: ${phrase}`);
+  }
+  assert.ok(/direct\s+inline/.test(boundarySection), 'decompose.md must refuse direct inline launches');
+  for (const phrase of [
+    '**Codex runtime — logical model ladder**',
+    '**Workflow-native alias runtime — native alias ladder**',
+    'sonnet/high',
+    'opus/medium',
+    'fable/medium',
+  ]) {
+    assert.ok(source.includes(phrase), `decompose.md must state the runtime-specific ladder: ${phrase}`);
   }
   for (const phrase of ['role: research', 'role: decomposition']) {
     assert.ok(source.includes(phrase), `decompose.md must route the GSD role explicitly: ${phrase}`);
@@ -647,10 +678,12 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'GSD model profiles and model maps must not be launch authority'
   );
   assert.ok(
-    source.includes('If the available Skill cannot be wired to the')
-      && source.includes('refuse instead of running it opaquely'),
+    normalized(source).includes(normalized('If GSD, the Skill, callback wiring, or the durable recorder is unavailable, refuse before launching'))
+      && normalized(source).includes(normalized('do not run the Skill opaquely')),
     'an opaque GSD Skill invocation must be refused'
   );
+  assert.ok(normalized(source).includes(normalized('do not prompt the user to run an external command')), 'Skill fallback must not escape the receipt boundary');
+  assert.ok(normalized(source).includes(normalized('there is no receipt-bound decomposition fallback')), 'missing receipts must fail closed');
 });
 
 test('research and decomposition use the canonical runtime ladders and only declared escalation signals', () => {
@@ -713,14 +746,15 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
 });
 
-test('Codex GSD researcher uses the static agent and planner uses explicit dynamic arguments with durable receipts', () => {
+test('Codex GSD researcher, planner, and checker use named callback roles and durable receipts', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-codex-contract-'));
   const agentsDir = path.join(root, 'agents');
   const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
   const calls = [];
   const cases = [
-    { role: 'research', signals: {}, id: 'codex-gsd-research' },
-    { role: 'decomposition', signals: { critical: true }, id: 'codex-gsd-planner' },
+    { gsdRole: 'gsd-phase-researcher', role: 'research', signals: {}, id: 'codex-gsd-research' },
+    { gsdRole: 'gsd-planner', role: 'decomposition', signals: { critical: true }, id: 'codex-gsd-planner' },
+    { gsdRole: 'gsd-plan-checker', role: 'decomposition', signals: { checkpoint: true }, id: 'codex-gsd-checker' },
   ];
   const resolutions = cases.map(({ role, signals, id }) => dispatchResolution('codex', role, signals, id));
   writeGeneratedResearchAgent(agentsDir, resolutions[0]);
@@ -749,10 +783,13 @@ test('Codex GSD researcher uses the static agent and planner uses explicit dynam
     for (const [index, item] of cases.entries()) {
       const result = boundary.dispatch({
         runtime: 'codex', role: item.role, signals: item.signals, dispatch_id: item.id,
-      }, { gsd_role: item.role });
+      }, { gsd_role: item.gsdRole });
       assert.equal(result.receipt.compliance, 'verified');
+      assert.equal(result.receipt.dispatch_id, item.id);
+      assert.equal(result.receipt.role, item.role);
       assert.equal(result.receipt.applied_model, resolutions[index].model);
       assert.equal(result.receipt.applied_effort, resolutions[index].effort);
+      assert.equal(calls[index].context.gsd_role, item.gsdRole);
       assert.deepStrictEqual(recorder.getVerifiedRecord(item.id).receipt, result.receipt);
     }
     assert.equal(calls[0].kind, 'static');
@@ -762,6 +799,8 @@ test('Codex GSD researcher uses the static agent and planner uses explicit dynam
     );
     assert.equal(calls[1].kind, 'dynamic');
     assert.deepStrictEqual(calls[1].selection, resolutions[1].launch_arguments);
+    assert.equal(calls[2].kind, 'dynamic');
+    assert.deepStrictEqual(calls[2].selection, resolutions[2].launch_arguments);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -772,9 +811,9 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
   const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
   const calls = [];
   const cases = [
-    { role: 'research', signals: {}, id: 'claude-gsd-research' },
-    { role: 'decomposition', signals: {}, id: 'claude-gsd-planner' },
-    { role: 'decomposition', signals: { checkpoint: true }, id: 'claude-gsd-checker' },
+    { gsdRole: 'gsd-phase-researcher', role: 'research', signals: {}, id: 'claude-gsd-research' },
+    { gsdRole: 'gsd-planner', role: 'decomposition', signals: {}, id: 'claude-gsd-planner' },
+    { gsdRole: 'gsd-plan-checker', role: 'decomposition', signals: { checkpoint: true }, id: 'claude-gsd-checker' },
   ];
   const resolutions = cases.map(({ role, signals, id }) => dispatchResolution('claude', role, signals, id));
   const capabilities = capabilitiesFor(resolutions);
@@ -795,8 +834,11 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
     for (const [index, item] of cases.entries()) {
       const result = boundary.dispatch({
         runtime: 'claude', role: item.role, signals: item.signals, dispatch_id: item.id,
-      }, { gsd_role: item.role });
+      }, { gsd_role: item.gsdRole });
       assert.equal(result.receipt.compliance, 'verified');
+      assert.equal(result.receipt.dispatch_id, item.id);
+      assert.equal(result.receipt.role, item.role);
+      assert.equal(calls[index].context.gsd_role, item.gsdRole);
       assert.deepStrictEqual(calls[index].selection, resolutions[index].launch_arguments);
       assert.deepStrictEqual(recorder.getVerifiedRecord(item.id).receipt, result.receipt);
     }
