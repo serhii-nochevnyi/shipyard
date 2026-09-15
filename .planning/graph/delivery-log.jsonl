@@ -1226,3 +1226,5 @@
 {"ts":"2026-09-15T12:53:28.279Z","event":"base_merge","ticket":"T-36-08","pr":143,"base":"ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches","head":"426c3ef955623c436585e2fb5e2037ce9082756f"}
 {"ts":"2026-09-15T12:57:56.055Z","event":"base_merge","ticket":"T-36-04","pr":139,"base":"epic/36-enforce-the-runtime-model-ladder","head":"b32f2656ba2df64ee2421f2b927040e764d1a29f"}
 {"ts":"2026-09-15T12:59:16.810Z","event":"base_merge","ticket":"T-36-05","pr":140,"base":"ticket/T-36-04-generate-and-validate-the-complete-codex","head":"195cc46ccb0b90eee5b2faf141ba9138fe05c943"}
+{"ts":"2026-09-15T13:07:49.291Z","event":"base_merge","ticket":"T-36-09","pr":144,"base":"ticket/T-36-08-application-receipts-and-dispatch-record","head":"2afe11ed7208e14764add9538d769f0a5f4477b7"}
+{"ts":"2026-09-15T13:08:01.515Z","event":"status_change","ticket":"T-36-09","from":"pending","to":"pr-open","pr":144}
