@@ -73,8 +73,19 @@ Initialize it before starting the GSD chain:
    `createDurableRecorder`. The adapter must advertise the selected model and
    effort pair. If the adapter, capabilities, recorder, or typed GSD launch
    hook is unavailable, refuse before launching.
-4. Use the canonical boundary call for each role:
-   `boundary.dispatch({ runtime, role, signals, dispatch_id }, context)`.
+4. Before every researcher, planner, or checker callback, load the authoritative
+   routed configuration and resolve that callback through
+   `pipelineConfig.resolveDispatch({ root, runtime, role, signals, dispatch_id })`
+   (or the equivalent `pipeline-config.cjs model <role> --routed --runtime
+   "$runtime" --dispatch-id "$dispatch_id"` command). This is mandatory even
+   when the project has no overrides. Keep the complete resolution and pass its
+   selected `model` and `effort` together with the same `dispatch_id` to the
+   boundary. Any malformed, stale, ambiguous, or conflicting project/GSD
+   override is a refusal before the adapter or host is called; do not inspect
+   only compatibility settings or continue with the canonical default.
+5. Use the canonical boundary call for each role:
+   `boundary.dispatch({ runtime, role, signals, dispatch_id,
+   model: resolution.model, effort: resolution.effort }, context)`.
    The boundary resolves and validates the canonical policy, invokes the
    runtime adapter, verifies application evidence, and records the receipt.
    Do not resolve a model and then launch it through another path.
@@ -156,11 +167,14 @@ trace as decomposition evidence for the corresponding researcher, planner, or
 checker launch. Host exit status or self-asserted application evidence alone
 is not a receipt. Missing or failed evidence is a refusal, not a fallback.
 
-If configuration must be loaded, use the routed `pipeline-config.cjs`
-`resolveDispatch` bridge for canonical preflight and selection validation with
-the explicit active runtime. Its compatibility tier/model readers, GSD `models` or
-`model_overrides`, `model_profile`, and session defaults cannot select or
-authorize a launch, and they cannot replace the boundary receipt.
+The routed configuration bridge above is required before every callback, not
+only when a caller happens to notice configuration. It performs canonical
+preflight and selection validation with the explicit active runtime. Its
+compatibility tier/model readers, GSD `models` or `model_overrides`,
+`model_profile`, and session defaults cannot select or authorize a launch, and
+they cannot replace the boundary receipt. If the bridge is unavailable or
+refuses a configuration conflict, stop before launching; there is no
+configuration-free fallback.
 
 ## Step 1 — Clarify the mode and the ticket size
 

@@ -680,6 +680,9 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'createClaudeDispatchAdapter',
     'createDurableRecorder',
     'boundary.dispatch',
+    'pipelineConfig.resolveDispatch',
+    'Before every researcher, planner, or checker callback',
+    'configuration-free fallback',
     'gsd-phase-researcher',
     'gsd-planner',
     'gsd-plan-checker',
@@ -733,7 +736,12 @@ test('decompose selects runtime before tuning and establishes context before one
   );
   const runtimeAt = boundarySection.indexOf('1. Identify the active host runtime');
   const tuneAt = boundarySection.indexOf('gsd-tune.cjs --check');
-  assert.ok(runtimeAt >= 0 && tuneAt > runtimeAt, 'the active runtime must be selected before gsd-tune preflight');
+  const configAt = boundarySection.indexOf('Before every researcher, planner, or checker callback');
+  const boundaryAt = boundarySection.indexOf('5. Use the canonical boundary call for each role');
+  assert.ok(
+    runtimeAt >= 0 && tuneAt > runtimeAt && configAt > tuneAt && boundaryAt > configAt,
+    'the active runtime, tuning, and routed configuration must precede every boundary callback'
+  );
   assert.match(
     boundarySection,
     /gsd-tune\.cjs --check --runtime "\$runtime"/,
@@ -769,6 +777,59 @@ test('decompose selects runtime before tuning and establishes context before one
     1,
     'convergence must not add a second checker callback or receipt'
   );
+});
+
+test('every GSD callback requires routed configuration validation on both runtimes', () => {
+  const roots = [];
+  const writeConfig = (runtime, raw) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-config-contract-'));
+    roots.push(root);
+    fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
+    return pipelineConfig.loadConfig(root, { runtime, env: {}, routed: true }).config;
+  };
+
+  try {
+    for (const runtime of ['codex', 'claude']) {
+      const consent = runtime === 'claude' ? { pipeline: { fable: 'auto' } } : {};
+      const config = writeConfig(runtime, consent);
+      for (const [index, item] of [
+        { role: 'research', signals: {} },
+        { role: 'decomposition', signals: { critical: true } },
+        { role: 'decomposition', signals: { checkpoint: true } },
+      ].entries()) {
+        const resolution = pipelineConfig.resolveDispatch({
+          config,
+          runtime,
+          role: item.role,
+          signals: item.signals,
+          dispatch_id: `config-contract-${runtime}-${index}`,
+        });
+        assert.equal(resolution.runtime, runtime);
+        assert.ok(resolution.model, `${runtime} callback must receive a routed model`);
+        assert.ok(resolution.effort, `${runtime} callback must receive a routed effort`);
+      }
+
+      const conflicting = runtime === 'codex'
+        ? { pipeline: { models: { research: 'sonnet' } } }
+        : { pipeline: { fable: 'auto', models: { research: 'opus' } } };
+      const badConfig = writeConfig(runtime, conflicting);
+      assert.throws(
+        () => pipelineConfig.resolveDispatch({
+          config: badConfig,
+          runtime,
+          role: 'research',
+          signals: {},
+          dispatch_id: `config-conflict-${runtime}`,
+        }),
+        (error) => error && error.code === 'CONFLICTING_OVERRIDE'
+          && error.details && error.details.source === 'pipeline.models.research',
+        `${runtime} must refuse a conflicting project model override before launch`
+      );
+    }
+  } finally {
+    for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('research and decomposition use the canonical runtime ladders and only declared escalation signals', () => {
