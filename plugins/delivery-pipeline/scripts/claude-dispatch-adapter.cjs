@@ -265,11 +265,12 @@ function createClaudeWorkflowDispatch(options = {}) {
       if (typeof prompt !== 'string') {
         throw boundaryFailure('INVALID_INPUT', 'Claude workflow prompt factory must return a string');
       }
-      const result = options.agent(prompt, {
+      const launchOptions = Object.freeze({
         ...agentOptions,
         model: selection.model,
         effort: selection.effort,
       });
+      const result = options.agent(prompt, launchOptions);
       const capture = (value) => {
         agentResult = value;
         // This callback is host-owned. It must report what the host actually
