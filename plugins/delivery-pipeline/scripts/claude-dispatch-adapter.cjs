@@ -227,7 +227,15 @@ function createClaudeDispatchAdapter(options = {}) {
 // evidence here.
 function createClaudeWorkflowDispatch(options = {}) {
   if (!object(options)) refuse('INVALID_INPUT', 'Claude workflow dispatch options must be an object');
-  if (typeof options.agent !== 'function' && typeof options.typedGsdCallback !== 'function') {
+  const suppliedHost = object(options.host) ? options.host : null;
+  // Resolve the effective typed callback before the preflight. An explicit
+  // host owns the callback just as it owns capabilities, receipts, and
+  // application evidence; inspecting only serializable options would reject a
+  // valid typed-only host or let its absence fail after reservation.
+  const typedGsdCallback = suppliedHost
+    ? suppliedHost.typedGsdCallback
+    : options.typedGsdCallback;
+  if (typeof options.agent !== 'function' && typeof typedGsdCallback !== 'function') {
     refuse('MISSING_ADAPTER', 'Claude workflow dispatch requires the native agent callback or typed GSD callback');
   }
   if (typeof options.prompt !== 'string' && typeof options.prompt !== 'function') {
@@ -238,8 +246,13 @@ function createClaudeWorkflowDispatch(options = {}) {
       || typeof options.effort !== 'string' || !options.effort.trim()) {
     refuse('INVALID_INPUT', 'Claude workflow dispatch requires explicit model and effort');
   }
+  if (typeof options.agent !== 'function'
+      && typeof typedGsdCallback === 'function'
+      && ['research', 'decomposition'].includes(options.role)
+      && options.gsdRole === undefined) {
+    refuse('INVALID_INPUT', `Claude typed-only ${options.role} dispatch requires an explicit gsdRole`);
+  }
 
-  const suppliedHost = object(options.host) ? options.host : null;
   // When an explicit host is present, its closures are the trust boundary.
   // Serializable workflow args must not be able to advertise capabilities or
   // replace the host's recorder/evidence implementation.
@@ -248,9 +261,6 @@ function createClaudeWorkflowDispatch(options = {}) {
   const applicationEvidence = suppliedHost
     ? suppliedHost.applicationEvidence
     : options.applicationEvidence;
-  const typedGsdCallback = suppliedHost
-    ? suppliedHost.typedGsdCallback
-    : options.typedGsdCallback;
   if (capabilities === undefined) {
     refuse('UNSUPPORTED_SELECTION', 'Claude workflow dispatch requires explicit host capabilities');
   }
@@ -358,7 +368,9 @@ function createClaudeWorkflowDispatch(options = {}) {
       return true;
     },
   });
-  const boundary = createDispatchBoundary({ adapters: { claude: adapter }, recorder });
+  const boundary = createDispatchBoundary({
+    adapters: { claude: adapter }, recorder, requireGsdRole: true,
+  });
   const input = {
     runtime: 'claude',
     role: options.role,

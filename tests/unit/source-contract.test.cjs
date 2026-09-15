@@ -1231,6 +1231,61 @@ test('Claude workflow coordinator selects the typed callback and refuses its abs
   );
 });
 
+test('Claude workflow coordinator accepts an explicit typed-only host and preflights its role', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-typed-host-'));
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  const evidence = new WeakMap();
+  let typedCalls = 0;
+  const host = {
+    capabilities: sourceDispatchCapabilities,
+    recorder,
+    typedGsdCallback: async (_prompt, launchOptions, gsdRole) => {
+      typedCalls++;
+      const value = {};
+      evidence.set(value, {
+        launch_id: 'claude-host-typed-only',
+        applied_model: launchOptions.model,
+        applied_effort: launchOptions.effort,
+        gsd_role: gsdRole,
+        gsd_launch_mechanism: launchOptions.gsd_launch_mechanism,
+      });
+      return value;
+    },
+    applicationEvidence: ({ result }) => evidence.get(result),
+  };
+
+  try {
+    const result = await createClaudeWorkflowDispatch({
+      host,
+      prompt: 'typed-only host prompt',
+      role: 'decomposition',
+      model: 'opus',
+      effort: 'medium',
+      gsdRole: 'gsd-planner',
+      dispatchId: 'claude-host-typed-only',
+    });
+    assert.equal(result.receipt.gsd_role, 'gsd-planner');
+    assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
+    assert.equal(typedCalls, 1);
+
+    assert.throws(
+      () => createClaudeWorkflowDispatch({
+        host,
+        prompt: 'typed-only host without role',
+        role: 'decomposition',
+        model: 'opus',
+        effort: 'medium',
+        dispatchId: 'claude-host-typed-only-missing-role',
+      }),
+      (error) => error && error.code === 'INVALID_INPUT',
+      'a typed-only GSD host must reject a missing gsdRole before dispatch reservation'
+    );
+    assert.equal(typedCalls, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('GSD callback wiring refuses generic launches and mismatched host attestation on both runtimes', () => {
   const runRefusal = (runtime, host, id, expectedCode) => {
     const resolution = dispatchResolution(runtime, 'decomposition', {}, id);
