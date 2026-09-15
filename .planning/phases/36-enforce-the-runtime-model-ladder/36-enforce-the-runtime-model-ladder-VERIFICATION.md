@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2728601387c170
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c5f6a2e520c151618dfc8d36be79e0672b2f21a4ab2a540fadb5db1abefef9d7
 phase: 36
 status: human_needed
-shipyard_source_fingerprint: 21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2728601387c170
+shipyard_source_fingerprint: c5f6a2e520c151618dfc8d36be79e0672b2f21a4ab2a540fadb5db1abefef9d7
 ---
 
 # Phase 36: Enforce the runtime model ladder — Verification Projection
@@ -22,11 +22,11 @@ shipyard_source_fingerprint: 21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2
 | Ticket | Delivery | Plan status |
 |---|---|---|
 | T-36-01 | merged | ✓ VERIFIED |
-| T-36-02 | pending | ? UNCERTAIN |
-| T-36-03 | pending | ? UNCERTAIN |
-| T-36-04 | pending | ? UNCERTAIN |
-| T-36-05 | pending | ? UNCERTAIN |
-| T-36-06 | pending | ? UNCERTAIN |
+| T-36-02 | pr-open | ? UNCERTAIN |
+| T-36-03 | pr-open | ? UNCERTAIN |
+| T-36-04 | pr-open | ? UNCERTAIN |
+| T-36-05 | pr-open | ? UNCERTAIN |
+| T-36-06 | pr-open | ? UNCERTAIN |
 | T-36-07 | pending | ? UNCERTAIN |
 | T-36-08 | pending | ? UNCERTAIN |
 | T-36-09 | pending | ? UNCERTAIN |

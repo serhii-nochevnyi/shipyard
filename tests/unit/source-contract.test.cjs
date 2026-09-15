@@ -75,8 +75,13 @@ const { execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { createDurableRecorder } = boundaryModule;
 const { createCodexDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
-const { CLAUDE_MODEL_ALIASES, createClaudeDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
+const {
+  CLAUDE_MODEL_ALIASES,
+  createClaudeDispatchAdapter,
+  createClaudeWorkflowDispatch,
+} = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
 
 const REPO = path.join(__dirname, '..', '..');
 const readRepo = (rel) => fs.readFileSync(path.join(REPO, rel), 'utf8');
@@ -478,6 +483,32 @@ test('command-backed verification rule reaches every delivery boundary', () => {
 });
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const sourceDispatchStore = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-source-contract-dispatch-'));
+const sourceDispatchRecorder = createDurableRecorder(sourceDispatchStore);
+const sourceDispatchCapabilities = Object.freeze({
+  supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
+  supportedEfforts: ['high', 'medium', 'max'],
+  observedModel: false,
+  observedEffort: false,
+});
+const sourceHostEvidence = new WeakMap();
+let sourceLaunch = 0;
+const sourceApplicationEvidence = ({ result }) => {
+  const evidence = sourceHostEvidence.get(result);
+  if (!evidence) throw new Error('test Claude host returned no application evidence');
+  return evidence;
+};
+const sourceDispatchFactory = (options) => createClaudeWorkflowDispatch({
+  ...options,
+  capabilities: options.capabilities === undefined ? sourceDispatchCapabilities : options.capabilities,
+  recorder: options.recorder === undefined ? sourceDispatchRecorder : options.recorder,
+  applicationEvidence: options.applicationEvidence === undefined
+    ? sourceApplicationEvidence
+    : options.applicationEvidence,
+});
+process.on('exit', () => {
+  try { fs.rmSync(sourceDispatchStore, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+});
 const workflowArgs = {
   executors: {
     tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01', model: 'sonnet', effort: 'max' }],
@@ -505,19 +536,17 @@ async function renderedPrompt(name) {
       : name === 'drift-gate'
         ? { id: 'T-30-01', verdict: 'fresh', moved: [], reuse_candidates: [], evidence: ['git status --short — /repo — exit 0'] }
         : { id: 'T-30-01', pr: 109, pushed: false, status: 'no-op', notes: '', hypothesis: 'none' };
+    sourceHostEvidence.set(result, {
+      launch_id: `test-source-launch-${++sourceLaunch}`,
+      applied_model: opts.model,
+      applied_effort: opts.effort,
+    });
     return result;
   };
-  // This fixture only renders workflow prompts. It deliberately does not
-  // stand in for the runtime adapter or claim role attestation; that contract
-  // belongs to the adjacent adapter files and their host integration.
-  const sourceWorkflowDispatch = async ({ agent: dispatchAgent, prompt, model, effort, agentOptions }) => ({
-    result: await dispatchAgent(prompt, { ...agentOptions, model, effort }),
-    receipt: null,
-  });
   const parallel = async (thunks) => Promise.all(thunks.map((thunk) => thunk()));
   await new AsyncFunction(
     'agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch', source
-  )(agent, parallel, () => {}, () => {}, workflowArgs[name], sourceWorkflowDispatch);
+  )(agent, parallel, () => {}, () => {}, workflowArgs[name], sourceDispatchFactory);
   assert.strictEqual(calls.length, 1, `${name} must dispatch one prompt in the rendered-contract fixture`);
   const expectedSelection = {
     executors: { model: 'sonnet', effort: 'max' },

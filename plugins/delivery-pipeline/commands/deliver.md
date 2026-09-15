@@ -144,16 +144,16 @@ instead, and the front reads it back by itself:
   authorises a spend past itself — the one way this field can make the count too
   small, and nothing can validate it away. Holding no id at all, omit the flag: an
   unidentified record counts as its own agent, which is the safe direction.
-  On the Codex bundle add `--agent-file shipyard-<role>[-critical|-deep]` — the file you
-  actually dispatched, which is where that runtime's model choice lives. That
-  pattern is not 1:1 for every role, so check `dispatch-record.cjs`'s own mapping
-  rather than assuming it: `research` dispatches ship as `shipyard-inv-research`
-  (the investigation loop's own name for it, not `shipyard-research`), and
-  `executor` has no agent file at all — an executor is dispatched by the main
-  loop, not a `.toml`, so its `mark` omits `--agent-file` rather than naming a
-  file nothing ships. Naming a file the role does not claim is refused. For
-  static Codex roles select the file from the same signals with
+  On the Codex bundle add the selector's exact `agent_file` to the record — the
+  file you actually dispatched, which is where that runtime's model choice lives.
+  Do not construct a suffix from the role: the canonical grid has role-specific
+  variants, `research` dispatches ship as `shipyard-inv-research`, and
+  `executor` has no agent file at all. An executor is dispatched by the main
+  loop with explicit launch arguments, so its `mark` omits `--agent-file` rather
+  than naming a file nothing ships. Naming a file the role does not claim is
+  refused. For static Codex roles select the file from the same signals with
   `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json
+  --capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"
   [--project-dir <project>] [--risk …] [--files …] [--checkpoint]
   [--signature-state …]`; pass its `agent_file` and `route` fields unchanged.
   Run it from the conveyor project, or pass `--project-dir <project>` when the
@@ -166,8 +166,10 @@ instead, and the front reads it back by itself:
   `--observed-model <model>`, while `route` supplies the shared tier alias and
   requested effort. Do not pass the concrete id to `dispatch-record.cjs
   --model`; that flag accepts the resolver tier alias.
-  `-critical` is the first-attempt lane for risky/checkpointed work; `-deep` is
-  recovery after `repeat_exhausted` or a contested judgement.
+  The selector owns the rung mapping: critical judgment dispatches may select
+  `shipyard-arch-review-critical` or `shipyard-integrator-critical`, while
+  exhausted repair signatures select the canonical repair recovery file. The
+  sentinel remains on `shipyard-pr-sentinel`; it has no recovery file.
   Every mark prints a unique `dispatch_id`. After the runtime exposes its
   transcript identity, record the join with
   `usage-attribution.cjs record --stdin --graph <project>/.planning/graph`: include that `dispatch_id`,
@@ -393,9 +395,9 @@ deepening anything. **Effort is a QUALITY knob, not a price one:** output is 12�
 of a model line and cache read+write 82–87%, so `xhigh` → `high` moves ~3.4% of a
 run against ≈2.5× for a tier step. Never argue an effort row as a saving.
 `minimal` is clamped to `low` (it is not in Workflow's enum). On the Codex runtime
-this table does NOT apply: the effort axis there is two values wide by measurement
-— `low` for the mechanical role, `high` for everything else — and depth comes from
-the model instead (ADR-005 D6, and the `-critical`/`-deep` agents below).
+this table does NOT apply: model and effort are fixed by the ADR-014 role/rung
+metadata in each emitted agent file, and dynamic roles receive the selected pair
+as explicit launch arguments.
 
 **Adaptive task levels.** Set `delivery_pipeline.model_ladder` to `adaptive` when
 the project wants the measured cost/quality split:
@@ -409,12 +411,12 @@ recovery    repeat_exhausted or contested judgement; use the ceiling lane
 ```
 
 On the Workflow path, routine work resolves to `sonnet`, complex work keeps
-`opus`, and critical work uses `opus` at `xhigh` effort. On the Codex path,
-routine/complex work uses the first palette entry and critical/recovery work uses
-the generated
-`-critical`/`-deep` file at the last palette entry for roles that have those
-variants. The Codex integrator file stays on the palette ceiling and has no
-variant; Claude reaches that ceiling only through its earned ceiling route.
+`opus`, and critical work uses `opus` at `xhigh` effort. On the Codex path, the
+selector resolves the ADR-014 role/rung and names the matching emitted file;
+critical judgment work may use `shipyard-arch-review-critical` or
+`shipyard-integrator-critical`, and repair recovery uses the emitted repair
+recovery file. `shipyard-pr-sentinel` remains the only sentinel file. The
+dynamic executor/decomposition roles receive explicit launch arguments instead.
 Missing facts keep a task in the complex lane and produce a warning; they never
 silently buy a cheaper lane.
 
@@ -473,8 +475,10 @@ CEILING — fable, only under `pipeline.fable: auto`, only via these routes:
                   returned needs-fix on this epic before
   shut ceiling    every route above → opus at max effort, with the reason
                   (`pipeline.fable` off, or a runtime whose tier vocabulary has no
-                  such alias — where an agent is a static file, the SAME two
-                  triggers select a `-deep` agent instead; see below)
+                  such alias). On Codex, static files follow the policy-specific
+                  variant: repair `repeat_exhausted` uses `-deep`, critical or
+                  contested judgement uses `-critical` where emitted, and the
+                  sentinel stays on its base file.
 ```
 
 **PASS THE SIGNALS THE TABLE READS, or the row is decoration.** This was measured
@@ -560,48 +564,49 @@ exists. (Phrased without naming the runtime on purpose — the Codex generator
 substitutes that name in prose, which would inflect this sentence into saying
 the opposite where it matters most.)
 On Codex, static `$shipyard-<role>` agents run under their own
-`~/.codex/agents/<name>.toml`, which carries the model and effort ALREADY —
-written at install time from the operator's palette (`pipeline.codex_models`,
-first entry the workhorse floor, last the ceiling). Resolve a static file at
-dispatch time with `codex-agent.cjs select <role> --json [--project-dir <project>]`;
+`~/.codex/agents/<name>.toml`, which carries the canonical ADR-014 model and
+effort ALREADY — written at install time from the policy module, not from the
+compatibility `pipeline.codex_models` palette. Resolve a static file at dispatch
+time with `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json --capabilities-file
+"${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json" [--project-dir <project>];
 if it runs from a ticket worktree, `--project-dir` must point at the conveyor
 root so the adaptive policy is loaded rather than the conservative defaults.
 Do not hand the Codex
 spawn a tier alias, because the static file is the field that carries the
 concrete model. `executor` is the one deliberate exception: it has no static
-file, so `codex-agent.cjs select executor --json` resolves the concrete palette
-model at runtime and has `agent_file: null`. Pass that model and effort to
+file, so `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select executor --json
+--capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"` resolves the
+concrete palette model at runtime and has `agent_file: null`. Pass that model and effort to
 `spawn_agent`/`codex exec` when the schema supports them; otherwise the active
 session model is an explicit, measurable fallback. For the dispatch record, use
 the selector's `route`/`model_tier`; use its concrete `model` as
 `--observed-model` when the host reports it.
 
 **Escalating there means dispatching a DIFFERENT agent**, because a file cannot
-be re-parameterised: `$shipyard-ci-fix-critical`, `$shipyard-review-fix-critical`,
-`$shipyard-arch-review-critical` and `$shipyard-inv-research-critical` are
-first-attempt critical variants;
-`$shipyard-ci-fix-deep`, `$shipyard-review-fix-deep`,
-`$shipyard-pr-sentinel-deep` and `$shipyard-arch-review-deep` are the same
-contracts at the palette's ceiling model. Three conditions select one, all read
-from the journal, never guessed:
+be re-parameterised. The selector is the only authority for the canonical
+role/rung file: critical judgment work may use
+`$shipyard-arch-review-critical` or `$shipyard-integrator-critical`, and repair
+recovery may use `$shipyard-ci-fix-deep` or `$shipyard-review-fix-deep`. Three
+conditions select one, all read from the journal, never guessed:
 
 - `critical` — the resolver classified risk as high or the ticket as a checkpoint;
-  in Codex **adaptive** mode use the matching `-critical` file. Conservative mode
-  intentionally does not generate that variant: use the selector's ordinary-file
-  fallback and record its `fallback` reason.
+  use the selector's emitted critical file when that role has one, otherwise use
+  its ordinary-file result and record the selector's `fallback` reason.
 
 - `repeat_exhausted` — for a repair role: the same failure signature has come
-  back after the `rethink` strategy was already spent on it. One `-deep`
-  dispatch, then escalate to a human rather than a third model.
+  back after the `rethink` strategy was already spent on it. Use the selector's
+  emitted repair recovery file once, then escalate to a human rather than a
+  third model.
 - a recorded `arch_review … verdict=violation` for this ticket — for the judge:
   the conform gate has already refused this PR once, so the re-judgement goes to
-  `$shipyard-arch-review-deep`.
+  `$shipyard-arch-review-critical`.
 
-The Codex integrator file stays at the ceiling and has no critical or deep
-variant. On Claude, the same role reaches the ceiling only through an earned
-route. Where the palette has no second entry (or the host's CLI is too old to
-configure it) other variants are not generated — check that the selected file
-exists and use the selector's `fallback` field.
+The Codex integrator has a base file and the emitted
+`$shipyard-integrator-critical` file; use the latter for its critical or
+contested rung. On Claude, the same role reaches the ceiling only through an
+earned route. The compatibility palette does not remove canonical files, and
+the installer requires explicit host evidence and refuses a host that cannot
+satisfy the required capability pairs.
 
 Scripts (the deterministic layer — do NOT improvise git/gh by hand where a script
 exists):
@@ -1505,8 +1510,10 @@ may be dispatched at all: fix the file.
    model from `pipeline-config.cjs model executor --json --explain --risk <risk>
    --type <type> --files <n> [--checkpoint]` and pass the returned `model`,
    `effort` and `task_level` verbatim. On the Codex path, call
-   `codex-agent.cjs select executor --json --project-dir <project> --risk <risk>
-   --type <type> --files <n> [--checkpoint]` with the same signals. Pass its
+   `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select executor --json --capabilities-file
+   "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json" --project-dir <project>
+   --risk <risk> --type <type> --files <n> [--checkpoint]` with the same signals.
+   Pass its
    concrete `model` and `effort` when the host supports those
    overrides; when `model` is `null`, omit `--model` and let the Codex CLI default
    apply. In both runtimes keep the selector's `route`, `model_tier` and
@@ -1687,7 +1694,8 @@ for every ticket on the guarded list, taking all three resolver fields from the
     is known absent, `unknown` when the host did not expose what ran, or omit the flag
     when neither fact is available;
     on the Codex path also pass `--agent-file <agent_file>` from the same
-    `codex-agent.cjs select pr-sentinel` call, so the ordinary or recovery lane is
+    `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select pr-sentinel --json --capabilities-file
+    "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"` call, so the ordinary or recovery lane is
     recorded; omit that field for the Agent path.
 a mark ahead of a spawn that failed describes a guard nobody posted. Clear each
 one when the guard's report comes back for it — a `pr-sentinel` record also lifts

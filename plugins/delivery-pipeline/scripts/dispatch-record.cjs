@@ -305,8 +305,10 @@ const rolesWithVariantSuffix = (suffix) => new Set(
 
 // Compatibility views retained for callers that group the generated names by
 // suffix. They are derived from the same canonical rung metadata as
-// `agentFilesFor`, so the retired pr-sentinel/arch-review deep files cannot
-// re-enter this contract and integrator-critical cannot be omitted.
+// `agentFilesFor`: only ci-fix/review-fix have a deep recovery file, while the
+// critical set includes research, integrator and arch-review. In particular,
+// the emitted integrator-critical file cannot be omitted or replaced by a
+// retired fixed-role recovery name.
 const CODEX_DEEP_ROLES = rolesWithVariantSuffix(CODEX_DEEP_SUFFIX);
 const CODEX_CRITICAL_ROLES = rolesWithVariantSuffix(CODEX_CRITICAL_SUFFIX);
 
@@ -582,17 +584,17 @@ function parseMarkFlags(argv, role) {
       );
     }
     // A KNOWN file belonging to a DIFFERENT role is the case the flag was blind
-    // to, and it was found by reproduction: `mark T-01-01 executor --agent-file
-    // shipyard-arch-review-deep` was accepted. Either the dispatch went to the
+    // to, and it was found by reproduction: a dispatch could name an
+    // arch-review recovery file for an executor. Either the dispatch went to the
     // wrong agent or the record names the wrong file, and the journal must not
     // quietly hold it under either reading — the whole point of the field is that
-    // the ordinary/`-deep` choice IS the dispatch's decision on Codex, so a file
+    // the ordinary/rung choice IS the dispatch's decision on Codex, so a file
     // from another role makes the model recorded beside it fiction.
     //
     // Built from the ROLE rather than parsed out of the file name: five role names
-    // contain a hyphen, and `-deep` is a suffix, so splitting the name is where an
-    // off-by-one lives. Never compared against itself — the mutation test asserts
-    // that a known file for another role still refuses.
+    // contain a hyphen, and a rung suffix is part of the file name, so splitting
+    // the name is where an off-by-one lives. Never compared against itself — the
+    // mutation test asserts that a known file for another role still refuses.
     const mine = agentFilesFor(role, known);
     if (!mine.size) {
       fail(

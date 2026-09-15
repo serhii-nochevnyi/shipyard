@@ -1,15 +1,24 @@
 {
-  "generated_at": "2026-09-14T12:38:06.416Z",
-  "observed_at": "2026-09-14T12:38:06.416Z",
-  "generation": 230,
+  "generated_at": "2026-09-14T22:54:33.217Z",
+  "observed_at": "2026-09-14T22:54:33.217Z",
+  "generation": 257,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-14T12:38:06.416Z",
+  "dispatches_applied_at": "2026-09-14T22:54:33.217Z",
   "actionable": {
-    "execute": [],
+    "execute": [
+      "T-36-07"
+    ],
     "publish": [],
-    "fix": [],
-    "finalize": [],
+    "fix": [
+      "T-36-03",
+      "T-36-05",
+      "T-36-06"
+    ],
+    "finalize": [
+      "T-36-02",
+      "T-36-04"
+    ],
     "merge": []
   },
   "waiting": {
@@ -21,19 +30,6 @@
   },
   "parked": {
     "blocked": [
-      "T-31-01",
-      "T-31-02",
-      "T-31-03",
-      "T-31-04",
-      "T-31-05",
-      "T-31-06",
-      "T-31-07",
-      "T-36-02",
-      "T-36-03",
-      "T-36-04",
-      "T-36-05",
-      "T-36-06",
-      "T-36-07",
       "T-36-08",
       "T-36-09",
       "T-36-10",
@@ -128,6 +124,13 @@
       "T-30-08",
       "T-30-09",
       "T-30-10",
+      "T-31-01",
+      "T-31-02",
+      "T-31-03",
+      "T-31-04",
+      "T-31-05",
+      "T-31-06",
+      "T-31-07",
       "T-32-01",
       "T-32-02",
       "T-32-06",
@@ -142,54 +145,53 @@
     ]
   },
   "why": {
-    "T-31-01": "escalated — left behind after Phase 31 epic landed; outside current Phase 36 model-ladder scope; requires separate re-decomposition. It lifts by itself once the PR moves (a push, a review answer, undrafting); `escalation-record.cjs clear T-31-01` to take it back.",
-    "T-31-02": "T-31-01 (parent has no branch yet (nothing to cascade from))",
-    "T-31-03": "T-31-02 (parent has no branch yet (nothing to cascade from))",
-    "T-31-04": "T-31-03 (parent has no branch yet (nothing to cascade from))",
-    "T-31-05": "T-31-04 (parent has no branch yet (nothing to cascade from))",
-    "T-31-06": "T-31-05 (parent has no branch yet (nothing to cascade from))",
-    "T-31-07": "T-31-06 (parent has no branch yet (nothing to cascade from))",
-    "T-36-02": "T-31-02 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending))",
-    "T-36-03": "T-36-02 (parent has no branch yet (nothing to cascade from))",
-    "T-36-04": "T-36-03 (parent has no branch yet (nothing to cascade from))",
-    "T-36-05": "T-36-04 (parent has no branch yet (nothing to cascade from))",
-    "T-36-06": "T-36-05 (parent has no branch yet (nothing to cascade from))",
-    "T-36-07": "T-36-06 (parent has no branch yet (nothing to cascade from)); T-31-01 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)); T-31-02 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)); T-31-06 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending)); T-31-07 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending))",
+    "T-36-02": "PR #137: green and still a draft — threads, arch-review, conform gate",
+    "T-36-03": "PR #138: the base moved: `ticket/T-36-02-authoritative-configuration-bridge-and-o` is 1 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
+    "T-36-04": "PR #139: green and still a draft — threads, arch-review, conform gate",
+    "T-36-05": "PR #140: 1 failing check(s)",
+    "T-36-06": "PR #141: the base moved: `ticket/T-36-05-claude-adapter-and-explicit-workflow-lau` is 15 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
+    "T-36-07": "ready — worktree + executor",
     "T-36-08": "T-36-07 (parent has no branch yet (nothing to cascade from))",
     "T-36-09": "T-36-08 (parent has no branch yet (nothing to cascade from))",
     "T-36-10": "T-36-09 (parent has no branch yet (nothing to cascade from))",
     "T-36-11": "T-36-10 (parent has no branch yet (nothing to cascade from))",
-    "T-36-12": "T-36-10 (parent has no branch yet (nothing to cascade from)); T-31-02 (cross-phase parent must be MERGED and its phase 31 epic landed on main first (parent is pending))"
+    "T-36-12": "T-36-10 (parent has no branch yet (nothing to cascade from))"
   },
   "counts": {
-    "execute": 0,
+    "execute": 1,
     "publish": 0,
-    "fix": 0,
-    "finalize": 0,
+    "fix": 3,
+    "finalize": 2,
     "merge": 0,
     "ci": 0,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 18,
-    "done": 98
+    "blocked": 5,
+    "done": 105
   },
   "parent_of": {},
-  "actionable_count": 0,
+  "actionable_count": 6,
   "left_behind_count": 0,
-  "fixpoint": true,
+  "fixpoint": false,
   "capacity": {
     "max": 4,
     "in_flight": 0,
     "free": 4
   },
   "sentinel": {
-    "duty": [],
+    "duty": [
+      "T-36-03",
+      "T-36-05",
+      "T-36-06",
+      "T-36-02",
+      "T-36-04"
+    ],
     "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
-    "clear": true
+    "clear": false
   },
   "roles": {
     "execute": [

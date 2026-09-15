@@ -137,6 +137,18 @@ test('matching named configuration is an assertion, independent of palette order
   } finally { clean(f); }
 });
 
+test('documented comma-separated Codex palettes are normalized before strict validation', () => {
+  const f = fixture({
+    delivery_pipeline: {
+      codex_models: 'gpt-6-astra:medium@0.153.1, gpt-5.6-luna:max',
+    },
+  });
+  try {
+    assert.equal(selectAgent('executor', f.options).model, 'gpt-5.6-luna');
+    assert.equal(selectAgent('executor', { ...f.options, signals: { critical: true } }).model, 'gpt-6-astra');
+  } finally { clean(f); }
+});
+
 test('a matching remap cannot hide a contradictory lower-precedence remap', () => {
   const f = fixture({
     model_policy: { runtime_tiers: { codex: { luna: 'gpt-5.6-luna' } } },
@@ -182,6 +194,16 @@ test('availability is mandatory for static and dynamic selections', () => {
   } finally { clean(f); }
 });
 
+test('selector accepts capabilities from the host integration boundary', () => {
+  const f = fixture();
+  try {
+    const withoutCapabilities = { ...f.options, capabilities: undefined };
+    const result = selectAgent('executor', { ...withoutCapabilities, host: { capabilities } });
+    assert.equal(result.model, 'gpt-5.6-luna');
+    assert.throws(() => selectAgent('executor', { ...withoutCapabilities, host: {} }), /capabilities-file/);
+  } finally { clean(f); }
+});
+
 test('malformed project config does not fall through to defaults or the GSD catalog', () => {
   const f = fixture();
   try {
@@ -205,8 +227,9 @@ test('named remapper exposes exactly the canonical palette without loading GSD',
 });
 
 test('CLI accepts canonical signals and refuses obsolete fallback-era inputs', () => {
-  const parsed = parseArgs(['select', 'research', '--type', 'alternatives', '--complexity', 'very-complex', '--critical']);
+  const parsed = parseArgs(['select', 'research', '--type', 'alternatives', '--complexity', 'very-complex', '--files', '3', '--critical']);
   assert.deepEqual(signalsFrom(parsed.flags), { type: 'alternatives', complexity: 'very-complex', critical: true });
+  assert.equal(parsed.flags.get('files'), '3');
   assert.deepEqual(signalsFrom(new Map()), {});
   for (const args of [['--attempt', '2'], ['--task-level', 'critical'], ['--critical', '--critical'], ['--complexity']]) {
     assert.throws(() => parseArgs(args));
@@ -218,13 +241,26 @@ test('CLI accepts canonical signals and refuses obsolete fallback-era inputs', (
 test('CLI plain and JSON output both preserve explicit dynamic model and effort', () => {
   const f = fixture();
   try {
-    for (const flags of [[], ['--json']]) {
-      const result = spawnSync(process.execPath, [SCRIPT, 'select', 'executor',
-        '--project-dir', f.root, '--capabilities-file', path.join(f.root, 'capabilities.json'), ...flags],
-      { cwd: ROOT, encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });
-      assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(JSON.parse(result.stdout).launch_arguments, { model: 'gpt-5.6-luna', reasoning_effort: 'max' });
-    }
+    const plain = spawnSync(process.execPath, [SCRIPT, 'select', 'executor',
+      '--project-dir', f.root, '--capabilities-file', path.join(f.root, 'capabilities.json'), '--files', '2'],
+    { cwd: ROOT, encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.equal(plain.stdout.trim(), 'gpt-5.6-luna max');
+    assert.throws(() => JSON.parse(plain.stdout));
+
+    const json = spawnSync(process.execPath, [SCRIPT, 'select', 'executor',
+      '--project-dir', f.root, '--capabilities-file', path.join(f.root, 'capabilities.json'), '--json'],
+    { cwd: ROOT, encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });
+    assert.equal(json.status, 0, json.stderr);
+    assert.deepEqual(JSON.parse(json.stdout).launch_arguments, { model: 'gpt-5.6-luna', reasoning_effort: 'max' });
+
+    const staticPlain = spawnSync(process.execPath, [SCRIPT, 'select', 'research',
+      '--project-dir', f.root, '--agent-dir', f.agentDir,
+      '--capabilities-file', path.join(f.root, 'capabilities.json')],
+    { cwd: ROOT, encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });
+    assert.equal(staticPlain.status, 0, staticPlain.stderr);
+    assert.equal(staticPlain.stdout.trim(), 'shipyard-inv-research.toml high');
+
     const refused = spawnSync(process.execPath, [SCRIPT, 'select', 'executor', '--project-dir', f.root],
       { encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });
     assert.notEqual(refused.status, 0);

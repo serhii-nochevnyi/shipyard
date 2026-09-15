@@ -1035,16 +1035,23 @@ function withBundle(check, phase = 2) {
       '--project-dir', root, '--phase', String(phase), '--capabilities', capabilitiesFile];
     const generated = spawnSync(process.execPath, args, { encoding: 'utf8', env: hermetic() });
     assert.equal(generated.status, 0, generated.stderr);
-    check({ root, out, args, options: { codexHome, phase, capabilities: bundleCapabilities } });
+    check({ root, out, converter, args, options: { codexHome, phase, capabilities: bundleCapabilities } });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
 test('generation covers every static rung and excludes every dynamic file in both phases', () => {
-  for (const phase of [1, 2]) withBundle(({ out, options }) => {
+  for (const phase of [1, 2]) withBundle(({ out, converter, options }) => {
     const manifest = validateCodexBundle(out, options);
     assert.equal(manifest.policy_hash, bundlePolicy.POLICY_HASH);
+    assert.equal(manifest.gsd_lib, converter);
+    assert.equal(manifest.gsd_lib_digest,
+      require('crypto').createHash('sha256').update(fs.readFileSync(converter)).digest('hex'));
+    assert.equal(manifest.capabilities_file, 'codex-capabilities.json');
+    assert.ok(manifest.bundle_files.includes('codex-capabilities.json'));
+    assert.ok(manifest.bundle_files.length > 0);
+    assert.ok(manifest.skill_files.includes(`shipyard-${phase === 2 ? 'deliver' : 'bench'}/SKILL.md`));
     for (const role of bundlePolicy.CODEX_STATIC_ROLES.filter((role) => phase === 2 || role === 'research')) {
       for (const rung of bundlePolicy.CODEX_ROLE_RUNG_DEFINITIONS[role]) {
         assert.ok(manifest.agent_files.includes(bundlePolicy.codexAgentFile(role, rung.name)));
@@ -1056,6 +1063,16 @@ test('generation covers every static rung and excludes every dynamic file in bot
       }
     }
   }, phase);
+});
+
+test('the direct bundle validator defaults an omitted phase to phase 2', () => {
+  withBundle(({ root, out, options }) => {
+    const result = spawnSync(process.execPath, [SCRIPT, '--validate-codex-bundle', out,
+      '--codex-home', options.codexHome, '--capabilities', path.join(root, 'capabilities.json')], {
+      encoding: 'utf8', env: hermetic(),
+    });
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+  });
 });
 
 test('validator rejects incomplete, stale, tampered, unregistered and dynamic artifacts', () => {
@@ -1070,6 +1087,18 @@ test('validator rejects incomplete, stale, tampered, unregistered and dynamic ar
     digest: (_, m) => { m.agent_digests[m.agent_files[0]] = '0'.repeat(64); },
     dynamic: ({ out }) => fs.writeFileSync(path.join(out, 'agents', 'shipyard-executor.toml'), ''),
     payload: ({ out }) => fs.appendFileSync(path.join(out, 'bundle/scripts/model-policy.cjs'), '// stale'),
+    nestedPayload: ({ out }) => {
+      const file = path.join(out, 'bundle/references/inv-research.md');
+      fs.appendFileSync(file, '// stale');
+    },
+    extraNestedPayload: ({ out }) => fs.writeFileSync(
+      path.join(out, 'bundle/references/foreign-review.md'), 'must be rejected'),
+    extraNestedSkill: ({ out }) => {
+      fs.mkdirSync(path.join(out, 'skills/shipyard-deliver/references'), { recursive: true });
+      fs.writeFileSync(path.join(out, 'skills/shipyard-deliver/references/foreign.md'), 'must be rejected');
+    },
+    missingPayloadManifest: (_, m) => { delete m.bundle_files; },
+    missingPayloadDigest: (_, m) => { delete m.bundle_digests[m.bundle_files[0]]; },
     skill: ({ out }) => fs.unlinkSync(path.join(out, 'skills/shipyard-bench/SKILL.md')),
     foreignSkill: ({ out }) => {
       fs.mkdirSync(path.join(out, 'skills/gsd-executor'));
@@ -1107,6 +1136,14 @@ test('a recomputed digest cannot authorize a model-less, downgraded or trailing 
     manifest.agent_digests[name] = require('crypto').createHash('sha256').update(text).digest('hex');
     fs.writeFileSync(manifestFile, JSON.stringify(manifest));
     assert.throws(() => validateCodexBundle(out, options));
+  });
+});
+
+test('a converter swap after validation invalidates the bundle binding', () => {
+  withBundle(({ out, converter, options }) => {
+    validateCodexBundle(out, options);
+    fs.appendFileSync(converter, '\n// swapped after preflight\n');
+    assert.throws(() => validateCodexBundle(out, options), /converter/);
   });
 });
 

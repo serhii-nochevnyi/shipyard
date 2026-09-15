@@ -19,6 +19,8 @@ for f in scripts/gen-codex-shipyard.cjs scripts/merge-codex-config.cjs scripts/i
 done
 node --check scripts/gen-codex-shipyard.cjs
 node --check scripts/merge-codex-config.cjs
+node --check plugins/delivery-pipeline/scripts/gsd-tune.cjs
+node --check plugins/delivery-pipeline/scripts/dispatch-record.cjs
 node --check plugins/delivery-pipeline/scripts/gsd-sync.cjs
 node --check capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs
 bash -n scripts/install-shipyard-codex.sh
@@ -71,10 +73,14 @@ GSD_BEFORE="$(gsd_owned_state)"
 # version's converter. The installer now refreshes gsd-core to the latest by
 # default — correct for a user, wrong here: it would overwrite the setup this
 # test just built and make every assertion below describe a different gsd-core
-# than the one it installed. Exported once; every install call below inherits it.
+# than the one it installed. Most installs use this explicit host fixture; a
+# later call deliberately unsets it to exercise the installer's bare-install
+# provisioning path.
 export SHIPYARD_GSD_AUTO_INSTALL=0
 
 # Explicit host capability fixture, independent of the compatibility palette.
+# The installer requires this measured input and carries its exact bytes into
+# the installed bundle for later selector calls.
 export SHIPYARD_CODEX_CAPABILITIES_FILE="$WORK/codex-capabilities.json"
 node - "$SHIPYARD_CODEX_CAPABILITIES_FILE" <<'NODE'
 const fs = require('fs');
@@ -105,6 +111,29 @@ grep -rq 'CLAUDE_PLUGIN_ROOT' "$SKILLS"/shipyard-*/SKILL.md && { echo "CLAUDE_PL
 grep -rq '/shipyard:' "$SKILLS"/shipyard-*/SKILL.md && { echo "unconverted /shipyard: reference"; exit 1; } || true
 grep -rq '[$]shipyard-' "$SKILLS"/shipyard-*/SKILL.md || { echo "no \$shipyard- invocations found"; exit 1; }
 grep -q 'codex_skill_adapter' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "missing codex adapter header"; exit 1; }
+for f in "$SKILLS/shipyard-deliver/SKILL.md" "$CODEX_HOME/agents/shipyard-pr-sentinel.toml"; do
+  if grep -Eq 'inv-research-critical|pr-sentinel-deep|arch-review-deep' "$f"; then
+    echo "canonical Codex instructions name a non-emitted variant: $f"; exit 1
+  fi
+done
+grep -q 'shipyard-integrator-critical' "$SKILLS/shipyard-deliver/SKILL.md" \
+  || { echo "canonical deliver instructions omit integrator-critical"; exit 1; }
+[[ -f "$CODEX_HOME/shipyard/codex-capabilities.json" ]] \
+  || { echo "installed bundle lost durable Codex capability evidence"; exit 1; }
+cmp -s "$SHIPYARD_CODEX_CAPABILITIES_FILE" "$CODEX_HOME/shipyard/codex-capabilities.json" \
+  || { echo "installed capability evidence is not the supplied host document"; exit 1; }
+
+# A bare install is refused before gsd-core bootstrap or staging. The policy is
+# not host evidence, so the installer never fabricates a capability document.
+cp -a "$CODEX_HOME" "$WORK/bare-before"
+if env -u SHIPYARD_CODEX_CAPABILITIES_FILE \
+  bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/bare-install.log" 2>&1; then
+  echo "bare install unexpectedly passed without explicit host evidence"; exit 1
+fi
+grep -q 'explicit Codex host capability evidence is required' "$WORK/bare-install.log" \
+  || { cat "$WORK/bare-install.log"; exit 1; }
+diff -ruN "$WORK/bare-before" "$CODEX_HOME" >/dev/null \
+  || { echo "bare-install refusal changed the destination"; exit 1; }
 
 # bundle payload carries the deterministic scripts (incl. the telemetry layer)
 # and they are valid node — the deliver skill calls them via the rewritten root
@@ -239,6 +268,14 @@ for (const role of policy.DYNAMIC_ROLES) {
   }
 }
 assert.equal(require(path.join(home, 'shipyard/scripts/model-policy.cjs')).POLICY_HASH, policy.POLICY_HASH);
+for (const file of manifest.skill_files) {
+  const text = fs.readFileSync(path.join(home, '..', '.agents', 'skills', file), 'utf8');
+  assert.equal(require('crypto').createHash('sha256').update(text).digest('hex'), manifest.skill_file_digests[file]);
+}
+for (const file of manifest.bundle_files) {
+  const text = fs.readFileSync(path.join(home, 'shipyard', file), 'utf8');
+  assert.equal(require('crypto').createHash('sha256').update(text).digest('hex'), manifest.bundle_digests[file]);
+}
 console.log(variants.length);
 NODE
 )"
@@ -379,7 +416,8 @@ fi
 # phase gating: --phase 1 emits neither the deliver skill nor phase-2 agents,
 # but still emits the phase-1 inv-research agent and its adaptive critical lane.
 node scripts/gen-codex-shipyard.cjs --plugin plugins/delivery-pipeline \
-  --out "$WORK/p1" --codex-home "$CODEX_HOME" --phase 1 >/dev/null
+  --out "$WORK/p1" --codex-home "$CODEX_HOME" --phase 1 \
+  --capabilities "$SHIPYARD_CODEX_CAPABILITIES_FILE" >/dev/null
 [[ ! -e "$WORK/p1/skills/shipyard-deliver" ]] || { echo "phase 1 leaked deliver skill"; exit 1; }
 [[ ! -e "$WORK/p1/agents/shipyard-arch-review.toml" ]] || { echo "phase 1 leaked a phase-2 agent"; exit 1; }
 [[ -e "$WORK/p1/agents/shipyard-inv-research.toml" ]] || { echo "phase 1 missing inv-research agent"; exit 1; }
@@ -394,12 +432,16 @@ P1_DEEP="$(find "$WORK/p1/agents" -name '*-deep.toml' | wc -l | tr -d ' ')"
 # the full palette.
 PHASE1_AGENTS="$WORK/phase1-AGENTS.md"
 CODEX_AGENTS_MD="$PHASE1_AGENTS" bash scripts/install-shipyard-codex.sh --phase 1 >/dev/null
+[[ ! -e "$SKILLS/shipyard-deliver" ]] \
+  || { echo "phase 1 downgrade left the phase-2 deliver skill installed"; exit 1; }
 grep -q 'large / multi-ticket -> `\$shipyard-decompose`; install phase 2 before delivery' "$PHASE1_AGENTS" \
   || { echo "phase 1 auto-route advertises an unavailable deliver skill"; exit 1; }
 if grep -q '\$shipyard-decompose` -> `\$shipyard-deliver' "$PHASE1_AGENTS"; then
   echo "phase 1 auto-route still advertises shipyard-deliver"; exit 1
 fi
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+[[ -f "$SKILLS/shipyard-deliver/SKILL.md" ]] \
+  || { echo "phase 2 reinstall did not restore the deliver skill"; exit 1; }
 
 # Compatibility remaps must not weaken the canonical runtime ladder.
 mkdir -p "$WORK/remapproj/.planning"

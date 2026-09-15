@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const policy = require('./model-policy.cjs');
+const pipelineConfig = require('./pipeline-config.cjs');
 const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
 const { REPAIR } = require('./codex-dispatch-adapter.cjs');
 
@@ -18,6 +19,17 @@ function normalizeModel(value) {
     refuse('Codex models must be exact Terra/Sol/Luna/Astra IDs');
   }
   return model;
+}
+
+function normalizePalette(value, source) {
+  if (typeof value !== 'string') return value;
+  const warnings = [];
+  const normalized = pipelineConfig.normalizeCodexModels(value, warnings);
+  if (!Array.isArray(normalized) || warnings.length) {
+    const detail = warnings.length ? `: ${warnings.join('; ')}` : '';
+    refuse(`${source} is not a valid documented comma-separated Codex palette${detail}`);
+  }
+  return normalized;
 }
 
 function readProjectConfig(cwd, file = path.join(cwd, '.planning', 'config.json')) {
@@ -78,7 +90,8 @@ function validateCodexConfiguration(resolution, config, capabilities = {}) {
   }
   // Check both namespaces; namespace precedence cannot hide a conflict.
   for (const namespace of ['pipeline', 'delivery_pipeline']) {
-    const palette = config[namespace]?.codex_models;
+    const source = `${namespace}.codex_models`;
+    const palette = normalizePalette(config[namespace]?.codex_models, source);
     if (palette === undefined) continue;
     if (!Array.isArray(palette) || !palette.length) refuse(namespace + '.codex_models must declare a non-empty named palette');
     const seen = new Set();

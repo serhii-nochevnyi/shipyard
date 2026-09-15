@@ -29,13 +29,24 @@ export const meta = {
 //                        // dispatch boundary (never inherited or defaulted here)
 //       effort,          // caller-resolved reasoning effort; required at the
 //                        // dispatch boundary (never inherited or defaulted here)
+//       signals,         // exact ADR-014 signals used to resolve model/effort;
+//                        // never infer a repair rung from the pair alone
+//       signatureState,  // optional alias; must agree with signals.signatureState
+//       risk, critical, checkpoint, // optional canonical signal aliases
+//       priorReceipt,    // preceding boundary-returned receipt, never agent output
+//       previous_dispatch_id, // that receipt's dispatch identity (required for repair)
+//       dispatch_id,     // optional new dispatch identity
 //     } ],
 //     ciFixRefPath,      // abs path to references/ci-fix.md
 //     reviewFixRefPath,  // abs path to references/review-fix.md
 //     reinitScript,      // abs path to scripts/reviewers.cjs
 //     artifactLanguage,  // optional; language for shipped artifacts (default English)
+//     claudeCapabilities,       // explicit capabilities from the Claude host
+//     dispatchRecorder,          // durable receipt recorder from the host
+//     claudeApplicationEvidence, // host callback returning actual launch_id/applied_model/applied_effort
+//     claudeHost,                // optional host object carrying the same fields
 //   }
-// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis } ]
+// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis, receipt } ]
 //
 // A fresh agent per attempt is right for context hygiene and is exactly why
 // attempt 3 can re-propose attempt 1's failed fix. `attemptHistory` in, and
@@ -80,6 +91,15 @@ const OUT = {
   },
 }
 
+// A receipt is boundary-owned provenance, not an agent result field. Keep a
+// non-conforming/stubbed agent from smuggling a lookalike through the spread;
+// only the receipt returned by createClaudeWorkflowDispatch may cross out.
+const withoutAgentReceipt = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const { receipt: ignoredReceipt, ...safe } = value
+  return safe
+}
+
 // The Workflow runtime may hand `args` over as a JSON STRING rather than an
 // object (observed 2026-07-28). Reading `args.x` then silently yields undefined,
 // so both shapes are accepted — but a string that is not JSON is a MALFORMED
@@ -121,6 +141,19 @@ if (!prs.length) return []
 if (!ciRef || !reviewRef || !reinitScript) {
   throw new Error('fix-round: args.ciFixRefPath, args.reviewFixRefPath and args.reinitScript are required')
 }
+
+// The Workflow DSL has no import surface. Require the host-injected bridge;
+// if it does not exist, refuse the dispatch
+// rather than calling agent() outside createClaudeDispatchAdapter/
+// createDispatchBoundary.
+function loadClaudeWorkflowDispatch() {
+  // This is an explicit host integration point, not a documented DSL binding.
+  // JSON args cannot install callbacks, a recorder, or application evidence.
+  if (typeof __createClaudeWorkflowDispatch === 'function') return __createClaudeWorkflowDispatch
+  throw new Error('fix-round: Claude dispatch boundary bridge is unavailable; the Workflow host must bind createClaudeWorkflowDispatch with capabilities, a durable recorder, and application evidence')
+}
+
+const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
 
 // The base-merge script sits beside the reviewers one the orchestrator passed —
 // same scripts directory, and no module import is available in this runtime.
@@ -207,23 +240,52 @@ return await parallel(
     // `hypothesis` included — and an invented one would be worse than none: it
     // would enter the record as something that was tried and ruled out. Say what
     // is actually known instead.
-    const fixFallback = (why, hypothesis) => ({ id: p.id, pr: p.pr, pushed: false, status: 'escalate', notes: why, hypothesis })
-    return agent(buildPrompt(p), {
-      label: `fix:${p.id}#${p.pr}`,
-      phase: 'Fix',
-      // Preserve the caller's resolver decision exactly. The Claude adapter
-      // applies the native alias only after canonical boundary validation.
-      model: p.model,
-      effort: p.effort,
-      agentType: 'general-purpose',
-      schema: OUT,
+    const fixFallback = (why, hypothesis, receipt) => ({
+      id: p.id, pr: p.pr, pushed: false, status: 'escalate', notes: why, hypothesis,
+      ...(receipt ? { receipt } : {}),
     })
-      .then((r) => (r
-        ? { ...r, id: p.id, pr: p.pr }
-        : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one')))
-      .catch((e) => fixFallback(
+    try {
+      const role = p.needsCiFix ? 'ci-fix' : p.needsReviewFix ? 'review-fix' : null
+      if (!role) throw new Error('fixer dispatch requires needsCiFix or needsReviewFix')
+      return createClaudeWorkflowDispatch({
+        agent,
+        prompt: buildPrompt(p),
+        role,
+        model: p.model,
+        effort: p.effort,
+        signals: p.signals,
+        signatureState: p.signatureState,
+        risk: p.risk,
+        critical: p.critical,
+        checkpoint: p.checkpoint,
+        priorApplied: p.priorApplied,
+        priorReceipt: p.priorReceipt,
+        dispatchId: p.dispatch_id || p.dispatchId,
+        previousDispatchId: p.previous_dispatch_id || p.previousDispatchId,
+        capabilities: argv.claudeCapabilities,
+        recorder: argv.dispatchRecorder,
+        applicationEvidence: argv.claudeApplicationEvidence,
+        host: argv.claudeHost,
+        label: `fix:${p.id}#${p.pr}`,
+        agentOptions: {
+          label: `fix:${p.id}#${p.pr}`,
+          phase: 'Fix',
+          agentType: 'general-purpose',
+          schema: OUT,
+        },
+      })
+        .then(({ result: r, receipt }) => (r
+          ? { ...withoutAgentReceipt(r), id: p.id, pr: p.pr, ...(receipt ? { receipt } : {}) }
+          : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one', receipt)))
+        .catch((e) => fixFallback(
+          `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
+          'unknown — the fixer errored before reporting one'
+        ))
+    } catch (e) {
+      return Promise.resolve(fixFallback(
         `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
         'unknown — the fixer errored before reporting one'
       ))
+    }
   })
 )
