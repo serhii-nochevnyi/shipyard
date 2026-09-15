@@ -1357,6 +1357,11 @@ function codexRemapSelection(value) {
   return object ? { ...object, model } : { model: model || value };
 }
 
+function isGsdStageTier(name, value) {
+  return ['planning', 'execution', 'research', 'verification'].includes(name)
+    && ['opus', 'sonnet', 'haiku'].includes(value);
+}
+
 function configurationSelections(raw, role, runtime, modelKey) {
   const selections = [];
   const addSelection = (source, selection) => {
@@ -1402,7 +1407,8 @@ function configurationSelections(raw, role, runtime, modelKey) {
   }
   for (const [prefix, cfg] of [['config', raw], ...['pipeline', 'delivery_pipeline', 'gsd']
     .filter((key) => raw[key]).map((key) => [key, raw[key]])]) {
-    const keys = new Set([role, ...(prefix === 'config' || prefix === 'gsd' ? GSD_ROLE_KEYS[role] || [] : [])]);
+    const gsdNamespace = prefix === 'config' || prefix === 'gsd';
+    const keys = new Set([role, ...(gsdNamespace ? GSD_ROLE_KEYS[role] || [] : [])]);
     for (const [key, field] of [['models', 'model'], ['effort', 'effort'], ['model_overrides', 'model']]) {
       const values = cfg[key];
       if (values === undefined) continue;
@@ -1410,12 +1416,21 @@ function configurationSelections(raw, role, runtime, modelKey) {
         add(`${prefix}.${key}`, field, values);
         continue;
       }
-      for (const name of keys) add(`${prefix}.${key}.${name}`, field, values[name]);
+      for (const name of keys) {
+        // gsd-tune's stage tiers are portable GSD preferences, not concrete
+        // Shipyard selections (even when their spelling is a Claude alias).
+        // Only this vocabulary at these stage keys is superseded by ADR-014;
+        // role/agent keys, model_overrides and concrete stage IDs still validate.
+        if (gsdNamespace && key === 'models' && isGsdStageTier(name, values[name])) continue;
+        add(`${prefix}.${key}.${name}`, field, values[name]);
+      }
       if (key === 'effort') {
         for (const name of keys) add(`${prefix}.effort.agent_overrides.${name}`, field, values.agent_overrides?.[name]);
-        // Explicit generic defaults cannot override any rung of a routed role.
-        // Adapters must supply the canonical effort, without a GSD tier fallback.
+        // Generic GSD tier defaults do not select a routed role's effort.
+        // Preserve validation of unknown tiers/values and concrete overrides.
         for (const [tier, effort] of Object.entries(values.routing_tier_defaults || {})) {
+          if (gsdNamespace && ['light', 'standard', 'heavy'].includes(tier)
+              && ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) continue;
           add(`${prefix}.effort.routing_tier_defaults.${tier}`, field, effort);
         }
       }
@@ -1685,6 +1700,14 @@ function resolveDispatch(input) {
       fable_window_tokens: controls.fable_window_tokens,
     },
   };
+  // `research` is both a GSD stage and a Shipyard role. Remove only recognized
+  // stage tiers from the canonical input, retaining the frozen raw configuration
+  // for source validation; concrete IDs and pipeline.models remain untouched.
+  if (canonicalConfig.models && typeof canonicalConfig.models === 'object'
+      && !Array.isArray(canonicalConfig.models)) {
+    canonicalConfig.models = Object.fromEntries(Object.entries(canonicalConfig.models)
+      .filter(([name, value]) => !isGsdStageTier(name, value)));
+  }
   const request = { ...input, config: canonicalConfig, runtime: runtime.runtime };
   if (identity.dispatch_id !== undefined) request.dispatch_id = identity.dispatch_id;
   const resolution = modelPolicy.resolveDispatch(request);

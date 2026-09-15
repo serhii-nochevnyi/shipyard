@@ -2446,10 +2446,10 @@ test('refuses original overrides before compatibility parsing or namespace mergi
     [{ pipeline: { effort: { executor: 'ultra' } } }, 'pipeline.effort.executor'],
     [{ pipeline: { models: { executor: 'opus' } }, delivery_pipeline: { models: {} } }, 'pipeline.models.executor'],
     [{ delivery_pipeline: { models: { executor: 'opus' } } }, 'delivery_pipeline.models.executor'],
-    [{ models: { execution: 'opus' } }, 'config.models.execution'],
+    [{ models: { execution: 'gpt-6-astra' } }, 'config.models.execution'],
     [{ model_overrides: { 'gsd-executor': 'opus' } }, 'config.model_overrides.gsd-executor'],
     [{ effort: { agent_overrides: { 'gsd-executor': 'low' } } }, 'config.effort.agent_overrides.gsd-executor'],
-    [{ effort: { routing_tier_defaults: { standard: 'low' } } }, 'config.effort.routing_tier_defaults.standard'],
+    [{ effort: { routing_tier_defaults: { standard: 'ultra' } } }, 'config.effort.routing_tier_defaults.standard'],
     [{ gsd: { models: { executor: 'opus' } } }, 'gsd.models.executor'],
     [{ pipeline: { models: null } }, 'pipeline.models'],
     [{ pipeline: { inline: true } }, 'pipeline.inline'],
@@ -2457,6 +2457,83 @@ test('refuses original overrides before compatibility parsing or namespace mergi
   for (const [raw, source] of cases) {
     const { config } = routedConfig(raw);
     refusesSource(() => resolveDispatch({ role: 'executor', config }), source);
+  }
+});
+
+test('GSD tuning tiers and defaults defer to both runtime ladders for every role', () => {
+  const tuning = {
+    models: { planning: 'opus', execution: 'opus', research: 'sonnet', verification: 'sonnet' },
+    effort: { routing_tier_defaults: { light: 'low', standard: 'high', heavy: 'xhigh' } },
+  };
+  for (const runtime of ['codex', 'claude']) {
+    for (const raw of [tuning, { gsd: tuning }]) {
+      const { config } = routedConfig({ ...raw, pipeline: { fable: 'auto' } }, runtime);
+      for (const role of ROUTED_ROLES) {
+        for (const signals of [{}, { checkpoint: true }]) {
+          assert.deepStrictEqual(resolveDispatch({ config, role, signals }),
+            canonicalPolicy.resolveDispatch({ runtime, role, signals }));
+        }
+      }
+    }
+    // gsd-tune also writes these concrete Claude overrides when Fable is off.
+    const raw = { ...tuning, model_profile: 'balanced', ...(runtime === 'claude' ? {
+      model_overrides: { 'gsd-planner': 'opus', 'gsd-code-reviewer': 'opus' },
+    } : {}) };
+    const { config } = routedConfig(raw, runtime);
+    for (const role of ROUTED_ROLES) {
+      assert.deepStrictEqual(resolveDispatch({ config, role }),
+        canonicalPolicy.resolveDispatch({ runtime, role }));
+    }
+  }
+});
+
+test('only GSD stage tier aliases are exempt, not concrete or inherited selections', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const prefix of ['config', 'gsd']) {
+      const wrap = (value) => prefix === 'config' ? value : { gsd: value };
+      for (const alias of ['haiku', 'sonnet', 'opus']) {
+        const { config } = routedConfig(wrap({ models: { execution: alias } }), runtime);
+        assert.deepStrictEqual(resolveDispatch({ config, role: 'executor' }),
+          canonicalPolicy.resolveDispatch({ runtime, role: 'executor' }));
+      }
+      for (const [value, source] of [
+        [{ models: { execution: 'inherit' } }, 'models.execution'],
+        [{ models: { execution: 'not-a-model' } }, 'models.execution'],
+        [{ models: { executor: 'haiku' } }, 'models.executor'],
+        [{ models: { 'gsd-executor': 'haiku' } }, 'models.gsd-executor'],
+        [{ model_overrides: { execution: 'haiku' } }, 'model_overrides.execution'],
+        [{ model_overrides: { 'gsd-executor': 'haiku' } }, 'model_overrides.gsd-executor'],
+        [{ effort: { execution: 'low' } }, 'effort.execution'],
+        [{ effort: { agent_overrides: { 'gsd-executor': 'low' } } }, 'effort.agent_overrides.gsd-executor'],
+      ]) {
+        const { config } = routedConfig(wrap(value), runtime);
+        refusesSource(() => resolveDispatch({ config, role: 'executor' }), `${prefix}.${source}`);
+      }
+    }
+  }
+  for (const role of ['decomposition', 'arch-review']) {
+    const agent = role === 'decomposition' ? 'gsd-planner' : 'gsd-code-reviewer';
+    const { config } = routedConfig({ pipeline: { fable: 'auto' },
+      model_overrides: { [agent]: 'fable' } }, 'claude');
+    refusesSource(() => resolveDispatch({ config, role }), `config.model_overrides.${agent}`);
+  }
+});
+
+test('inherited GSD tuning defaults retain the canonical selections on both runtimes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-tuning-root-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-tuning-home-'));
+  fs.mkdirSync(path.join(home, '.gsd'));
+  fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify({
+    model_profile: 'balanced',
+    models: { planning: 'opus', execution: 'opus', research: 'sonnet', verification: 'sonnet' },
+    effort: { routing_tier_defaults: { light: 'low', standard: 'high', heavy: 'xhigh' } },
+  }));
+  for (const runtime of ['codex', 'claude']) {
+    const { config } = loadConfig(root, { runtime, routed: true, env: { GSD_HOME: home } });
+    for (const role of ROUTED_ROLES) {
+      assert.deepStrictEqual(resolveDispatch({ config, role }),
+        canonicalPolicy.resolveDispatch({ runtime, role }));
+    }
   }
 });
 
@@ -2471,11 +2548,11 @@ test('matching configured selections are harmless and cannot pin a later rung', 
     const expected = canonicalPolicy.resolveDispatch({ runtime, role: 'executor' });
     const { config } = routedConfig({
       pipeline: { models: { executor: expected.model }, effort: { executor: expected.effort } },
-      models: { execution: expected.model },
+      model_overrides: { 'gsd-executor': expected.model },
       effort: { agent_overrides: { 'gsd-executor': expected.effort } },
     }, runtime);
     assert.deepStrictEqual(resolveDispatch({ config, role: 'executor' }), expected);
-    refusesSource(() => resolveDispatch({ config, role: 'executor', signals: { checkpoint: true } }), 'config.models.execution');
+    refusesSource(() => resolveDispatch({ config, role: 'executor', signals: { checkpoint: true } }), 'config.effort.agent_overrides.gsd-executor');
   }
 });
 
