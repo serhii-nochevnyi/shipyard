@@ -186,141 +186,110 @@ Full specification: `docs/gsd_multilevel_delivery_pipeline.md`.
 
 ### Agent model policy
 
-The conveyor routes agents by a **floor**, a **depth** and an earned **ceiling**,
-and that policy is code:
+The active model policy is [ADR-014](.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md).
+It is runtime-neutral at the contract boundary, but it deliberately gives
+Claude Code and Codex independent native model grids. A role, rung, signal set,
+explicit launch selection, and application receipt are one dispatch contract;
+the runtime adapter decides how that selection is applied. ADR-005 and ADR-012
+remain historical records and are superseded for current model and effort
+selection.
 
 ```bash
-node plugins/delivery-pipeline/scripts/pipeline-config.cjs model executor --risk high
-node plugins/delivery-pipeline/scripts/pipeline-config.cjs model ci-fix --json --signature-state repeat
-node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve      # effective config
+node plugins/delivery-pipeline/scripts/model-policy.cjs fingerprint
+node plugins/delivery-pipeline/scripts/codex-agent.cjs select <role> --json \
+  --capabilities-file "$CODEX_HOME/shipyard/codex-capabilities.json"
 ```
 
-| | tier | effort |
+The canonical runtime palettes are:
+
+| Runtime | Native model key | Concrete selection |
 |---|---|---|
-| executor | `opus` | `high`, `xhigh` at `--risk high` or `--checkpoint` |
-| research | `opus` | `high`, `xhigh` with `--type alternatives` |
-| ci-fix, review-fix | `opus` | `high` |
-| arch-review, integrator | `opus` | `xhigh` |
-| pr-sentinel | `sonnet` | `high` |
-| drift-check | `sonnet` | `high` |
-| any repair role on a repeated failure signature | same | `max` |
+| Codex | `Luna` | `gpt-5.6-luna` |
+| Codex | `Astra` | `gpt-6-astra` |
+| Claude Code | `Sonnet` | native alias `sonnet` |
+| Claude Code | `Opus` | native alias `opus` |
+| Claude Code | `Fable` | native alias `fable` |
 
-Set `delivery_pipeline.model_ladder` to `adaptive` to route by task level:
+The canonical role/rung ladder and its evidence are:
 
-| level | automatic signal | Claude | Codex |
-|---|---|---|---|
-| mechanical | drift-check, pr-sentinel | `sonnet` | canonical base file |
-| routine | executor/research, low risk, 1–4 files | `sonnet` | canonical policy rung |
-| complex | normal implementation, repair and judgement | `opus` | canonical policy rung |
-| critical | high risk or checkpoint | `opus` + `xhigh` | emitted critical rung, where defined |
-| recovery | `repeat_exhausted` or contested judgement | ceiling route | emitted recovery rung, where defined |
+| Role | Codex | Claude Code |
+|---|---|---|
+| `research` | Astra/low → Astra/medium on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Sonnet/high → Opus/medium on `type: alternatives` → Fable/medium on `complexity: very-complex` |
+| `decomposition` | Astra/low → Astra/medium on `critical` or `checkpoint` | Opus/medium → Fable/medium on `critical` or `checkpoint` |
+| `executor` | Luna/max → Astra/low on explicit `critical` or `checkpoint` | Sonnet/max → Opus/high on explicit `critical` or `checkpoint` |
+| `pr-sentinel` | Luna/medium, fixed; gate strategy only | Sonnet/high, fixed; gate strategy only |
+| `integrator` | Astra/low → Astra/medium on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on the same evidence |
+| `drift-check` | Luna/max, fixed; gate strategy only | Opus/max, fixed; gate strategy only |
+| `arch-review` | Astra/low → Astra/medium on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/max on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
+| `ci-fix` | Luna/max → Astra/low on verified `signatureState: repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+| `review-fix` | Luna/max → Astra/low on verified `signatureState: repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
 
-The resolver guards missing evidence into the complex lane and records the
-classification in `route`/dispatch telemetry. On Claude, the integrator reaches
-the ceiling only when an earned ceiling route fires; on Codex, the generated
-integrator base/critical files are fixed by ADR-014. The default remains
-`conservative`; the current project enables `adaptive` in
-`.planning/config.json`.
+Signals are role-scoped, not global promotions. The shared vocabulary is
+`type`, `complexity`, `risk`, `critical`, `checkpoint`, `contested`, measured
+`inputTokens`, `signatureState`, and boundary-issued `priorApplied`. A missing
+signal never promotes a role. When multiple declared signals fire, the resolver
+retains every reason and selects the highest rung allowed for that runtime and
+role. `flake` and `plan_defect` are terminal gate/strategy outcomes, not model
+promotions. Repair escalation is permitted only after the immediately preceding
+rung has a boundary-verified application receipt; a copied or self-asserted
+receipt is not evidence.
 
-The floor is `opus` for every role that writes code or renders a judgement: the
-conveyor's failure mode is a wrong green reaching an epic, and every mechanical
-gate above the executor costs more to run than the difference between two tiers.
-`haiku` is returned by no built-in path (it stays a value you may configure). The
-two exemptions are about what actually DECIDES rather than what is at stake —
-`pr-sentinel`'s merge gate is re-verified inside `sentinel.cjs` against live
-GitHub, and `drift-check` returns a file list — and together they are 57% of all
-dispatches.
+### The mandatory dispatch boundary
 
-Depth is EFFORT, keyed on the role and its signals. **It is a quality knob, not a
-price one:** output is 12–19% of a model line and cache read+write 82–87%, so
-`xhigh` → `high` moves about 3.4% of a run against ≈2.5× for a tier step. Note
-`max` appears once, earned by a failure that has repeated on one ticket — the
-judges sit at `xhigh` because that is the best setting for most coding and agentic
-work, and `max` is for where measurement shows headroom below it. **Effort is only
-enforced on the Workflow path**: the Agent tool has no `effort` parameter, so for a
-background guard it is a sentence in the prompt.
+Every routed launch, including research, decomposition, executor, sentinel,
+drift, architecture review, integration, CI-fix, and review-fix, follows one
+boundary:
 
-**Pass the signals the table reads.** Every signal-keyed row above is an upgrade,
-so an absent signal resolves to the cheaper row — and the resolver warns on stderr
-when a row could not be reached for want of one. That direction is deliberate: the
-defect it replaces read `Number(signals.files) <= 2` against a dispatch that never
-passed `--files`, so the cheap row was unreachable in all 173 recorded dispatches
-and every one of them silently bought the dearer answer.
-
-It only ever emits the tier aliases `opus`, `sonnet`, `haiku`, `fable` — the values
-the Agent tool validates `model` against, and the only ones it accepts: a full model
-ID or a suffixed alias like `opus[1m]` is rejected on input. (Full model ids and
-`inherit` live on a different surface — a subagent's own `model:` frontmatter in
-`.claude/agents/*.md` — not on the tool parameter the conveyor dispatches through,
-so a model-config page listing them is not permission to emit one.) With `--json` it
-also returns the reasoning `effort` from the table above — keyed on the ROLE and its
-signals, not on the resolved model. That dependency had to invert: while effort was
-derived from the tier, the floor made the tier constant and everything collapsed to
-one value, which is how `--signature-state repeat` came to deepen nothing at all.
-
-`fable` is Claude Fable 5.1 (Claude Code 2.1.255 on; `opus` is Opus 5 from 2.1.219
-on): Opus-tier with a **1M-token context window** and adaptive thinking — the only
-alias that expresses "top tier with 1M context". It is a **ceiling the conveyor
-reaches by itself, and nobody's default**, the integrator included. The window
-argument was retired on a measurement: on this repository the ADR corpus a judge
-re-reads is ~8k tokens, the largest ticket diff of a phase ~16k, and the phase epic
-diff — the integrator's own input, the largest in the whole system — ~52k, all of
-which Opus 5's ordinary window swallows, while `fable` costs exactly 2× `opus`.
-
-Three mechanical routes reach it, and each is computed rather than argued:
-
-1. **window** — a caller-MEASURED `--input-tokens` over `fable_window_tokens`
-   (250000 by default, five times the largest input measured here);
-2. **exhausted depth** — a repair role at `--signature-state repeat_exhausted`:
-   the same failure signature a third time, after `rethink` at `max` already failed;
-3. **contested judgment** — `--contested`, when the journal already holds an
-   `arch_review … verdict=violation` for the ticket.
-
-All three are gated on consent, because it is a paid model that may bill usage
-credits and asks for permission ONCE — and in a background or Remote Control
-session that prompt waits out `dialogExpiry` (5 min) and then ends the turn without
-sending, so silence must not read as agreement:
-
-```json
-{ "delivery_pipeline": { "fable": "auto" } }
+```text
+resolve(runtime, role, signals)
+  → validate concrete model/effort and policy fingerprint
+  → launch with explicit runtime selection
+  → verify application receipt
+  → record requested + applied + observed evidence
 ```
 
-With it `off` (the default) a fired route degrades to `opus` at `max` effort and
-says why. Two more guards: on a runtime whose tier vocabulary has no such alias the
-route degrades the same way (on Codex the selector applies the canonical policy
-rung instead), and below CLI 2.1.255 the alias resolves to Fable **5** — so
-`gsd-tune.cjs` reports that floor at Step 0 of every delivery, and
-`ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1` is pinned in `.env.example`,
-`docker-compose.yml` and `k8s/configmap.yaml`, which bypasses the built-in mapping
-and therefore holds whatever version the host runs.
+The boundary is built from `createDispatchBoundary`, the active runtime's
+`createCodexDispatchAdapter` or `createClaudeDispatchAdapter`, and a
+`createDurableRecorder`. Codex static roles use the selector's exact generated
+`agent_file`; dynamic `decomposition` and `executor` launches receive explicit
+`model` and `reasoning_effort` arguments. Claude launches receive the selected
+native alias and explicit effort through Workflow arguments. A missing or
+ambiguous runtime, unsupported pair, stale generated file, missing adapter,
+missing receipt, conflicting override, inline launch, or parent-session-inherited
+selection is a hard refusal. There is no silent lower-model or session fallback.
 
-Configuration lives in `.planning/config.json` under two namespaces:
-`delivery_pipeline.*` (the capability's own declared config — GSD-native, settable
-and validated through GSD's tooling, and it wins) and `pipeline.*` (shipyard's
-runtime knobs; note `pipeline` is not a valid GSD config key, so edit the file
-directly). The synchronization gate is `delivery_pipeline.gsd_sync` and defaults
-to on; set it to `false` to opt out of only the projection lifecycle gate. Keys:
-`model_policy` (GSD's own `budget`/`quality` names work as
-aliases — it mirrors GSD's own `model_profile` and routes none of our roles, since
-the floor is not a preference), `models`, `effort`, `fable` (`off` | `auto`),
-`fable_window_tokens`, `max_attempts`, `pr_fetch_limit`,
-`integration_mode`, `use_workflow`, `graph_gate`, `jira`, `jira_transitions`
-(the tracker projection's status map — empty by default, which is the
-projection switched off), `jira_todo_statuses` (a comma-separated allowlist of
-tracker status NAMES for eligibility — empty by default, with no
-`statusCategory` fallback), `repos`.
+Each receipt records the runtime, role, native model key, logical rung, concrete
+requested and applied model/effort, all fired signals, policy version/fingerprint,
+backend, agent file or launch arguments, dispatch identity, application receipt,
+and observed model/effort when the runtime exposes them. A successful process
+exit, prompt text, or requested value copied into an `applied` field is not a
+receipt.
 
-The conveyor also **obeys GSD's own settings** rather than second-guessing them:
-`git.base_branch` decides where epics are cut from and where the integration PR
-goes (it outranks the repo default), `git.branching_strategy` must stay `none`
-because the conveyor owns branching. Runtime is selected per invocation: an
-explicit `SHIPYARD_RUNTIME`/`GSD_RUNTIME` handshake wins, followed by the
-runtime-specific GSD install marker; a legacy top-level `runtime` is migration
-debt, never an active project preference. `gsd-tune --apply` removes that old
-key without replacing it, so GSD can use the active install's marker. This means
-one checkout can be used by Claude Code and Codex concurrently. `state-sync`
-echoes the effective runtime and warns when an old persisted value conflicts
-with the active runner.
+Claude's palette/provider configuration is unchanged. ADR-014 uses the existing
+Claude Code aliases (`sonnet`, `opus`, and `fable`) as native selections; it does
+not change their model IDs, provider, credentials, environment pins, or palette
+files. A Fable rung is an evidence-backed Claude result and requires the existing
+routed consent (`pipeline.fable: auto`); unsupported or unconsented application
+is refused rather than silently downgraded.
+
+The task-level vocabulary from ADR-012 may remain useful as context or telemetry,
+but it is not a second launch authority. Routed selection comes from ADR-014's
+runtime, role, rung, and signal rules.
+
+Configuration and GSD model profiles cannot override the canonical boundary.
+`delivery_pipeline.codex_models` and `pipeline.codex_models` are compatibility
+inputs for legacy/non-routed consumers; their first/last palette behavior,
+version-filtered behavior, and any empty-palette fallback do not select or
+authorize a routed launch. The generator emits the ADR-014 Codex bundle from
+`plugins/delivery-pipeline/scripts/model-policy.cjs` and does not derive it from
+that compatibility list, a GSD remap, or a parent session. `models`,
+`model_profile`, and `model_overrides` supply GSD context only and cannot replace
+the boundary's explicit selection or receipt.
+
+Runtime is still selected per invocation: the explicit
+`SHIPYARD_RUNTIME`/`GSD_RUNTIME` handshake wins, followed by the runtime-specific
+GSD install marker. Do not persist a shared project preference for `claude` or
+`codex`; one checkout can be used by both runtimes.
 
 ## Shipyard on the OpenAI Codex CLI
 
@@ -374,21 +343,25 @@ deterministic bookkeeping in Node scripts, agentic work via Codex `spawn_agent`.
 **Codex model configuration has two deliberately different surfaces.**
 `delivery_pipeline.codex_models` (or `pipeline.codex_models`) in
 `.planning/config.json` is a compatibility input for legacy/non-routed
-configuration consumers. It is an ordered `model[:effort][@min_cli]` list:
+configuration consumers. It is an ordered `model[:effort][@min_cli]` list, not
+the ADR-014 launch policy:
 
 ```json
-{ "delivery_pipeline": { "codex_models": "gpt-6-astra:low@0.153.1, gpt-6-astra:medium@0.153.1" } }
+{ "delivery_pipeline": { "codex_models": "gpt-5.6-luna:max@0.153.1, gpt-6-astra:low@0.153.1" } }
 ```
 
-- The compatibility resolver may use the first entry as its floor and the last as
-  its ceiling. `min_cli` is a compatibility floor for that resolver; it does not
-  select, remove or rewrite a canonical bundle agent.
+- The compatibility resolver may inspect the first or last entry for its own
+  diagnostics. That behavior is legacy input only; it does not select, remove,
+  rewrite, or authorize a routed bundle agent. The old Terra/Astra-only palette
+  and any first/last or version-filtered launch fallback are superseded by
+  ADR-014.
 - The canonical Codex bundle is a separate ADR-014 contract. The generator reads
   `plugins/delivery-pipeline/scripts/model-policy.cjs` and emits every required
   static role/rung with its exact model and effort. It does not derive those
   files from `codex_models`, an empty palette, a GSD remap, or a CLI-version
   fallback; dynamic `executor` and `decomposition` selections remain explicit
-  launch arguments.
+  launch arguments. Missing or stale policy/artifact evidence is a refusal, not
+  a session or parent-model fallback.
 - The emitted static variants include the repair `repeat`/`deep` files and the
   judgment `shipyard-arch-review-critical` and
   `shipyard-integrator-critical` files. `shipyard-pr-sentinel` is the only
@@ -397,8 +370,8 @@ configuration consumers. It is an ordered `model[:effort][@min_cli]` list:
   [--project-dir <project>]` with the dispatch signals and pass its
   exact `agent_file` to the record; for dynamic roles pass its concrete
   `model`/`effort` to the supported `spawn_agent` or `codex exec` call and omit
-  `--agent-file`. The selector also reports a fallback when a requested rung is
-  not a static file.
+  `--agent-file`. A requested static rung that is missing or stale fails closed;
+  it is never replaced with an ordinary file or an inherited session selection.
 - The installer/generator validates the complete required capability set before
   replacing destinations. The compatibility palette is not host evidence and
   never tunes the ADR-014 files. The adjacent selector contract also validates

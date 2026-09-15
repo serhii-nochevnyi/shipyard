@@ -1,6 +1,6 @@
 # ADR-005 — The floor is opus, the depth is effort, and fable is earned
 
-- **Status**: accepted
+- **Status**: superseded for runtime model and effort selection
 - **Date**: 2026-09-07
 - **Supersedes**: nothing wholesale. Replaces the tier reasoning inside
   ADR-001's model ladder, and retires FOUR claims in ADR-003 — read out of
@@ -31,6 +31,17 @@
   are) are REFINED, not retired: D5 here sharpens D4's "Fable 5.1" to a consent
   knob plus a version floor, and D9 adds a second floor beside D1's — neither
   reverses anything either decision said.
+
+> **Historical record — superseded by [ADR-014](ADR-014-mandatory-runtime-model-ladder.md).**
+> The dated reasoning and amendments below are retained without rewriting the
+> historical decision. They are not current launch instructions. ADR-014 now
+> owns model, effort, runtime, escalation, and receipt selection. In particular,
+> it supersedes this ADR's universal `opus` floor, Terra/Sol/Astra-only palette
+> assumptions, unconditional integrator ceiling, and any fallback that permits
+> an inline or parent-session-inherited model. Current dispatches use ADR-014's
+> independent Codex and Claude grids and fail closed when an explicit selection
+> or application receipt cannot be proved. Claude's existing model palette,
+> aliases, provider, and credentials are unchanged.
 
 ## Context
 
