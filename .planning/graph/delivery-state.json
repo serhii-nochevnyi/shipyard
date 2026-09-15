@@ -1193,30 +1193,15 @@
   "T-36-04": {
     "branch": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
     "pr": 139,
-    "status": "pr-open",
+    "status": "merged",
     "matched_by": "marker",
     "pr_branch": "ticket/T-36-04-generate-and-validate-the-complete-codex",
-    "draft": true,
-    "review_decision": null,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/139",
-    "pr_base": "epic/36-enforce-the-runtime-model-ladder",
-    "pr_created_at": "2026-09-14T20:35:18Z",
-    "head_sha": "cc78d3a94152bf88bb0a194ca77012b2a01afdab",
-    "merge_state": "UNKNOWN",
-    "behind_by": 8,
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false,
-      "unavailable": false
-    },
     "base": "epic/36-enforce-the-runtime-model-ladder",
     "base_reason": "T-36-03 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-14T20:35:26.658Z"
+    "reapable": true,
+    "since": "2026-09-15T14:07:06.774Z"
   },
   "T-36-05": {
     "branch": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
@@ -1225,11 +1210,11 @@
     "draft": true,
     "review_decision": null,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/140",
-    "pr_base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
+    "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T21:26:23Z",
-    "head_sha": "23f4883fcb9e955e5d70ed3b0964c5374f2b9272",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
+    "head_sha": "195cc46ccb0b90eee5b2faf141ba9138fe05c943",
+    "merge_state": "UNKNOWN",
+    "behind_by": 16,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1237,10 +1222,10 @@
       "none_reported": false,
       "unavailable": false
     },
-    "base": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
-    "base_reason": "T-36-04 is pr-open — cascade off ticket/T-36-04-generate-and-validate-the-codex-bundle-w; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-04 lands",
+    "base": "epic/36-enforce-the-runtime-model-ladder",
+    "base_reason": "T-36-04 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "merge_scope": "integration",
+    "merge_scope": "stacked",
     "reapable": false,
     "since": "2026-09-14T21:26:55.563Z"
   },
@@ -1255,7 +1240,7 @@
     "pr_created_at": "2026-09-14T21:57:13Z",
     "head_sha": "825ba638ca0d09ca9b78584a32d389af803ea501",
     "merge_state": "CLEAN",
-    "behind_by": 0,
+    "behind_by": 11,
     "gate": {
       "arch-review": "conform",
       "drift-check": "fresh",
@@ -1316,12 +1301,12 @@
     "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
     "pr_created_at": "2026-09-15T12:14:35Z",
     "head_sha": "426c3ef955623c436585e2fb5e2037ce9082756f",
-    "merge_state": "UNSTABLE",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -1334,29 +1319,40 @@
   },
   "T-36-09": {
     "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio",
-    "pr": null,
-    "status": "pending",
+    "pr": 144,
+    "status": "pr-open",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting",
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/144",
+    "pr_base": "ticket/T-36-08-application-receipts-and-dispatch-record",
+    "pr_created_at": "2026-09-15T13:07:39Z",
+    "head_sha": "2afe11ed7208e14764add9538d769f0a5f4477b7",
+    "merge_state": "CLEAN",
+    "behind_by": 0,
+    "checks": {
+      "total": 1,
+      "failing": 0,
+      "pending": 0,
+      "none_reported": false,
+      "unavailable": false
+    },
     "base": "ticket/T-36-08-application-receipts-and-dispatch-record",
     "base_reason": "T-36-08 is pr-open — cascade off ticket/T-36-08-application-receipts-and-dispatch-record; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-08 lands",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "ready": true,
+    "merge_scope": "stacked",
     "reapable": false,
-    "since": "2026-09-12T19:57:33.322Z"
+    "since": "2026-09-15T13:08:01.515Z"
   },
   "T-36-10": {
     "branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
     "pr": null,
     "status": "pending",
-    "base": "epic/36-enforce-the-runtime-model-ladder",
-    "base_reason": "T-36-09 has no branch on the remote yet (status pending) — ticket/T-36-09-policy-aware-telemetry-and-reconciliatio is not a base that exists, so the base is epic/36-enforce-the-runtime-model-ladder",
+    "base": "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio",
+    "base_reason": "T-36-09 is pr-open — cascade off ticket/T-36-09-policy-aware-telemetry-and-reconciliatio; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-09 lands",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "ready": false,
-    "blocked_by": [
-      "T-36-09"
-    ],
-    "blocked_reasons": {
-      "T-36-09": "parent has no branch yet (nothing to cascade from)"
-    },
+    "ready": true,
     "reapable": false,
     "since": "2026-09-12T19:57:33.322Z"
   },
