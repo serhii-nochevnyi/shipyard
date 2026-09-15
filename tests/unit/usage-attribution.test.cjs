@@ -463,6 +463,29 @@ test('nested provenance accepts only bounded schema fields', () => {
       pattern,
     );
   }
+
+  const resolution = routed('claude', 'executor', {}, 'signal-reason-provenance');
+  const priorReceipt = applicationReceipt(resolution);
+  const withReceiptValue = {
+    ...resolution,
+    signal_reasons: [{
+      signal: 'priorApplied', source: 'boundary', value: priorReceipt,
+      applies: true, rung: null, reason: 'verified predecessor',
+    }],
+  };
+  assert.deepEqual(
+    normalizeRecord(base({ resolution: withReceiptValue })).resolution.signal_reasons[0].value,
+    priorReceipt,
+  );
+  assert.throws(
+    () => normalizeRecord(base({
+      resolution: {
+        ...withReceiptValue,
+        signal_reasons: [{ ...withReceiptValue.signal_reasons[0], value: { prompt: 'secret' } }],
+      },
+    })),
+    /resolution\.signal_reasons\[0\]\.value\.prompt is not supported/,
+  );
 });
 
 test('reconciliation rejects conflicting application copies and unsupported provenance', () => {
@@ -514,6 +537,26 @@ test('reconciliation keeps unknown application evidence separate and rejects mis
     { dispatch_id: resolution.dispatch_id, runtime: 'claude', provider: 'anthropic', session_id: 'two' },
   ];
   assert.equal(reconcileTelemetry({ ...resolution, application_receipt: receipt }, { usageRecords }).usage_join_status, 'ambiguous');
+});
+
+test('reconciliation rejects concrete observed values that disagree with the applied receipt', () => {
+  const resolution = routed('claude', 'executor', {}, 'observed-mismatch');
+  const receipt = applicationReceipt(resolution);
+  const modelMismatch = reconcileTelemetry({
+    ...resolution,
+    application_receipt: { ...receipt, observed_model: 'different-provider-model' },
+  });
+  assert.equal(modelMismatch.application_status, 'contradictory');
+  assert.ok(modelMismatch.runtime_application.contradictions.includes('observed_model'));
+  assert.equal(modelMismatch.comparison_ready, false);
+
+  const otherEffort = resolution.requested_effort === 'max' ? 'high' : 'max';
+  const effortMismatch = reconcileTelemetry({
+    ...resolution,
+    application_receipt: { ...receipt, observed_effort: otherEffort },
+  });
+  assert.equal(effortMismatch.application_status, 'contradictory');
+  assert.ok(effortMismatch.runtime_application.contradictions.includes('observed_effort'));
 });
 
 test('reconciliation derives only the omitted deterministic fields from a complete boundary projection', () => {
@@ -638,6 +681,22 @@ test('static Codex application receipts require a lowercase SHA-256 agent digest
   assert.equal(facts.application_status, 'unverifiable');
   assert.ok(facts.runtime_application.missing_fields.includes('agent_file_digest'));
   assert.equal(facts.compliant, false);
+});
+
+test('static Codex reconciliation canonicalizes suffix-free legacy agent filenames', () => {
+  const resolution = routed('codex', 'research', {}, 'legacy-agent-file');
+  const legacyResolution = {
+    ...resolution,
+    agent_file: resolution.agent_file.replace(/\.toml$/, ''),
+  };
+  const facts = reconcileTelemetry({
+    ...legacyResolution,
+    application_receipt: applicationReceipt(resolution),
+  });
+  assert.equal(facts.resolution_status, 'resolved');
+  assert.equal(facts.application_status, 'applied');
+  assert.equal(facts.agent_file, legacyResolution.agent_file);
+  assert.equal(facts.compliant, true);
 });
 
 test('reconciliation reports independent findings and never marks stale or legacy history compliant', () => {
