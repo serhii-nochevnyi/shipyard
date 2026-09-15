@@ -934,6 +934,7 @@ test('delivery docs project selector, recorder, and workflow contracts without i
     '`repeat`/`repeat_exhausted` → `rethink`',
     'tickets: [{ id, planPath, baseRef, model, effort, signals }]',
     'priorReceipt, previous_dispatch_id, dispatch_id',
+    '`false` disables the Workflow path',
     'pipeline.fable: auto',
     'Codex research has no alternatives rung',
     'shipyard-inv-research-critical.toml',
@@ -944,6 +945,10 @@ test('delivery docs project selector, recorder, and workflow contracts without i
   for (const stale of ['model_tier', 'boundaryReceipt', 'shipyard-inv-research-alternatives.toml']) {
     assert.ok(!source.includes(stale), `delivery docs must not invent stale contract field/variant ${stale}`);
   }
+  assert.ok(!source.includes('force the Agent fallback only for non-repair'),
+    'delivery docs must not authorize an effort-omitting native Agent fallback');
+  assert.ok(normalized(source).includes(normalized('never authorizes a native Agent fallback')),
+    'delivery docs must reject the native Agent fallback explicitly');
   assert.ok(
     !source.includes('The resolver returns `strategy: fix|continue|rethink`'),
     'strategy must remain a failure-verdict input, not an invented boundary result'
