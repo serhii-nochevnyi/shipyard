@@ -1229,9 +1229,10 @@ const BOUNDARY_LAUNCH_SOURCES = ROUTED_LAUNCH_SOURCES.filter((rel) => {
 });
 const NATIVE_LAUNCHERS = new Set(['agent', 'spawn_agent', 'spawnAgent']);
 const launchableSource = (rel, source) => {
-  let fenced = !rel.endsWith('.md');
+  if (!rel.endsWith('.md')) return source;
+  let fenced = false;
   return source.split('\n').map((line) => {
-    if (rel.endsWith('.md') && /^\s*```/.test(line)) {
+    if (/^\s*```/.test(line)) {
       fenced = !fenced;
       return '';
     }
@@ -1332,6 +1333,23 @@ test('the routed-launch source sweep rejects direct, optional, and parenthesized
   assert.match(offenders[2], /\(agent\)\(prompt\)/);
   assert.match(offenders[3], /spawn_agent\?\.\(prompt\)/);
   assert.match(offenders[4], /\(spawnAgent\)\(prompt\)/);
+});
+
+test('the routed-launch source sweep rejects native launches in shipped Markdown fenced blocks', () => {
+  const dir = fixture('outside.md', [
+    '# Workflow prompt',
+    '',
+    'This prose may describe `agent(prompt)` without constituting launch text.',
+    '',
+    '```javascript',
+    'agent(prompt);',
+    '```',
+    '',
+  ].join('\n'));
+  const offenders = directLaunchOffenders(dir, ['outside.md']);
+  assert.equal(offenders.length, 1, `the fenced prompt text must be scanned: ${offenders.join('\n')}`);
+  assert.match(offenders[0], /outside\.md:6/);
+  assert.match(offenders[0], /agent\(prompt\)/);
 });
 
 const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
