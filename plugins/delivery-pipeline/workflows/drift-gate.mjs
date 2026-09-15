@@ -191,6 +191,7 @@ const results = await parallel(
         priorReceipt: t.priorReceipt,
         dispatchId: t.dispatch_id || t.dispatchId,
         previousDispatchId: t.previous_dispatch_id || t.previousDispatchId,
+        context: { ticket: t.id },
         capabilities: argv.claudeCapabilities,
         recorder: argv.dispatchRecorder,
         applicationEvidence: argv.claudeApplicationEvidence,
