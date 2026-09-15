@@ -684,8 +684,7 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'gsd-phase-researcher',
     'gsd-planner',
     'gsd-plan-checker',
-    'Terra/high',
-    'Sol/medium',
+    'Astra/low',
     'Astra/medium',
     'receipt.compliance',
     'generic-agent',
@@ -743,8 +742,8 @@ test('decompose selects runtime before tuning and establishes context before one
   );
   assert.ok(
     normalized(boundarySection).includes(normalized('Tuning drift is harmless and MUST NOT block decomposition'))
-      && normalized(boundarySection).includes(normalized('only required delivery-contract or projection failures block')),
-    'tuning-only drift must not block while required contract/projection failures still do'
+      && normalized(boundarySection).includes(normalized('required delivery-contract or projection failures and every entry in the report\'s `blockers` array do block')),
+    'tuning-only drift must not block while required contract/projection and blocker failures do'
   );
 
   const chain = source.slice(
@@ -858,6 +857,35 @@ test('active Claude instructions enforce ADR-014 instead of the superseded ladde
   ]) {
     assert.ok(!active.includes(obsolete), 'CLAUDE.md must not retain obsolete active ladder guidance: ' + obsolete);
   }
+});
+
+test('delivery docs project selector, recorder, and workflow contracts without inventing fields', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
+  const source = `${deliver}\n${sentinel}`;
+
+  for (const phrase of [
+    '--capabilities-file <current-host-capabilities.json>',
+    'concrete `model`, `model_key`, `effort`/`requested_effort`',
+    'compatibility recorder route',
+    'recorder projection',
+    'name without its `.toml` suffix',
+    'tickets: [{ id, planPath, baseRef, model, effort, signals }]',
+    'priorReceipt, previous_dispatch_id, dispatch_id',
+    'pipeline.fable: auto',
+    'Codex research has no alternatives rung',
+    'shipyard-inv-research-critical.toml',
+  ]) {
+    assert.ok(source.includes(phrase), `delivery docs must state the actual contract: ${phrase}`);
+  }
+
+  for (const stale of ['model_tier', 'boundaryReceipt', 'shipyard-inv-research-alternatives.toml']) {
+    assert.ok(!source.includes(stale), `delivery docs must not invent stale contract field/variant ${stale}`);
+  }
+  assert.ok(
+    !source.includes('The resolver returns `strategy: fix|continue|rethink`'),
+    'strategy must remain a failure-verdict input, not an invented boundary result'
+  );
 });
 
 test('research and decomposition use the canonical runtime ladders and only declared escalation signals', () => {
@@ -1211,26 +1239,102 @@ test('runtime adapters refuse inline and inherited-session launch contexts', () 
 // The Workflow files deliberately receive the native `agent` callback, so a
 // simple `agent` token sweep would reject the injection point itself. The
 // executable-call shape below catches a new direct invocation such as
-// `return agent(prompt)` while ignoring the explanatory comments and prompt
-// prose that document why that invocation is forbidden. The live files are
-// swept and the detector is independently exercised against a mutation
-// fixture, so a source list or regex that quietly matches nothing cannot pass.
-const ROUTED_LAUNCH_SOURCES = [
-  ...PROMPT_BUILDERS,
-  'plugins/delivery-pipeline/commands/decompose.md',
-  'plugins/delivery-pipeline/commands/deliver.md',
-  'plugins/delivery-pipeline/references/pr-sentinel.md',
+// `if (ready) agent(prompt)`, `agent?.(prompt)`, or `(agent)(prompt)` while
+// ignoring explanatory prose. The scan tokenizes executable source instead of
+// relying on one spelling of `agent(`. The
+// manifest comes from every tracked Workflow, command, and delivery reference:
+// a new routed surface therefore joins the sweep without an accompanying edit
+// to this test. Boundary-bearing sources are checked separately below; the
+// wider sweep is what catches a newly added source that bypasses the boundary
+// altogether.
+const ROUTED_LAUNCH_ROOTS = [
+  'plugins/delivery-pipeline/workflows',
+  'plugins/delivery-pipeline/commands',
+  'plugins/delivery-pipeline/references',
 ];
-const directLaunchCall = /(?:^|[=;{}(,:]|=>|&&)\s*(?:(?:return|await)\s+)?(?:agent|spawn_agent|spawnAgent)\s*\(/;
-const directLaunchOffenders = (root, rels) => rels.flatMap((rel) => fs.readFileSync(path.join(root, rel), 'utf8')
-  .split('\n')
-  .flatMap((line, index) => directLaunchCall.test(line.replace(/\/\/[^\n]*/g, ''))
-    ? [`${rel}:${index + 1}: ${line.trim()}`]
-    : []));
+const routedLaunchSources = () => tracked(...ROUTED_LAUNCH_ROOTS)
+  .filter((rel) => /\.(?:mjs|md)$/.test(rel));
+const ROUTED_LAUNCH_SOURCES = routedLaunchSources();
+const BOUNDARY_LAUNCH_SOURCES = ROUTED_LAUNCH_SOURCES.filter((rel) => {
+  const source = readRepo(rel);
+  return source.includes('createClaudeWorkflowDispatch')
+    || source.includes('createDispatchBoundary')
+    || source.includes('boundary.dispatch');
+});
+const NATIVE_LAUNCHERS = new Set(['agent', 'spawn_agent', 'spawnAgent']);
+const launchableSource = (rel, source) => {
+  if (!rel.endsWith('.md')) return source;
+  let fenced = false;
+  return source.split('\n').map((line) => {
+    if (/^\s*```/.test(line)) {
+      fenced = !fenced;
+      return '';
+    }
+    return fenced ? line : '';
+  }).join('\n');
+};
+const executableTokens = (source) => {
+  const tokens = [];
+  let index = 0;
+  let line = 1;
+  const advance = () => {
+    if (source[index++] === '\n') line++;
+  };
+  while (index < source.length) {
+    const ch = source[index];
+    if (/\s/.test(ch)) {
+      advance();
+    } else if (ch === '/' && source[index + 1] === '/') {
+      while (index < source.length && source[index] !== '\n') advance();
+    } else if (ch === '/' && source[index + 1] === '*') {
+      advance(); advance();
+      while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) advance();
+      if (index < source.length) { advance(); advance(); }
+    } else if (ch === '\'' || ch === '"' || ch === '`') {
+      const quote = ch;
+      advance();
+      while (index < source.length && source[index] !== quote) {
+        if (source[index] === '\\') advance();
+        advance();
+      }
+      if (index < source.length) advance();
+    } else if (/[A-Za-z_$]/.test(ch)) {
+      const start = index;
+      const tokenLine = line;
+      advance();
+      while (index < source.length && /[A-Za-z0-9_$]/.test(source[index])) advance();
+      tokens.push({ value: source.slice(start, index), line: tokenLine });
+    } else {
+      tokens.push({ value: ch, line });
+      advance();
+    }
+  }
+  return tokens;
+};
+const callOpensAt = (tokens, index) => tokens[index]?.value === '('
+  || (tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' && tokens[index + 2]?.value === '(');
+const directLaunchCalls = (source) => {
+  const tokens = executableTokens(source);
+  return tokens.filter((token, index) => {
+    if (!NATIVE_LAUNCHERS.has(token.value) || tokens[index - 1]?.value === '.') return false;
+    if (callOpensAt(tokens, index + 1)) return true;
+    return tokens[index - 1]?.value === '('
+      && tokens[index + 1]?.value === ')'
+      && callOpensAt(tokens, index + 2);
+  });
+};
+const directLaunchOffenders = (root, rels) => rels.flatMap((rel) => {
+  const source = fs.readFileSync(path.join(root, rel), 'utf8');
+  return directLaunchCalls(launchableSource(rel, source)).map(({ line }) =>
+    `${rel}:${line}: ${source.split('\n')[line - 1].trim()}`);
+});
 
 test('every routed launch surface names the boundary and has no direct launch call outside it', () => {
-  assert.ok(ROUTED_LAUNCH_SOURCES.length >= 6, 'the routed source sweep must cover workflows and delivery prompts');
-  for (const rel of ROUTED_LAUNCH_SOURCES) {
+  assert.ok(ROUTED_LAUNCH_SOURCES.includes('plugins/delivery-pipeline/workflows/executors.mjs'), 'the tracked routed-source manifest must include Workflow launchers');
+  assert.ok(ROUTED_LAUNCH_SOURCES.includes('plugins/delivery-pipeline/commands/deliver.md'), 'the tracked routed-source manifest must include delivery commands');
+  assert.ok(ROUTED_LAUNCH_SOURCES.includes('plugins/delivery-pipeline/references/pr-sentinel.md'), 'the tracked routed-source manifest must include delivery references');
+  assert.ok(BOUNDARY_LAUNCH_SOURCES.length >= 6, 'the tracked routed-source manifest must discover the current boundary-bearing surfaces');
+  for (const rel of BOUNDARY_LAUNCH_SOURCES) {
     const source = readRepo(rel);
     assert.ok(source.includes('createClaudeWorkflowDispatch') || source.includes('createDispatchBoundary'), `${rel} must name its boundary entry point`);
     assert.ok(source.includes('boundary.dispatch') || source.includes('createClaudeWorkflowDispatch'), `${rel} must use the boundary launch shape`);
@@ -1243,27 +1347,54 @@ test('every routed launch surface names the boundary and has no direct launch ca
   );
 });
 
-test('the routed-launch source sweep rejects a newly added direct agent launch', () => {
+test('the routed-launch source sweep rejects direct, optional, and parenthesized native launches', () => {
   const dir = fixture('outside.mjs', [
     'const direct = (prompt) => agent(prompt);',
+    'const optional = (prompt) => agent?.(prompt);',
+    'const grouped = (prompt) => (agent)(prompt);',
+    'const spawned = (prompt) => spawn_agent?.(prompt);',
+    'const groupedSpawn = (prompt) => (spawnAgent)(prompt);',
+    '// agent(prompt) is forbidden outside the boundary.',
+    'const prose = "agent(prompt)";',
     'const allowed = (prompt) => createClaudeWorkflowDispatch({ prompt });',
     '',
   ].join('\n'));
   const offenders = directLaunchOffenders(dir, ['outside.mjs']);
-  assert.equal(offenders.length, 1, `the fixture must exercise the direct-launch arm: ${offenders.join('\n')}`);
+  assert.equal(offenders.length, 5, `the fixture must exercise every native-launch call form: ${offenders.join('\n')}`);
   assert.match(offenders[0], /outside\.mjs:1/);
+  assert.match(offenders[0], /agent\(prompt\)/);
+  assert.match(offenders[1], /agent\?\.\(prompt\)/);
+  assert.match(offenders[2], /\(agent\)\(prompt\)/);
+  assert.match(offenders[3], /spawn_agent\?\.\(prompt\)/);
+  assert.match(offenders[4], /\(spawnAgent\)\(prompt\)/);
+});
+
+test('the routed-launch source sweep rejects native launches in shipped Markdown fenced blocks', () => {
+  const dir = fixture('outside.md', [
+    '# Workflow prompt',
+    '',
+    'This prose may describe `agent(prompt)` without constituting launch text.',
+    '',
+    '```javascript',
+    'agent(prompt);',
+    '```',
+    '',
+  ].join('\n'));
+  const offenders = directLaunchOffenders(dir, ['outside.md']);
+  assert.equal(offenders.length, 1, `the fenced prompt text must be scanned: ${offenders.join('\n')}`);
+  assert.match(offenders[0], /outside\.md:6/);
   assert.match(offenders[0], /agent\(prompt\)/);
 });
 
-test('Claude palette and provider adapter sources remain byte-identical and native', () => {
-  const files = [
-    'plugins/delivery-pipeline/scripts/runtime-adapters.cjs',
-    'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs',
-  ];
-  for (const rel of files) {
-    const current = fs.readFileSync(path.join(REPO, rel));
-    const committed = execFileSync('git', ['show', `HEAD:${rel}`], { cwd: REPO });
-    assert.deepStrictEqual(current, committed, `${rel} is a runtime-owned palette/provider file and must remain untouched by the matrix suite`);
+const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
+  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '6fd1478f8b6a26098e4b86485541cf20be371675aa2cf424b8dd7902433540bc',
+  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '70d299ec3587706202d6cafcb238d844353d19dbecaeead97dfdd409841522b6',
+});
+
+test('Claude palette and provider adapter sources match their checked-in baselines and remain native', () => {
+  for (const [rel, expectedDigest] of Object.entries(RUNTIME_OWNED_FILE_DIGESTS)) {
+    const actualDigest = crypto.createHash('sha256').update(fs.readFileSync(path.join(REPO, rel))).digest('hex');
+    assert.equal(actualDigest, expectedDigest, `${rel} is a runtime-owned palette/provider file and must match its checked-in baseline`);
   }
   assert.deepStrictEqual(CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'opus', fable: 'fable' });
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('runtime: \'claude\''), true);

@@ -80,7 +80,8 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 // RESOLVER's, so it is validated against the resolver's own grammar rather than a
 // regex copied over here — the drift `CODEX_DEEP_ROLES` already paid for.
 const {
-  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime, loadConfig,
+  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, resolveModel, resolveEffort,
+  resolveTaskLevel, routeOf, tierAllowedForRuntime, loadConfig,
 } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const {
   CODEX_STATIC_ROLES, CODEX_ROLE_RUNG_DEFINITIONS, codexAgentFile, variantSuffix,
@@ -398,8 +399,16 @@ function parseMarkFlags(argv, role) {
   }
 
   // ADR-014 writes reconcile a dispatch id against boundary-owned storage.
-  // The legacy flags below remain unverified telemetry; they cannot populate
-  // applied_* or mint an application_receipt by themselves.
+  // A store without its id cannot identify a receipt, so reject it before
+  // opening the store (and before a partial record can be written).
+  if (given.has('boundary-store') && !given.has('dispatch-id')) {
+    fail(
+      'a reconciled dispatch requires both --boundary-store and --dispatch-id; ' +
+      'the dispatch id must name the receipt the boundary recorded after launch.'
+    );
+  }
+  // The legacy flags below remain readable historical telemetry. They cannot
+  // populate applied_* or mint an application_receipt by themselves.
   if (given.has('boundary-store')) {
     try {
       const { createDurableRecorder, createDispatchBoundary } = require('./dispatch-boundary.cjs');
@@ -412,9 +421,22 @@ function parseMarkFlags(argv, role) {
         const issue = opaqueDispatchValueIssue(facts[field]);
         if (issue) throw new Error(`boundary receipt ${field} cannot be recorded: ${issue}`);
       }
+      // ADR-014 resolves concrete provider IDs and a boundary-native route.
+      // The dispatch journal predates that vocabulary: its model/reason fields
+      // are compatibility projections consumed by pipeline-stats. Preserve the
+      // boundary facts in their own fields while deriving those legacy fields
+      // from the same role/signals using the existing legacy resolver.
+      const legacyModel = resolveModel(facts.role, facts.signals);
+      const legacyEffort = resolveEffort(facts.role, legacyModel, undefined, facts.signals);
+      const legacyRoute = routeOf(facts.role, facts.signals);
+      const legacyTaskLevel = resolveTaskLevel(facts.role, facts.signals);
+      if (facts.task_level !== legacyTaskLevel) {
+        throw new Error('boundary task level does not match the resolver projection');
+      }
       const aliases = {
-        model: facts.requested_model, effort: facts.requested_effort,
-        'effort-applied': facts.applied_effort, route: facts.route,
+        model: legacyModel, effort: legacyEffort,
+        'effort-applied': facts.applied_effort, route: legacyRoute,
+        'task-level': facts.task_level,
         runtime: facts.runtime, backend: facts.backend,
         'observed-model': facts.observed_model, 'observed-effort': facts.observed_effort,
         'agent-file': facts.agent_file, 'agent-id': facts.launch_id,
@@ -425,8 +447,8 @@ function parseMarkFlags(argv, role) {
           throw new Error(`--${flag} contradicts or is absent from the boundary receipt`);
         }
       }
-      return { ...facts, model: facts.requested_model, effort: facts.requested_effort,
-        effort_applied: facts.applied_effort, reason: facts.route, agent_id: facts.launch_id };
+      return { ...facts, model: legacyModel, effort: legacyEffort,
+        effort_applied: facts.applied_effort, reason: legacyRoute, agent_id: facts.launch_id };
     } catch (error) {
       fail(`boundary receipt reconciliation failed: ${error.message}`);
     }
@@ -660,6 +682,18 @@ function parseMarkFlags(argv, role) {
       );
     }
     decided.agent_file = agentFile;
+  }
+  // A resolver route is the declaration that this is a new routed launch, not
+  // merely an old ownership row.  Its requested/applied fields are execution
+  // claims, so accepting caller-supplied values here would let the normal
+  // delivery instructions write unverified telemetry.  The launch-flow caller
+  // is wired in a later ticket; until it passes the durable boundary receipt,
+  // fail closed rather than treating hand-written flags as evidence.
+  if (given.has('route')) {
+    fail(
+      'a routed dispatch requires --boundary-store and --dispatch-id from the completed dispatch boundary; ' +
+      'manual --model/--effort/--route values are not application evidence.'
+    );
   }
   return decided;
 }

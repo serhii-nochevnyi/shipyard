@@ -571,4 +571,39 @@ test('ADR-014 reconciliation keeps resolution, application, observation and join
   assert.deepStrictEqual(json.reconciliation.findings, reconciliation.findings);
 });
 
+test('usage joins require matching runtime and transcript identity, then merge later observations', () => {
+  const joined = adrDispatch({
+    runtime: 'codex', role: 'executor', dispatch_id: 'joined-usage',
+    receipt_over: { observed_model: 'unknown', observed_effort: 'unknown' },
+  });
+  const crossRuntime = adrDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'cross-runtime' });
+  const noIdentity = adrDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'no-identity' });
+  const { code, json } = asJson({
+    tickets: {}, journal: [joined, crossRuntime, noIdentity].map(JSON.stringify),
+    attributions: [
+      {
+        observation_id: 'joined-valid', dispatch_id: 'joined-usage', runtime: 'codex', provider: 'openai',
+        session_id: 'codex-session', observed_model: joined.requested_model,
+        observed_effort: joined.requested_effort,
+      },
+      {
+        observation_id: 'cross-runtime', dispatch_id: 'cross-runtime', runtime: 'claude', provider: 'anthropic',
+        session_id: 'claude-session', observed_model: 'opus', observed_effort: 'max',
+      },
+      {
+        observation_id: 'no-identity', dispatch_id: 'no-identity', runtime: 'codex', provider: 'openai',
+        observed_model: noIdentity.requested_model, observed_effort: noIdentity.requested_effort,
+      },
+    ], prs: [],
+  });
+  assert.equal(code, 0);
+  const facts = json.ladder.reconciliation.records;
+  const merged = facts.find((fact) => fact.dispatch_id === 'joined-usage');
+  assert.equal(merged.usage_join_status, 'joined');
+  assert.equal(merged.observation_status, 'observed');
+  assert.equal(merged.comparison_ready, true);
+  assert.equal(facts.find((fact) => fact.dispatch_id === 'cross-runtime').usage_join_status, 'unjoined');
+  assert.equal(facts.find((fact) => fact.dispatch_id === 'no-identity').usage_join_status, 'unjoined');
+});
+
 done();
