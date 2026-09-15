@@ -3700,7 +3700,9 @@
       "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/decompose.md",
-        "tests/unit/source-contract.test.cjs"
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "tests/unit/source-contract.test.cjs",
+        "tests/unit/pipeline-config.test.cjs"
       ],
       "risk": "high",
       "type": "implementation",
