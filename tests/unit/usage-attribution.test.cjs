@@ -434,6 +434,17 @@ test('nested provenance accepts only bounded schema fields', () => {
     ].map((field) => [field, 'a'.repeat(900)])) })),
     /receipt exceeds 16384 bytes/
   );
+
+  for (const [field, value, pattern] of [
+    ['compliance_proof', { prompt: 'secret' }, /signals\.priorApplied\.compliance_proof\.prompt is not supported/],
+    ['launch_arguments', { credential: 'secret' }, /signals\.priorApplied\.launch_arguments\.credential is not supported/],
+    ['signals', { priorApplied: { signals: { prompt: 'secret' } } }, /signals\.priorApplied\.signals\.priorApplied\.signals\.prompt is not supported/],
+  ]) {
+    assert.throws(
+      () => normalizeRecord(base({ signals: { priorApplied: { [field]: value } } })),
+      pattern,
+    );
+  }
 });
 
 test('reconciliation rejects conflicting application copies and unsupported provenance', () => {
@@ -487,6 +498,41 @@ test('reconciliation keeps unknown application evidence separate and rejects mis
   assert.equal(reconcileTelemetry({ ...resolution, application_receipt: receipt }, { usageRecords }).usage_join_status, 'ambiguous');
 });
 
+test('reconciliation derives only the omitted deterministic fields from a complete boundary projection', () => {
+  const resolution = routed('claude', 'executor', {}, 'boundary-projection');
+  const receipt = applicationReceipt(resolution);
+  const boundaryProjection = {
+    dispatch_id: resolution.dispatch_id,
+    policy_version: resolution.policy_version,
+    policy_hash: resolution.policy_hash,
+    role: resolution.role,
+    task_level: 'routine',
+    logical_rung: resolution.logical_rung,
+    rung: resolution.rung,
+    signals: resolution.signals,
+    signals_fired: resolution.signals_fired,
+    route: resolution.route,
+    runtime: resolution.runtime,
+    backend: resolution.backend,
+    mechanism: resolution.mechanism,
+    launch_id: receipt.launch_id,
+    agent_file: resolution.agent_file,
+    launch_arguments: resolution.launch_arguments || null,
+    requested_model: resolution.requested_model,
+    requested_effort: resolution.requested_effort,
+    applied_model: receipt.applied_model,
+    applied_effort: receipt.applied_effort,
+    observed_model: receipt.observed_model,
+    observed_effort: receipt.observed_effort,
+    application_receipt: receipt,
+  };
+  const facts = reconcileTelemetry(boundaryProjection);
+  assert.equal(facts.resolution_status, 'resolved');
+  assert.equal(facts.policy_resolution.current, true);
+  assert.equal(facts.policy_resolution.logical_model, resolution.logical_model);
+  assert.equal(facts.policy_resolution.rung_index, resolution.rung_index);
+});
+
 test('policy reconciliation requires complete resolver provenance and reconciles its full signal route', () => {
   const resolution = routed('codex', 'executor', { critical: true }, 'complete-signals');
   const incomplete = { ...resolution, application_receipt: applicationReceipt(resolution) };
@@ -509,6 +555,60 @@ test('policy reconciliation requires complete resolver provenance and reconciles
     ...resolution, rung_index: 99, application_receipt: applicationReceipt(resolution),
   });
   assert.ok(wrongIndex.policy_resolution.contradictions.includes('rung_index'));
+});
+
+test('reconciliation evaluates repair signal provenance without re-invoking receipt-gated resolution', () => {
+  const prior = applicationReceipt(routed('claude', 'executor', {}, 'repair-prior'));
+  const runtime = 'claude';
+  const role = 'review-fix';
+  const rung = modelPolicy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role]
+    .find((entry) => entry.name === 'repeat');
+  const model = modelPolicy.CLAUDE_MODEL_ALIASES[rung.model_key];
+  const evaluation = modelPolicy.evaluateSignals(role, {
+    signatureState: 'repeat', priorApplied: prior,
+  }, { runtime });
+  const resolution = {
+    policy_version: POLICY_VERSION,
+    policy_hash: POLICY_HASH,
+    runtime,
+    role,
+    model_key: rung.model_key,
+    logical_model: rung.logical_model || rung.model_key,
+    logical_rung: rung.name,
+    rung: rung.name,
+    rung_index: modelPolicy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role].indexOf(rung),
+    model,
+    effort: rung.effort,
+    requested_model: model,
+    requested_effort: rung.effort,
+    route: `role=${role} rung=${rung.name} model=${rung.model_key} signals=repeat->repeat`,
+    backend: 'workflow',
+    mechanism: 'workflow-explicit-selection',
+    launch_arguments: { model, effort: rung.effort },
+    signals: evaluation.signals,
+    signals_fired: evaluation.signals_fired,
+    dispatch_id: 'repair-current',
+  };
+  const facts = reconcileTelemetry({
+    ...resolution,
+    application_receipt: applicationReceipt(resolution),
+  });
+  assert.equal(facts.resolution_status, 'resolved');
+  assert.equal(facts.policy_resolution.contradictions.includes('signals'), false);
+  assert.equal(facts.compliant, true);
+});
+
+test('reconciliation rejects a receipt whose launch differs from the selected dispatch launch', () => {
+  const resolution = routed('claude', 'executor', {}, 'launch-mismatch');
+  const receipt = applicationReceipt(resolution, { launch_id: 'launch-other' });
+  const facts = reconcileTelemetry({
+    ...resolution,
+    agent_id: 'launch-selected',
+    application_receipt: receipt,
+  });
+  assert.equal(facts.application_status, 'contradictory');
+  assert.ok(facts.runtime_application.contradictions.includes('launch_id'));
+  assert.equal(facts.compliant, false);
 });
 
 test('static Codex application receipts require a lowercase SHA-256 agent digest', () => {
