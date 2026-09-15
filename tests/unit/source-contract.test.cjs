@@ -1339,17 +1339,69 @@ const executableTokens = (source) => {
 };
 const callOpensAt = (tokens, index) => tokens[index]?.value === '('
   || (tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' && tokens[index + 2]?.value === '(');
+const NATIVE_MEMBER_METHODS = new Set(['call', 'apply', 'bind']);
 const memberCallOpensAt = (tokens, index) => {
   const memberStart = tokens[index]?.value === '.' ? index + 1
     : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' ? index + 2 : null;
-  return memberStart !== null
-    && ['call', 'apply'].includes(tokens[memberStart]?.value)
-    && callOpensAt(tokens, memberStart + 1);
+  if (memberStart !== null
+      && NATIVE_MEMBER_METHODS.has(tokens[memberStart]?.value)
+      && callOpensAt(tokens, memberStart + 1)) return true;
+  const computedStart = tokens[index]?.value === '[' ? index
+    : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.'
+      && tokens[index + 2]?.value === '[' ? index + 2 : null;
+  // Quoted computed property names are skipped by the lexer, so a native
+  // callback's `['call'](...)`, `['apply'](...)`, or `['bind'](...)` has the
+  // compact `[ ] (` shape.
+  // Treating any computed member call as a violation is deliberately
+  // conservative: a routed native callback must not be invoked indirectly.
+  return computedStart !== null
+    && tokens[computedStart + 1]?.value === ']'
+    && callOpensAt(tokens, computedStart + 2);
+};
+const launcherReferenceAt = (tokens, index, launchers) => {
+  if (launchers.has(tokens[index]?.value)) return index;
+  if (tokens[index]?.value === '('
+      && launchers.has(tokens[index + 1]?.value)
+      && tokens[index + 2]?.value === ')') return index + 1;
+  return null;
+};
+const boundMemberCallOpensAt = (tokens, index) => {
+  const memberStart = tokens[index]?.value === '.' ? index + 1
+    : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' ? index + 2 : null;
+  if (memberStart !== null) {
+    return tokens[memberStart]?.value === 'bind'
+      && callOpensAt(tokens, memberStart + 1);
+  }
+  const computedStart = tokens[index]?.value === '[' ? index
+    : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.'
+      && tokens[index + 2]?.value === '[' ? index + 2 : null;
+  // Quoted computed property names are skipped by the lexer, so a bound
+  // callback's `['bind'](...)` has the compact `[ ] (` shape.
+  return computedStart !== null
+    && tokens[computedStart + 1]?.value === ']'
+    && callOpensAt(tokens, computedStart + 2);
+};
+const launcherAliases = (tokens) => {
+  const launchers = new Set(NATIVE_LAUNCHERS);
+  for (let index = 0; index + 3 < tokens.length; index++) {
+    if (!['const', 'let', 'var'].includes(tokens[index]?.value)
+        || tokens[index + 1]?.value === undefined
+        || tokens[index + 2]?.value !== '=') continue;
+    const source = launcherReferenceAt(tokens, index + 3, launchers);
+    if (source === null) continue;
+    const sourceEnd = source + 1;
+    const isDirect = tokens[sourceEnd]?.value === ';' || tokens[sourceEnd]?.value === ','
+      || tokens[sourceEnd]?.value === ')';
+    const isBound = boundMemberCallOpensAt(tokens, sourceEnd);
+    if (isDirect || isBound) launchers.add(tokens[index + 1].value);
+  }
+  return launchers;
 };
 const directLaunchCalls = (source) => {
   const tokens = executableTokens(source);
+  const launchers = launcherAliases(tokens);
   return tokens.filter((token, index) => {
-    if (!NATIVE_LAUNCHERS.has(token.value) || tokens[index - 1]?.value === '.') return false;
+    if (!launchers.has(token.value) || tokens[index - 1]?.value === '.') return false;
     if (callOpensAt(tokens, index + 1) || memberCallOpensAt(tokens, index + 1)) return true;
     return tokens[index - 1]?.value === '('
       && tokens[index + 1]?.value === ')'
@@ -1423,16 +1475,46 @@ test('the routed-launch source sweep rejects native call and apply member forms'
     'const applied = agent.apply(null, [prompt]);',
     'const grouped = (spawnAgent).call(null, prompt);',
     'const property = worker.agent.call(null, prompt);',
+    'const computedCalled = agent[\'call\'](null, prompt);',
+    'const optionalComputedApplied = agent?.[\'apply\'](null, [prompt]);',
     '',
   ].join('\n'));
   const offenders = directLaunchOffenders(dir, ['member-outside.mjs']);
-  assert.equal(offenders.length, 3, `native call/apply member forms must be rejected: ${offenders.join('\n')}`);
+  assert.equal(offenders.length, 5, `native call/apply member forms must be rejected: ${offenders.join('\n')}`);
   assert.match(offenders[0], /member-outside\.mjs:1/);
   assert.match(offenders[0], /agent\.call/);
   assert.match(offenders[1], /member-outside\.mjs:2/);
   assert.match(offenders[1], /agent\.apply/);
   assert.match(offenders[2], /member-outside\.mjs:3/);
   assert.match(offenders[2], /\(spawnAgent\)\.call/);
+  assert.match(offenders[3], /member-outside\.mjs:5/);
+  assert.match(offenders[3], /agent\['call'\]/);
+  assert.match(offenders[4], /member-outside\.mjs:6/);
+  assert.match(offenders[4], /agent\?\.\['apply'\]/);
+});
+
+test('the routed-launch source sweep rejects direct and bound native launcher aliases', () => {
+  const dir = fixture('alias-outside.mjs', [
+    'const launch = agent;',
+    'const directAlias = (prompt) => launch(prompt);',
+    'const bound = agent.bind(null);',
+    'const boundAlias = (prompt) => bound(prompt);',
+    'const computedBound = agent[\'bind\'](null);',
+    'const computedBoundAlias = (prompt) => computedBound(prompt);',
+    '',
+  ].join('\n'));
+  const offenders = directLaunchOffenders(dir, ['alias-outside.mjs']);
+  assert.equal(offenders.length, 5, `native launcher aliases must be rejected: ${offenders.join('\n')}`);
+  assert.match(offenders[0], /alias-outside\.mjs:2/);
+  assert.match(offenders[0], /launch\(prompt\)/);
+  assert.match(offenders[1], /alias-outside\.mjs:3/);
+  assert.match(offenders[1], /agent\.bind/);
+  assert.match(offenders[2], /alias-outside\.mjs:4/);
+  assert.match(offenders[2], /bound\(prompt\)/);
+  assert.match(offenders[3], /alias-outside\.mjs:5/);
+  assert.match(offenders[3], /agent\['bind'\]/);
+  assert.match(offenders[4], /alias-outside\.mjs:6/);
+  assert.match(offenders[4], /computedBound\(prompt\)/);
 });
 
 test('the routed-launch source sweep rejects native launches in shipped Markdown fenced blocks', () => {
