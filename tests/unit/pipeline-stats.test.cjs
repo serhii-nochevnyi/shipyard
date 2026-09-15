@@ -409,6 +409,15 @@ test('a parseable route whose structured fields disagree is not comparable', () 
   assert.strictEqual(json.ladder.requested_comparable, 0);
 });
 
+test('an ADR-014 route model key must agree with the event logical model', () => {
+  const row = adrDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'wrong-model-key' });
+  row.logical_model = 'astra';
+  const { code, json } = asJson({ tickets: {}, journal: [JSON.stringify(row)], prs: [] });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.ladder.missing_route, 1);
+  assert.strictEqual(json.ladder.requested_comparable, 0);
+});
+
 test('non-concrete effort states do not count as applied or observed coverage', () => {
   const row = {
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor',
