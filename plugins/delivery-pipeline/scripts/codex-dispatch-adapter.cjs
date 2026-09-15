@@ -165,6 +165,21 @@ function createCodexDispatchAdapter(options = {}) {
     return candidate;
   }
 
+  // The dispatch boundary owns receipt durability, while this adapter owns the
+  // loader-issued WeakMap provenance for an effective Codex remap.  Give the
+  // boundary a deliberately narrow way to recover the canonical selection
+  // from a bound dynamic resolution; a caller cannot manufacture this result
+  // because verifiedCodexRemap is private to the configuration loader.
+  function effectiveResolution(resolution) {
+    const binding = verifiedCodexRemap(resolution);
+    if (!binding) return null;
+    const canonical = canonicalResolution(resolution);
+    return Object.freeze({
+      canonical,
+      effective_model: effectiveModelFor(resolution, canonical),
+    });
+  }
+
   function validateGeneratedAgent(resolution) {
     const canonical = canonicalResolution(resolution);
     if (canonical.runtime !== 'codex' || !canonical.agent_file || !agentsDir) {
@@ -304,9 +319,14 @@ function createCodexDispatchAdapter(options = {}) {
 
   return Object.freeze({
     runtime: 'codex', models: CODEX_MODEL_IDS,
+    // These are immutable configuration facts, not launch input.  Publishing
+    // them lets the boundary independently snapshot static content and honour
+    // a non-default manifest path before it delegates to this adapter.
+    agentsDir,
+    agentManifest,
     capabilities: Object.freeze({ observedModel: capabilities.observedModel !== false, observedEffort: capabilities.observedEffort !== false }),
     supports: (resolution) => validateAvailability(resolution, capabilities),
-    validate, validateGeneratedAgent,
+    validate, validateGeneratedAgent, effectiveResolution,
     launch: (resolution, context) => {
       if (canonicalView(resolution).agent_file) refuse('UNSUPPORTED_SELECTION', 'static role must use launchStatic');
       return launch(resolution, context);

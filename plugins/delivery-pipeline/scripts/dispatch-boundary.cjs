@@ -1077,8 +1077,36 @@ function revalidateGeneratedAgent(resolution, adapter) {
 }
 
 function validateWithAdapter(resolution, adapter) {
-  canonicalValidateResolution(resolution, { requireDispatchId: true });
+  // A Codex adapter may hold loader-private provenance for a dynamic effective
+  // model.  Validate its canonical ADR-014 selection, while preserving the
+  // effective model as the expected application result.  Other adapters (and
+  // ordinary canonical selections) have no such contract.
+  const effective = adapter && typeof adapter.effectiveResolution === 'function'
+    ? invokeSync(adapter.effectiveResolution, adapter, [resolution], 'adapter.effectiveResolution')
+    : null;
+  const canonical = effective === null ? resolution : effective && effective.canonical;
+  if (effective !== null
+      && (!isObject(effective)
+        || !isObject(canonical)
+        || typeof effective.effective_model !== 'string'
+        || effective.effective_model.trim() === '')) {
+    refuse('INVALID_RESOLUTION', 'adapter effective selection must contain canonical resolution and concrete model');
+  }
+  canonicalValidateResolution(canonical, { requireDispatchId: true });
   adapterSupports(adapter, resolution);
+  let adapterValidated = false;
+  // Keep the adapter's repair guidance on a pre-existing static artifact
+  // failure, then independently inspect the published paths below to obtain
+  // the immutable boundary handoff.  This is intentionally limited to the
+  // concrete Codex adapter; generic adapters retain their existing hook order.
+  if (resolution.agent_file && adapter && adapter.runtime === 'codex' && typeof adapter.validate === 'function') {
+    const result = invokeSync(adapter.validate, adapter, [resolution], 'adapter.validate');
+    if (result === false || result && result.valid === false) {
+      const reason = result && typeof result.reason === 'string' ? `: ${result.reason}` : '';
+      refuse('UNSUPPORTED_SELECTION', `adapter validation refused the resolved selection${reason}`, { resolution });
+    }
+    adapterValidated = true;
+  }
   let validatedResolution = resolution;
   if (resolution.agent_file) {
     const evidence = generatedAgentEvidence(resolution, adapter)
@@ -1103,7 +1131,7 @@ function validateWithAdapter(resolution, adapter) {
     }
     validatedResolution = deepFreeze(snapshot({ ...resolution, agent_file_digest: evidence.agent_file_digest }));
   }
-  if (typeof adapter.validate === 'function') {
+  if (!adapterValidated && typeof adapter.validate === 'function') {
     const result = invokeSync(adapter.validate, adapter, [validatedResolution], 'adapter.validate');
     if (result === false || result && result.valid === false) {
       const reason = result && typeof result.reason === 'string' ? `: ${result.reason}` : '';
@@ -1111,6 +1139,20 @@ function validateWithAdapter(resolution, adapter) {
     }
   }
   return validatedResolution;
+}
+
+function expectedSelectionForReceipt(resolution, adapter) {
+  const effective = adapter && typeof adapter.effectiveResolution === 'function'
+    ? invokeSync(adapter.effectiveResolution, adapter, [resolution], 'adapter.effectiveResolution')
+    : null;
+  if (effective === null) return { canonical: resolution, applied_model: resolution.model };
+  if (!isObject(effective)
+      || !isObject(effective.canonical)
+      || typeof effective.effective_model !== 'string'
+      || effective.effective_model.trim() === '') {
+    refuse('INVALID_RESOLUTION', 'adapter effective selection must contain canonical resolution and concrete model');
+  }
+  return { canonical: effective.canonical, applied_model: effective.effective_model };
 }
 
 function unwrapReceipt(value) {
@@ -1140,6 +1182,8 @@ function observedValue(receipt, field, applied, allowUnknown) {
 
 function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) {
   const receipt = unwrapReceipt(rawReceipt);
+  const expectedSelection = expectedSelectionForReceipt(resolution, options.adapter);
+  const canonical = expectedSelection.canonical;
   if (!isObject(receipt)) {
     refuse('MISSING_RECEIPT', 'launch did not return an application receipt; a successful process exit is not evidence of application');
   }
@@ -1180,15 +1224,15 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt dispatch_id does not match the boundary dispatch', { expected: resolution.dispatch_id, actual: receipt.dispatch_id });
   }
   nonEmpty(receipt.launch_id, 'launch_id');
-  if (receipt.requested_model !== resolution.requested_model || receipt.requested_effort !== resolution.requested_effort) {
+  if (receipt.requested_model !== canonical.requested_model || receipt.requested_effort !== canonical.requested_effort) {
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt requested values do not match the immutable resolution', {
-      expected: { model: resolution.requested_model, effort: resolution.requested_effort },
+      expected: { model: canonical.requested_model, effort: canonical.requested_effort },
       actual: { model: receipt.requested_model, effort: receipt.requested_effort },
     });
   }
-  if (receipt.applied_model !== resolution.model || receipt.applied_effort !== resolution.effort) {
+  if (receipt.applied_model !== expectedSelection.applied_model || receipt.applied_effort !== canonical.effort) {
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt applied values do not match the resolved selection', {
-      expected: { model: resolution.model, effort: resolution.effort },
+      expected: { model: expectedSelection.applied_model, effort: canonical.effort },
       actual: { model: receipt.applied_model, effort: receipt.applied_effort },
     });
   }

@@ -213,6 +213,47 @@ test('a dynamic remap records canonical requested values beside the applied mode
   } finally { clean(f); }
 });
 
+test('the boundary verifies a loader-bound dynamic remap against its effective model', () => {
+  const model = 'vendor/codex-runtime-model';
+  const f = setup({
+    capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
+  });
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
+    const selected = loadCodexRemap({
+      config: { model_policy: { runtime_tiers: { codex: { sonnet: model } } } },
+    }).bindResolution({ ...resolution, effective_model: model }, resolution, 'sonnet');
+    const receipt = f.adapter.launch(selected);
+    const evidence = f.boundary.receipt(selected, receipt);
+    assert.equal(evidence.requested_model, resolution.model);
+    assert.equal(evidence.applied_model, model);
+    assert.equal(evidence.applied_effort, resolution.effort);
+  } finally { clean(f); }
+});
+
+test('the adapter exposes immutable static-artifact configuration to the boundary', () => {
+  const f = fixture();
+  const customManifest = path.join(f.root, 'custom-manifest.json');
+  fs.renameSync(path.join(f.root, '.shipyard-manifest.json'), customManifest);
+  const host = {
+    capabilities,
+    launch: (selection) => applied(selection),
+    launchStatic: (selection) => applied(selection),
+  };
+  const adapter = createCodexDispatchAdapter({
+    agentsDir: f.root,
+    agentManifest: customManifest,
+    capabilities,
+    host,
+  });
+  try {
+    assert.equal(adapter.agentsDir, f.root);
+    assert.equal(adapter.agentManifest, customManifest);
+    const boundary = createDispatchBoundary({ adapters: { codex: adapter }, recorder: () => true });
+    assert.equal(boundary.dispatch({ runtime: 'codex', role: 'research' }).receipt.agent_file, 'shipyard-inv-research.toml');
+  } finally { clean(f); }
+});
+
 test('a forged outer model cannot borrow a canonical resolution without an explicit remap', () => {
   const f = setup();
   try {
