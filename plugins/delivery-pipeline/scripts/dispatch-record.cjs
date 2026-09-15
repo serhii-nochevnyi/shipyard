@@ -548,6 +548,19 @@ function parseMarkFlags(argv, role) {
     // refused above, before this ever runs.
     if (decided.model === undefined) decided.model = parsed.tier.model;
     if (decided.effort === undefined) decided.effort = parsed.effort.effort;
+    // A route makes this a new ladder-routed dispatch, not merely a legacy
+    // ownership mark. It must carry the launch receipt's concrete effort: an
+    // absent value, `unsupported`, or `unknown` proves that the launch surface
+    // did not apply the selected pair and must fail before this record can hide
+    // the ticket from the front. Older rows remain readable as telemetry; this
+    // is a write-time rule only.
+    if (!EFFORTS.includes(decided.effort_applied)) {
+      fail(
+        'a routed dispatch requires a concrete --effort-applied receipt from a launch that explicitly applied ' +
+        'the resolved model and effort; absent, unsupported, and unknown are historical telemetry, not evidence for a new dispatch.\n' +
+        `  efforts: ${EFFORTS.join(', ')}`
+      );
+    }
     decided.reason = route;
   }
   if (runtime !== undefined && decided.model !== undefined

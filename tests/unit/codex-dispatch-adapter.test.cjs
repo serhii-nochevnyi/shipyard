@@ -10,7 +10,7 @@ const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scri
 const { createCodexDispatchAdapter, CODEX_MODEL_IDS } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 
 const capabilities = {
-  supportedModels: Object.values(CODEX_MODEL_IDS), supportedEfforts: ['high', 'medium', 'max'],
+  supportedModels: Object.values(CODEX_MODEL_IDS), supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   observedModel: false, observedEffort: false,
 };
 function fixture() {
@@ -71,10 +71,10 @@ suite('strict Codex adapter — canonical launches and application evidence');
 test('all base roles receive explicit ADR-014 selections', () => {
   const f = setup();
   const expected = {
-    research: ['gpt-5.6-terra', 'high'], decomposition: ['gpt-5.6-sol', 'medium'],
+    research: ['gpt-6-astra', 'low'], decomposition: ['gpt-6-astra', 'low'],
     executor: ['gpt-5.6-luna', 'max'], 'pr-sentinel': ['gpt-5.6-luna', 'medium'],
-    integrator: ['gpt-5.6-sol', 'medium'], 'drift-check': ['gpt-5.6-luna', 'max'],
-    'arch-review': ['gpt-5.6-sol', 'medium'], 'ci-fix': ['gpt-5.6-luna', 'max'],
+    integrator: ['gpt-6-astra', 'low'], 'drift-check': ['gpt-5.6-luna', 'max'],
+    'arch-review': ['gpt-6-astra', 'low'], 'ci-fix': ['gpt-5.6-luna', 'max'],
     'review-fix': ['gpt-5.6-luna', 'max'],
   };
   try {
@@ -101,17 +101,17 @@ test('all base roles receive explicit ADR-014 selections', () => {
 test('research, dynamic and judgement escalation use exact canonical files/arguments', () => {
   const f = setup();
   try {
-    for (const [role, signals, model, suffix] of [
-      ['research', { type: 'alternatives' }, 'gpt-5.6-sol', '-alternatives.toml'],
-      ['research', { complexity: 'very-complex' }, 'gpt-6-astra', '-critical.toml'],
-      ['executor', { critical: true }, 'gpt-6-astra', null],
-      ['decomposition', { checkpoint: true }, 'gpt-6-astra', null],
-      ['integrator', { contested: true }, 'gpt-6-astra', '-critical.toml'],
-      ['arch-review', { inputTokens: 250001 }, 'gpt-6-astra', '-critical.toml'],
+    for (const [role, signals, model, effort, suffix] of [
+      ['research', { type: 'alternatives' }, 'gpt-6-astra', 'low', '.toml'],
+      ['research', { complexity: 'very-complex' }, 'gpt-6-astra', 'medium', '-critical.toml'],
+      ['executor', { critical: true }, 'gpt-6-astra', 'low', null],
+      ['decomposition', { checkpoint: true }, 'gpt-6-astra', 'medium', null],
+      ['integrator', { contested: true }, 'gpt-6-astra', 'medium', '-critical.toml'],
+      ['arch-review', { inputTokens: 250001 }, 'gpt-6-astra', 'medium', '-critical.toml'],
     ]) {
       const result = f.boundary.dispatch({ runtime: 'codex', role, signals });
       assert.equal(result.applied_model, model);
-      assert.equal(result.applied_effort, 'medium');
+      assert.equal(result.applied_effort, effort);
       if (suffix) assert.ok(f.calls.at(-1).agent_file.endsWith(suffix));
     }
   } finally { clean(f); }
@@ -124,7 +124,8 @@ test('repair escalation consumes boundary-verified predecessor receipts through 
       const base = f.boundary.dispatch({ runtime: 'codex', role });
       const repeat = f.boundary.dispatch({ runtime: 'codex', role, previous_dispatch_id: base.dispatch_id, signals: { signatureState: 'repeat', priorApplied: base.receipt } });
       const deep = f.boundary.dispatch({ runtime: 'codex', role, previous_dispatch_id: repeat.dispatch_id, signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt } });
-      assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+      assert.equal(repeat.applied_model, 'gpt-6-astra');
+      assert.equal(repeat.applied_effort, 'low');
       assert.equal(deep.applied_model, 'gpt-6-astra');
       assert.equal(deep.applied_effort, 'medium');
     }
@@ -156,12 +157,12 @@ for (const [name, mutate] of [
 }
 
 for (const [name, change] of [
-  ['duplicate model', (text) => text.replace('developer_instructions', 'model = "gpt-5.6-terra"\ndeveloper_instructions')],
+  ['duplicate model', (text) => text.replace('developer_instructions', 'model = "gpt-5.6-luna"\ndeveloper_instructions')],
   ['nested model table', (text) => text.replace('model = ', '[other]\nmodel = ')],
-  ['model only inside instructions', (text) => text.replace('model = "gpt-5.6-sol"\n', '').replace('Run the exact role.', 'model = "gpt-5.6-sol"')],
+  ['model only inside instructions', (text) => text.replace('model = "gpt-6-astra"\n', '').replace('Run the exact role.', 'model = "gpt-5.6-luna"')],
   ['policy only inside instructions', (text) => text.replace('# shipyard-policy-role = "arch-review"\n', '').replace('Run the exact role.', '# shipyard-policy-role = "arch-review"')],
   ['duplicate policy comment', (text) => '# shipyard-policy-role = "arch-review"\n' + text],
-  ['configuration after instructions', (text) => text + 'model = "gpt-5.6-terra"\n'],
+  ['configuration after instructions', (text) => text + 'model = "gpt-5.6-luna"\n'],
 ]) {
   test(name + ' cannot spoof static identity even with an updated digest', () => {
     const f = setup();
@@ -179,7 +180,7 @@ for (const [name, change] of [
 
 test('unavailable model, effort or pair never selects a lower tuple', () => {
   for (const advertised of [
-    {}, { ...capabilities, supportedModels: ['gpt-5.6-terra'] },
+    {}, { ...capabilities, supportedModels: ['gpt-6-astra'] },
     { ...capabilities, supportedEfforts: ['high'] },
     { ...capabilities, supportedSelections: [{ model: 'gpt-5.6-luna', effort: 'medium' }] },
   ]) {
@@ -189,6 +190,109 @@ test('unavailable model, effort or pair never selects a lower tuple', () => {
       assert.equal(f.calls.length, 0);
     } finally { clean(f); }
   }
+});
+
+test('a dynamic launch and receipt use the resolver canonical concrete model', () => {
+  const f = setup();
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
+    const result = f.adapter.launch(resolution);
+    assert.equal(f.calls.at(-1).model, resolution.model);
+    assert.equal(f.calls.at(-1).reasoning_effort, 'low');
+    assert.equal(result.requested_model, resolution.requested_model);
+    assert.equal(result.requested_effort, resolution.requested_effort);
+    assert.equal(result.applied_model, resolution.model);
+    assert.equal(result.applied_effort, 'low');
+  } finally { clean(f); }
+});
+
+test('the boundary rejects a Codex adapter effective-model substitution', () => {
+  const f = setup();
+  try {
+    const substituted = Object.freeze({
+      ...f.adapter,
+      effectiveResolution: (resolution) => ({ canonical: resolution, effective_model: 'gpt-6-astra' }),
+    });
+    const boundary = createDispatchBoundary({ adapters: { codex: substituted }, recorder: () => true });
+    assert.throws(() => boundary.dispatch({ runtime: 'codex', role: 'decomposition' }),
+      (error) => error.code === 'INVALID_RESOLUTION' && /canonical concrete model/.test(error.message));
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('the adapter exposes immutable static-artifact configuration to the boundary', () => {
+  const f = fixture();
+  const customManifest = path.join(f.root, 'custom-manifest.json');
+  fs.renameSync(path.join(f.root, '.shipyard-manifest.json'), customManifest);
+  const host = {
+    capabilities,
+    launch: (selection) => applied(selection),
+    launchStatic: (selection) => applied(selection),
+  };
+  const adapter = createCodexDispatchAdapter({
+    agentsDir: f.root,
+    agentManifest: customManifest,
+    capabilities,
+    host,
+  });
+  try {
+    assert.equal(adapter.agentsDir, f.root);
+    assert.equal(adapter.agentManifest, customManifest);
+    const boundary = createDispatchBoundary({ adapters: { codex: adapter }, recorder: () => true });
+    assert.equal(boundary.dispatch({ runtime: 'codex', role: 'research' }).receipt.agent_file, 'shipyard-inv-research.toml');
+  } finally { clean(f); }
+});
+
+test('a forged outer model cannot borrow a canonical resolution without an explicit remap', () => {
+  const f = setup();
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'executor' });
+    const forged = { ...resolution, model: 'gpt-6-astra' };
+    Object.defineProperty(forged, 'canonical_resolution', { value: resolution });
+    rejected(() => f.adapter.launch(forged), 'CONFLICTING_OVERRIDE');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('effective-model provenance is rejected before the host is called', () => {
+  const f = setup();
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
+    const remapped = { ...resolution, model: 'gpt-6-astra', effective_model: 'gpt-6-astra' };
+    rejected(() => f.adapter.launch(remapped), 'CONFLICTING_OVERRIDE');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('caller-constructed canonical and remap provenance cannot authorize an effective model', () => {
+  const model = 'vendor/forged-sol';
+  const f = setup({
+    capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
+  });
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
+    const forged = {
+      ...resolution,
+      model,
+      canonical_model: resolution.model,
+      effective_model: model,
+      model_source: 'gsd-remap',
+      remap_key: 'sonnet',
+    };
+    Object.defineProperty(forged, 'canonical_resolution', { value: resolution });
+    rejected(() => f.adapter.launch(forged), 'CONFLICTING_OVERRIDE');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('static generated evidence cannot be bypassed by effective-model provenance', () => {
+  const f = setup();
+  try {
+    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'research' });
+    const selected = { ...resolution, effective_model: 'gpt-6-astra' };
+    assert.throws(() => f.adapter.validate(selected),
+      (error) => error.code === 'CONFLICTING_OVERRIDE' && /cannot use model remap provenance/.test(error.message));
+  } finally { clean(f); }
 });
 
 test('missing native launch method refuses without any ordinary-agent fallback', () => {
@@ -203,7 +307,7 @@ test('launch context cannot override explicit selection or request inheritance',
   const f = setup();
   try {
     for (const context of [
-      { model: 'gpt-5.6-terra' }, { reasoning_effort: 'medium' },
+      { model: 'gpt-6-astra' }, { reasoning_effort: 'medium' },
       { launch_arguments: { model: 'gpt-6-astra' } }, { session: { inherit: true } },
     ]) {
       assert.throws(() => f.boundary.dispatch({ runtime: 'codex', role: 'executor' }, context),
@@ -235,7 +339,7 @@ test('a successful exit or requested values alone cannot produce application evi
 });
 
 test('host downgrade and effort mismatch are refused instead of copying requested values', () => {
-  for (const extra of [{ applied_model: 'gpt-5.6-terra' }, { applied_effort: 'medium' }]) {
+  for (const extra of [{ applied_model: 'gpt-6-astra' }, { applied_effort: 'medium' }]) {
     const f = setup({ host: { launch: (selection) => applied(selection, extra) } });
     try {
       rejected(() => f.boundary.dispatch({ runtime: 'codex', role: 'executor' }), 'NONCOMPLIANT_RECEIPT');

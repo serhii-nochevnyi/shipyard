@@ -10,11 +10,13 @@ const ROOT = path.join(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'plugins/delivery-pipeline/scripts/codex-agent.cjs');
 const { selectAgent, parseArgs, signalsFrom, projectDirFrom } = require(SCRIPT);
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-const { createCodexRemapper, readProjectConfig } = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
+const {
+  createCodexRemapper, readProjectConfig, validateCodexConfiguration,
+} = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
 
 const capabilities = {
-  supportedModels: ['gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-astra'],
-  supportedEfforts: ['high', 'medium', 'max'], cliVersion: '0.200.0',
+  supportedModels: ['gpt-5.6-luna', 'gpt-6-astra'],
+  supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], cliVersion: '0.200.0',
 };
 function fixture(raw = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-agent-'));
@@ -25,7 +27,7 @@ function fixture(raw = {}) {
   fs.writeFileSync(path.join(root, 'capabilities.json'), JSON.stringify(capabilities));
   const manifest = { policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
     policy_hash: policy.POLICY_HASH, agent_files: [], agent_digests: {} };
-  for (const [role, signals] of [['research', {}], ['research', { type: 'alternatives' }], ['arch-review', {}], ['arch-review', { critical: true }]]) {
+  for (const [role, signals] of [['research', {}], ['research', { complexity: 'very-complex' }], ['arch-review', {}], ['arch-review', { critical: true }]]) {
     const r = policy.resolveDispatch({ runtime: 'codex', role, signals });
     const text = [
       '# shipyard-policy-id = "ADR-014"',
@@ -57,8 +59,8 @@ test('static selections expose exact policy filename, identity, model and effort
     assert.equal(r.role, 'research');
     assert.equal(r.agent_file, 'shipyard-inv-research.toml');
     assert.equal(r.agent_path, path.join(f.agentDir, r.agent_file));
-    assert.equal(r.model, 'gpt-5.6-terra');
-    assert.equal(r.effort, 'high');
+    assert.equal(r.model, 'gpt-6-astra');
+    assert.equal(r.effort, 'low');
     assert.equal(r.policy_hash, policy.POLICY_HASH);
     assert.match(r.agent_file_digest, /^[a-f0-9]{64}$/);
     assert.equal(r.fallback, undefined);
@@ -69,13 +71,13 @@ test('static selections expose exact policy filename, identity, model and effort
 test('dynamic executor and decomposition always expose both explicit arguments', () => {
   const f = fixture();
   try {
-    for (const [role, model, effort] of [['executor', 'gpt-5.6-luna', 'max'], ['decomposition', 'gpt-5.6-sol', 'medium']]) {
+    for (const [role, model, effort, criticalEffort] of [['executor', 'gpt-5.6-luna', 'max', 'low'], ['decomposition', 'gpt-6-astra', 'low', 'medium']]) {
       const r = selectAgent(role, f.options);
       assert.equal(r.agent_file, null);
       assert.equal(r.agent_path, null);
       assert.deepEqual(r.launch_arguments, { model, reasoning_effort: effort });
       const critical = selectAgent(role, { ...f.options, signals: { critical: true } });
-      assert.deepEqual(critical.launch_arguments, { model: 'gpt-6-astra', reasoning_effort: 'medium' });
+      assert.deepEqual(critical.launch_arguments, { model: 'gpt-6-astra', reasoning_effort: criticalEffort });
     }
   } finally { clean(f); }
 });
@@ -107,14 +109,11 @@ test('unverified repair escalation cannot be manufactured by the selector', () =
 });
 
 for (const raw of [
-  { pipeline: { models: { executor: 'gpt-5.6-terra' } } },
+  { pipeline: { models: { executor: 'gpt-6-astra' } } },
   { delivery_pipeline: { effort: { executor: 'high' } } },
-  { model_overrides: { 'gsd-executor': 'gpt-5.6-terra' } },
-  { model_policy: { runtime_tiers: { codex: { luna: 'gpt-6-astra' } } } },
-  { model_profile_overrides: { codex: { sonnet: 'gpt-5.6-luna' } } },
+  { model_overrides: { 'gsd-executor': 'gpt-6-astra' } },
   { model_policy: { runtime_tiers: { codex: { luna: { model: 'gpt-5.6-luna', effort: 'medium' } } } } },
   { delivery_pipeline: { codex_models: [] } },
-  { delivery_pipeline: { codex_models: [{ model: 'gpt-5.6-terra' }] } },
   { delivery_pipeline: { codex_models: [{ model: 'gpt-5.6-luna', effort: 'high' }] } },
 ]) {
   test('configuration conflicts are not normalized away: ' + JSON.stringify(raw), () => {
@@ -124,6 +123,53 @@ for (const raw of [
     } finally { clean(f); }
   });
 }
+
+for (const [source, inherited, raw] of [
+  ['project runtime tier', false, { model_policy: { runtime_tiers: { codex: { luna: 'vendor/codex-luna-v2' } } } }],
+  ['project profile override', false, { model_profile_overrides: { codex: { luna: 'vendor/codex-luna-v2' } } }],
+  ['inherited runtime tier', true, { model_policy: { runtime_tiers: { codex: { astra: 'vendor/codex-astra-v2' } } } }],
+  ['inherited profile override', true, { model_profile_overrides: { codex: { astra: 'vendor/codex-astra-v2' } } }],
+]) {
+  test(source + ' arbitrary Codex id fails closed before a routed launch', () => {
+    const f = fixture(raw);
+    const gsdHome = inherited ? fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-')) : null;
+    try {
+      if (inherited) {
+        fs.rmSync(path.join(f.root, '.planning'), { recursive: true, force: true });
+        fs.mkdirSync(path.join(gsdHome, '.gsd'));
+        fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(raw));
+      }
+      assert.throws(() => selectAgent('decomposition', inherited
+        ? { ...f.options, env: { GSD_HOME: gsdHome } }
+        : f.options), (error) =>
+        error.code === 'CONFLICTING_OVERRIDE' && /cannot replace canonical/.test(error.message));
+    } finally {
+      clean(f);
+      if (gsdHome) fs.rmSync(gsdHome, { recursive: true, force: true });
+    }
+  });
+}
+
+test('an arbitrary Codex palette id fails closed while named palette assertions remain valid', () => {
+  const f = fixture({ delivery_pipeline: { codex_models: [{ model: 'vendor/codex-luna-v2' }] } });
+  try {
+    assert.throws(() => selectAgent('executor', f.options), (error) =>
+      error.code === 'CONFLICTING_OVERRIDE' && /outside the named ADR-014 Codex palette/.test(error.message));
+  } finally { clean(f); }
+});
+
+test('a configured effort above the canonical effort is accepted but the host receives canonical effort', () => {
+  const f = fixture({ delivery_pipeline: { codex_models: [
+    { model: 'gpt-6-astra', effort: 'high' },
+  ] } });
+  try {
+    const resolution = policy.resolveDispatch({ runtime: 'codex', role: 'decomposition' });
+    assert.equal(validateCodexConfiguration(resolution, readProjectConfig(f.root), capabilities), true);
+    const result = selectAgent('decomposition', f.options);
+    assert.equal(result.effort, 'low');
+    assert.deepEqual(result.launch_arguments, { model: 'gpt-6-astra', reasoning_effort: 'low' });
+  } finally { clean(f); }
+});
 
 test('matching named configuration is an assertion, independent of palette order', () => {
   const f = fixture({
@@ -140,7 +186,7 @@ test('matching named configuration is an assertion, independent of palette order
 test('documented comma-separated Codex palettes are normalized before strict validation', () => {
   const f = fixture({
     delivery_pipeline: {
-      codex_models: 'gpt-6-astra:medium@0.153.1, gpt-5.6-luna:max',
+      codex_models: 'gpt-6-astra:low@0.153.1, gpt-6-astra:medium@0.153.1',
     },
   });
   try {
@@ -163,7 +209,7 @@ test('model, effort and inheritance overrides cannot replace canonical launch ar
   const f = fixture();
   try {
     for (const override of [
-      { model: 'gpt-5.6-terra' }, { reasoning_effort: 'high' }, { inherit: true },
+      { model: 'gpt-6-astra' }, { reasoning_effort: 'high' }, { inherit: true },
       { session: { model: 'gpt-6-astra' } },
       { launch_arguments: { model: 'gpt-5.6-luna', reasoning_effort: 'medium' } },
     ]) assert.throws(() => selectAgent('executor', { ...f.options, ...override }));
@@ -214,15 +260,18 @@ test('malformed project config does not fall through to defaults or the GSD cata
   } finally { clean(f); }
 });
 
-test('named remapper exposes exactly the canonical palette without loading GSD', () => {
+test('named remapper accepts only canonical named assertions and never returns a replacement', () => {
   const f = fixture();
   try {
-    const remap = createCodexRemapper({ cwd: f.root, codexHome: '/nonexistent-gsd' });
-    assert.equal(remap('terra'), 'gpt-5.6-terra');
-    assert.equal(remap('sol'), 'gpt-5.6-sol');
-    assert.equal(remap('luna'), 'gpt-5.6-luna');
-    assert.equal(remap('astra'), 'gpt-6-astra');
-    for (const key of ['sonnet', 'unknown', '', undefined]) assert.throws(() => remap(key), /unknown named Codex model/);
+    const remap = createCodexRemapper({
+      cwd: f.root,
+      config: { model_policy: { runtime_tiers: { codex: { astra: 'gpt-6-astra' } } } },
+    });
+    assert.equal(remap('astra'), null);
+    assert.equal(remap('unknown'), null);
+    assert.throws(() => createCodexRemapper({
+      config: { model_policy: { runtime_tiers: { codex: { astra: 'vendor/model@2026' } } } },
+    }), /cannot replace canonical/);
   } finally { clean(f); }
 });
 
@@ -259,7 +308,7 @@ test('CLI plain and JSON output both preserve explicit dynamic model and effort'
       '--capabilities-file', path.join(f.root, 'capabilities.json')],
     { cwd: ROOT, encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });
     assert.equal(staticPlain.status, 0, staticPlain.stderr);
-    assert.equal(staticPlain.stdout.trim(), 'shipyard-inv-research.toml high');
+    assert.equal(staticPlain.stdout.trim(), 'shipyard-inv-research.toml low');
 
     const refused = spawnSync(process.execPath, [SCRIPT, 'select', 'executor', '--project-dir', f.root],
       { encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });

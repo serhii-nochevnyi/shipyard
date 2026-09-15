@@ -106,9 +106,15 @@ for s in shipyard-route shipyard-investigate shipyard-decompose shipyard-deliver
   [[ -f "$SKILLS/$s/SKILL.md" ]] || { echo "missing skill $s"; exit 1; }
 done
 # no Claude-only leaks; self-refs converted; adapter present
-grep -rq 'allowed-tools' "$SKILLS"/shipyard-*/SKILL.md && { echo "allowed-tools leaked into a skill"; exit 1; } || true
-grep -rq 'CLAUDE_PLUGIN_ROOT' "$SKILLS"/shipyard-*/SKILL.md && { echo "CLAUDE_PLUGIN_ROOT not rewritten"; exit 1; } || true
-grep -rq '/shipyard:' "$SKILLS"/shipyard-*/SKILL.md && { echo "unconverted /shipyard: reference"; exit 1; } || true
+if grep -rq 'allowed-tools' "$SKILLS"/shipyard-*/SKILL.md; then
+  echo "allowed-tools leaked into a skill"; exit 1
+fi
+if grep -rq 'CLAUDE_PLUGIN_ROOT' "$SKILLS"/shipyard-*/SKILL.md; then
+  echo "CLAUDE_PLUGIN_ROOT not rewritten"; exit 1
+fi
+if grep -rq '/shipyard:' "$SKILLS"/shipyard-*/SKILL.md; then
+  echo "unconverted /shipyard: reference"; exit 1
+fi
 grep -rq '[$]shipyard-' "$SKILLS"/shipyard-*/SKILL.md || { echo "no \$shipyard- invocations found"; exit 1; }
 grep -q 'codex_skill_adapter' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "missing codex adapter header"; exit 1; }
 for f in "$SKILLS/shipyard-deliver/SKILL.md" "$CODEX_HOME/agents/shipyard-pr-sentinel.toml"; do
@@ -230,6 +236,33 @@ grep -q 'pipeline-config.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "del
 # auto-route lands in the CODEX_HOME being installed into, not a hardcoded ~/.codex
 grep -q 'shipyard-auto-route:begin' "$CODEX_HOME/AGENTS.md" \
   || { echo "auto-route block missing from \$CODEX_HOME/AGENTS.md"; exit 1; }
+
+# A managed AGENTS.md may not be a symlink: Node writes through symlinks, while
+# rollback restores the directory entry, not the external target's old bytes.
+# Refuse it before any installer-owned artifact can be replaced.
+SYMLINKED_AGENTS_MD="$WORK/symlinked-AGENTS.md"
+SYMLINKED_AGENTS_TARGET="$WORK/operator-AGENTS.md"
+printf '# operator-owned AGENTS target\n' > "$SYMLINKED_AGENTS_TARGET"
+cp "$SYMLINKED_AGENTS_TARGET" "$WORK/symlinked-AGENTS-expected"
+ln -s "$SYMLINKED_AGENTS_TARGET" "$SYMLINKED_AGENTS_MD"
+cp "$CODEX_HOME/config.toml" "$WORK/symlink-refusal-config-expected"
+cp "$CODEX_HOME/agents/shipyard-arch-review.toml" "$WORK/symlink-refusal-agent-expected"
+cp "$CODEX_HOME/shipyard/scripts/state-sync.cjs" "$WORK/symlink-refusal-bundle-expected"
+if CODEX_AGENTS_MD="$SYMLINKED_AGENTS_MD" bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/symlinked-agents-md.log" 2>&1; then
+  echo "installer accepted a symlinked managed AGENTS.md target"; exit 1
+fi
+grep -q 'refusing to manage symlinked AGENTS.md target' "$WORK/symlinked-agents-md.log" \
+  || { echo "symlinked AGENTS.md target was not refused honestly"; cat "$WORK/symlinked-agents-md.log"; exit 1; }
+[[ -L "$SYMLINKED_AGENTS_MD" && "$(readlink "$SYMLINKED_AGENTS_MD")" == "$SYMLINKED_AGENTS_TARGET" ]] \
+  || { echo "symlinked AGENTS.md entry changed during refusal"; exit 1; }
+cmp -s "$WORK/symlinked-AGENTS-expected" "$SYMLINKED_AGENTS_TARGET" \
+  || { echo "symlinked AGENTS.md refusal changed the operator target"; exit 1; }
+cmp -s "$WORK/symlink-refusal-config-expected" "$CODEX_HOME/config.toml" \
+  || { echo "symlinked AGENTS.md refusal changed config.toml"; exit 1; }
+cmp -s "$WORK/symlink-refusal-agent-expected" "$CODEX_HOME/agents/shipyard-arch-review.toml" \
+  || { echo "symlinked AGENTS.md refusal changed generated agents"; exit 1; }
+cmp -s "$WORK/symlink-refusal-bundle-expected" "$CODEX_HOME/shipyard/scripts/state-sync.cjs" \
+  || { echo "symlinked AGENTS.md refusal changed the bundle"; exit 1; }
 
 # Runtime rollback snapshots are indexed in one file. Reject a target path whose
 # name would corrupt that record instead of silently recording it twice.

@@ -892,8 +892,13 @@ if (codexToml && !CONFIG_REFUSAL) {
     });
   }
   const codexHave = cliVersion('codex');
+  const paletteFloors = new Map();
   for (const entry of Array.isArray(pipeline.codex_models) ? pipeline.codex_models : []) {
     if (!entry || !entry.min_cli || !entry.model) continue;
+    const known = paletteFloors.get(entry.model);
+    if (!known || cmpVersion(entry.min_cli, known.min_cli) > 0) paletteFloors.set(entry.model, entry);
+  }
+  for (const entry of paletteFloors.values()) {
     // One palette entry is ONE finding however many files name it — the report is
     // about the model's floor, and the files are the evidence for it.
     const named = codexModelSources.filter((s) => s.text.includes(entry.model));

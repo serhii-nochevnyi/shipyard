@@ -47,7 +47,7 @@ for (const [bin,version] of [['codex','codex-cli 0.147.0'],['claude','2.1.263 (C
 const configRoot = path.join(scratch,'codex-config');
 fs.mkdirSync(path.join(configRoot,'agents'),{recursive:true});
 fs.writeFileSync(path.join(configRoot,'config.toml'),'[agents.shipyard-integrator]\nconfig_file = "agents/shipyard-integrator.toml"\n');
-fs.writeFileSync(path.join(configRoot,'agents/shipyard-integrator.toml'),'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n');
+fs.writeFileSync(path.join(configRoot,'agents/shipyard-integrator.toml'),'model = "gpt-6-astra"\nmodel_reasoning_effort = "medium"\n');
 const tuner = path.join(root,'plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const env = {...process.env, PATH: bins+path.delimiter+process.env.PATH, CODEX_HOME:configRoot};
 for (const [name,cfg,extra] of [

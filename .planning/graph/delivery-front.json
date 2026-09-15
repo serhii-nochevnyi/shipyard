@@ -1,23 +1,21 @@
 {
-  "generated_at": "2026-09-14T22:54:33.217Z",
-  "observed_at": "2026-09-14T22:54:33.217Z",
-  "generation": 257,
+  "generated_at": "2026-09-15T07:40:58.523Z",
+  "observed_at": "2026-09-15T07:40:58.523Z",
+  "generation": 270,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-14T22:54:33.217Z",
+  "dispatches_applied_at": "2026-09-15T07:40:58.523Z",
   "actionable": {
     "execute": [
-      "T-36-07"
+      "T-36-08"
     ],
     "publish": [],
     "fix": [
-      "T-36-03",
-      "T-36-05",
-      "T-36-06"
+      "T-36-04",
+      "T-36-07"
     ],
     "finalize": [
-      "T-36-02",
-      "T-36-04"
+      "T-36-05"
     ],
     "merge": []
   },
@@ -26,11 +24,12 @@
     "dispatched": [],
     "parent": [],
     "merge_human": [],
-    "human": []
+    "human": [
+      "T-36-06"
+    ]
   },
   "parked": {
     "blocked": [
-      "T-36-08",
       "T-36-09",
       "T-36-10",
       "T-36-11",
@@ -141,17 +140,17 @@
       "T-35-01",
       "T-35-02",
       "T-35-03",
-      "T-36-01"
+      "T-36-01",
+      "T-36-02",
+      "T-36-03"
     ]
   },
   "why": {
-    "T-36-02": "PR #137: green and still a draft — threads, arch-review, conform gate",
-    "T-36-03": "PR #138: the base moved: `ticket/T-36-02-authoritative-configuration-bridge-and-o` is 1 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
-    "T-36-04": "PR #139: green and still a draft — threads, arch-review, conform gate",
-    "T-36-05": "PR #140: 1 failing check(s)",
-    "T-36-06": "PR #141: the base moved: `ticket/T-36-05-claude-adapter-and-explicit-workflow-lau` is 15 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
-    "T-36-07": "ready — worktree + executor",
-    "T-36-08": "T-36-07 (parent has no branch yet (nothing to cascade from))",
+    "T-36-04": "PR #139: merge conflicts with `epic/36-enforce-the-runtime-model-ladder` — the base moved and the two editions disagree. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
+    "T-36-05": "PR #140: green and still a draft — threads, arch-review, conform gate",
+    "T-36-06": "PR #141: green + conform, but its base is T-36-05 — a pre-authorized human_checkpoint PR still open. Nobody is reading it, but it lands first; this one follows.",
+    "T-36-07": "PR #142: 1 failing check(s)",
+    "T-36-08": "ready — worktree + executor",
     "T-36-09": "T-36-08 (parent has no branch yet (nothing to cascade from))",
     "T-36-10": "T-36-09 (parent has no branch yet (nothing to cascade from))",
     "T-36-11": "T-36-10 (parent has no branch yet (nothing to cascade from))",
@@ -160,19 +159,20 @@
   "counts": {
     "execute": 1,
     "publish": 0,
-    "fix": 3,
-    "finalize": 2,
+    "fix": 2,
+    "finalize": 1,
     "merge": 0,
     "ci": 0,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
-    "human": 0,
-    "blocked": 5,
-    "done": 105
+    "human": 1,
+    "blocked": 4,
+    "done": 107
   },
   "parent_of": {},
-  "actionable_count": 6,
+  "actionable_count": 4,
+  "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
   "capacity": {
@@ -182,11 +182,9 @@
   },
   "sentinel": {
     "duty": [
-      "T-36-03",
-      "T-36-05",
-      "T-36-06",
-      "T-36-02",
-      "T-36-04"
+      "T-36-04",
+      "T-36-07",
+      "T-36-05"
     ],
     "waiting_ci": [],
     "waiting_parent": [],

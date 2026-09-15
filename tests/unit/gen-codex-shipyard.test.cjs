@@ -569,7 +569,7 @@ test('a converter swap after generation invalidates the staged bundle', () => {
 const agentMutations = {
   'model-less file': (s) => s.replace(/^model = .*\n/m, ''),
   'foreign model': (s) => s.replace(/^model = .*$/m, 'model = "foreign-model"'),
-  'downgraded effort': (s) => s.replace(/^model_reasoning_effort = .*$/m, 'model_reasoning_effort = "low"'),
+  'altered effort': (s) => s.replace(/^model_reasoning_effort = .*$/m, 'model_reasoning_effort = "xhigh"'),
   'wrong role': (s) => s.replace(/^# shipyard-policy-role = .*$/m, '# shipyard-policy-role = "executor"'),
   'wrong rung': (s) => s.replace(/^# shipyard-policy-rung = .*$/m, '# shipyard-policy-rung = "unknown"'),
   'wrong sandbox': (s) => s.replace(/^sandbox_mode = .*$/m, 'sandbox_mode = "danger-full-access"'),
@@ -589,7 +589,10 @@ for (const [name, mutate] of Object.entries(agentMutations)) {
       write(file, after);
       manifest.agent_digests[name] = hash(after);
       writeJson(path.join(f.out, 'manifest.json'), manifest);
-      assert.throws(() => gen.validateCodexBundle(f.out, f.options), /Codex/);
+      let refusal;
+      try { gen.validateCodexBundle(f.out, f.options); } catch (error) { refusal = error; }
+      assert.ok(refusal, name + ' must refuse validation');
+      assert.match(refusal.message, /Codex/, name + ': ' + refusal.message);
     });
   });
 }

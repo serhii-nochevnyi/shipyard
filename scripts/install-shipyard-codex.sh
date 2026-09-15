@@ -36,6 +36,7 @@ AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
 BUNDLE_ROOT="$CODEX_HOME/shipyard"
 GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
 CAPABILITIES_FILE="${SHIPYARD_CODEX_CAPABILITIES_FILE:-}"
+AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,6 +52,10 @@ command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; e
 [[ -d "$PLUGIN_DIR" ]] || { echo "error: plugin dir missing: $PLUGIN_DIR" >&2; exit 1; }
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
 [[ -d "$PROJECT_DIR" ]] || { echo "error: project dir missing: $PROJECT_DIR" >&2; exit 1; }
+if [[ -L "$AGENTS_MD" ]]; then
+  echo "error: refusing to manage symlinked AGENTS.md target: $AGENTS_MD" >&2
+  exit 2
+fi
 if [[ -z "$CAPABILITIES_FILE" ]]; then
   echo "error: explicit Codex host capability evidence is required; set SHIPYARD_CODEX_CAPABILITIES_FILE" >&2
   exit 2
@@ -572,7 +577,6 @@ GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$GSD_TOOLS" capability install "$
 # Idempotent: managed block between markers, rewritten in place on reinstall.
 # Honour CODEX_HOME: with a custom home everything else installs there, so
 # hardcoding ~/.codex here split the install across two locations.
-AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
 snapshot_runtime_path agents-md main "$AGENTS_MD"
 echo "→ ensuring shipyard auto-route block in $AGENTS_MD"
 mkdir -p "$(dirname "$AGENTS_MD")"
