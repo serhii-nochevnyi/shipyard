@@ -1221,3 +1221,4 @@
 {"ts":"2026-09-15T12:22:48.114Z","event":"base_merge","ticket":"T-36-06","pr":141,"base":"ticket/T-36-05-claude-adapter-and-explicit-workflow-lau","head":"6f6dc4f161e5306f9e2f7059eb468354c06932a2"}
 {"ts":"2026-09-15T12:24:17.443Z","event":"base_merge","ticket":"T-36-07","pr":142,"base":"ticket/T-36-06-route-gsd-decomposition-through-the-mand","head":"623f523b169ba5e4f67bb641e804d4a7d1d3ad22"}
 {"ts":"2026-09-15T12:38:51.857Z","event":"base_merge","ticket":"T-36-05","pr":140,"base":"ticket/T-36-04-generate-and-validate-the-complete-codex","head":"23f4883fcb9e955e5d70ed3b0964c5374f2b9272"}
+{"ts":"2026-09-15T12:45:10.405Z","event":"base_merge","ticket":"T-36-06","pr":141,"base":"ticket/T-36-05-claude-adapter-and-explicit-workflow-lau","head":"825ba638ca0d09ca9b78584a32d389af803ea501"}

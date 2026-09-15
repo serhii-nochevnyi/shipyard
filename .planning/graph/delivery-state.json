@@ -1202,8 +1202,8 @@
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T20:35:18Z",
     "head_sha": "cc78d3a94152bf88bb0a194ca77012b2a01afdab",
-    "merge_state": "CLEAN",
-    "behind_by": 4,
+    "merge_state": "UNKNOWN",
+    "behind_by": 5,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1228,12 +1228,12 @@
     "pr_base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
     "pr_created_at": "2026-09-14T21:26:23Z",
     "head_sha": "23f4883fcb9e955e5d70ed3b0964c5374f2b9272",
-    "merge_state": "UNSTABLE",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -1253,9 +1253,9 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/141",
     "pr_base": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
     "pr_created_at": "2026-09-14T21:57:13Z",
-    "head_sha": "6f6dc4f161e5306f9e2f7059eb468354c06932a2",
-    "merge_state": "UNKNOWN",
-    "behind_by": 2,
+    "head_sha": "825ba638ca0d09ca9b78584a32d389af803ea501",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "gate": {
       "arch-review": "conform",
       "drift-check": "fresh",
@@ -1266,8 +1266,8 @@
     },
     "checks": {
       "total": 1,
-      "failing": 1,
-      "pending": 0,
+      "failing": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
@@ -1290,8 +1290,8 @@
     "pr_base": "ticket/T-36-06-route-gsd-decomposition-through-the-mand",
     "pr_created_at": "2026-09-14T22:55:34Z",
     "head_sha": "623f523b169ba5e4f67bb641e804d4a7d1d3ad22",
-    "merge_state": "UNSTABLE",
-    "behind_by": 0,
+    "merge_state": "UNKNOWN",
+    "behind_by": 3,
     "checks": {
       "total": 1,
       "failing": 1,
