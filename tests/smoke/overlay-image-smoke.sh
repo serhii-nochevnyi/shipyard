@@ -86,13 +86,13 @@ CAP_VER="$(node -p 'require("./capabilities/delivery-pipeline/capability.json").
 [[ ! -f scripts/sync-dev-copilot.sh ]] || { echo "sync-dev-copilot.sh should be gone"; exit 1; }
 [[ ! -f scripts/install-dev-copilot.sh ]] || { echo "install-dev-copilot.sh should be gone"; exit 1; }
 
-if [[ "${CI:-}" != true && "${CI:-}" != 1 ]]; then
-  if ! command -v docker >/dev/null 2>&1 ||
-     ! docker image inspect claude-shipyard:test claude-shipyard-base:test >/dev/null 2>&1; then
-    echo "overlay image smoke: SKIP image checks (test images unavailable; image builds run in CI)"
-    exit 0
-  fi
-else
+if ! command -v docker >/dev/null 2>&1; then
+  echo "overlay image smoke: SKIP image-backed checks (Docker unavailable)" >&2
+  exit 0
+fi
+
+# Always build the images from the current checkout. Reusing locally tagged
+# images would let this smoke test pass against stale Dockerfiles or sources.
 rm -rf .build/karpathy-skills
 KARPATHY_SKILLS_REPO="${KARPATHY_SKILLS_REPO:-https://github.com/multica-ai/andrej-karpathy-skills}" \
 KARPATHY_SKILLS_REF="${KARPATHY_SKILLS_REF:-2c606141936f1eeef17fa3043a72095b4765b9c2}" \
@@ -116,14 +116,13 @@ docker build -f Dockerfile -t claude-shipyard:test \
   --build-arg BASE_IMAGE=claude-shipyard-base:test \
   --build-arg KARPATHY_SKILLS_DIR=.build/karpathy-skills \
   .
-fi
 
 docker run --rm \
   -e SHIPYARD_EXPECTED_POLICY_HASH="$(node -p 'require("./plugins/delivery-pipeline/scripts/model-policy.cjs").POLICY_HASH')" \
   claude-shipyard:test bash -lc '
   set -euo pipefail
   test -f /opt/delivery-pipeline/scripts/model-policy.cjs \
-    || { echo "overlay image smoke: image lacks ADR-014 model policy; rebuild in CI" >&2; exit 1; }
+    || { echo "overlay image smoke: image lacks ADR-014 model policy; rebuild the smoke image" >&2; exit 1; }
   node -e "require(\"assert/strict\").equal(require(\"/opt/delivery-pipeline/scripts/model-policy.cjs\").POLICY_HASH, process.env.SHIPYARD_EXPECTED_POLICY_HASH)"
   test -d /opt/karpathy-skills
   test -d /opt/delivery-pipeline

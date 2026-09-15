@@ -16,12 +16,9 @@ if HOME=/home/dev ./scripts/bootstrap-atlassian-rovo-oauth.sh >/dev/null 2>&1; t
   exit 1
 fi
 
-if [[ "${CI:-}" != true && "${CI:-}" != 1 ]]; then
-  if ! command -v docker >/dev/null 2>&1 ||
-     ! docker image inspect claude-shipyard:test claude-shipyard-base:test >/dev/null 2>&1; then
-    echo "runtime smoke: SKIP image checks (test images unavailable; image builds run in CI)"
-    exit 0
-  fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "runtime smoke: SKIP image-backed checks (Docker unavailable)" >&2
+  exit 0
 fi
 
 # `make build-base` below hard-fails without it; the exported vars satisfy the
@@ -36,9 +33,9 @@ mkdir -p "$RUNTIME_WORK/workspace" "$RUNTIME_WORK/.cache-home" "$STATE_DIR" \
   "$RUNTIME_WORK/home/.config/gh" "$RUNTIME_WORK/ssh"
 trap 'docker compose down >/dev/null 2>&1 || true; rm -rf "$RUNTIME_WORK"' EXIT
 
-if [[ "${CI:-}" == true || "${CI:-}" == 1 ]]; then
-  make build-base sync-karpathy-skills build-dev-image >/dev/null
-fi
+# Always build the images from the current checkout. Reusing locally tagged
+# images would let this smoke test pass against stale Dockerfiles or sources.
+make build-base sync-karpathy-skills build-dev-image >/dev/null
 
 COMPOSE_ENV=(
   DEV_IMAGE=claude-shipyard:test
@@ -61,7 +58,7 @@ env "${COMPOSE_ENV[@]}" docker compose run --rm \
   -e SHIPYARD_EXPECTED_POLICY_HASH="$(node -p 'require("./plugins/delivery-pipeline/scripts/model-policy.cjs").POLICY_HASH')" dev bash -lc '
   set -euo pipefail
   test -f /opt/delivery-pipeline/scripts/model-policy.cjs \
-    || { echo "runtime smoke: image lacks ADR-014 model policy; rebuild in CI" >&2; exit 1; }
+    || { echo "runtime smoke: image lacks ADR-014 model policy; rebuild the smoke image" >&2; exit 1; }
   node -e "require(\"assert/strict\").equal(require(\"/opt/delivery-pipeline/scripts/model-policy.cjs\").POLICY_HASH, process.env.SHIPYARD_EXPECTED_POLICY_HASH)"
   id -un | grep -qx dev
   test -d /workspace
