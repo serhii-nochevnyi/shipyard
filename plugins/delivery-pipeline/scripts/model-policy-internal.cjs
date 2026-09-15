@@ -23,7 +23,7 @@ const CANONICAL_MODEL_MAPPINGS = Object.freeze({
   claude: CLAUDE_MODEL_ALIASES,
 });
 
-const POLICY_VERSION = 'adr-014.v2';
+const POLICY_VERSION = 'adr-014.v3';
 const SUPPORTED_RUNTIMES = Object.freeze(['codex', 'claude']);
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const SIGNATURE_STATES = Object.freeze([
@@ -67,40 +67,39 @@ const FIXED_ROLES = new Set(ROLE_CLASSES.fixed);
 // not reused by Claude.
 const CODEX_ROLE_RUNG_DEFINITIONS = Object.freeze({
   research: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'terra', logical_model: 'terra', effort: 'high' }),
-    Object.freeze({ name: 'alternatives', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'astra', logical_model: 'astra', effort: 'low' }),
     Object.freeze({ name: 'very-complex', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   decomposition: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'astra', logical_model: 'astra', effort: 'low' }),
     Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   executor: Object.freeze([
     Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
-    Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
+    Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'low' }),
   ]),
   'pr-sentinel': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'medium' }),
   ]),
   integrator: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'astra', logical_model: 'astra', effort: 'low' }),
     Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   'drift-check': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
   ]),
   'arch-review': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'astra', logical_model: 'astra', effort: 'low' }),
     Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   'ci-fix': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
-    Object.freeze({ name: 'repeat', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'repeat', model_key: 'astra', logical_model: 'astra', effort: 'low' }),
     Object.freeze({ name: 'repeat_exhausted', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   'review-fix': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
-    Object.freeze({ name: 'repeat', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'repeat', model_key: 'astra', logical_model: 'astra', effort: 'low' }),
     Object.freeze({ name: 'repeat_exhausted', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
 });
@@ -162,7 +161,6 @@ const RUNTIME_ROLE_RUNG_DEFINITIONS = Object.freeze({
 // ceiling; ordinary critical/contested/checkpoint evidence stops at Opus max.
 const CODEX_ROLE_SIGNAL_RULES = Object.freeze({
   research: Object.freeze({
-    alternatives: Object.freeze({ rung: 'alternatives', any: Object.freeze([{ type: 'alternatives' }]) }),
     'very-complex': Object.freeze({ rung: 'very-complex', any: Object.freeze([{ complexity: 'very-complex' }]) }),
   }),
   decomposition: Object.freeze({
@@ -190,7 +188,10 @@ const CODEX_ROLE_SIGNAL_RULES = Object.freeze({
 });
 
 const CLAUDE_ROLE_SIGNAL_RULES = Object.freeze({
-  research: CODEX_ROLE_SIGNAL_RULES.research,
+  research: Object.freeze({
+    alternatives: Object.freeze({ rung: 'alternatives', any: Object.freeze([{ type: 'alternatives' }]) }),
+    'very-complex': Object.freeze({ rung: 'very-complex', any: Object.freeze([{ complexity: 'very-complex' }]) }),
+  }),
   decomposition: CODEX_ROLE_SIGNAL_RULES.decomposition,
   executor: CODEX_ROLE_SIGNAL_RULES.executor,
   'pr-sentinel': Object.freeze({}),

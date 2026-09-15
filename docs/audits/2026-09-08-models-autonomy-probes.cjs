@@ -4,11 +4,31 @@ const os = require('os');
 const {spawnSync} = require('child_process');
 // Diagnostic only: prints observed behavior; assertions and fixes belong to the
 // corresponding implementation tickets. All mutations target temporary fixtures.
+// The capability document below is a synthetic fixture for exercising the
+// complete-policy path; it is not host support evidence and is never installed.
 const root = path.resolve(process.argv[2] || process.cwd());
 const gsdRoot = path.resolve(process.argv[3] || path.join(os.homedir(),'.codex'));
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(),'shipyard-recheck-probes-'));
 fs.mkdirSync(scratch, {recursive:true});
 const out = [];
+const modelPolicyPath = path.join(root,'plugins/delivery-pipeline/scripts/model-policy.cjs');
+const modelPolicy = require(modelPolicyPath);
+const capabilitiesFile = path.join(scratch,'codex-capabilities.json');
+const capabilitySelections = [];
+for (const role of modelPolicy.ROLES) {
+  for (const rung of modelPolicy.CODEX_ROLE_RUNG_DEFINITIONS[role]) {
+    const selection = {model:modelPolicy.CODEX_MODEL_IDS[rung.model_key],effort:rung.effort};
+    if (!capabilitySelections.some((entry)=>entry.model===selection.model && entry.effort===selection.effort)) {
+      capabilitySelections.push(selection);
+    }
+  }
+}
+fs.writeFileSync(capabilitiesFile,JSON.stringify({
+  source:'models-autonomy-probes:synthetic-capability-fixture',
+  supportedModels:[...new Set(capabilitySelections.map((entry)=>entry.model))],
+  supportedEfforts:[...new Set(capabilitySelections.map((entry)=>entry.effort))],
+  supportedSelections:capabilitySelections,
+},null,2));
 function project(name, cfg) {
   const dir = path.join(scratch,name);
   fs.mkdirSync(path.join(dir,'.planning'),{recursive:true});
@@ -27,7 +47,7 @@ for (const [bin,version] of [['codex','codex-cli 0.147.0'],['claude','2.1.263 (C
 const configRoot = path.join(scratch,'codex-config');
 fs.mkdirSync(path.join(configRoot,'agents'),{recursive:true});
 fs.writeFileSync(path.join(configRoot,'config.toml'),'[agents.shipyard-integrator]\nconfig_file = "agents/shipyard-integrator.toml"\n');
-fs.writeFileSync(path.join(configRoot,'agents/shipyard-integrator.toml'),'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n');
+fs.writeFileSync(path.join(configRoot,'agents/shipyard-integrator.toml'),'model = "gpt-6-astra"\nmodel_reasoning_effort = "medium"\n');
 const tuner = path.join(root,'plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const env = {...process.env, PATH: bins+path.delimiter+process.env.PATH, CODEX_HOME:configRoot};
 for (const [name,cfg,extra] of [
@@ -42,15 +62,16 @@ for (const [name,cfg,extra] of [
 }
 const remapProject=project('codex-remap',{runtime:'codex',model_profile_overrides:{codex:{sonnet:{model:'gpt-6-astra'}}}});
 const gen=require(path.join(root,'scripts/gen-codex-shipyard.cjs'));
-const logs=[];
-const policy=gen.codexModelPolicy(path.join(root,'plugins/delivery-pipeline'),gsdRoot,{cwd:remapProject,env:{...env,SHIPYARD_CODEX_CLI_VERSION:'0.147.0'},log:m=>logs.push(m.trim())});
-out.push({probe:'codex-remap-bypasses-floor',palette:policy.palette,actual:policy.forRole('ci-fix'),logs});
+const remapOutput=path.join(scratch,'codex-remap-bundle');
+const remapResult=spawnSync(process.execPath,[path.join(root,'scripts/gen-codex-shipyard.cjs'),'--plugin',path.join(root,'plugins/delivery-pipeline'),'--out',remapOutput,'--codex-home',gsdRoot,'--phase','2','--project-dir',remapProject,'--capabilities',capabilitiesFile],{cwd:remapProject,env:{...env,SHIPYARD_CODEX_CLI_VERSION:'0.147.0'},encoding:'utf8',timeout:30000});
+if(remapResult.status!==0) throw new Error(remapResult.stderr);
+out.push({probe:'codex-remap-cannot-bypass-canonical-policy',configured:remapProject,actual:gen.codexStaticVariants(2).map(({file,model,effort})=>({file,model,effort})),manifest:JSON.parse(fs.readFileSync(path.join(remapOutput,'manifest.json'),'utf8')).policy_hash});
 const installedAgents=path.join(scratch,'upgrade-agents');
 fs.mkdirSync(installedAgents,{recursive:true});
 let freshLow=[];
 for (const version of ['0.153.4','0.147.0']) {
   const output=path.join(scratch,'generated-'+version);
-  const result=spawnSync(process.execPath,[path.join(root,'scripts/gen-codex-shipyard.cjs'),'--plugin',path.join(root,'plugins/delivery-pipeline'),'--out',output,'--codex-home',gsdRoot,'--phase','2'],{cwd:project('generator-upgrade',{runtime:'codex'}),env:{...process.env,SHIPYARD_CODEX_CLI_VERSION:version},encoding:'utf8',timeout:30000});
+  const result=spawnSync(process.execPath,[path.join(root,'scripts/gen-codex-shipyard.cjs'),'--plugin',path.join(root,'plugins/delivery-pipeline'),'--out',output,'--codex-home',gsdRoot,'--phase','2','--capabilities',capabilitiesFile],{cwd:project('generator-upgrade',{runtime:'codex'}),env:{...process.env,SHIPYARD_CODEX_CLI_VERSION:version},encoding:'utf8',timeout:30000});
   if(result.status!==0) throw new Error(result.stderr);
   const produced=fs.readdirSync(path.join(output,'agents'));
   for(const file of produced) fs.copyFileSync(path.join(output,'agents',file),path.join(installedAgents,file));

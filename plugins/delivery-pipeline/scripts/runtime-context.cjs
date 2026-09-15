@@ -161,6 +161,25 @@ function runtimeError(code, source, message) {
   return require('./model-policy.cjs').policyError(code, `${source}: ${message}`, { source });
 }
 
+// GSD inherits global defaults only when the project has no .planning directory.
+// Inspect the original values: its permissive parser is not a routed fallback.
+function readInheritedConfig(root, options = {}) {
+  if (root && fs.existsSync(path.join(root, '.planning'))) return {};
+  const env = options.env || process.env;
+  const home = env.GSD_HOME || env.HOME || require('os').homedir();
+  const file = path.join(home, '.gsd', 'defaults.json');
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('must be a JSON object');
+    }
+    return raw;
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    throw runtimeError('INVALID_CONFIG', file, `cannot inspect inherited GSD settings: ${error.message}`);
+  }
+}
+
 // Dispatches need evidence of the executing host. Installation presence,
 // project state and compatibility defaults cannot establish that identity.
 function resolveDispatchContext(root, options = {}) {
@@ -172,8 +191,8 @@ function resolveDispatchContext(root, options = {}) {
   }
   const candidates = [
     [options.runtime, 'option.runtime'],
-    [env.SHIPYARD_RUNTIME, 'SHIPYARD_RUNTIME'],
-    [env.GSD_RUNTIME, 'GSD_RUNTIME'],
+    [nonEmpty(env.SHIPYARD_RUNTIME), 'SHIPYARD_RUNTIME'],
+    [nonEmpty(env.GSD_RUNTIME), 'GSD_RUNTIME'],
     [options.runtimeMarker, 'runtime-marker'],
     [markerFromTools(options.gsdTools, true), 'option.gsdTools'],
     [markerFromTools(env.SHIPYARD_GSD_TOOLS, true), 'SHIPYARD_GSD_TOOLS'],
@@ -229,4 +248,5 @@ module.exports = {
   readJsonRuntime,
   resolveRuntime,
   resolveDispatchContext,
+  readInheritedConfig,
 };

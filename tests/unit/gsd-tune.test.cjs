@@ -469,10 +469,11 @@ test('a palette model below its declared min_cli is the mirror blocker, read fro
   assert.equal(b[0].need, CEILING.min_cli);
   // At a release above the floor it is silent…
   assert.deepEqual(blockersOf(dir, [], { ...env, PATH: stubCli({ codex: 'codex-cli 0.153.4' }) }), []);
-  // …and so is a config that names only the workhorse, at any version.
+  // The Astra workhorse is also a configured model and therefore has the same
+  // host floor; a low-version host cannot silently accept it.
   fs.writeFileSync(path.join(codexHome, 'config.toml'),
     `[agents.shipyard-executor]\nmodel = "${pc.DEFAULT_CODEX_MODELS[0].model}"\n`);
-  assert.deepEqual(blockersOf(dir, [], env), []);
+  assert.equal(blockersOf(dir, [], env).length, 1);
 });
 
 test('a palette entry that declares no floor cannot produce one', () => {
@@ -855,7 +856,7 @@ test('a config_file OUTSIDE an [agents.*] table is not an agent registration', (
   // Codex delivery. A same-named key in an unrelated table is not a registration,
   // and a missing file there is none of our business.
   const codexHome = codexHomeRegistering(
-    { 'shipyard-integrator': { model: pc.DEFAULT_CODEX_MODELS[0].model } },
+    { 'shipyard-integrator': { model: 'some-new-model' } },
     `[history]\nconfig_file = "${path.join(os.tmpdir(), 'not-an-agent-at-all.toml')}"\n`,
   );
   assert.deepEqual(
@@ -1035,16 +1036,23 @@ function withBundle(check, phase = 2) {
       '--project-dir', root, '--phase', String(phase), '--capabilities', capabilitiesFile];
     const generated = spawnSync(process.execPath, args, { encoding: 'utf8', env: hermetic() });
     assert.equal(generated.status, 0, generated.stderr);
-    check({ root, out, args, options: { codexHome, phase, capabilities: bundleCapabilities } });
+    check({ root, out, converter, args, options: { codexHome, phase, capabilities: bundleCapabilities } });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
 test('generation covers every static rung and excludes every dynamic file in both phases', () => {
-  for (const phase of [1, 2]) withBundle(({ out, options }) => {
+  for (const phase of [1, 2]) withBundle(({ out, converter, options }) => {
     const manifest = validateCodexBundle(out, options);
     assert.equal(manifest.policy_hash, bundlePolicy.POLICY_HASH);
+    assert.equal(manifest.gsd_lib, converter);
+    assert.equal(manifest.gsd_lib_digest,
+      require('crypto').createHash('sha256').update(fs.readFileSync(converter)).digest('hex'));
+    assert.equal(manifest.capabilities_file, 'codex-capabilities.json');
+    assert.ok(manifest.bundle_files.includes('codex-capabilities.json'));
+    assert.ok(manifest.bundle_files.length > 0);
+    assert.ok(manifest.skill_files.includes(`shipyard-${phase === 2 ? 'deliver' : 'bench'}/SKILL.md`));
     for (const role of bundlePolicy.CODEX_STATIC_ROLES.filter((role) => phase === 2 || role === 'research')) {
       for (const rung of bundlePolicy.CODEX_ROLE_RUNG_DEFINITIONS[role]) {
         assert.ok(manifest.agent_files.includes(bundlePolicy.codexAgentFile(role, rung.name)));
@@ -1056,6 +1064,16 @@ test('generation covers every static rung and excludes every dynamic file in bot
       }
     }
   }, phase);
+});
+
+test('the direct bundle validator defaults an omitted phase to phase 2', () => {
+  withBundle(({ root, out, options }) => {
+    const result = spawnSync(process.execPath, [SCRIPT, '--validate-codex-bundle', out,
+      '--codex-home', options.codexHome, '--capabilities', path.join(root, 'capabilities.json')], {
+      encoding: 'utf8', env: hermetic(),
+    });
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+  });
 });
 
 test('validator rejects incomplete, stale, tampered, unregistered and dynamic artifacts', () => {
@@ -1070,6 +1088,18 @@ test('validator rejects incomplete, stale, tampered, unregistered and dynamic ar
     digest: (_, m) => { m.agent_digests[m.agent_files[0]] = '0'.repeat(64); },
     dynamic: ({ out }) => fs.writeFileSync(path.join(out, 'agents', 'shipyard-executor.toml'), ''),
     payload: ({ out }) => fs.appendFileSync(path.join(out, 'bundle/scripts/model-policy.cjs'), '// stale'),
+    nestedPayload: ({ out }) => {
+      const file = path.join(out, 'bundle/references/inv-research.md');
+      fs.appendFileSync(file, '// stale');
+    },
+    extraNestedPayload: ({ out }) => fs.writeFileSync(
+      path.join(out, 'bundle/references/foreign-review.md'), 'must be rejected'),
+    extraNestedSkill: ({ out }) => {
+      fs.mkdirSync(path.join(out, 'skills/shipyard-deliver/references'), { recursive: true });
+      fs.writeFileSync(path.join(out, 'skills/shipyard-deliver/references/foreign.md'), 'must be rejected');
+    },
+    missingPayloadManifest: (_, m) => { delete m.bundle_files; },
+    missingPayloadDigest: (_, m) => { delete m.bundle_digests[m.bundle_files[0]]; },
     skill: ({ out }) => fs.unlinkSync(path.join(out, 'skills/shipyard-bench/SKILL.md')),
     foreignSkill: ({ out }) => {
       fs.mkdirSync(path.join(out, 'skills/gsd-executor'));
@@ -1094,7 +1124,7 @@ test('a recomputed digest cannot authorize a model-less, downgraded or trailing 
   for (const change of [
     (text) => text.replace(/^model = .*\n/m, ''),
     (text) => text.replace(/^model = .*$/m, 'model = "foreign-model"'),
-    (text) => text.replace(/^model_reasoning_effort = .*$/m, 'model_reasoning_effort = "low"'),
+    (text) => text.replace(/^model_reasoning_effort = .*$/m, 'model_reasoning_effort = "xhigh"'),
     (text) => text + '\nmodel = "foreign-model"\n',
     (text) => text.replace(/^# shipyard-policy-role = .*$/m, '# shipyard-policy-role = "executor"'),
   ]) withBundle(({ out, options }) => {
@@ -1107,6 +1137,14 @@ test('a recomputed digest cannot authorize a model-less, downgraded or trailing 
     manifest.agent_digests[name] = require('crypto').createHash('sha256').update(text).digest('hex');
     fs.writeFileSync(manifestFile, JSON.stringify(manifest));
     assert.throws(() => validateCodexBundle(out, options));
+  });
+});
+
+test('a converter swap after validation invalidates the bundle binding', () => {
+  withBundle(({ out, converter, options }) => {
+    validateCodexBundle(out, options);
+    fs.appendFileSync(converter, '\n// swapped after preflight\n');
+    assert.throws(() => validateCodexBundle(out, options), /converter/);
   });
 });
 

@@ -20,7 +20,10 @@ command-backed evidence is not verification.
 
 ## Input (provided by the orchestrator)
 - The list of guarded tickets (id, PR number, branch, worktree path, repo, base).
-- `SHIPYARD_ROOT` — the absolute path of the plugin scripts directory.
+- `SHIPYARD_ROOT` — the absolute path of the installed bundle/plugin root;
+  its deterministic commands are under `$SHIPYARD_ROOT/scripts`.
+- On the Codex bundle, the durable host-evidence file is
+  `$SHIPYARD_ROOT/codex-capabilities.json`; pass it to every Codex selector.
 - The project root (where `.planning/` lives) and, per ticket, the checkout its
   repo lives in (a multi-repo phase has more than one).
 - `maxAttempts` (default 5), `plan_defect_signatures` (default 3 — the K of the
@@ -152,6 +155,9 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   mandatory boundary. Read the prior-attempt record before settling on an
   explanation (`attempt-history.cjs <T> --graph <project>/.planning/graph`): a
   hypothesis already in it was tried and did not hold, so it is EXCLUDED.
+  Hard-refuse before prompt, spawn, or record without a concrete applied
+  model-and-effort receipt; no Agent, prompt, session, or in-process fallback
+  may perform or record this ci-fix.
   Supply the failure log, signature, strategy, full ticket evidence, and the
   signed `signatureState` to:
 
@@ -174,12 +180,13 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   missing predecessor receipt, undocumented escalation, literal model, omitted
   effort, inline callback, or inherited session.
 
-Then the fix itself: `gh run view <run-id> --log-failed` for the real
-failing assertion, reproduce it in the ticket's worktree with the plan's
-Verification commands, make the SMALLEST fix inside the ticket's `files_modified`
-scope, re-verify locally, commit `fix(<T>): <what was wrong>`, push. A fix that
-needs out-of-scope changes is `escalate: out-of-scope` — park the PR, keep the
-others moving. Follow `references/ci-fix.md` — it is the same contract.
+Only the boundary-dispatched fixer may now act: use `gh run view <run-id>
+--log-failed` for the real failing assertion, reproduce it in the ticket's
+worktree with the plan's Verification commands, make the SMALLEST fix inside the
+ticket's `files_modified` scope, re-verify locally, commit `fix(<T>): <what was
+wrong>`, and push. A fix that needs out-of-scope changes is
+`escalate: out-of-scope` — park the PR, keep the others moving. Follow
+`references/ci-fix.md` — it is the same contract.
 
 **`base-merge`** — the base moved under the branch. TWO different facts with one
 remedy, and the duty does not blur them: `mergeStateStatus: BEHIND`, or
@@ -247,6 +254,12 @@ Codex uses `shipyard-review-fix.toml` → `shipyard-review-fix-repeat.toml` →
 `shipyard-review-fix-deep.toml`; Claude uses Opus/medium → Opus/max with
 explicit native effort. No fixer may launch or record an attempt until the
 boundary returns a verified receipt.
+
+Before constructing a review-fix prompt, spawning a fixer, or recording a routed
+dispatch or attempt, invoke the mandatory dispatch boundary and require its
+receipt to name the concrete applied model and effort. If the boundary cannot
+return that receipt, hard-refuse before those side effects: no Agent, prompt,
+session, or in-process fallback may perform or record this `review-fix`.
 
 **`arch-review`** — green, but no verdict is recorded. **Judgment is ONE
 procedure: measure → resolve → validate → launch → receipt → record.** It uses
@@ -419,7 +432,7 @@ git -C <worktree> rev-parse HEAD                     # must equal the pushed hea
 node $SHIPYARD_ROOT/scripts/reviewers.cjs reinit <pr> [--repo owner/name]
 node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> \
      role=<ci-fix|review-fix> model=<tier> \
-     effort_applied=<level|unsupported|unknown> \
+     effort_applied=<applied-level> \
      outcome=<pushed|no-op|escalate|flake> \
      signature=<sig> head=<full 40-char sha> hypothesis="<one sentence: what you believed was wrong>" \
      --graph <project>/.planning/graph
@@ -431,23 +444,22 @@ re-propose what this one already ruled out. Write the fixer's own sentence, neve
 an invented one: an invented hypothesis enters the record as something tried and
 excluded. `outcome=flake` is logged at an UNCHANGED `n`.
 
-**`effort_applied` is the depth the SPAWN carried, and it belongs on THIS row.**
-`failure-signature.cjs` reads the `attempt` row and nothing else, and it will
-only claim `repeat_exhausted` — the rung that opens the ceiling model and then
-spends a person's attention — off a prior round whose row NAMES a real level. So
-an unrecorded depth reads as not-yet-spent and the loop rethinks once more
-instead of escalating early. `dispatch-record.cjs --effort-applied` records the
-same fact about the DISPATCH, on a `dispatch` event, and is NOT a substitute for
-this key: the escalation rule never reads that event, so a guard that recorded
-only the flag has left the rung unreachable and every one of its rounds reads as
-not-yet-spent. Write what the boundary receipt proves, never what the resolver
-merely requested — the two fields are separate exactly so the check cannot
-become a synonym. A typed fixer host must carry the explicit effort; if the host
-cannot expose the applied value, `unknown` is honest telemetry but cannot
-authorize escalation. Levels
-are the resolver's own vocabulary (`low|medium|high|xhigh|max`), or `unknown`;
-anything else is WARNED about and still logged as written, and reads downstream
-exactly like absence.
+**`effort_applied` is the concrete depth the mandatory boundary's receipt proves,
+and it belongs on THIS row.** `failure-signature.cjs` reads the `attempt` row and
+nothing else, and it will only claim `repeat_exhausted` — the rung that opens the
+ceiling model and then spends a person's attention — off a prior round whose row
+NAMES a real level. A new routed `ci-fix` or `review-fix` therefore accepts only
+`low|medium|high|xhigh|max`, and only after the mandatory boundary has returned a
+concrete applied model-and-effort receipt. Otherwise hard-refuse before prompt, spawn, or record;
+do not use an Agent, session, or in-process fallback. Existing historical
+telemetry may contain `unsupported` or `unknown`, but it is non-compliant history
+and never authorizes a new routed attempt. `dispatch-record.cjs --effort-applied`
+records the same fact about the DISPATCH, on a `dispatch` event, and is NOT a
+substitute for this key: the escalation rule never reads that event, so a guard
+that recorded only the flag has left the rung unreachable and every one of its
+rounds reads as not-yet-spent. Write what the boundary receipt proves, never what
+the resolver decided — the two fields are separate exactly so the check cannot
+become a synonym.
 
 The attempt number is READ, never kept: `attempt-history.cjs <T> --json --graph
 <project>/.planning/graph` gives `next_n` (the `n=` this round logs) and
@@ -505,7 +517,7 @@ reinit is not optional.
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
   delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
-  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend> --graph <project>/.planning/graph`
+  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --effort-applied <applied-effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend> --graph <project>/.planning/graph`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as
@@ -519,17 +531,20 @@ reinit is not optional.
   `codex-agent.cjs` launches, and keep concrete observed model/effort separate
   from the requested tier/effort. Missing observations remain unknown and are
   excluded from efficiency comparisons.
-  **The pair AND the route are the ones the boundary resolution just gave you**,
-  including the `rethink` deepening — re-deriving either here would record the
-  ladder's opinion instead of your dispatch, and recording nothing is why the
-  journal cannot today say what any fix round ran at. Add
-  `--effort-applied <effort>` only from the boundary receipt. Every typed
-  model-backed host must carry the explicit effort; an unsupported effort is a
-  refusal, while `unknown` means the host did not expose what was applied and
-  cannot authorize a later escalation. On the Codex bundle add the exact `--agent-file <agent_file>` returned
-  by `codex-agent.cjs select <role> --json [--project-dir <project>]`, which is
-  where that runtime's model choice lives. A dispatch that does not name the
-  selected file does not record the
+  **The pair AND the route are the ones the boundary resolution just gave you**, including the `rethink` deepening — re-deriving either here
+  would record the ladder's opinion instead of your dispatch, and recording
+  nothing is why the journal cannot today say what any fix round ran at. A routed
+  fixer must launch only through a surface that explicitly applies the resolved
+  model and effort and returns that application receipt; record its concrete
+  `--effort-applied <effort>`. If that surface is unavailable, hard-refuse before
+  constructing a prompt, spawning, or recording — no Agent, prompt, or session
+  fallback may turn `unsupported`, `unknown`, or an omitted receipt into a routed
+  dispatch. Historical rows may retain those states as telemetry only. On the
+  Codex bundle add the selector's exact `agent_file`, which is
+  where that runtime's model choice lives — `node $SHIPYARD_ROOT/scripts/codex-agent.cjs
+  select <role> --json --capabilities-file "$SHIPYARD_ROOT/codex-capabilities.json"
+  [--project-dir <project>]` gives the exact file. A dispatch that does not name
+  the selected file does not record the
   escalation. Neither call is a cleanup you can forget
   safely-but-late: the record lifts on the OWNER'S OUTPUT — your own dispatch
   when the PR merges or its base moves, a fixer's when the PR's head moves — and

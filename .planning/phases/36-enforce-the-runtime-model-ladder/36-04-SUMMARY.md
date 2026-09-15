@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2728601387c170
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f0ed654daca31827bfdbb6bdd35a1c10f33c18eadd151ec0b95beacb4ba02752
 phase: 36-enforce-the-runtime-model-ladder
 plan: 04
 subsystem: shipyard delivery
@@ -22,18 +22,18 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2728601387c170
+shipyard_source_fingerprint: f0ed654daca31827bfdbb6bdd35a1c10f33c18eadd151ec0b95beacb4ba02752
 ---
 
-# Phase 36: Generate and validate the complete Codex agent bundle — Delivery Projection
+# Phase 36: Generate and validate the Codex bundle with the amended model ladder — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
 - Ticket: T-36-04
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #139
 - Source plan: .planning/phases/36-enforce-the-runtime-model-ladder/36-04-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 

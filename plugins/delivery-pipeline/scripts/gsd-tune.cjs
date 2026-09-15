@@ -64,6 +64,42 @@ const { resolveRuntime } = require(path.join(__dirname, 'runtime-context.cjs'));
 const policy = require('./model-policy.cjs');
 const digest = (content) => require('crypto').createHash('sha256').update(content).digest('hex');
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const IGNORED_PAYLOAD = /\.(bak|orig|rej|swp)$|^\.DS_Store$|~$/;
+const CODEX_CAPABILITIES_BUNDLE_FILE = 'codex-capabilities.json';
+
+function sortedJson(value) {
+  if (Array.isArray(value)) return value.map(sortedJson);
+  if (object(value)) {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortedJson(value[key])]));
+  }
+  return value;
+}
+
+// The installer copies these trees wholesale. Keep their inventory in the
+// manifest so validation covers nested references, templates, workflows and
+// skill payloads rather than only the three policy scripts.
+function payloadFiles(root) {
+  const files = [];
+  const walk = (current, prefix = '') => {
+    if (!fs.existsSync(current) || !fs.statSync(current).isDirectory()) {
+      throw new Error(`missing Codex payload directory: ${current}`);
+    }
+    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (IGNORED_PAYLOAD.test(entry.name)) continue;
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const file = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(file, relative);
+      else if (entry.isFile()) files.push(relative);
+      else throw new Error(`unsafe Codex payload entry: ${relative}`);
+    }
+  };
+  walk(root);
+  return files.sort();
+}
+
+function payloadDigests(root, files) {
+  return Object.fromEntries(files.map((file) => [file, digest(fs.readFileSync(path.join(root, file)))]));
+}
 
 function codexSkillNames(phase) {
   return ['route', 'investigate', 'decompose', ...(phase === 2 ? ['deliver'] : []), 'bench', 'delivery-rules']
@@ -137,7 +173,57 @@ function validateCodexBundle(root, { codexHome, phase = 2, capabilities } = {}) 
       throw new Error(`stale Codex skill: ${skill}`);
     }
   }
+  const skillRoot = path.join(root, 'skills');
+  const actualSkillFiles = payloadFiles(skillRoot);
+  if (!Array.isArray(manifest.skill_files) || !object(manifest.skill_file_digests)) {
+    throw new Error('missing Codex skill payload manifest');
+  }
+  sameSet(manifest.skill_files, actualSkillFiles, 'skill payload files');
+  sameSet(Object.keys(manifest.skill_file_digests), actualSkillFiles, 'skill payload digests');
+  for (const file of actualSkillFiles) {
+    if (digest(read(`skills/${file}`)) !== manifest.skill_file_digests[file]) {
+      throw new Error(`stale Codex skill payload: ${file}`);
+    }
+  }
+  const bundleRoot = path.join(root, 'bundle');
+  const actualBundleFiles = payloadFiles(bundleRoot);
+  if (!Array.isArray(manifest.bundle_files) || !object(manifest.bundle_digests)) {
+    throw new Error('missing Codex bundle payload manifest');
+  }
+  sameSet(manifest.bundle_files, actualBundleFiles, 'payload files');
+  sameSet(Object.keys(manifest.bundle_digests), actualBundleFiles, 'payload digests');
+  for (const file of actualBundleFiles) {
+    if (digest(read(`bundle/${file}`)) !== manifest.bundle_digests[file]) {
+      throw new Error(`stale Codex bundle payload: ${file}`);
+    }
+  }
+  if (manifest.capabilities_file !== CODEX_CAPABILITIES_BUNDLE_FILE
+      || typeof manifest.capabilities_digest !== 'string') {
+    throw new Error('missing durable Codex capability evidence');
+  }
+  const bundledCapabilitiesRaw = read(`bundle/${CODEX_CAPABILITIES_BUNDLE_FILE}`);
+  if (digest(bundledCapabilitiesRaw) !== manifest.capabilities_digest) {
+    throw new Error('stale durable Codex capability evidence');
+  }
+  let bundledCapabilities;
+  try { bundledCapabilities = JSON.parse(bundledCapabilitiesRaw); }
+  catch (error) { throw new Error(`invalid durable Codex capability evidence: ${error.message}`); }
+  validateCodexCapabilities(bundledCapabilities, phase);
   validateCodexCapabilities(capabilities, phase);
+  if (JSON.stringify(sortedJson(bundledCapabilities)) !== JSON.stringify(sortedJson(capabilities))) {
+    throw new Error('durable Codex capability evidence does not match the supplied host evidence');
+  }
+  const converterPath = manifest.gsd_lib;
+  const converterDigest = manifest.gsd_lib_digest;
+  if (typeof converterPath !== 'string' || typeof converterDigest !== 'string'
+      || manifest.gsdLib !== converterPath) {
+    throw new Error('missing GSD converter binding');
+  }
+  try {
+    if (digest(fs.readFileSync(converterPath)) !== converterDigest) throw new Error('digest mismatch');
+  } catch (error) {
+    throw new Error(`stale or missing GSD converter: ${converterPath}`);
+  }
   let expectedFragment = '# shipyard-agents:begin — delivery-pipeline agents, managed by install-shipyard-codex.sh\n';
   for (const variant of variants) {
     const content = read(`agents/${variant.file}`);
@@ -182,15 +268,26 @@ function validateCodexBundle(root, { codexHome, phase = 2, capabilities } = {}) 
   return manifest;
 }
 
-module.exports = { codexSkillNames, codexStaticVariants, validateCodexCapabilities, validateCodexBundle };
+module.exports = {
+  codexSkillNames, codexStaticVariants, validateCodexCapabilities, validateCodexBundle,
+  payloadFiles, payloadDigests, CODEX_CAPABILITIES_BUNDLE_FILE,
+};
 
 function main() {
 if (process.argv.includes('--validate-codex-bundle')) {
   try {
-    const value = (flag) => process.argv[process.argv.indexOf(flag) + 1];
-    const capabilities = JSON.parse(fs.readFileSync(process.env.SHIPYARD_CODEX_CAPABILITIES_FILE || '', 'utf8'));
+    const value = (flag) => {
+      const index = process.argv.indexOf(flag);
+      return index === -1 ? undefined : process.argv[index + 1];
+    };
+    const capabilitiesFile = value('--capabilities') || value('--capabilities-file')
+      || process.env.SHIPYARD_CODEX_CAPABILITIES_FILE;
+    if (!capabilitiesFile) throw new Error('missing Codex host capabilities; pass --capabilities or set SHIPYARD_CODEX_CAPABILITIES_FILE');
+    const capabilities = JSON.parse(fs.readFileSync(capabilitiesFile, 'utf8'));
+    const phaseArg = value('--phase');
+    const phase = phaseArg === undefined ? 2 : Number(phaseArg);
     validateCodexBundle(value('--validate-codex-bundle'), {
-      codexHome: value('--codex-home'), phase: Number(value('--phase')), capabilities,
+      codexHome: value('--codex-home'), phase, capabilities,
     });
     console.log('Codex bundle policy, completeness, registrations and capabilities: valid');
     process.exit(0);
@@ -795,8 +892,13 @@ if (codexToml && !CONFIG_REFUSAL) {
     });
   }
   const codexHave = cliVersion('codex');
+  const paletteFloors = new Map();
   for (const entry of Array.isArray(pipeline.codex_models) ? pipeline.codex_models : []) {
     if (!entry || !entry.min_cli || !entry.model) continue;
+    const known = paletteFloors.get(entry.model);
+    if (!known || cmpVersion(entry.min_cli, known.min_cli) > 0) paletteFloors.set(entry.model, entry);
+  }
+  for (const entry of paletteFloors.values()) {
     // One palette entry is ONE finding however many files name it — the report is
     // about the model's floor, and the files are the evidence for it.
     const named = codexModelSources.filter((s) => s.text.includes(entry.model));
