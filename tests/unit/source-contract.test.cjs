@@ -687,6 +687,7 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'createCodexDispatchAdapter',
     'createClaudeDispatchAdapter',
     'createDurableRecorder',
+    'requireGsdRole',
     'boundary.dispatch',
     'pipelineConfig.resolveDispatch',
     'Before every researcher, planner, or checker callback',
@@ -736,6 +737,75 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
   );
   assert.ok(normalized(source).includes(normalized('do not prompt the user to run an external command')), 'Skill fallback must not escape the receipt boundary');
   assert.ok(normalized(source).includes(normalized('there is no receipt-bound decomposition fallback')), 'missing receipts must fail closed');
+});
+
+test('the documented GSD boundary call selects typed callbacks and refuses a missing role', () => {
+  const cases = [
+    { runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner' },
+    { runtime: 'claude', role: 'decomposition', gsd_role: 'gsd-planner' },
+  ];
+
+  for (const item of cases) {
+    const resolution = dispatchResolution(item.runtime, item.role, {}, `documented-${item.runtime}`);
+    const calls = [];
+    const application = item.runtime === 'codex'
+      ? codexApplicationEvidence
+      : (selection, launchId, extra = {}) => applicationEvidence(selection, launchId, selection.effort, extra);
+    const host = {
+      capabilities: capabilitiesFor([resolution]),
+      launch(selection) {
+        calls.push('generic');
+        return application(selection, `${item.runtime}-generic`);
+      },
+      launchTypedGsd(selection, context) {
+        calls.push(context.gsd_role);
+        return application(selection, `${item.runtime}-typed`, {
+          gsd_role: context.gsd_role,
+          gsd_launch_mechanism: context.gsd_launch_mechanism,
+        });
+      },
+    };
+    const adapter = item.runtime === 'codex'
+      ? createCodexDispatchAdapter({ host, capabilities: host.capabilities })
+      : createClaudeDispatchAdapter({ host, capabilities: host.capabilities });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-doc-call-'));
+    const recorder = createDurableRecorder(path.join(root, 'receipts'));
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { [item.runtime]: adapter }, recorder, requireGsdRole: true,
+    });
+
+    try {
+      const result = boundary.dispatch({
+        runtime: item.runtime,
+        role: item.role,
+        gsd_role: item.gsd_role,
+        signals: {},
+        dispatch_id: `documented-${item.runtime}`,
+        model: resolution.model,
+        effort: resolution.effort,
+      }, {});
+      assert.equal(result.receipt.gsd_role, item.gsd_role);
+      assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
+      assert.deepStrictEqual(calls, [item.gsd_role]);
+
+      const missing = boundaryModule.createDispatchBoundary({
+        adapters: { [item.runtime]: adapter },
+        recorder: createDurableRecorder(path.join(root, 'missing-receipts')),
+        requireGsdRole: true,
+      });
+      expectCode(() => missing.dispatch({
+        runtime: item.runtime,
+        role: item.role,
+        signals: {},
+        dispatch_id: `missing-${item.runtime}`,
+        model: resolution.model,
+        effort: resolution.effort,
+      }, {}), 'INVALID_INPUT');
+      assert.deepStrictEqual(calls, [item.gsd_role], 'missing gsd_role must not reach either host launch method');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
 });
 
 test('decompose selects runtime before tuning and establishes context before one callback set', () => {

@@ -68,11 +68,12 @@ Initialize it before starting the GSD chain:
    explicit `--runtime "$runtime"` keeps a dual-runtime host from checking the
    wrong install or reporting ambiguity; this preflight does not replace a
    dispatch receipt.
-3. Use `createDispatchBoundary` from `dispatch-boundary.cjs` with the matching
-   `createCodexDispatchAdapter` or `createClaudeDispatchAdapter` and a
-   `createDurableRecorder`. The adapter must advertise the selected model and
-   effort pair. If the adapter, capabilities, recorder, or typed GSD launch
-   hook is unavailable, refuse before launching.
+3. Use `createDispatchBoundary` from `dispatch-boundary.cjs` with
+   `requireGsdRole: true`, the matching `createCodexDispatchAdapter` or
+   `createClaudeDispatchAdapter`, and a `createDurableRecorder`. The adapter
+   must advertise the selected model and effort pair. If the adapter,
+   capabilities, recorder, or typed GSD launch hook is unavailable, refuse
+   before launching.
 4. Before every researcher, planner, or checker callback, load the authoritative
    routed configuration and resolve that callback through
    `pipelineConfig.resolveDispatch({ root, runtime, role, signals, dispatch_id })`
@@ -83,9 +84,13 @@ Initialize it before starting the GSD chain:
    boundary. Any malformed, stale, ambiguous, or conflicting project/GSD
    override is a refusal before the adapter or host is called; do not inspect
    only compatibility settings or continue with the canonical default.
-5. Use the canonical boundary call for each role:
-   `boundary.dispatch({ runtime, role, signals, dispatch_id,
+5. Use the canonical boundary call for each role, including its exact typed GSD
+   role:
+   `boundary.dispatch({ runtime, role, gsd_role, signals, dispatch_id,
    model: resolution.model, effort: resolution.effort }, context)`.
+   Use `gsd-phase-researcher` for `research`, `gsd-planner` for the planner,
+   and `gsd-plan-checker` for the checker. With `requireGsdRole: true`, a
+   missing or mismatched typed role is refused before any host launch.
    The boundary resolves and validates the canonical policy, invokes the
    runtime adapter, verifies application evidence, and records the receipt.
    Do not resolve a model and then launch it through another path.
@@ -155,11 +160,13 @@ through the host-owned `launchTypedGsd` method; Claude routes through the
 host-owned `typedGsdCallback`. Both methods receive the exact `gsd_role`, and
 their host application evidence must attest that same role together with
 `gsd_launch_mechanism: "typed-gsd-callback"` before the boundary receipt is
-accepted. If either typed method, its attestation, or the durable recorder is
-unavailable, the boundary refuses before launch. `context.gsd_role`,
-`agentType`, `agent_type`, bare Agent/Task markers, and self-asserted
-application evidence are not attestation; source-contract fixtures exercise
-the missing and mismatched cases as well as the successful typed path.
+accepted. If either typed method or the durable recorder is unavailable, the
+boundary refuses before launch. If the callback returns missing or mismatched
+application evidence, the boundary rejects that launch after it returns; it
+does not fall back to a generic launch. `context.gsd_role`, `agentType`,
+`agent_type`, bare Agent/Task markers, and self-asserted application evidence
+are not attestation; source-contract fixtures exercise the missing and
+mismatched cases as well as the successful typed path.
 
 Treat a dispatch as successful only when the returned record contains a
 boundary-verified receipt (`receipt.compliance` is `verified`) and the durable

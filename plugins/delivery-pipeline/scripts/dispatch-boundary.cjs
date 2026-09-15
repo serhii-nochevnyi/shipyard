@@ -1580,6 +1580,7 @@ function createDispatchBoundary(options = {}) {
     refuse('INVALID_INPUT', 'boundary policy must expose resolveDispatch and validateResolution');
   }
   const adapters = options.adapters || {};
+  const requireGsdRole = options.requireGsdRole === true;
   const trustedReceipts = new Map();
   const trustedResolutions = new Map();
   const consumedReceiptIds = new Set();
@@ -1779,6 +1780,9 @@ function createDispatchBoundary(options = {}) {
     }
     const resolved = canonicalResolveDispatch(canonicalInput);
     const gsdRole = gsdRoleFromInput(withId, resolved);
+    if (requireGsdRole && GSD_TYPED_ROLES[resolved.role] && gsdRole === undefined) {
+      refuse('INVALID_INPUT', `GSD typed role is required for boundary role ${resolved.role}`);
+    }
     const output = snapshot(prior ? { ...resolved, ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}), prior_applied: {
       dispatch_id: prior.dispatch_id,
       model: prior.model,
