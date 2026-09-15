@@ -1306,32 +1306,24 @@ const DOC_MARKS = [
   [path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 1],
 ];
 
-test('every documented mark invocation passes the resolved pair', () => {
+test('every documented mark invocation reconciles a boundary receipt', () => {
   // Asserted as a COUNT, not as a spot check: a dispatch added later must not be
-  // able to forget the flags, and that is only enforceable if the number of
-  // invocation lines and the number of lines carrying `--model` are compared. The
-  // corollary is a discipline on the prose — the literal token appears on
-  // invocation lines only, and the fields are named without their dashes when a
-  // sentence explains them.
+  // able to bypass the receipt reconciliation path, and that is only enforceable
+  // if every invocation names both halves of the boundary receipt identity.
   for (const [file, expected] of DOC_MARKS) {
     const lines = fs.readFileSync(file, 'utf8').split('\n');
     const marks = lines.filter((l) => /dispatch-record\.cjs mark <T>/.test(l));
     const rel = path.basename(file);
     assert.ok(marks.length >= expected, `${rel}: expected at least ${expected} mark invocations, found ${marks.length}`);
     for (const l of marks) {
-      assert.ok(/--model /.test(l), `${rel}: a mark invocation with no --model: ${l.trim()}`);
-      assert.ok(/--effort /.test(l), `${rel}: a mark invocation with no --effort: ${l.trim()}`);
+      assert.ok(/--boundary-store /.test(l), `${rel}: a mark invocation with no --boundary-store: ${l.trim()}`);
+      assert.ok(/--dispatch-id /.test(l), `${rel}: a mark invocation with no --dispatch-id: ${l.trim()}`);
     }
-    assert.equal(lines.filter((l) => /--model /.test(l)).length, marks.length,
-      `${rel}: --model must appear on the mark invocation lines and nowhere else`);
     // `--reason` is refused by `mark` now (ADR-006 D5) — a MARK INVOCATION that
     // still spells it is not a style nit, it is an instruction the recorder will
     // reject at the moment a guard follows it. Scoped to the invocation lines,
     // not the whole file: prose elsewhere legitimately NAMES the retired flag to
-    // explain the change. This is the exact hole a prior version of this same
-    // test had (it checked --model/--effort only) while
-    // `references/pr-sentinel.md` spelt `--reason "<branch>"` on its own copy of
-    // this invocation and went undetected.
+    // explain the change.
     for (const l of marks) {
       assert.ok(!/--reason\b/.test(l),
         `${rel}: a mark invocation still spells the refused --reason flag: ${l.trim()}`);
@@ -1339,28 +1331,23 @@ test('every documented mark invocation passes the resolved pair', () => {
   }
 });
 
-test('every mark deliver.md documents passes the agent identity too', () => {
-  // Scoped to deliver.md — DOC_MARKS[0] — on purpose. `references/pr-sentinel.md`
-  // carries one mark of its own for a FIXER, whose cardinality is 'ticket' (one
-  // agent per record either way, so the identity changes no count there), and that
-  // file belongs to another ticket in this phase; adding the assertion over it
-  // would fail on a file this change may not touch. Named here rather than left
-  // implicit: a deferral addressed to nobody is how the defect above shipped.
-  //
-  // Presence only, with no "and nowhere else" half: the identity has to be
-  // EXPLAINED in prose beside the invocations, and the prose spells it without
-  // dashes (`agent id`, `agent_id`) precisely so it stays out of this grep.
+test('every mark deliver.md documents the boundary receipt identity too', () => {
+  // Scoped to deliver.md — DOC_MARKS[0] — on purpose. Every routed mark must
+  // name the receipt store and dispatch id; those are the only identities the
+  // fail-closed recorder can reconcile into an overlay.
   const [file] = DOC_MARKS[0];
   const marks = fs.readFileSync(file, 'utf8').split('\n')
     .filter((l) => /dispatch-record\.cjs mark <T>/.test(l));
   assert.ok(marks.length >= 3, `expected the documented invocations, found ${marks.length}`);
   for (const l of marks) {
-    assert.ok(/--agent-id /.test(l),
-      `a documented mark that records no holder: ${l.trim()}`);
+    assert.ok(/--boundary-store /.test(l),
+      `a documented mark that names no receipt store: ${l.trim()}`);
+    assert.ok(/--dispatch-id /.test(l),
+      `a documented mark that names no boundary dispatch: ${l.trim()}`);
   }
 });
 
-test('the PR-sentinel refuses an Agent fallback without explicit applied effort', () => {
+test('the PR-sentinel refuses an Agent fallback without a boundary receipt', () => {
   const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
   const sentinel = deliver.slice(
     deliver.indexOf('## Step 4 — Post the sentinel'),
@@ -1370,8 +1357,10 @@ test('the PR-sentinel refuses an Agent fallback without explicit applied effort'
   assert.ok(sentinel.length > 0, 'cannot isolate the PR-sentinel launch contract');
   assert.match(sentinel, /hard-refuse[\s\S]*before constructing a prompt,\s+spawning, or recording/,
     'the sentinel must refuse an unsupported launch before either side effect');
-  assert.match(sentinel, /--effort-applied <applied-effort>/,
-    'a compliant sentinel record must name the effort the launch applied');
+  assert.match(sentinel, /--boundary-store <receipt-store>[\s\S]*--dispatch-id <dispatch-id>/,
+    'a compliant sentinel record must reconcile the boundary receipt');
+  assert.match(sentinel, /concrete application receipt/,
+    'a compliant sentinel record must require application evidence');
   assert.doesNotMatch(sentinel, /Resolved effort: <effort>/,
     'prompt-only effort must not be offered as a sentinel fallback');
   assert.match(sentinel, /Do not substitute[\s\S]*effort_applied=unsupported/,
@@ -1401,7 +1390,9 @@ test('the generic Agent fallback excludes routed fixers before any side effect',
 test('complete sentinel and fixer guidance require a concrete receipt, not a fallback', () => {
   const sentinel = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 'utf8');
   const sentinelLaunch = sentinel.slice(sentinel.indexOf('Hand a ticket back to the board'), sentinel.indexOf('One PR blocked'));
-  assert.match(sentinelLaunch, /--effort-applied <applied-effort>/, 'sentinel fixer marks must carry applied effort');
+  assert.match(sentinelLaunch, /--boundary-store <receipt-store>[\s\S]*--dispatch-id <dispatch-id>/,
+    'sentinel fixer marks must reconcile the boundary receipt');
+  assert.match(sentinelLaunch, /application evidence/, 'sentinel fixer marks must require application evidence');
   assert.match(sentinelLaunch, /hard-refuse before[\s\S]*constructing a prompt, spawning, or recording/, 'sentinel fixer fallback must refuse before side effects');
   assert.doesNotMatch(sentinelLaunch, /pass `unsupported`|`unknown`\s+when the host|omit the flag/, 'sentinel fixer guidance must not authorize non-receipts');
 

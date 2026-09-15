@@ -533,14 +533,16 @@ reinit is not optional.
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
   delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
-  `dispatch-record.cjs mark <T> <role> --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <backend> --agent-id <launch-id> --graph <project>/.planning/graph`
+  `dispatch-record.cjs mark <T> <role> --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <rung> --graph <project>/.planning/graph`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as
-  `waiting.dispatched` for 90 minutes: work in flight that is not. The launch's
-  own id (the task id the Workflow tool returns, or the agent id the Agent tool
-  returns) belongs in your report — `mark` stores the ticket, the role, the time,
-  what you dispatched it at and a generated `dispatch_id`. Once the runtime
+  `waiting.dispatched` for 90 minutes: work in flight that is not. The boundary
+  receipt supplies the model, effort, route, runtime, backend, launch identity,
+  and application evidence; never reconstruct those fields with manual flags.
+  The launch's own id (the task id the Workflow tool returns, or the agent id the
+  Agent tool returns) belongs in your report — `mark` stores the ticket, the role,
+  the time, what you dispatched it at and a generated `dispatch_id`. Once the runtime
   exposes the transcript session/request/message id, connect it with
   `usage-attribution.cjs record --stdin --graph <project>/.planning/graph`: use
   `provider=anthropic` for Workflow/Agent-tool launches and `provider=openai` for
