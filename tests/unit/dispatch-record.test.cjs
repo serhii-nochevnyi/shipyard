@@ -1385,6 +1385,18 @@ test('complete sentinel and fixer guidance require a concrete receipt, not a fal
   assert.match(sentinelLaunch, /hard-refuse before[\s\S]*constructing a prompt, spawning, or recording/, 'sentinel fixer fallback must refuse before side effects');
   assert.doesNotMatch(sentinelLaunch, /pass `unsupported`|`unknown`\s+when the host|omit the flag/, 'sentinel fixer guidance must not authorize non-receipts');
 
+  // The post-push block is a separate executable path: it previously permitted
+  // unknown applied effort for Agent and in-process fixes even after the launch
+  // contract above had been tightened. Scan the COMPLETE block, not a convenient
+  // prefix, so a fallback appended beside attempt logging cannot escape review.
+  const postPush = sentinel.slice(sentinel.indexOf('## After EVERY push'), sentinel.indexOf('## Hard rules'));
+  assert.ok(postPush.length > 0, 'cannot isolate the complete sentinel post-push contract');
+  assert.match(postPush, /mandatory boundary[\s\S]*concrete applied model-and-effort receipt/, 'post-push guidance requires the boundary receipt');
+  assert.match(postPush, /hard-refuse before prompt, spawn, or record/, 'post-push guidance refuses before side effects');
+  assert.match(postPush, /only\s+`low\|medium\|high\|xhigh\|max`/, 'new routed attempts accept concrete effort only');
+  assert.match(postPush, /Existing historical\s+telemetry may contain `unsupported` or `unknown`, but it is non-compliant history/, 'legacy telemetry is explicitly historical');
+  assert.doesNotMatch(postPush, /Agent tool spawned|fix you made in-process|honest value is then|anything else is WARNED/, 'the complete block has no executable non-receipt fallback');
+
   const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
   for (const [start, end, role] of [
     ['first | progress | repeat | repeat_exhausted', "'escalate' from the agent", 'ci-fix'],

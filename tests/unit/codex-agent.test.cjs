@@ -16,7 +16,7 @@ const {
 
 const capabilities = {
   supportedModels: ['gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-astra'],
-  supportedEfforts: ['high', 'medium', 'max'], cliVersion: '0.200.0',
+  supportedEfforts: ['high', 'medium', 'xhigh', 'max'], cliVersion: '0.200.0',
 };
 function fixture(raw = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-agent-'));
@@ -60,7 +60,7 @@ test('static selections expose exact policy filename, identity, model and effort
     assert.equal(r.agent_file, 'shipyard-inv-research.toml');
     assert.equal(r.agent_path, path.join(f.agentDir, r.agent_file));
     assert.equal(r.model, 'gpt-5.6-terra');
-    assert.equal(r.effort, 'high');
+    assert.equal(r.effort, 'xhigh');
     assert.equal(r.policy_hash, policy.POLICY_HASH);
     assert.match(r.agent_file_digest, /^[a-f0-9]{64}$/);
     assert.equal(r.fallback, undefined);
@@ -71,7 +71,7 @@ test('static selections expose exact policy filename, identity, model and effort
 test('dynamic executor and decomposition always expose both explicit arguments', () => {
   const f = fixture();
   try {
-    for (const [role, model, effort] of [['executor', 'gpt-5.6-luna', 'max'], ['decomposition', 'gpt-5.6-sol', 'medium']]) {
+    for (const [role, model, effort] of [['executor', 'gpt-5.6-luna', 'max'], ['decomposition', 'gpt-5.6-sol', 'high']]) {
       const r = selectAgent(role, f.options);
       assert.equal(r.agent_file, null);
       assert.equal(r.agent_path, null);
@@ -166,8 +166,8 @@ test('a configured effort above the canonical effort is accepted but the host re
     const resolution = policy.resolveDispatch({ runtime: 'codex', role: 'decomposition' });
     assert.equal(validateCodexConfiguration(resolution, readProjectConfig(f.root), capabilities), true);
     const result = selectAgent('decomposition', f.options);
-    assert.equal(result.effort, 'medium');
-    assert.deepEqual(result.launch_arguments, { model: 'gpt-5.6-sol', reasoning_effort: 'medium' });
+    assert.equal(result.effort, 'high');
+    assert.deepEqual(result.launch_arguments, { model: 'gpt-5.6-sol', reasoning_effort: 'high' });
   } finally { clean(f); }
 });
 
@@ -308,7 +308,7 @@ test('CLI plain and JSON output both preserve explicit dynamic model and effort'
       '--capabilities-file', path.join(f.root, 'capabilities.json')],
     { cwd: ROOT, encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });
     assert.equal(staticPlain.status, 0, staticPlain.stderr);
-    assert.equal(staticPlain.stdout.trim(), 'shipyard-inv-research.toml high');
+    assert.equal(staticPlain.stdout.trim(), 'shipyard-inv-research.toml xhigh');
 
     const refused = spawnSync(process.execPath, [SCRIPT, 'select', 'executor', '--project-dir', f.root],
       { encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });

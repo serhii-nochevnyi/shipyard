@@ -67,12 +67,12 @@ const FIXED_ROLES = new Set(ROLE_CLASSES.fixed);
 // not reused by Claude.
 const CODEX_ROLE_RUNG_DEFINITIONS = Object.freeze({
   research: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'terra', logical_model: 'terra', effort: 'high' }),
-    Object.freeze({ name: 'alternatives', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'terra', logical_model: 'terra', effort: 'xhigh' }),
+    Object.freeze({ name: 'alternatives', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
     Object.freeze({ name: 'very-complex', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   decomposition: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
     Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   executor: Object.freeze([
@@ -83,24 +83,24 @@ const CODEX_ROLE_RUNG_DEFINITIONS = Object.freeze({
     Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'medium' }),
   ]),
   integrator: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
     Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   'drift-check': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
   ]),
   'arch-review': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
     Object.freeze({ name: 'critical', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   'ci-fix': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
-    Object.freeze({ name: 'repeat', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'repeat', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
     Object.freeze({ name: 'repeat_exhausted', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
   'review-fix': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
-    Object.freeze({ name: 'repeat', model_key: 'sol', logical_model: 'sol', effort: 'medium' }),
+    Object.freeze({ name: 'repeat', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
     Object.freeze({ name: 'repeat_exhausted', model_key: 'astra', logical_model: 'astra', effort: 'medium' }),
   ]),
 });

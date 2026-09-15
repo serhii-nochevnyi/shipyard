@@ -6,8 +6,8 @@ The policy is represented as role-scoped ordered rungs:
 {
   "role": "research",
   "rungs": [
-    {"name":"base", "model":"terra", "effort":"high"},
-    {"name":"alternatives", "model":"sol", "effort":"medium"},
+    {"name":"base", "model":"terra", "effort":"xhigh"},
+    {"name":"alternatives", "model":"sol", "effort":"high"},
     {"name":"very-complex", "model":"astra", "effort":"medium"}
   ],
   "signals": {

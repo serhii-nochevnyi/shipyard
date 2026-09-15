@@ -92,14 +92,19 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   Your parked set inherits it for free — it is one store, so `duty` stops offering
   the ticket without any flag from you. Moving the PR does NOT lift this park;
   re-decomposing the plan file does.
-- **`first` / `progress` / `repeat`** — fix it. Resolve model, effort and strategy
-  with `pipeline-config.cjs model ci-fix --json --explain --risk <r> --signature-state
+- **`first` / `progress` / `repeat`** — route a fix only through the mandatory
+  dispatch boundary. Resolve model, effort and strategy with
+  `pipeline-config.cjs model ci-fix --json --explain --risk <r> --signature-state
   <verdict>`; on `repeat` the strategy is `rethink` — the SAME tier at a deeper
   effort and a DIFFERENT hypothesis, because a bigger model on the hypothesis that
-  just failed is the failure mode, not the remedy. Read the prior-attempt record
-  before you settle on an explanation (`attempt-history.cjs <T> --graph
-  <project>/.planning/graph`): a hypothesis already in it was tried and did not
-  hold, so it is EXCLUDED, not a candidate to refine.
+  just failed is the failure mode, not the remedy. Before constructing a prompt,
+  spawning a fixer, or recording a routed dispatch or attempt, the mandatory
+  boundary must return a receipt with the concrete applied model and effort. If it
+  does not, hard-refuse: no Agent, prompt, session, or in-process fallback may
+  perform or record this `ci-fix`. Read the prior-attempt record before you settle
+  on an explanation (`attempt-history.cjs <T> --graph <project>/.planning/graph`):
+  a hypothesis already in it was tried and did not hold, so it is EXCLUDED, not a
+  candidate to refine.
 
   **`critical` — the resolver classified this `ci-fix` dispatch from high risk
   or a checkpoint.** On Codex, run
@@ -127,12 +132,13 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   own answer already carries the escalation. Check the generated agent directory
   before naming any static file.
 
-Then the fix itself: `gh run view <run-id> --log-failed` for the real
-failing assertion, reproduce it in the ticket's worktree with the plan's
-Verification commands, make the SMALLEST fix inside the ticket's `files_modified`
-scope, re-verify locally, commit `fix(<T>): <what was wrong>`, push. A fix that
-needs out-of-scope changes is `escalate: out-of-scope` — park the PR, keep the
-others moving. Follow `references/ci-fix.md` — it is the same contract.
+Only the boundary-dispatched fixer may now act: use `gh run view <run-id>
+--log-failed` for the real failing assertion, reproduce it in the ticket's
+worktree with the plan's Verification commands, make the SMALLEST fix inside the
+ticket's `files_modified` scope, re-verify locally, commit `fix(<T>): <what was
+wrong>`, and push. A fix that needs out-of-scope changes is
+`escalate: out-of-scope` — park the PR, keep the others moving. Follow
+`references/ci-fix.md` — it is the same contract.
 
 **`base-merge`** — the base moved under the branch. TWO different facts with one
 remedy, and the duty does not blur them: `mergeStateStatus: BEHIND`, or
@@ -186,6 +192,12 @@ straight back. When this PR also carries a signed failure history, pass its
 verdict — `pipeline-config.cjs model review-fix --json --explain [--no-code-change]
 [--signature-state <verdict>]` — it is a repair role, so a `repeat` deepens the
 effort at the same tier.
+
+Before constructing a review-fix prompt, spawning a fixer, or recording a routed
+dispatch or attempt, invoke the mandatory dispatch boundary and require its
+receipt to name the concrete applied model and effort. If the boundary cannot
+return that receipt, hard-refuse before those side effects: no Agent, prompt,
+session, or in-process fallback may perform or record this `review-fix`.
 
 **`arch-review`** — green, but no verdict is recorded. **Judgment is ONE
 procedure, and this is where it is stated: measure → resolve → dispatch →
@@ -357,7 +369,7 @@ git -C <worktree> rev-parse HEAD                     # must equal the pushed hea
 node $SHIPYARD_ROOT/scripts/reviewers.cjs reinit <pr> [--repo owner/name]
 node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> \
      role=<ci-fix|review-fix> model=<tier> \
-     effort_applied=<level|unsupported|unknown> \
+     effort_applied=<applied-level> \
      outcome=<pushed|no-op|escalate|flake> \
      signature=<sig> head=<full 40-char sha> hypothesis="<one sentence: what you believed was wrong>" \
      --graph <project>/.planning/graph
@@ -369,23 +381,22 @@ re-propose what this one already ruled out. Write the fixer's own sentence, neve
 an invented one: an invented hypothesis enters the record as something tried and
 excluded. `outcome=flake` is logged at an UNCHANGED `n`.
 
-**`effort_applied` is the depth the SPAWN carried, and it belongs on THIS row.**
-`failure-signature.cjs` reads the `attempt` row and nothing else, and it will
-only claim `repeat_exhausted` — the rung that opens the ceiling model and then
-spends a person's attention — off a prior round whose row NAMES a real level. So
-an unrecorded depth reads as not-yet-spent and the loop rethinks once more
-instead of escalating early. `dispatch-record.cjs --effort-applied` records the
-same fact about the DISPATCH, on a `dispatch` event, and is NOT a substitute for
-this key: the escalation rule never reads that event, so a guard that recorded
-only the flag has left the rung unreachable and every one of its rounds reads as
-not-yet-spent. Write what the spawn carried, never what the resolver decided —
-the two fields are separate exactly so the check cannot become a synonym. A
-fixer the Workflow tool carried has an effort to name (the one you passed it); a
-fixer the Agent tool spawned, or a fix you made in-process, has none, and the
-honest value is then the literal `unknown`, written rather than omitted. Levels
-are the resolver's own vocabulary (`low|medium|high|xhigh|max`), or `unknown`;
-anything else is WARNED about and still logged as written, and reads downstream
-exactly like absence.
+**`effort_applied` is the concrete depth the mandatory boundary's receipt proves,
+and it belongs on THIS row.** `failure-signature.cjs` reads the `attempt` row and
+nothing else, and it will only claim `repeat_exhausted` — the rung that opens the
+ceiling model and then spends a person's attention — off a prior round whose row
+NAMES a real level. A new routed `ci-fix` or `review-fix` therefore accepts only
+`low|medium|high|xhigh|max`, and only after the mandatory boundary has returned a
+concrete applied model-and-effort receipt. Otherwise hard-refuse before prompt, spawn, or record;
+do not use an Agent, session, or in-process fallback. Existing historical
+telemetry may contain `unsupported` or `unknown`, but it is non-compliant history
+and never authorizes a new routed attempt. `dispatch-record.cjs --effort-applied`
+records the same fact about the DISPATCH, on a `dispatch` event, and is NOT a
+substitute for this key: the escalation rule never reads that event, so a guard
+that recorded only the flag has left the rung unreachable and every one of its
+rounds reads as not-yet-spent. Write what the boundary receipt proves, never what
+the resolver decided — the two fields are separate exactly so the check cannot
+become a synonym.
 
 The attempt number is READ, never kept: `attempt-history.cjs <T> --json --graph
 <project>/.planning/graph` gives `next_n` (the `n=` this round logs) and

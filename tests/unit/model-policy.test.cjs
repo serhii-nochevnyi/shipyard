@@ -39,13 +39,13 @@ function priorReceipt(role, model, effort, dispatchId) {
 }
 
 const CODEx_BASE = {
-  research: ['terra', 'gpt-5.6-terra', 'high'],
-  decomposition: ['sol', 'gpt-5.6-sol', 'medium'],
+  research: ['terra', 'gpt-5.6-terra', 'xhigh'],
+  decomposition: ['sol', 'gpt-5.6-sol', 'high'],
   executor: ['luna', 'gpt-5.6-luna', 'max'],
   'pr-sentinel': ['luna', 'gpt-5.6-luna', 'medium'],
-  integrator: ['sol', 'gpt-5.6-sol', 'medium'],
+  integrator: ['sol', 'gpt-5.6-sol', 'high'],
   'drift-check': ['luna', 'gpt-5.6-luna', 'max'],
-  'arch-review': ['sol', 'gpt-5.6-sol', 'medium'],
+  'arch-review': ['sol', 'gpt-5.6-sol', 'high'],
   'ci-fix': ['luna', 'gpt-5.6-luna', 'max'],
   'review-fix': ['luna', 'gpt-5.6-luna', 'max'],
 };

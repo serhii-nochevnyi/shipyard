@@ -10,7 +10,7 @@ const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scri
 const { createCodexDispatchAdapter, CODEX_MODEL_IDS } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 
 const capabilities = {
-  supportedModels: Object.values(CODEX_MODEL_IDS), supportedEfforts: ['high', 'medium', 'max'],
+  supportedModels: Object.values(CODEX_MODEL_IDS), supportedEfforts: ['high', 'medium', 'xhigh', 'max'],
   observedModel: false, observedEffort: false,
 };
 function fixture() {
@@ -71,10 +71,10 @@ suite('strict Codex adapter — canonical launches and application evidence');
 test('all base roles receive explicit ADR-014 selections', () => {
   const f = setup();
   const expected = {
-    research: ['gpt-5.6-terra', 'high'], decomposition: ['gpt-5.6-sol', 'medium'],
+    research: ['gpt-5.6-terra', 'xhigh'], decomposition: ['gpt-5.6-sol', 'high'],
     executor: ['gpt-5.6-luna', 'max'], 'pr-sentinel': ['gpt-5.6-luna', 'medium'],
-    integrator: ['gpt-5.6-sol', 'medium'], 'drift-check': ['gpt-5.6-luna', 'max'],
-    'arch-review': ['gpt-5.6-sol', 'medium'], 'ci-fix': ['gpt-5.6-luna', 'max'],
+    integrator: ['gpt-5.6-sol', 'high'], 'drift-check': ['gpt-5.6-luna', 'max'],
+    'arch-review': ['gpt-5.6-sol', 'high'], 'ci-fix': ['gpt-5.6-luna', 'max'],
     'review-fix': ['gpt-5.6-luna', 'max'],
   };
   try {
@@ -101,17 +101,17 @@ test('all base roles receive explicit ADR-014 selections', () => {
 test('research, dynamic and judgement escalation use exact canonical files/arguments', () => {
   const f = setup();
   try {
-    for (const [role, signals, model, suffix] of [
-      ['research', { type: 'alternatives' }, 'gpt-5.6-sol', '-alternatives.toml'],
-      ['research', { complexity: 'very-complex' }, 'gpt-6-astra', '-critical.toml'],
-      ['executor', { critical: true }, 'gpt-6-astra', null],
-      ['decomposition', { checkpoint: true }, 'gpt-6-astra', null],
-      ['integrator', { contested: true }, 'gpt-6-astra', '-critical.toml'],
-      ['arch-review', { inputTokens: 250001 }, 'gpt-6-astra', '-critical.toml'],
+    for (const [role, signals, model, effort, suffix] of [
+      ['research', { type: 'alternatives' }, 'gpt-5.6-sol', 'high', '-alternatives.toml'],
+      ['research', { complexity: 'very-complex' }, 'gpt-6-astra', 'medium', '-critical.toml'],
+      ['executor', { critical: true }, 'gpt-6-astra', 'medium', null],
+      ['decomposition', { checkpoint: true }, 'gpt-6-astra', 'medium', null],
+      ['integrator', { contested: true }, 'gpt-6-astra', 'medium', '-critical.toml'],
+      ['arch-review', { inputTokens: 250001 }, 'gpt-6-astra', 'medium', '-critical.toml'],
     ]) {
       const result = f.boundary.dispatch({ runtime: 'codex', role, signals });
       assert.equal(result.applied_model, model);
-      assert.equal(result.applied_effort, 'medium');
+      assert.equal(result.applied_effort, effort);
       if (suffix) assert.ok(f.calls.at(-1).agent_file.endsWith(suffix));
     }
   } finally { clean(f); }
@@ -197,11 +197,11 @@ test('a dynamic launch and receipt use the resolver canonical concrete model', (
     const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
     const result = f.adapter.launch(resolution);
     assert.equal(f.calls.at(-1).model, resolution.model);
-    assert.equal(f.calls.at(-1).reasoning_effort, 'medium');
+    assert.equal(f.calls.at(-1).reasoning_effort, 'high');
     assert.equal(result.requested_model, resolution.requested_model);
     assert.equal(result.requested_effort, resolution.requested_effort);
     assert.equal(result.applied_model, resolution.model);
-    assert.equal(result.applied_effort, 'medium');
+    assert.equal(result.applied_effort, 'high');
   } finally { clean(f); }
 });
 

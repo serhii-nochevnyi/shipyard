@@ -271,7 +271,7 @@ function taskLevelRoute(role, signals = {}, cfg = {}) {
 // no built-in path selects it. It stays a value a person may configure — see the
 // capability's declared default, which mirrors this list.
 const DEFAULT_CODEX_MODELS = [
-  { model: 'gpt-5.6-terra', effort: 'high' },
+  { model: 'gpt-5.6-terra', effort: 'xhigh' },
   { model: 'gpt-6-astra', effort: 'high', min_cli: '0.153.1' },
 ];
 const CODEX_MODEL_KEYS = new Set(['model', 'effort', 'min_cli']);

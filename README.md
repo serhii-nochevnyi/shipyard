@@ -377,7 +377,7 @@ deterministic bookkeeping in Node scripts, agentic work via Codex `spawn_agent`.
 configuration consumers. It is an ordered `model[:effort][@min_cli]` list:
 
 ```json
-{ "delivery_pipeline": { "codex_models": "gpt-5.6-terra:high, gpt-6-astra:high@0.153.1" } }
+{ "delivery_pipeline": { "codex_models": "gpt-5.6-terra:xhigh, gpt-6-astra:high@0.153.1" } }
 ```
 
 - The compatibility resolver may use the first entry as its floor and the last as

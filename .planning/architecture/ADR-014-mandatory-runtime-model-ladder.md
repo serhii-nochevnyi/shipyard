@@ -54,15 +54,15 @@ Claude's existing native palette is:
 
 | Role | Base selection | Escalation 1 | Escalation 2 | Escalation signals |
 |---|---|---|---|---|
-| research | Terra/high | Sol/medium | Astra/medium | `alternatives`; explicit `very-complex` |
-| decomposition | Sol/medium | — | Astra/medium | explicit `critical` or `checkpoint` |
+| research | Terra/xhigh | Sol/high | Astra/medium | `alternatives`; explicit `very-complex` |
+| decomposition | Sol/high | — | Astra/medium | explicit `critical` or `checkpoint` |
 | executor | Luna/max | Astra/medium | — | explicit `critical` or `checkpoint` |
 | pr-sentinel | Luna/medium | — | — | gate strategy only |
-| integrator | Sol/medium | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
+| integrator | Sol/high | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
 | drift-check | Luna/max | — | — | evidence/gate strategy only |
-| arch-review | Sol/medium | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
-| ci-fix | Luna/max | Sol/medium | Astra/medium | verified `repeat`; `repeat_exhausted` |
-| review-fix | Luna/max | Sol/medium | Astra/medium | verified `repeat`; `repeat_exhausted` |
+| arch-review | Sol/high | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
+| ci-fix | Luna/max | Sol/high | Astra/medium | verified `repeat`; `repeat_exhausted` |
+| review-fix | Luna/max | Sol/high | Astra/medium | verified `repeat`; `repeat_exhausted` |
 
 For research, `alternatives` selects the middle rung; it does not by itself
 mean `very-complex`. A very-complex classification is explicit and durable in
