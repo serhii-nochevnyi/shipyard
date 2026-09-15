@@ -899,17 +899,6 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
     return pipelineConfig.loadConfig(configRoot, { runtime: 'claude', env: {}, routed: true }).config;
   };
   const withoutConsent = loadRoutedConfig({});
-  assert.throws(
-    () => pipelineConfig.resolveDispatch({
-      config: withoutConsent,
-      role: 'decomposition',
-      signals: { checkpoint: true },
-      dispatch_id: 'claude-gsd-checker-off',
-    }),
-    (error) => error && error.code === 'CONFLICTING_OVERRIDE'
-      && error.details && error.details.source === 'pipeline.fable',
-    'Claude checkpoint escalation must refuse when routed Fable consent is off'
-  );
   const consented = loadRoutedConfig({ pipeline: { fable: 'auto' } });
   const resolutions = cases.map(({ role, signals, id }) => pipelineConfig.resolveDispatch({
     config: consented,
@@ -930,12 +919,36 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
     adapters: { claude: adapter },
     recorder,
   });
+  const dispatchRouted = (config, item) => {
+    const resolution = pipelineConfig.resolveDispatch({
+      config,
+      role: item.role,
+      signals: item.signals,
+      dispatch_id: item.id,
+    });
+    return boundary.dispatch({
+      runtime: 'claude',
+      role: item.role,
+      signals: item.signals,
+      dispatch_id: item.id,
+      model: resolution.model,
+      effort: resolution.effort,
+    }, {});
+  };
 
   try {
+    assert.throws(
+      () => dispatchRouted(withoutConsent, {
+        role: 'decomposition', signals: { checkpoint: true }, id: 'claude-gsd-checker-off',
+      }),
+      (error) => error && error.code === 'CONFLICTING_OVERRIDE'
+        && error.details && error.details.source === 'pipeline.fable',
+      'Claude checkpoint dispatch must refuse before launch when routed Fable consent is off'
+    );
+    assert.equal(calls.length, 0, 'unconsented routed Fable selection must not reach the Claude host');
+
     for (const [index, item] of cases.entries()) {
-      const result = boundary.dispatch({
-        runtime: 'claude', role: item.role, signals: item.signals, dispatch_id: item.id,
-      }, {});
+      const result = dispatchRouted(consented, item);
       assert.equal(result.receipt.compliance, 'verified');
       assert.equal(result.receipt.dispatch_id, item.id);
       assert.equal(result.receipt.role, item.role);
