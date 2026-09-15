@@ -683,8 +683,7 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'gsd-phase-researcher',
     'gsd-planner',
     'gsd-plan-checker',
-    'Terra/high',
-    'Sol/medium',
+    'Astra/low',
     'Astra/medium',
     'receipt.compliance',
     'generic-agent',
@@ -742,8 +741,8 @@ test('decompose selects runtime before tuning and establishes context before one
   );
   assert.ok(
     normalized(boundarySection).includes(normalized('Tuning drift is harmless and MUST NOT block decomposition'))
-      && normalized(boundarySection).includes(normalized('only required delivery-contract or projection failures block')),
-    'tuning-only drift must not block while required contract/projection failures still do'
+      && normalized(boundarySection).includes(normalized('required delivery-contract or projection failures and every entry in the report\'s `blockers` array do block')),
+    'tuning-only drift must not block while required contract/projection and blocker failures do'
   );
 
   const chain = source.slice(
