@@ -953,11 +953,13 @@ test('the accepted agent files are read from the generated Codex agents director
     CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
   } = require(DISPATCH);
   assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), [...gen.DEEP_ROLES].sort(),
-    'the deep-eligible roles must be the generator\'s own');
+    'only canonical repair roles may select a deep recovery file');
   assert.equal(CODEX_DEEP_SUFFIX, gen.DEEP_SUFFIX);
   assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), [...gen.CRITICAL_ROLES].sort(),
-    'the critical-eligible roles must be the generator\'s own');
+    'the critical roles must include every canonical critical rung');
   assert.equal(CODEX_CRITICAL_SUFFIX, gen.CRITICAL_SUFFIX);
+  assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), ['ci-fix', 'review-fix']);
+  assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), ['arch-review', 'integrator', 'inv-research']);
 
   // Every canonical variant is present, including research alternatives and the
   // repeat rung that used to be absent from this contract.
@@ -965,6 +967,7 @@ test('the accepted agent files are read from the generated Codex agents director
     .filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agents-'));
   const files = codexAgentFiles(writeCodexAgents(dir));
+  assert.ok(files.has('shipyard-integrator-critical'), 'integrator-critical is a canonical file');
   for (const role of refs) assert.ok(files.has(`shipyard-${role}`), `shipyard-${role} must be accepted`);
   const expected = gen.codexStaticVariants().map(({ file }) => file.replace(/\.toml$/, '')).sort();
   assert.deepStrictEqual([...files].sort(), expected, 'and nothing else is');

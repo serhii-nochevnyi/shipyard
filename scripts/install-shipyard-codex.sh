@@ -11,16 +11,17 @@ set -euo pipefail
 #
 # Prerequisites:
 #   - node on PATH
-#   - gsd-core already installed for Codex:
-#       npx --yes @opengsd/gsd-core@latest --codex --global
+#   - network access for the default gsd-core bootstrap (or an existing install
+#     with SHIPYARD_GSD_AUTO_INSTALL=0)
 #
 # Environment overrides:
 #   CODEX_HOME         Codex config home (default: ~/.codex)
 #   AGENTS_SKILLS_DIR  Codex/cursor/cline skills dir (default: ~/.agents/skills)
 #   SHIPYARD_CODEX_PHASE  1 = investigate+decompose only; 2 = + deliver (default 2)
 #   SHIPYARD_PROJECT_DIR  conveyor project root whose .planning/config.json is read
-#   SHIPYARD_CODEX_CAPABILITIES_FILE  host JSON: supportedModels, supportedEfforts,
-#                                    optional supportedSelections [{model, effort}]
+#   SHIPYARD_CODEX_CAPABILITIES_FILE  required host JSON: supportedModels,
+#                                    supportedEfforts, optional
+#                                    supportedSelections [{model, effort}]
 #
 # Usage: bash scripts/install-shipyard-codex.sh [--phase 1|2] [--project-dir <dir>]
 
@@ -34,6 +35,7 @@ CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
 BUNDLE_ROOT="$CODEX_HOME/shipyard"
 GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
+CAPABILITIES_FILE="${SHIPYARD_CODEX_CAPABILITIES_FILE:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,10 +51,30 @@ command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; e
 [[ -d "$PLUGIN_DIR" ]] || { echo "error: plugin dir missing: $PLUGIN_DIR" >&2; exit 1; }
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
 [[ -d "$PROJECT_DIR" ]] || { echo "error: project dir missing: $PROJECT_DIR" >&2; exit 1; }
+if [[ -z "$CAPABILITIES_FILE" ]]; then
+  echo "error: explicit Codex host capability evidence is required; set SHIPYARD_CODEX_CAPABILITIES_FILE" >&2
+  exit 2
+fi
+if [[ "$CAPABILITIES_FILE" != /* ]]; then
+  CAPABILITIES_FILE="$(cd "$(dirname "$CAPABILITIES_FILE")" && pwd)/$(basename "$CAPABILITIES_FILE")" || {
+    echo "error: cannot resolve SHIPYARD_CODEX_CAPABILITIES_FILE: $CAPABILITIES_FILE" >&2
+    exit 2
+  }
+fi
+[[ -f "$CAPABILITIES_FILE" && -r "$CAPABILITIES_FILE" ]] || {
+  echo "error: Codex host capability evidence is not a readable file: $CAPABILITIES_FILE" >&2
+  exit 2
+}
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
-# gsd-core's installed converter is needed for read-only bundle preflight.
-# Refresh happens after validation so a refused bundle cannot rewrite the host.
+# gsd-core's installed converter is needed for read-only bundle preflight. It is
+# bootstrapped/refreshed BEFORE checking for it and before generation, so a fresh
+# documented install does not fail before the dependency can be installed. No
+# refresh is allowed after generation: the manifest binds the exact converter
+# bytes used for the staged bundle.
 # SHIPYARD_GSD_AUTO_INSTALL=0 opts out; GSD_CORE_VERSION pins the refresh.
+if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
+  bash "$REPO_ROOT/scripts/ensure-gsd-core.sh" codex
+fi
 if [[ ! -f "$GSD_TOOLS" ]]; then
   echo "error: gsd-core for Codex not found at $GSD_TOOLS" >&2
   echo "       install it first:" >&2
@@ -209,6 +231,11 @@ RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
 mkdir -p "$RUNTIME_BACKUP"
 : > "$RUNTIME_BACKUP_INDEX"
 
+# Never synthesize capabilities from ADR-014 here. The policy describes what
+# Shipyard requires; only the caller's explicit host-evidence document can say
+# what this Codex installation actually supports. The generator copies that
+# document into the staged bundle for the runtime selector to consume later.
+
 # ── generate ─────────────────────────────────────────────────────────────────
 echo "→ generating Codex bundle (phase $PHASE)…"
 # Keep the runtime in the process context. Do not persist it into the shared
@@ -216,18 +243,12 @@ echo "→ generating Codex bundle (phase $PHASE)…"
 GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" \
   --plugin "$PLUGIN_DIR" --out "$OUT" \
   --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE" \
-  --project-dir "$PROJECT_DIR"
+  --project-dir "$PROJECT_DIR" --capabilities "$CAPABILITIES_FILE"
 
 # Validate the staged generation against the source policy and host evidence
 # before any destination replacement (including agents/config/capabilities).
 node "$PLUGIN_DIR/scripts/gsd-tune.cjs" --validate-codex-bundle "$OUT" \
-  --codex-home "$CODEX_HOME" --phase "$PHASE"
-
-# Refresh the dependency only after the bundle passes preflight. An invalid
-# generation must not let GSD rewrite the destination's config first.
-if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
-  bash "$REPO_ROOT/scripts/ensure-gsd-core.sh" codex
-fi
+  --codex-home "$CODEX_HOME" --phase "$PHASE" --capabilities "$CAPABILITIES_FILE"
 
 # ── skills + bundle install LAST ───────────────────────────────────────────────
 # Keep both staged until agent/config/capability/AGENTS.md have succeeded, so a
@@ -250,6 +271,7 @@ fi
 # name passes every other assertion this reconciliation has and deletes an agent
 # the operator wrote by hand, which is the one outcome worth being slow about.
 AGENT_MANIFEST_NAME=".shipyard-manifest.json"
+AGENT_MANIFEST_BACKUP=""
 if compgen -G "$OUT/agents/*.toml" >/dev/null; then
   echo "→ installing agents → $CODEX_HOME/agents"
   ROLLBACK_ACTIVE=1
@@ -280,6 +302,29 @@ if compgen -G "$OUT/agents/*.toml" >/dev/null; then
   if [[ -e "$AGENT_MANIFEST_TARGET" || -L "$AGENT_MANIFEST_TARGET" ]]; then
     cp -a "$AGENT_MANIFEST_TARGET" "$AGENT_MANIFEST_BACKUP"
     AGENT_MANIFEST_PREEXISTED=1
+  fi
+
+  # A phase downgrade removes only skill directories the PREVIOUS manifest
+  # claimed. Snapshot those directories before the manifest advances so a
+  # later failure can restore them along with the current skill replacements.
+  if [[ "$AGENT_MANIFEST_PREEXISTED" == 1 ]]; then
+    while IFS= read -r name; do
+      [[ -n "$name" ]] || continue
+      snapshot_runtime_path skill "$name" "$AGENTS_SKILLS/$name"
+    done < <(
+      SHIPYARD_PREV_MANIFEST="$AGENT_MANIFEST_BACKUP" node - <<'NODE'
+const fs = require('fs');
+const safe = /^shipyard-[A-Za-z0-9._-]+$/;
+try {
+  const manifest = JSON.parse(fs.readFileSync(process.env.SHIPYARD_PREV_MANIFEST, 'utf8'));
+  if (manifest && Array.isArray(manifest.skills)) {
+    for (const name of new Set(manifest.skills)) {
+      if (typeof name === 'string' && safe.test(name)) process.stdout.write(`${name}\n`);
+    }
+  }
+} catch { /* no trustworthy previous claim: reconcile conservatively */ }
+NODE
+    )
   fi
   mkdir -p "$AGENT_BACKUP"
   : > "$AGENT_BACKUP_INDEX"
@@ -575,7 +620,12 @@ snapshot_runtime_path gsd-defaults defaults.json "$GSD_DEFAULTS"
 [[ -f "$GSD_TUNE" ]] || GSD_TUNE="$BUNDLE_ROOT/scripts/gsd-tune.cjs"
 if [[ -f "$GSD_TUNE" ]]; then
   echo "→ GSD global defaults (~/.gsd/defaults.json)"
-  GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$GSD_TUNE" --global --runtime codex --apply 2>&1 | sed 's/^/  /' || true
+  # gsd-tune --global writes the machine-wide file but reads the conveyor
+  # policy from the active project. Keep that read anchored to --project-dir;
+  # the installer may have been launched from a ticket worktree or another
+  # checkout entirely.
+  (cd "$PROJECT_DIR" && GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex \
+    node "$GSD_TUNE" --global --runtime codex --apply) 2>&1 | sed 's/^/  /' || true
 fi
 
 # ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
@@ -595,6 +645,66 @@ for d in "$OUT"/skills/*/; do
   }
 done
 
+# A phase-2 install owns `shipyard-deliver`; a phase-1 install does not. Remove
+# that kind of stale directory only when the previous ownership record and this
+# validated manifest agree about the transition. Missing or malformed records
+# are conservative: they never authorize a sweep of the operator's skills.
+if [[ -n "${AGENT_MANIFEST_BACKUP:-}" ]]; then
+  SHIPYARD_PREV_MANIFEST="$AGENT_MANIFEST_BACKUP" \
+  SHIPYARD_NEW_MANIFEST="$OUT/manifest.json" \
+  SHIPYARD_SKILLS_DIR="$AGENTS_SKILLS" \
+  node - <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const dir = process.env.SHIPYARD_SKILLS_DIR;
+const read = (file) => {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+};
+const say = (message) => process.stdout.write(`  ${message}\n`);
+const OURS = /^shipyard-[A-Za-z0-9._-]+$/;
+const actionable = (entry) => typeof entry === 'string' && path.basename(entry) === entry && OURS.test(entry);
+const next = read(process.env.SHIPYARD_NEW_MANIFEST);
+if (!next || !Array.isArray(next.skills)
+    || next.skills.some((entry) => !actionable(entry))
+    || new Set(next.skills).size !== next.skills.length) {
+  say('this run produced no trustworthy skill manifest — removing nothing');
+  process.exit(1);
+}
+const claimed = new Set(next.skills);
+const previous = read(process.env.SHIPYARD_PREV_MANIFEST);
+if (!previous || !Array.isArray(previous.skills)) {
+  say('no manifest from a previous install — removing no skill directories');
+  process.exit(0);
+}
+let failed = false;
+for (const entry of new Set(previous.skills)) {
+  if (claimed.has(entry)) continue;
+  if (!actionable(entry)) {
+    say(`left in place, the previous skill claim is not actionable: ${entry}`);
+    failed = true;
+    continue;
+  }
+  const target = path.join(dir, entry);
+  let stat;
+  try { stat = fs.lstatSync(target); } catch { continue; }
+  if (!stat.isDirectory() && !stat.isSymbolicLink()) {
+    say(`left in place, the previous skill target is not a directory: ${entry}`);
+    failed = true;
+    continue;
+  }
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+    say(`removed skill this phase no longer emits: ${entry}`);
+  } catch (error) {
+    say(`could not remove stale skill ${entry}: ${error.message}`);
+    failed = true;
+  }
+}
+if (failed) process.exit(1);
+NODE
+fi
+
 # ── bundle payload (CLAUDE_PLUGIN_ROOT target: scripts/references/templates) ──
 # REPLACED, not merged over — the same way the skills above are. Copying onto an
 # existing bundle leaves every file the plugin has since deleted or renamed in
@@ -611,8 +721,8 @@ replace_dir "$OUT/bundle" "$BUNDLE_ROOT" "bundle payload" || {
 }
 
 # Nothing installer-owned remains to roll back after this point. Keeping the
-# rollback active through both replacement loops is what makes a failed second
-# skill or bundle swap restore the earlier swaps as one generation.
+# rollback active through the skill reconciliation is what makes a failed
+# second skill or bundle swap restore the earlier swaps as one generation.
 ROLLBACK_ACTIVE=0
 
 deliver_hint=""

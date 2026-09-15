@@ -172,8 +172,8 @@ function resolveDispatchContext(root, options = {}) {
   }
   const candidates = [
     [options.runtime, 'option.runtime'],
-    [env.SHIPYARD_RUNTIME, 'SHIPYARD_RUNTIME'],
-    [env.GSD_RUNTIME, 'GSD_RUNTIME'],
+    [nonEmpty(env.SHIPYARD_RUNTIME), 'SHIPYARD_RUNTIME'],
+    [nonEmpty(env.GSD_RUNTIME), 'GSD_RUNTIME'],
     [options.runtimeMarker, 'runtime-marker'],
     [markerFromTools(options.gsdTools, true), 'option.gsdTools'],
     [markerFromTools(env.SHIPYARD_GSD_TOOLS, true), 'SHIPYARD_GSD_TOOLS'],

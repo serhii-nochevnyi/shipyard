@@ -21,6 +21,8 @@ command-backed evidence is not verification.
 ## Input (provided by the orchestrator)
 - The list of guarded tickets (id, PR number, branch, worktree path, repo, base).
 - `SHIPYARD_ROOT` — the absolute path of the plugin scripts directory.
+- On the Codex bundle, the durable host-evidence file is
+  `$SHIPYARD_ROOT/codex-capabilities.json`; pass it to every Codex selector.
 - The project root (where `.planning/` lives) and, per ticket, the checkout its
   repo lives in (a multi-repo phase has more than one).
 - `maxAttempts` (default 5), `plan_defect_signatures` (default 3 — the K of the

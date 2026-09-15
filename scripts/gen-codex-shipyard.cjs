@@ -17,11 +17,13 @@
 //   skills/shipyard-delivery-rules/…    → ~/.agents/skills/
 //   agents/shipyard-<role>.toml         → $CODEX_HOME/agents/
 //   config.fragment.toml                → merged into $CODEX_HOME/config.toml
-//   bundle/{scripts,references,templates} → $CODEX_HOME/shipyard/ (CLAUDE_PLUGIN_ROOT payload)
+//   bundle/{scripts,references,templates}, bundle/codex-capabilities.json
+//                                      → $CODEX_HOME/shipyard/ (CLAUDE_PLUGIN_ROOT payload)
 //
 // The install script (install-shipyard-codex.sh) places these; this script only
-// stages them and never writes outside --out. `--project-dir` identifies the
-// checkout whose `.planning/config.json` must be readable. ADR-014 owns the
+// stages them and leaves no persistent output outside --out. A disposable
+// sibling is used during generation so a failed run preserves the prior stage.
+// `--project-dir` identifies the checkout whose `.planning/config.json` must be readable. ADR-014 owns the
 // selection grid; project compatibility palettes cannot override it. Host
 // availability must be supplied via --capabilities or
 // SHIPYARD_CODEX_CAPABILITIES_FILE (the adapter's supportedModels,
@@ -61,7 +63,8 @@ function resolveGsdLib(explicit, codexHome) {
   if (explicit) candidates.push(expandHome(explicit));
   candidates.push(path.join(codexHome, 'gsd-core', 'bin', 'lib', 'runtime-artifact-conversion.cjs'));
   for (const c of candidates) {
-    if (c && fs.existsSync(c)) return c;
+    const resolved = c && path.resolve(c);
+    if (resolved && fs.existsSync(resolved)) return resolved;
   }
   fail(
     'could not locate gsd-core runtime-artifact-conversion.cjs.\n' +
@@ -73,7 +76,10 @@ function resolveGsdLib(explicit, codexHome) {
 // Static selections come only from ADR-014 metadata. Project palettes/remaps
 // remain compatibility settings for other callers; they cannot tune this bundle.
 const policy = require('../plugins/delivery-pipeline/scripts/model-policy.cjs');
-const { codexSkillNames, codexStaticVariants, validateCodexCapabilities, validateCodexBundle } = require('../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
+const {
+  codexSkillNames, codexStaticVariants, validateCodexCapabilities, validateCodexBundle,
+  payloadFiles, payloadDigests, CODEX_CAPABILITIES_BUNDLE_FILE,
+} = require('../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const digest = (content) => require('crypto').createHash('sha256').update(content).digest('hex');
 
 // Compatibility exports use generated reference names (research is inv-research)
@@ -88,6 +94,11 @@ const CRITICAL_ROLES = staticRolesWithSuffix(CRITICAL_SUFFIX);
 
 function rmrf(p) {
   fs.rmSync(p, { recursive: true, force: true });
+}
+
+let activeStageDir = null;
+function cleanupStage() {
+  if (activeStageDir) rmrf(activeStageDir);
 }
 
 // Editor leftovers must not become part of a shipped bundle. Three `*.mjs.bak`
@@ -169,13 +180,20 @@ function main() {
 
   if (!fs.existsSync(pluginDir)) fail(`plugin dir not found: ${pluginDir}`);
   const gsdLib = resolveGsdLib(args['gsd-lib'], codexHome);
+  // Capture the converter before loading or generating anything. Validation
+  // compares this exact pre-generation snapshot with the live file again, so a
+  // concurrent refresh cannot silently produce a bundle whose manifest names a
+  // converter different from the one that was loaded.
+  const gsdLibDigest = digest(fs.readFileSync(gsdLib));
   const convert = require(gsdLib);
   for (const fn of ['convertClaudeCommandToCodexSkill', 'convertClaudeToCodexMarkdown']) {
     if (typeof convert[fn] !== 'function') fail(`gsd-core lib missing export ${fn} (incompatible version?)`);
   }
 
-  // Refuse unreadable policy input and missing required sources before clearing
-  // an existing stage. A partial bundle is never a successful generation.
+  // Refuse unreadable policy input and missing required sources before touching
+  // an existing stage. Generate in a disposable sibling, validate it fully,
+  // then publish it as one directory replacement so a failed conversion or
+  // payload copy cannot erase the previous valid stage.
   const loaded = require(path.resolve(pluginDir, 'scripts/pipeline-config.cjs')).loadConfig(projectDir);
   if (!loaded.valid) fail('cannot read project config: ' + loaded.error.message);
   const variants = codexStaticVariants(phase);
@@ -185,12 +203,18 @@ function main() {
   }
   const capabilitiesFile = args.capabilities || process.env.SHIPYARD_CODEX_CAPABILITIES_FILE;
   let capabilities;
-  try { capabilities = JSON.parse(fs.readFileSync(capabilitiesFile || '', 'utf8')); }
+  let capabilitiesRaw;
+  try {
+    capabilitiesRaw = fs.readFileSync(capabilitiesFile || '', 'utf8');
+    capabilities = JSON.parse(capabilitiesRaw);
+  }
   catch (error) { fail('read host capabilities with --capabilities or SHIPYARD_CODEX_CAPABILITIES_FILE: ' + error.message); }
   validateCodexCapabilities(capabilities, phase);
 
-  rmrf(outDir);
-  fs.mkdirSync(outDir, { recursive: true });
+  fs.mkdirSync(path.dirname(outDir), { recursive: true });
+  const stageDir = fs.mkdtempSync(`${outDir}.stage-`);
+  activeStageDir = stageDir;
+  process.once('exit', cleanupStage);
 
   // ── commands → Codex skills ───────────────────────────────────────────────
   // route (entry router) and bench (off-conveyor) are meta / no ticket graph —
@@ -204,7 +228,7 @@ function main() {
     const skillName = `shipyard-${cmd}`;
     const raw = fs.readFileSync(src, 'utf8');
     const converted = shipyardRewrites(convert.convertClaudeCommandToCodexSkill(raw, skillName), scriptsRoot);
-    writeFile(path.join(outDir, 'skills', skillName, 'SKILL.md'), converted);
+    writeFile(path.join(stageDir, 'skills', skillName, 'SKILL.md'), converted);
     emittedSkills.push(skillName);
   }
 
@@ -214,7 +238,7 @@ function main() {
     const skillName = 'shipyard-delivery-rules';
     const raw = fs.readFileSync(drSrc, 'utf8');
     const converted = shipyardRewrites(convert.convertClaudeCommandToCodexSkill(raw, skillName), scriptsRoot);
-    writeFile(path.join(outDir, 'skills', skillName, 'SKILL.md'), converted);
+    writeFile(path.join(stageDir, 'skills', skillName, 'SKILL.md'), converted);
     emittedSkills.push(skillName);
   }
 
@@ -237,7 +261,7 @@ function main() {
       + 'model = ' + tomlBasic(variant.model) + '\n'
       + 'model_reasoning_effort = ' + tomlBasic(variant.effort) + '\n'
       + 'developer_instructions = ' + tomlMultiline(body) + '\n';
-    writeFile(path.join(outDir, 'agents', variant.file), content);
+    writeFile(path.join(stageDir, 'agents', variant.file), content);
     agentDigests[variant.file] = digest(content);
     emittedAgents.push({ agentName, description });
   }
@@ -257,7 +281,7 @@ function main() {
       frag += `config_file = ${tomlBasic(cfgPath)}\n`;
     }
     frag += '\n# shipyard-agents:end\n';
-    writeFile(path.join(outDir, 'config.fragment.toml'), frag);
+    writeFile(path.join(stageDir, 'config.fragment.toml'), frag);
   }
 
   // ── CLAUDE_PLUGIN_ROOT payload (scripts/references/templates/workflows) ────
@@ -266,7 +290,7 @@ function main() {
   // leaving the directory out pointed those paths at files that do not exist.
   for (const sub of ['scripts', 'references', 'templates', 'workflows']) {
     const s = path.join(pluginDir, sub);
-    if (fs.existsSync(s)) copyDir(s, path.join(outDir, 'bundle', sub));
+    if (fs.existsSync(s)) copyDir(s, path.join(stageDir, 'bundle', sub));
   }
   // gsd-tune uses one project-relative delivery-rules projection for both
   // runtimes. Keep the canonical, runtime-neutral source beside the Codex
@@ -274,32 +298,65 @@ function main() {
   // the checkout it was built from.
   const neutralRules = path.join(pluginDir, 'skills', 'delivery-rules');
   if (fs.existsSync(path.join(neutralRules, 'SKILL.md'))) {
-    copyDir(neutralRules, path.join(outDir, 'bundle', 'skills', 'delivery-rules'));
+    copyDir(neutralRules, path.join(stageDir, 'bundle', 'skills', 'delivery-rules'));
   }
+  // Preserve the exact, explicitly supplied host-evidence document beside the
+  // installed selector. A policy-derived copy would claim support that was
+  // never measured; this file is only a durable copy of the caller's input.
+  writeFile(path.join(stageDir, 'bundle', CODEX_CAPABILITIES_BUNDLE_FILE), capabilitiesRaw);
 
   // The manifest binds ownership, policy identity, files and registrations.
+  const skillFiles = payloadFiles(path.join(stageDir, 'skills'));
+  const bundleFiles = payloadFiles(path.join(stageDir, 'bundle'));
   const manifest = {
     phase,
     policy_id: policy.POLICY.id,
     policy_version: policy.POLICY_VERSION,
     policy_hash: policy.POLICY_HASH,
+    capabilities_file: CODEX_CAPABILITIES_BUNDLE_FILE,
+    capabilities_digest: digest(capabilitiesRaw),
     agent_digests: agentDigests,
-    config_digest: digest(fs.readFileSync(path.join(outDir, 'config.fragment.toml'))),
+    config_digest: digest(fs.readFileSync(path.join(stageDir, 'config.fragment.toml'))),
     dynamic_roles: policy.DYNAMIC_ROLES,
     codexHome,
     scriptsRoot,
     skills: emittedSkills,
     skill_digests: Object.fromEntries(emittedSkills.map((name) => [
-      name, digest(fs.readFileSync(path.join(outDir, 'skills', name, 'SKILL.md'))),
+      name, digest(fs.readFileSync(path.join(stageDir, 'skills', name, 'SKILL.md'))),
     ])),
+    skill_files: skillFiles,
+    skill_file_digests: payloadDigests(path.join(stageDir, 'skills'), skillFiles),
+    bundle_files: bundleFiles,
+    bundle_digests: payloadDigests(path.join(stageDir, 'bundle'), bundleFiles),
     agents: emittedAgents.map((a) => a.agentName),
     agent_files: emittedAgents.map((a) => `${a.agentName}.toml`),
     registrations: emittedAgents.map((a) => `agents.${a.agentName}`),
     gsdLib,
+    gsd_lib: gsdLib,
+    gsd_lib_digest: gsdLibDigest,
   };
-  writeFile(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  writeFile(path.join(stageDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 
-  validateCodexBundle(outDir, { codexHome, phase, capabilities });
+  validateCodexBundle(stageDir, { codexHome, phase, capabilities });
+  let previousDir = null;
+  const outExists = fs.existsSync(outDir) || (() => {
+    try { return fs.lstatSync(outDir) !== undefined; } catch { return false; }
+  })();
+  if (outExists) {
+    previousDir = fs.mkdtempSync(`${outDir}.previous-`);
+    rmrf(previousDir);
+    fs.renameSync(outDir, previousDir);
+  }
+  try {
+    fs.renameSync(stageDir, outDir);
+    activeStageDir = null;
+  } catch (error) {
+    if (previousDir && !fs.existsSync(outDir)) {
+      try { fs.renameSync(previousDir, outDir); previousDir = null; } catch { /* preserve the original error */ }
+    }
+    throw error;
+  }
+  if (previousDir) rmrf(previousDir);
   process.stdout.write(
     `staged ${emittedSkills.length} skills, ${emittedAgents.length} agents → ${outDir} (phase ${phase})\n`,
   );

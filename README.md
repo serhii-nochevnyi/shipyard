@@ -209,16 +209,16 @@ Set `delivery_pipeline.model_ladder` to `adaptive` to route by task level:
 
 | level | automatic signal | Claude | Codex |
 |---|---|---|---|
-| mechanical | drift-check, pr-sentinel | `sonnet` | floor palette entry |
-| routine | executor/research, low risk, 1–4 files | `sonnet` | floor palette entry |
-| complex | normal implementation, repair and judgement | `opus` | floor palette entry |
-| critical | high risk or checkpoint | `opus` + `xhigh` | `-critical` ceiling agent |
-| recovery | `repeat_exhausted` or contested judgement | ceiling route | `-deep` ceiling agent |
+| mechanical | drift-check, pr-sentinel | `sonnet` | canonical base file |
+| routine | executor/research, low risk, 1–4 files | `sonnet` | canonical policy rung |
+| complex | normal implementation, repair and judgement | `opus` | canonical policy rung |
+| critical | high risk or checkpoint | `opus` + `xhigh` | emitted critical rung, where defined |
+| recovery | `repeat_exhausted` or contested judgement | ceiling route | emitted recovery rung, where defined |
 
 The resolver guards missing evidence into the complex lane and records the
 classification in `route`/dispatch telemetry. On Claude, the integrator reaches
 the ceiling only when an earned ceiling route fires; on Codex, the generated
-integrator file stays on the palette ceiling. The default remains
+integrator base/critical files are fixed by ADR-014. The default remains
 `conservative`; the current project enables `adaptive` in
 `.planning/config.json`.
 
@@ -287,8 +287,8 @@ sending, so silence must not read as agreement:
 
 With it `off` (the default) a fired route degrades to `opus` at `max` effort and
 says why. Two more guards: on a runtime whose tier vocabulary has no such alias the
-route degrades the same way (on Codex the escalation is a `-deep` agent file
-instead), and below CLI 2.1.255 the alias resolves to Fable **5** — so
+route degrades the same way (on Codex the selector applies the canonical policy
+rung instead), and below CLI 2.1.255 the alias resolves to Fable **5** — so
 `gsd-tune.cjs` reports that floor at Step 0 of every delivery, and
 `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1` is pinned in `.env.example`,
 `docker-compose.yml` and `k8s/configmap.yaml`, which bypasses the built-in mapping
@@ -349,8 +349,17 @@ Codex):
 
 ```bash
 git clone https://github.com/serhii-nochevnyi/shipyard && cd shipyard
+export SHIPYARD_CODEX_CAPABILITIES_FILE=/absolute/path/to/measured/codex-capabilities.json
 make install-shipyard-codex        # or: bash scripts/install-shipyard-codex.sh
 ```
+
+`SHIPYARD_CODEX_CAPABILITIES_FILE` is required host evidence, not an optional
+default. It must be a JSON document measured for this Codex installation with
+`supportedModels`, `supportedEfforts`, and, when the host exposes pair-level
+support, `supportedSelections`. The installer refuses missing, malformed or
+insufficient evidence; it never turns the ADR-014 requirements into a claim
+about what the host supports. The exact supplied bytes are copied to
+`$CODEX_HOME/shipyard/codex-capabilities.json` for later selector calls.
 
 This generates Codex skills from the Claude commands (via gsd-core's own
 converter — `$shipyard-route`, `$shipyard-investigate`, `$shipyard-decompose`,
@@ -362,49 +371,41 @@ graph) and UAT gates — the same gates the Claude runtime uses.
 Because Codex has no Workflow tool, `deliver` runs its built-in agent path:
 deterministic bookkeeping in Node scripts, agentic work via Codex `spawn_agent`.
 
-**Which model each Codex agent runs, and how to change it.** On Claude the model
-is chosen per dispatch; on Codex an agent is a static `.toml`, so it is written at
-install time from a palette you declare — `delivery_pipeline.codex_models` (or
-`pipeline.codex_models`) in `.planning/config.json`, an ordered
-`model[:effort][@min_cli]` list:
+**Codex model configuration has two deliberately different surfaces.**
+`delivery_pipeline.codex_models` (or `pipeline.codex_models`) in
+`.planning/config.json` is a compatibility input for legacy/non-routed
+configuration consumers. It is an ordered `model[:effort][@min_cli]` list:
 
 ```json
 { "delivery_pipeline": { "codex_models": "gpt-5.6-terra:high, gpt-6-astra:high@0.153.1" } }
 ```
 
-- The **first** entry is the workhorse floor every agent gets; the **last** is the
-  ceiling. `effort` is the effort to *use* for that model, not the deepest it
-  accepts — a role may ask for less (the mechanical drift judge stays at `low`)
-  and never more. `min_cli` is the Codex CLI version that can first configure the
-  model: below it the generator writes the previous entry for every role and says
-  so, rather than an agent your CLI may ignore.
-- The **integrator** takes the ceiling on every call in both modes. It has no
-  critical or recovery variant. Other critical first-attempt variants are
-  `$shipyard-inv-research-critical`, `$shipyard-arch-review-critical`,
-  `$shipyard-ci-fix-critical` and `$shipyard-review-fix-critical`. Recovery variants remain
-  `$shipyard-ci-fix-deep`, `$shipyard-review-fix-deep`,
-  `$shipyard-pr-sentinel-deep` and `$shipyard-arch-review-deep`.
-  Run `node $CODEX_HOME/shipyard/scripts/codex-agent.cjs select <role> --json
-  [--project-dir <project>]` with the dispatch signals. If it runs from a
-  ticket worktree, pass the conveyor root explicitly: the worktree may contain
-  generated agent files but not the project's `.planning/config.json`. For
-  static roles, pass its `agent_file` to the
-  record; for `executor`, use its concrete `model`/`effort` in the supported
-  `spawn_agent` or `codex exec` call and omit `--agent-file`. Use its
-  `route`/`model_tier` for the requested lane, and record its concrete `model`
-  as `--observed-model` when available.
-  A one-entry palette produces only base agents and the selector reports its
-  fallback instead of naming a file that was not generated.
-- An **empty** palette (`"codex_models": []`) writes no `model` key at all and
-  leaves every agent on your CLI default. A GSD remap
-  (`model_policy.runtime_tiers.codex.<tier>`,
-  `model_profile_overrides.codex.<tier>`) still wins over the palette, resolved
-  through GSD's own resolver — set it where the installer runs, since GSD reads
-  the config of the current directory and a project config outranks
-  `~/.gsd/defaults.json`.
-- Effort on Codex is deliberately two-valued (`low` for the mechanical role,
-  `high` for everything else): the deeper levels were measured to cost more
-  without a better result, so depth there comes from the model instead.
+- The compatibility resolver may use the first entry as its floor and the last as
+  its ceiling. `min_cli` is a compatibility floor for that resolver; it does not
+  select, remove or rewrite a canonical bundle agent.
+- The canonical Codex bundle is a separate ADR-014 contract. The generator reads
+  `plugins/delivery-pipeline/scripts/model-policy.cjs` and emits every required
+  static role/rung with its exact model and effort. It does not derive those
+  files from `codex_models`, an empty palette, a GSD remap, or a CLI-version
+  fallback; dynamic `executor` and `decomposition` selections remain explicit
+  launch arguments.
+- The emitted static variants include the repair `repeat`/`deep` files and the
+  judgment `shipyard-arch-review-critical` and
+  `shipyard-integrator-critical` files. `shipyard-pr-sentinel` is the only
+  sentinel file. Use `node "$CODEX_HOME/shipyard/scripts/codex-agent.cjs" select
+  <role> --json --capabilities-file "$CODEX_HOME/shipyard/codex-capabilities.json"
+  [--project-dir <project>]` with the dispatch signals and pass its
+  exact `agent_file` to the record; for dynamic roles pass its concrete
+  `model`/`effort` to the supported `spawn_agent` or `codex exec` call and omit
+  `--agent-file`. The selector also reports a fallback when a requested rung is
+  not a static file.
+- The installer/generator validates the complete required capability set before
+  replacing destinations. The compatibility palette is not host evidence and
+  never tunes the ADR-014 files. The adjacent selector contract also validates
+  any explicitly declared compatibility palette against the model it resolves;
+  routed Codex projects should omit that legacy palette or keep it consistent
+  with the canonical policy. This boundary belongs to the Codex adapter, while
+  the T-36-04 bundle supplies the durable evidence file it consumes.
 
 <!-- keep in sync with commands/decompose.md -->
 **One config detail matters on both runtimes.** The delivery-rules contract reaches

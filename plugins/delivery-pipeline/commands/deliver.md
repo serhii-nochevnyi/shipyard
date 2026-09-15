@@ -152,6 +152,7 @@ instead, and the front reads it back by itself:
   file nothing ships. Naming a file the role does not claim is refused. For
   static Codex roles select the file from the same signals with
   `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json
+  --capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"
   [--project-dir <project>] [--risk …] [--files …] [--checkpoint]
   [--signature-state …]`; pass its `agent_file` and `route` fields unchanged.
   Run it from the conveyor project, or pass `--project-dir <project>` when the
@@ -1561,9 +1562,7 @@ The boundary resolves the fixed Codex Luna/medium or Claude Sonnet/high
 selection, validates the generated `shipyard-pr-sentinel.toml` or the native
 Claude alias plus explicit effort, launches the typed guard, and returns a
 verified receipt. Only after that receipt exists may the overlay be updated:
-`dispatch-record.cjs mark <T> pr-sentinel --model <model_tier> --effort
-<requested_effort> --route "<route>" --task-level <task_level> --runtime
-<runtime> --backend <workflow|agent|codex-agent> --agent-id <launch id>` for
+`dispatch-record.cjs mark <T> pr-sentinel --model <model_tier> --effort <requested_effort> --route "<route>" --task-level <task_level> --runtime <runtime> --backend <workflow|agent|codex-agent> --agent-id <launch id>` for
 every ticket on the guarded list, with the same returned launch id and the exact
 Codex `--agent-file` when applicable. Never create a mark for a refused or
 phantom launch. Clear each record when the guard's report comes back; a
