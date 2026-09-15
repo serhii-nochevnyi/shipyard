@@ -524,6 +524,11 @@ test('delivery docs name the generated Codex variants and no retired recovery ta
   }
   assert.ok(source.includes('shipyard-inv-research-critical.toml'), 'research ceiling must use the emitted suffix');
   assert.ok(!source.includes('shipyard-inv-research-alternatives.toml'), 'Codex research has no generated alternatives variant');
+  const codexGuidance = source.slice(
+    source.indexOf('### Codex policy and generated files'),
+    source.indexOf('### Workflow-native alias policy and native workflow arguments')
+  );
+  assert.ok(!codexGuidance.includes('`-alternatives`'), 'Codex guidance must not claim an unsupported research alternatives suffix');
   assert.ok(source.includes('shipyard-integrator-critical.toml'), 'integrator critical must use the emitted suffix');
   assert.ok(source.includes('shipyard-ci-fix-repeat.toml'), 'repair repeat must use the emitted suffix');
   assert.ok(!source.includes('pr-sentinel-deep'), 'sentinel has no generated recovery variant');
