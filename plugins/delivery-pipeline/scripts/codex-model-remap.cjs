@@ -140,24 +140,36 @@ function validateCodexConfiguration(resolution, config = {}, capabilities = {}, 
     if (palette === undefined) continue;
     if (!Array.isArray(palette) || !palette.length) refuse(namespace + '.codex_models must declare a non-empty named palette');
     const seen = new Set();
+    const entriesByModel = new Map();
     for (const entry of palette) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) refuse(namespace + '.codex_models entries must be objects');
       const model = normalizeModel(entry);
       if (!Object.values(CODEX_MODEL_IDS).includes(model)) {
         refuse(source + ' contains a model outside the named ADR-014 Codex palette: ' + model);
       }
-      if (seen.has(model)) refuse(namespace + '.codex_models has duplicate model ' + model);
-      seen.add(model);
+      const selection = `${model}/${entry.effort || ''}`;
+      if (seen.has(selection)) refuse(namespace + '.codex_models has duplicate selection ' + selection);
+      seen.add(selection);
       if (entry.effort !== undefined && !policy.EFFORTS.includes(entry.effort)) refuse('invalid palette effort for ' + model);
       if (entry.min_cli !== undefined && (typeof entry.min_cli !== 'string' || !/^\d+(?:\.\d+)*$/.test(entry.min_cli))) {
         refuse('invalid CLI version floor for ' + model);
       }
+      if (!entriesByModel.has(model)) entriesByModel.set(model, []);
+      entriesByModel.get(model).push(entry);
+    }
+    for (const [model, entries] of entriesByModel) {
       if (model !== resolution.model) continue;
-      if (entry.effort !== undefined) effortAtLeastConfigured(source + '.' + model + '.effort', entry.effort, resolution);
-      if (entry.min_cli !== undefined
-          && (typeof capabilities.cliVersion !== 'string' || !/^\d+(?:\.\d+)*$/.test(capabilities.cliVersion)
-            || compareVersions(capabilities.cliVersion, entry.min_cli) < 0)) {
-        refuse(model + ' requires Codex CLI ' + entry.min_cli + '; host version is unavailable or too old');
+      const exact = entries.filter((entry) => entry.effort === undefined || entry.effort === resolution.effort);
+      const selected = exact.length ? exact : [entries.reduce((best, entry) =>
+        policy.EFFORTS.indexOf(entry.effort || resolution.effort) > policy.EFFORTS.indexOf(best.effort || resolution.effort)
+          ? entry : best)];
+      for (const entry of selected) {
+        if (entry.effort !== undefined) effortAtLeastConfigured(source + '.' + model + '.effort', entry.effort, resolution);
+        if (entry.min_cli !== undefined
+            && (typeof capabilities.cliVersion !== 'string' || !/^\d+(?:\.\d+)*$/.test(capabilities.cliVersion)
+              || compareVersions(capabilities.cliVersion, entry.min_cli) < 0)) {
+          refuse(model + ' requires Codex CLI ' + entry.min_cli + '; host version is unavailable or too old');
+        }
       }
     }
   }

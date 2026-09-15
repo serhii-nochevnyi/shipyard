@@ -2334,7 +2334,7 @@ test('routeOf is compatibility-only and routed decisions retain the complete can
 });
 
 test('compatibility parsing cannot hide a conflicting routed decomposition override', () => {
-  for (const [key, value] of [['models', 'opus'], ['effort', 'low']]) {
+  for (const [key, value] of [['models', 'gpt-5.6-luna'], ['effort', 'medium']]) {
     const { config, warnings } = withRawOptions({ pipeline: { [key]: { decomposition: value } } },
       { runtime: 'codex', env: {} });
     assert.equal(config[key].decomposition, undefined);
@@ -2930,8 +2930,7 @@ test('Codex remaps validate the selected tier without rejecting unrelated tiers'
     const { config } = routedConfig(raw);
     assert.equal(resolveDispatch({ config, role: 'executor' }).model, 'gpt-5.6-luna');
     assert.equal(resolveDispatch({ config, role: 'executor', signals: { critical: true } }).model, 'gpt-6-astra');
-    refusesSource(() => resolveDispatch({ config, role: 'research' }),
-      namespace === 'model_policy' ? 'config.model_policy.runtime_tiers.codex.haiku' : 'config.model_profile_overrides.codex.haiku');
+    assert.doesNotThrow(() => resolveDispatch({ config, role: 'research' }));
   }
 });
 
@@ -2944,7 +2943,7 @@ test('unconfigured projects inspect inherited GSD selection and reject conflicti
     fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify(raw));
     const { config } = loadConfig(dir, { routed: true, runtime: 'codex', env: { GSD_HOME: home } });
     if (raw.model_profile === 'balanced') {
-      assert.equal(resolveDispatch({ config, role: 'decomposition' }).model, 'gpt-5.6-sol');
+      assert.equal(resolveDispatch({ config, role: 'decomposition' }).model, 'gpt-6-astra');
     } else {
       refusesSource(() => resolveDispatch({ config, role: 'decomposition' }),
         raw.model_profile ? 'config.model_profile' : 'config.model_overrides.gsd-planner');

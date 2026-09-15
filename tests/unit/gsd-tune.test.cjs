@@ -469,10 +469,11 @@ test('a palette model below its declared min_cli is the mirror blocker, read fro
   assert.equal(b[0].need, CEILING.min_cli);
   // At a release above the floor it is silent…
   assert.deepEqual(blockersOf(dir, [], { ...env, PATH: stubCli({ codex: 'codex-cli 0.153.4' }) }), []);
-  // …and so is a config that names only the workhorse, at any version.
+  // The Astra workhorse is also a configured model and therefore has the same
+  // host floor; a low-version host cannot silently accept it.
   fs.writeFileSync(path.join(codexHome, 'config.toml'),
     `[agents.shipyard-executor]\nmodel = "${pc.DEFAULT_CODEX_MODELS[0].model}"\n`);
-  assert.deepEqual(blockersOf(dir, [], env), []);
+  assert.equal(blockersOf(dir, [], env).length, 1);
 });
 
 test('a palette entry that declares no floor cannot produce one', () => {
@@ -855,7 +856,7 @@ test('a config_file OUTSIDE an [agents.*] table is not an agent registration', (
   // Codex delivery. A same-named key in an unrelated table is not a registration,
   // and a missing file there is none of our business.
   const codexHome = codexHomeRegistering(
-    { 'shipyard-integrator': { model: pc.DEFAULT_CODEX_MODELS[0].model } },
+    { 'shipyard-integrator': { model: 'some-new-model' } },
     `[history]\nconfig_file = "${path.join(os.tmpdir(), 'not-an-agent-at-all.toml')}"\n`,
   );
   assert.deepEqual(
@@ -1123,7 +1124,7 @@ test('a recomputed digest cannot authorize a model-less, downgraded or trailing 
   for (const change of [
     (text) => text.replace(/^model = .*\n/m, ''),
     (text) => text.replace(/^model = .*$/m, 'model = "foreign-model"'),
-    (text) => text.replace(/^model_reasoning_effort = .*$/m, 'model_reasoning_effort = "low"'),
+    (text) => text.replace(/^model_reasoning_effort = .*$/m, 'model_reasoning_effort = "xhigh"'),
     (text) => text + '\nmodel = "foreign-model"\n',
     (text) => text.replace(/^# shipyard-policy-role = .*$/m, '# shipyard-policy-role = "executor"'),
   ]) withBundle(({ out, options }) => {

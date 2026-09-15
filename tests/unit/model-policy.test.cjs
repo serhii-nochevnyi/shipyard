@@ -39,13 +39,13 @@ function priorReceipt(role, model, effort, dispatchId) {
 }
 
 const CODEx_BASE = {
-  research: ['terra', 'gpt-5.6-terra', 'xhigh'],
-  decomposition: ['sol', 'gpt-5.6-sol', 'high'],
+  research: ['astra', 'gpt-6-astra', 'low'],
+  decomposition: ['astra', 'gpt-6-astra', 'low'],
   executor: ['luna', 'gpt-5.6-luna', 'max'],
   'pr-sentinel': ['luna', 'gpt-5.6-luna', 'medium'],
-  integrator: ['sol', 'gpt-5.6-sol', 'high'],
+  integrator: ['astra', 'gpt-6-astra', 'low'],
   'drift-check': ['luna', 'gpt-5.6-luna', 'max'],
-  'arch-review': ['sol', 'gpt-5.6-sol', 'high'],
+  'arch-review': ['astra', 'gpt-6-astra', 'low'],
   'ci-fix': ['luna', 'gpt-5.6-luna', 'max'],
   'review-fix': ['luna', 'gpt-5.6-luna', 'max'],
 };
@@ -55,8 +55,6 @@ suite('ADR-014 canonical policy');
 test('exposes exactly the nine routed roles and the concrete Codex palette', () => {
   assert.deepStrictEqual([...policy.ROLES], Object.keys(CODEx_BASE));
   assert.deepStrictEqual(policy.CODEX_MODEL_IDS, {
-    terra: 'gpt-5.6-terra',
-    sol: 'gpt-5.6-sol',
     luna: 'gpt-5.6-luna',
     astra: 'gpt-6-astra',
   });
@@ -146,17 +144,18 @@ test('resolves Claude through its independent native grid without changing Codex
   });
 });
 
-test('research promotes alternatives and explicit very-complex, retaining both reasons', () => {
+test('Codex research promotes only explicit very-complex and retains inert alternatives evidence', () => {
   const result = codex('research', {
     type: 'alternatives',
     complexity: 'very-complex',
   });
   assert.equal(result.logical_rung, 'very-complex');
   assert.equal(result.model, 'gpt-6-astra');
-  assert.deepStrictEqual(result.signals_fired, ['alternatives', 'very-complex']);
-  assert.deepStrictEqual(result.selected_signals.map((item) => item.signal), ['alternatives', 'very-complex']);
+  assert.deepStrictEqual(result.signals_fired, ['type', 'very-complex']);
+  assert.deepStrictEqual(result.selected_signals.map((item) => item.signal), ['very-complex']);
   assert.equal(result.signal_reasons.length, 2);
-  assert.ok(result.signal_reasons.every((item) => item.applies === true));
+  assert.equal(result.signal_reasons.find((item) => item.signal === 'type').applies, false);
+  assert.equal(result.signal_reasons.find((item) => item.signal === 'very-complex').applies, true);
 });
 
 test('decomposition uses only explicit checkpoint evidence, not global risk', () => {
@@ -185,7 +184,7 @@ test('judgement roles promote only on ADR-014 scoped signals and preserve all fi
     }
     const riskOnly = codex(role, { risk: 'high' });
     assert.equal(riskOnly.logical_rung, 'base', `${role}/risk`);
-    assert.equal(riskOnly.model, 'gpt-5.6-sol');
+    assert.equal(riskOnly.model, 'gpt-6-astra');
     assert.ok(riskOnly.signal_reasons.some((item) => item.signal === 'risk' && item.applies === false));
     const combined = codex(role, {
       risk: 'high',
@@ -234,7 +233,7 @@ test('window escalation uses only measured input against the fingerprinted thres
   );
 });
 
-test('executor keeps Luna/max by default and escalates to Astra/medium on explicit critical evidence', () => {
+test('executor keeps Luna/max by default and escalates to Astra/low on explicit critical evidence', () => {
   const base = codex('executor', { risk: 'high', inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 });
   assert.equal(base.logical_rung, 'base');
   assert.equal(base.logical_model, 'luna');
@@ -248,7 +247,7 @@ test('executor keeps Luna/max by default and escalates to Astra/medium on explic
     assert.equal(result.logical_rung, 'critical', signal);
     assert.equal(result.logical_model, 'astra', signal);
     assert.equal(result.model, 'gpt-6-astra', signal);
-    assert.equal(result.effort, 'medium', signal);
+    assert.equal(result.effort, 'low', signal);
     assert.ok(result.signal_reasons.some((item) => item.signal === signal && item.applies === true));
   }
 });
@@ -320,7 +319,7 @@ test('matching overrides are harmless but conflicting or unsupported selections 
   });
   assert.equal(matching.model, 'gpt-5.6-luna');
   assert.throws(
-    () => codex('executor', {}, { override: { model: 'gpt-5.6-terra' } }),
+    () => codex('executor', {}, { override: { model: 'gpt-6-astra' } }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
   assert.throws(
@@ -353,7 +352,7 @@ test('matching overrides are harmless but conflicting or unsupported selections 
       runtime: 'codex',
       role: 'executor',
       model: 'gpt-5.6-luna',
-      requested_model: 'gpt-5.6-terra',
+      requested_model: 'gpt-6-astra',
     }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
@@ -371,7 +370,7 @@ test('matching overrides are harmless but conflicting or unsupported selections 
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
   for (const [field, value] of [
-    ['logical_model', 'terra'],
+    ['logical_model', 'astra'],
     ['logical_rung', 'critical'],
     ['rung', 'critical'],
     ['rung_index', 1],

@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6e6553cb5991b1789142ad5ffc589984cb06c5293ce7819e31a7a4a1192e2497
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 540dcf665a5d233fbd59ed285c57e6dd7bd2521679681ccb2bb1bdee600d5acf
 phase: 33
 status: human_needed
-shipyard_source_fingerprint: 6e6553cb5991b1789142ad5ffc589984cb06c5293ce7819e31a7a4a1192e2497
+shipyard_source_fingerprint: 540dcf665a5d233fbd59ed285c57e6dd7bd2521679681ccb2bb1bdee600d5acf
 ---
 
 # Phase 33: Reduce orchestration context and transfer sessions safely — Verification Projection

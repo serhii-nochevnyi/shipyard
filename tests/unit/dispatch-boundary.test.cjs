@@ -128,7 +128,7 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   assert.ok(Object.isFrozen(result.trace));
 });
 
-test('executor critical dispatch uses the Astra/medium escalation rung', () => {
+test('executor critical dispatch uses the Astra/low escalation rung', () => {
   let launched;
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: {
@@ -143,10 +143,10 @@ test('executor critical dispatch uses the Astra/medium escalation rung', () => {
   });
   assert.deepStrictEqual(launched.launch_arguments, {
     model: 'gpt-6-astra',
-    reasoning_effort: 'medium',
+    reasoning_effort: 'low',
   });
   assert.equal(result.applied_model, 'gpt-6-astra');
-  assert.equal(result.applied_effort, 'medium');
+  assert.equal(result.applied_effort, 'low');
 });
 
 test('static Codex roles pass the resolver-selected generated file to the adapter', () => {
@@ -160,9 +160,9 @@ test('static Codex roles pass the resolver-selected generated file to the adapte
   const result = boundary.dispatch({
     runtime: 'codex',
     role: 'research',
-    signals: { type: 'alternatives' },
+    signals: { complexity: 'very-complex' },
   });
-  assert.equal(launched.agent_file, 'shipyard-inv-research-alternatives.toml');
+  assert.equal(launched.agent_file, 'shipyard-inv-research-critical.toml');
   assert.equal(result.receipt.agent_file, launched.agent_file);
   assert.equal(launched.launch_arguments, undefined);
 });
@@ -336,7 +336,8 @@ test('repair escalations require the boundary receipt chain and consume each pre
     previous_dispatch_id: base.dispatch_id,
   });
   assert.equal(base.applied_model, 'gpt-5.6-luna');
-  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_model, 'gpt-6-astra');
+  assert.equal(repeat.applied_effort, 'low');
   assert.throws(
     () => boundary.dispatch({
       runtime: 'codex',
@@ -375,7 +376,8 @@ test('same-boundary function recorders can authorize their own in-memory repair 
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'function-recorder-repeat',
   });
-  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_model, 'gpt-6-astra');
+  assert.equal(repeat.applied_effort, 'low');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
 });
 
@@ -571,7 +573,7 @@ test('receipt contradictions, stale policy, and wrong agent file are rejected', 
       'NONCOMPLIANT_RECEIPT',
     ],
     [
-      { observed_effort: 'low' },
+      { observed_effort: 'medium' },
       'NONCOMPLIANT_RECEIPT',
     ],
   ];
@@ -976,7 +978,8 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'durable-repair-repeat',
   });
-  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_model, 'gpt-6-astra');
+  assert.equal(repeat.applied_effort, 'low');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
   assert.throws(
     () => makeFreshBoundary().dispatch({
@@ -1250,7 +1253,8 @@ test('top-level dispatch continues a repair chain with the same durable recorder
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'convenience-repeat',
   }, options);
-  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_model, 'gpt-6-astra');
+  assert.equal(repeat.applied_effort, 'low');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
 });
 
@@ -1293,7 +1297,8 @@ test('a failed repair launch releases its predecessor claim for a later attempt'
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'retry-success',
   });
-  assert.equal(retry.applied_model, 'gpt-5.6-sol');
+  assert.equal(retry.applied_model, 'gpt-6-astra');
+  assert.equal(retry.applied_effort, 'low');
 });
 
 test('durable recorder writes require boundary authority', () => {
