@@ -1,14 +1,15 @@
 {
-  "generated_at": "2026-09-15T14:23:36.572Z",
-  "observed_at": "2026-09-15T14:23:36.572Z",
-  "generation": 306,
+  "generated_at": "2026-09-15T14:24:08.332Z",
+  "observed_at": "2026-09-15T14:24:08.332Z",
+  "generation": 307,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-15T14:23:36.572Z",
+  "dispatches_applied_at": "2026-09-15T14:24:08.332Z",
   "actionable": {
     "execute": [],
     "publish": [],
     "fix": [
+      "T-36-05",
       "T-36-06"
     ],
     "finalize": [
@@ -19,9 +20,7 @@
     "merge": []
   },
   "waiting": {
-    "ci": [
-      "T-36-05"
-    ],
+    "ci": [],
     "dispatched": [
       "T-36-10"
     ],
@@ -146,7 +145,7 @@
     ]
   },
   "why": {
-    "T-36-05": "PR #140: 1 check(s) still running",
+    "T-36-05": "PR #140: the base moved: `epic/36-enforce-the-runtime-model-ladder` is 1 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-36-06": "PR #141: the base moved: `ticket/T-36-05-claude-adapter-and-explicit-workflow-lau` is 31 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-36-07": "PR #142: green and still a draft — threads, arch-review, conform gate",
     "T-36-08": "PR #143: green and still a draft — threads, arch-review, conform gate",
@@ -158,10 +157,10 @@
   "counts": {
     "execute": 0,
     "publish": 0,
-    "fix": 1,
+    "fix": 2,
     "finalize": 3,
     "merge": 0,
-    "ci": 1,
+    "ci": 0,
     "dispatched": 1,
     "parent": 0,
     "merge_human": 0,
@@ -170,7 +169,7 @@
     "done": 108
   },
   "parent_of": {},
-  "actionable_count": 4,
+  "actionable_count": 5,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
@@ -181,14 +180,13 @@
   },
   "sentinel": {
     "duty": [
+      "T-36-05",
       "T-36-06",
       "T-36-07",
       "T-36-08",
       "T-36-09"
     ],
-    "waiting_ci": [
-      "T-36-05"
-    ],
+    "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
     "clear": false
