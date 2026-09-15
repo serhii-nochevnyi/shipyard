@@ -1202,8 +1202,8 @@
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T20:35:18Z",
     "head_sha": "cc78d3a94152bf88bb0a194ca77012b2a01afdab",
-    "merge_state": "CLEAN",
-    "behind_by": 6,
+    "merge_state": "UNKNOWN",
+    "behind_by": 7,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1315,13 +1315,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/143",
     "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
     "pr_created_at": "2026-09-15T12:14:35Z",
-    "head_sha": "7e8ce30734d252dc56550a54adf386bdb6ac168f",
-    "merge_state": "UNKNOWN",
-    "behind_by": 15,
+    "head_sha": "426c3ef955623c436585e2fb5e2037ce9082756f",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
