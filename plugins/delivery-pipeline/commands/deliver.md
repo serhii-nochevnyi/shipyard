@@ -157,16 +157,21 @@ instead, and the front reads it back by itself:
   static Codex roles select the file from the same signals with
   `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json
   --capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"
-  [--project-dir <project>] [--risk …] [--files …] [--checkpoint]
-  [--signature-state …]`. Its `agent_file` is a `.toml` path for the launch;
+  [--project-dir <project>] [--risk …] [--type …] [--complexity …]
+  [--input-tokens …] [--contested] [--critical] [--checkpoint]
+  [--signature-state …] [--files …]`. The `--files` flag is retained only
+  for compatibility; it does not select an ADR-014 rung. Its `agent_file` is
+  a `.toml` path for the launch;
   project it to the suffixless recorder name, and retain its canonical `route`
   in the boundary receipt rather than passing it to the recorder.
   Run it from the conveyor project, or pass `--project-dir <project>` when the
   caller is in a ticket worktree; generated agent files and project policy do
-  not have to live in the same directory. For `executor`, run the same
-  selector and pass its concrete `model` and `effort` to `spawn_agent` (or
-  `codex exec`) when that host surface advertises those overrides; its JSON
-  intentionally has `agent_file: null` and uses the project palette directly.
+  not have to live in the same directory. For `executor`, the boundary's Codex
+  adapter consumes the selector's concrete `model` and `effort` internally;
+  callers must not pass selector output directly to `spawn_agent` or `codex
+  exec`. Those host calls are adapter internals reached only through
+  `boundary.dispatch`. The selector JSON intentionally has `agent_file: null`
+  and uses the project palette directly.
   The selector's `model` is the concrete id: record it as
   `--observed-model <model>`, while `route` supplies the shared tier alias and
   requested effort. Do not pass the concrete id to `dispatch-record.cjs
@@ -1274,18 +1279,25 @@ attempts and landing nothing. When the script cannot measure, it says `needed`
 for exactly this reason: the failure it prevents is the most expensive one there
 is.
 
-Before either launch path, dispatch each needed judge through the one boundary:
+For the Workflow runtime, dispatch each needed judge through the host-injected
+bridge and the one boundary:
 
 ```text
 boundary.dispatch(
-  { runtime, role: "drift-check", signals: { risk, type, complexity, checkpoint, critical }, dispatch_id },
+  { runtime: "claude", role: "drift-check",
+    signals: { risk, type, complexity, checkpoint, critical }, dispatch_id },
   { scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/drift-gate.mjs",
-   args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
-           driftRefPath, recordCmd, graphDir,
-           claudeCapabilities, dispatchRecorder, claudeApplicationEvidence,
-           claudeHost } }
+    args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
+            driftRefPath, recordCmd, graphDir } }
 )
 ```
+
+The `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`,
+and `claudeHost` values are host-injected Workflow bridge resources, not
+serializable `args`; the active Workflow adapter supplies them. On Codex,
+there is no `drift-gate.mjs` bridge: the Codex adapter selects and validates
+the generated `shipyard-drift-check.toml` and invokes `launchStatic` through
+the boundary.
 
 `drift-check` is fixed at Codex Luna/max and Workflow runtime Opus/max; risk, checkpoint,
 window size, and other global context are retained as evidence but cannot
@@ -1423,14 +1435,22 @@ may be dispatched at all: fix the file.
    ```text
    executors.mjs args: { tickets: [{ id, planPath, branch, worktreePath, prBase,
      model, effort, signals, risk, critical, checkpoint, reuseCandidates }],
-     deliveryRulesHint, prBodyGuide, artifactLanguage, claudeCapabilities,
-     dispatchRecorder, claudeApplicationEvidence, claudeHost }
+     deliveryRulesHint, prBodyGuide, artifactLanguage }
    ```
 
+   `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`, and
+   `claudeHost` are host-injected Workflow bridge resources, not serializable
+   `args`; the active adapter supplies them. The Codex adapter receives its
+   generated-agent directory and capabilities through the boundary context.
+
    On Codex, `codex-agent.cjs select executor --json --capabilities-file
-   <current-host-capabilities.json> --project-dir <project>` is selection
-   preflight only: the result's concrete `model` and `effort` are passed as
-   explicit dynamic launch arguments because executor has `agent_file: null`.
+   <current-host-capabilities.json> --project-dir <project> [--risk <risk>]
+   [--type <type>] [--complexity <complexity>] [--input-tokens <inputTokens>]
+   [--contested] [--critical] [--checkpoint]
+   [--signature-state <signatureState>]` is selection preflight only. Pass the
+   same complete signal set to the boundary; its Codex adapter consumes the
+   selected concrete `model` and `effort` internally because executor has
+   `agent_file: null`.
    On the Workflow runtime, the adapter passes the selected native alias and
    explicit effort. There is no omitted-model or CLI-default branch, and an
    Agent fallback that cannot carry the explicit selection is a refusal, not
@@ -1950,9 +1970,13 @@ itself. The round order:
      needsCiFix, needsReviewFix, needsBaseMerge, base, model, effort, signals,
      priorReceipt, previous_dispatch_id, dispatch_id, attemptHistory, strategy,
      signatureState }], ciFixRefPath, reviewFixRefPath, reinitScript,
-     artifactLanguage, claudeCapabilities, dispatchRecorder,
-     claudeApplicationEvidence, claudeHost }
+     artifactLanguage }
    ```
+
+   `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`, and
+   `claudeHost` are host-injected Workflow bridge resources, not serializable
+   `args`; the active adapter supplies them. The Codex adapter receives its
+   generated-agent directory and capabilities through the boundary context.
 
    The per-item boundary selection resolves the canonical ladder, validates the
    Codex generated file or the Workflow runtime's native alias plus explicit
