@@ -1172,4 +1172,69 @@ test('runtime adapters refuse inline and inherited-session launch contexts', () 
   assert.equal(launches, 0, 'inline and inherited-session contexts must never reach the host');
 });
 
+// ── No routed launch may grow beside the boundary (REQ-110) ────────────────
+//
+// The Workflow files deliberately receive the native `agent` callback, so a
+// simple `agent` token sweep would reject the injection point itself. The
+// executable-call shape below catches a new direct invocation such as
+// `return agent(prompt)` while ignoring the explanatory comments and prompt
+// prose that document why that invocation is forbidden. The live files are
+// swept and the detector is independently exercised against a mutation
+// fixture, so a source list or regex that quietly matches nothing cannot pass.
+const ROUTED_LAUNCH_SOURCES = [
+  ...PROMPT_BUILDERS,
+  'plugins/delivery-pipeline/commands/decompose.md',
+  'plugins/delivery-pipeline/commands/deliver.md',
+  'plugins/delivery-pipeline/references/pr-sentinel.md',
+];
+const directLaunchCall = /(?:^|[=;{}(,:]|=>|&&)\s*(?:(?:return|await)\s+)?(?:agent|spawn_agent|spawnAgent)\s*\(/;
+const directLaunchOffenders = (root, rels) => rels.flatMap((rel) => fs.readFileSync(path.join(root, rel), 'utf8')
+  .split('\n')
+  .flatMap((line, index) => directLaunchCall.test(line.replace(/\/\/[^\n]*/g, ''))
+    ? [`${rel}:${index + 1}: ${line.trim()}`]
+    : []));
+
+test('every routed launch surface names the boundary and has no direct launch call outside it', () => {
+  assert.ok(ROUTED_LAUNCH_SOURCES.length >= 6, 'the routed source sweep must cover workflows and delivery prompts');
+  for (const rel of ROUTED_LAUNCH_SOURCES) {
+    const source = readRepo(rel);
+    assert.ok(source.includes('createClaudeWorkflowDispatch') || source.includes('createDispatchBoundary'), `${rel} must name its boundary entry point`);
+    assert.ok(source.includes('boundary.dispatch') || source.includes('createClaudeWorkflowDispatch'), `${rel} must use the boundary launch shape`);
+  }
+  const offenders = directLaunchOffenders(REPO, ROUTED_LAUNCH_SOURCES);
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    `a routed launch must cross resolve → validate → launch → receipt through the boundary; direct launch calls found:\n  ${offenders.join('\n  ')}`,
+  );
+});
+
+test('the routed-launch source sweep rejects a newly added direct agent launch', () => {
+  const dir = fixture('outside.mjs', [
+    'const direct = (prompt) => agent(prompt);',
+    'const allowed = (prompt) => createClaudeWorkflowDispatch({ prompt });',
+    '',
+  ].join('\n'));
+  const offenders = directLaunchOffenders(dir, ['outside.mjs']);
+  assert.equal(offenders.length, 1, `the fixture must exercise the direct-launch arm: ${offenders.join('\n')}`);
+  assert.match(offenders[0], /outside\.mjs:1/);
+  assert.match(offenders[0], /agent\(prompt\)/);
+});
+
+test('Claude palette and provider adapter sources remain byte-identical and native', () => {
+  const files = [
+    'plugins/delivery-pipeline/scripts/runtime-adapters.cjs',
+    'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs',
+  ];
+  for (const rel of files) {
+    const current = fs.readFileSync(path.join(REPO, rel));
+    const committed = execFileSync('git', ['show', `HEAD:${rel}`], { cwd: REPO });
+    assert.deepStrictEqual(current, committed, `${rel} is a runtime-owned palette/provider file and must remain untouched by the matrix suite`);
+  }
+  assert.deepStrictEqual(CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'opus', fable: 'fable' });
+  assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('runtime: \'claude\''), true);
+  assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-5.6-luna'), false);
+  assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-6-astra'), false);
+});
+
 done();

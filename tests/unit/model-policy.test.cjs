@@ -515,4 +515,249 @@ test('canonical policy ignores caller mutation attempts against runtime adapter 
   assert.equal(runtimeAdapters.CODEX_MODEL_IDS.luna, originalCodexLuna);
 });
 
+test('exhaustive runtime matrix covers every native base tuple and scoped escalation rung', () => {
+  const base = {
+    codex: {
+      research: ['gpt-6-astra', 'low'],
+      decomposition: ['gpt-6-astra', 'low'],
+      executor: ['gpt-5.6-luna', 'max'],
+      'pr-sentinel': ['gpt-5.6-luna', 'medium'],
+      integrator: ['gpt-6-astra', 'low'],
+      'drift-check': ['gpt-5.6-luna', 'max'],
+      'arch-review': ['gpt-6-astra', 'low'],
+      'ci-fix': ['gpt-5.6-luna', 'max'],
+      'review-fix': ['gpt-5.6-luna', 'max'],
+    },
+    claude: {
+      research: ['sonnet', 'high'],
+      decomposition: ['opus', 'medium'],
+      executor: ['sonnet', 'max'],
+      'pr-sentinel': ['sonnet', 'high'],
+      integrator: ['opus', 'medium'],
+      'drift-check': ['opus', 'max'],
+      'arch-review': ['opus', 'medium'],
+      'ci-fix': ['opus', 'medium'],
+      'review-fix': ['opus', 'medium'],
+    },
+  };
+  const escalations = [
+    ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6-astra', 'medium'],
+    ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6-astra', 'medium'],
+    ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
+    ['codex', 'executor', { critical: true }, 'critical', 'gpt-6-astra', 'low'],
+    ['codex', 'executor', { checkpoint: true }, 'critical', 'gpt-6-astra', 'low'],
+    ['codex', 'integrator', { critical: true }, 'critical', 'gpt-6-astra', 'medium'],
+    ['codex', 'integrator', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
+    ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6-astra', 'medium'],
+    ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
+    ['codex', 'arch-review', { critical: true }, 'critical', 'gpt-6-astra', 'medium'],
+    ['codex', 'arch-review', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
+    ['codex', 'arch-review', { contested: true }, 'critical', 'gpt-6-astra', 'medium'],
+    ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
+    ['claude', 'research', { type: 'alternatives' }, 'alternatives', 'opus', 'medium'],
+    ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'fable', 'medium'],
+    ['claude', 'decomposition', { critical: true }, 'critical', 'fable', 'medium'],
+    ['claude', 'decomposition', { checkpoint: true }, 'critical', 'fable', 'medium'],
+    ['claude', 'executor', { critical: true }, 'critical', 'opus', 'high'],
+    ['claude', 'executor', { checkpoint: true }, 'critical', 'opus', 'high'],
+    ['claude', 'integrator', { critical: true }, 'critical', 'opus', 'high'],
+    ['claude', 'integrator', { checkpoint: true }, 'critical', 'opus', 'high'],
+    ['claude', 'integrator', { contested: true }, 'critical', 'opus', 'high'],
+    ['claude', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'opus', 'high'],
+    ['claude', 'arch-review', { critical: true }, 'critical', 'opus', 'max'],
+    ['claude', 'arch-review', { checkpoint: true }, 'critical', 'opus', 'max'],
+    ['claude', 'arch-review', { contested: true }, 'critical', 'opus', 'max'],
+    ['claude', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'medium'],
+  ];
+
+  for (const runtime of policy.SUPPORTED_RUNTIMES) {
+    for (const role of policy.ROLES) {
+      const result = policy.resolveDispatch({ runtime, role, signals: {} });
+      assert.deepStrictEqual(
+        [result.logical_rung, result.model, result.effort],
+        ['base', ...base[runtime][role]],
+        `${runtime}/${role} base`,
+      );
+      assert.deepStrictEqual(result.selected_signals, [], `${runtime}/${role} base has no selected signal`);
+    }
+  }
+
+  for (const [runtime, role, signals, rung, model, effort] of escalations) {
+    const result = policy.resolveDispatch({ runtime, role, signals });
+    assert.deepStrictEqual(
+      [result.logical_rung, result.model, result.effort],
+      [rung, model, effort],
+      `${runtime}/${role}/${JSON.stringify(signals)}`,
+    );
+    for (const source of Object.keys(signals)) {
+      const signal = source === 'inputTokens' ? 'window'
+        : source === 'type' && runtime === 'claude' && signals[source] === 'alternatives' ? 'alternatives'
+          : source === 'complexity' && signals[source] === 'very-complex' ? 'very-complex' : source;
+      assert.ok(result.signals_fired.includes(signal), `${runtime}/${role} retains ${source}`);
+      assert.ok(result.signal_reasons.some((reason) => reason.source === `signals.${source}`), `${runtime}/${role} explains ${source}`);
+      assert.ok(result.selected_signals.some((selected) => selected.signal === signal), `${runtime}/${role} selects ${source}`);
+    }
+  }
+});
+
+test('combined signals retain every reason while the highest authorized rung wins', () => {
+  const cases = [
+    {
+      runtime: 'codex',
+      role: 'research',
+      signals: { type: 'alternatives', complexity: 'very-complex' },
+      rung: 'very-complex',
+      selected: ['very-complex'],
+      inert: ['type'],
+    },
+    {
+      runtime: 'claude',
+      role: 'research',
+      signals: { type: 'alternatives', complexity: 'very-complex' },
+      rung: 'very-complex',
+      selected: ['alternatives', 'very-complex'],
+      inert: [],
+    },
+    {
+      runtime: 'codex',
+      role: 'integrator',
+      signals: {
+        risk: 'high',
+        critical: true,
+        checkpoint: true,
+        contested: true,
+        inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
+      },
+      rung: 'critical',
+      selected: ['critical', 'checkpoint', 'contested', 'window'],
+      inert: ['risk'],
+    },
+    {
+      runtime: 'claude',
+      role: 'arch-review',
+      signals: {
+        risk: 'high',
+        critical: true,
+        checkpoint: true,
+        contested: true,
+        inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
+      },
+      rung: 'ceiling',
+      selected: ['critical', 'checkpoint', 'contested', 'window'],
+      inert: ['risk'],
+    },
+  ];
+  for (const item of cases) {
+    const result = policy.resolveDispatch(item);
+    assert.equal(result.logical_rung, item.rung, `${item.runtime}/${item.role} highest rung`);
+    for (const source of Object.keys(item.signals)) {
+      assert.ok(
+        result.signal_reasons.some((reason) => reason.source === `signals.${source}`),
+        `${item.runtime}/${item.role} retains ${source} reason`,
+      );
+    }
+    assert.deepStrictEqual(
+      result.selected_signals.map((selected) => selected.signal),
+      item.selected,
+      `${item.runtime}/${item.role} selected signals`,
+    );
+    for (const signal of item.inert) {
+      assert.ok(result.signal_reasons.some((reason) => reason.signal === signal && reason.applies === false), `${signal} remains inert`);
+    }
+    assert.equal(new Set(result.signals_fired).size, result.signals_fired.length, 'signal names are not silently duplicated');
+    assert.equal(result.signal_reasons.length, Object.keys(item.signals).length, 'no supplied signal is omitted');
+  }
+});
+
+test('global promotion cannot move fixed native roles off their base tuple', () => {
+  const signals = {
+    risk: 'high',
+    critical: true,
+    checkpoint: true,
+    contested: true,
+    inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
+  };
+  for (const [runtime, expected] of [
+    ['codex', { 'pr-sentinel': ['gpt-5.6-luna', 'medium'], 'drift-check': ['gpt-5.6-luna', 'max'] }],
+    ['claude', { 'pr-sentinel': ['sonnet', 'high'], 'drift-check': ['opus', 'max'] }],
+  ]) {
+    for (const [role, [model, effort]] of Object.entries(expected)) {
+      const result = policy.resolveDispatch({ runtime, role, signals });
+      assert.deepStrictEqual([result.logical_rung, result.model, result.effort], ['base', model, effort], `${runtime}/${role}`);
+      assert.deepStrictEqual(result.selected_signals, [], `${runtime}/${role} has no global promotion`);
+      assert.equal(result.signal_reasons.length, Object.keys(signals).length, `${runtime}/${role} keeps all global context`);
+      assert.ok(result.signal_reasons.every((reason) => reason.applies === false), `${runtime}/${role} has no selected global reason`);
+    }
+  }
+});
+
+test('all override sources reject conflicting, unsupported, inline, and inherited selections', () => {
+  for (const [runtime, expected] of [
+    ['codex', { model: 'gpt-5.6-luna', otherModel: 'gpt-6-astra', effort: 'max', otherEffort: 'low' }],
+    ['claude', { model: 'sonnet', otherModel: 'opus', effort: 'max', otherEffort: 'high' }],
+  ]) {
+    const base = { runtime, role: 'executor', signals: {} };
+    for (const [source, value] of [
+      ['override', { model: expected.otherModel }],
+      ['overrides', { effort: expected.otherEffort }],
+      ['selection', { runtime: runtime === 'codex' ? 'claude' : 'codex' }],
+      ['launch_arguments', { model: 'unsupported-model' }],
+      ['gsdOverride', { effort: 'unsupported-effort' }],
+      ['perRoleOverride', { model: expected.otherModel }],
+      ['configOverride', { effort: expected.otherEffort }],
+    ]) {
+      assert.throws(
+        () => policy.resolveDispatch({ ...base, [source]: value }),
+        (error) => error.code === 'CONFLICTING_OVERRIDE',
+        `${runtime}/${source} must not bypass the resolver`,
+      );
+    }
+    for (const config of [
+      { runtime: runtime === 'codex' ? 'claude' : 'codex' },
+      { models: { executor: expected.otherModel } },
+      { effort: { executor: expected.otherEffort } },
+      { model_policy: { models: { executor: 'unsupported-model' } } },
+    ]) {
+      assert.throws(
+        () => policy.resolveDispatch({ ...base, config }),
+        (error) => error.code === 'CONFLICTING_OVERRIDE',
+        `${runtime}/config override must not bypass the resolver`,
+      );
+    }
+    for (const selection of [
+      { inline: true },
+      { inherit: true },
+      { session_inherited: true },
+    ]) {
+      assert.throws(
+        () => policy.resolveDispatch({ ...base, selection }),
+        (error) => error.code === 'UNSUPPORTED_SELECTION',
+        `${runtime}/implicit selection must be refused`,
+      );
+    }
+    assert.deepStrictEqual(
+      [policy.resolveDispatch({ ...base, model: expected.model, effort: expected.effort }).model,
+        policy.resolveDispatch({ ...base, model: expected.model, effort: expected.effort }).effort],
+      [expected.model, expected.effort],
+      `${runtime}/matching explicit values remain harmless`,
+    );
+  }
+});
+
+test('stale policy fingerprints and versions cannot validate an otherwise shaped resolution', () => {
+  for (const runtime of policy.SUPPORTED_RUNTIMES) {
+    const valid = policy.resolveDispatch({ runtime, role: 'executor', signals: {} });
+    for (const stale of [
+      { policy_hash: '0'.repeat(64) },
+      { policy_version: 'adr-014.stale' },
+    ]) {
+      assert.throws(
+        () => policy.validateResolution({ ...valid, ...stale }),
+        (error) => error.code === 'STALE_POLICY',
+        `${runtime}/${JSON.stringify(stale)} must fail before launch`,
+      );
+    }
+  }
+});
+
 done();

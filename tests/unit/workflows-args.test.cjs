@@ -455,6 +455,74 @@ test('executor critical selection is resolved by signals and preserves Claude So
   assert.strictEqual(calls[0].opts.effort, 'high');
 });
 
+test('workflow fan-outs retain combined signal evidence and never infer an omitted promotion signal', async () => {
+  const combinedSignals = {
+    risk: 'high',
+    critical: true,
+    checkpoint: true,
+    contested: true,
+    inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
+  };
+  const executor = await run('executors', {
+    tickets: [{
+      ...TICKETS[0],
+      model: 'opus',
+      effort: 'high',
+      signals: combinedSignals,
+    }],
+  });
+  assert.strictEqual(executor.calls.length, 1);
+  assert.deepStrictEqual(
+    [executor.calls[0].opts.model, executor.calls[0].opts.effort],
+    ['opus', 'high'],
+  );
+  const executorRecord = WORKFLOW_RECORDER.getVerifiedRecord(executor.value[0].receipt.dispatch_id);
+  assert.equal(executorRecord.resolution.logical_rung, 'critical');
+  assert.equal(executorRecord.resolution.signal_reasons.length, Object.keys(combinedSignals).length);
+  for (const field of Object.keys(combinedSignals)) {
+    assert.ok(executorRecord.resolution.signal_reasons.some((reason) => reason.source === `signals.${field}`), `executor retains ${field}`);
+  }
+  assert.ok(executorRecord.resolution.signal_reasons.some((reason) => reason.signal === 'risk' && reason.applies === false));
+
+  const omitted = await run('executors', {
+    tickets: [{
+      ...TICKETS[0],
+      model: 'sonnet',
+      effort: 'max',
+      signals: { risk: 'high', contested: true, inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 },
+    }],
+  });
+  assert.strictEqual(omitted.calls.length, 1, 'global context without executor evidence remains a base launch');
+  assert.deepStrictEqual(
+    [omitted.calls[0].opts.model, omitted.calls[0].opts.effort],
+    ['sonnet', 'max'],
+  );
+  const omittedRecord = WORKFLOW_RECORDER.getVerifiedRecord(omitted.value[0].receipt.dispatch_id);
+  assert.equal(omittedRecord.resolution.logical_rung, 'base');
+  assert.ok(omittedRecord.resolution.signals_fired.includes('risk'));
+  assert.ok(omittedRecord.resolution.signals_fired.includes('contested'));
+  assert.ok(omittedRecord.resolution.signals_fired.includes('window'));
+  assert.equal(omittedRecord.resolution.selected_signals.length, 0, 'no absent critical signal is inferred');
+
+  const fixed = await run('drift-gate', {
+    tickets: [{
+      ...driftTickets([TICKETS[0]])[0],
+      signals: combinedSignals,
+    }],
+    driftRefPath: '/x/drift-check.md',
+  });
+  assert.strictEqual(fixed.calls.length, 1);
+  assert.deepStrictEqual(
+    [fixed.calls[0].opts.model, fixed.calls[0].opts.effort],
+    ['opus', 'max'],
+    'fixed drift-check remains on its native base tuple',
+  );
+  const fixedRecord = WORKFLOW_RECORDER.getVerifiedRecord(fixed.value[0].receipt.dispatch_id);
+  assert.equal(fixedRecord.resolution.logical_rung, 'base');
+  assert.equal(fixedRecord.resolution.signal_reasons.length, Object.keys(combinedSignals).length);
+  assert.ok(fixedRecord.resolution.signal_reasons.every((reason) => reason.applies === false));
+});
+
 for (const spec of DISPATCH) {
   test(`${spec.name} refuses the documented DSL-only host without launching`, async () => {
     const source = fs.readFileSync(path.join(WORKFLOWS, `${spec.name}.mjs`), 'utf8')
@@ -547,7 +615,7 @@ test('repair refuses absent, invented or contradictory predecessor inputs before
 
 test('workflow agent options and context cannot bypass selection checks or reserve a dispatch', () => {
   for (const invalid of [
-    { inherit: true }, { session: { inherit: true } },
+    { inherit: true }, { inline: true }, { session_inherited: true }, { session: { inherit: true } },
     { requested_effort: 'high' }, { applied_effort: 'high' },
     { model: 'opus' }, { effort: 'high' }, [],
   ]) {
@@ -566,6 +634,65 @@ test('workflow agent options and context cannot bypass selection checks or reser
       assert.deepStrictEqual(fs.readdirSync(storeDir), [], 'invalid options must fail before reservation');
     }
   }
+});
+
+test('workflow-native dispatch rejects unsupported runtime tuples and copied application values before recording', () => {
+  const invalidSelections = [
+    { model: 'gpt-6-astra', effort: 'max' },
+    { model: 'sonnet', effort: 'unsupported-effort' },
+    { model: 'inherit', effort: 'max' },
+  ];
+  for (const [index, selection] of invalidSelections.entries()) {
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-negative-selection-'));
+    workflowStores.push(storeDir);
+    const recorder = createDurableRecorder(storeDir);
+    let launched = false;
+    assert.throws(
+      () => createClaudeWorkflowDispatch({
+        agent: () => { launched = true; return {}; },
+        prompt: 'test',
+        role: 'executor',
+        ...selection,
+        dispatchId: `workflow-negative-selection-${index}`,
+        capabilities: WORKFLOW_CAPABILITIES,
+        recorder,
+        applicationEvidence: () => ({
+          launch_id: `negative-${index}`,
+          applied_model: selection.model,
+          applied_effort: selection.effort,
+        }),
+      }),
+      (error) => ['CONFLICTING_OVERRIDE', 'UNSUPPORTED_SELECTION'].includes(error.code),
+      `invalid Claude selection ${index}`,
+    );
+    assert.strictEqual(launched, false);
+    assert.deepStrictEqual(fs.readdirSync(storeDir), [], `invalid selection ${index} must not reserve a record`);
+  }
+
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-copied-evidence-'));
+  workflowStores.push(storeDir);
+  const recorder = createDurableRecorder(storeDir);
+  let launches = 0;
+  assert.throws(
+    () => createClaudeWorkflowDispatch({
+      agent: () => { launches += 1; return {}; },
+      prompt: 'test',
+      role: 'executor',
+      model: 'sonnet',
+      effort: 'max',
+      dispatchId: 'workflow-copied-evidence',
+      capabilities: WORKFLOW_CAPABILITIES,
+      recorder,
+      applicationEvidence: () => ({
+        launch_id: 'copied-evidence',
+        requested_model: 'sonnet',
+        requested_effort: 'max',
+      }),
+    }),
+    (error) => error.code === 'MISSING_RECEIPT',
+  );
+  assert.strictEqual(launches, 1, 'the host was called but its requested-only report is not application evidence');
+  assert.equal(recorder.getVerifiedRecord('workflow-copied-evidence'), null);
 });
 
 test('unsupported or contradictory workflow selections fail closed before agent()', async () => {
