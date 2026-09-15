@@ -1792,6 +1792,9 @@ function createDispatchBoundary(options = {}) {
 
   // Reconciliation consumes authenticated storage, never caller-supplied proof.
   function reconcile(dispatchId) {
+    if (!options.recorder) {
+      refuse('RECORD_UNAVAILABLE', 'reconcile requires an explicitly configured durable dispatch recorder');
+    }
     nonEmpty(dispatchId, 'dispatch_id');
     if (consumedReceiptIds.has(dispatchId) || recorderIsConsumed(options.recorder, dispatchId)) {
       refuse('UNVERIFIED_RECEIPT', 'dispatch receipt was already consumed by another repair dispatch', { dispatch_id: dispatchId });
