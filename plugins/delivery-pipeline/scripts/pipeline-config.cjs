@@ -1522,6 +1522,7 @@ function normalizedRoutedControls(cfg, context) {
   for (const [namespace, values] of [
     ['pipeline', context.configuration?.pipeline],
     ['delivery_pipeline', context.configuration?.delivery_pipeline],
+    ['gsd', context.configuration?.gsd],
   ]) {
     if (!values || typeof values !== 'object' || Array.isArray(values)) continue;
     for (const [field, valid] of [
@@ -1542,6 +1543,13 @@ function normalizedRoutedControls(cfg, context) {
         'UNSUPPORTED_SELECTION',
         `${namespace}.model_policy ${JSON.stringify(raw)} is not a supported pipeline profile`,
         { source: `${namespace}.model_policy` },
+      );
+    }
+    if (profile !== normalized.model_policy) {
+      throw modelPolicy.policyError(
+        'CONFLICTING_OVERRIDE',
+        `${namespace}.model_policy selects "${profile}", but pipeline.model_policy requires "${normalized.model_policy}"`,
+        { source: `${namespace}.model_policy`, expected: normalized.model_policy, actual: profile },
       );
     }
   }

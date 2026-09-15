@@ -2407,9 +2407,59 @@ test('model_profile must match the normalized pipeline policy at the routed boun
 });
 
 test('routed profile controls reject raw nested values hidden by compatibility normalization', () => {
-  for (const namespace of ['pipeline', 'delivery_pipeline']) {
-    const { config } = routedConfig({ [namespace]: { model_policy: 'bogus' } });
-    refusesSource(() => resolveDispatch({ config, role: 'executor' }), `${namespace}.model_policy`);
+  for (const namespace of ['pipeline', 'delivery_pipeline', 'gsd']) {
+    for (const value of ['bogus', null, false, 0, '', {}, []]) {
+      const { config } = routedConfig({ [namespace]: { model_policy: value } });
+      assert.throws(() => resolveDispatch({ config, role: 'executor' }), (error) =>
+        error.code === 'UNSUPPORTED_SELECTION' && error.details.source === `${namespace}.model_policy`);
+    }
+  }
+});
+
+test('raw GSD model policy must match the normalized routed policy', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const [policy, model_profile, alias] of [
+      ['balanced', 'balanced', 'adaptive'], ['economy', 'budget', 'budget'], ['premium', 'quality', 'quality'],
+    ]) {
+      for (const value of [policy, alias]) {
+        const { config } = routedConfig({
+          model_profile, pipeline: { model_policy: policy }, gsd: { model_policy: value },
+        }, runtime);
+        assert.deepStrictEqual(resolveDispatch({ config, role: 'executor' }),
+          canonicalPolicy.resolveDispatch({ runtime, role: 'executor' }));
+      }
+      for (const value of ['balanced', 'economy', 'premium'].filter((value) => value !== policy)) {
+        const { config } = routedConfig({
+          model_profile, pipeline: { model_policy: policy }, gsd: { model_policy: value },
+        }, runtime);
+        assert.throws(() => resolveDispatch({ config, role: 'executor' }), (error) =>
+          error.code === 'CONFLICTING_OVERRIDE' && error.details.source === 'gsd.model_policy'
+          && error.details.expected === policy && error.details.actual === value);
+      }
+    }
+    const { config } = routedConfig({ gsd: { model_policy: 'economy' } }, runtime);
+    refusesSource(() => resolveDispatch({ config, role: 'executor' }), 'gsd.model_policy');
+  }
+});
+
+test('routed Codex CLI refuses malformed or conflicting GSD model policies without a decision', () => {
+  for (const [value, code] of [
+    ['bogus', 'UNSUPPORTED_SELECTION'], [null, 'UNSUPPORTED_SELECTION'], ['economy', 'CONFLICTING_OVERRIDE'],
+    ['balanced', null],
+  ]) {
+    const { dir } = routedConfig({ gsd: { model_policy: value } });
+    const result = spawnSync(process.execPath, [mod, 'dispatch', JSON.stringify({ runtime: 'codex', role: 'executor' })],
+      { cwd: dir, env: {}, encoding: 'utf8' });
+    if (code) {
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout, '');
+      assert.ok(result.stderr.includes(code) && result.stderr.includes('gsd.model_policy'), result.stderr);
+    } else {
+      assert.equal(result.status, 0, result.stderr);
+      const decision = JSON.parse(result.stdout);
+      assert.equal(decision.model, 'gpt-5.6-luna');
+      assert.equal(decision.effort, 'max');
+    }
   }
 });
 
