@@ -118,9 +118,7 @@ fi
 grep -rq '[$]shipyard-' "$SKILLS"/shipyard-*/SKILL.md || { echo "no \$shipyard- invocations found"; exit 1; }
 grep -q 'codex_skill_adapter' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "missing codex adapter header"; exit 1; }
 for f in "$SKILLS/shipyard-deliver/SKILL.md" "$CODEX_HOME/agents/shipyard-pr-sentinel.toml"; do
-  # Research's very-complex rung is emitted as -critical. Only these two
-  # recovery targets are intentionally not generated for the checked-in bundle.
-  if grep -Eq 'pr-sentinel-deep|arch-review-deep' "$f"; then
+  if grep -Eq 'inv-research-critical|pr-sentinel-deep|arch-review-deep' "$f"; then
     echo "canonical Codex instructions name a non-emitted variant: $f"; exit 1
   fi
 done
