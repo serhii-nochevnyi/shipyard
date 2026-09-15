@@ -3665,7 +3665,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": false,
+      "missing_paths": true,
       "files": [
         "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
         "plugins/delivery-pipeline/workflows/executors.mjs",
@@ -3894,15 +3894,10 @@
       "unreachable_paths": false,
       "missing_paths": false,
       "files": [
-        ".planning/graph/tickets.json",
-        ".planning/graph/tickets.yaml",
-        ".planning/phases/36-enforce-the-runtime-model-ladder/36-12-PLAN.md",
-        "CLAUDE.md",
         ".planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md",
         ".planning/architecture/ADR-012-task-level-model-ladder.md",
         "README.md",
-        "docs/gsd_multilevel_delivery_pipeline.md",
-        "tests/unit/source-contract.test.cjs"
+        "docs/gsd_multilevel_delivery_pipeline.md"
       ],
       "risk": "medium",
       "type": "implementation",
