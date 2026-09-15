@@ -1203,7 +1203,7 @@
     "pr_created_at": "2026-09-14T20:35:18Z",
     "head_sha": "b32f2656ba2df64ee2422f1b927040e764d1a29f",
     "merge_state": "UNSTABLE",
-    "behind_by": 0,
+    "behind_by": 1,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1227,13 +1227,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/140",
     "pr_base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
     "pr_created_at": "2026-09-14T21:26:23Z",
-    "head_sha": "23f4883fcb9e955e5d70ed3b0964c5374f2b9272",
-    "merge_state": "UNKNOWN",
-    "behind_by": 10,
+    "head_sha": "195cc46ccb0b90eee5b2faf141ba9138fe05c943",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
@@ -1254,8 +1254,8 @@
     "pr_base": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
     "pr_created_at": "2026-09-14T21:57:13Z",
     "head_sha": "825ba638ca0d09ca9b78584a32d389af803ea501",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
+    "merge_state": "UNKNOWN",
+    "behind_by": 11,
     "gate": {
       "arch-review": "conform",
       "drift-check": "fresh",
