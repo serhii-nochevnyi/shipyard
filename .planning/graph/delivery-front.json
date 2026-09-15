@@ -1,26 +1,25 @@
 {
-  "generated_at": "2026-09-15T12:24:32.883Z",
-  "observed_at": "2026-09-15T12:24:32.883Z",
-  "generation": 284,
+  "generated_at": "2026-09-15T12:32:00.935Z",
+  "observed_at": "2026-09-15T12:32:00.935Z",
+  "generation": 285,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-15T12:24:32.883Z",
+  "dispatches_applied_at": "2026-09-15T12:32:00.935Z",
   "actionable": {
     "execute": [],
     "publish": [],
     "fix": [
       "T-36-04",
       "T-36-05",
+      "T-36-06",
+      "T-36-07",
       "T-36-08"
     ],
     "finalize": [],
     "merge": []
   },
   "waiting": {
-    "ci": [
-      "T-36-06",
-      "T-36-07"
-    ],
+    "ci": [],
     "dispatched": [
       "T-36-09"
     ],
@@ -145,12 +144,12 @@
     ]
   },
   "why": {
-    "T-36-04": "PR #139: 1 failing check(s)",
+    "T-36-04": "PR #139: the base moved: `epic/36-enforce-the-runtime-model-ladder` is 3 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-36-05": "PR #140: 1 failing check(s)",
-    "T-36-06": "PR #141: 1 check(s) still running",
-    "T-36-07": "PR #142: 1 check(s) still running",
+    "T-36-06": "PR #141: 1 failing check(s)",
+    "T-36-07": "PR #142: 1 failing check(s)",
     "T-36-08": "PR #143: the base moved: `ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches` is 11 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
-    "T-36-09": "dispatched to executor 7m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (a branch or a PR appears) or after 90m; `dispatch-record.cjs clear T-36-09 <dispatch_id>` returns it now.",
+    "T-36-09": "dispatched to executor 15m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (a branch or a PR appears) or after 90m; `dispatch-record.cjs clear T-36-09 <dispatch_id>` returns it now.",
     "T-36-10": "T-36-09 (parent has no branch yet (nothing to cascade from))",
     "T-36-11": "T-36-10 (parent has no branch yet (nothing to cascade from))",
     "T-36-12": "T-36-10 (parent has no branch yet (nothing to cascade from))"
@@ -158,10 +157,10 @@
   "counts": {
     "execute": 0,
     "publish": 0,
-    "fix": 3,
+    "fix": 5,
     "finalize": 0,
     "merge": 0,
-    "ci": 2,
+    "ci": 0,
     "dispatched": 1,
     "parent": 0,
     "merge_human": 0,
@@ -170,7 +169,7 @@
     "done": 107
   },
   "parent_of": {},
-  "actionable_count": 3,
+  "actionable_count": 5,
   "left_behind_count": 0,
   "fixpoint": false,
   "capacity": {
@@ -182,12 +181,11 @@
     "duty": [
       "T-36-04",
       "T-36-05",
+      "T-36-06",
+      "T-36-07",
       "T-36-08"
     ],
-    "waiting_ci": [
-      "T-36-06",
-      "T-36-07"
-    ],
+    "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
     "clear": false

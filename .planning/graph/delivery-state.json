@@ -1201,13 +1201,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/139",
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T20:35:18Z",
-    "head_sha": "746a67201f8cb0aadc4c76aa6464c6615171abc4",
-    "merge_state": "UNKNOWN",
-    "behind_by": 2,
+    "head_sha": "cc78d3a94152bf88bb0a194ca77012b2a01afdab",
+    "merge_state": "UNSTABLE",
+    "behind_by": 3,
     "checks": {
       "total": 1,
-      "failing": 1,
-      "pending": 0,
+      "failing": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
@@ -1228,8 +1228,8 @@
     "pr_base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
     "pr_created_at": "2026-09-14T21:26:23Z",
     "head_sha": "b0e3513f9695ff5b647809633c7a4ceae7620b6b",
-    "merge_state": "UNSTABLE",
-    "behind_by": 0,
+    "merge_state": "UNKNOWN",
+    "behind_by": 1,
     "checks": {
       "total": 1,
       "failing": 1,
@@ -1266,8 +1266,8 @@
     },
     "checks": {
       "total": 1,
-      "failing": 0,
-      "pending": 1,
+      "failing": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -1294,8 +1294,8 @@
     "behind_by": 0,
     "checks": {
       "total": 1,
-      "failing": 0,
-      "pending": 1,
+      "failing": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -1316,7 +1316,7 @@
     "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
     "pr_created_at": "2026-09-15T12:14:35Z",
     "head_sha": "7e8ce30734d252dc56550a54adf386bdb6ac168f",
-    "merge_state": "UNKNOWN",
+    "merge_state": "CLEAN",
     "behind_by": 11,
     "checks": {
       "total": 1,
