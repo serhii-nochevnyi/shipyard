@@ -836,6 +836,10 @@ test('delivery docs project selector, recorder, and workflow contracts without i
     'compatibility recorder route',
     'recorder projection',
     'name without its `.toml` suffix',
+    'Codex dynamic roles are `decomposition` and `executor`',
+    '--effort-applied <receipt-applied-effort>',
+    '`failure-signature.cjs verdict` supplies only verdict/history facts',
+    '`repeat`/`repeat_exhausted` → `rethink`',
     'tickets: [{ id, planPath, baseRef, model, effort, signals }]',
     'priorReceipt, previous_dispatch_id, dispatch_id',
     'pipeline.fable: auto',
@@ -1246,24 +1250,76 @@ const executableTokens = (source) => {
   const advance = () => {
     if (source[index++] === '\n') line++;
   };
+  const skipLineComment = () => {
+    while (index < source.length && source[index] !== '\n') advance();
+  };
+  const skipBlockComment = () => {
+    advance(); advance();
+    while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) advance();
+    if (index < source.length) { advance(); advance(); }
+  };
+  const skipQuoted = (quote) => {
+    advance();
+    while (index < source.length && source[index] !== quote) {
+      if (source[index] === '\\') advance();
+      advance();
+    }
+    if (index < source.length) advance();
+  };
+  const skipTemplateLiteral = () => {
+    advance();
+    while (index < source.length) {
+      if (source[index] === '\\') { advance(); advance(); }
+      else if (source[index] === '`') { advance(); return; }
+      else if (source[index] === '$' && source[index + 1] === '{') {
+        advance(); advance();
+        skipTemplateExpression();
+      } else advance();
+    }
+  };
+  const skipTemplateExpression = () => {
+    let depth = 1;
+    while (index < source.length && depth > 0) {
+      const ch = source[index];
+      if (ch === '/' && source[index + 1] === '/') skipLineComment();
+      else if (ch === '/' && source[index + 1] === '*') skipBlockComment();
+      else if (ch === '\'' || ch === '"') skipQuoted(ch);
+      else if (ch === '`') skipTemplateLiteral();
+      else if (ch === '{') { depth++; advance(); }
+      else if (ch === '}') { depth--; advance(); }
+      else advance();
+    }
+  };
+  const tokenizeTemplate = () => {
+    advance();
+    while (index < source.length) {
+      if (source[index] === '\\') { advance(); advance(); }
+      else if (source[index] === '`') { advance(); return; }
+      else if (source[index] === '$' && source[index + 1] === '{') {
+        advance(); advance();
+        const expressionStart = index;
+        const expressionLine = line;
+        skipTemplateExpression();
+        const expression = source.slice(expressionStart, index - 1);
+        tokens.push(...executableTokens(expression).map((token) => ({
+          ...token,
+          line: token.line + expressionLine - 1,
+        })));
+      } else advance();
+    }
+  };
   while (index < source.length) {
     const ch = source[index];
     if (/\s/.test(ch)) {
       advance();
     } else if (ch === '/' && source[index + 1] === '/') {
-      while (index < source.length && source[index] !== '\n') advance();
+      skipLineComment();
     } else if (ch === '/' && source[index + 1] === '*') {
-      advance(); advance();
-      while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) advance();
-      if (index < source.length) { advance(); advance(); }
-    } else if (ch === '\'' || ch === '"' || ch === '`') {
-      const quote = ch;
-      advance();
-      while (index < source.length && source[index] !== quote) {
-        if (source[index] === '\\') advance();
-        advance();
-      }
-      if (index < source.length) advance();
+      skipBlockComment();
+    } else if (ch === '\'' || ch === '"') {
+      skipQuoted(ch);
+    } else if (ch === '`') {
+      tokenizeTemplate();
     } else if (/[A-Za-z_$]/.test(ch)) {
       const start = index;
       const tokenLine = line;
@@ -1279,14 +1335,21 @@ const executableTokens = (source) => {
 };
 const callOpensAt = (tokens, index) => tokens[index]?.value === '('
   || (tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' && tokens[index + 2]?.value === '(');
+const memberCallOpensAt = (tokens, index) => {
+  const memberStart = tokens[index]?.value === '.' ? index + 1
+    : tokens[index]?.value === '?' && tokens[index + 1]?.value === '.' ? index + 2 : null;
+  return memberStart !== null
+    && ['call', 'apply'].includes(tokens[memberStart]?.value)
+    && callOpensAt(tokens, memberStart + 1);
+};
 const directLaunchCalls = (source) => {
   const tokens = executableTokens(source);
   return tokens.filter((token, index) => {
     if (!NATIVE_LAUNCHERS.has(token.value) || tokens[index - 1]?.value === '.') return false;
-    if (callOpensAt(tokens, index + 1)) return true;
+    if (callOpensAt(tokens, index + 1) || memberCallOpensAt(tokens, index + 1)) return true;
     return tokens[index - 1]?.value === '('
       && tokens[index + 1]?.value === ')'
-      && callOpensAt(tokens, index + 2);
+      && (callOpensAt(tokens, index + 2) || memberCallOpensAt(tokens, index + 2));
   });
 };
 const directLaunchOffenders = (root, rels) => rels.flatMap((rel) => {
@@ -1333,6 +1396,39 @@ test('the routed-launch source sweep rejects direct, optional, and parenthesized
   assert.match(offenders[2], /\(agent\)\(prompt\)/);
   assert.match(offenders[3], /spawn_agent\?\.\(prompt\)/);
   assert.match(offenders[4], /\(spawnAgent\)\(prompt\)/);
+});
+
+test('the routed-launch source sweep recursively scans template interpolations', () => {
+  const dir = fixture('template-outside.mjs', [
+    'const interpolated = `launch: ${agent(prompt)}`;',
+    'const nested = `outer ${`inner ${spawn_agent?.(prompt)}`}`;',
+    'const prose = `agent(prompt)`;',
+    '',
+  ].join('\n'));
+  const offenders = directLaunchOffenders(dir, ['template-outside.mjs']);
+  assert.equal(offenders.length, 2, `template interpolations must be scanned recursively: ${offenders.join('\n')}`);
+  assert.match(offenders[0], /template-outside\.mjs:1/);
+  assert.match(offenders[0], /\$\{agent\(prompt\)\}/);
+  assert.match(offenders[1], /template-outside\.mjs:2/);
+  assert.match(offenders[1], /spawn_agent\?\.\(prompt\)/);
+});
+
+test('the routed-launch source sweep rejects native call and apply member forms', () => {
+  const dir = fixture('member-outside.mjs', [
+    'const called = agent.call(null, prompt);',
+    'const applied = agent.apply(null, [prompt]);',
+    'const grouped = (spawnAgent).call(null, prompt);',
+    'const property = worker.agent.call(null, prompt);',
+    '',
+  ].join('\n'));
+  const offenders = directLaunchOffenders(dir, ['member-outside.mjs']);
+  assert.equal(offenders.length, 3, `native call/apply member forms must be rejected: ${offenders.join('\n')}`);
+  assert.match(offenders[0], /member-outside\.mjs:1/);
+  assert.match(offenders[0], /agent\.call/);
+  assert.match(offenders[1], /member-outside\.mjs:2/);
+  assert.match(offenders[1], /agent\.apply/);
+  assert.match(offenders[2], /member-outside\.mjs:3/);
+  assert.match(offenders[2], /\(spawnAgent\)\.call/);
 });
 
 test('the routed-launch source sweep rejects native launches in shipped Markdown fenced blocks', () => {

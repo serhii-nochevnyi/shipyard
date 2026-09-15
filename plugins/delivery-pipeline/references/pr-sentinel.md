@@ -95,9 +95,9 @@ Codex static duties use the generated files named by the selector:
 `shipyard-review-fix-deep.toml`, `shipyard-arch-review.toml`,
 `shipyard-arch-review-critical.toml`, `shipyard-integrator.toml`, and
 `shipyard-integrator-critical.toml`. No sentinel recovery variant or additional
-architecture-review `repeat_exhausted` variant is generated. Codex dynamic roles,
-when handed back by the main loop, receive explicit model and effort arguments
-from the same receipt. The Workflow adapter receives its independent native
+architecture-review `repeat_exhausted` variant is generated. Codex dynamic roles
+`decomposition` and `executor`, when handed back by the main loop, receive
+explicit model and effort arguments from the same receipt. The Workflow adapter receives its independent native
 alias and explicit effort; a native Agent surface without an effort parameter
 must refuse. Never invent a file, translate a logical Codex name into a Workflow
 native alias, or inherit the caller's session.
@@ -162,7 +162,10 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   and effort and returns a concrete application receipt. Otherwise hard-refuse
   before constructing a prompt, spawning, or recording; no Agent, prompt,
   session, or in-process fallback may perform or record this ci-fix.
-  Supply the failure log, signature, strategy, full ticket evidence, and the
+  `failure-signature.cjs verdict` returns verdict/history facts, not a strategy.
+  Derive the caller-owned fixer strategy before this call: `first` → `fix`,
+  `progress` → `continue`, and `repeat`/`repeat_exhausted` → `rethink`. Supply
+  the failure log, signature, that derived strategy, full ticket evidence, and the
   signed `signatureState` to:
 
   ```text
@@ -522,7 +525,7 @@ reinit is not optional.
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
   delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
-  `dispatch-record.cjs mark <T> <role> --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <backend> --graph <project>/.planning/graph`
+  `dispatch-record.cjs mark <T> <role> --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <backend> --agent-id <launch-id> --graph <project>/.planning/graph`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as
