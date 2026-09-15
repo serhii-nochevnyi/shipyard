@@ -420,6 +420,24 @@ test('policy-aware attribution retains provenance and compares nested facts idem
   }
 });
 
+test('boundary resolution accepts task level and bounded repair provenance', () => {
+  const resolved = routed('claude', 'executor', {}, 'boundary-resolution');
+  const resolution = {
+    ...resolved,
+    task_level: 'routine',
+    prior_applied: { dispatch_id: 'boundary-prior', model: resolved.model, effort: resolved.effort },
+  };
+  const record = normalizeRecord(base({ resolution }));
+  assert.equal(record.resolution.task_level, 'routine');
+  assert.deepEqual(record.resolution.prior_applied, resolution.prior_applied);
+  assert.throws(
+    () => normalizeRecord(base({
+      resolution: { ...resolution, prior_applied: { ...resolution.prior_applied, prompt: 'secret' } },
+    })),
+    /resolution\.prior_applied\.prompt is not supported/,
+  );
+});
+
 test('nested provenance accepts only bounded schema fields', () => {
   assert.throws(
     () => normalizeRecord(base({ receipt: { prompt: 'secret' } })),

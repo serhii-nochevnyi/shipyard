@@ -140,17 +140,21 @@ const RECEIPT_FIELDS = Object.freeze({
   launch_arguments: 'object', signals: 'object', observation_unavailable: 'boolean',
 });
 const RESOLUTION_FIELDS = Object.freeze({
-  policy_version: 'text', policy_hash: 'text', runtime: 'text', role: 'text', model_key: 'text',
+  policy_version: 'text', policy_hash: 'text', runtime: 'text', role: 'text', task_level: 'text',
+  model_key: 'text',
   logical_model: 'text', logical_rung: 'text', rung: 'text', rung_index: 'integer', model: 'text',
   effort: 'text', requested_model: 'text', requested_effort: 'text', route: 'text', backend: 'text',
   mechanism: 'text', signals_fired: 'array', signals: 'object', agent_file: 'nullable_text',
   agent_file_digest: 'text', launch_arguments: 'nullable_object', dispatch_id: 'text',
-  signal_reasons: 'array', selected_signals: 'array',
+  signal_reasons: 'array', selected_signals: 'array', prior_applied: 'object',
 });
 const SIGNAL_REASON_FIELDS = Object.freeze({
   signal: 'text', source: 'text', value: 'scalar', applies: 'boolean', rung: 'nullable_text', reason: 'text',
 });
 const SELECTED_SIGNAL_FIELDS = Object.freeze({ signal: 'text', rung: 'text', reason: 'text' });
+const PRIOR_APPLIED_FIELDS = Object.freeze({
+  dispatch_id: 'text', model: 'text', effort: 'text',
+});
 
 // `priorApplied` is a receipt, not an opaque signal payload. A repair receipt
 // may itself retain the predecessor's signals, so validate the complete shape
@@ -197,6 +201,10 @@ function validateProvenance(record) {
       if (nested.launch_arguments !== undefined && nested.launch_arguments !== null) {
         const nestedIssue = provenanceIssue(nested.launch_arguments, `${field}.launch_arguments`, LAUNCH_ARGUMENT_FIELDS);
         if (nestedIssue) fail(nestedIssue);
+      }
+      if (nested.prior_applied !== undefined) {
+        const priorIssue = provenanceIssue(nested.prior_applied, field + '.prior_applied', PRIOR_APPLIED_FIELDS);
+        if (priorIssue) fail(priorIssue);
       }
       for (const [nestedField, schemaForItem] of [
         ['signal_reasons', SIGNAL_REASON_FIELDS], ['selected_signals', SELECTED_SIGNAL_FIELDS],
