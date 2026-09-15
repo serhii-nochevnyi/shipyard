@@ -50,6 +50,25 @@ function fixture(raw = {}) {
 }
 function clean(f) { fs.rmSync(f.root, { recursive: true, force: true }); }
 
+function writeGsdResolver(codexHome) {
+  const resolver = path.join(codexHome, 'gsd-core', 'bin', 'lib', 'model-resolver.cjs');
+  fs.writeFileSync(resolver, [
+    'module.exports = {',
+    '  resolveTierEntry({ runtime, tier, overrides }) {',
+    "    const builtin = runtime === 'codex' && tier === 'sonnet' ? { model: 'builtin-sonnet' } : null;",
+    '    const raw = overrides?.[runtime]?.[tier];',
+    "    const user = raw ? (typeof raw === 'string' ? { model: raw } : raw) : null;",
+    '    if (!builtin && !user) return null;',
+    '    return { ...(builtin || {}), ...(user || {}) };',
+    '  },',
+    '  resolveModelPolicy(policy, tier) {',
+    '    const raw = policy?.runtime_tiers?.[policy.runtime]?.[tier];',
+    "    return typeof raw === 'string' ? raw : raw?.model || null;",
+    '  },',
+    '};',
+  ].join('\n'));
+}
+
 suite('strict Codex selector and named model palette');
 
 test('static selections expose exact policy filename, identity, model and effort', () => {
@@ -192,6 +211,7 @@ test('an absent project config stays undefined and loads an inherited GSD remap 
   fs.mkdirSync(path.join(root, '.planning'));
   fs.mkdirSync(agentDir);
   fs.mkdirSync(path.dirname(loader), { recursive: true });
+  writeGsdResolver(codexHome);
   fs.writeFileSync(loader, [
     'module.exports = {',
     '  loadConfig(cwd) {',
@@ -218,6 +238,39 @@ test('an absent project config stays undefined and loads an inherited GSD remap 
   }
 });
 
+test('an inherited builtin catalog value is a no-op while a genuine remap remains effective', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-builtin-'));
+  const agentDir = path.join(root, 'agents');
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-home-'));
+  const loader = path.join(codexHome, 'gsd-core', 'bin', 'lib', 'config-loader.cjs');
+  fs.mkdirSync(path.join(root, '.planning'));
+  fs.mkdirSync(agentDir);
+  fs.mkdirSync(path.dirname(loader), { recursive: true });
+  writeGsdResolver(codexHome);
+  fs.writeFileSync(loader, [
+    'module.exports = {',
+    '  loadConfig() {',
+    "    return { model_profile_overrides: { codex: { sonnet: 'builtin-sonnet' } } };",
+    '  },',
+    '};',
+  ].join('\n'));
+  try {
+    const inherited = loadCodexRemap({ cwd: root, env: { CODEX_HOME: codexHome } });
+    assert.equal(inherited.remap('sonnet'), null);
+    assert.equal(inherited.sourceConfig.model_profile_overrides.codex.sonnet, 'builtin-sonnet');
+    const result = selectAgent('decomposition', {
+      cwd: root, agentDir, capabilities,
+      env: { CODEX_HOME: codexHome },
+    });
+    assert.equal(result.model, 'gpt-5.6-sol');
+    assert.equal(result.effective_model, undefined);
+    assert.equal(result.model_source, undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 for (const [label, entry] of [
   ['invalid inherited effort', { model: 'vendor/codex-inherited-invalid', effort: 'bogus' }],
   ['below-canonical inherited effort', { model: 'vendor/codex-inherited-low', effort: 'low' }],
@@ -230,6 +283,7 @@ for (const [label, entry] of [
     fs.mkdirSync(path.join(root, '.planning'));
     fs.mkdirSync(agentDir);
     fs.mkdirSync(path.dirname(loader), { recursive: true });
+    writeGsdResolver(codexHome);
     fs.writeFileSync(loader, [
       'module.exports = {',
       '  loadConfig() {',
@@ -262,6 +316,7 @@ test('a conflicting inherited GSD runtime is validated before its remap is appli
   fs.mkdirSync(path.join(root, '.planning'));
   fs.mkdirSync(agentDir);
   fs.mkdirSync(path.dirname(loader), { recursive: true });
+  writeGsdResolver(codexHome);
   fs.writeFileSync(loader, [
     'module.exports = {',
     '  loadConfig() {',

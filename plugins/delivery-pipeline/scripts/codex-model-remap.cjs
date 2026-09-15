@@ -76,19 +76,50 @@ function assertNoConflictingRemaps(entries) {
 
 function loadGsdConfig(codexHome, cwd) {
   const lib = path.join(codexHome, 'gsd-core', 'bin', 'lib');
+  const resolver = require(path.join(lib, 'model-resolver.cjs'));
   const loader = require(path.join(lib, 'config-loader.cjs'));
-  if (typeof loader.loadConfig !== 'function') throw new Error('gsd-core config-loader lacks loadConfig');
+  if (typeof resolver.resolveTierEntry !== 'function' || typeof loader.loadConfig !== 'function') {
+    throw new Error('gsd-core model-resolver/config-loader lack the expected exports');
+  }
   const write = process.stderr.write;
+  let config;
   try {
     process.stderr.write = () => true;
-    return loader.loadConfig(cwd) || {};
+    config = loader.loadConfig(cwd);
   } finally {
     process.stderr.write = write;
   }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('gsd-core config-loader returned an invalid configuration');
+  }
+  return Object.freeze({
+    config,
+    resolveModelPolicy: resolver.resolveModelPolicy,
+    resolveTierEntry: resolver.resolveTierEntry,
+  });
+}
+
+function gsdRemapFor(config, resolver, tier) {
+  if (!resolver || !tier) return null;
+  const modelPolicy = config.model_policy && typeof config.model_policy === 'object'
+    ? { ...config.model_policy, runtime: 'codex' }
+    : null;
+  const fromPolicy = modelPolicy && typeof resolver.resolveModelPolicy === 'function'
+    ? resolver.resolveModelPolicy(modelPolicy, tier)
+    : null;
+  if (typeof fromPolicy === 'string' && fromPolicy) return fromPolicy;
+
+  const overrides = config.model_profile_overrides;
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return null;
+  const mapped = resolver.resolveTierEntry({ runtime: 'codex', tier, overrides });
+  const builtin = resolver.resolveTierEntry({ runtime: 'codex', tier, overrides: undefined });
+  if (mapped && mapped.model && (!builtin || mapped.model !== builtin.model)) return mapped.model;
+  return null;
 }
 
 function loadCodexRemap({ cwd = process.cwd(), config, codexHome, env = process.env } = {}) {
   let sourceConfig = config;
+  let gsdResolver;
   if (sourceConfig === undefined) {
     const projectFile = path.join(cwd, '.planning', 'config.json');
     // Validate an existing project file ourselves before consulting GSD. This
@@ -98,7 +129,8 @@ function loadCodexRemap({ cwd = process.cwd(), config, codexHome, env = process.
     if (sourceConfig === undefined) {
       const home = codexHome || env.CODEX_HOME || path.join(os.homedir(), '.codex');
       try {
-        sourceConfig = loadGsdConfig(home, cwd);
+        gsdResolver = loadGsdConfig(home, cwd);
+        sourceConfig = gsdResolver.config;
       } catch (error) {
         refuse(`cannot load GSD model configuration from ${home}: ${error.message}`, 'UNSUPPORTED_SELECTION');
       }
@@ -109,7 +141,11 @@ function loadCodexRemap({ cwd = process.cwd(), config, codexHome, env = process.
   const mapped = new Map(entries.map((entry) => [entry.key, entry]));
   const remapper = (key) => {
     if (typeof key !== 'string' || !key.trim()) return null;
-    return mapped.get(key.trim())?.model || null;
+    const normalizedKey = key.trim();
+    if (!mapped.has(normalizedKey)) return null;
+    return gsdResolver
+      ? gsdRemapFor(sourceConfig || {}, gsdResolver, normalizedKey)
+      : mapped.get(normalizedKey).model;
   };
   const bindResolution = (resolution, canonical, key) => {
     const normalizedKey = typeof key === 'string' ? key.trim() : '';
