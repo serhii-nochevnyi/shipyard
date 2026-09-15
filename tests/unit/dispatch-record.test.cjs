@@ -17,6 +17,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync, execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 
@@ -140,6 +141,62 @@ test('boundary receipts reconcile into the existing store and journal without re
       '--dispatch-id', 'absent'], project);
     assert.notEqual(absent.status, 0);
     assert.deepStrictEqual(store(graph)['T-01-01'], rec);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('reconciled records hold the receipt lease and normalize static Codex agent files', () => {
+  const { dir, project, graph, codexAgentDir } = scratch({ 'T-01-01': READY, 'T-01-02': READY });
+  try {
+    const boundaryStore = path.join(dir, 'receipts');
+    const boundary = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
+    const recorder = boundary.createDurableRecorder(boundaryStore);
+    const staticAgentContent = 'dispatch-record-static-agent';
+    const staticAgentDigest = crypto.createHash('sha256').update(staticAgentContent).digest('hex');
+    const applicationReceipt = (r) => ({
+      receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role,
+      dispatch_id: r.dispatch_id, launch_id: `launch-${r.dispatch_id}`, policy_hash: r.policy_hash,
+      requested_model: r.requested_model, requested_effort: r.requested_effort,
+      applied_model: r.model, applied_effort: r.effort,
+      observed_model: r.model, observed_effort: r.effort,
+      ...(r.agent_file ? { agent_file: r.agent_file, agent_file_digest: staticAgentDigest } : {}),
+    });
+    const writer = boundary.createDispatchBoundary({
+      recorder,
+      adapters: { codex: {
+        launch: applicationReceipt,
+        launchStatic: applicationReceipt,
+        validateGeneratedAgent: (r) => {
+          return {
+            valid: true, exists: true, content_verified: true,
+            policy_hash: r.policy_hash, agent_file: r.agent_file,
+            agent_file_content: staticAgentContent,
+            agent_file_digest: staticAgentDigest,
+          };
+        },
+      } },
+    });
+    const pending = writer.dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'pending-repair' });
+    const repairClaim = recorder.claim(pending.dispatch_id, 'concurrent-repair');
+    assert.equal(repairClaim.claimed, true);
+    const raced = run(['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
+      '--dispatch-id', pending.dispatch_id], project);
+    assert.notEqual(raced.status, 0, raced.stderr);
+    assert.match(raced.stderr, /currently claimed/);
+    assert.equal(store(graph)['T-01-01'], undefined, 'a receipt claimed by a repair cannot be persisted');
+    assert.deepStrictEqual(recorder.release(pending.dispatch_id, 'concurrent-repair', repairClaim), { released: true });
+
+    const staticResult = writer.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'static-agent-file' });
+    assert.match(staticResult.resolution.agent_file, /\.toml$/, 'the boundary retains the physical generated file');
+    const publicAgentFile = staticResult.resolution.agent_file.replace(/\.toml$/, '');
+    const marked = run(['mark', 'T-01-02', 'research', '--boundary-store', boundaryStore,
+      '--dispatch-id', staticResult.dispatch_id, '--agent-file', publicAgentFile], project,
+    { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir });
+    assert.equal(marked.status, 0, marked.stderr);
+    assert.equal(store(graph)['T-01-02'].agent_file, publicAgentFile);
+    const event = JSON.parse(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.equal(event.agent_file, publicAgentFile);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

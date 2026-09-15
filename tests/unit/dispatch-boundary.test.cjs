@@ -145,6 +145,14 @@ test('reconciliation requires authenticated current receipt evidence across boun
     assert.deepStrictEqual(facts.application_receipt, result.receipt);
     assert.deepStrictEqual(facts.launch_arguments, result.resolution.launch_arguments);
     assert.throws(() => reader.reconcile('absent'), /compliant applied receipt/);
+    // A recorder claim is the lease used by dispatch-record reconciliation.
+    // A repair cannot consume the receipt while the record writer still owns
+    // that lease between its trusted read and durable record write.
+    const recordClaim = recorder.claim(result.dispatch_id, 'dispatch-record-mark');
+    assert.equal(recordClaim.claimed, true);
+    const competingRepair = recorder.claim(result.dispatch_id, 'repair-dispatch');
+    assert.equal(competingRepair.claimed, false);
+    assert.deepStrictEqual(recorder.release(result.dispatch_id, 'dispatch-record-mark', recordClaim), { released: true });
     const file = path.join(dir, 'receipts', `record-${crypto.createHash('sha256').update(result.dispatch_id).digest('hex')}.json`);
     const original = JSON.parse(fs.readFileSync(file, 'utf8'));
     for (const mutate of [
