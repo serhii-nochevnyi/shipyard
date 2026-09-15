@@ -178,6 +178,15 @@ test('reconciliation requires authenticated current receipt evidence across boun
   }
 });
 
+test('reconciliation refuses without an explicitly configured recorder', () => {
+  const reader = boundaryModule.createDispatchBoundary();
+  assert.throws(
+    () => reader.reconcile('dispatch-without-recorder'),
+    (error) => error.code === 'RECORD_UNAVAILABLE'
+      && /explicitly configured durable dispatch recorder/.test(error.message),
+  );
+});
+
 test('executor critical dispatch uses the Astra/low escalation rung', () => {
   let launched;
   const boundary = boundaryModule.createDispatchBoundary({
