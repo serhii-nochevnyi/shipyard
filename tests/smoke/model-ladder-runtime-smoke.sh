@@ -175,6 +175,7 @@ fs.cpSync(args[2], path.join(process.env.GSD_CAPABILITIES_DIR, 'delivery-pipelin
     critical: { critical: true }, ceiling: { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 },
     repeat: { signatureState: 'repeat' }, repeat_exhausted: { signatureState: 'repeat_exhausted' },
   };
+  const smokeContext = { ticket: 'T-36-11-runtime-ladder-smoke' };
   let cases = 0;
   for (const runtime of policy.SUPPORTED_RUNTIMES) {
     const boundary = boundaries[runtime];
@@ -187,13 +188,13 @@ fs.cpSync(args[2], path.join(process.env.GSD_CAPABILITIES_DIR, 'delivery-pipelin
         const result = boundary.dispatch({ runtime, role, dispatch_id: `${runtime}-${role}-${rung.name}`,
           signals: { ...rungSignals[rung.name], ...(repair ? { priorApplied: previous.receipt } : {}) },
           ...(repair ? { previous_dispatch_id: previous.dispatch_id } : {}),
-        });
+        }, smokeContext);
         assert.deepEqual([result.resolution.logical_rung, result.applied_model, result.applied_effort],
           [rung.name, models[rung.model_key], rung.effort], `${runtime}/${role}/${rung.name}`);
         assert.deepEqual(calls.at(-1), { runtime, model: models[rung.model_key], effort: rung.effort });
         assert.equal(result.receipt.compliance, 'verified');
         assert.deepEqual(recorders[runtime].getVerifiedRecord(result.dispatch_id).receipt, result.receipt);
-        assert.equal(boundary.reconcile(result.dispatch_id).applied_effort, rung.effort);
+        assert.equal(boundary.reconcile(result.dispatch_id, smokeContext).applied_effort, rung.effort);
         previous = result;
         cases++;
       }
