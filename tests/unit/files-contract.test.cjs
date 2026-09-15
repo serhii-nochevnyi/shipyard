@@ -518,6 +518,9 @@ test('delivery docs name the generated Codex variants and no retired recovery ta
   const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
   const source = readRepo(DELIVER_MD) + '\n' + readRepo(SENTINEL_MD);
   const variants = codexStaticVariants(2);
+  const smoke = readRepo('tests/smoke/codex-shipyard-smoke.sh');
+  assert.ok(smoke.includes("grep -Eq 'pr-sentinel-deep|arch-review-deep'"), 'Codex smoke must reject only retired recovery variants');
+  assert.ok(!smoke.includes("grep -Eq 'inv-research-critical|pr-sentinel-deep|arch-review-deep'"), 'Codex smoke must allow emitted research critical variant');
   assert.ok(variants.length > 0, 'the generator must expose phase-2 Codex variants');
   for (const variant of variants) {
     assert.ok(source.includes(variant.file), `docs omit generator output ${variant.file}`);

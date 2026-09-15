@@ -950,6 +950,29 @@ test('delivery docs project selector, recorder, and workflow contracts without i
   );
 });
 
+test('recorder task levels are projected separately from boundary rungs', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
+  const source = `${deliver}\n${sentinel}`;
+  assert.ok(source.includes('taskLevelRoute'), 'recorder marks must use the task-level projection');
+  assert.ok(source.includes('mechanical|routine|complex|critical|recovery'), 'docs must name recorder task levels');
+  assert.ok(!source.includes('--task-level <rung>'), 'canonical boundary rung must not be passed to the recorder');
+
+  const adaptive = { ...pipelineConfig.DEFAULTS, model_ladder: 'adaptive' };
+  for (const [role, signals, expected] of [
+    ['pr-sentinel', {}, 'mechanical'],
+    ['drift-check', {}, 'mechanical'],
+    ['executor', { risk: 'low', files: 2 }, 'routine'],
+    ['executor', { risk: 'high' }, 'critical'],
+    ['ci-fix', { signatureState: 'repeat_exhausted' }, 'recovery'],
+    ['arch-review', { contested: true }, 'recovery'],
+  ]) {
+    const level = pipelineConfig.resolveTaskLevel(role, signals, adaptive);
+    assert.ok(pipelineConfig.TASK_LEVELS.includes(level), `${role} projection must be recorder-compatible`);
+    assert.equal(level, expected, `${role} must project its evidence to the expected recorder task level`);
+  }
+});
+
 test('every GSD callback requires routed configuration validation on both runtimes', () => {
   const roots = [];
   const writeConfig = (runtime, raw) => {

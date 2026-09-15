@@ -1813,7 +1813,7 @@ tickets:
     repo: null
     wave: 16
     depends_on: [T-36-06, T-30-04, T-30-06, T-30-08, T-30-09, T-31-01, T-31-02, T-31-06, T-31-07]
-    files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/files-contract.test.cjs, tests/unit/source-contract.test.cjs]
+    files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/files-contract.test.cjs, tests/unit/source-contract.test.cjs, tests/smoke/codex-shipyard-smoke.sh, '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-PLAN.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml']
     risk: high
     human_checkpoint: true
     preauthorized: true

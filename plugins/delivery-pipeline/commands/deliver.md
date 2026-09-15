@@ -101,7 +101,7 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role> --model <recorder tier alias> --effort <level> --effort-applied <receipt applied effort> --task-level <level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<recorder route>"` — an agent
+- `dispatch-record.cjs mark <T> <role> --model <recorder tier alias> --effort <level> --effort-applied <receipt applied effort> --task-level <recorder-task-level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<recorder route>"` — an agent
   is working on it RIGHT NOW. The one fact here that is motion rather than a
   verdict, and the one the board could not see at all: nothing is pushed yet, so
   the live state still reads `execute`/`fix` and the stop gate refuses turns over
@@ -122,6 +122,15 @@ instead, and the front reads it back by itself:
   journal can say a judge was dispatched and not what it ran at, so every row of
   the ladder stays a matter of argument. With them a ladder review is one query
   (below).
+  **`--task-level` is a separate compatibility projection, not the canonical
+  boundary `rung`.** The adapter classifies the same dispatch facts with
+  `taskLevelRoute` and passes one of the recorder's supported values:
+  `mechanical|routine|complex|critical|recovery`. A fixed `base` dispatch for
+  `pr-sentinel` or `drift-check` maps to `mechanical`; ordinary work maps to
+  `routine` or `complex`; an earned critical lane maps to `critical`; and an
+  exhausted repair or contested judgement maps to `recovery`. Never pass
+  `base`, `very-complex`, `alternatives`, `repeat`, or `ceiling` verbatim as
+  `--task-level`; those are boundary rung names, not recorder task levels.
   **A sha the journal records is the full forty characters** — `$(git rev-parse HEAD)`,
   never `--short` and never an abbreviation pasted from a PR page. `log-event.cjs`
   refuses a shorter one outright: `gate_status` records a head that way, and a
@@ -1487,7 +1496,7 @@ may be dispatched at all: fix the file.
     before.** The receipt carries the launch identity (the Workflow task id or
     typed Agent id); once it exists, and only then, for every ticket you just
     handed out:
-    `dispatch-record.cjs mark <T> executor --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <receipt-applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <claude|codex> --backend <workflow|agent|codex-agent> --agent-id <launch id>`
+    `dispatch-record.cjs mark <T> executor --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <receipt-applied-effort> --route "<recorder-route>" --task-level <recorder-task-level> --runtime <claude|codex> --backend <workflow|agent|codex-agent> --agent-id <launch id>`
     The recorder adapter provides the compatibility tier/effort/route
     projection; it is not the canonical boundary route. Keep the concrete
     selector `model` for `--observed-model` when the host reports it.
@@ -1626,7 +1635,7 @@ The boundary resolves the fixed Codex Luna/medium or Workflow runtime Sonnet/hig
 selection, validates the generated `shipyard-pr-sentinel.toml` or the native
 Workflow-runtime alias plus explicit effort, launches the typed guard, and returns a
 verified receipt. Only after that receipt exists may the overlay be updated:
-`dispatch-record.cjs mark <T> pr-sentinel --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <workflow|agent|codex-agent> --agent-id <launch id>` for
+`dispatch-record.cjs mark <T> pr-sentinel --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <recorder-task-level> --runtime <runtime> --backend <workflow|agent|codex-agent> --agent-id <launch id>` for
 every ticket on the guarded list, with the same returned launch id and the exact
 Codex `--agent-file` when applicable. Never create a mark for a refused or
 phantom launch. Clear each record when the guard's report comes back; a
