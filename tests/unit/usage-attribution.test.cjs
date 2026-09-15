@@ -458,6 +458,35 @@ test('reconciliation rejects conflicting application copies and unsupported prov
   assert.equal(unsupported.compliant, false);
 });
 
+test('reconciliation keeps unknown application evidence separate and rejects mismatched dispatch joins', () => {
+  const resolution = routed('claude', 'executor', {}, 'outer-dispatch');
+  const receipt = applicationReceipt(resolution);
+  const unknown = reconcileTelemetry({
+    ...resolution,
+    application_receipt: { ...receipt, applied_model: 'unknown', applied_effort: 'unknown' },
+  });
+  assert.equal(unknown.application_status, 'unverifiable');
+  assert.equal(unknown.findings.includes('contradictory_application'), false);
+
+  const mismatchedId = reconcileTelemetry({
+    ...resolution,
+    resolution: { ...resolution, dispatch_id: 'nested-dispatch' },
+    application_receipt: receipt,
+  });
+  assert.equal(mismatchedId.resolution_status, 'contradictory');
+  assert.ok(mismatchedId.policy_resolution.contradictions.includes('dispatch_id_conflict'));
+
+  const missing = reconcileTelemetry({ ...resolution, receipt: null });
+  assert.equal(missing.application_status, 'unverifiable');
+  assert.ok(missing.findings.includes('missing_receipt'));
+
+  const usageRecords = [
+    { dispatch_id: resolution.dispatch_id, runtime: 'claude', provider: 'anthropic', session_id: 'one' },
+    { dispatch_id: resolution.dispatch_id, runtime: 'claude', provider: 'anthropic', session_id: 'two' },
+  ];
+  assert.equal(reconcileTelemetry({ ...resolution, application_receipt: receipt }, { usageRecords }).usage_join_status, 'ambiguous');
+});
+
 test('policy reconciliation requires complete resolver provenance and reconciles its full signal route', () => {
   const resolution = routed('codex', 'executor', { critical: true }, 'complete-signals');
   const incomplete = { ...resolution, application_receipt: applicationReceipt(resolution) };

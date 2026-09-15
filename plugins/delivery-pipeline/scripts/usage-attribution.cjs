@@ -586,6 +586,7 @@ function reconcileTelemetry(raw, options = {}) {
     && candidate.dispatch_id === initialDispatchId
     && supportedRuntime(initialRuntime)
     && candidate.runtime === initialRuntime
+    && candidate.provider === RUNTIME_PROVIDER[initialRuntime]
     && identityPresent(candidate));
   const usageEvidence = usageMatches.length === 1 ? usageMatches[0] : null;
   const usageResolution = usageEvidence ? resolutionOf(usageEvidence) : null;
@@ -654,7 +655,7 @@ function reconcileTelemetry(raw, options = {}) {
   if (runtime !== undefined && !supportedRuntime(runtime)) resolutionContradictions.push('unsupported_runtime');
   for (const field of [
     'runtime', 'role', 'policy_id', 'policy_version', 'policy_hash', 'logical_model',
-    'logical_rung', 'rung', 'rung_index', 'route', 'backend', 'mechanism',
+    'logical_rung', 'rung', 'rung_index', 'dispatch_id', 'route', 'backend', 'mechanism',
     'agent_file', 'launch_arguments', 'signals', 'signals_fired', 'requested_model',
     'requested_effort',
   ]) {
@@ -763,16 +764,16 @@ function reconcileTelemetry(raw, options = {}) {
   if (concreteConflictBetween(applicationSources, 'observed_model')) applicationContradictions.push('observed_model');
   if (concreteConflictBetween(applicationSources, 'observed_effort')) applicationContradictions.push('observed_effort');
   let receiptStalePolicy = false;
-  if (policyAware && appliedModel !== undefined && requestedModel !== undefined && appliedModel !== requestedModel) {
+  if (policyAware && concreteValue(appliedModel) && concreteValue(requestedModel) && appliedModel !== requestedModel) {
     applicationContradictions.push('applied_model');
   }
-  if (policyAware && appliedEffort !== undefined && requestedEffort !== undefined && appliedEffort !== requestedEffort) {
+  if (policyAware && effortValue(appliedEffort) && effortValue(requestedEffort) && appliedEffort !== requestedEffort) {
     applicationContradictions.push('applied_effort');
   }
-  if (expected && currentPolicy && appliedModel !== undefined && appliedModel !== expected.model) {
+  if (expected && currentPolicy && concreteValue(appliedModel) && appliedModel !== expected.model) {
     applicationContradictions.push('applied_model');
   }
-  if (expected && currentPolicy && appliedEffort !== undefined && appliedEffort !== expected.effort) {
+  if (expected && currentPolicy && effortValue(appliedEffort) && appliedEffort !== expected.effort) {
     applicationContradictions.push('applied_effort');
   }
   const receiptFields = [
@@ -822,9 +823,9 @@ function reconcileTelemetry(raw, options = {}) {
         && receipt.requested_model !== requestedModel) applicationContradictions.push('requested_model');
     if (receipt.requested_effort !== undefined && requestedEffort !== undefined
         && receipt.requested_effort !== requestedEffort) applicationContradictions.push('requested_effort');
-    if (receipt.applied_model !== undefined && appliedModel !== undefined
+    if (concreteValue(receipt.applied_model) && concreteValue(appliedModel)
         && receipt.applied_model !== appliedModel) applicationContradictions.push('applied_model');
-    if (receipt.applied_effort !== undefined && appliedEffort !== undefined
+    if (effortValue(receipt.applied_effort) && effortValue(appliedEffort)
         && receipt.applied_effort !== appliedEffort) applicationContradictions.push('applied_effort');
     if (receipt.backend !== undefined && backend !== undefined && receipt.backend !== backend) {
       applicationContradictions.push('backend');
@@ -849,10 +850,10 @@ function reconcileTelemetry(raw, options = {}) {
       }
     }
     if (expected && currentPolicy) {
-      if (receipt.applied_model !== undefined && receipt.applied_model !== expected.model) {
+      if (concreteValue(receipt.applied_model) && receipt.applied_model !== expected.model) {
         applicationContradictions.push('applied_model');
       }
-      if (receipt.applied_effort !== undefined && receipt.applied_effort !== expected.effort) {
+      if (effortValue(receipt.applied_effort) && receipt.applied_effort !== expected.effort) {
         applicationContradictions.push('applied_effort');
       }
       if (receipt.mechanism !== undefined && receipt.mechanism !== expected.mechanism) {
@@ -939,11 +940,11 @@ function reconcileTelemetry(raw, options = {}) {
   } else if (options.usageJoined === false || options.usage_joined === false) {
     usageJoinStatus = 'unjoined';
   } else if (Array.isArray(options.usageMatches)) {
-    usageJoinStatus = usageMatches.length > 1 && options.usageAmbiguous === true
+    usageJoinStatus = usageMatches.length > 1
       ? 'ambiguous'
       : usageMatches.length ? 'joined' : 'unjoined';
   } else if (Array.isArray(options.usageRecords)) {
-    usageJoinStatus = usageMatches.length > 1 && options.usageAmbiguous === true
+    usageJoinStatus = usageMatches.length > 1
       ? 'ambiguous'
       : usageMatches.length ? 'joined' : 'unjoined';
   } else {
@@ -963,7 +964,7 @@ function reconcileTelemetry(raw, options = {}) {
   const findings = [];
   if (stalePolicy || receiptStalePolicy) findings.push('stale_policy');
   if (uniqueApplicationContradictions.length) findings.push('contradictory_application');
-  if (!receipt && !receiptClaimed) findings.push('missing_receipt');
+  if (!receipt) findings.push('missing_receipt');
   if (observationUnknown) findings.push('unknown_observation');
   if (legacy) findings.push('legacy');
   const uniqueFindings = [...new Set(findings)];
