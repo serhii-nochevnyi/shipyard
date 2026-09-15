@@ -677,22 +677,61 @@ launch selection, policy fingerprinting, and receipt requirements; Codex and
 Claude resolve those facts through their own adapters. ADR-005 and ADR-012 are
 historical records and are superseded for current model and effort selection.
 
-The following block is retained only as the compatibility projection of the
-legacy `pipeline-config.cjs model <role> --json` reader. It is not launch
-authority and must not be used to choose a routed model. `tests/smoke/docs-smoke.sh`
-compares it with that compatibility reader so the diagnostic surface cannot
-drift silently:
+The following blocks are retained only as the compatibility projection of the
+legacy `pipeline-config.cjs model <role> --json` reader. They are not launch
+authority and must not be used to choose a routed model. The first block records
+the reader's default role rows, including the reason for each below-floor
+exemption. `tests/smoke/docs-smoke.sh` compares it with that compatibility
+reader so the diagnostic surface cannot drift silently:
 
 ```text
-role          tier     effort
-arch-review   opus     xhigh
-ci-fix        opus     high
-drift-check   sonnet   high
-executor      opus     high
-integrator    opus     xhigh
-pr-sentinel   sonnet   high
-research      opus     high
-review-fix    opus     high
+role          tier     effort   why this row
+integrator    opus     xhigh    the last mechanical judgment before a person merges,
+                                so its effort never drops; its measured run is a
+                                dispatch-specific fact, not a standing exception
+arch-review   opus     xhigh    reads a whole diff against every ADR; its effort is
+                                fixed by the compatibility reader, not by a runtime
+                                model preference
+executor      opus     high     it implements a contract; falsifying that contract
+                                belongs upstream of it
+ci-fix        opus     high     diagnosing a failing pipeline
+review-fix    opus     high     diagnosing review threads
+research      opus     high     gathering facts
+drift-check   sonnet   high     EXEMPT: it returns a file list and reuse pointers;
+                                its plan-defect burden is bought with effort, not
+                                with a tier, while the gate remains mechanical
+pr-sentinel   sonnet   high     EXEMPT: the merge decision is enforced by
+                                sentinel.cjs against live GitHub, not by the model;
+                                the script decides what lands
+```
+
+The compatibility reader also has signal-specific diagnostics. This second
+block is exhaustive for that legacy surface and is deliberately separate from
+the authoritative ADR-014 table below; it exists so old non-routed callers and
+their documentation cannot silently disagree about what the compatibility CLI
+reports:
+
+```text
+role          tier     effort   the dispatch signal that reaches it
+integrator    opus     max      --contested
+integrator    opus     max      --input-tokens over pipeline.fable_window_tokens
+arch-review   opus     max      --contested
+arch-review   opus     max      --input-tokens over pipeline.fable_window_tokens
+executor      opus     xhigh    --risk high
+executor      opus     xhigh    --checkpoint
+executor      opus     max      --input-tokens over pipeline.fable_window_tokens
+ci-fix        opus     max      --signature-state repeat
+ci-fix        opus     max      --signature-state repeat_exhausted
+ci-fix        opus     max      --input-tokens over pipeline.fable_window_tokens
+review-fix    opus     max      --signature-state repeat
+review-fix    opus     max      --signature-state repeat_exhausted
+review-fix    opus     max      --input-tokens over pipeline.fable_window_tokens
+drift-check   opus     max      --input-tokens over pipeline.fable_window_tokens
+research      opus     xhigh    --type alternatives
+research      opus     max      --input-tokens over pipeline.fable_window_tokens
+pr-sentinel   sonnet   max      --signature-state repeat
+pr-sentinel   opus     max      --signature-state repeat_exhausted
+pr-sentinel   opus     max      --input-tokens over pipeline.fable_window_tokens
 ```
 
 ### 7.5.1. Runtime-native model grids

@@ -347,7 +347,7 @@ configuration consumers. It is an ordered `model[:effort][@min_cli]` list, not
 the ADR-014 launch policy:
 
 ```json
-{ "delivery_pipeline": { "codex_models": "gpt-5.6-luna:max@0.153.1, gpt-6-astra:low@0.153.1" } }
+{ "delivery_pipeline": { "codex_models": "gpt-6-astra:low@0.153.1, gpt-6-astra:medium@0.153.1" } }
 ```
 
 - The compatibility resolver may inspect the first or last entry for its own
