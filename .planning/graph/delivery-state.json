@@ -1214,7 +1214,7 @@
     "pr_created_at": "2026-09-14T21:26:23Z",
     "head_sha": "70ac26b6ff7a4e3ef8dc6c00efe077c4462789f0",
     "merge_state": "UNKNOWN",
-    "behind_by": 11,
+    "behind_by": 12,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1386,13 +1386,28 @@
   },
   "T-36-12": {
     "branch": "ticket/T-36-12-supersede-obsolete-ladder-documentation",
-    "pr": null,
-    "status": "pending",
+    "pr": 147,
+    "status": "pr-open",
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/147",
+    "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
+    "pr_created_at": "2026-09-15T14:44:49Z",
+    "head_sha": "d32118ac71e1309d8f862c82ff4c96b3b54bbcd3",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
+    "checks": {
+      "total": 1,
+      "failing": 0,
+      "pending": 1,
+      "none_reported": false,
+      "unavailable": false
+    },
     "base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
     "base_reason": "T-36-10 is pr-open — cascade off ticket/T-36-10-exhaustive-signal-matrix-and-negative-by; the sentinel retargets this PR onto epic/36-enforce-the-runtime-model-ladder when T-36-10 lands",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
-    "ready": true,
+    "merge_scope": "integration",
     "reapable": false,
-    "since": "2026-09-12T19:57:33.322Z"
+    "since": "2026-09-15T14:45:05.271Z"
   }
 }

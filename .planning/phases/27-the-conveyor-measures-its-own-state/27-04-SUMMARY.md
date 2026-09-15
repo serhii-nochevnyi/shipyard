@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1e4a32da9889469b0b2c0f57f4ba96d07e636577d56270c8ba125876c5d91c91
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 43518feb2ef1224ca01a0e75b37ef104cb5ddf2cf00a699a8256facb18c9188b
 phase: 27-the-conveyor-measures-its-own-state
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 1e4a32da9889469b0b2c0f57f4ba96d07e636577d56270c8ba125876c5d91c91
+shipyard_source_fingerprint: 43518feb2ef1224ca01a0e75b37ef104cb5ddf2cf00a699a8256facb18c9188b
 ---
 
 # Phase 27: An epic learns what landed under it, and a worktree is cut from what the board named — Delivery Projection

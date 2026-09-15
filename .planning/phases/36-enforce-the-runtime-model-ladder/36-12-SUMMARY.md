@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1e4a32da9889469b0b2c0f57f4ba96d07e636577d56270c8ba125876c5d91c91
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 43518feb2ef1224ca01a0e75b37ef104cb5ddf2cf00a699a8256facb18c9188b
 phase: 36-enforce-the-runtime-model-ladder
 plan: 12
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 1e4a32da9889469b0b2c0f57f4ba96d07e636577d56270c8ba125876c5d91c91
+shipyard_source_fingerprint: 43518feb2ef1224ca01a0e75b37ef104cb5ddf2cf00a699a8256facb18c9188b
 ---
 
 # Phase 36: Supersede obsolete ladder documentation — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: 1e4a32da9889469b0b2c0f57f4ba96d07e636577d56270c8ba1
 ## Delivery Evidence
 
 - Ticket: T-36-12
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #147
 - Source plan: .planning/phases/36-enforce-the-runtime-model-ladder/36-12-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
