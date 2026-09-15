@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c5f6a2e520c151618dfc8d36be79e0672b2f21a4ab2a540fadb5db1abefef9d7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 14dc25c7a62475d8d31e9791906d9ba72debbd7baacea2893590ae5c14303a59
 phase: 21-verdicts-a-human-would-have-made-anyway
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: c5f6a2e520c151618dfc8d36be79e0672b2f21a4ab2a540fadb5db1abefef9d7
+shipyard_source_fingerprint: 14dc25c7a62475d8d31e9791906d9ba72debbd7baacea2893590ae5c14303a59
 ---
 
 # Phase 21: Decomposition asks for the approval the night would have needed — Delivery Projection
