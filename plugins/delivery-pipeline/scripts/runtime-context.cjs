@@ -43,23 +43,25 @@ function readJsonRuntime(root) {
   }
 }
 
-function markerFromCoreHome(coreHome) {
+function markerFromCoreHome(coreHome, strict = false) {
   const home = nonEmpty(coreHome);
   if (!home) return null;
   try {
     const marker = path.join(home, '.gsd-runtime');
     if (!fs.existsSync(marker)) return null;
-    return normalizeRuntime(fs.readFileSync(marker, 'utf8'));
-  } catch {
+    const value = fs.readFileSync(marker, 'utf8');
+    return strict ? value : normalizeRuntime(value);
+  } catch (error) {
+    if (strict) throw runtimeError('UNKNOWN_RUNTIME', 'gsd-core-marker', error.message);
     return null;
   }
 }
 
-function markerFromTools(toolsPath) {
+function markerFromTools(toolsPath, strict = false) {
   const tools = nonEmpty(toolsPath);
   if (!tools) return null;
   // <runtime-home>/gsd-core/bin/gsd-tools.cjs → <runtime-home>/gsd-core
-  return markerFromCoreHome(path.resolve(path.dirname(tools), '..'));
+  return markerFromCoreHome(path.resolve(path.dirname(tools), '..'), strict);
 }
 
 function markerFromPath(candidate) {
@@ -104,6 +106,7 @@ function installedRuntime(env) {
 }
 
 function resolveRuntime(root, options = {}) {
+  if (options.routed === true) return resolveDispatchContext(root, options);
   const env = options.env || process.env;
   const persisted = readJsonRuntime(root);
   const candidates = [
@@ -154,9 +157,96 @@ function resolveRuntime(root, options = {}) {
   return { runtime: fallback, source: fallback ? 'default' : 'ambiguous', persisted, conflict: null };
 }
 
+function runtimeError(code, source, message) {
+  return require('./model-policy.cjs').policyError(code, `${source}: ${message}`, { source });
+}
+
+// GSD inherits global defaults only when the project has no .planning directory.
+// Inspect the original values: its permissive parser is not a routed fallback.
+function readInheritedConfig(root, options = {}) {
+  if (root && fs.existsSync(path.join(root, '.planning'))) return {};
+  const env = options.env || process.env;
+  const home = env.GSD_HOME || env.HOME || require('os').homedir();
+  const file = path.join(home, '.gsd', 'defaults.json');
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('must be a JSON object');
+    }
+    return raw;
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    throw runtimeError('INVALID_CONFIG', file, `cannot inspect inherited GSD settings: ${error.message}`);
+  }
+}
+
+// Dispatches need evidence of the executing host. Installation presence,
+// project state and compatibility defaults cannot establish that identity.
+function resolveDispatchContext(root, options = {}) {
+  const env = options.env || process.env;
+  for (const [object, key, source] of [[options, 'runtime', 'option.runtime'],
+    [options, 'runtimeMarker', 'runtime-marker'], [env, 'SHIPYARD_RUNTIME', 'SHIPYARD_RUNTIME'],
+    [env, 'GSD_RUNTIME', 'GSD_RUNTIME']]) {
+    if (object[key] === null) throw runtimeError('UNKNOWN_RUNTIME', source, 'runtime must not be null');
+  }
+  const candidates = [
+    [options.runtime, 'option.runtime'],
+    [nonEmpty(env.SHIPYARD_RUNTIME), 'SHIPYARD_RUNTIME'],
+    [nonEmpty(env.GSD_RUNTIME), 'GSD_RUNTIME'],
+    [options.runtimeMarker, 'runtime-marker'],
+    [markerFromTools(options.gsdTools, true), 'option.gsdTools'],
+    [markerFromTools(env.SHIPYARD_GSD_TOOLS, true), 'SHIPYARD_GSD_TOOLS'],
+    [markerFromTools(env.GSD_TOOLS, true), 'GSD_TOOLS'],
+    [markerFromCoreHome(options.gsdCoreHome, true), 'option.gsdCoreHome'],
+    [markerFromCoreHome(env.GSD_CORE_HOME, true), 'GSD_CORE_HOME'],
+    [markerFromPath(options.scriptPath), 'bundle-path'],
+    [nonEmpty(env.CODEX_SANDBOX) || nonEmpty(env.CODEX_SANDBOX_NETWORK_DISABLED) ? 'codex' : undefined, 'codex-session-env'],
+    [nonEmpty(env.CLAUDE_PLUGIN_ROOT) || nonEmpty(env.CLAUDE_CODE_ENTRYPOINT) ? 'claude' : undefined, 'claude-session-env'],
+  ].filter(([value]) => value !== undefined && value !== null);
+  let selected;
+  for (const [value, source] of candidates) {
+    // Do not sanitize malformed IDs into a supported runtime.
+    const runtime = typeof value === 'string' && /^[a-zA-Z_ -]+$/.test(value.trim())
+      ? normalizeRuntime(value) : null;
+    if (!KNOWN_RUNTIMES.has(runtime)) {
+      throw runtimeError('UNKNOWN_RUNTIME', source, `unknown runtime ${JSON.stringify(value)}`);
+    }
+    if (selected && selected.runtime !== runtime) {
+      throw runtimeError('AMBIGUOUS_RUNTIME', source,
+        `runtime ${runtime} conflicts with ${selected.source} (${selected.runtime})`);
+    }
+    if (!selected) selected = { runtime, source };
+  }
+  if (!selected) {
+    throw runtimeError('AMBIGUOUS_RUNTIME', 'runtime-context',
+      'no active runtime; project-config-legacy, CODEX_HOME and defaultRuntime are compatibility-only');
+  }
+  const { POLICY_VERSION, POLICY_HASH } = require('./model-policy.cjs');
+  const persisted = readJsonRuntime(root);
+  const context = {
+    ...selected,
+    persisted,
+    conflict: persisted && persisted !== selected.runtime
+      ? { persisted, effective: selected.runtime } : null,
+    policy_version: POLICY_VERSION,
+    policy_hash: POLICY_HASH,
+  };
+  if (options.dispatch_id !== undefined) {
+    const id = options.dispatch_id;
+    if (typeof id !== 'string' || !id || /[\s\u0000-\u001f\u007f]/.test(id)) {
+      throw runtimeError('INVALID_INPUT', 'dispatch_id', 'must be a non-empty, whitespace-free launch identity');
+    }
+    context.dispatch_id = id;
+  }
+  if (context.conflict) Object.freeze(context.conflict);
+  return Object.freeze(context);
+}
+
 module.exports = {
   KNOWN_RUNTIMES,
   normalizeRuntime,
   readJsonRuntime,
   resolveRuntime,
+  resolveDispatchContext,
+  readInheritedConfig,
 };
