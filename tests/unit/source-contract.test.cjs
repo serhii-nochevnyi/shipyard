@@ -780,7 +780,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
 
   assert.deepStrictEqual(
     [codexResearch.model, codexResearch.effort, codexResearch.rung],
-    [policy.CODEX_MODEL_IDS.terra, 'high', 'base']
+    [policy.CODEX_MODEL_IDS.astra, 'low', 'base']
   );
   assert.deepStrictEqual(
     [claudeResearch.model, claudeResearch.effort, claudeResearch.rung],
@@ -788,7 +788,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
   assert.deepStrictEqual(
     [codexDecomposition.model, codexDecomposition.effort, codexDecomposition.rung],
-    [policy.CODEX_MODEL_IDS.sol, 'medium', 'base']
+    [policy.CODEX_MODEL_IDS.astra, 'low', 'base']
   );
   assert.deepStrictEqual(
     [claudeDecomposition.model, claudeDecomposition.effort, claudeDecomposition.rung],
@@ -797,7 +797,8 @@ test('research and decomposition use the canonical runtime ladders and only decl
 
   assert.equal(
     dispatchResolution('codex', 'research', { type: 'alternatives' }, 'contract-research-alternatives').rung,
-    'alternatives'
+    'base',
+    'Codex research has no alternatives rung; the undeclared signal must not promote it'
   );
   assert.equal(
     dispatchResolution('codex', 'research', { complexity: 'very-complex' }, 'contract-research-complex').rung,
