@@ -206,13 +206,12 @@ function createClaudeWorkflowDispatch(options = {}) {
   }
 
   const suppliedHost = object(options.host) ? options.host : null;
-  const capabilities = options.capabilities === undefined && suppliedHost
-    ? suppliedHost.capabilities
-    : options.capabilities;
-  const recorder = options.recorder === undefined && suppliedHost
-    ? suppliedHost.recorder
-    : options.recorder;
-  const applicationEvidence = options.applicationEvidence === undefined && suppliedHost
+  // When an explicit host is present, its closures are the trust boundary.
+  // Serializable workflow args must not be able to advertise capabilities or
+  // replace the host's recorder/evidence implementation.
+  const capabilities = suppliedHost ? suppliedHost.capabilities : options.capabilities;
+  const recorder = suppliedHost ? suppliedHost.recorder : options.recorder;
+  const applicationEvidence = suppliedHost
     ? suppliedHost.applicationEvidence
     : options.applicationEvidence;
   if (capabilities === undefined) {

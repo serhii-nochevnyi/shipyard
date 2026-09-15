@@ -670,6 +670,44 @@ test('workflow dispatch has no implicit host resources and rejects self-attested
   );
 });
 
+test('explicit Claude host owns workflow capabilities and receipt services', async () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-host-'));
+  workflowStores.push(storeDir);
+  const recorder = createDurableRecorder(storeDir);
+  const host = {
+    capabilities: WORKFLOW_CAPABILITIES,
+    recorder,
+    applicationEvidence: workflowApplicationEvidence,
+  };
+  const calls = [];
+  const result = await createClaudeWorkflowDispatch({
+    agent: async (prompt, options) => {
+      calls.push(options);
+      const value = {};
+      hostEvidence.set(value, {
+        launch_id: 'host-owned-launch',
+        applied_model: options.model,
+        applied_effort: options.effort,
+      });
+      return value;
+    },
+    prompt: 'host-owned prompt',
+    role: 'executor',
+    model: 'sonnet',
+    effort: 'max',
+    host,
+    // Contradictory caller values must not override the explicit host.
+    capabilities: { supportedModels: ['fable'], supportedEfforts: ['ultra'] },
+    recorder: {},
+    applicationEvidence: () => ({
+      launch_id: 'spoofed-launch', applied_model: 'fable', applied_effort: 'ultra',
+    }),
+  });
+  assert.strictEqual(calls[0].model, 'sonnet');
+  assert.strictEqual(calls[0].effort, 'max');
+  assert.strictEqual(result.receipt.launch_id, 'host-owned-launch');
+});
+
 suite('strict Claude adapter — native aliases and explicit application evidence (T-36-05)');
 
 const CLAUDE_CAPABILITIES = {
