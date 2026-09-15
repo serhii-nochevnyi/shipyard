@@ -399,8 +399,16 @@ function parseMarkFlags(argv, role) {
   }
 
   // ADR-014 writes reconcile a dispatch id against boundary-owned storage.
-  // The legacy flags below remain unverified telemetry; they cannot populate
-  // applied_* or mint an application_receipt by themselves.
+  // A store without its id cannot identify a receipt, so reject it before
+  // opening the store (and before a partial record can be written).
+  if (given.has('boundary-store') && !given.has('dispatch-id')) {
+    fail(
+      'a reconciled dispatch requires both --boundary-store and --dispatch-id; ' +
+      'the dispatch id must name the receipt the boundary recorded after launch.'
+    );
+  }
+  // The legacy flags below remain readable historical telemetry. They cannot
+  // populate applied_* or mint an application_receipt by themselves.
   if (given.has('boundary-store')) {
     try {
       const { createDurableRecorder, createDispatchBoundary } = require('./dispatch-boundary.cjs');
@@ -674,6 +682,18 @@ function parseMarkFlags(argv, role) {
       );
     }
     decided.agent_file = agentFile;
+  }
+  // A resolver route is the declaration that this is a new routed launch, not
+  // merely an old ownership row.  Its requested/applied fields are execution
+  // claims, so accepting caller-supplied values here would let the normal
+  // delivery instructions write unverified telemetry.  The launch-flow caller
+  // is wired in a later ticket; until it passes the durable boundary receipt,
+  // fail closed rather than treating hand-written flags as evidence.
+  if (given.has('route')) {
+    fail(
+      'a routed dispatch requires --boundary-store and --dispatch-id from the completed dispatch boundary; ' +
+      'manual --model/--effort/--route values are not application evidence.'
+    );
   }
   return decided;
 }
