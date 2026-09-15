@@ -11,6 +11,13 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const {
+  createDurableRecorder,
+} = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const {
+  CLAUDE_MODEL_ALIASES,
+  createClaudeWorkflowDispatch,
+} = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
 
 const SENTINEL = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'sentinel.cjs');
 const roots = [];
@@ -1554,26 +1561,61 @@ suite('the fix round carries the remedy the duty named');
 const FIX_ROUND = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'workflows', 'fix-round.mjs'
 );
+const FIX_DISPATCH_STORE = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sentinel-dispatch-'));
+const FIX_DISPATCH_RECORDER = createDurableRecorder(FIX_DISPATCH_STORE);
+process.on('exit', () => {
+  try { fs.rmSync(FIX_DISPATCH_STORE, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+});
+const FIX_DISPATCH_CAPABILITIES = Object.freeze({
+  supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
+  supportedEfforts: ['high', 'medium', 'max'],
+  observedModel: false,
+  observedEffort: false,
+});
+const fixHostEvidence = new WeakMap();
+let fixLaunch = 0;
+const fixApplicationEvidence = ({ result }) => {
+  const evidence = fixHostEvidence.get(result);
+  if (!evidence) throw new Error('test Claude host returned no application evidence');
+  return evidence;
+};
+const fixDispatchFactory = (options) => createClaudeWorkflowDispatch({
+  ...options,
+  capabilities: options.capabilities === undefined ? FIX_DISPATCH_CAPABILITIES : options.capabilities,
+  recorder: options.recorder === undefined ? FIX_DISPATCH_RECORDER : options.recorder,
+  applicationEvidence: options.applicationEvidence === undefined
+    ? fixApplicationEvidence
+    : options.applicationEvidence,
+});
 
 function runFixRound(args) {
   const src = fs.readFileSync(FIX_ROUND, 'utf8').replace(/^export const meta/m, 'const meta');
   // eslint-disable-next-line no-new-func
-  const wf = new Function('agent', 'parallel', 'phase', 'log', 'args',
+  const wf = new Function('agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch',
     `return (async () => {\n${src}\n})()`);
   const prompts = [];
-  const agent = (prompt) => {
+  const agent = (prompt, opts) => {
     prompts.push(prompt);
-    return Promise.resolve({ pushed: true, status: 'fixed', notes: 'n', hypothesis: 'h' });
+    const result = { pushed: true, status: 'fixed', notes: 'n', hypothesis: 'h' };
+    fixHostEvidence.set(result, {
+      launch_id: `test-fix-launch-${++fixLaunch}`,
+      applied_model: opts.model,
+      applied_effort: opts.effort,
+    });
+    return Promise.resolve(result);
   };
   const parallel = (fns) => Promise.all(fns.map((f) => f()));
-  return { prompts, result: wf(agent, parallel, () => {}, () => {}, args) };
+  return {
+    prompts,
+    result: wf(agent, parallel, () => {}, () => {}, args, fixDispatchFactory),
+  };
 }
 
 const FIX_ARGS = (over = {}) => ({
   prs: [{
     id: 'T-24-06', pr: 42, branch: 'ticket/T-24-06', worktreePath: '/wt/T-24-06',
     planPath: '/proj/.planning/phases/24/24-06-PLAN.md', needsCiFix: true,
-    base: 'epic/24-x', ...over,
+    base: 'epic/24-x', model: 'opus', effort: 'medium', ...over,
   }],
   ciFixRefPath: '/refs/ci-fix.md',
   reviewFixRefPath: '/refs/review-fix.md',
