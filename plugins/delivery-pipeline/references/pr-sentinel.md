@@ -533,7 +533,7 @@ reinit is not optional.
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
   delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
-  `dispatch-record.cjs mark <T> <role> --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <backend> --agent-id <launch-id> --graph <project>/.planning/graph`
+  `dispatch-record.cjs mark <T> <role> --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <recorder-task-level> --runtime <runtime> --backend <backend> --agent-id <launch-id> --graph <project>/.planning/graph`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as
