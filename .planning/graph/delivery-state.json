@@ -1212,13 +1212,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/140",
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T21:26:23Z",
-    "head_sha": "70ac26b6ff7a4e3ef8dc6c00efe077c4462789f0",
-    "merge_state": "UNKNOWN",
-    "behind_by": 15,
+    "head_sha": "86701de63194627dcd9ef6ef78a758b555c5fb2c",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
@@ -1238,9 +1238,9 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/141",
     "pr_base": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
     "pr_created_at": "2026-09-14T21:57:13Z",
-    "head_sha": "825ba638ca0d09ca9b78584a32d389af803ea501",
-    "merge_state": "CLEAN",
-    "behind_by": 31,
+    "head_sha": "886234a3a77d6d379bfd6a33921d9972c02371c2",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "gate": {
       "arch-review": "conform",
       "drift-check": "fresh",
@@ -1252,7 +1252,7 @@
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
@@ -1275,8 +1275,8 @@
     "pr_base": "ticket/T-36-06-route-gsd-decomposition-through-the-mand",
     "pr_created_at": "2026-09-14T22:55:34Z",
     "head_sha": "c85dd2a4567c34c6d8e1a47816df76c77b5e1695",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
+    "merge_state": "UNKNOWN",
+    "behind_by": 49,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1411,12 +1411,12 @@
     "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
     "pr_created_at": "2026-09-15T14:44:49Z",
     "head_sha": "36b55c6a76c91e3df4ffcd34b1489e799e76129b",
-    "merge_state": "UNSTABLE",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
