@@ -140,13 +140,14 @@ review; it cannot add a rung to research or decomposition.
 
 Runtime-specific launch handling is also fixed:
 
-- The static generated-agent route used by Codex uses the boundary's validated
-  `agent_file` and immutable handoff through `launchStatic`. The dynamic
-  workflow-adapter route used by the workflow-native alias runtime passes
-  `resolution.launch_arguments.model` and the supported effort
-  (`reasoning_effort` for a Codex callback, `effort` for a native alias callback)
-  unchanged to the typed GSD host callback. Never translate a native alias into
-  a logical model id or invent a selection here.
+- Static Codex roles use the boundary's validated `agent_file` and immutable
+  handoff through `launchStatic`. Codex `decomposition` is dynamic: its
+  `agent_file` is null, so the boundary passes
+  `resolution.launch_arguments.model` and `reasoning_effort` to the typed GSD
+  host callback. The workflow-native alias runtime is dynamic for this role as
+  well and passes the native `model` and `effort` pair. Never send a dynamic
+  decomposition selection through `launchStatic`, translate a native alias into
+  a logical model id, or invent a selection here.
 
 The `/gsd-plan-phase` Skill is only a coordinator for these callbacks. Wire its
 `gsd-phase-researcher`, `gsd-planner`, and `gsd-plan-checker` launches to the
@@ -171,6 +172,19 @@ does not fall back to a generic launch. `context.gsd_role`, `agentType`,
 `agent_type`, bare Agent/Task markers, and self-asserted application evidence
 are not attestation; source-contract fixtures exercise the missing and
 mismatched cases as well as the successful typed path.
+
+**Cross-ticket integration dependency (T-36-03/T-36-05):** This command
+declares the callback contract; the production Workflow host binding is
+`${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs`. It injects the typed
+`__createClaudeWorkflowDispatch` callback as the sixth workflow binding and
+keeps capabilities, the durable recorder, and application evidence outside
+serializable `args`. The host must provide and enforce the named-role and
+launch-mechanism attestations, then invoke `boundary.dispatch` for the three
+callbacks. Until that binding exists, treat the callback as unavailable and
+stop before launch. `context.gsd_role`,
+`agentType`, `agent_type`, bare Agent/Task markers, and self-asserted
+application evidence are not attestation; this command and its source-contract
+fixtures must not simulate them.
 
 Treat a dispatch as successful only when the returned record contains a
 boundary-verified receipt (`receipt.compliance` is `verified`) and the durable

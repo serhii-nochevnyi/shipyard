@@ -901,6 +901,21 @@ ${CLAUDE_PLUGIN_ROOT}/workflows/executors.mjs    # Step 3 — code+verify+commit
 ${CLAUDE_PLUGIN_ROOT}/workflows/fix-round.mjs    # Step 4 — one parallel fix pass
 ```
 
+The production Workflow host binding is
+`${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs`. It loads one of these
+DSL scripts, supplies the native `agent`/`parallel` callbacks, and injects
+`__createClaudeWorkflowDispatch` as the sixth binding. The binding owns the
+capabilities, frozen durable recorder, and application-evidence callback; those
+resources must never be smuggled through serializable `args`:
+
+```text
+runClaudeWorkflow({ scriptPath, args, agent, parallel, phase, log,
+  capabilities, recorder, applicationEvidence })
+```
+
+This is the only production Workflow launch path. A host that cannot provide
+that binding refuses before the workflow evaluates or calls `agent()`.
+
 The fix-round adapter receives one already-validated boundary selection per PR;
 its argument shape remains explicit so the base-merge and evidence contract
 cannot disappear during a formatting-only edit:

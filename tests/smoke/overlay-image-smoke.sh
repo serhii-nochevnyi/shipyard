@@ -18,6 +18,7 @@ for f in commands/route.md commands/investigate.md commands/decompose.md command
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
          scripts/usage-attribution.cjs scripts/usage-report.cjs \
          scripts/frontmatter.cjs scripts/pipeline-config.cjs scripts/front.cjs \
+         scripts/claude-workflow-host.cjs \
          workflows/drift-gate.mjs workflows/executors.mjs workflows/fix-round.mjs \
          workflows/investigation-research.mjs; do
   [[ -f "plugins/delivery-pipeline/$f" ]] || { echo "missing delivery-pipeline $f"; exit 1; }
@@ -135,6 +136,7 @@ docker run --rm \
   test -f /opt/delivery-pipeline/scripts/usage-report.cjs
   test -f /opt/delivery-pipeline/scripts/frontmatter.cjs
   test -f /opt/delivery-pipeline/scripts/pipeline-config.cjs
+  test -f /opt/delivery-pipeline/scripts/claude-workflow-host.cjs
   test -f /opt/delivery-pipeline/workflows/executors.mjs
   test -f /opt/delivery-pipeline/workflows/drift-gate.mjs
   test -f /opt/delivery-pipeline/workflows/fix-round.mjs
