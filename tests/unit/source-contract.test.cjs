@@ -726,6 +726,52 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
   assert.ok(normalized(source).includes(normalized('there is no receipt-bound decomposition fallback')), 'missing receipts must fail closed');
 });
 
+test('decompose selects runtime before tuning and establishes context before one callback set', () => {
+  const source = readRepo('plugins/delivery-pipeline/commands/decompose.md');
+  const boundarySection = source.slice(
+    source.indexOf('## Step 0.5 — Mandatory GSD runtime dispatch'),
+    source.indexOf('## Step 1 — Clarify the mode and the ticket size')
+  );
+  const runtimeAt = boundarySection.indexOf('1. Identify the active host runtime');
+  const tuneAt = boundarySection.indexOf('gsd-tune.cjs --check');
+  assert.ok(runtimeAt >= 0 && tuneAt > runtimeAt, 'the active runtime must be selected before gsd-tune preflight');
+  assert.match(
+    boundarySection,
+    /gsd-tune\.cjs --check --runtime "\$runtime"/,
+    'gsd-tune --check must receive the already-selected runtime explicitly'
+  );
+  assert.ok(
+    normalized(boundarySection).includes(normalized('Tuning drift is harmless and MUST NOT block decomposition'))
+      && normalized(boundarySection).includes(normalized('only required delivery-contract or projection failures block')),
+    'tuning-only drift must not block while required contract/projection failures still do'
+  );
+
+  const chain = source.slice(
+    source.indexOf('## Step 2 — GSD chain'),
+    source.indexOf('## Step 3 — Delivery frontmatter extension')
+  );
+  const phaseAt = chain.indexOf('Pick the phase number');
+  const contextAt = chain.indexOf('/gsd-plan-phase <N> --ingest <adr-paths>');
+  const researcherAt = chain.indexOf('`gsd-phase-researcher` →');
+  const plannerAt = chain.indexOf('`gsd-planner` →');
+  const checkerAt = chain.indexOf('`gsd-plan-checker` →');
+  assert.ok(
+    phaseAt >= 0 && phaseAt < contextAt && contextAt < researcherAt
+      && researcherAt < plannerAt && plannerAt < checkerAt,
+    'phase/ADR context must precede the researcher, planner, and checker callbacks'
+  );
+  assert.ok(normalized(chain).includes(normalized('exactly one set of three typed, boundary-owned callbacks')));
+  assert.ok(normalized(chain).includes(normalized('same explicit context')));
+  assert.ok(normalized(chain).includes(normalized('exactly three verified durable receipts')));
+  assert.ok(normalized(chain).includes(normalized('same checker receipt')));
+  assert.ok(normalized(chain).includes(normalized('must not dispatch or record a second `gsd-plan-checker`')));
+  assert.equal(
+    (chain.match(/`gsd-plan-checker` →/g) || []).length,
+    1,
+    'convergence must not add a second checker callback or receipt'
+  );
+});
+
 test('research and decomposition use the canonical runtime ladders and only declared escalation signals', () => {
   const codexResearch = dispatchResolution('codex', 'research', {}, 'contract-codex-research');
   const claudeResearch = dispatchResolution('claude', 'research', {}, 'contract-claude-research');

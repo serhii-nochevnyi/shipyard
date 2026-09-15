@@ -49,23 +49,28 @@ The boundary, not `.planning/config.json`, a model profile, or an inherited
 session, is the authority for runtime, model, effort, escalation, and receipt.
 Initialize it before starting the GSD chain:
 
-Before any GSD launch, preflight the project-relative delivery contract. Run
-`node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-tune.cjs --check` and require a clean
-report with `.shipyard/generated/gsd-delivery-rules/SKILL.md` present for the
-planner and executor. If the check, projection, or required skill is missing or
-stale, stop and tune the project before retrying; this preflight does not select
-a runtime or replace a dispatch receipt.
-
 1. Identify the active host runtime. It MUST be exactly `codex` or `claude` and
-   MUST be passed explicitly on every `boundary.dispatch` input. A project
-   preference, an installed integration, or an ambiguous host is not runtime
-   selection.
-2. Use `createDispatchBoundary` from `dispatch-boundary.cjs` with the matching
+   MUST be saved as `runtime` and passed explicitly to every later preflight and
+   `boundary.dispatch` input. A project preference, an installed integration,
+   or an ambiguous host is not runtime selection.
+2. With `runtime` fixed, preflight the project-relative delivery contract. Run
+   `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-tune.cjs --check --runtime "$runtime"`
+   and inspect the report by category. Tuning drift is harmless and MUST NOT
+   block decomposition; only required delivery-contract or projection failures
+   block. A required failure includes the conveyor setting, or a missing,
+   stale, foreign, or unreadable `.shipyard/generated/gsd-delivery-rules/SKILL.md`
+   projection needed by the planner and executor. A hard preflight refusal is
+   still fail-closed. Do not apply tuning automatically, and do not treat the
+   aggregate non-zero status caused only by tuning drift as a block. The
+   explicit `--runtime "$runtime"` keeps a dual-runtime host from checking the
+   wrong install or reporting ambiguity; this preflight does not replace a
+   dispatch receipt.
+3. Use `createDispatchBoundary` from `dispatch-boundary.cjs` with the matching
    `createCodexDispatchAdapter` or `createClaudeDispatchAdapter` and a
    `createDurableRecorder`. The adapter must advertise the selected model and
    effort pair. If the adapter, capabilities, recorder, or typed GSD launch
    hook is unavailable, refuse before launching.
-3. Use the canonical boundary call for each role:
+4. Use the canonical boundary call for each role:
    `boundary.dispatch({ runtime, role, signals, dispatch_id }, context)`.
    The boundary resolves and validates the canonical policy, invokes the
    runtime adapter, verifies application evidence, and records the receipt.
@@ -177,32 +182,40 @@ parses ADRs.)
 ## Step 2 — GSD chain
 
 Before invoking GSD, complete Step 0.5 and keep one durable boundary recorder
-for the chain. The three launches below are separate dispatches and each must
-produce its own recorded receipt:
+for the chain. The invocation below is one coordinated operation: phase and GSD
+context first, then one callback set, then materialization verification.
 
-1. `gsd-phase-researcher` → `role: research`, with only the declared research
-   signals.
-2. `gsd-planner` → `role: decomposition`, with only the declared
-   critical/checkpoint signals.
-3. `gsd-plan-checker` → `role: decomposition`, with only the declared
-   critical/checkpoint signals.
+1. Pick the phase number: the next free one (or the user's argument), and
+   gather the selected ADR path(s) and the mode/granularity chosen in Step 1.
+2. Gather/invoke the GSD context by running
+   `/gsd-plan-phase <N> --ingest <adr-paths> [--tdd|--mvp]` only through the
+   Skill. The Skill must first establish one explicit context carrying phase
+   `<N>`, the ADR path(s), mode, granularity, and relevant reads; no callback is
+   eligible before that context is fixed. If GSD, the Skill, callback wiring,
+   or the durable recorder is unavailable, refuse before launching or making
+   any callback; do not prompt the user to run an external command and do not
+   run the Skill opaquely.
+3. With that context fixed, the Skill makes exactly one set of three typed,
+   boundary-owned callbacks, in this order:
+   - `gsd-phase-researcher` → `role: research`, with only the declared research
+     signals.
+   - `gsd-planner` → `role: decomposition`, with only the declared
+     critical/checkpoint signals.
+   - `gsd-plan-checker` → `role: decomposition`, with only the declared
+     critical/checkpoint signals.
 
-The Skill/coordinator must pass the explicit runtime and resolved launch
-selection into each typed callback. Never collapse these roles into one inline
-prompt or launch a generic agent when a callback cannot apply the resolution.
-
-4. Pick the phase number: the next free one (or the user's argument).
-5. Run `/gsd-plan-phase <N> --ingest <adr-paths> [--tdd|--mvp]` only through a
-   Skill wired to the three boundary callbacks above. If GSD, the Skill,
-   callback wiring, or the durable recorder is unavailable, refuse before
-   launching; do not prompt the user to run an external command and do not run
-   the Skill opaquely.
-6. **Verify materialization**: `ls .planning/phases/<N>-*/*-PLAN.md` — the files
-   MUST exist, and all three GSD dispatches MUST have acknowledged, verified
-   receipts. If the GSD chain is unavailable, any receipt is missing or failed,
-   or the files were not created — stop with a BLOCK. Do NOT substitute Jira
-   tickets for them and do NOT create PLAN.md files yourself; there is no
-   receipt-bound decomposition fallback.
+   Each callback receives the same explicit context plus the selected runtime,
+   resolved launch selection, and a unique `dispatch_id`. Each boundary call
+   must return one acknowledged, verified durable receipt. The set is exactly
+   three callback dispatches and exactly three verified durable receipts, one
+   per typed role. Never collapse these roles into one inline prompt or launch
+   a generic agent when a callback cannot apply the resolution.
+4. **Verify materialization**: `ls .planning/phases/<N>-*/*-PLAN.md` — the files
+   MUST exist, and the three receipts from item 3 must be present and verified.
+   If the GSD chain is unavailable, any receipt is missing or failed, or the
+   files were not created — stop with a BLOCK. Do NOT substitute Jira tickets
+   for them and do NOT create PLAN.md files yourself; there is no receipt-bound
+   decomposition fallback.
 
    ```markdown
    ---
@@ -241,12 +254,16 @@ prompt or launch a generic agent when a callback cannot apply the resolution.
    `files_modified`/`requirements` is rejected by Gate 2: it is almost always a
    comment that leaked into the value, and a corrupted path silently disables the
    file-overlap guarantee for that entry.
-7. Run `/gsd-plan-review-convergence <N> --all --max-cycles 3` only as a
-   boundary-owned `gsd-plan-checker` callback with its own explicit runtime,
-   dispatch id, and durable receipt, or replace it with a deterministic local
-   check that launches no agent. If neither path is available, stop with a
-   BLOCK. Never invoke an opaque Skill, skip convergence as a tuning choice, or
-   synthesize a convergence result without evidence.
+5. Convergence belongs to the single checker path from item 3. That callback
+   may perform `/gsd-plan-review-convergence <N> --all --max-cycles 3` as
+   internal work, and its result must be covered by the same checker receipt;
+   it MUST NOT dispatch or record a second `gsd-plan-checker`. If the callback
+   cannot own convergence, use a deterministic local check that launches no
+   agent and creates no receipt. Either path leaves exactly three typed
+   callbacks, exactly three verified receipts, and the materialized PLAN set
+   above. If neither path is available, stop with a BLOCK. Never invoke an
+   opaque Skill, skip convergence as a tuning choice, or synthesize a
+   convergence result without evidence.
 
 ## Step 3 — Delivery frontmatter extension
 
