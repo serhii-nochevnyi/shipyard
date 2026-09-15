@@ -1,9 +1,19 @@
 # ADR-012 — task-level model ladder for Claude and Codex
 
-- **Status:** accepted
+- **Status:** superseded for runtime model and effort selection
 - **Date:** 2026-09-10
 - **Decision owner:** repository operator
 - **Scope:** Shipyard delivery roles on Claude Code and Codex
+
+> **Historical record — superseded by [ADR-014](ADR-014-mandatory-runtime-model-ladder.md).**
+> This ADR remains readable as the dated task-level experiment; its decision,
+> rationale, and rollback text are not rewritten. It is not current launch
+> authority. ADR-014 supersedes the universal-floor wording, the Terra/Astra-only
+> palette, the integrator-ceiling rule, and the one-entry/implicit or inherited
+> fallback behavior described below. Current routed dispatches use ADR-014's
+> runtime-specific role/rung/signal grids, explicit Codex or Claude adapters,
+> mandatory boundary, and verified application receipts. Claude's existing
+> palette, aliases, provider, and credentials remain unchanged.
 
 ## Decision
 
