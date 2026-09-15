@@ -18,7 +18,9 @@ test('states the current independent runtime grids and their native ladders', ()
     'Codex grid:',
     'executor Luna/max → Astra/low only for explicit `critical`/`checkpoint`',
     'Claude grid:',
-    'executor Sonnet/max → Opus/high only for explicit `critical`/`checkpoint`',
+    'research Opus/medium → Opus/max only for explicit `very-complex`',
+    'decomposition Opus/medium → Opus/max only for explicit `critical`/`checkpoint`',
+    'executor Sonnet/max → Opus/low only for explicit `critical`/`checkpoint`',
   ]) {
     assert.ok(instructions.includes(phrase), `CLAUDE.md must state: ${phrase}`);
   }

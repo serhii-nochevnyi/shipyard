@@ -23,7 +23,7 @@ const CANONICAL_MODEL_MAPPINGS = Object.freeze({
   claude: CLAUDE_MODEL_ALIASES,
 });
 
-const POLICY_VERSION = 'adr-014.v3';
+const POLICY_VERSION = 'adr-014.v4';
 const SUPPORTED_RUNTIMES = Object.freeze(['codex', 'claude']);
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const SIGNATURE_STATES = Object.freeze([
@@ -109,17 +109,16 @@ const CODEX_ROLE_RUNG_DEFINITIONS = Object.freeze({
 // is consumed only as a set of supported concrete Claude selections.
 const CLAUDE_ROLE_RUNG_DEFINITIONS = Object.freeze({
   research: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'high' }),
-    Object.freeze({ name: 'alternatives', model_key: 'opus', effort: 'medium' }),
-    Object.freeze({ name: 'very-complex', model_key: 'fable', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'very-complex', model_key: 'opus', effort: 'max' }),
   ]),
   decomposition: Object.freeze([
     Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
-    Object.freeze({ name: 'critical', model_key: 'fable', effort: 'medium' }),
+    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'max' }),
   ]),
   executor: Object.freeze([
     Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'max' }),
-    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
+    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'low' }),
   ]),
   'pr-sentinel': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'high' }),
@@ -189,7 +188,6 @@ const CODEX_ROLE_SIGNAL_RULES = Object.freeze({
 
 const CLAUDE_ROLE_SIGNAL_RULES = Object.freeze({
   research: Object.freeze({
-    alternatives: Object.freeze({ rung: 'alternatives', any: Object.freeze([{ type: 'alternatives' }]) }),
     'very-complex': Object.freeze({ rung: 'very-complex', any: Object.freeze([{ complexity: 'very-complex' }]) }),
   }),
   decomposition: CODEX_ROLE_SIGNAL_RULES.decomposition,

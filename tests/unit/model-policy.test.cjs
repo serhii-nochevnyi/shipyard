@@ -98,13 +98,13 @@ test('resolves every base role to the ADR-014 logical and concrete tuple on Code
 
 test('resolves Claude through its independent native grid without changing Codex ids', () => {
   const cases = [
-    ['research', {}, 'base', 'sonnet', 'sonnet', 'high'],
-    ['research', { type: 'alternatives' }, 'alternatives', 'opus', 'opus', 'medium'],
-    ['research', { complexity: 'very-complex' }, 'very-complex', 'fable', 'fable', 'medium'],
-    ['decomposition', { checkpoint: true }, 'critical', 'fable', 'fable', 'medium'],
-    ['decomposition', { critical: true }, 'critical', 'fable', 'fable', 'medium'],
+    ['research', {}, 'base', 'opus', 'opus', 'medium'],
+    ['research', { type: 'alternatives' }, 'base', 'opus', 'opus', 'medium'],
+    ['research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'opus', 'max'],
+    ['decomposition', { checkpoint: true }, 'critical', 'opus', 'opus', 'max'],
+    ['decomposition', { critical: true }, 'critical', 'opus', 'opus', 'max'],
     ['executor', {}, 'base', 'sonnet', 'sonnet', 'max'],
-    ['executor', { critical: true }, 'critical', 'opus', 'opus', 'high'],
+    ['executor', { critical: true }, 'critical', 'opus', 'opus', 'low'],
     ['pr-sentinel', {}, 'base', 'sonnet', 'sonnet', 'high'],
     ['integrator', {}, 'base', 'opus', 'opus', 'medium'],
     ['integrator', { contested: true }, 'critical', 'opus', 'opus', 'high'],
@@ -141,6 +141,13 @@ test('resolves Claude through its independent native grid without changing Codex
   });
   assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.executor[0], {
     name: 'base', model_key: 'sonnet', effort: 'max',
+  });
+  assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.research, [
+    { name: 'base', model_key: 'opus', effort: 'medium' },
+    { name: 'very-complex', model_key: 'opus', effort: 'max' },
+  ]);
+  assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.decomposition[1], {
+    name: 'critical', model_key: 'opus', effort: 'max',
   });
 });
 
