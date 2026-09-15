@@ -125,13 +125,13 @@ instead, and the front reads it back by itself:
   refuses a shorter one outright: `gate_status` records a head that way, and a
   reader holding only the journal cannot lengthen an abbreviation, so the two
   formats never compare and a live architecture verdict reads as stale.
-  Add `--effort-applied <level>` **on the Workflow path only** — `agent()` carries
-  an effort, the Agent tool has no such parameter, so an Agent-dispatched role runs
-  at the session's own effort whatever the ladder chose. If the backend is known
-  not to support the parameter, pass `--effort-applied unsupported`; if it ran but
-  the host did not expose what was applied, pass `unknown`. Omitting the flag is
-  UNMEASURED, and the recorder will not fill it in. Never pass the resolved value
-  as the applied one.
+  Add `--effort-applied <level>` only after the launch adapter explicitly applied
+  the resolved effort and returned its application receipt. A routed Agent path
+  without an explicit effort override must hard-refuse before spawn and before a
+  dispatch record: prompt text, session inheritance, `unsupported`, and `unknown`
+  are not applied effort. Never copy the resolved value into this field. Existing
+  historical `unsupported` or `unknown` evidence remains visible to reports, but
+  cannot make a new routed launch compliant.
   When the runtime reports the concrete execution, add `--observed-model <id>`
   and `--observed-effort <level|unsupported|unknown>`. These fields let the ladder report
   compare requested, applied and observed values; omit them when the host gives
@@ -270,9 +270,10 @@ SENTINEL    ci-fix / base-merge / review-fix / arch-review / undraft / merge
 
 **Post the guard, then keep moving. Never wait for it.**
 
-- **Background agent (preferred, where the Agent tool exists).** After Step 3 publishes PRs,
-  spawn ONE sentinel with `Agent({ run_in_background: true, subagent_type:
-  'general-purpose', model, ... })` whose prompt is
+- **Background sentinel (preferred, where a launch surface explicitly applies both
+  resolved values).** After Step 3 publishes PRs, spawn ONE sentinel only through
+  a launch surface that applies the selected model and reasoning effort explicitly
+  and returns an application receipt. Its prompt is
   `${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md` plus the guarded ticket list
   (id, PR, branch, worktree path, repo, base, plan path), the absolute plugin
   scripts path, the project's `.planning/graph` path and `maxAttempts`.
@@ -421,11 +422,12 @@ Missing facts keep a task in the complex lane and produce a warning; they never
 silently buy a cheaper lane.
 
 **The Agent tool takes no `effort` parameter at all** (verified against the live
-schema, CLI 2.1.263): only Workflow's `agent()` carries it. So effort is ENFORCED
-on the Workflow path — executors, drift judges, fix rounds — and for an
-Agent-spawned background guard it is a sentence in the prompt ("think at <effort>
-effort"). Pass the resolved `model` either way; do not read the guard's behaviour
-as if the number were enforced there.
+schema, CLI 2.1.263): only Workflow's `agent()` carries it. It therefore cannot
+launch a routed background guard under ADR-014. Do not turn the resolved effort
+into prompt text or rely on the active session; hard-refuse that launch and run the
+documented sentinel duty pass instead. Static Codex roles still use their
+resolver-selected generated file, and dynamic roles still require explicit model
+and effort launch arguments.
 
 The signals the resolver needs are already deterministic: `risk`/`type`/`files`
 from tickets.json (validated by Gate 2), the verdict `failure-signature.cjs
@@ -1674,25 +1676,26 @@ prompt:        ${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md
              + the guarded list: {ticket, pr, branch, worktreePath, repo, base, planPath}
              + the absolute scripts path, the project's .planning/graph path,
                maxAttempts and plan_defect_signatures (the K)
-spawn:         Agent({ run_in_background: true, subagent_type: 'general-purpose', model, ... })
+spawn:         only through a launch surface that explicitly applies the resolved model
+               and effort and returns an application receipt; otherwise hard-refuse
+               before spawning or recording and use the sentinel duty pass
 ```
 
-The sentinel's Agent prompt must carry the same explicit instruction when the
-Workflow path is unavailable: `Resolved effort: <effort>. Think and work at
-this effort level throughout the guard pass.` The Agent tool has no effort
-parameter, so the prompt is the only way to communicate the requested depth and
-the dispatch record remains `effort_applied=unsupported`.
+The Agent tool cannot carry reasoning effort. When it is the only available
+background surface, hard-refuse the sentinel launch before constructing a prompt,
+spawning, or recording. Do not substitute a prompt instruction, active-session
+effort, `effort_applied=unsupported`, or `unknown` evidence. Use the documented
+inline sentinel duty pass for that round instead.
 
-Record that hand-over the same way the executors' was, and in the same order —
-the `Agent` call returns an agent id, and THEN
-    `dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <agent|codex-agent> --agent-id <the id that Agent call returned> [--agent-file <agent_file>]`
+After a compliant launch returns its agent id and application receipt, record that
+hand-over the same way the executors' was:
+    `dispatch-record.cjs mark <T> pr-sentinel --model <model> --effort <effort> --effort-applied <applied-effort> --route "<route>" --task-level <task_level> --runtime <claude|codex> --backend <agent|codex-agent> --agent-id <the id that launch returned> [--agent-file <agent_file>]`
 for every ticket on the guarded list, taking all three resolver fields from the
-`model pr-sentinel` call above — the route included, verbatim — and the agent id
-    from the spawn you just made. **Every ticket this guard holds carries THAT SAME
-    id**, which is what makes one guard over four PRs one agent instead of four. No `--effort-applied` here: the guard is spawned with the `Agent` tool,
-    which carries no effort. Pass `--effort-applied unsupported` when that capability
-    is known absent, `unknown` when the host did not expose what ran, or omit the flag
-    when neither fact is available;
+`model pr-sentinel` call above — the route included, verbatim — plus the explicit
+application receipt and the agent id from that launch. **Every ticket this guard
+holds carries THAT SAME id**, which is what makes one guard over four PRs one agent
+instead of four. A launch without confirmed explicit model and effort application
+must not be recorded as a compliant sentinel dispatch;
     on the Codex path also pass `--agent-file <agent_file>` from the same
     `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select pr-sentinel --json --capabilities-file
     "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"` call, so the ordinary or recovery lane is

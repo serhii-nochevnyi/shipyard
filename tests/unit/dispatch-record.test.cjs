@@ -1347,6 +1347,24 @@ test('every mark deliver.md documents passes the agent identity too', () => {
   }
 });
 
+test('the PR-sentinel refuses an Agent fallback without explicit applied effort', () => {
+  const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
+  const sentinel = deliver.slice(
+    deliver.indexOf('## Step 4 — Post the sentinel'),
+    deliver.indexOf('Then **return to Step 3 immediately.**')
+  );
+
+  assert.ok(sentinel.length > 0, 'cannot isolate the PR-sentinel launch contract');
+  assert.match(sentinel, /hard-refuse[\s\S]*before constructing a prompt,\s+spawning, or recording/,
+    'the sentinel must refuse an unsupported launch before either side effect');
+  assert.match(sentinel, /--effort-applied <applied-effort>/,
+    'a compliant sentinel record must name the effort the launch applied');
+  assert.doesNotMatch(sentinel, /Resolved effort: <effort>/,
+    'prompt-only effort must not be offered as a sentinel fallback');
+  assert.match(sentinel, /Do not substitute[\s\S]*effort_applied=unsupported/,
+    'unsupported effort must be prohibited for a routed sentinel launch');
+});
+
 test('delivery docs prefer one mark/clear batch per fan-out', () => {
   const sentinel = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 'utf8');
   assert.match(sentinel, /dispatch-record\.cjs mark-many --stdin/,
