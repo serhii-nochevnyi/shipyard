@@ -883,7 +883,7 @@ test('Codex GSD researcher, planner, and checker use runtime selections and dura
   }
 });
 
-test('Claude GSD researcher, planner, and checker use explicit native selections with durable receipts', () => {
+test('Claude GSD researcher, planner, and checker use explicit native selections with routed consent and durable receipts', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-claude-contract-'));
   const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
   const calls = [];
@@ -892,7 +892,31 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
     { role: 'decomposition', signals: {}, id: 'claude-gsd-planner' },
     { role: 'decomposition', signals: { checkpoint: true }, id: 'claude-gsd-checker' },
   ];
-  const resolutions = cases.map(({ role, signals, id }) => dispatchResolution('claude', role, signals, id));
+  const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-claude-config-'));
+  fs.mkdirSync(path.join(configRoot, '.planning'), { recursive: true });
+  const loadRoutedConfig = (raw) => {
+    fs.writeFileSync(path.join(configRoot, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
+    return pipelineConfig.loadConfig(configRoot, { runtime: 'claude', env: {}, routed: true }).config;
+  };
+  const withoutConsent = loadRoutedConfig({});
+  assert.throws(
+    () => pipelineConfig.resolveDispatch({
+      config: withoutConsent,
+      role: 'decomposition',
+      signals: { checkpoint: true },
+      dispatch_id: 'claude-gsd-checker-off',
+    }),
+    (error) => error && error.code === 'CONFLICTING_OVERRIDE'
+      && error.details && error.details.source === 'pipeline.fable',
+    'Claude checkpoint escalation must refuse when routed Fable consent is off'
+  );
+  const consented = loadRoutedConfig({ pipeline: { fable: 'auto' } });
+  const resolutions = cases.map(({ role, signals, id }) => pipelineConfig.resolveDispatch({
+    config: consented,
+    role,
+    signals,
+    dispatch_id: id,
+  }));
   const capabilities = capabilitiesFor(resolutions);
   const host = {
     capabilities,
@@ -923,6 +947,7 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
     assert.equal(calls[2].selection.model, CLAUDE_MODEL_ALIASES.fable);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(configRoot, { recursive: true, force: true });
   }
 });
 
