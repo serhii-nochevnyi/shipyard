@@ -9,8 +9,6 @@ export const meta = {
 //     invId, invPath, problemStatement, referencePath,
 //     artifactLanguage,                         // optional, defaults to English
 //     lines: [ { id, label, model, effort, signals } ], // exactly four, caller-resolved
-//     claudeCapabilities, dispatchRecorder, claudeApplicationEvidence,
-//     claudeHost,                               // host-injected boundary resources
 //   }
 //
 // The workflow deliberately receives the resolved selection rather than a
@@ -126,10 +124,6 @@ return await parallel(lines.map((line) => async () => {
         investigation: argv.invPath,
         research_line: line.id,
       },
-      capabilities: argv.claudeCapabilities,
-      recorder: argv.dispatchRecorder,
-      applicationEvidence: argv.claudeApplicationEvidence,
-      host: argv.claudeHost,
       agentOptions: {
         label: `research:${argv.invId}:${line.id}`,
         phase: 'Research',

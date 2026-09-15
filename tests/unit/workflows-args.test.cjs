@@ -118,7 +118,10 @@ async function run(name, args, opts) {
     ? undefined
     : opts && opts.dispatchFactory
       ? opts.dispatchFactory
-      : testDispatchFactory;
+      : (dispatchOptions) => testDispatchFactory({
+          ...dispatchOptions,
+          ...(opts && opts.recorder ? { recorder: opts.recorder } : {}),
+        });
   const value = await load(name)(h.agent, h.parallel, h.phase, h.log, args, dispatchFactory);
   return { value, calls: h.calls };
 }
@@ -412,9 +415,8 @@ for (const spec of DISPATCH) {
       const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-dispatch-'));
       workflowStores.push(storeDir);
       recorder = createDurableRecorder(storeDir);
-      args.dispatchRecorder = recorder;
     }
-    const result = await run(spec.name, args);
+    const result = await run(spec.name, args, withRecorder ? { recorder } : undefined);
     return { ...result, recorder };
   };
 
@@ -520,8 +522,7 @@ for (const role of ['ci-fix', 'review-fix']) {
           previous_dispatch_id: prior.dispatch_id,
         } : {}),
       });
-      args.dispatchRecorder = recorder;
-      const { calls, value } = await run('fix-round', args);
+      const { calls, value } = await run('fix-round', args, { recorder });
       assert.strictEqual(calls.length, 1, JSON.stringify(value));
       const receipt = value[0].receipt;
       const record = recorder.getVerifiedRecord(receipt.dispatch_id);

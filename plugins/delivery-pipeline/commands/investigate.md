@@ -60,13 +60,15 @@ Read `.planning/investigations/` (may not exist):
    Astra/low and the same explicit very-complex signal escalates to Astra/medium.
    Keep the resolved `{ model, effort, signals }` on every line.
 
-   For Claude, invoke `${CLAUDE_PLUGIN_ROOT}/workflows/investigation-research.mjs`
-   through the Workflow host. It must receive the host-injected typed
-   `createClaudeWorkflowDispatch` bridge, durable recorder, capabilities, and
-   application-evidence callback; the workflow dispatches all four lines through
-   that bridge in parallel and refuses if any host dependency is absent. Do not
-   use the native Agent tool, a generic session, an in-process fallback, or a
-   direct `agent()` call. For Codex, use the generated agent selected by
+   For the Workflow runtime, invoke `${CLAUDE_PLUGIN_ROOT}/workflows/investigation-research.mjs`
+   through the production host binding
+   `${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs`. It injects the typed
+   `createClaudeWorkflowDispatch` bridge as the sixth workflow binding and keeps
+   the durable recorder, capabilities, and application-evidence callback outside
+   serializable args; the workflow dispatches all four lines through that bridge
+   in parallel and refuses if any host dependency is absent. Do not use the
+   native Agent tool, a generic session, an in-process fallback, or a direct
+   `agent()` call. For Codex, use the generated agent selected by
    `codex-agent.cjs select research --json --capabilities-file
    ${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json` and the same dispatch boundary
    via `createCodexDispatchAdapter`; do not call `spawn_agent` directly.

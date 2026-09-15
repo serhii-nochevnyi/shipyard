@@ -39,10 +39,6 @@ export const meta = {
 //                        // when given, a `drifted` judge persists its own verdict
 //                        // instead of leaving it in a reply that dies with the run
 //     graphDir: "<project>/.planning/graph",  // where that record belongs
-//     claudeCapabilities,       // explicit capabilities from the Claude host
-//     dispatchRecorder,          // durable receipt recorder from the host
-//     claudeApplicationEvidence, // host callback returning actual launch_id/applied_model/applied_effort
-//     claudeHost,                // optional host object carrying the same fields
 //   }
 // returns: [ { id, verdict: 'fresh'|'drifted', moved: [string], reuse_candidates: [string], evidence: [string], recorded?: string, receipt } ]
 //
@@ -192,10 +188,6 @@ const results = await parallel(
         dispatchId: t.dispatch_id || t.dispatchId,
         previousDispatchId: t.previous_dispatch_id || t.previousDispatchId,
         context: { ticket: t.id },
-        capabilities: argv.claudeCapabilities,
-        recorder: argv.dispatchRecorder,
-        applicationEvidence: argv.claudeApplicationEvidence,
-        host: argv.claudeHost,
         label: `drift:${t.id}`,
         agentOptions: {
           label: `drift:${t.id}`,
