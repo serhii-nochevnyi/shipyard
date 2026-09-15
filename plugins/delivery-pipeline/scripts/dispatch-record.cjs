@@ -80,7 +80,8 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 // RESOLVER's, so it is validated against the resolver's own grammar rather than a
 // regex copied over here — the drift `CODEX_DEEP_ROLES` already paid for.
 const {
-  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, tierAllowedForRuntime, loadConfig,
+  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, resolveModel, resolveEffort,
+  resolveTaskLevel, routeOf, tierAllowedForRuntime, loadConfig,
 } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const {
   CODEX_STATIC_ROLES, CODEX_ROLE_RUNG_DEFINITIONS, codexAgentFile, variantSuffix,
@@ -178,6 +179,7 @@ const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
 const MARK_FLAGS = [
   'model', 'effort', 'effort-applied', 'route', 'task-level', 'runtime', 'backend',
   'observed-model', 'observed-effort', 'agent-file', 'agent-id', 'dispatch-id',
+  'boundary-store',
 ];
 
 // ── `reason` is the RESOLVER's route, never the caller's sentence ────────────
@@ -218,7 +220,73 @@ const MARK_FIELD = {
   'agent-file': 'agent_file',
   'agent-id': 'agent_id',
   'dispatch-id': 'dispatch_id',
+  'boundary-store': 'boundary_store',
 };
+
+// Boundary resolutions use the generated file's physical name, while this
+// recorder's public schema names the corresponding Codex agent without its
+// `.toml` extension. Keep that projection at the reconciliation boundary so
+// both caller comparison and legacy storage speak the recorder's vocabulary.
+function recorderAgentFile(agentFile) {
+  return typeof agentFile === 'string' ? agentFile.replace(/\.toml$/, '') : agentFile;
+}
+
+// A reconciled receipt must remain current until the dispatch record itself is
+// atomically written. The boundary recorder's fenced claim is the shared lease
+// with repairs: while this holder owns it, another repair cannot consume the
+// receipt between reconciliation and the dispatch-record mutation.
+const RECONCILIATION_CLAIM = Symbol('reconciliation claim');
+const ACTIVE_RECONCILIATION_LEASES = new Set();
+let reconciliationExitHandlerInstalled = false;
+
+function newReconciliationConsumerId() {
+  const uniqueId = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
+  return `dispatch-record:${process.pid}:${uniqueId}`;
+}
+
+function errorMessage(error) {
+  return error && typeof error.message === 'string' && error.message
+    ? error.message
+    : String(error);
+}
+
+function warnReconciliationReleaseFailure(subject, error) {
+  process.stderr.write(
+    `dispatch-record: warning — ${subject} was durably recorded and journalled, ` +
+    `but the boundary receipt claim could not be released (${errorMessage(error)}). ` +
+    'Do not retry solely because of this warning; the claim remains fenced until it is released or expires.\n'
+  );
+}
+
+function installReconciliationExitHandler() {
+  if (reconciliationExitHandlerInstalled) return;
+  reconciliationExitHandlerInstalled = true;
+  // `fail()` exits the CLI directly, so a later malformed item in mark-many
+  // would otherwise strand an earlier item's lease until its TTL. Exit handlers
+  // are synchronous; release the same fenced claims before the process leaves.
+  process.on('exit', () => {
+    for (const lease of [...ACTIVE_RECONCILIATION_LEASES]) {
+      try { releaseReconciliationClaim({ [RECONCILIATION_CLAIM]: lease }); } catch (_) { /* lease TTL remains the backstop */ }
+    }
+  });
+}
+
+function releaseReconciliationClaim(decided) {
+  const lease = decided && decided[RECONCILIATION_CLAIM];
+  if (!lease || lease.released) return;
+  const released = lease.recorder.release(lease.dispatchId, lease.consumerId, lease.claim);
+  if (!released || !released.released) {
+    throw new Error('boundary receipt claim could not be released after recording');
+  }
+  lease.released = true;
+  ACTIVE_RECONCILIATION_LEASES.delete(lease);
+}
+
+function releaseReconciliationClaims(decidedRecords) {
+  for (const decided of decidedRecords) releaseReconciliationClaim(decided);
+}
 
 // ── WHO holds it, not just WHAT it is (ADR-007 D1) ───────────────────────────
 //
@@ -371,7 +439,7 @@ function codexAgentFiles(dir = codexAgentDir()) {
  * recorded silently is worse than no field, because it would be counted later as
  * fact.
  */
-function parseMarkFlags(argv, role) {
+function parseMarkFlags(argv, role, ticket) {
   const given = new Map();
   for (let i = 0; i < argv.length;) {
     const arg = String(argv[i]);
@@ -395,6 +463,78 @@ function parseMarkFlags(argv, role) {
     i += 2;
   }
 
+  // ADR-014 writes reconcile a dispatch id against boundary-owned storage.
+  // A store without its id cannot identify a receipt, so reject it before
+  // opening the store (and before a partial record can be written).
+  if (given.has('boundary-store') && !given.has('dispatch-id')) {
+    fail(
+      'a reconciled dispatch requires both --boundary-store and --dispatch-id; ' +
+      'the dispatch id must name the receipt the boundary recorded after launch.'
+    );
+  }
+  // The legacy flags below remain readable historical telemetry. They cannot
+  // populate applied_* or mint an application_receipt by themselves.
+  if (given.has('boundary-store')) {
+    let lease = null;
+    try {
+      const { createDurableRecorder, createDispatchBoundary } = require('./dispatch-boundary.cjs');
+      const storeDir = given.get('boundary-store');
+      if (!storeDir.trim() || !fs.statSync(storeDir).isDirectory()) throw new Error('boundary store must exist');
+      const recorder = createDurableRecorder(storeDir);
+      const dispatchId = given.get('dispatch-id');
+      const consumerId = newReconciliationConsumerId();
+      const claim = recorder.claim(dispatchId, consumerId);
+      if (!claim || !claim.claimed) {
+        throw new Error('boundary receipt is currently claimed by another repair or recorder');
+      }
+      lease = { recorder, dispatchId, consumerId, claim, released: false };
+      ACTIVE_RECONCILIATION_LEASES.add(lease);
+      installReconciliationExitHandler();
+      const facts = createDispatchBoundary({ recorder })
+        .reconcile(given.get('dispatch-id'), { ticket });
+      if (facts.role !== role) throw new Error('boundary receipt role contradicts the dispatch role');
+      for (const field of ['dispatch_id', 'launch_id']) {
+        const issue = opaqueDispatchValueIssue(facts[field]);
+        if (issue) throw new Error(`boundary receipt ${field} cannot be recorded: ${issue}`);
+      }
+      // ADR-014 resolves concrete provider IDs and a boundary-native route.
+      // The dispatch journal predates that vocabulary: its model/reason fields
+      // are compatibility projections consumed by pipeline-stats. Preserve the
+      // boundary facts in their own fields while deriving those legacy fields
+      // from the same role/signals using the existing legacy resolver.
+      const legacyModel = resolveModel(facts.role, facts.signals);
+      const legacyEffort = resolveEffort(facts.role, legacyModel, undefined, facts.signals);
+      const legacyRoute = routeOf(facts.role, facts.signals);
+      const legacyTaskLevel = resolveTaskLevel(facts.role, facts.signals);
+      if (facts.task_level !== legacyTaskLevel) {
+        throw new Error('boundary task level does not match the resolver projection');
+      }
+      const aliases = {
+        model: legacyModel, effort: legacyEffort,
+        'effort-applied': facts.applied_effort, route: legacyRoute,
+        'task-level': facts.task_level,
+        runtime: facts.runtime, backend: facts.backend,
+        'observed-model': facts.observed_model, 'observed-effort': facts.observed_effort,
+        'agent-file': recorderAgentFile(facts.agent_file), 'agent-id': facts.launch_id,
+      };
+      for (const [flag, value] of given) {
+        if (['boundary-store', 'dispatch-id'].includes(flag)) continue;
+        if (!Object.prototype.hasOwnProperty.call(aliases, flag) || aliases[flag] !== value) {
+          throw new Error(`--${flag} contradicts or is absent from the boundary receipt`);
+        }
+      }
+      const decided = { ...facts, agent_file: recorderAgentFile(facts.agent_file),
+        model: legacyModel, effort: legacyEffort, effort_applied: facts.applied_effort,
+        reason: legacyRoute, agent_id: facts.launch_id };
+      Object.defineProperty(decided, RECONCILIATION_CLAIM, { value: lease });
+      return decided;
+    } catch (error) {
+      if (lease) {
+        try { releaseReconciliationClaim({ [RECONCILIATION_CLAIM]: lease }); } catch (_) { /* preserve the refusal */ }
+      }
+      fail(`boundary receipt reconciliation failed: ${errorMessage(error)}`);
+    }
+  }
   const decided = {};
   const model = given.get('model');
   if (model !== undefined) {
@@ -625,6 +765,18 @@ function parseMarkFlags(argv, role) {
     }
     decided.agent_file = agentFile;
   }
+  // A resolver route is the declaration that this is a new routed launch, not
+  // merely an old ownership row.  Its requested/applied fields are execution
+  // claims, so accepting caller-supplied values here would let the normal
+  // delivery instructions write unverified telemetry.  The launch-flow caller
+  // is wired in a later ticket; until it passes the durable boundary receipt,
+  // fail closed rather than treating hand-written flags as evidence.
+  if (given.has('route')) {
+    fail(
+      'a routed dispatch requires --boundary-store and --dispatch-id from the completed dispatch boundary; ' +
+      'manual --model/--effort/--route values are not application evidence.'
+    );
+  }
   return decided;
 }
 
@@ -648,6 +800,7 @@ const BATCH_FIELDS = new Map([
   ['agent_file', 'agent-file'],
   ['agent_id', 'agent-id'],
   ['dispatch_id', 'dispatch-id'],
+  ['boundary_store', 'boundary-store'],
 ]);
 
 function parseBatchEntries(raw) {
@@ -688,7 +841,7 @@ function parseBatchEntries(raw) {
     return {
       ticket: item.ticket,
       role: item.role,
-      decided: parseMarkFlags(flags, item.role),
+      decided: parseMarkFlags(flags, item.role, item.ticket),
     };
   });
 }
@@ -1167,41 +1320,51 @@ if (require.main === module) {
     // Parsed and validated BEFORE the state lookup and before anything is
     // written: a usage error must cost no lock and must never leave half a
     // record behind.
-    const decided = parseMarkFlags(rest.slice(2), role);
+    const decided = parseMarkFlags(rest.slice(2), role, ticket);
     const at = new Date().toISOString();
     let dispatchId;
-    mutate(cwd, (store) => {
-      // Read the ticket state while the dispatch mutation is locked. A
-      // concurrent state-sync may move the PR between the preflight read and
-      // this callback; using the older fingerprint would make a fresh dispatch
-      // look expired on the next front evaluation.
-      const state = readState(cwd);
-      if (!hasStateTicket(state, ticket)) throw new Error(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
-      const s = state[ticket];
-      // A re-dispatch restarts the clock: the previous agent is not the one
-      // holding it now.
-      const recorded = withDispatchId(decided, store, cwd);
-      dispatchId = recorded.dispatch_id;
-      store.tickets[ticket] = {
-        role,
-        at,
-        // Spread, never enumerated: a flag the caller did not pass contributes no
-        // key, so the record distinguishes "ran at high" from "nobody measured".
-        ...recorded,
-        fingerprint: dispatchFingerprint(role, s),
-        // Which hash the line above is, so a reader upgrading over an existing
-        // store compares each record with the rule it was written under.
-        fingerprint_kind: 'role',
-        pr: s.pr || null,
-      };
-      // Journalled because nothing else records WHEN work was handed over, nor
-      // WHAT it was handed to. The TTL above had to be inferred from PR
-      // timestamps for want of this line and the ladder from judgement for want
-      // of the fields; the next one of each can be measured. The ticket's next
-      // `status_change` closes the interval, so a `clear` needs no event of its
-      // own.
-      return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...recorded, by: 'dispatch-record' };
-    });
+    try {
+      mutate(cwd, (store) => {
+        // Read the ticket state while the dispatch mutation is locked. A
+        // concurrent state-sync may move the PR between the preflight read and
+        // this callback; using the older fingerprint would make a fresh dispatch
+        // look expired on the next front evaluation.
+        const state = readState(cwd);
+        if (!hasStateTicket(state, ticket)) throw new Error(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+        const s = state[ticket];
+        // A re-dispatch restarts the clock: the previous agent is not the one
+        // holding it now.
+        const recorded = withDispatchId(decided, store, cwd);
+        dispatchId = recorded.dispatch_id;
+        store.tickets[ticket] = {
+          role,
+          at,
+          // Spread, never enumerated: a flag the caller did not pass contributes no
+          // key, so the record distinguishes "ran at high" from "nobody measured".
+          ...recorded,
+          fingerprint: dispatchFingerprint(role, s),
+          // Which hash the line above is, so a reader upgrading over an existing
+          // store compares each record with the rule it was written under.
+          fingerprint_kind: 'role',
+          pr: s.pr || null,
+        };
+        // Journalled because nothing else records WHEN work was handed over, nor
+        // WHAT it was handed to. The TTL above had to be inferred from PR
+        // timestamps for want of this line and the ladder from judgement for want
+        // of the fields; the next one of each can be measured. The ticket's next
+        // `status_change` closes the interval, so a `clear` needs no event of its
+        // own.
+        return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...recorded, by: 'dispatch-record' };
+      });
+    } catch (e) {
+      try { releaseReconciliationClaim(decided); } catch (_) { /* keep the write failure */ }
+      fail(e && e.message ? e.message : e);
+    }
+    try {
+      releaseReconciliationClaim(decided);
+    } catch (e) {
+      warnReconciliationReleaseFailure(`dispatch for ${ticket}`, e);
+    }
     // The record is durable the instant `mutate` above returns — that alone is
     // what `activeDispatches` reads. `refreshFront` only decides whether the
     // ON-DISK board reflects it RIGHT NOW or on the next sync; its return value
@@ -1243,7 +1406,10 @@ if (require.main === module) {
       // fingerprint or leave only the first item filed.
       const state = readState(cwd);
       const missing = entries.find((entry) => !hasStateTicket(state, entry.ticket));
-      if (missing) fail(`no ${missing.ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+      if (missing) {
+        try { releaseReconciliationClaims(entries.map((entry) => entry.decided)); } catch (_) { /* preserve the refusal */ }
+        fail(`no ${missing.ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+      }
       const at = new Date().toISOString();
       const dispatchIds = new Map();
       try {
@@ -1280,7 +1446,13 @@ if (require.main === module) {
           return events;
         });
       } catch (e) {
+        try { releaseReconciliationClaims(entries.map((entry) => entry.decided)); } catch (_) { /* keep the write failure */ }
         fail(e && e.message ? e.message : e);
+      }
+      try {
+        releaseReconciliationClaims(entries.map((entry) => entry.decided));
+      } catch (e) {
+        warnReconciliationReleaseFailure(`dispatch batch for ${entries.length} ticket(s)`, e);
       }
       const refreshed = refreshFront(cwd) !== null;
       console.log(
