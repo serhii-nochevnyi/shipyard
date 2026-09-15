@@ -104,7 +104,7 @@ test('boundary receipts reconcile into the existing store and journal without re
         applied_model: r.model, applied_effort: r.effort,
         observed_model: r.model, observed_effort: r.effort,
       }) } },
-    }).dispatch({ runtime: 'codex', role: 'executor' });
+    }).dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-01-01' });
     const args = ['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
       '--dispatch-id', result.dispatch_id, '--task-level', result.resolution.task_level];
     const missingId = run(['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore], project);
@@ -262,7 +262,7 @@ test('reconciled records hold the receipt lease and normalize static Codex agent
     assert.equal(store(graph)['T-01-01'], undefined, 'a receipt claimed by a repair cannot be persisted');
     assert.deepStrictEqual(recorder.release(pending.dispatch_id, 'concurrent-repair', repairClaim), { released: true });
 
-    const staticResult = writer.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'static-agent-file' });
+    const staticResult = writer.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'static-agent-file' }, { ticket: 'T-01-02' });
     assert.match(staticResult.resolution.agent_file, /\.toml$/, 'the boundary retains the physical generated file');
     const publicAgentFile = staticResult.resolution.agent_file.replace(/\.toml$/, '');
     const marked = run(['mark', 'T-01-02', 'research', '--boundary-store', boundaryStore,
