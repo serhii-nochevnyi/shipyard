@@ -823,7 +823,41 @@ test('delivery launch docs route every role through the boundary and the generat
     assert.ok(
       !/node[^\n]*pipeline-config\.cjs\s+model\s+/.test(source),
       'delivery docs must not execute the compatibility model command'
-    );
+  );
+});
+
+test('active Claude instructions enforce ADR-014 instead of the superseded ladder', () => {
+  const claude = readRepo('CLAUDE.md');
+  const start = claude.indexOf('**Active routed dispatch policy (ADR-014, accepted):**');
+  const end = claude.indexOf('**Executor isolation is the conveyor\'s, not GSD\'s.**', start);
+  assert.ok(start >= 0 && end > start, 'CLAUDE.md must isolate a current ADR-014 dispatch-instruction section');
+  const active = claude.slice(start, end);
+
+  for (const phrase of [
+    'two independent native grids',
+    'Do not alias either grid through the other',
+    'Luna/max', 'Luna/medium', 'Astra/low', 'Astra/medium',
+    'Sonnet/max', 'Sonnet/high', 'Opus/medium', 'Opus/high', 'Opus/max', 'Fable/medium',
+    'resolve → validate → launch → receipt',
+    'selected runtime-native model and effort must be explicit at launch',
+    'requested and applied model/effort with an application receipt',
+    'inline or session-inherited selection',
+    'hard-refuse',
+  ]) {
+    assert.ok(active.includes(phrase), 'CLAUDE.md must state the ADR-014 active instruction: ' + phrase);
+  }
+
+  for (const obsolete of [
+    'Active ladder amendment (ADR-012',
+    'delivery_pipeline.model_ladder: adaptive',
+    'The FLOOR is opus',
+    'pipeline.codex_models',
+    'integrator takes the ceiling unconditionally',
+    'conservative fallback',
+    'unset-runtime default',
+  ]) {
+    assert.ok(!active.includes(obsolete), 'CLAUDE.md must not retain obsolete active ladder guidance: ' + obsolete);
+  }
 });
 
 test('research and decomposition use the canonical runtime ladders and only declared escalation signals', () => {
