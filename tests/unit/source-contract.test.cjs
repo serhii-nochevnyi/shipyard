@@ -825,6 +825,35 @@ test('delivery launch docs route every role through the boundary and the generat
     );
 });
 
+test('delivery docs project selector, recorder, and workflow contracts without inventing fields', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
+  const source = `${deliver}\n${sentinel}`;
+
+  for (const phrase of [
+    '--capabilities-file <current-host-capabilities.json>',
+    'concrete `model`, `model_key`, `effort`/`requested_effort`',
+    'compatibility recorder route',
+    'recorder projection',
+    'name without its `.toml` suffix',
+    'tickets: [{ id, planPath, baseRef, model, effort, signals }]',
+    'priorReceipt, previous_dispatch_id, dispatch_id',
+    'pipeline.fable: auto',
+    'Codex research has no alternatives rung',
+    'shipyard-inv-research-critical.toml',
+  ]) {
+    assert.ok(source.includes(phrase), `delivery docs must state the actual contract: ${phrase}`);
+  }
+
+  for (const stale of ['model_tier', 'boundaryReceipt', 'shipyard-inv-research-alternatives.toml']) {
+    assert.ok(!source.includes(stale), `delivery docs must not invent stale contract field/variant ${stale}`);
+  }
+  assert.ok(
+    !source.includes('The resolver returns `strategy: fix|continue|rethink`'),
+    'strategy must remain a failure-verdict input, not an invented boundary result'
+  );
+});
+
 test('research and decomposition use the canonical runtime ladders and only declared escalation signals', () => {
   const codexResearch = dispatchResolution('codex', 'research', {}, 'contract-codex-research');
   const claudeResearch = dispatchResolution('claude', 'research', {}, 'contract-claude-research');
