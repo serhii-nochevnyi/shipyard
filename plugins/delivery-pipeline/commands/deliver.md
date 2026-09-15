@@ -101,7 +101,7 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role> --model <recorder tier alias> --effort <level> --task-level <level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<recorder route>"` — an agent
+- `dispatch-record.cjs mark <T> <role> --model <recorder tier alias> --effort <level> --effort-applied <receipt applied effort> --task-level <level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<recorder route>"` — an agent
   is working on it RIGHT NOW. The one fact here that is motion rather than a
   verdict, and the one the board could not see at all: nothing is pushed yet, so
   the live state still reads `execute`/`fix` and the stop gate refuses turns over
@@ -403,21 +403,22 @@ to bypass the boundary or to launch a different file.
 | `ci-fix` | Luna/max | verified `repeat` → Astra/low → verified `repeat_exhausted` → Astra/medium | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
 | `review-fix` | Luna/max | verified `repeat` → Astra/low → verified `repeat_exhausted` → Astra/medium | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
 
-The Codex `executor` is dynamic and has `agent_file: null`; pass its selected
-concrete `model` and `effort` explicitly to the host. Every other delivery role
-in this table is static and MUST use the generated file named by the selector.
+The Codex dynamic roles are `decomposition` and `executor`; both have
+`agent_file: null` and receive their selected concrete `model` and `effort`
+explicitly from the host. Every other delivery role in this table is static and
+MUST use the generated file named by the selector.
 Codex research has no alternatives rung; its `very-complex` rung uses the
 emitted `-critical` suffix. The generator emits `-repeat` for a repair repeat
 rung and `-deep` only for `ci-fix`/`review-fix` `repeat_exhausted`. No sentinel
 recovery variant or additional architecture-review `repeat_exhausted` variant is
 generated; neither role accepts an invented target.
 
-### Workflow runtime policy and native workflow arguments
+### Workflow-native alias policy and native workflow arguments
 
-The Workflow runtime (Claude) has an independent native grid; never translate
-the Codex logical names into its launch arguments. Its Workflow adapter receives
-the selected native alias and explicit effort from `resolution.launch_arguments`,
-and the host must return application evidence for that exact pair:
+The Workflow-native alias runtime has an independent grid; never translate the
+Codex logical names into its launch arguments. Its Workflow adapter receives the
+selected native alias and explicit effort from `resolution.launch_arguments`, and
+the host must return application evidence for that exact pair:
 
 | Role | Base | Evidence-based escalation |
 | --- | --- | --- |
@@ -430,7 +431,7 @@ and the host must return application evidence for that exact pair:
 | `arch-review` | Opus/medium | critical/contested/checkpoint → Opus/max; measured window → Fable/medium |
 | `ci-fix` / `review-fix` | Opus/medium | verified `repeat` or `repeat_exhausted` → Opus/max |
 
-**The native Agent tool takes no `effort` parameter**: only Workflow's `agent()`
+**The native Agent tool takes no `effort` parameter**: only the Workflow-native `agent()`
 carries the explicit pair. It cannot launch a routed background guard under
 ADR-014. Do not turn resolved effort into prompt text or rely on the active
 session; hard-refuse that launch and run the documented sentinel duty pass
@@ -447,8 +448,11 @@ without a boundary-verified receipt is a failed dispatch, not a fallback.
 
 The boundary receives the full ticket/PR evidence, not a summary invented by
 the caller. Keep its `route`, `signals_fired`, signal reasons, `rung`, model,
-effort, and receipt verbatim. `strategy` is a compatibility failure-verdict
-input for a fixer prompt; it is not a field returned by the boundary. `risk`,
+effort, and receipt verbatim. `strategy` is caller-owned fixer context, not a
+field returned by the boundary or `failure-signature.cjs verdict`: derive it
+from that verdict as `first` → `fix`, `progress` → `continue`, and
+`repeat`/`repeat_exhausted` → `rethink` before constructing the fixer prompt.
+`risk`,
 `type`, available `complexity`,
 and checkpoint signals are passed on every executor, while declared files and
 changed-file evidence remain in context; `inputTokens` is measured for both
@@ -1463,15 +1467,15 @@ may be dispatched at all: fix the file.
     before.** The receipt carries the launch identity (the Workflow task id or
     typed Agent id); once it exists, and only then, for every ticket you just
     handed out:
-    `dispatch-record.cjs mark <T> executor --model <recorder-tier-alias> --effort <recorder-effort> --route "<recorder-route>" --task-level <rung> --runtime <claude|codex> --backend <workflow|agent|codex-agent> --agent-id <launch id>`
+    `dispatch-record.cjs mark <T> executor --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <receipt-applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <claude|codex> --backend <workflow|agent|codex-agent> --agent-id <launch id>`
     The recorder adapter provides the compatibility tier/effort/route
     projection; it is not the canonical boundary route. Keep the concrete
     selector `model` for `--observed-model` when the host reports it.
-    (add `--effort-applied <effort>` only when the selected backend explicitly
-    carried the effort into the spawn. If it cannot, hard-refuse before marking;
-    do not record `unsupported` or `unknown` as a compliant executor dispatch.
-    Otherwise omit the flag, never guess; add `--graph <project>/.planning/graph` when you are
-    not standing in the project). The selector supplies the concrete observation;
+    The verified receipt supplies `--effort-applied <receipt-applied-effort>`.
+    If it has no concrete applied effort, the boundary refused the launch and
+    there is no mark; never substitute `unsupported`, `unknown`, or an omitted
+    flag. Add `--graph <project>/.planning/graph` when you are not standing in
+    the project. The selector supplies the concrete observation;
     the recorder adapter supplies the separate compatibility projection. Neither is
     hand-composed or paraphrased, so the record holds the dispatch facts rather
     than the caller's reading of the ladder. The recorder checks its route against
@@ -1700,8 +1704,11 @@ loop:
          )
          ```
 
-         The failure-signature verdict supplies `strategy: fix|continue|rethink`;
-         the boundary validates the ordered receipt chain. Codex uses the generated
+         `failure-signature.cjs verdict` supplies only verdict/history facts.
+         Before this call, derive the caller-owned fixer strategy as `first` →
+         `fix`, `progress` → `continue`, and `repeat`/`repeat_exhausted` →
+         `rethink`; pass that value as prompt context, never as a claimed
+         boundary result. The boundary validates the ordered receipt chain. Codex uses the generated
          `shipyard-ci-fix.toml` → `shipyard-ci-fix-repeat.toml` →
          `shipyard-ci-fix-deep.toml` files for base → verified `repeat` →
          verified `repeat_exhausted`; Claude uses Opus/medium → Opus/max with
