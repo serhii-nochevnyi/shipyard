@@ -1202,8 +1202,8 @@
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T20:35:18Z",
     "head_sha": "cc78d3a94152bf88bb0a194ca77012b2a01afdab",
-    "merge_state": "UNKNOWN",
-    "behind_by": 5,
+    "merge_state": "CLEAN",
+    "behind_by": 6,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -1254,7 +1254,7 @@
     "pr_base": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
     "pr_created_at": "2026-09-14T21:57:13Z",
     "head_sha": "825ba638ca0d09ca9b78584a32d389af803ea501",
-    "merge_state": "UNSTABLE",
+    "merge_state": "CLEAN",
     "behind_by": 0,
     "gate": {
       "arch-review": "conform",
@@ -1267,7 +1267,7 @@
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -1289,13 +1289,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/142",
     "pr_base": "ticket/T-36-06-route-gsd-decomposition-through-the-mand",
     "pr_created_at": "2026-09-14T22:55:34Z",
-    "head_sha": "623f523b169ba5e4f67bb641e804d4a7d1d3ad22",
-    "merge_state": "UNKNOWN",
-    "behind_by": 3,
+    "head_sha": "c85dd2a4567c34c6d8e1a47816df76c77b5e1695",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "checks": {
       "total": 1,
-      "failing": 1,
-      "pending": 0,
+      "failing": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
@@ -1316,8 +1316,8 @@
     "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
     "pr_created_at": "2026-09-15T12:14:35Z",
     "head_sha": "7e8ce30734d252dc56550a54adf386bdb6ac168f",
-    "merge_state": "CLEAN",
-    "behind_by": 11,
+    "merge_state": "UNKNOWN",
+    "behind_by": 15,
     "checks": {
       "total": 1,
       "failing": 0,
