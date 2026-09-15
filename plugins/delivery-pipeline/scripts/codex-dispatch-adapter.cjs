@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const policy = require('./model-policy.cjs');
 const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
 const { generatedAgentEvidence } = require('./dispatch-boundary.cjs');
-const { REPAIR, verifiedCodexRemap } = require('./codex-model-remap.cjs');
+const { REPAIR } = require('./codex-model-remap.cjs');
 
 const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
 function refuse(code, message) {
@@ -23,36 +23,21 @@ function object(value) {
 
 function canonicalView(resolution) {
   if (!object(resolution)) return resolution;
-  const binding = verifiedCodexRemap(resolution);
-  if (binding) return binding.canonical;
   if (resolution.canonical_resolution !== undefined
       || resolution.canonical_model !== undefined
       || resolution.effective_model !== undefined
       || resolution.model_source !== undefined
       || resolution.remap_key !== undefined) {
-    refuse('CONFLICTING_OVERRIDE', 'Codex remap provenance was not issued by the configuration loader');
+    refuse('CONFLICTING_OVERRIDE', 'Codex routed launches cannot use model remap provenance');
   }
   return resolution;
 }
 
 function effectiveModelFor(resolution, canonical) {
-  const explicit = resolution && resolution.effective_model;
-  if (resolution && resolution.model !== canonical.model && explicit === undefined) {
-    refuse('CONFLICTING_OVERRIDE', 'outer Codex model changes require an explicit effective_model');
+  if (resolution && resolution.model !== canonical.model) {
+    refuse('CONFLICTING_OVERRIDE', 'Codex launch model must equal the resolver canonical concrete model');
   }
-  const model = explicit === undefined
-    ? (resolution && resolution.model !== canonical.model ? resolution.model : canonical.model)
-    : explicit;
-  if (typeof model !== 'string' || !model.trim()) {
-    refuse('CONFLICTING_OVERRIDE', 'effective Codex model must be a non-empty model id');
-  }
-  if (explicit !== undefined && resolution.model !== canonical.model && resolution.model !== explicit) {
-    refuse('CONFLICTING_OVERRIDE', 'effective Codex selection disagrees with its model');
-  }
-  if (canonical.agent_file && model !== canonical.model) {
-    refuse('CONFLICTING_OVERRIDE', 'static Codex selections cannot use an effective model remap');
-  }
-  return model.trim();
+  return canonical.model;
 }
 
 // Deliberately accept the generator's flat TOML subset, not arbitrary TOML.
@@ -136,19 +121,6 @@ function createCodexDispatchAdapter(options = {}) {
     // Retain only evidence already accepted by canonical validation, and reuse
     // that identity only for an otherwise byte-equivalent dispatch resolution.
     const view = canonicalView(resolution);
-    if (verifiedCodexRemap(resolution)) {
-      for (const field of [
-        'policy_version', 'policy_hash', 'runtime', 'role', 'model_key', 'logical_model',
-        'logical_rung', 'rung', 'rung_index', 'effort', 'requested_effort', 'route',
-        'backend', 'mechanism', 'signals_fired', 'signal_reasons', 'selected_signals',
-        'signals', 'agent_file', 'dispatch_id',
-      ]) {
-        if (resolution[field] !== undefined
-            && policy.stableStringify(resolution[field]) !== policy.stableStringify(view[field])) {
-          refuse('INVALID_RESOLUTION', 'effective Codex selection changed canonical ' + field);
-        }
-      }
-    }
     const previous = validatedRepairs.get(view && view.dispatch_id);
     let candidate = view;
     if (previous) {
@@ -163,21 +135,6 @@ function createCodexDispatchAdapter(options = {}) {
       validatedRepairs.set(candidate.dispatch_id, candidate);
     }
     return candidate;
-  }
-
-  // The dispatch boundary owns receipt durability, while this adapter owns the
-  // loader-issued WeakMap provenance for an effective Codex remap.  Give the
-  // boundary a deliberately narrow way to recover the canonical selection
-  // from a bound dynamic resolution; a caller cannot manufacture this result
-  // because verifiedCodexRemap is private to the configuration loader.
-  function effectiveResolution(resolution) {
-    const binding = verifiedCodexRemap(resolution);
-    if (!binding) return null;
-    const canonical = canonicalResolution(resolution);
-    return Object.freeze({
-      canonical,
-      effective_model: effectiveModelFor(resolution, canonical),
-    });
   }
 
   function validateGeneratedAgent(resolution) {
@@ -257,9 +214,8 @@ function createCodexDispatchAdapter(options = {}) {
     return Object.freeze({
       receipt_type: 'adr-014.application', runtime: 'codex', role: resolution.role,
       dispatch_id: resolution.dispatch_id, launch_id: applied.launch_id,
-      // A dynamic remap is the concrete model applied by the host, not a new
-      // policy request. Keep the canonical request here so the boundary's
-      // durable receipt can distinguish requested from applied values.
+      // Both requested and applied model are the resolver's concrete selection;
+      // application evidence proves the host did not substitute a provider ID.
       requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
       applied_model: applied.applied_model, applied_effort: applied.applied_effort,
       ...observations, policy_hash: resolution.policy_hash,
@@ -326,7 +282,7 @@ function createCodexDispatchAdapter(options = {}) {
     agentManifest,
     capabilities: Object.freeze({ observedModel: capabilities.observedModel !== false, observedEffort: capabilities.observedEffort !== false }),
     supports: (resolution) => validateAvailability(resolution, capabilities),
-    validate, validateGeneratedAgent, effectiveResolution,
+    validate, validateGeneratedAgent,
     launch: (resolution, context) => {
       if (canonicalView(resolution).agent_file) refuse('UNSUPPORTED_SELECTION', 'static role must use launchStatic');
       return launch(resolution, context);

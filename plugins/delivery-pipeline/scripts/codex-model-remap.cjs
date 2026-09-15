@@ -1,16 +1,15 @@
 'use strict';
 
-// Compatibility entrypoint for named Codex keys. The ADR-014 resolver chooses
-// the rung and effort; this module carries the operator's effective concrete
-// model remap to the Codex selector without maintaining a stale model registry.
+// Configuration validator for named Codex palette assertions. ADR-014 owns the
+// concrete selection: these namespaces may confirm that selection, never remap
+// it to a GSD/provider model.
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const policy = require('./model-policy.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
+const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
 
 const REPAIR = 'Install an ADR-014-capable Codex host and regenerate agents with install-shipyard-codex.sh --phase 2; provide current host capabilities and retry the exact selection.';
-const VERIFIED_CODEX_REMAPS = new WeakMap();
 
 function refuse(message, code = 'CONFLICTING_OVERRIDE') {
   throw policy.policyError(code, message + '. Remove the conflicting Codex override. ' + REPAIR);
@@ -63,7 +62,7 @@ function remapEntries(config) {
   return entries;
 }
 
-function assertNoConflictingRemaps(entries) {
+function assertNamedPaletteAssertions(entries) {
   const mapped = new Map();
   for (const current of entries) {
     const previous = mapped.get(current.key);
@@ -71,117 +70,26 @@ function assertNoConflictingRemaps(entries) {
       refuse(`${current.source} contradicts ${previous.source}`);
     }
     if (!previous) mapped.set(current.key, current);
-  }
-}
-
-function loadGsdConfig(codexHome, cwd) {
-  const lib = path.join(codexHome, 'gsd-core', 'bin', 'lib');
-  const resolver = require(path.join(lib, 'model-resolver.cjs'));
-  const loader = require(path.join(lib, 'config-loader.cjs'));
-  if (typeof resolver.resolveTierEntry !== 'function' || typeof loader.loadConfig !== 'function') {
-    throw new Error('gsd-core model-resolver/config-loader lack the expected exports');
-  }
-  const write = process.stderr.write;
-  let config;
-  try {
-    process.stderr.write = () => true;
-    config = loader.loadConfig(cwd);
-  } finally {
-    process.stderr.write = write;
-  }
-  if (!config || typeof config !== 'object' || Array.isArray(config)) {
-    throw new Error('gsd-core config-loader returned an invalid configuration');
-  }
-  return Object.freeze({
-    config,
-    resolveModelPolicy: resolver.resolveModelPolicy,
-    resolveTierEntry: resolver.resolveTierEntry,
-  });
-}
-
-function gsdRemapFor(config, resolver, tier) {
-  if (!resolver || !tier) return null;
-  const modelPolicy = config.model_policy && typeof config.model_policy === 'object'
-    ? { ...config.model_policy, runtime: 'codex' }
-    : null;
-  const fromPolicy = modelPolicy && typeof resolver.resolveModelPolicy === 'function'
-    ? resolver.resolveModelPolicy(modelPolicy, tier)
-    : null;
-  if (typeof fromPolicy === 'string' && fromPolicy) return fromPolicy;
-
-  const overrides = config.model_profile_overrides;
-  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return null;
-  const mapped = resolver.resolveTierEntry({ runtime: 'codex', tier, overrides });
-  const builtin = resolver.resolveTierEntry({ runtime: 'codex', tier, overrides: undefined });
-  if (mapped && mapped.model && (!builtin || mapped.model !== builtin.model)) return mapped.model;
-  return null;
-}
-
-function loadCodexRemap({ cwd = process.cwd(), config, codexHome, env = process.env } = {}) {
-  let sourceConfig = config;
-  let gsdResolver;
-  if (sourceConfig === undefined) {
-    const projectFile = path.join(cwd, '.planning', 'config.json');
-    // Validate an existing project file ourselves before consulting GSD. This
-    // preserves the fail-closed distinction between malformed project policy
-    // and an absent project file, even when GSD would fall back to defaults.
-    sourceConfig = fs.existsSync(projectFile) ? readProjectConfig(cwd) : undefined;
-    if (sourceConfig === undefined) {
-      const home = codexHome || env.CODEX_HOME || path.join(os.homedir(), '.codex');
-      try {
-        gsdResolver = loadGsdConfig(home, cwd);
-        sourceConfig = gsdResolver.config;
-      } catch (error) {
-        refuse(`cannot load GSD model configuration from ${home}: ${error.message}`, 'UNSUPPORTED_SELECTION');
-      }
+    const expected = CODEX_MODEL_IDS[current.key];
+    if (!expected) {
+      refuse(`${current.source} must use one of the named Codex keys: ${Object.keys(CODEX_MODEL_IDS).join(', ')}`);
+    }
+    if (current.model !== expected) {
+      refuse(`${current.source} cannot replace canonical ${current.key} model ${expected} with ${current.model}`);
     }
   }
+}
+
+function loadCodexRemap({ cwd = process.cwd(), config } = {}) {
+  const sourceConfig = config === undefined ? readProjectConfig(cwd) : config;
   const entries = remapEntries(sourceConfig || {});
-  assertNoConflictingRemaps(entries);
-  const mapped = new Map(entries.map((entry) => [entry.key, entry]));
-  const remapper = (key) => {
-    if (typeof key !== 'string' || !key.trim()) return null;
-    const normalizedKey = key.trim();
-    if (!mapped.has(normalizedKey)) return null;
-    return gsdResolver
-      ? gsdRemapFor(sourceConfig || {}, gsdResolver, normalizedKey)
-      : mapped.get(normalizedKey).model;
-  };
-  const bindResolution = (resolution, canonical, key) => {
-    const normalizedKey = typeof key === 'string' ? key.trim() : '';
-    const entry = mapped.get(normalizedKey);
-    policy.validateResolution(canonical);
-    if (!resolution || typeof resolution !== 'object' || Array.isArray(resolution)
-        || !canonical || typeof canonical !== 'object' || Array.isArray(canonical)
-        || !entry || resolution.effective_model !== entry.model
-        || (resolution.model !== canonical.model && resolution.model !== entry.model)) {
-      refuse('Codex remap binding does not match the loader-validated model and canonical resolution');
-    }
-    VERIFIED_CODEX_REMAPS.set(resolution, Object.freeze({
-      canonical, effective_model: entry.model, remap_key: normalizedKey,
-    }));
-    return resolution;
-  };
-  Object.defineProperty(remapper, 'bindResolution', { value: bindResolution });
-  // Return provenance explicitly so every consumer can validate the exact
-  // project or inherited GSD object that supplied the effective model.
-  return Object.freeze({ remap: remapper, sourceConfig, bindResolution });
+  assertNamedPaletteAssertions(entries);
+  // Retain the compatibility export, but make its no-remap behavior explicit.
+  return Object.freeze({ remap: () => null, sourceConfig });
 }
 
 function createCodexRemapper(options) {
   return loadCodexRemap(options).remap;
-}
-
-function verifiedCodexRemap(resolution) {
-  const binding = resolution && VERIFIED_CODEX_REMAPS.get(resolution);
-  if (!binding
-      || resolution.effective_model !== binding.effective_model
-      || (resolution.model !== binding.canonical.model && resolution.model !== binding.effective_model)
-      || (resolution.canonical_resolution !== undefined && resolution.canonical_resolution !== binding.canonical)
-      || (resolution.canonical_model !== undefined && resolution.canonical_model !== binding.canonical.model)
-      || (resolution.model_source !== undefined && resolution.model_source !== 'gsd-remap')
-      || (resolution.remap_key !== undefined && resolution.remap_key !== binding.remap_key)) return null;
-  return binding;
 }
 
 function compareVersions(left, right) {
@@ -209,26 +117,20 @@ function validateCodexConfiguration(resolution, config = {}, capabilities = {}, 
   if (sourceConfig.model_policy?.runtime !== undefined && sourceConfig.model_policy.runtime !== 'codex') {
     refuse('model_policy.runtime contradicts the Codex dispatch');
   }
-  const effectiveModel = options.effectiveModel ?? resolution.effective_model ?? resolution.model;
-  if (typeof effectiveModel !== 'string' || !effectiveModel.trim()) {
-    refuse('effective Codex model must be a non-empty model id');
+  if (options.effectiveModel !== undefined && options.effectiveModel !== resolution.model) {
+    refuse('Codex launch validation must use the resolver canonical concrete model');
   }
-  if (resolution.agent_file && effectiveModel !== resolution.model) {
-    refuse('static Codex selections cannot use an effective model remap');
+  for (const field of ['canonical_resolution', 'canonical_model', 'effective_model', 'model_source', 'remap_key']) {
+    if (resolution[field] !== undefined) refuse('Codex resolution contains forbidden remap provenance ' + field);
   }
-  const remapKeys = new Set([
-    resolution.model_key,
-    resolution.logical_model,
-    ...(Array.isArray(options.remapKeys) ? options.remapKeys : []),
-  ].filter((key) => typeof key === 'string' && key.trim()).map((key) => key.trim()));
   const entries = remapEntries(config);
-  assertNoConflictingRemaps(entries);
+  assertNamedPaletteAssertions(entries);
   for (const { source, key, entry } of entries) {
     if (typeof entry === 'string' || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
     for (const field of ['effort', 'reasoning_effort']) {
       if (entry[field] === undefined) continue;
       if (!policy.EFFORTS.includes(entry[field])) refuse(source + '.' + field + ' is not a valid effort');
-      if (remapKeys.has(key)) effortAtLeastConfigured(source + '.' + field, entry[field], resolution);
+      if (key === resolution.model_key) effortAtLeastConfigured(source + '.' + field, entry[field], resolution);
     }
   }
   // Check both namespaces; namespace precedence cannot hide a conflict.
@@ -241,13 +143,16 @@ function validateCodexConfiguration(resolution, config = {}, capabilities = {}, 
     for (const entry of palette) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) refuse(namespace + '.codex_models entries must be objects');
       const model = normalizeModel(entry);
+      if (!Object.values(CODEX_MODEL_IDS).includes(model)) {
+        refuse(source + ' contains a model outside the named ADR-014 Codex palette: ' + model);
+      }
       if (seen.has(model)) refuse(namespace + '.codex_models has duplicate model ' + model);
       seen.add(model);
       if (entry.effort !== undefined && !policy.EFFORTS.includes(entry.effort)) refuse('invalid palette effort for ' + model);
       if (entry.min_cli !== undefined && (typeof entry.min_cli !== 'string' || !/^\d+(?:\.\d+)*$/.test(entry.min_cli))) {
         refuse('invalid CLI version floor for ' + model);
       }
-      if (model !== effectiveModel) continue;
+      if (model !== resolution.model) continue;
       if (entry.effort !== undefined) effortAtLeastConfigured(source + '.' + model + '.effort', entry.effort, resolution);
       if (entry.min_cli !== undefined
           && (typeof capabilities.cliVersion !== 'string' || !/^\d+(?:\.\d+)*$/.test(capabilities.cliVersion)
@@ -261,5 +166,5 @@ function validateCodexConfiguration(resolution, config = {}, capabilities = {}, 
 
 module.exports = Object.freeze({
   REPAIR, createCodexRemapper, loadCodexRemap, normalizeModel, readProjectConfig,
-  validateCodexConfiguration, verifiedCodexRemap,
+  validateCodexConfiguration,
 });

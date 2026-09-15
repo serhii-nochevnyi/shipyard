@@ -11,7 +11,7 @@ const SCRIPT = path.join(ROOT, 'plugins/delivery-pipeline/scripts/codex-agent.cj
 const { selectAgent, parseArgs, signalsFrom, projectDirFrom } = require(SCRIPT);
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const {
-  createCodexRemapper, loadCodexRemap, readProjectConfig, validateCodexConfiguration,
+  createCodexRemapper, readProjectConfig, validateCodexConfiguration,
 } = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
 
 const capabilities = {
@@ -49,25 +49,6 @@ function fixture(raw = {}) {
   return { root, agentDir, options: { cwd: root, agentDir, capabilities, env: {} } };
 }
 function clean(f) { fs.rmSync(f.root, { recursive: true, force: true }); }
-
-function writeGsdResolver(codexHome) {
-  const resolver = path.join(codexHome, 'gsd-core', 'bin', 'lib', 'model-resolver.cjs');
-  fs.writeFileSync(resolver, [
-    'module.exports = {',
-    '  resolveTierEntry({ runtime, tier, overrides }) {',
-    "    const builtin = runtime === 'codex' && tier === 'sonnet' ? { model: 'builtin-sonnet' } : null;",
-    '    const raw = overrides?.[runtime]?.[tier];',
-    "    const user = raw ? (typeof raw === 'string' ? { model: raw } : raw) : null;",
-    '    if (!builtin && !user) return null;',
-    '    return { ...(builtin || {}), ...(user || {}) };',
-    '  },',
-    '  resolveModelPolicy(policy, tier) {',
-    '    const raw = policy?.runtime_tiers?.[policy.runtime]?.[tier];',
-    "    return typeof raw === 'string' ? raw : raw?.model || null;",
-    '  },',
-    '};',
-  ].join('\n'));
-}
 
 suite('strict Codex selector and named model palette');
 
@@ -143,230 +124,37 @@ for (const raw of [
   });
 }
 
-test('an effective GSD remap survives selection and keeps the canonical effort', () => {
-  const model = 'vendor/codex-sonnet-v2';
-  const f = fixture({
-    model_policy: { runtime_tiers: { codex: { sonnet: model } } },
-    delivery_pipeline: { codex_models: [{ model, effort: 'high' }] },
-  });
-  try {
-    const result = selectAgent('decomposition', {
-      ...f.options,
-      capabilities: {
-        ...capabilities,
-        supportedModels: [...capabilities.supportedModels, model],
-        supportedEfforts: ['medium'],
-      },
-    });
-    assert.equal(result.model, model);
-    assert.equal(result.requested_model, 'gpt-5.6-sol');
-    assert.equal(result.canonical_model, 'gpt-5.6-sol');
-    assert.equal(result.effective_model, model);
-    assert.equal(result.model_source, 'gsd-remap');
-    assert.equal(result.remap_key, 'sonnet');
-    assert.equal(result.effort, 'medium');
-    assert.deepEqual(result.launch_arguments, { model, reasoning_effort: 'medium' });
-  } finally { clean(f); }
-});
-
-test('remap lookup follows the canonical Codex model key to its GSD tier', () => {
-  const model = 'vendor/codex-opus-v2';
-  const f = fixture({
-    model_policy: { runtime_tiers: { codex: {
-      sonnet: 'vendor/codex-wrong-tier', opus: { model, effort: 'medium' },
-    } } },
-    delivery_pipeline: { codex_models: [{ model, effort: 'medium' }] },
-  });
-  try {
-    const result = selectAgent('executor', {
-      ...f.options,
-      signals: { critical: true },
-      capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
-    });
-    assert.equal(result.model, model);
-    assert.equal(result.canonical_model, 'gpt-6-astra');
-    assert.equal(result.effective_model, model);
-    assert.equal(result.remap_key, 'opus');
-  } finally { clean(f); }
-});
-
-test('a Terra resolution ignores an unrelated Sonnet remap instead of applying it', () => {
-  const f = fixture({
-    model_policy: { runtime_tiers: { codex: { sonnet: 'vendor/codex-wrong-tier' } } },
-  });
-  try {
-    const result = selectAgent('research', f.options);
-    assert.equal(result.model, 'gpt-5.6-terra');
-    assert.equal(result.effective_model, undefined);
-    assert.equal(result.model_source, undefined);
-  } finally { clean(f); }
-});
-
-test('an absent project config stays undefined and loads an inherited GSD remap with cwd/env', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-'));
-  const agentDir = path.join(root, 'agents');
-  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-home-'));
-  const model = 'vendor/codex-inherited-sonnet';
-  const loader = path.join(codexHome, 'gsd-core', 'bin', 'lib', 'config-loader.cjs');
-  fs.mkdirSync(path.join(root, '.planning'));
-  fs.mkdirSync(agentDir);
-  fs.mkdirSync(path.dirname(loader), { recursive: true });
-  writeGsdResolver(codexHome);
-  fs.writeFileSync(loader, [
-    'module.exports = {',
-    '  loadConfig(cwd) {',
-    `    if (cwd !== ${JSON.stringify(root)}) throw new Error('unexpected project cwd');`,
-    `    return { model_policy: { runtime_tiers: { codex: { sonnet: ${JSON.stringify(model)} } } } };`,
-    '  },',
-    '};',
-  ].join('\n'));
-  try {
-    assert.equal(readProjectConfig(root), undefined);
-    const inherited = loadCodexRemap({ cwd: root, env: { CODEX_HOME: codexHome } });
-    assert.equal(inherited.remap('sonnet'), model);
-    assert.equal(inherited.sourceConfig.model_policy.runtime_tiers.codex.sonnet, model);
-    const result = selectAgent('decomposition', {
-      cwd: root, agentDir, capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model], supportedEfforts: ['medium'] },
-      env: { CODEX_HOME: codexHome },
-    });
-    assert.equal(result.model, model);
-    assert.equal(result.requested_model, 'gpt-5.6-sol');
-    assert.equal(result.effective_model, model);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-    fs.rmSync(codexHome, { recursive: true, force: true });
-  }
-});
-
-test('an inherited builtin catalog value is a no-op while a genuine remap remains effective', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-builtin-'));
-  const agentDir = path.join(root, 'agents');
-  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-home-'));
-  const loader = path.join(codexHome, 'gsd-core', 'bin', 'lib', 'config-loader.cjs');
-  fs.mkdirSync(path.join(root, '.planning'));
-  fs.mkdirSync(agentDir);
-  fs.mkdirSync(path.dirname(loader), { recursive: true });
-  writeGsdResolver(codexHome);
-  fs.writeFileSync(loader, [
-    'module.exports = {',
-    '  loadConfig() {',
-    "    return { model_profile_overrides: { codex: { sonnet: 'builtin-sonnet' } } };",
-    '  },',
-    '};',
-  ].join('\n'));
-  try {
-    const inherited = loadCodexRemap({ cwd: root, env: { CODEX_HOME: codexHome } });
-    assert.equal(inherited.remap('sonnet'), null);
-    assert.equal(inherited.sourceConfig.model_profile_overrides.codex.sonnet, 'builtin-sonnet');
-    const result = selectAgent('decomposition', {
-      cwd: root, agentDir, capabilities,
-      env: { CODEX_HOME: codexHome },
-    });
-    assert.equal(result.model, 'gpt-5.6-sol');
-    assert.equal(result.effective_model, undefined);
-    assert.equal(result.model_source, undefined);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-    fs.rmSync(codexHome, { recursive: true, force: true });
-  }
-});
-
-for (const [label, entry] of [
-  ['invalid inherited effort', { model: 'vendor/codex-inherited-invalid', effort: 'bogus' }],
-  ['below-canonical inherited effort', { model: 'vendor/codex-inherited-low', effort: 'low' }],
+for (const [source, inherited, raw] of [
+  ['project runtime tier', false, { model_policy: { runtime_tiers: { codex: { sol: 'vendor/codex-sonnet-v2' } } } }],
+  ['project profile override', false, { model_profile_overrides: { codex: { luna: 'vendor/codex-luna-v2' } } }],
+  ['inherited runtime tier', true, { model_policy: { runtime_tiers: { codex: { astra: 'vendor/codex-astra-v2' } } } }],
+  ['inherited profile override', true, { model_profile_overrides: { codex: { terra: 'vendor/codex-terra-v2' } } }],
 ]) {
-  test(label + ' is validated before its model is applied', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-validation-'));
-    const agentDir = path.join(root, 'agents');
-    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-home-'));
-    const loader = path.join(codexHome, 'gsd-core', 'bin', 'lib', 'config-loader.cjs');
-    fs.mkdirSync(path.join(root, '.planning'));
-    fs.mkdirSync(agentDir);
-    fs.mkdirSync(path.dirname(loader), { recursive: true });
-    writeGsdResolver(codexHome);
-    fs.writeFileSync(loader, [
-      'module.exports = {',
-      '  loadConfig() {',
-      `    return { model_policy: { runtime_tiers: { codex: { sonnet: ${JSON.stringify(entry)} } } } };`,
-      '  },',
-      '};',
-    ].join('\n'));
+  test(source + ' arbitrary Codex id fails closed before a routed launch', () => {
+    const f = fixture(raw);
+    const gsdHome = inherited ? fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-')) : null;
     try {
-      assert.throws(() => selectAgent('decomposition', {
-        cwd: root, agentDir,
-        capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, entry.model] },
-        env: { CODEX_HOME: codexHome },
-      }), (error) => error.code === 'CONFLICTING_OVERRIDE'
-        && (label === 'invalid inherited effort'
-          ? /is not a valid effort/.test(error.message)
-          : /below the canonical decomposition\/base effort medium/.test(error.message)));
+      if (inherited) {
+        fs.rmSync(path.join(f.root, '.planning'), { recursive: true, force: true });
+        fs.mkdirSync(path.join(gsdHome, '.gsd'));
+        fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(raw));
+      }
+      assert.throws(() => selectAgent('decomposition', inherited
+        ? { ...f.options, env: { GSD_HOME: gsdHome } }
+        : f.options), (error) =>
+        error.code === 'CONFLICTING_OVERRIDE' && /cannot replace canonical/.test(error.message));
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-      fs.rmSync(codexHome, { recursive: true, force: true });
+      clean(f);
+      if (gsdHome) fs.rmSync(gsdHome, { recursive: true, force: true });
     }
   });
 }
 
-test('a conflicting inherited GSD runtime is validated before its remap is applied', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-inherited-runtime-'));
-  const agentDir = path.join(root, 'agents');
-  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-home-'));
-  const model = 'vendor/codex-inherited-runtime-conflict';
-  const loader = path.join(codexHome, 'gsd-core', 'bin', 'lib', 'config-loader.cjs');
-  fs.mkdirSync(path.join(root, '.planning'));
-  fs.mkdirSync(agentDir);
-  fs.mkdirSync(path.dirname(loader), { recursive: true });
-  writeGsdResolver(codexHome);
-  fs.writeFileSync(loader, [
-    'module.exports = {',
-    '  loadConfig() {',
-    `    return { model_policy: { runtime: 'claude', runtime_tiers: { codex: { sonnet: ${JSON.stringify(model)} } } } };`,
-    '  },',
-    '};',
-  ].join('\n'));
-  try {
-    assert.throws(() => selectAgent('decomposition', {
-      cwd: root, agentDir,
-      capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
-      env: { CODEX_HOME: codexHome },
-    }), (error) => error.code === 'CONFLICTING_OVERRIDE'
-      && /model_policy\.runtime contradicts the Codex dispatch/.test(error.message));
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-    fs.rmSync(codexHome, { recursive: true, force: true });
-  }
-});
-
-test('an unavailable inherited GSD loader refuses instead of falling back to the canonical model', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-loader-failure-'));
-  const missingHome = path.join(root, 'missing-codex-home');
-  fs.mkdirSync(path.join(root, '.planning'));
-  try {
-    assert.equal(readProjectConfig(root), undefined);
-    assert.throws(() => createCodexRemapper({ cwd: root, codexHome: missingHome, env: { CODEX_HOME: missingHome } }),
-      (error) => error.code === 'UNSUPPORTED_SELECTION'
-        && /cannot load GSD model configuration/.test(error.message)
-        && /install-shipyard-codex/.test(error.message));
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-test('an effective remap is refused when the host does not advertise its model', () => {
-  const model = 'vendor/codex-not-installed';
-  const f = fixture({ model_policy: { runtime_tiers: { codex: { sonnet: model } } } });
+test('an arbitrary Codex palette id fails closed while named palette assertions remain valid', () => {
+  const f = fixture({ delivery_pipeline: { codex_models: [{ model: 'vendor/codex-luna-v2' }] } });
   try {
     assert.throws(() => selectAgent('executor', f.options), (error) =>
-      error.code === 'UNSUPPORTED_SELECTION' && /supportedModels.*vendor\/codex-not-installed/.test(error.message));
-  } finally { clean(f); }
-});
-
-test('a static remap refuses instead of bypassing generated-file evidence', () => {
-  const model = 'vendor/codex-static-remap';
-  const f = fixture({ model_policy: { runtime_tiers: { codex: { haiku: model } } } });
-  try {
-    assert.throws(() => selectAgent('research', {
-      ...f.options,
-      capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
-    }), (error) => error.code === 'CONFLICTING_OVERRIDE' && /static Codex selections/.test(error.message));
+      error.code === 'CONFLICTING_OVERRIDE' && /outside the named ADR-014 Codex palette/.test(error.message));
   } finally { clean(f); }
 });
 
@@ -472,18 +260,18 @@ test('malformed project config does not fall through to defaults or the GSD cata
   } finally { clean(f); }
 });
 
-test('named remapper returns configured arbitrary ids without loading GSD', () => {
+test('named remapper accepts only canonical named assertions and never returns a replacement', () => {
   const f = fixture();
   try {
     const remap = createCodexRemapper({
       cwd: f.root,
-      codexHome: '/nonexistent-gsd',
-      config: { model_policy: { runtime_tiers: { codex: { sonnet: 'vendor/model@2026' } } } },
+      config: { model_policy: { runtime_tiers: { codex: { sol: 'gpt-5.6-sol' } } } },
     });
-    assert.equal(remap('sonnet'), 'vendor/model@2026');
+    assert.equal(remap('sol'), null);
     assert.equal(remap('unknown'), null);
-    assert.equal(remap(''), null);
-    assert.equal(remap(undefined), null);
+    assert.throws(() => createCodexRemapper({
+      config: { model_policy: { runtime_tiers: { codex: { sol: 'vendor/model@2026' } } } },
+    }), /cannot replace canonical/);
   } finally { clean(f); }
 });
 

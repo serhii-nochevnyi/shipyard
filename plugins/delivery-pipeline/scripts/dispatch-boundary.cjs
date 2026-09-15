@@ -1084,6 +1084,9 @@ function validateWithAdapter(resolution, adapter) {
   const effective = adapter && typeof adapter.effectiveResolution === 'function'
     ? invokeSync(adapter.effectiveResolution, adapter, [resolution], 'adapter.effectiveResolution')
     : null;
+  if (resolution.runtime === 'codex' && effective !== null) {
+    refuse('INVALID_RESOLUTION', 'Codex adapters must validate the resolver canonical concrete model without an effective-model substitution');
+  }
   const canonical = effective === null ? resolution : effective && effective.canonical;
   if (effective !== null
       && (!isObject(effective)
@@ -1145,6 +1148,9 @@ function expectedSelectionForReceipt(resolution, adapter) {
   const effective = adapter && typeof adapter.effectiveResolution === 'function'
     ? invokeSync(adapter.effectiveResolution, adapter, [resolution], 'adapter.effectiveResolution')
     : null;
+  if (resolution.runtime === 'codex' && effective !== null) {
+    refuse('INVALID_RESOLUTION', 'Codex receipts must use the resolver canonical concrete model without an effective-model substitution');
+  }
   if (effective === null) return { canonical: resolution, applied_model: resolution.model };
   if (!isObject(effective)
       || !isObject(effective.canonical)

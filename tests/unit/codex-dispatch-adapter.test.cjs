@@ -8,7 +8,6 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createCodexDispatchAdapter, CODEX_MODEL_IDS } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
-const { loadCodexRemap } = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
 
 const capabilities = {
   supportedModels: Object.values(CODEX_MODEL_IDS), supportedEfforts: ['high', 'medium', 'max'],
@@ -192,42 +191,31 @@ test('unavailable model, effort or pair never selects a lower tuple', () => {
   }
 });
 
-test('a dynamic remap records canonical requested values beside the applied model', () => {
-  const model = 'vendor/codex-runtime-model';
-  const f = setup({
-    capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
-  });
+test('a dynamic launch and receipt use the resolver canonical concrete model', () => {
+  const f = setup();
   try {
     const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
-    const loaded = loadCodexRemap({
-      config: { model_policy: { runtime_tiers: { codex: { sonnet: model } } } },
-    });
-    const selected = loaded.bindResolution({ ...resolution, effective_model: model }, resolution, 'sonnet');
-    const result = f.adapter.launch(selected);
-    assert.equal(f.calls.at(-1).model, model);
+    const result = f.adapter.launch(resolution);
+    assert.equal(f.calls.at(-1).model, resolution.model);
     assert.equal(f.calls.at(-1).reasoning_effort, 'medium');
     assert.equal(result.requested_model, resolution.requested_model);
     assert.equal(result.requested_effort, resolution.requested_effort);
-    assert.equal(result.applied_model, model);
+    assert.equal(result.applied_model, resolution.model);
     assert.equal(result.applied_effort, 'medium');
   } finally { clean(f); }
 });
 
-test('the boundary verifies a loader-bound dynamic remap against its effective model', () => {
-  const model = 'vendor/codex-runtime-model';
-  const f = setup({
-    capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
-  });
+test('the boundary rejects a Codex adapter effective-model substitution', () => {
+  const f = setup();
   try {
-    const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
-    const selected = loadCodexRemap({
-      config: { model_policy: { runtime_tiers: { codex: { sonnet: model } } } },
-    }).bindResolution({ ...resolution, effective_model: model }, resolution, 'sonnet');
-    const receipt = f.adapter.launch(selected);
-    const evidence = f.boundary.receipt(selected, receipt);
-    assert.equal(evidence.requested_model, resolution.model);
-    assert.equal(evidence.applied_model, model);
-    assert.equal(evidence.applied_effort, resolution.effort);
+    const substituted = Object.freeze({
+      ...f.adapter,
+      effectiveResolution: (resolution) => ({ canonical: resolution, effective_model: 'gpt-6-astra' }),
+    });
+    const boundary = createDispatchBoundary({ adapters: { codex: substituted }, recorder: () => true });
+    assert.throws(() => boundary.dispatch({ runtime: 'codex', role: 'decomposition' }),
+      (error) => error.code === 'INVALID_RESOLUTION' && /canonical concrete model/.test(error.message));
+    assert.equal(f.calls.length, 0);
   } finally { clean(f); }
 });
 
@@ -265,22 +253,13 @@ test('a forged outer model cannot borrow a canonical resolution without an expli
   } finally { clean(f); }
 });
 
-test('a loader-bound remap beside a canonical resolution preserves requested and applied receipt values', () => {
+test('effective-model provenance is rejected before the host is called', () => {
   const f = setup();
   try {
     const resolution = f.boundary.resolve({ runtime: 'codex', role: 'decomposition' });
     const remapped = { ...resolution, model: 'gpt-6-astra', effective_model: 'gpt-6-astra' };
-    Object.defineProperty(remapped, 'canonical_resolution', { value: resolution });
-    loadCodexRemap({
-      config: { model_policy: { runtime_tiers: { codex: { sonnet: 'gpt-6-astra' } } } },
-    }).bindResolution(remapped, resolution, 'sonnet');
-    const result = f.adapter.launch(remapped);
-    assert.equal(f.calls.at(-1).model, 'gpt-6-astra');
-    assert.equal(f.calls.at(-1).reasoning_effort, resolution.effort);
-    assert.equal(result.requested_model, resolution.requested_model);
-    assert.equal(result.requested_effort, resolution.requested_effort);
-    assert.equal(result.applied_model, 'gpt-6-astra');
-    assert.equal(result.applied_effort, resolution.effort);
+    rejected(() => f.adapter.launch(remapped), 'CONFLICTING_OVERRIDE');
+    assert.equal(f.calls.length, 0);
   } finally { clean(f); }
 });
 
@@ -305,18 +284,13 @@ test('caller-constructed canonical and remap provenance cannot authorize an effe
   } finally { clean(f); }
 });
 
-test('static generated evidence cannot be bypassed by an effective remap', () => {
-  const model = 'vendor/codex-static-model';
-  const f = setup({
-    capabilities: { ...capabilities, supportedModels: [...capabilities.supportedModels, model] },
-  });
+test('static generated evidence cannot be bypassed by effective-model provenance', () => {
+  const f = setup();
   try {
     const resolution = f.boundary.resolve({ runtime: 'codex', role: 'research' });
-    const selected = loadCodexRemap({
-      config: { model_policy: { runtime_tiers: { codex: { terra: model } } } },
-    }).bindResolution({ ...resolution, effective_model: model }, resolution, 'terra');
+    const selected = { ...resolution, effective_model: 'gpt-6-astra' };
     assert.throws(() => f.adapter.validate(selected),
-      (error) => error.code === 'CONFLICTING_OVERRIDE' && /static Codex selections/.test(error.message));
+      (error) => error.code === 'CONFLICTING_OVERRIDE' && /cannot use model remap provenance/.test(error.message));
   } finally { clean(f); }
 });
 

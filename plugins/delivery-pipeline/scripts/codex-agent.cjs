@@ -11,17 +11,10 @@ const pc = require('./pipeline-config.cjs');
 const boundary = require('./dispatch-boundary.cjs');
 const policy = require('./model-policy.cjs');
 const { createCodexDispatchAdapter, REPAIR } = require('./codex-dispatch-adapter.cjs');
-const { loadCodexRemap, readProjectConfig, validateCodexConfiguration } = require('./codex-model-remap.cjs');
+const { validateCodexConfiguration } = require('./codex-model-remap.cjs');
 
 const ROLE_ALIASES = Object.freeze({ 'inv-research': 'research' });
 const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json> (supportedModels and supportedEfforts)';
-// Keep this translation aligned with pipeline-config's routed bridge: GSD's
-// compatibility tiers are not the Codex model keys themselves. The ADR-014
-// resolver owns the concrete rung; this map only identifies which operator
-// remap is effective for that resolved Codex model.
-const GSD_REMAP_TIER_BY_CODEX_MODEL_KEY = Object.freeze({
-  terra: 'haiku', sol: 'sonnet', luna: 'sonnet', astra: 'opus',
-});
 
 function fail(message, code = 'INVALID_INPUT') {
   throw policy.policyError(code, message + '. ' + REPAIR);
@@ -105,11 +98,9 @@ function configForCodexResolution(config) {
   const original = config.dispatch_context.configuration;
   const configuration = { ...original };
   let changed = false;
-  // The bridge treats these named entries as per-rung launch overrides. Resolve
-  // the ADR-014 rung first, then apply the effective Codex remap below; keep
-  // the raw namespaces out of the bridge input so an operator model id cannot
-  // be mistaken for a canonical policy model. The raw values are still
-  // validated separately, including contradictions and host availability.
+  // The canonical resolver must not consume generic Codex/GSD configuration as
+  // launch input. The original loaded configuration is validated afterwards as
+  // a named-palette assertion, so arbitrary IDs fail closed rather than remap.
   const modelPolicy = configuration.model_policy;
   if (isObject(modelPolicy) && isObject(modelPolicy.runtime_tiers)) {
     const runtimeTiers = { ...modelPolicy.runtime_tiers };
@@ -163,50 +154,6 @@ function routedConfigForCodexResolution(config, cwd, env) {
   }
 }
 
-function remapKeysForResolution(resolution) {
-  // Static files cannot be rewritten at dispatch time. Still inspect the
-  // model's mapped GSD tier for them so an effective custom remap is refused
-  // rather than silently ignored behind a canonical generated artifact.
-  const modelKey = typeof resolution.model_key === 'string' ? resolution.model_key : null;
-  const gsdTier = modelKey && GSD_REMAP_TIER_BY_CODEX_MODEL_KEY[modelKey];
-  const keys = gsdTier ? [gsdTier] : [];
-  if (modelKey) keys.push(modelKey);
-  return [...new Set(keys)];
-}
-
-function effectiveRemapFor(resolution, config, { cwd, env } = {}) {
-  const { remap, sourceConfig, bindResolution } = loadCodexRemap({ config, cwd, env });
-  const keys = remapKeysForResolution(resolution);
-  for (const key of keys) {
-    const model = remap(key);
-    if (model) return { model, key, keys, sourceConfig, bindResolution };
-  }
-  return { model: resolution.model, key: null, keys, sourceConfig, bindResolution };
-}
-
-function selectionWithEffectiveRemap(selection, effective) {
-  if (!effective || effective.model === selection.model) return selection;
-  if (!policy.DYNAMIC_ROLES.includes(selection.role)) {
-    fail('static Codex selections cannot use an effective model remap', 'CONFLICTING_OVERRIDE');
-  }
-  const result = {
-    ...selection,
-    model: effective.model,
-    requested_model: selection.requested_model,
-    requested_effort: selection.requested_effort,
-    launch_arguments: { ...selection.launch_arguments, model: effective.model },
-    canonical_model: selection.model,
-    effective_model: effective.model,
-    model_source: 'gsd-remap',
-    remap_key: effective.key,
-  };
-  // Keep a non-enumerable canonical reference for diagnostics. Trust comes
-  // from the loader's private object-identity binding, not this forgeable field.
-  Object.defineProperty(result, 'canonical_resolution', { value: selection });
-  Object.freeze(result);
-  return effective.bindResolution(result, selection, effective.key);
-}
-
 function selectAgentInternal(role, options) {
   const cwd = path.resolve(options.cwd || process.cwd());
   const flags = options.flags || new Map();
@@ -220,24 +167,16 @@ function selectAgentInternal(role, options) {
     role: ROLE_ALIASES[role] || role, signals: options.signals || {},
     dispatch_id: options.dispatch_id === undefined ? boundary.newDispatchId() : options.dispatch_id,
   });
-  const projectConfig = readProjectConfig(cwd, loaded.file);
-  const effective = effectiveRemapFor(resolution, projectConfig, { cwd, env });
-  validateCodexConfiguration(resolution, effective.sourceConfig, capabilities, {
-    remapKeys: effective.keys,
-    effectiveModel: effective.model,
-  });
+  validateCodexConfiguration(resolution, loaded.config.dispatch_context.configuration, capabilities);
   const agentsDir = path.resolve(options.agentDir || agentDirFrom(flags, env));
   const adapter = createCodexDispatchAdapter({ agentsDir, agentManifest: options.agentManifest, capabilities });
-  const adapterResolution = effective.model === resolution.model
-    ? resolution
-    : effective.bindResolution({ ...resolution, effective_model: effective.model }, resolution, effective.key);
-  boundary.validateDispatch(adapterResolution, { adapters: { codex: adapter } });
+  boundary.validateDispatch(resolution, { adapters: { codex: adapter } });
   const evidence = resolution.agent_file ? adapter.validateGeneratedAgent(resolution) : null;
-  const selected = selectionWithEffectiveRemap({
+  const selected = {
     ...resolution, project_dir: cwd,
     agent_path: resolution.agent_file ? path.join(agentsDir, resolution.agent_file) : null,
     ...(evidence ? { agent_file_digest: evidence.agent_file_digest } : {}),
-  }, effective);
+  };
   return Object.isFrozen(selected) ? selected : Object.freeze(selected);
 }
 
