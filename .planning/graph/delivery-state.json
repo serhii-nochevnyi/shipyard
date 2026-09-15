@@ -1202,8 +1202,8 @@
     "pr_base": "epic/36-enforce-the-runtime-model-ladder",
     "pr_created_at": "2026-09-14T20:35:18Z",
     "head_sha": "746a67201f8cb0aadc4c76aa6464c6615171abc4",
-    "merge_state": "UNSTABLE",
-    "behind_by": 1,
+    "merge_state": "UNKNOWN",
+    "behind_by": 2,
     "checks": {
       "total": 1,
       "failing": 1,
@@ -1232,8 +1232,8 @@
     "behind_by": 0,
     "checks": {
       "total": 1,
-      "failing": 0,
-      "pending": 1,
+      "failing": 1,
+      "pending": 0,
       "none_reported": false,
       "unavailable": false
     },
@@ -1289,13 +1289,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/142",
     "pr_base": "ticket/T-36-06-route-gsd-decomposition-through-the-mand",
     "pr_created_at": "2026-09-14T22:55:34Z",
-    "head_sha": "738cc7aa4ae721973731289b3f152b527cd3024a",
-    "merge_state": "UNKNOWN",
-    "behind_by": 10,
+    "head_sha": "623f523b169ba5e4f67bb641e804d4a7d1d3ad22",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },
@@ -1316,8 +1316,8 @@
     "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
     "pr_created_at": "2026-09-15T12:14:35Z",
     "head_sha": "7e8ce30734d252dc56550a54adf386bdb6ac168f",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
+    "merge_state": "UNKNOWN",
+    "behind_by": 11,
     "checks": {
       "total": 1,
       "failing": 0,
