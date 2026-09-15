@@ -1,26 +1,26 @@
 {
-  "generated_at": "2026-09-15T12:54:51.149Z",
-  "observed_at": "2026-09-15T12:54:51.149Z",
-  "generation": 290,
+  "generated_at": "2026-09-15T12:58:08.994Z",
+  "observed_at": "2026-09-15T12:58:08.994Z",
+  "generation": 291,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-15T12:54:51.149Z",
+  "dispatches_applied_at": "2026-09-15T12:58:08.994Z",
   "actionable": {
     "execute": [],
     "publish": [],
     "fix": [
-      "T-36-04"
+      "T-36-05"
     ],
     "finalize": [
-      "T-36-05",
       "T-36-06",
-      "T-36-07"
+      "T-36-07",
+      "T-36-08"
     ],
     "merge": []
   },
   "waiting": {
     "ci": [
-      "T-36-08"
+      "T-36-04"
     ],
     "dispatched": [
       "T-36-09"
@@ -146,12 +146,12 @@
     ]
   },
   "why": {
-    "T-36-04": "PR #139: the base moved: `epic/36-enforce-the-runtime-model-ladder` is 8 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
-    "T-36-05": "PR #140: green and still a draft — threads, arch-review, conform gate",
+    "T-36-04": "PR #139: 1 check(s) still running",
+    "T-36-05": "PR #140: the base moved: `ticket/T-36-04-generate-and-validate-the-complete-codex` is 10 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-36-06": "PR #141: green, the conform trailer is for bc4a207, the PR is at 825ba63 — threads + arch-review still owed",
     "T-36-07": "PR #142: green and still a draft — threads, arch-review, conform gate",
-    "T-36-08": "PR #143: 1 check(s) still running",
-    "T-36-09": "dispatched to executor 38m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (a branch or a PR appears) or after 90m; `dispatch-record.cjs clear T-36-09 <dispatch_id>` returns it now.",
+    "T-36-08": "PR #143: green and still a draft — threads, arch-review, conform gate",
+    "T-36-09": "dispatched to executor 41m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (a branch or a PR appears) or after 90m; `dispatch-record.cjs clear T-36-09 <dispatch_id>` returns it now.",
     "T-36-10": "T-36-09 (parent has no branch yet (nothing to cascade from))",
     "T-36-11": "T-36-10 (parent has no branch yet (nothing to cascade from))",
     "T-36-12": "T-36-10 (parent has no branch yet (nothing to cascade from))"
@@ -181,13 +181,13 @@
   },
   "sentinel": {
     "duty": [
-      "T-36-04",
       "T-36-05",
       "T-36-06",
-      "T-36-07"
+      "T-36-07",
+      "T-36-08"
     ],
     "waiting_ci": [
-      "T-36-08"
+      "T-36-04"
     ],
     "waiting_parent": [],
     "dispatched": [],
