@@ -263,12 +263,12 @@ for (const { name, base } of SCRIPTS) {
   });
 }
 
-suite('executors.mjs — a dead or throwing agent is still a result');
+suite('executors.mjs — agent outcomes stay inside the boundary contract');
 
-test('a null agent result is a blocked verdict, not a gap', async () => {
-  const { value } = await run('executors', { tickets: TICKETS }, { agent: async () => null });
-  assert.strictEqual(value.length, 3);
-  assert.deepStrictEqual([...new Set(value.map((r) => r.status))], ['blocked']);
+test('a null agent result fails closed because it cannot produce a receipt', async () => {
+  const error = await rejects('executors', { tickets: TICKETS }, { agent: async () => null });
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
+  assert.strictEqual(error.code, 'MISSING_RECEIPT');
 });
 
 suite('drift-gate.mjs — a dead or throwing judge is still a verdict');
@@ -357,10 +357,9 @@ test('a blocked ticket returns its reason inline — no file, no path, the loop 
 
 test('a dead or throwing agent still returns a capped reason inline, with no worktreePath required', async () => {
   const ticket = { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', model: 'sonnet', effort: 'max' };
-  const dead = await run('executors', { tickets: [ticket] }, { agent: async () => null });
-  assert.strictEqual(dead.value[0].status, 'blocked');
-  assert.ok(dead.value[0].summary.length <= 500);
-  assert.strictEqual(dead.value[0].prBodyPath, '');
+  const dead = await rejects('executors', { tickets: [ticket] }, { agent: async () => null });
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(dead.name));
+  assert.strictEqual(dead.code, 'MISSING_RECEIPT');
 
   const threw = await run('executors', { tickets: [ticket] }, { agent: async () => { throw new Error('boom'); } });
   assert.strictEqual(threw.value[0].status, 'blocked');
@@ -439,6 +438,11 @@ for (const spec of DISPATCH) {
   });
 
   test(`${spec.name}.mjs refuses omitted launch values without invoking the host`, async () => {
+    if (spec.name === 'executors' || spec.name === 'fix-round' || spec.name === 'drift-gate') {
+      const error = await rejects(spec.name, spec.args({ model: undefined, effort: undefined }));
+      assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
+      return;
+    }
     const { calls, value } = await runSpec({ model: undefined, effort: undefined });
     assert.strictEqual(calls.length, 0, `${spec.name}: missing selection must fail before agent()`);
     assert.ok(value.length === 1);
@@ -491,12 +495,12 @@ test('executor preserves canonical risk/checkpoint facts and rejects contradicto
     { risk: 'high', signals: { risk: 'low' } },
     { signals: [] },
   ]) {
-    const { calls, value } = await run('executors', DISPATCH[0].args(facts));
-    assert.strictEqual(calls.length, 0);
-    assert.strictEqual(value[0].status, 'blocked');
+    const error = await rejects('executors', DISPATCH[0].args(facts));
+    assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
   }
-  const legacy = await run('drift-gate', DISPATCH[2].args({ model: 'sonnet', effort: 'high' }));
-  assert.strictEqual(legacy.calls.length, 0, 'compatibility tuples must not silently replace the canonical decision');
+  const legacy = await rejects('drift-gate', DISPATCH[2].args({ model: 'sonnet', effort: 'high' }));
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(legacy.name),
+    'compatibility tuples must not silently replace the canonical decision');
 });
 
 for (const role of ['ci-fix', 'review-fix']) {
@@ -537,11 +541,10 @@ test('repair refuses absent, invented or contradictory predecessor inputs before
     { signatureState: 'repeat', signals: { signatureState: 'first' } },
     { signatureState: 'repeat', priorReceipt: {}, priorApplied: { dispatch_id: 'different' } },
   ]) {
-    const { calls, value } = await run('fix-round', DISPATCH[1].args({
+    const error = await rejects('fix-round', DISPATCH[1].args({
       model: 'opus', effort: 'max', ...over,
     }));
-    assert.strictEqual(calls.length, 0);
-    assert.strictEqual(value[0].status, 'escalate');
+    assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
   }
 });
 
@@ -569,35 +572,77 @@ test('workflow agent options and context cannot bypass selection checks or reser
 });
 
 test('unsupported or contradictory workflow selections fail closed before agent()', async () => {
-  const executor = await run('executors', {
+  const executor = await rejects('executors', {
     tickets: [{ ...TICKETS[0], model: 'sonnet', effort: 'xhigh' }],
   });
-  assert.strictEqual(executor.calls.length, 0);
-  assert.strictEqual(executor.value[0].status, 'blocked');
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(executor.name));
 
-  const drift = await run('drift-gate', {
+  const drift = await rejects('drift-gate', {
     tickets: [{ ...TICKETS[0], model: 'fable', effort: 'high' }],
     driftRefPath: '/x/drift-check.md',
   });
-  assert.strictEqual(drift.calls.length, 0);
-  assert.strictEqual(drift.value[0].verdict, 'drifted');
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(drift.name));
 
-  const fix = await run('fix-round', {
+  const fix = await rejects('fix-round', {
     prs: [{ ...PR, model: 'sonnet', effort: 'max' }],
     ciFixRefPath: '/x/ci-fix.md', reviewFixRefPath: '/x/review-fix.md',
     reinitScript: '/x/scripts/reviewers.cjs',
   });
-  assert.strictEqual(fix.calls.length, 0);
-  assert.strictEqual(fix.value[0].status, 'escalate');
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(fix.name));
+});
+
+test('fix-round refuses before rendering an unsupported launch prompt', async () => {
+  let rendered = 0;
+  const dispatchFactory = (options) => {
+    const prompt = options.prompt;
+    return testDispatchFactory({
+      ...options,
+      prompt: () => {
+        rendered += 1;
+        return prompt();
+      },
+    });
+  };
+  const error = await rejects('fix-round', {
+    prs: [{ ...PR, model: 'sonnet', effort: 'max' }],
+    ciFixRefPath: '/x/ci-fix.md', reviewFixRefPath: '/x/review-fix.md',
+    reinitScript: '/x/scripts/reviewers.cjs',
+  }, { dispatchFactory });
+  assert.strictEqual(rendered, 0, 'boundary refusal must precede prompt construction');
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
+});
+
+test('drift-gate propagates host receipt failures instead of inventing drift', async () => {
+  const dispatchFactory = (options) => testDispatchFactory({
+    ...options,
+    applicationEvidence: () => { throw new Error('host receipt unavailable'); },
+  });
+  const error = await rejects('drift-gate', {
+    tickets: driftTickets([TICKETS[0]]),
+    driftRefPath: '/x/drift-check.md',
+  }, { dispatchFactory });
+  assert.strictEqual(error.name, 'DispatchBoundaryError');
+  assert.strictEqual(error.code, 'MISSING_RECEIPT');
+});
+
+test('executors propagates host receipt failures instead of blocking a ticket', async () => {
+  const dispatchFactory = (options) => testDispatchFactory({
+    ...options,
+    applicationEvidence: () => { throw new Error('host receipt unavailable'); },
+  });
+  const error = await rejects('executors', {
+    tickets: [TICKETS[0]],
+  }, { dispatchFactory });
+  assert.strictEqual(error.name, 'DispatchBoundaryError');
+  assert.strictEqual(error.code, 'MISSING_RECEIPT');
 });
 
 test('workflow dispatch has no implicit host resources and rejects self-attested application evidence', async () => {
-  const strict = await run('executors', { tickets: [TICKETS[0]] }, {
+  const strict = await rejects('executors', { tickets: [TICKETS[0]] }, {
     dispatchFactory: createClaudeWorkflowDispatch,
   });
-  assert.strictEqual(strict.calls.length, 0);
-  assert.strictEqual(strict.value[0].status, 'blocked');
-  assert.match(strict.value[0].summary, /explicit host capabilities/);
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(strict.name));
+  assert.match(strict.message, /explicit host capabilities/);
 
   const base = {
     agent: () => ({}),
@@ -631,6 +676,44 @@ test('workflow dispatch has no implicit host resources and rejects self-attested
     }),
     (error) => error.code === 'NONCOMPLIANT_RECEIPT',
   );
+});
+
+test('explicit Claude host owns workflow capabilities and receipt services', async () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-host-'));
+  workflowStores.push(storeDir);
+  const recorder = createDurableRecorder(storeDir);
+  const host = {
+    capabilities: WORKFLOW_CAPABILITIES,
+    recorder,
+    applicationEvidence: workflowApplicationEvidence,
+  };
+  const calls = [];
+  const result = await createClaudeWorkflowDispatch({
+    agent: async (prompt, options) => {
+      calls.push(options);
+      const value = {};
+      hostEvidence.set(value, {
+        launch_id: 'host-owned-launch',
+        applied_model: options.model,
+        applied_effort: options.effort,
+      });
+      return value;
+    },
+    prompt: 'host-owned prompt',
+    role: 'executor',
+    model: 'sonnet',
+    effort: 'max',
+    host,
+    // Contradictory caller values must not override the explicit host.
+    capabilities: { supportedModels: ['fable'], supportedEfforts: ['ultra'] },
+    recorder: {},
+    applicationEvidence: () => ({
+      launch_id: 'spoofed-launch', applied_model: 'fable', applied_effort: 'ultra',
+    }),
+  });
+  assert.strictEqual(calls[0].model, 'sonnet');
+  assert.strictEqual(calls[0].effort, 'max');
+  assert.strictEqual(result.receipt.launch_id, 'host-owned-launch');
 });
 
 suite('strict Claude adapter — native aliases and explicit application evidence (T-36-05)');
