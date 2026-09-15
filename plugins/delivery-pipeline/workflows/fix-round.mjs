@@ -31,6 +31,11 @@ export const meta = {
 //                        // dispatch boundary (never inherited or defaulted here)
 //       signals,         // exact ADR-014 signals used to resolve model/effort;
 //                        // never infer a repair rung from the pair alone
+//       signatureState,  // optional alias; must agree with signals.signatureState
+//       risk, critical, checkpoint, // optional canonical signal aliases
+//       priorReceipt,    // preceding boundary-returned receipt, never agent output
+//       previous_dispatch_id, // that receipt's dispatch identity (required for repair)
+//       dispatch_id,     // optional new dispatch identity
 //     } ],
 //     ciFixRefPath,      // abs path to references/ci-fix.md
 //     reviewFixRefPath,  // abs path to references/review-fix.md
@@ -137,46 +142,15 @@ if (!ciRef || !reviewRef || !reinitScript) {
   throw new Error('fix-round: args.ciFixRefPath, args.reviewFixRefPath and args.reinitScript are required')
 }
 
-// The Workflow DSL has no import surface. Use the injected bridge or resolve
-// the plugin module from the host; if neither exists, refuse the dispatch
+// The Workflow DSL has no import surface. Require the host-injected bridge;
+// if it does not exist, refuse the dispatch
 // rather than calling agent() outside createClaudeDispatchAdapter/
 // createDispatchBoundary.
 function loadClaudeWorkflowDispatch() {
+  // This is an explicit host integration point, not a documented DSL binding.
+  // JSON args cannot install callbacks, a recorder, or application evidence.
   if (typeof __createClaudeWorkflowDispatch === 'function') return __createClaudeWorkflowDispatch
-  if (argv && argv.dispatch && typeof argv.dispatch.createClaudeWorkflowDispatch === 'function') {
-    return argv.dispatch.createClaudeWorkflowDispatch
-  }
-  const requireModule = typeof __require === 'function'
-    ? __require
-    : typeof require === 'function' ? require
-      : typeof process !== 'undefined' && process && typeof process.getBuiltinModule === 'function'
-        ? process.getBuiltinModule('module').createRequire(`${process.cwd()}/.shipyard-workflow.cjs`)
-        : null
-  if (!requireModule) {
-    throw new Error('fix-round: Claude dispatch boundary bridge is unavailable')
-  }
-  const candidates = []
-  const addRoot = (root) => {
-    if (typeof root !== 'string' || !root.trim()) return
-    const value = root.replace(/\/$/, '')
-    candidates.push(value.endsWith('.cjs')
-      ? value
-      : `${value}/scripts/claude-dispatch-adapter.cjs`)
-    candidates.push(`${value}/plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs`)
-  }
-  addRoot(argv.dispatchRoot)
-  addRoot(reinitScript.replace(/\/scripts\/[^/]+$/, ''))
-  if (typeof process !== 'undefined' && process && process.env) addRoot(process.env.CLAUDE_PLUGIN_ROOT)
-  if (typeof process !== 'undefined' && process && typeof process.cwd === 'function') addRoot(process.cwd())
-  for (const candidate of candidates) {
-    try {
-      const loaded = requireModule(candidate)
-      if (loaded && typeof loaded.createClaudeWorkflowDispatch === 'function') {
-        return loaded.createClaudeWorkflowDispatch
-      }
-    } catch (_) { /* try the next host/plugin root */ }
-  }
-  throw new Error('fix-round: Claude dispatch boundary bridge could not be loaded')
+  throw new Error('fix-round: Claude dispatch boundary bridge is unavailable; the Workflow host must bind createClaudeWorkflowDispatch with capabilities, a durable recorder, and application evidence')
 }
 
 const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
@@ -273,20 +247,17 @@ return await parallel(
     try {
       const role = p.needsCiFix ? 'ci-fix' : p.needsReviewFix ? 'review-fix' : null
       if (!role) throw new Error('fixer dispatch requires needsCiFix or needsReviewFix')
-      const signals = p.signals === undefined
-        ? (p.signatureState === undefined ? undefined : { signatureState: p.signatureState })
-        : p.signatureState === undefined
-          ? p.signals
-          : p.signals.signatureState !== undefined && p.signals.signatureState !== p.signatureState
-            ? (() => { throw new Error('fixer dispatch received contradictory signatureState signals') })()
-            : { ...p.signals, signatureState: p.signatureState }
       return createClaudeWorkflowDispatch({
         agent,
         prompt: buildPrompt(p),
         role,
         model: p.model,
         effort: p.effort,
-        signals,
+        signals: p.signals,
+        signatureState: p.signatureState,
+        risk: p.risk,
+        critical: p.critical,
+        checkpoint: p.checkpoint,
         priorApplied: p.priorApplied,
         priorReceipt: p.priorReceipt,
         dispatchId: p.dispatch_id || p.dispatchId,

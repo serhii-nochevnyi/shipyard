@@ -1591,7 +1591,7 @@ const fixDispatchFactory = (options) => createClaudeWorkflowDispatch({
 function runFixRound(args) {
   const src = fs.readFileSync(FIX_ROUND, 'utf8').replace(/^export const meta/m, 'const meta');
   // eslint-disable-next-line no-new-func
-  const wf = new Function('agent', 'parallel', 'phase', 'log', 'args', '__require', '__createClaudeWorkflowDispatch',
+  const wf = new Function('agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch',
     `return (async () => {\n${src}\n})()`);
   const prompts = [];
   const agent = (prompt, opts) => {
@@ -1607,7 +1607,7 @@ function runFixRound(args) {
   const parallel = (fns) => Promise.all(fns.map((f) => f()));
   return {
     prompts,
-    result: wf(agent, parallel, () => {}, () => {}, args, require, fixDispatchFactory),
+    result: wf(agent, parallel, () => {}, () => {}, args, fixDispatchFactory),
   };
 }
 

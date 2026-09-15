@@ -128,46 +128,15 @@ const refPath = argv && argv.driftRefPath
 if (!refPath) throw new Error('drift-gate: args.driftRefPath is required')
 if (!tickets.length) return []
 
-// The Workflow DSL has no import surface. Use the injected bridge or resolve
-// the plugin module from the host; if neither exists, refuse the dispatch
+// The Workflow DSL has no import surface. Require the host-injected bridge;
+// if it does not exist, refuse the dispatch
 // rather than calling agent() outside createClaudeDispatchAdapter/
 // createDispatchBoundary.
 function loadClaudeWorkflowDispatch() {
+  // This is an explicit host integration point, not a documented DSL binding.
+  // JSON args cannot install callbacks, a recorder, or application evidence.
   if (typeof __createClaudeWorkflowDispatch === 'function') return __createClaudeWorkflowDispatch
-  if (argv && argv.dispatch && typeof argv.dispatch.createClaudeWorkflowDispatch === 'function') {
-    return argv.dispatch.createClaudeWorkflowDispatch
-  }
-  const requireModule = typeof __require === 'function'
-    ? __require
-    : typeof require === 'function' ? require
-      : typeof process !== 'undefined' && process && typeof process.getBuiltinModule === 'function'
-        ? process.getBuiltinModule('module').createRequire(`${process.cwd()}/.shipyard-workflow.cjs`)
-        : null
-  if (!requireModule) {
-    throw new Error('drift-gate: Claude dispatch boundary bridge is unavailable')
-  }
-  const candidates = []
-  const addRoot = (root) => {
-    if (typeof root !== 'string' || !root.trim()) return
-    const value = root.replace(/\/$/, '')
-    candidates.push(value.endsWith('.cjs')
-      ? value
-      : `${value}/scripts/claude-dispatch-adapter.cjs`)
-    candidates.push(`${value}/plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs`)
-  }
-  addRoot(argv.dispatchRoot)
-  addRoot(refPath.replace(/\/references\/[^/]+$/, ''))
-  if (typeof process !== 'undefined' && process && process.env) addRoot(process.env.CLAUDE_PLUGIN_ROOT)
-  if (typeof process !== 'undefined' && process && typeof process.cwd === 'function') addRoot(process.cwd())
-  for (const candidate of candidates) {
-    try {
-      const loaded = requireModule(candidate)
-      if (loaded && typeof loaded.createClaudeWorkflowDispatch === 'function') {
-        return loaded.createClaudeWorkflowDispatch
-      }
-    } catch (_) { /* try the next host/plugin root */ }
-  }
-  throw new Error('drift-gate: Claude dispatch boundary bridge could not be loaded')
+  throw new Error('drift-gate: Claude dispatch boundary bridge is unavailable; the Workflow host must bind createClaudeWorkflowDispatch with capabilities, a durable recorder, and application evidence')
 }
 
 const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
@@ -212,9 +181,13 @@ const results = await parallel(
         model: t.model,
         effort: t.effort,
         signals: t.signals,
+        risk: t.risk,
+        critical: t.critical,
+        checkpoint: t.checkpoint,
         priorApplied: t.priorApplied,
         priorReceipt: t.priorReceipt,
         dispatchId: t.dispatch_id || t.dispatchId,
+        previousDispatchId: t.previous_dispatch_id || t.previousDispatchId,
         capabilities: argv.claudeCapabilities,
         recorder: argv.dispatchRecorder,
         applicationEvidence: argv.claudeApplicationEvidence,

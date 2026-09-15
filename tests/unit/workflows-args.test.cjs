@@ -21,9 +21,8 @@
 // The plan names `new Function('agent','parallel','phase','log','args', src)`;
 // the constructor used here is the async Function constructor with that exact
 // parameter list, because plain `new Function` rejects `return await
-// parallel(...)` outright. `__require` is the test host's explicit module
-// bridge; the native Workflow host may inject the same bridge without putting
-// a module import expression in the DSL source.
+// parallel(...)` outright. Successful fixtures explicitly install an ADR-014
+// host bridge; separate DSL-only fixtures assert that its absence blocks.
 
 const fs = require('fs');
 const os = require('os');
@@ -81,7 +80,7 @@ function load(name) {
     // the smoke test's canary (`sed 's/^export const meta/const meta/'`)
     .replace(/^export const meta/m, 'const meta');
   return new AsyncFunction(
-    'agent', 'parallel', 'phase', 'log', 'args', '__require', '__createClaudeWorkflowDispatch', src
+    'agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch', src
   );
 }
 
@@ -120,7 +119,7 @@ async function run(name, args, opts) {
     : opts && opts.dispatchFactory
       ? opts.dispatchFactory
       : testDispatchFactory;
-  const value = await load(name)(h.agent, h.parallel, h.phase, h.log, args, require, dispatchFactory);
+  const value = await load(name)(h.agent, h.parallel, h.phase, h.log, args, dispatchFactory);
   return { value, calls: h.calls };
 }
 
@@ -454,6 +453,119 @@ test('executor critical selection is resolved by signals and preserves Claude So
   assert.strictEqual(calls.length, 1);
   assert.strictEqual(calls[0].opts.model, 'opus');
   assert.strictEqual(calls[0].opts.effort, 'high');
+});
+
+for (const spec of DISPATCH) {
+  test(`${spec.name} refuses the documented DSL-only host without launching`, async () => {
+    const source = fs.readFileSync(path.join(WORKFLOWS, `${spec.name}.mjs`), 'utf8')
+      .replace(/^export const meta/m, 'const meta');
+    const h = harness();
+    const workflow = new AsyncFunction('agent', 'parallel', 'phase', 'log', 'args', source);
+    await assert.rejects(
+      () => workflow(h.agent, h.parallel, h.phase, h.log, JSON.stringify(spec.args())),
+      /host must bind createClaudeWorkflowDispatch/,
+    );
+    assert.strictEqual(h.calls.length, 0);
+  });
+}
+
+test('executor preserves canonical risk/checkpoint facts and rejects contradictory or legacy tuples', async () => {
+  for (const facts of [
+    { risk: 'high', checkpoint: true },
+    { risk: 'low', critical: true },
+    { signals: { risk: 'high', checkpoint: true }, risk: 'high', checkpoint: true },
+  ]) {
+    const { calls, value } = await run('executors', DISPATCH[0].args({
+      ...facts, model: 'opus', effort: 'high',
+    }));
+    assert.strictEqual(calls.length, 1);
+    const record = WORKFLOW_RECORDER.getVerifiedRecord(value[0].receipt.dispatch_id);
+    assert.strictEqual(record.resolution.signals.risk, facts.risk);
+    assert.strictEqual(record.resolution.logical_rung, 'critical');
+  }
+  const inert = await run('executors', DISPATCH[0].args({ risk: 'high' }));
+  assert.strictEqual(inert.calls.length, 1, 'high risk alone must retain the canonical base tuple');
+  for (const facts of [
+    { risk: 'high', model: 'opus', effort: 'high' },
+    { checkpoint: true, signals: { checkpoint: false } },
+    { risk: 'high', signals: { risk: 'low' } },
+    { signals: [] },
+  ]) {
+    const { calls, value } = await run('executors', DISPATCH[0].args(facts));
+    assert.strictEqual(calls.length, 0);
+    assert.strictEqual(value[0].status, 'blocked');
+  }
+  const legacy = await run('drift-gate', DISPATCH[2].args({ model: 'sonnet', effort: 'high' }));
+  assert.strictEqual(legacy.calls.length, 0, 'compatibility tuples must not silently replace the canonical decision');
+});
+
+for (const role of ['ci-fix', 'review-fix']) {
+  test(`${role} carries a serialized predecessor through base, repeat and exhausted workflow rounds`, async () => {
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-chain-'));
+    workflowStores.push(storeDir);
+    let prior;
+    for (const state of ['first', 'repeat', 'repeat_exhausted']) {
+      // Reopen the durable store for each invocation, as the next host would.
+      const recorder = createDurableRecorder(storeDir);
+      const args = DISPATCH[1].args({
+        needsCiFix: role === 'ci-fix', needsReviewFix: role === 'review-fix',
+        signatureState: state, signals: { signatureState: state },
+        model: 'opus', effort: state === 'first' ? 'medium' : 'max',
+        ...(prior ? {
+          priorReceipt: JSON.parse(JSON.stringify(prior)),
+          previous_dispatch_id: prior.dispatch_id,
+        } : {}),
+      });
+      args.dispatchRecorder = recorder;
+      const { calls, value } = await run('fix-round', args);
+      assert.strictEqual(calls.length, 1, JSON.stringify(value));
+      const receipt = value[0].receipt;
+      const record = recorder.getVerifiedRecord(receipt.dispatch_id);
+      assert.strictEqual(record.resolution.signals.signatureState, state);
+      assert.strictEqual(record.resolution.role, role);
+      assert.strictEqual(record.receipt.applied_effort, state === 'first' ? 'medium' : 'max');
+      if (prior) assert.strictEqual(record.predecessor_dispatch_id, prior.dispatch_id);
+      prior = receipt;
+    }
+  });
+}
+
+test('repair refuses absent, invented or contradictory predecessor inputs before launch', async () => {
+  for (const over of [
+    { signatureState: 'repeat' },
+    { signatureState: 'repeat_exhausted', previous_dispatch_id: 'invented', priorReceipt: {} },
+    { signatureState: 'repeat', signals: { signatureState: 'first' } },
+    { signatureState: 'repeat', priorReceipt: {}, priorApplied: { dispatch_id: 'different' } },
+  ]) {
+    const { calls, value } = await run('fix-round', DISPATCH[1].args({
+      model: 'opus', effort: 'max', ...over,
+    }));
+    assert.strictEqual(calls.length, 0);
+    assert.strictEqual(value[0].status, 'escalate');
+  }
+});
+
+test('workflow agent options and context cannot bypass selection checks or reserve a dispatch', () => {
+  for (const invalid of [
+    { inherit: true }, { session: { inherit: true } },
+    { requested_effort: 'high' }, { applied_effort: 'high' },
+    { model: 'opus' }, { effort: 'high' }, [],
+  ]) {
+    for (const field of ['agentOptions', 'context']) {
+      const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-options-'));
+      workflowStores.push(storeDir);
+      const recorder = createDurableRecorder(storeDir);
+      let launched = false;
+      assert.throws(() => createClaudeWorkflowDispatch({
+        agent: () => { launched = true; }, prompt: 'test', role: 'executor',
+        model: 'sonnet', effort: 'max', dispatchId: 'refused-options',
+        capabilities: WORKFLOW_CAPABILITIES, recorder,
+        applicationEvidence: workflowApplicationEvidence, [field]: invalid,
+      }));
+      assert.strictEqual(launched, false);
+      assert.deepStrictEqual(fs.readdirSync(storeDir), [], 'invalid options must fail before reservation');
+    }
+  }
 });
 
 test('unsupported or contradictory workflow selections fail closed before agent()', async () => {

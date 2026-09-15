@@ -21,6 +21,8 @@ export const meta = {
 //                      // dispatch boundary (never inherited or defaulted here)
 //       signals,       // exact ADR-014 signals used to resolve model/effort;
 //                      // never infer a critical rung from the pair alone
+//       risk, critical, checkpoint, // optional canonical signal aliases;
+//                      // must agree with signals; high risk alone is inert
 //       reuseCandidates, // optional [string]; drift-check's `reuse_candidates` for
 //                      // this ticket — existing implementations to build on. Advisory
 //                      // context, NOT a scope change: it never widens files_modified.
@@ -184,45 +186,14 @@ const artifactLanguage = (argv && argv.artifactLanguage) || 'English'
 
 if (!tickets.length) return []
 
-// Workflow scripts have no module import surface. The bridge is injected by
-// the host when available, with the repository/plugin path as a test and
-// local-runtime fallback; absence is a hard refusal, never a direct agent()
+// Workflow scripts have no module import surface. The bridge must be injected
+// by an ADR-014-capable host; absence is a hard refusal, never a direct agent()
 // launch outside createClaudeDispatchAdapter/createDispatchBoundary.
 function loadClaudeWorkflowDispatch() {
+  // This is an explicit host integration point, not a documented DSL binding.
+  // JSON args cannot install callbacks, a recorder, or application evidence.
   if (typeof __createClaudeWorkflowDispatch === 'function') return __createClaudeWorkflowDispatch
-  if (argv && argv.dispatch && typeof argv.dispatch.createClaudeWorkflowDispatch === 'function') {
-    return argv.dispatch.createClaudeWorkflowDispatch
-  }
-  const requireModule = typeof __require === 'function'
-    ? __require
-    : typeof require === 'function' ? require
-      : typeof process !== 'undefined' && process && typeof process.getBuiltinModule === 'function'
-        ? process.getBuiltinModule('module').createRequire(`${process.cwd()}/.shipyard-workflow.cjs`)
-        : null
-  if (!requireModule) {
-    throw new Error('executors: Claude dispatch boundary bridge is unavailable')
-  }
-  const candidates = []
-  const addRoot = (root) => {
-    if (typeof root !== 'string' || !root.trim()) return
-    const value = root.replace(/\/$/, '')
-    candidates.push(value.endsWith('.cjs')
-      ? value
-      : `${value}/scripts/claude-dispatch-adapter.cjs`)
-    candidates.push(`${value}/plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs`)
-  }
-  addRoot(argv.dispatchRoot)
-  if (typeof process !== 'undefined' && process && process.env) addRoot(process.env.CLAUDE_PLUGIN_ROOT)
-  if (typeof process !== 'undefined' && process && typeof process.cwd === 'function') addRoot(process.cwd())
-  for (const candidate of candidates) {
-    try {
-      const loaded = requireModule(candidate)
-      if (loaded && typeof loaded.createClaudeWorkflowDispatch === 'function') {
-        return loaded.createClaudeWorkflowDispatch
-      }
-    } catch (_) { /* try the next host/plugin root */ }
-  }
-  throw new Error('executors: Claude dispatch boundary bridge could not be loaded')
+  throw new Error('executors: Claude dispatch boundary bridge is unavailable; the Workflow host must bind createClaudeWorkflowDispatch with capabilities, a durable recorder, and application evidence')
 }
 
 const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
@@ -287,6 +258,9 @@ const results = await parallel(
         model: t.model,
         effort: t.effort,
         signals: t.signals,
+        risk: t.risk,
+        critical: t.critical,
+        checkpoint: t.checkpoint,
         priorApplied: t.priorApplied,
         priorReceipt: t.priorReceipt,
         dispatchId: t.dispatch_id || t.dispatchId,

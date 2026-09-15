@@ -542,8 +542,8 @@ async function renderedPrompt(name) {
   };
   const parallel = async (thunks) => Promise.all(thunks.map((thunk) => thunk()));
   await new AsyncFunction(
-    'agent', 'parallel', 'phase', 'log', 'args', '__require', '__createClaudeWorkflowDispatch', source
-  )(agent, parallel, () => {}, () => {}, workflowArgs[name], require, sourceDispatchFactory);
+    'agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch', source
+  )(agent, parallel, () => {}, () => {}, workflowArgs[name], sourceDispatchFactory);
   assert.strictEqual(calls.length, 1, `${name} must dispatch one prompt in the rendered-contract fixture`);
   return calls[0];
 }

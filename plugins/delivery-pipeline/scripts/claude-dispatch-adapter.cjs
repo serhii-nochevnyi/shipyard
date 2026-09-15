@@ -5,6 +5,7 @@
 // application evidence. The dispatch boundary is the only layer that turns
 // this evidence into a compliant, durably recorded receipt.
 const policy = require('./model-policy.cjs');
+const { isDeepStrictEqual } = require('node:util');
 const { CLAUDE_MODEL_ALIASES } = require('./runtime-adapters.cjs');
 const { createDispatchBoundary } = require('./dispatch-boundary.cjs');
 
@@ -66,6 +67,8 @@ function validateLaunchContext(resolution, context) {
       ['requested_model', resolution.model],
       ['applied_model', resolution.model],
       ['effort', resolution.effort],
+      ['requested_effort', resolution.effort],
+      ['applied_effort', resolution.effort],
       ['reasoning_effort', resolution.effort],
       ['model_reasoning_effort', resolution.effort],
       ['agent_file', null],
@@ -208,7 +211,29 @@ function createClaudeWorkflowDispatch(options = {}) {
   if (typeof applicationEvidence !== 'function') {
     refuse('MISSING_RECEIPT', 'Claude workflow dispatch requires host application evidence');
   }
-  const agentOptions = object(options.agentOptions) ? { ...options.agentOptions } : {};
+  if (options.agentOptions !== undefined && !object(options.agentOptions)) {
+    refuse('INVALID_INPUT', 'agentOptions must be an object');
+  }
+  const agentOptions = options.agentOptions === undefined ? {} : { ...options.agentOptions };
+  if (options.signals !== undefined && !object(options.signals)) {
+    refuse('INVALID_SIGNAL', 'signals must be an object');
+  }
+  const signals = { ...options.signals };
+  // Preserve supplied facts exactly. In particular risk is recorded context,
+  // not authority to infer critical=true from a legacy model/effort pair.
+  for (const field of ['risk', 'critical', 'checkpoint', 'signatureState', 'priorApplied']) {
+    if (options[field] === undefined) continue;
+    if (signals[field] !== undefined
+        && !isDeepStrictEqual(signals[field], options[field])) {
+      refuse('CONFLICTING_OVERRIDE', 'contradictory workflow signal ' + field);
+    }
+    signals[field] = options[field];
+  }
+  if (options.priorReceipt !== undefined && signals.priorApplied !== undefined
+      && !isDeepStrictEqual(options.priorReceipt, signals.priorApplied)) {
+    refuse('CONFLICTING_OVERRIDE', 'contradictory workflow predecessor receipts');
+  }
+  const context = options.context === undefined ? {} : options.context;
 
   let agentResult;
   const host = {
@@ -229,7 +254,18 @@ function createClaudeWorkflowDispatch(options = {}) {
       return result && typeof result.then === 'function' ? result.then(capture) : capture(result);
     },
   };
-  const adapter = createClaudeDispatchAdapter({ host, capabilities });
+  const nativeAdapter = createClaudeDispatchAdapter({ host, capabilities });
+  const adapter = Object.freeze({
+    ...nativeAdapter,
+    validate(resolution) {
+      nativeAdapter.validate(resolution);
+      // Agent options reach the native host too: validate them before the
+      // boundary reserves a dispatch identity, not only inside host.launch.
+      validateLaunchContext(resolution, agentOptions);
+      validateLaunchContext(resolution, context);
+      return true;
+    },
+  });
   const boundary = createDispatchBoundary({ adapters: { claude: adapter }, recorder });
   const input = {
     runtime: 'claude',
@@ -237,14 +273,10 @@ function createClaudeWorkflowDispatch(options = {}) {
     model: options.model,
     effort: options.effort,
   };
-  if (options.signals !== undefined) input.signals = options.signals;
-  if (options.priorApplied !== undefined) {
-    input.signals = { ...(input.signals || {}), priorApplied: options.priorApplied };
-  }
+  input.signals = signals;
   if (options.priorReceipt !== undefined) input.priorReceipt = options.priorReceipt;
   if (options.dispatchId !== undefined) input.dispatch_id = options.dispatchId;
   if (options.previousDispatchId !== undefined) input.previous_dispatch_id = options.previousDispatchId;
-  const context = options.context === undefined ? {} : options.context;
   const finish = (record) => {
     if (!object(record) || !object(record.receipt) || record.receipt.compliance !== 'verified') {
       refuse('MISSING_RECEIPT', 'Claude workflow dispatch completed without a boundary-verified application receipt');
