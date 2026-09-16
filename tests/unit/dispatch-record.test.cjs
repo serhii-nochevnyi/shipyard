@@ -114,9 +114,11 @@ test('boundary receipts reconcile into the existing store and journal without re
       'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
       '--effort-applied', 'high', '--route', routeOf('executor', {}),
     ], project);
-    assert.notEqual(manualRoute.status, 0);
-    assert.match(manualRoute.stderr, /routed dispatch requires --boundary-store and --dispatch-id/);
-    assert.equal(store(graph)['T-01-01'], undefined, 'manual routed fields cannot create a dispatch record');
+    assert.equal(manualRoute.status, 0, manualRoute.stderr);
+    const legacyRouted = store(graph)['T-01-01'];
+    assert.equal(legacyRouted.application_receipt, undefined,
+      'the compatibility route is telemetry, not boundary evidence');
+    assert.equal(run(['clear', 'T-01-01', legacyRouted.dispatch_id], project).status, 0);
     const batch = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
       cwd: project, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '' },
       input: JSON.stringify([
@@ -672,7 +674,7 @@ test('every dispatch reaches the journal exactly once', () => {
   assert.equal(new Set(log.map((e) => e.ticket)).size, 3, 'no ticket logged twice');
 });
 
-test('mark-many rejects a manual routed wave before one mutation', () => {
+test('mark-many keeps a legacy routed wave atomic without minting receipts', () => {
   const state = {};
   for (let i = 1; i <= 3; i++) state[`T-01-0${i}`] = { ...READY };
   const { project, graph } = scratch(state);
@@ -696,10 +698,15 @@ test('mark-many rejects a manual routed wave before one mutation', () => {
   const r = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
     cwd: project, input: JSON.stringify(payload), encoding: 'utf8',
   });
-  assert.equal(r.status, 1, `manual routed batch must fail (${r.stderr})`);
-  assert.match(r.stderr, /routed dispatch requires --boundary-store and --dispatch-id/);
-  assert.deepStrictEqual(store(graph), {}, 'a rejected routed batch is atomic');
-  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'and writes no journal lines');
+  assert.equal(r.status, 0, `legacy routed batch must remain compatible (${r.stderr})`);
+  const records = store(graph);
+  assert.equal(Object.keys(records).length, 3, 'the whole wave is recorded atomically');
+  assert.ok(Object.values(records).every((record) => record.application_receipt === undefined),
+    'legacy routed rows carry no boundary receipt');
+  const events = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8')
+    .trim().split('\n').map(JSON.parse);
+  assert.equal(events.filter((event) => event.event === 'dispatch').length, 3,
+    'and write one journal line per dispatch');
 });
 
 test('mark-many rejects the whole batch before writing when one item is invalid', () => {
@@ -908,16 +915,20 @@ test('the two claims are never collapsed into one', () => {
   assert.equal(rec.effort_applied, 'low', 'and the spawn\'s, verbatim — neither borrowed from the other');
 });
 
-test('the full round trip reaches the store AND the journal', () => {
+test('the legacy routed round trip reaches the store AND the journal', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const r = run([
     'mark', 'T-01-01', 'executor',
     '--model', 'opus', '--effort', 'high', '--effort-applied', 'high', '--route', ROUTE,
   ], project);
-  assert.equal(r.status, 1, `manual routed values must fail (${r.stderr})`);
-  assert.match(r.stderr, /routed dispatch requires --boundary-store and --dispatch-id/);
-  assert.deepStrictEqual(store(graph), {}, 'a manual route cannot reach the store');
-  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'or the journal');
+  assert.equal(r.status, 0, `legacy routed values remain compatible (${r.stderr})`);
+  const rec = store(graph)['T-01-01'];
+  assert.equal(rec.model, 'opus');
+  assert.equal(rec.effort, 'high');
+  assert.equal(rec.effort_applied, 'high');
+  assert.equal(rec.reason, ROUTE);
+  assert.equal(rec.application_receipt, undefined, 'the legacy path cannot mint a receipt');
+  assert.equal(lastDispatch(graph).reason, ROUTE, 'the resolver route reaches the journal');
 });
 
 test('requested, applied and observed routing facts round-trip separately', () => {
@@ -928,9 +939,14 @@ test('requested, applied and observed routing facts round-trip separately', () =
     '--runtime', 'claude', '--backend', 'workflow', '--observed-model', 'claude-opus-5',
     '--observed-effort', 'xhigh',
   ], project);
-  assert.equal(r.status, 1, `manual routed values must fail (${r.stderr})`);
-  assert.match(r.stderr, /routed dispatch requires --boundary-store and --dispatch-id/);
-  assert.deepStrictEqual(store(graph), {});
+  assert.equal(r.status, 0, `legacy routed values remain compatible (${r.stderr})`);
+  const rec = store(graph)['T-01-01'];
+  assert.equal(rec.task_level, 'complex');
+  assert.equal(rec.runtime, 'claude');
+  assert.equal(rec.backend, 'workflow');
+  assert.equal(rec.observed_model, 'claude-opus-5');
+  assert.equal(rec.observed_effort, 'xhigh');
+  assert.equal(rec.application_receipt, undefined);
 });
 
 test('a known runtime cannot create an unmeasured model dispatch', () => {
@@ -964,9 +980,8 @@ test('observed model ids reject whitespace and controls but keep opaque ids flex
     'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--route', ROUTE,
     '--effort-applied', 'high', '--observed-model', 'claude-opus-5.1-preview', '--observed-effort', 'unknown',
   ], project);
-  assert.equal(ok.status, 1, ok.stderr);
-  assert.match(ok.stderr, /routed dispatch requires --boundary-store and --dispatch-id/);
-  assert.deepStrictEqual(store(graph), {});
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(store(graph)['T-01-01'].application_receipt, undefined);
 });
 
 test('the flags survive --graph in any position, from a foreign cwd', () => {
@@ -1179,20 +1194,18 @@ test('a hand-composed reason is REFUSED, and the message names where the value c
   }
 });
 
-test('--route requires a boundary receipt instead of recording a caller-supplied route', () => {
+test('--route remains a legacy compatibility projection until launch-flow integration', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE, '--effort-applied', 'high'], project);
-  assert.equal(r.status, 1, `manual route must fail (${r.stderr})`);
-  assert.match(r.stderr, /routed dispatch requires --boundary-store and --dispatch-id/);
-  assert.deepStrictEqual(store(graph), {});
+  assert.equal(r.status, 0, `legacy route must remain compatible (${r.stderr})`);
+  assert.equal(store(graph)['T-01-01'].application_receipt, undefined);
 });
 
-test('a routed receipt cannot be backfilled from caller-supplied route fields', () => {
+test('a boundary receipt cannot be backfilled from caller-supplied route fields', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE, '--effort-applied', 'high'], project);
-  assert.equal(r.status, 1, `manual route must fail (${r.stderr})`);
-  assert.match(r.stderr, /routed dispatch requires --boundary-store and --dispatch-id/);
-  assert.deepStrictEqual(store(graph), {});
+  assert.equal(r.status, 0, `legacy route must remain compatible (${r.stderr})`);
+  assert.equal(store(graph)['T-01-01'].application_receipt, undefined);
   // Disagreement is still refused before the reconciliation requirement, so a
   // malformed/copy-pasted manual route cannot hide the more useful diagnosis.
   const bad = run(['mark', 'T-01-01', 'executor', '--model', 'sonnet', '--route', ROUTE, '--effort-applied', 'high'], project);
@@ -1253,9 +1266,9 @@ test('a distinct manually supplied applied effort is still not boundary evidence
     'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
     '--effort-applied', 'low', '--route', ROUTE,
   ], project);
-  assert.equal(r.status, 1, `manual route must fail (${r.stderr})`);
-  assert.match(r.stderr, /routed dispatch requires --boundary-store and --dispatch-id/);
-  assert.deepStrictEqual(store(graph), {});
+  assert.equal(r.status, 0, `legacy route must remain compatible (${r.stderr})`);
+  assert.equal(store(graph)['T-01-01'].effort_applied, 'low');
+  assert.equal(store(graph)['T-01-01'].application_receipt, undefined);
 });
 
 test('a KNOWN agent file belonging to another role is refused, and names both', () => {

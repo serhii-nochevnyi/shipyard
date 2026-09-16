@@ -765,18 +765,13 @@ function parseMarkFlags(argv, role, ticket) {
     }
     decided.agent_file = agentFile;
   }
-  // A resolver route is the declaration that this is a new routed launch, not
-  // merely an old ownership row.  Its requested/applied fields are execution
-  // claims, so accepting caller-supplied values here would let the normal
-  // delivery instructions write unverified telemetry.  The launch-flow caller
-  // is wired in a later ticket; until it passes the durable boundary receipt,
-  // fail closed rather than treating hand-written flags as evidence.
-  if (given.has('route')) {
-    fail(
-      'a routed dispatch requires --boundary-store and --dispatch-id from the completed dispatch boundary; ' +
-      'manual --model/--effort/--route values are not application evidence.'
-    );
-  }
+  // The launch-flow caller that can supply a durable boundary receipt is wired
+  // in a later ticket. Until that integration exists, retain the documented
+  // compatibility mark form so current executors and sentinels can still keep
+  // the board honest. A legacy route is telemetry only: it cannot populate the
+  // boundary-owned applied_* fields or mint an application_receipt. Once the
+  // launch-flow caller is available, this compatibility path is the point at
+  // which its receipt-backed replacement can become mandatory.
   return decided;
 }
 
