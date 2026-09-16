@@ -11,10 +11,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-# Always prove the installed dual-runtime contract before the network-backed
-# official converter integration below.
-bash tests/smoke/model-ladder-runtime-smoke.sh
-
 # ── static ───────────────────────────────────────────────────────────────────
 for f in scripts/gen-codex-shipyard.cjs scripts/merge-codex-config.cjs scripts/install-shipyard-codex.sh \
          plugins/delivery-pipeline/scripts/runtime-context.cjs \

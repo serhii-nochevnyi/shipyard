@@ -758,7 +758,7 @@ kubectl exec -it claude-shipyard-0 -- bash -lc 'cd /workspace && claude --danger
 `make test-fast` needs neither Docker nor the network — run it on every edit:
 
 ```bash
-make test-fast          # unit + graph + worktree + sentinel + docs + ssh-sync
+make test-fast          # unit + graph + worktree + sentinel + docs + ssh-sync + model-ladder runtime
 make test-unit          # frontmatter parser, model policy, locks, front + sentinel verdicts
 make test-graph         # Gate 2 contract + plan:post gate applicability, on fixtures
 make test-worktree      # epic-branch.sh + ticket-worktree.sh against real git repos

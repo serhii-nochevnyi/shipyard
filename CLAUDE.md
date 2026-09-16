@@ -31,7 +31,7 @@ Before first run, copy `.env.example` to `.env`. Key vars: `CLAUDE_CODE_OAUTH_TO
 ## Tests
 
 ```bash
-make test-fast          # unit + graph + worktree + docs + ssh-sync — no Docker, no network
+make test-fast          # unit + graph + worktree + docs + ssh-sync + model-ladder runtime — no Docker, no network
 make test-unit          # frontmatter parser, model policy, ticket↔PR matching
 make test-graph         # Gate 2 contract + plan:post gate applicability, on fixture projects
 make test-worktree      # epic-branch.sh + ticket-worktree.sh against real local git repos

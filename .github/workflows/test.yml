@@ -4,8 +4,8 @@
 # no npm install (this repo has no package.json — the tests run on bare node),
 # so it finishes in seconds and covers the deterministic layer where this repo's
 # sharp bugs live: the frontmatter parser, the model policy, the graph validator,
-# the worktree lifecycle, the pre-publish gates, the sentinel, and the docs
-# contract.
+# the worktree lifecycle, the pre-publish gates, the sentinel, the docs contract,
+# and the installed-runtime/model-ladder smoke.
 #
 # NOT here, on purpose: test-base, test-overlay, test-runtime and
 # test-mcp-runtime build or run images (Docker), test-k8s needs kubectl, and
