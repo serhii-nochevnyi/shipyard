@@ -837,8 +837,12 @@ function reconcileTelemetry(raw, options = {}) {
     if (expected && !expected.agent_file && agentFile !== undefined && agentFile !== null) {
       resolutionContradictions.push('agent_file');
     }
-    if (expected && expected.launch_arguments && object(launchArguments)
-        && stableStringify(launchArguments) !== stableStringify(expected.launch_arguments)) {
+    if (object(expected.launch_arguments) && launchArguments !== undefined
+        && (!object(launchArguments)
+          || stableStringify(launchArguments) !== stableStringify(expected.launch_arguments))) {
+      resolutionContradictions.push('launch_arguments');
+    }
+    if (expected.launch_arguments === null && launchArguments !== undefined && launchArguments !== null) {
       resolutionContradictions.push('launch_arguments');
     }
   } else if (policyAware && runtime && role && !expected) {

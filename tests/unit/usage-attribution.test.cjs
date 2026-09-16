@@ -984,6 +984,72 @@ test('valid optional receipt rung and launch arguments remain comparison-ready',
   }
 });
 
+test('static Codex boundary projections reject non-null outer launch arguments', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-static-boundary-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const boundary = createDispatchBoundary({
+    recorder: createDurableRecorder(dir),
+    adapters: { codex: {
+      capabilities: { observedModel: true, observedEffort: true },
+      validateGeneratedAgent(resolution) {
+        const content = `adapter-owned:${resolution.agent_file}`;
+        return {
+          valid: true, exists: true, content_verified: true,
+          policy_hash: resolution.policy_hash, agent_file: resolution.agent_file,
+          agent_file_digest: crypto.createHash('sha256').update(content).digest('hex'),
+          agent_file_content: content,
+        };
+      },
+      launchStatic: (resolution) => applicationReceipt(resolution, {
+        backend: resolution.backend, mechanism: resolution.mechanism,
+        agent_file_digest: resolution.agent_file_digest, launch_arguments: null,
+      }),
+    } },
+  });
+  const context = { ticket: 'T-36-09' };
+  const trace = boundary.dispatch({ runtime: 'codex', role: 'arch-review' }, context);
+  const projection = JSON.parse(JSON.stringify(boundary.reconcile(trace.dispatch_id, context)));
+  assert.equal(projection.launch_arguments, null);
+  const options = { usageRecords: [{
+    dispatch_id: trace.dispatch_id, runtime: 'codex', provider: 'openai', session_id: 'static-session',
+  }] };
+  const omitted = { ...projection };
+  delete omitted.launch_arguments;
+  for (const valid of [projection, omitted]) {
+    const facts = reconcileTelemetry(valid, options);
+    assert.equal(facts.compliant, true);
+    assert.equal(facts.comparison_ready, true);
+    assert.equal(facts.launch_arguments, null);
+  }
+  for (const value of ['inherited', 42, [], {}, { model: 'wrong-model', reasoning_effort: 'max' }]) {
+    const facts = reconcileTelemetry({ ...projection, launch_arguments: value }, options);
+    const label = JSON.stringify(value);
+    assert.equal(facts.resolution_status, 'contradictory', label);
+    assert.ok(facts.policy_resolution.contradictions.includes('launch_arguments'), label);
+    assert.equal(facts.compliant, false, label);
+    assert.equal(facts.comparison_ready, false, label);
+    assert.equal(facts.application_status, 'applied', label);
+  }
+});
+
+test('dynamic outer launch arguments must exactly match the canonical object', () => {
+  for (const runtime of ['claude', 'codex']) {
+    const resolution = routed(runtime, 'executor', {}, `outer-arguments-${runtime}`);
+    const raw = { ...resolution, application_receipt: applicationReceipt(resolution) };
+    const reordered = Object.fromEntries(Object.entries(resolution.launch_arguments).reverse());
+    assert.equal(reconcileTelemetry({ ...raw, launch_arguments: reordered }, { usageJoined: true }).comparison_ready, true);
+    for (const value of [null, 'inherited', 42, [], {},
+      { ...resolution.launch_arguments, model: 'wrong-model' },
+      { ...resolution.launch_arguments, extra: true }]) {
+      const facts = reconcileTelemetry({ ...raw, launch_arguments: value }, { usageJoined: true });
+      const label = `${runtime}: ${JSON.stringify(value)}`;
+      assert.ok(facts.policy_resolution.contradictions.includes('launch_arguments'), label);
+      assert.equal(facts.compliant, false, label);
+      assert.equal(facts.comparison_ready, false, label);
+    }
+  }
+});
+
 test('explicit invalid outer launch identities cannot fall back to valid receipt evidence', () => {
   const resolution = routed('claude', 'executor', {}, 'outer-launch');
   const receipt = applicationReceipt(resolution);
