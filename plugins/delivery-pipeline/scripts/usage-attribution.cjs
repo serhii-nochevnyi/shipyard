@@ -1015,7 +1015,15 @@ function reconcileTelemetry(raw, options = {}) {
     } else {
       applicationMissing.push('compliance_proof');
     }
+    // Static boundary receipts use null to denote selection by agent file.
+    const staticArgumentsAbsent = expected?.agent_file && receipt.launch_arguments === null;
+    if (hasOwn(receipt, 'launch_arguments') && !staticArgumentsAbsent && !object(receipt.launch_arguments)) {
+      applicationContradictions.push('launch_arguments');
+    }
     if (expected && currentPolicy) {
+      for (const field of ['rung', 'logical_rung']) {
+        if (hasOwn(receipt, field) && receipt[field] !== rung) applicationContradictions.push(field);
+      }
       if (concreteValue(receipt.applied_model) && receipt.applied_model !== expected.model) {
         applicationContradictions.push('applied_model');
       }
@@ -1039,9 +1047,9 @@ function reconcileTelemetry(raw, options = {}) {
       if (!expected.agent_file && receipt.agent_file !== undefined && receipt.agent_file !== null) {
         applicationContradictions.push('agent_file');
       }
-      if (receipt.launch_arguments !== undefined && object(receipt.launch_arguments)
-          && expected.launch_arguments
-          && stableStringify(receipt.launch_arguments) !== stableStringify(expected.launch_arguments)) {
+      if (hasOwn(receipt, 'launch_arguments')
+          && (!expected.launch_arguments && !staticArgumentsAbsent
+            || stableStringify(receipt.launch_arguments) !== stableStringify(expected.launch_arguments))) {
         applicationContradictions.push('launch_arguments');
       }
     }

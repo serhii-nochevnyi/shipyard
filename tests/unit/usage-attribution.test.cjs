@@ -921,6 +921,69 @@ test('reconciliation checks identities and proofs in every supplied receipt copy
   }
 });
 
+test('reconciliation validates rung and launch argument claims in every receipt copy', () => {
+  for (const [runtime, role] of [['claude', 'executor'], ['codex', 'executor'], ['codex', 'arch-review']]) {
+    const resolution = routed(runtime, role, {}, `receipt-selection-${runtime}-${role}`);
+    const valid = applicationReceipt(resolution);
+    const claims = [
+      ['rung', 'wrong-rung'],
+      ['logical_rung', 'wrong-rung'],
+      ...[undefined, 'inherited', 42, []].map((value) => ['launch_arguments', value]),
+      ['launch_arguments', { ...resolution.launch_arguments, model: 'wrong-model' }],
+    ];
+    if (!resolution.launch_arguments) {
+      claims.push(['launch_arguments', {}]);
+      claims.push(['launch_arguments', { model: resolution.model, reasoning_effort: resolution.effort }]);
+    } else {
+      claims.push(['launch_arguments', null]);
+    }
+    for (const location of ['receipt', 'application_receipt', 'joined_receipt', 'joined_application_receipt']) {
+      for (const [field, value] of claims) {
+        const raw = { ...resolution, receipt: valid, application_receipt: valid };
+        const usage = {
+          dispatch_id: resolution.dispatch_id, runtime,
+          provider: runtime === 'claude' ? 'anthropic' : 'openai', session_id: 'joined',
+        };
+        const invalid = { ...valid, [field]: value };
+        if (location.startsWith('joined_')) usage[location.slice(7)] = invalid;
+        else raw[location] = invalid;
+        const facts = reconcileTelemetry(raw, { usageRecords: [usage] });
+        const label = `${runtime}/${role} ${location}.${field}=${JSON.stringify(value)}`;
+        assert.equal(facts.resolution_status, 'resolved', label);
+        assert.equal(facts.application_status, 'contradictory', label);
+        assert.ok(facts.runtime_application.contradictions.includes(field), label);
+        assert.ok(facts.findings.includes('contradictory_application'), label);
+        assert.equal(facts.compliant, false, label);
+        assert.equal(facts.comparison_ready, false, label);
+      }
+    }
+  }
+});
+
+test('valid optional receipt rung and launch arguments remain comparison-ready', () => {
+  for (const [runtime, role] of [['claude', 'executor'], ['codex', 'executor'], ['codex', 'arch-review']]) {
+    const resolution = routed(runtime, role, {}, `valid-receipt-selection-${runtime}-${role}`);
+    for (const claims of [{}, {
+      rung: resolution.rung,
+      logical_rung: resolution.logical_rung,
+      launch_arguments: resolution.launch_arguments ? { ...resolution.launch_arguments } : null,
+    }]) {
+      const receipt = applicationReceipt(resolution, claims);
+      const facts = reconcileTelemetry({ ...resolution, receipt, application_receipt: receipt }, {
+        usageRecords: [{
+          dispatch_id: resolution.dispatch_id, runtime,
+          provider: runtime === 'claude' ? 'anthropic' : 'openai', session_id: 'joined',
+          receipt, application_receipt: receipt,
+        }],
+      });
+      assert.equal(facts.application_status, 'applied', `${runtime}/${role}`);
+      assert.deepEqual(facts.runtime_application.contradictions, []);
+      assert.equal(facts.compliant, true);
+      assert.equal(facts.comparison_ready, true);
+    }
+  }
+});
+
 test('explicit invalid outer launch identities cannot fall back to valid receipt evidence', () => {
   const resolution = routed('claude', 'executor', {}, 'outer-launch');
   const receipt = applicationReceipt(resolution);
