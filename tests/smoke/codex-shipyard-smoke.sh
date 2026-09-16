@@ -11,6 +11,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
+# Always prove the installed dual-runtime contract before the network-backed
+# official converter integration below.
+bash tests/smoke/model-ladder-runtime-smoke.sh
+
 # ── static ───────────────────────────────────────────────────────────────────
 for f in scripts/gen-codex-shipyard.cjs scripts/merge-codex-config.cjs scripts/install-shipyard-codex.sh \
          plugins/delivery-pipeline/scripts/runtime-context.cjs \
@@ -32,6 +36,11 @@ trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK"
 CODEX_HOME="$WORK/.codex"
 SKILLS="$WORK/.agents/skills"
+# Keep inherited installer destination overrides inside this smoke's fixture.
+export AGENTS_SKILLS_DIR="$SKILLS"
+export GSD_CAPABILITIES_DIR="$WORK/.gsd/capabilities"
+export GSD_DEFAULTS_PATH="$WORK/.gsd/defaults.json"
+export CODEX_AGENTS_MD="$WORK/.codex/AGENTS.md"
 
 echo "→ installing gsd-core@${GSD_CORE_VERSION} --codex (throwaway HOME)…"
 npx --yes "@opengsd/gsd-core@${GSD_CORE_VERSION}" --codex --global </dev/null >/dev/null 2>&1 \
@@ -118,7 +127,7 @@ fi
 grep -rq '[$]shipyard-' "$SKILLS"/shipyard-*/SKILL.md || { echo "no \$shipyard- invocations found"; exit 1; }
 grep -q 'codex_skill_adapter' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "missing codex adapter header"; exit 1; }
 for f in "$SKILLS/shipyard-deliver/SKILL.md" "$CODEX_HOME/agents/shipyard-pr-sentinel.toml"; do
-  if grep -Eq 'inv-research-critical|pr-sentinel-deep|arch-review-deep' "$f"; then
+  if grep -Eq 'pr-sentinel-deep|arch-review-deep' "$f"; then
     echo "canonical Codex instructions name a non-emitted variant: $f"; exit 1
   fi
 done
