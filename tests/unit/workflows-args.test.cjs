@@ -818,6 +818,9 @@ test('explicit Claude host owns workflow capabilities and receipt services', asy
   const result = await createClaudeWorkflowDispatch({
     agent: async (prompt, options) => {
       calls.push(options);
+      assert.ok(Object.isFrozen(options), 'Claude launch options must be immutable at the host boundary');
+      assert.throws(() => { options.model = 'fable'; }, TypeError);
+      assert.throws(() => Object.defineProperty(options, 'effort', { value: 'low' }), TypeError);
       const value = {};
       hostEvidence.set(value, {
         launch_id: 'host-owned-launch',
