@@ -15,6 +15,8 @@ const {
 } = require('./dispatch-boundary.cjs');
 
 const REPAIR = 'Install an ADR-014-capable Claude host with explicit workflow model and effort support; provide current host capabilities and retry the exact selection.';
+const ARTIFACT_ENVELOPE_MAX_BYTES = 8192;
+const ARTIFACT_SUMMARY_MAX_CHARS = 500;
 
 function refuse(code, message) {
   throw policy.policyError(code, message + '. ' + REPAIR);
@@ -33,6 +35,166 @@ function boundaryFailure(code, message, cause) {
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function artifactText(value, label, max = ARTIFACT_SUMMARY_MAX_CHARS) {
+  if (typeof value !== 'string' || value.trim() === '' || /[\u0000-\u001f\u007f]/.test(value)) {
+    refuse('INVALID_ARTIFACT', `${label} must be non-empty text`);
+  }
+  if (Array.from(value).length > max) {
+    refuse('INVALID_ARTIFACT', `${label} exceeds its ${max}-character bound`);
+  }
+  return value;
+}
+
+function artifactPath(value, label) {
+  if (typeof value !== 'string' || value.trim() === '' || /[\u0000-\u001f\u007f]/.test(value)) {
+    refuse('INVALID_ARTIFACT', `${label} must be a non-empty path`);
+  }
+  return value;
+}
+
+function artifactReference(value, label) {
+  if (!object(value)
+      || typeof value.path !== 'string'
+      || value.path.trim() === ''
+      || /[\u0000-\u001f\u007f]/.test(value.path)
+      || !Number.isInteger(value.bytes) || value.bytes < 0
+      || value.content_bytes !== value.bytes
+      || typeof value.sha256 !== 'string'
+      || value.sha256 !== value.digest
+      || !/^[a-f0-9]{64}$/.test(value.sha256)) {
+    refuse('INVALID_ARTIFACT', `${label} must be a bounded immutable file reference`);
+  }
+  return Object.freeze({
+    path: value.path,
+    bytes: value.bytes,
+    content_bytes: value.content_bytes,
+    sha256: value.sha256,
+    digest: value.digest,
+  });
+}
+
+function boundedActionable(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    if (typeof value === 'string') artifactText(value, 'actionable_delta');
+    return value;
+  }
+  if (!object(value)) refuse('INVALID_ARTIFACT', 'actionable_delta must be a bounded JSON value');
+  const allowed = new Set(['type', 'path', 'sha256', 'digest', 'note', 'next', 'action', 'owner', 'reason']);
+  const output = {};
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) continue;
+    const item = value[key];
+    if (typeof item === 'string') output[key] = artifactText(item, `actionable_delta.${key}`);
+    else if (typeof item === 'number') {
+      if (!Number.isFinite(item)) refuse('INVALID_ARTIFACT', `actionable_delta.${key} must be finite`);
+      output[key] = item;
+    } else if (typeof item === 'boolean' || item === null) output[key] = item;
+  }
+  return output;
+}
+
+function boundedEnvelope(value) {
+  if (!object(value)) refuse('INVALID_ARTIFACT', 'trusted role-artifact envelope must be an object');
+  const output = {};
+  const strings = [
+    'schema', 'role', 'ticket', 'subject', 'outcome', 'status', 'verdict',
+    'summary', 'notes', 'hypothesis',
+  ];
+  const integers = ['version', 'pr', 'blocking_count', 'moved_count', 'reuse_candidates_count', 'evidence_count'];
+  for (const key of strings) {
+    if (value[key] !== undefined) {
+      // The executor contract permits an empty summary when the agent supplied
+      // no synopsis; it is still bounded metadata and must not be turned into a
+      // false acceptance failure at this transport boundary.
+      output[key] = key === 'summary' && value[key] === ''
+        ? ''
+        : artifactText(value[key], `envelope.${key}`);
+    }
+  }
+  for (const key of integers) {
+    if (value[key] !== undefined) {
+      if (!Number.isInteger(value[key]) || value[key] < 0) refuse('INVALID_ARTIFACT', `envelope.${key} must be a non-negative integer`);
+      output[key] = value[key];
+    }
+  }
+  if (value.pushed !== undefined) {
+    if (typeof value.pushed !== 'boolean') refuse('INVALID_ARTIFACT', 'envelope.pushed must be boolean');
+    output.pushed = value.pushed;
+  }
+  if (value.actionable_delta !== undefined) output.actionable_delta = boundedActionable(value.actionable_delta);
+  if (value.overflow !== undefined) {
+    if (!object(value.overflow)) refuse('INVALID_ARTIFACT', 'envelope.overflow must be an object');
+    const overflow = {};
+    if (Array.isArray(value.overflow.fields)) {
+      if (value.overflow.fields.length > 16 || value.overflow.fields.some((item) => typeof item !== 'string')) {
+        refuse('INVALID_ARTIFACT', 'envelope.overflow.fields is not bounded');
+      }
+      overflow.fields = value.overflow.fields.map((item) => artifactText(item, 'envelope.overflow.fields[]', 100));
+    }
+    if (value.overflow.reference !== undefined) overflow.reference = artifactReference(value.overflow.reference, 'envelope.overflow.reference');
+    output.overflow = overflow;
+  }
+  if (value.integration_base !== undefined) {
+    if (!object(value.integration_base)) refuse('INVALID_ARTIFACT', 'envelope.integration_base must be an object');
+    output.integration_base = {};
+    for (const key of ['ref', 'commit', 'tree']) {
+      if (value.integration_base[key] !== undefined) output.integration_base[key] = artifactText(value.integration_base[key], `envelope.integration_base.${key}`, 200);
+    }
+  }
+  for (const key of ['evidence_index', 'findings_index']) {
+    if (value[key] !== undefined) {
+      const reference = artifactReference(value[key], `envelope.${key}`);
+      output[key] = reference;
+      const refKey = `${key}_ref`;
+      if (value[refKey] !== undefined) {
+        const ref = artifactReference(value[refKey], `envelope.${refKey}`);
+        if (!isDeepStrictEqual(reference, ref)) refuse('INVALID_ARTIFACT', `envelope.${key} and ${refKey} disagree`);
+      }
+      output[refKey] = reference;
+    }
+  }
+  if (output.summary === undefined) refuse('INVALID_ARTIFACT', 'trusted role-artifact envelope requires a bounded summary');
+  let size;
+  try { size = Buffer.byteLength(JSON.stringify(output), 'utf8'); } catch (error) {
+    refuse('INVALID_ARTIFACT', `trusted role-artifact envelope is not serializable: ${error.message}`);
+  }
+  if (size > ARTIFACT_ENVELOPE_MAX_BYTES) refuse('INVALID_ARTIFACT', 'trusted role-artifact envelope exceeds its bounded return contract');
+  return Object.freeze(output);
+}
+
+function canonicalArtifact(value) {
+  if (!object(value)
+      || value.schema !== 'shipyard.role-artifact.v1'
+      || typeof (value.artifact_ref || value.artifact_path) !== 'string'
+      || typeof value.artifact_digest !== 'string'
+      || !/^[a-f0-9]{64}$/.test(value.artifact_digest)) {
+    throw boundaryFailure('INVALID_ARTIFACT', 'trusted role-artifact consumer returned no validated references');
+  }
+  const artifactRef = artifactPath(value.artifact_ref || value.artifact_path, 'artifact reference');
+  const evidenceIndex = artifactReference(value.evidence_index, 'artifact evidence_index');
+  const envelope = boundedEnvelope(value.envelope);
+  if (!object(envelope.evidence_index)
+      || !isDeepStrictEqual(envelope.evidence_index, evidenceIndex)) {
+    throw boundaryFailure('INVALID_ARTIFACT', 'trusted role-artifact evidence index does not match its envelope');
+  }
+  const output = {
+    schema: value.schema,
+    artifact_ref: artifactRef,
+    artifact_path: artifactRef,
+    artifact_digest: value.artifact_digest,
+    envelope,
+    evidence_index: evidenceIndex,
+  };
+  if (value.findings_index !== undefined) {
+    const findingsIndex = artifactReference(value.findings_index, 'artifact findings_index');
+    if (!object(envelope.findings_index) || !isDeepStrictEqual(envelope.findings_index, findingsIndex)) {
+      throw boundaryFailure('INVALID_ARTIFACT', 'trusted role-artifact findings index does not match its envelope');
+    }
+    output.findings_index = findingsIndex;
+  }
+  return Object.freeze(output);
 }
 
 function durableRecorder(value) {
@@ -313,6 +475,30 @@ function createClaudeWorkflowDispatch(options = {}) {
       refuse('INVALID_INPUT', `artifact metadata must be JSON-serializable: ${error.message}`);
     }
   }
+  // Artifact-required workflows must prove that their trusted consumer and
+  // identity inputs exist before the boundary reserves a dispatch or invokes
+  // an agent. Deferring this check until after launch can spend a model call on
+  // a result that could never be accepted.
+  if (artifactRequired) {
+    if (!object(artifactMetadata)) refuse('INVALID_ARTIFACT', 'artifact-required dispatch needs artifact metadata');
+    if (typeof artifactConsumer !== 'function') {
+      refuse('MISSING_ARTIFACT', 'artifact-required dispatch needs the trusted role-artifact consumer');
+    }
+    for (const [field, value] of [
+      ['role', artifactMetadata.role],
+      ['ticket', artifactMetadata.ticket],
+      ['worktreePath', artifactMetadata.worktreePath],
+      ['base', artifactMetadata.base || artifactMetadata.baseRef],
+    ]) {
+      if (typeof value !== 'string' || value.trim() === '' || /[\u0000-\u001f\u007f]/.test(value)) {
+        refuse('INVALID_ARTIFACT', `artifact metadata requires ${field} before launch`);
+      }
+    }
+    if (['ci-fix', 'review-fix'].includes(artifactMetadata.role)
+        && (!Number.isInteger(artifactMetadata.pr) || artifactMetadata.pr < 1)) {
+      refuse('INVALID_ARTIFACT', 'repair artifact metadata requires a positive PR number before launch');
+    }
+  }
 
   let agentResult;
   const host = {
@@ -354,14 +540,38 @@ function createClaudeWorkflowDispatch(options = {}) {
           gsd_launch_mechanism: GSD_LAUNCH_MECHANISM,
         } : {}),
       });
-      const result = callback(prompt, launchOptions, context && context.gsd_role);
+      let result;
+      try {
+        result = callback(prompt, launchOptions, context && context.gsd_role);
+      } catch (error) {
+        if (isBoundaryFailure(error)) throw error;
+        if (artifactRequired) {
+          throw boundaryFailure(
+            'DISPATCH_FAILED',
+            `Claude agent launch failed: ${error && error.message ? error.message : error}`,
+            error,
+          );
+        }
+        throw error;
+      }
       const capture = (value) => {
         agentResult = value;
         // This callback is host-owned. It must report what the host actually
         // applied; the requested selection is intentionally not passed in, so
         // this adapter cannot turn its own input into application evidence.
         try {
-          return applicationEvidence.call(suppliedHost || host, { result: value, context });
+          const evidence = applicationEvidence.call(suppliedHost || host, { result: value, context });
+          if (evidence && typeof evidence.then === 'function') {
+            return evidence.catch((error) => {
+              if (isBoundaryFailure(error)) throw error;
+              throw boundaryFailure(
+                'MISSING_RECEIPT',
+                `Claude host application evidence failed: ${error && error.message ? error.message : error}`,
+                error,
+              );
+            });
+          }
+          return evidence;
         } catch (error) {
           if (isBoundaryFailure(error)) throw error;
           throw boundaryFailure(
@@ -371,7 +581,20 @@ function createClaudeWorkflowDispatch(options = {}) {
           );
         }
       };
-      return result && typeof result.then === 'function' ? result.then(capture) : capture(result);
+      if (result && typeof result.then === 'function') {
+        return result.then(capture, (error) => {
+          if (isBoundaryFailure(error)) throw error;
+          if (artifactRequired) {
+            throw boundaryFailure(
+              'DISPATCH_FAILED',
+              `Claude agent launch failed: ${error && error.message ? error.message : error}`,
+              error,
+            );
+          }
+          throw error;
+        });
+      }
+      return capture(result);
   }
   const nativeAdapter = createClaudeDispatchAdapter({ host, capabilities });
   const adapter = Object.freeze({
@@ -411,9 +634,6 @@ function createClaudeWorkflowDispatch(options = {}) {
       refuse('MISSING_RECEIPT', 'Claude workflow dispatch completed without a boundary-verified application receipt');
     }
     if (!artifactRequired || !agentResult || agentResult.status !== 'committed') return complete(record);
-    if (typeof artifactConsumer !== 'function') {
-      refuse('MISSING_ARTIFACT', 'Claude workflow dispatch completed a committed result without the trusted role-artifact consumer');
-    }
     let sealed;
     try {
       sealed = artifactConsumer.call(suppliedHost || host, {
@@ -431,42 +651,29 @@ function createClaudeWorkflowDispatch(options = {}) {
       );
     }
     const finishArtifact = (artifact) => {
-      if (!object(artifact)
-          || artifact.schema !== 'shipyard.role-artifact.v1'
-          || typeof (artifact.artifact_ref || artifact.artifact_path) !== 'string'
-          || typeof artifact.artifact_digest !== 'string'
-          || !/^[a-f0-9]{64}$/.test(artifact.artifact_digest)
-          || !object(artifact.envelope)
-          || !object(artifact.evidence_index)) {
-        throw boundaryFailure('INVALID_ARTIFACT', 'trusted role-artifact consumer returned no validated references');
-      }
-      let envelopeBytes;
       try {
-        envelopeBytes = Buffer.byteLength(JSON.stringify(artifact.envelope), 'utf8');
+        const boundedArtifact = canonicalArtifact(artifact);
+        return complete(record, boundedArtifact);
       } catch (error) {
-        throw boundaryFailure('INVALID_ARTIFACT', `trusted role-artifact envelope is not serializable: ${error.message}`, error);
+        if (isBoundaryFailure(error)) throw error;
+        throw boundaryFailure(
+          'INVALID_ARTIFACT',
+          `trusted role-artifact consumer returned invalid references: ${error && error.message ? error.message : error}`,
+          error,
+        );
       }
-      if (envelopeBytes > 8192
-          || typeof artifact.envelope.summary !== 'string'
-          || Array.from(artifact.envelope.summary).length > 500) {
-        throw boundaryFailure('INVALID_ARTIFACT', 'trusted role-artifact envelope exceeds its bounded return contract');
-      }
-      // Do not let a custom host resource accidentally reintroduce complete
-      // documents into the Workflow result. Only the reference envelope crosses
-      // the adapter boundary; validated bytes remain owned by the consumer.
-      const boundedArtifact = Object.freeze({
-        schema: artifact.schema,
-        artifact_ref: artifact.artifact_ref || artifact.artifact_path,
-        artifact_path: artifact.artifact_ref || artifact.artifact_path,
-        artifact_digest: artifact.artifact_digest,
-        envelope: artifact.envelope,
-        evidence_index: artifact.evidence_index,
-      });
-      return complete(record, boundedArtifact);
     };
-    return sealed && typeof sealed.then === 'function'
-      ? sealed.then(finishArtifact)
-      : finishArtifact(sealed);
+    if (sealed && typeof sealed.then === 'function') {
+      return sealed.then(finishArtifact, (error) => {
+        if (isBoundaryFailure(error)) throw error;
+        throw boundaryFailure(
+          'INVALID_ARTIFACT',
+          `trusted role-artifact consumer failed asynchronously: ${error && error.message ? error.message : error}`,
+          error,
+        );
+      });
+    }
+    return finishArtifact(sealed);
   };
   const record = boundary.dispatch(input, context);
   return record && typeof record.then === 'function' ? record.then(finish) : finish(record);

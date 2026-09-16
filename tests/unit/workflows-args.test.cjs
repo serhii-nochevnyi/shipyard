@@ -65,7 +65,9 @@ const workflowArtifactConsumer = ({ artifact, result, record }) => {
   const evidenceIndex = {
     path: '.shipyard-evidence.md',
     bytes: 0,
+    content_bytes: 0,
     sha256: '0'.repeat(64),
+    digest: '0'.repeat(64),
   };
   const envelope = {
     schema: 'shipyard.executor-result.v1',
@@ -180,9 +182,9 @@ const parseErrorOf = (s) => {
 };
 
 const TICKETS = [
-  { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', model: 'sonnet', effort: 'max' },
-  { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', model: 'sonnet', effort: 'max' },
-  { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', model: 'sonnet', effort: 'max' },
+  { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath: '/w/T-99-01', model: 'sonnet', effort: 'max' },
+  { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', worktreePath: '/w/T-99-02', model: 'sonnet', effort: 'max' },
+  { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', worktreePath: '/w/T-99-03', model: 'sonnet', effort: 'max' },
 ];
 
 const driftTickets = (tickets) => tickets.map((ticket) => ({
@@ -335,7 +337,7 @@ test('a committed ticket returns paths and a short summary, never the documents,
     const longPrBody = `Ticket: T-99-01\n${'x'.repeat(11000)}`;
     const longEvidence = `$ node tests/unit/x.test.cjs\n${'y'.repeat(9000)}`;
     const longSummary = 'z'.repeat(900);
-    const ticket = { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath, model: 'sonnet', effort: 'max' };
+  const ticket = { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath, model: 'sonnet', effort: 'max' };
     const stubAgent = async (prompt) => {
       // The real agent is told exactly where to write — assert the prompt
       // actually names both paths, so a future edit can't drop the instruction
@@ -421,15 +423,16 @@ test('blocked results with oversized summaries stay explicit and bounded', async
   assert.ok(!('artifact_ref' in value[0]));
 });
 
-test('a dead or throwing agent still returns a capped reason inline, with no worktreePath required', async () => {
-  const ticket = { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', model: 'sonnet', effort: 'max' };
+test('an artifact-required executor failure is a failed dispatch, not an unsealed blocked result', async () => {
+  const ticket = { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', worktreePath: '/does/not/exist', model: 'sonnet', effort: 'max' };
   const dead = await rejects('executors', { tickets: [ticket] }, { agent: async () => null });
   assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(dead.name));
   assert.strictEqual(dead.code, 'MISSING_RECEIPT');
 
-  const threw = await run('executors', { tickets: [ticket] }, { agent: async () => { throw new Error('boom'); } });
-  assert.strictEqual(threw.value[0].status, 'blocked');
-  assert.match(threw.value[0].summary, /boom/);
+  const threw = await rejects('executors', { tickets: [ticket] }, { agent: async () => { throw new Error('boom'); } });
+  assert.strictEqual(threw.name, 'DispatchBoundaryError');
+  assert.strictEqual(threw.code, 'DISPATCH_FAILED');
+  assert.match(threw.message, /boom/);
 });
 
 // ── BOUNDARY-MEDIATED WORKFLOW LAUNCH INPUT (T-36-05, ADR-014) ──────────────

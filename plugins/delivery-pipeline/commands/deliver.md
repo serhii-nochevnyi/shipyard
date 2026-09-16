@@ -978,10 +978,12 @@ Rules:
   The did-work gate has to be MECHANICAL (`git log <base>..HEAD`, run by you), and
   an agent that both self-certifies and publishes is exactly the hole that gate
   exists to close. So: agents code+verify+commit in parallel → you gate, push and
-  open the PR. The agent returns `prBodyPath` and `evidencePath` inside its
-  worktree; read those files and pass the body to `gh pr create --body-file`, so
-  PR quality does not regress without copying the documents into the
-  orchestrator transcript.
+  open the PR. The trusted `role-artifact.cjs validate` → `read` procedure below
+  is the sole publication path. `prBodyPath` and `evidencePath` are diagnostic
+  references only; never `cat` them or pass an unvalidated path/body directly to
+  `gh pr create`. Use the validated `--pr-body-out` file produced by that
+  procedure, so PR quality does not regress without copying the documents into
+  the orchestrator transcript.
 - Gates stay with the main loop: attempts, waiting for CI, arch-review, the conform
   gate, human-checkpoints, escalations. Workflow does only the burst work and
   returns structured verdicts — you make the decisions.

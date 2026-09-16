@@ -21,6 +21,7 @@ const ENVELOPE_SCHEMA = 'shipyard.executor-result.v1';
 const ENVELOPE_VERSION = 1;
 const SUMMARY_MAX_CHARS = 500;
 const ENVELOPE_MAX_BYTES = 8192;
+const EVIDENCE_RANGE_MAX_CHARS = 4096;
 const MANIFEST_NAME = '.shipyard-role-artifact.json';
 const PR_BODY_NAME = '.shipyard-pr-body.md';
 const EVIDENCE_NAME = '.shipyard-evidence.md';
@@ -36,6 +37,16 @@ function object(value) {
 function nonEmpty(value, label) {
   if (typeof value !== 'string' || value.trim() === '' || /[\s\u0000-\u001f\u007f]/.test(value)) {
     fail('INVALID_ARTIFACT', `${label} must be a non-empty, whitespace-free string`, { label });
+  }
+  return value;
+}
+
+// Paths may legitimately contain spaces. Identity fields use `nonEmpty` because
+// whitespace there is ambiguous; filesystem paths only reject control bytes and
+// empty values so a worktree such as `/tmp/my project` remains valid.
+function pathText(value, label) {
+  if (typeof value !== 'string' || value.trim() === '' || /[\u0000-\u001f\u007f]/.test(value)) {
+    fail('INVALID_ARTIFACT', `${label} must be a non-empty path`, { label });
   }
   return value;
 }
@@ -72,7 +83,7 @@ function ioFor(input) {
 }
 
 function safeRealpath(fsApi, value, label) {
-  nonEmpty(value, label);
+  pathText(value, label);
   try {
     return (fsApi.realpathSync.native || fsApi.realpathSync)(value);
   } catch (error) {
@@ -280,7 +291,7 @@ function verifyResult(result, metadata) {
   if (status !== 'committed' && status !== 'blocked') {
     fail('INVALID_RESULT', 'executor result status must be committed or blocked', { status });
   }
-  if (result.id !== undefined && result.id !== metadata.ticket) {
+  if (result.id !== metadata.ticket) {
     fail('ARTIFACT_IDENTITY_MISMATCH', 'executor result id does not match the authenticated ticket', {
       expected_ticket: metadata.ticket,
       actual_id: result.id,
@@ -403,21 +414,36 @@ function manifestFor(metadata, trusted, envelope, files) {
 }
 
 function writeManifest(fsApi, file, manifest) {
+  const serialized = `${JSON.stringify(manifest)}\n`;
+  const desired = Buffer.from(serialized, 'utf8');
   try {
     if (fsApi.existsSync(file)) {
       const stat = fsApi.lstatSync(file);
       if (stat.isSymbolicLink()) fail('ARTIFACT_PATH_ESCAPE', 'artifact manifest may not be a symlink', { path: file });
       if (!stat.isFile()) fail('INVALID_ARTIFACT', 'artifact manifest must be a regular file', { path: file });
+      const existing = readImmutableFile(fsApi, file, 'artifact manifest');
+      if (!existing.equals(desired)) {
+        fail('ARTIFACT_WRITE', 'artifact manifest already exists with different bytes', { path: file });
+      }
+      return existing;
     }
-    const serialized = `${JSON.stringify(manifest)}\n`;
     const temp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
-    fsApi.writeFileSync(temp, serialized, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    fsApi.writeFileSync(temp, desired, { flag: 'wx', mode: 0o600 });
     try {
-      fsApi.renameSync(temp, file);
+      // A hard link publishes only when the destination is absent. `renameSync`
+      // would silently replace an authenticated manifest during a duplicate seal.
+      fsApi.linkSync(temp, file);
+    } catch (error) {
+      if (!error || error.code !== 'EEXIST') throw error;
+      const existing = readImmutableFile(fsApi, file, 'artifact manifest');
+      if (!existing.equals(desired)) {
+        fail('ARTIFACT_WRITE', 'artifact manifest was published concurrently with different bytes', { path: file });
+      }
+      return existing;
     } finally {
       try { fsApi.unlinkSync(temp); } catch (_) { /* renamed */ }
     }
-    return Buffer.from(serialized, 'utf8');
+    return desired;
   } catch (error) {
     if (error && error.name === 'DispatchBoundaryError') throw error;
     fail('ARTIFACT_WRITE', `artifact manifest could not be sealed: ${error.message}`, { path: file });
@@ -471,8 +497,8 @@ function seal(value, options) {
     evidence_index: envelope.evidence_index,
     evidenceIndex: envelope.evidence_index,
     files: Object.freeze({
-      pr_body: Object.freeze({ path: fixedPath(worktree, PR_BODY_NAME, 'PR body'), ...manifest.files.pr_body }),
-      evidence: Object.freeze({ path: fixedPath(worktree, EVIDENCE_NAME, 'evidence'), ...manifest.files.evidence }),
+      pr_body: Object.freeze({ ...manifest.files.pr_body, path: fixedPath(worktree, PR_BODY_NAME, 'PR body') }),
+      evidence: Object.freeze({ ...manifest.files.evidence, path: fixedPath(worktree, EVIDENCE_NAME, 'evidence') }),
     }),
   });
 }
@@ -590,8 +616,11 @@ function validate(value, options) {
     fail('INVALID_ARTIFACT', 'conflicting artifact digest arguments');
   }
   const expectedDigest = input.artifactDigest || input.artifact_digest;
+  if (typeof expectedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(expectedDigest)) {
+    fail('INVALID_ARTIFACT', 'artifact digest is required to accept a validated manifest');
+  }
   const actualDigest = digest(manifestBytes);
-  if (expectedDigest !== undefined && expectedDigest !== actualDigest) {
+  if (expectedDigest !== actualDigest) {
     fail('ARTIFACT_DIGEST_MISMATCH', 'artifact manifest digest does not match the validated bytes', {
       expected: expectedDigest,
       actual: actualDigest,
@@ -633,7 +662,8 @@ function validate(value, options) {
 function range(value) {
   if (!Array.isArray(value) || value.length !== 2
       || !Number.isInteger(value[0]) || !Number.isInteger(value[1])
-      || value[0] < 0 || value[1] < value[0]) return null;
+      || value[0] < 0 || value[1] < value[0]
+      || value[1] - value[0] > EVIDENCE_RANGE_MAX_CHARS) return null;
   return value;
 }
 
@@ -642,7 +672,9 @@ function read(value, options) {
   const validated = validate(input);
   const hasRange = input.evidenceRange !== undefined || input.evidence_range !== undefined;
   const requested = range(input.evidenceRange || input.evidence_range);
-  if (hasRange && !requested) fail('INVALID_INPUT', 'evidence range must contain two non-negative integer offsets');
+  if (hasRange && !requested) {
+    fail('INVALID_INPUT', `evidence range must contain two non-negative integer offsets no more than ${EVIDENCE_RANGE_MAX_CHARS} characters apart`);
+  }
   if (!requested) return validated;
   const referenceOnlyFiles = Object.freeze({
     pr_body: Object.freeze({
@@ -701,6 +733,25 @@ function required(values, name) {
   return values[name];
 }
 
+// CLI stdout is an orchestration channel. Keep it to references and bounded
+// metadata; complete documents are returned only to an explicit --*-out file,
+// while an evidence range is an explicitly bounded exception.
+function cliValue(value) {
+  if (!object(value)) return value;
+  const output = { ...value };
+  if (object(value.files)) {
+    output.files = Object.fromEntries(Object.entries(value.files).map(([name, file]) => {
+      if (!object(file)) return [name, file];
+      const { content: ignoredContent, ...reference } = file;
+      return [name, reference];
+    }));
+  }
+  delete output.pr_body;
+  delete output.evidence;
+  delete output.findings;
+  return output;
+}
+
 function cli(argv) {
   const { command, values } = parseArgs(argv);
   if (command === 'help' || values.help) {
@@ -742,12 +793,21 @@ function cli(argv) {
       ...(values.evidenceStart !== undefined || values.evidenceEnd !== undefined
         ? { evidenceRange: [Number(values.evidenceStart), Number(values.evidenceEnd)] } : {}),
     });
-    if (values.prBodyOut) fs.writeFileSync(values.prBodyOut, value.pr_body, 'utf8');
-    if (values.evidenceOut) fs.writeFileSync(values.evidenceOut, value.evidence, 'utf8');
+    if (values.prBodyOut) {
+      if (value.pr_body === undefined) fail('INVALID_INPUT', '--pr-body-out cannot be combined with an evidence range');
+      fs.writeFileSync(values.prBodyOut, value.pr_body, 'utf8');
+    }
+    if (values.evidenceOut) {
+      const evidence = value.evidence === undefined
+        ? value.evidence_range && value.evidence_range.content
+        : value.evidence;
+      if (evidence === undefined) fail('INVALID_INPUT', '--evidence-out could not find a validated evidence snapshot');
+      fs.writeFileSync(values.evidenceOut, evidence, 'utf8');
+    }
   } else {
     fail('INVALID_INPUT', `unknown role-artifact command ${command}`);
   }
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+  process.stdout.write(`${JSON.stringify(cliValue(value))}\n`);
   return 0;
 }
 

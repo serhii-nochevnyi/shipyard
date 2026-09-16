@@ -1966,7 +1966,7 @@ test('the routed-launch source sweep rejects native launches in shipped Markdown
 
 const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
   'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '6fd1478f8b6a26098e4b86485541cf20be371675aa2cf424b8dd7902433540bc',
-  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '6a622b4f55bba06003c4f8b9f1b19c149c4737e731ef47a866b1f9269f8bb749',
+  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '154f9a094fdb94e524a2b47f766587ee51dbf4abf0f18cdf675b088972441fdf',
 });
 
 test('Claude palette and provider adapter sources match their checked-in baselines and remain native', () => {

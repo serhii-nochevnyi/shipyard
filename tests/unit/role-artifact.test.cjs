@@ -152,6 +152,7 @@ test('registered executor host returns only a bounded envelope and validated ref
       recorder: value.recorder,
       dispatchId: result[0].receipt.dispatch_id,
       artifactPath: result[0].artifact_ref,
+      artifactDigest: result[0].artifact_digest,
     });
     assert.equal(validated.pr_body, fs.readFileSync(path.join(value.root, '.shipyard-pr-body.md'), 'utf8'));
     assert.equal(validated.evidence, fs.readFileSync(path.join(value.root, '.shipyard-evidence.md'), 'utf8'));
@@ -166,6 +167,19 @@ test('registered executor host returns only a bounded envelope and validated ref
     });
     assert.equal(duplicate.artifact_ref, result[0].artifact_ref);
     assert.equal(duplicate.artifact_digest, result[0].artifact_digest, 'duplicate result delivery is idempotent');
+
+    const manifestBytes = fs.readFileSync(result[0].artifact_ref);
+    fs.appendFileSync(result[0].artifact_ref, 'mutation\n');
+    rejectsCode(() => roleArtifact.seal({
+      worktreePath: value.root,
+      base: 'main',
+      role: 'executor',
+      ticket: value.ticket,
+      recorder: value.recorder,
+      dispatchId: result[0].receipt.dispatch_id,
+      result: value.agentResult,
+    }), 'ARTIFACT_WRITE');
+    fs.writeFileSync(result[0].artifact_ref, manifestBytes);
   } finally {
     clean(value);
   }
@@ -186,7 +200,14 @@ test('rejects wrong dispatch, stale head, digest mutation, escaped paths, missin
     rejectsCode(() => roleArtifact.validate({
       worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
       recorder: value.recorder, dispatchId: artifact.receipt.dispatch_id, artifactPath: artifact.artifact_ref,
+      artifactDigest: artifact.artifact_digest,
     }), 'ARTIFACT_DIGEST_MISMATCH');
+
+    rejectsCode(() => roleArtifact.seal({
+      worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
+      recorder: value.recorder, dispatchId: artifact.receipt.dispatch_id,
+      result: { status: 'committed', summary: 'missing id' },
+    }), 'ARTIFACT_IDENTITY_MISMATCH');
     fs.writeFileSync(evidencePath, originalEvidence);
 
     const manifestPath = artifact.artifact_ref;
@@ -202,6 +223,7 @@ test('rejects wrong dispatch, stale head, digest mutation, escaped paths, missin
     rejectsCode(() => roleArtifact.validate({
       worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
       recorder: value.recorder, dispatchId: artifact.receipt.dispatch_id, artifactPath: manifestPath,
+      artifactDigest: artifact.artifact_digest,
     }), 'ARTIFACT_PATH_ESCAPE');
     fs.writeFileSync(manifestPath, originalManifest);
 
@@ -209,11 +231,13 @@ test('rejects wrong dispatch, stale head, digest mutation, escaped paths, missin
     rejectsCode(() => roleArtifact.validate({
       worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
       recorder: value.recorder, dispatchId: artifact.receipt.dispatch_id, artifactPath: manifestPath,
+      artifactDigest: artifact.artifact_digest,
     }), 'MISSING_ARTIFACT');
     fs.symlinkSync(path.join(value.root, 'tracked.txt'), evidencePath);
     rejectsCode(() => roleArtifact.validate({
       worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
       recorder: value.recorder, dispatchId: artifact.receipt.dispatch_id, artifactPath: manifestPath,
+      artifactDigest: artifact.artifact_digest,
     }), 'ARTIFACT_PATH_ESCAPE');
     fs.unlinkSync(evidencePath);
     fs.writeFileSync(evidencePath, originalEvidence);
@@ -224,6 +248,7 @@ test('rejects wrong dispatch, stale head, digest mutation, escaped paths, missin
     rejectsCode(() => roleArtifact.validate({
       worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
       recorder: value.recorder, dispatchId: artifact.receipt.dispatch_id, artifactPath: manifestPath,
+      artifactDigest: artifact.artifact_digest,
     }), 'STALE_ARTIFACT');
   } finally {
     clean(value);
@@ -274,16 +299,24 @@ test('caps summaries and overflows actionable data to complete evidence', async 
     const validated = roleArtifact.validate({
       worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
       recorder: value.recorder, dispatchId: artifact.receipt.dispatch_id, artifactPath: artifact.artifact_ref,
+      artifactDigest: artifact.artifact_digest,
     });
     assert.equal(artifact.artifact.evidence_index.sha256, validated.evidence_index.sha256);
     const targeted = roleArtifact.read({
       worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
       recorder: value.recorder, dispatchId: artifact.receipt.dispatch_id, artifactPath: artifact.artifact_ref,
+      artifactDigest: artifact.artifact_digest,
       evidenceRange: [0, 4],
     });
     assert.equal(targeted.evidence_range.content, validated.evidence.slice(0, 4));
     assert.ok(!('evidence' in targeted), 'targeted reads must not re-ingest complete evidence');
     assert.ok(!('pr_body' in targeted), 'targeted reads must not re-ingest the complete PR body');
+    rejectsCode(() => roleArtifact.read({
+      worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
+      recorder: value.recorder, dispatchId: artifact.receipt.dispatch_id, artifactPath: artifact.artifact_ref,
+      artifactDigest: artifact.artifact_digest,
+      evidenceRange: [0, roleArtifact.EVIDENCE_RANGE_MAX_CHARS + 1],
+    }), 'INVALID_INPUT');
   } finally {
     clean(value);
   }
@@ -327,6 +360,8 @@ test('CLI validate/read use the canonical helper and return the verified byte sn
     assert.equal(validation.status, 0, validation.stderr);
     const validated = JSON.parse(validation.stdout);
     assert.equal(validated.artifact_digest, artifact.artifact_digest);
+    assert.ok(!('pr_body' in validated), 'CLI validation must not print the complete PR body');
+    assert.ok(!('evidence' in validated), 'CLI validation must not print complete evidence');
 
     const read = spawnSync(process.execPath, [
       ROLE_ARTIFACT, 'read', '--worktree', value.root, '--base', 'main',
@@ -337,7 +372,7 @@ test('CLI validate/read use the canonical helper and return the verified byte sn
     ], { encoding: 'utf8' });
     assert.equal(read.status, 0, read.stderr);
     assert.equal(fs.readFileSync(bodyOut, 'utf8'), fs.readFileSync(path.join(value.root, '.shipyard-pr-body.md'), 'utf8'));
-    assert.equal(JSON.parse(read.stdout).pr_body, fs.readFileSync(bodyOut, 'utf8'));
+    assert.ok(!('pr_body' in JSON.parse(read.stdout)), 'CLI read must keep the complete PR body in the explicit output file');
   } finally {
     clean(value);
   }
