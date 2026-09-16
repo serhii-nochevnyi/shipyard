@@ -761,10 +761,19 @@ function reconcileTelemetry(raw, options = {}) {
         // the public resolver rejects that input because it cannot verify the
         // receipt capability outside the dispatch boundary.
         const evaluation = policy.evaluateSignals(role, signals, { runtime });
+        const rungs = policy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role];
+        const selectedNames = new Set(evaluation.selected.map((entry) => entry.rung));
+        let authorizedRung = rungs[0];
+        for (const candidate of rungs) {
+          if (selectedNames.has(candidate.name)) authorizedRung = candidate;
+        }
+        if (rung !== authorizedRung.name || logicalRung !== authorizedRung.name) {
+          resolutionContradictions.push('rung');
+        }
         const selectedRoute = evaluation.selected.length
           ? evaluation.selected.map((entry) => `${entry.signal}->${entry.rung}`).join('+')
           : 'base';
-        const expectedRoute = `role=${role} rung=${rung} model=${expected.model_key} signals=${selectedRoute}`;
+        const expectedRoute = `role=${role} rung=${authorizedRung.name} model=${authorizedRung.model_key} signals=${selectedRoute}`;
         if (stableStringify(evaluation.signals) !== stableStringify(signals)
             || route !== expectedRoute
             || stableStringify(evaluation.signals_fired) !== stableStringify(signalsFired)) {
@@ -911,13 +920,15 @@ function reconcileTelemetry(raw, options = {}) {
         && receipt.applied_model !== appliedModel) applicationContradictions.push('applied_model');
     if (effortValue(receipt.applied_effort) && effortValue(appliedEffort)
         && receipt.applied_effort !== appliedEffort) applicationContradictions.push('applied_effort');
-    if (concreteValue(receipt.observed_model) && concreteValue(receipt.applied_model)
-        && receipt.observed_model !== receipt.applied_model) {
-      applicationContradictions.push('observed_model');
-    }
-    if (effortValue(receipt.observed_effort) && effortValue(receipt.applied_effort)
-        && receipt.observed_effort !== receipt.applied_effort) {
-      applicationContradictions.push('observed_effort');
+    for (const source of applicationSources) {
+      if (concreteValue(source?.observed_model) && concreteValue(receipt.applied_model)
+          && source.observed_model !== receipt.applied_model) {
+        applicationContradictions.push('observed_model');
+      }
+      if (effortValue(source?.observed_effort) && effortValue(receipt.applied_effort)
+          && source.observed_effort !== receipt.applied_effort) {
+        applicationContradictions.push('observed_effort');
+      }
     }
     if (receipt.backend !== undefined && backend !== undefined && receipt.backend !== backend) {
       applicationContradictions.push('backend');

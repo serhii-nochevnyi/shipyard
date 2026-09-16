@@ -559,6 +559,57 @@ test('reconciliation rejects concrete observed values that disagree with the app
   assert.ok(effortMismatch.runtime_application.contradictions.includes('observed_effort'));
 });
 
+test('reconciliation compares outer and joined observations with an unknown-observation receipt', () => {
+  for (const runtime of ['codex', 'claude']) {
+    const resolution = routed(runtime, 'executor', {}, `joined-observation-${runtime}`);
+    const receipt = applicationReceipt(resolution, {
+      observed_model: 'unknown', observed_effort: 'unknown',
+    });
+    for (const location of ['outer', 'joined']) {
+      for (const field of ['observed_model', 'observed_effort']) {
+        const observations = {
+          observed_model: receipt.applied_model,
+          observed_effort: receipt.applied_effort,
+        };
+        for (const state of ['matching', 'unknown', 'contradictory', 'partial-contradictory']) {
+          const values = { ...observations };
+          if (state === 'unknown') {
+            values.observed_model = 'unknown';
+            values.observed_effort = 'unknown';
+          } else if (state.endsWith('contradictory')) {
+            values[field] = field === 'observed_model' ? 'different-provider-model' : 'low';
+            if (state === 'partial-contradictory') {
+              values[field === 'observed_model' ? 'observed_effort' : 'observed_model'] = 'unknown';
+            }
+          }
+          const usage = {
+            dispatch_id: resolution.dispatch_id, runtime,
+            provider: runtime === 'codex' ? 'openai' : 'anthropic',
+            session_id: 'joined-session', ...values,
+          };
+          const facts = reconcileTelemetry({
+            ...resolution, application_receipt: receipt,
+            ...(location === 'outer' ? usage : {}),
+          }, location === 'joined' ? { usageRecords: [usage] } : {});
+          const label = `${runtime}/${location}/${field}/${state}`;
+          const contradictory = state.endsWith('contradictory');
+          assert.equal(facts.resolution_status, 'resolved', label);
+          assert.equal(facts.usage_join_status, 'joined', label);
+          assert.equal(facts.application_status, contradictory ? 'contradictory' : 'applied', label);
+          assert.equal(facts.compliant, !contradictory, label);
+          assert.equal(facts.comparison_ready, state === 'matching', label);
+          assert.equal(facts.findings.includes('contradictory_application'), contradictory, label);
+          assert.equal(facts.findings.includes('unknown_observation'),
+            state === 'unknown' || state === 'partial-contradictory', label);
+          if (contradictory) {
+            assert.ok(facts.runtime_application.contradictions.includes(field), label);
+          }
+        }
+      }
+    }
+  }
+});
+
 test('reconciliation derives only the omitted deterministic fields from a complete boundary projection', () => {
   const resolution = routed('claude', 'executor', {}, 'boundary-projection');
   const receipt = applicationReceipt(resolution);
@@ -616,6 +667,48 @@ test('policy reconciliation requires complete resolver provenance and reconciles
     ...resolution, rung_index: 99, application_receipt: applicationReceipt(resolution),
   });
   assert.ok(wrongIndex.policy_resolution.contradictions.includes('rung_index'));
+});
+
+test('policy reconciliation rejects rungs unauthorized by canonical signals', () => {
+  const cases = [
+    ['codex', 'executor', { critical: true }, {}],
+    ['claude', 'executor', { critical: true }, {}],
+    ['codex', 'executor', {}, { checkpoint: true }],
+    ['claude', 'executor', {}, { checkpoint: true }],
+    ['claude', 'research', { type: 'alternatives' }, { type: 'alternatives', complexity: 'very-complex' }],
+  ];
+  for (const [runtime, role, selectedSignals, reportedSignals] of cases) {
+    const resolution = routed(runtime, role, selectedSignals, 'unauthorized-rung');
+    const authorized = routed(runtime, role, reportedSignals, resolution.dispatch_id);
+    const receipt = applicationReceipt(resolution, {
+      observed_model: 'unknown', observed_effort: 'unknown',
+    });
+    const facts = reconcileTelemetry({
+      ...resolution,
+      signals: authorized.signals,
+      signals_fired: authorized.signals_fired,
+      route: resolution.route.replace(/signals=.*$/, authorized.route.match(/signals=.*$/)[0]),
+      application_receipt: receipt,
+    }, { usageJoined: true });
+    const label = `${runtime}/${role}/${resolution.rung}->${authorized.rung}`;
+    assert.equal(facts.resolution_status, 'contradictory', label);
+    assert.ok(facts.policy_resolution.contradictions.includes('rung'), label);
+    assert.equal(facts.resolved, false, label);
+    assert.equal(facts.compliant, false, label);
+    assert.equal(facts.comparison_ready, false, label);
+    assert.equal(facts.application_status, 'applied', label);
+    assert.deepEqual(facts.findings, ['unknown_observation'], label);
+
+    const valid = reconcileTelemetry({
+      ...authorized,
+      application_receipt: applicationReceipt(authorized, {
+        observed_model: 'unknown', observed_effort: 'unknown',
+      }),
+    }, { usageJoined: true });
+    assert.equal(valid.compliant, true, label);
+    assert.equal(valid.comparison_ready, false, label);
+    assert.deepEqual(valid.findings, ['unknown_observation'], label);
+  }
 });
 
 test('reconciliation evaluates repair signal provenance without re-invoking receipt-gated resolution', () => {
