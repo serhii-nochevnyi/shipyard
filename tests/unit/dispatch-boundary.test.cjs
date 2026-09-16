@@ -309,6 +309,33 @@ test('Claude launches use the independent native grid with an explicit effort', 
   assert.equal(result.receipt.policy_hash, policy.POLICY_HASH);
 });
 
+test('Claude applies the amended research, decomposition, and executor ladder at the boundary', () => {
+  const cases = [
+    ['research', {}, 'opus', 'medium'],
+    ['research', { type: 'alternatives' }, 'opus', 'medium'],
+    ['research', { complexity: 'very-complex' }, 'opus', 'max'],
+    ['decomposition', {}, 'opus', 'medium'],
+    ['decomposition', { critical: true }, 'opus', 'max'],
+    ['decomposition', { checkpoint: true }, 'opus', 'max'],
+    ['executor', {}, 'sonnet', 'max'],
+    ['executor', { critical: true }, 'opus', 'low'],
+    ['executor', { checkpoint: true }, 'opus', 'low'],
+  ];
+  for (const [role, signals, model, effort] of cases) {
+    let launched;
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        claude: fakeAdapter({ onLaunch: (resolution) => { launched = resolution; } }),
+      },
+      recorder: () => true,
+    });
+    const result = boundary.dispatch({ runtime: 'claude', role, signals });
+    assert.deepStrictEqual(launched.launch_arguments, { model, effort }, `${role}/${JSON.stringify(signals)}`);
+    assert.equal(result.applied_model, model, `${role} model`);
+    assert.equal(result.applied_effort, effort, `${role} effort`);
+  }
+});
+
 test('Claude repair receipts authorize only the Claude-native predecessor rung', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-claude-chain-'));
   const ticket = 'T-36-CLAUDE';
@@ -1769,7 +1796,7 @@ test('the boundary launches every native base and escalation tuple for both runt
         'review-fix': ['gpt-5.6-luna', 'max'],
       },
       claude: {
-        research: ['sonnet', 'high'],
+        research: ['opus', 'medium'],
         decomposition: ['opus', 'medium'],
         executor: ['sonnet', 'max'],
         'pr-sentinel': ['sonnet', 'high'],
@@ -1788,10 +1815,10 @@ test('the boundary launches every native base and escalation tuple for both runt
       ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6-astra', 'medium'],
       ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
       ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
-      ['claude', 'research', { type: 'alternatives' }, 'alternatives', 'opus', 'medium'],
-      ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'fable', 'medium'],
-      ['claude', 'decomposition', { checkpoint: true }, 'critical', 'fable', 'medium'],
-      ['claude', 'executor', { critical: true }, 'critical', 'opus', 'high'],
+      ['claude', 'research', { type: 'alternatives' }, 'base', 'opus', 'medium'],
+      ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'max'],
+      ['claude', 'decomposition', { checkpoint: true }, 'critical', 'opus', 'max'],
+      ['claude', 'executor', { critical: true }, 'critical', 'opus', 'low'],
       ['claude', 'integrator', { contested: true }, 'critical', 'opus', 'high'],
       ['claude', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'medium'],
     ];

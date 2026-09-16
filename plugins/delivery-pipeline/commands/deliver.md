@@ -101,7 +101,7 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role> --model <recorder tier alias> --effort <level> --effort-applied <receipt applied effort> --task-level <recorder-task-level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<recorder route>"` — an agent
+- `dispatch-record.cjs mark <T> <role> --boundary-store <receipt store> --dispatch-id <dispatch id> --task-level <task-level> --graph <project>/.planning/graph` — an agent
   is working on it RIGHT NOW. The one fact here that is motion rather than a
   verdict, and the one the board could not see at all: nothing is pushed yet, so
   the live state still reads `execute`/`fix` and the stop gate refuses turns over
@@ -444,9 +444,9 @@ the host must return application evidence for that exact pair:
 
 | Role | Base | Evidence-based escalation |
 | --- | --- | --- |
-| `research` | Sonnet/high | `alternatives` → Opus/medium; `very-complex` → Fable/medium |
-| `decomposition` | Opus/medium | `critical` or `checkpoint` → Fable/medium |
-| `executor` | Sonnet/max | `critical` or `checkpoint` → Opus/high |
+| `research` | Opus/medium | `very-complex` → Opus/max; `alternatives` is inert |
+| `decomposition` | Opus/medium | `critical` or `checkpoint` → Opus/max |
+| `executor` | Sonnet/max | `critical` or `checkpoint` → Opus/low |
 | `pr-sentinel` | Sonnet/high | none |
 | `drift-check` | Opus/max | none |
 | `integrator` | Opus/medium | measured window, `contested`, `critical`, or `checkpoint` → Opus/high |
@@ -901,6 +901,40 @@ ${CLAUDE_PLUGIN_ROOT}/workflows/executors.mjs    # Step 3 — code+verify+commit
 ${CLAUDE_PLUGIN_ROOT}/workflows/fix-round.mjs    # Step 4 — one parallel fix pass
 ```
 
+The production Workflow host binding is
+`${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs`. Register it once with
+the native `agent`/`parallel` callbacks; its `run` method pins one of the
+shipped DSL scripts and injects `__createClaudeWorkflowDispatch` as the sixth
+binding. The binding owns the
+capabilities, frozen durable recorder, and application-evidence callback; those
+resources must never be smuggled through serializable `args`:
+
+```text
+const workflowHost = registerClaudeWorkflowHost({ agent, parallel, phase, log,
+  capabilities, recorder, applicationEvidence })
+await workflowHost.run('drift-gate', { args })
+```
+
+This registration is the production Workflow launch path; the wrapper's
+`run` method is the non-test caller that connects the native callbacks to the
+DSL. A host that cannot provide that binding refuses before the workflow
+evaluates or calls `agent()`.
+
+For a host that cannot import CommonJS into the native Workflow tool, the
+same boundary is available as an executable bridge:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs \
+  --workflow drift-gate \
+  --args-file /absolute/path/workflow-args.json \
+  --host-module /absolute/path/claude-workflow-host-adapter.cjs
+```
+
+The args file is serializable data only. The host module supplies the native
+callbacks, capabilities, durable recorder, and application-evidence callback;
+the bridge pins the workflow name to the shipped DSL and still injects the
+sixth binding before evaluation.
+
 The fix-round adapter receives one already-validated boundary selection per PR;
 its argument shape remains explicit so the base-merge and evidence contract
 cannot disappear during a formatting-only edit:
@@ -1302,22 +1336,23 @@ attempts and landing nothing. When the script cannot measure, it says `needed`
 for exactly this reason: the failure it prevents is the most expensive one there
 is.
 
-For the Workflow runtime, dispatch each needed judge through the host-injected
-bridge and the one boundary:
+For the Workflow runtime, invoke the drift workflow through the production host
+binding and let its injected bridge cross the one boundary:
 
 ```text
-boundary.dispatch(
-  { runtime: "claude", role: "drift-check",
-    signals: { risk, type, complexity, checkpoint, critical }, dispatch_id },
-  { scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/drift-gate.mjs",
-    args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
-            driftRefPath, recordCmd, graphDir } }
-)
+const workflowHost = registerClaudeWorkflowHost({
+  agent, parallel, phase, log,
+  capabilities, recorder, applicationEvidence
+})
+await workflowHost.run('drift-gate', {
+  args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
+          driftRefPath, recordCmd, graphDir },
+})
 ```
 
-The `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`,
-and `claudeHost` values are host-injected Workflow bridge resources, not
-serializable `args`; the active Workflow adapter supplies them. On Codex,
+The `capabilities`, `recorder`, `applicationEvidence`, and host callbacks are
+host-owned Workflow bridge resources, not serializable `args`; the active
+Workflow adapter supplies them. On Codex,
 there is no `drift-gate.mjs` bridge: the Codex adapter selects and validates
 the generated `shipyard-drift-check.toml` and invokes `launchStatic` through
 the boundary.
@@ -1453,7 +1488,7 @@ may be dispatched at all: fix the file.
    summarize away a signal. The executor resolves to
    Codex Luna/max or, only for explicit `critical`/`checkpoint` evidence,
    Astra/low. The Workflow runtime uses its independent Sonnet/max or evidence-based
-   Opus/high native selection.
+   Opus/low native selection.
 
    ```text
    executors.mjs args: { tickets: [{ id, planPath, branch, worktreePath, prBase,
@@ -1461,9 +1496,9 @@ may be dispatched at all: fix the file.
      deliveryRulesHint, prBodyGuide, artifactLanguage }
    ```
 
-   `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`, and
-   `claudeHost` are host-injected Workflow bridge resources, not serializable
-   `args`; the active adapter supplies them. The Codex adapter receives its
+   `capabilities`, `recorder`, `applicationEvidence`, and host callbacks are
+   host-injected Workflow bridge resources, not serializable `args`; the active
+   adapter supplies them. The Codex adapter receives its
    generated-agent directory and capabilities through the boundary context.
 
    On Codex, `codex-agent.cjs select executor --json --capabilities-file
@@ -1510,7 +1545,7 @@ may be dispatched at all: fix the file.
     before.** The receipt carries the launch identity (the Workflow task id or
     typed Agent id); once it exists, and only then, for every ticket you just
     handed out:
-    `dispatch-record.cjs mark <T> executor --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <receipt-applied-effort> --route "<recorder-route>" --task-level <recorder-task-level> --runtime <claude|codex> --backend <workflow|agent|codex-agent> --agent-id <launch id>`
+    `dispatch-record.cjs mark <T> executor --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph`
     The recorder adapter provides the compatibility tier/effort/route
     projection; it is not the canonical boundary route. Keep the concrete
     selector `model` for `--observed-model` when the host reports it.
@@ -1650,9 +1685,9 @@ The boundary resolves the fixed Codex Luna/medium or Workflow runtime Sonnet/hig
 selection, validates the generated `shipyard-pr-sentinel.toml` or the native
 Workflow-runtime alias plus explicit effort, launches the typed guard, and returns a
 verified receipt. Only after that receipt exists may the overlay be updated:
-`dispatch-record.cjs mark <T> pr-sentinel --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <recorder-task-level> --runtime <runtime> --backend <workflow|agent|codex-agent> --agent-id <launch id>` for
-every ticket on the guarded list, with the same returned launch id and the exact
-Codex `--agent-file` when applicable. Never create a mark for a refused or
+`dispatch-record.cjs mark <T> pr-sentinel --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph` for
+every ticket on the guarded list, using the returned boundary receipt and the
+exact Codex `--agent-file` when applicable. Never create a mark for a refused or
 phantom launch. Clear each record when the guard's report comes back; a
 `pr-sentinel` record also lifts when the PR merges or its base moves. New PRs get
 the same boundary call or the existing typed guard context, never an inherited
@@ -1997,9 +2032,9 @@ itself. The round order:
      artifactLanguage }
    ```
 
-   `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`, and
-   `claudeHost` are host-injected Workflow bridge resources, not serializable
-   `args`; the active adapter supplies them. The Codex adapter receives its
+   `capabilities`, `recorder`, `applicationEvidence`, and host callbacks are
+   host-injected Workflow bridge resources, not serializable `args`; the active
+   adapter supplies them. The Codex adapter receives its
    generated-agent directory and capabilities through the boundary context.
 
    The per-item boundary selection resolves the canonical ladder, validates the

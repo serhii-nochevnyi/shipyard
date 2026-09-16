@@ -98,13 +98,13 @@ test('resolves every base role to the ADR-014 logical and concrete tuple on Code
 
 test('resolves Claude through its independent native grid without changing Codex ids', () => {
   const cases = [
-    ['research', {}, 'base', 'sonnet', 'sonnet', 'high'],
-    ['research', { type: 'alternatives' }, 'alternatives', 'opus', 'opus', 'medium'],
-    ['research', { complexity: 'very-complex' }, 'very-complex', 'fable', 'fable', 'medium'],
-    ['decomposition', { checkpoint: true }, 'critical', 'fable', 'fable', 'medium'],
-    ['decomposition', { critical: true }, 'critical', 'fable', 'fable', 'medium'],
+    ['research', {}, 'base', 'opus', 'opus', 'medium'],
+    ['research', { type: 'alternatives' }, 'base', 'opus', 'opus', 'medium'],
+    ['research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'opus', 'max'],
+    ['decomposition', { checkpoint: true }, 'critical', 'opus', 'opus', 'max'],
+    ['decomposition', { critical: true }, 'critical', 'opus', 'opus', 'max'],
     ['executor', {}, 'base', 'sonnet', 'sonnet', 'max'],
-    ['executor', { critical: true }, 'critical', 'opus', 'opus', 'high'],
+    ['executor', { critical: true }, 'critical', 'opus', 'opus', 'low'],
     ['pr-sentinel', {}, 'base', 'sonnet', 'sonnet', 'high'],
     ['integrator', {}, 'base', 'opus', 'opus', 'medium'],
     ['integrator', { contested: true }, 'critical', 'opus', 'opus', 'high'],
@@ -141,6 +141,13 @@ test('resolves Claude through its independent native grid without changing Codex
   });
   assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.executor[0], {
     name: 'base', model_key: 'sonnet', effort: 'max',
+  });
+  assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.research, [
+    { name: 'base', model_key: 'opus', effort: 'medium' },
+    { name: 'very-complex', model_key: 'opus', effort: 'max' },
+  ]);
+  assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.decomposition[1], {
+    name: 'critical', model_key: 'opus', effort: 'max',
   });
 });
 
@@ -529,7 +536,7 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
       'review-fix': ['gpt-5.6-luna', 'max'],
     },
     claude: {
-      research: ['sonnet', 'high'],
+      research: ['opus', 'medium'],
       decomposition: ['opus', 'medium'],
       executor: ['sonnet', 'max'],
       'pr-sentinel': ['sonnet', 'high'],
@@ -555,12 +562,12 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
     ['codex', 'arch-review', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
     ['codex', 'arch-review', { contested: true }, 'critical', 'gpt-6-astra', 'medium'],
     ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
-    ['claude', 'research', { type: 'alternatives' }, 'alternatives', 'opus', 'medium'],
-    ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'fable', 'medium'],
-    ['claude', 'decomposition', { critical: true }, 'critical', 'fable', 'medium'],
-    ['claude', 'decomposition', { checkpoint: true }, 'critical', 'fable', 'medium'],
-    ['claude', 'executor', { critical: true }, 'critical', 'opus', 'high'],
-    ['claude', 'executor', { checkpoint: true }, 'critical', 'opus', 'high'],
+    ['claude', 'research', { type: 'alternatives' }, 'base', 'opus', 'medium'],
+    ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'max'],
+    ['claude', 'decomposition', { critical: true }, 'critical', 'opus', 'max'],
+    ['claude', 'decomposition', { checkpoint: true }, 'critical', 'opus', 'max'],
+    ['claude', 'executor', { critical: true }, 'critical', 'opus', 'low'],
+    ['claude', 'executor', { checkpoint: true }, 'critical', 'opus', 'low'],
     ['claude', 'integrator', { critical: true }, 'critical', 'opus', 'high'],
     ['claude', 'integrator', { checkpoint: true }, 'critical', 'opus', 'high'],
     ['claude', 'integrator', { contested: true }, 'critical', 'opus', 'high'],
@@ -592,8 +599,7 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
     );
     for (const source of Object.keys(signals)) {
       const signal = source === 'inputTokens' ? 'window'
-        : source === 'type' && runtime === 'claude' && signals[source] === 'alternatives' ? 'alternatives'
-          : source === 'complexity' && signals[source] === 'very-complex' ? 'very-complex' : source;
+        : source === 'complexity' && signals[source] === 'very-complex' ? 'very-complex' : source;
       assert.ok(result.signals_fired.includes(signal), `${runtime}/${role} retains ${source}`);
       const reason = result.signal_reasons.find((item) => item.source === `signals.${source}`);
       assert.ok(reason, `${runtime}/${role} explains ${source}`);
@@ -621,8 +627,8 @@ test('combined signals retain every reason while the highest authorized rung win
       role: 'research',
       signals: { type: 'alternatives', complexity: 'very-complex' },
       rung: 'very-complex',
-      selected: ['alternatives', 'very-complex'],
-      inert: [],
+      selected: ['very-complex'],
+      inert: ['type'],
     },
     {
       runtime: 'codex',

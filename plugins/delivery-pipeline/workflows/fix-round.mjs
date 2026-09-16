@@ -41,10 +41,6 @@ export const meta = {
 //     reviewFixRefPath,  // abs path to references/review-fix.md
 //     reinitScript,      // abs path to scripts/reviewers.cjs
 //     artifactLanguage,  // optional; language for shipped artifacts (default English)
-//     claudeCapabilities,       // explicit capabilities from the Claude host
-//     dispatchRecorder,          // durable receipt recorder from the host
-//     claudeApplicationEvidence, // host callback returning actual launch_id/applied_model/applied_effort
-//     claudeHost,                // optional host object carrying the same fields
 //   }
 // returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis, receipt } ]
 //
@@ -267,10 +263,6 @@ return await parallel(
         dispatchId: p.dispatch_id || p.dispatchId,
         previousDispatchId: p.previous_dispatch_id || p.previousDispatchId,
         context: { ticket: p.id },
-        capabilities: argv.claudeCapabilities,
-        recorder: argv.dispatchRecorder,
-        applicationEvidence: argv.claudeApplicationEvidence,
-        host: argv.claudeHost,
         label: `fix:${p.id}#${p.pr}`,
         agentOptions: {
           label: `fix:${p.id}#${p.pr}`,

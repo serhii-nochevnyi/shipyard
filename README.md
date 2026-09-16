@@ -214,9 +214,9 @@ The canonical role/rung ladder and its evidence are:
 
 | Role | Codex | Claude Code |
 |---|---|---|
-| `research` | Astra/low → Astra/medium on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Sonnet/high → Opus/medium on `type: alternatives` → Fable/medium on `complexity: very-complex` |
-| `decomposition` | Astra/low → Astra/medium on `critical` or `checkpoint` | Opus/medium → Fable/medium on `critical` or `checkpoint` |
-| `executor` | Luna/max → Astra/low on explicit `critical` or `checkpoint` | Sonnet/max → Opus/high on explicit `critical` or `checkpoint` |
+| `research` | Astra/low → Astra/medium on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Opus/medium → Opus/max on explicit `complexity: very-complex`; `type: alternatives` stays at base |
+| `decomposition` | Astra/low → Astra/medium on `critical` or `checkpoint` | Opus/medium → Opus/max on `critical` or `checkpoint` |
+| `executor` | Luna/max → Astra/low on explicit `critical` or `checkpoint` | Sonnet/max → Opus/low on explicit `critical` or `checkpoint` |
 | `pr-sentinel` | Luna/medium, fixed; gate strategy only | Sonnet/high, fixed; gate strategy only |
 | `integrator` | Astra/low → Astra/medium on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on the same evidence |
 | `drift-check` | Luna/max, fixed; gate strategy only | Opus/max, fixed; gate strategy only |

@@ -47,7 +47,7 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
 const WORKFLOW_CAPABILITIES = Object.freeze({
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
-  supportedEfforts: ['high', 'medium', 'max'],
+  supportedEfforts: ['low', 'high', 'medium', 'max'],
   observedModel: false,
   observedEffort: false,
 });
@@ -118,7 +118,10 @@ async function run(name, args, opts) {
     ? undefined
     : opts && opts.dispatchFactory
       ? opts.dispatchFactory
-      : testDispatchFactory;
+      : (dispatchOptions) => testDispatchFactory({
+          ...dispatchOptions,
+          ...(opts && opts.recorder ? { recorder: opts.recorder } : {}),
+        });
   const value = await load(name)(h.agent, h.parallel, h.phase, h.log, args, dispatchFactory);
   return { value, calls: h.calls };
 }
@@ -412,9 +415,8 @@ for (const spec of DISPATCH) {
       const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-dispatch-'));
       workflowStores.push(storeDir);
       recorder = createDurableRecorder(storeDir);
-      args.dispatchRecorder = recorder;
     }
-    const result = await run(spec.name, args);
+    const result = await run(spec.name, args, withRecorder ? { recorder } : undefined);
     return { ...result, recorder };
   };
 
@@ -450,13 +452,13 @@ for (const spec of DISPATCH) {
   });
 }
 
-test('executor critical selection is resolved by signals and preserves Claude Sonnet/max → Opus/high', async () => {
+test('executor critical selection is resolved by signals and preserves Claude Sonnet/max → Opus/low', async () => {
   const { calls } = await run('executors', {
-    tickets: [{ ...TICKETS[0], model: 'opus', effort: 'high', signals: { critical: true } }],
+    tickets: [{ ...TICKETS[0], model: 'opus', effort: 'low', signals: { critical: true } }],
   });
   assert.strictEqual(calls.length, 1);
   assert.strictEqual(calls[0].opts.model, 'opus');
-  assert.strictEqual(calls[0].opts.effort, 'high');
+  assert.strictEqual(calls[0].opts.effort, 'low');
 });
 
 test('workflow fan-outs retain combined signal evidence and never infer an omitted promotion signal', async () => {
@@ -471,14 +473,14 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
     tickets: [{
       ...TICKETS[0],
       model: 'opus',
-      effort: 'high',
+      effort: 'low',
       signals: combinedSignals,
     }],
   });
   assert.strictEqual(executor.calls.length, 1);
   assert.deepStrictEqual(
     [executor.calls[0].opts.model, executor.calls[0].opts.effort],
-    ['opus', 'high'],
+    ['opus', 'low'],
   );
   const executorRecord = WORKFLOW_RECORDER.getVerifiedRecord(executor.value[0].receipt.dispatch_id);
   assert.equal(executorRecord.resolution.logical_rung, 'critical');
@@ -548,7 +550,7 @@ test('executor preserves canonical risk/checkpoint facts and rejects contradicto
     { signals: { risk: 'high', checkpoint: true }, risk: 'high', checkpoint: true },
   ]) {
     const { calls, value } = await run('executors', DISPATCH[0].args({
-      ...facts, model: 'opus', effort: 'high',
+      ...facts, model: 'opus', effort: 'low',
     }));
     assert.strictEqual(calls.length, 1);
     const record = WORKFLOW_RECORDER.getVerifiedRecord(value[0].receipt.dispatch_id);
@@ -588,8 +590,7 @@ for (const role of ['ci-fix', 'review-fix']) {
           previous_dispatch_id: prior.dispatch_id,
         } : {}),
       });
-      args.dispatchRecorder = recorder;
-      const { calls, value } = await run('fix-round', args);
+      const { calls, value } = await run('fix-round', args, { recorder });
       assert.strictEqual(calls.length, 1, JSON.stringify(value));
       const receipt = value[0].receipt;
       const record = recorder.getVerifiedRecord(receipt.dispatch_id);

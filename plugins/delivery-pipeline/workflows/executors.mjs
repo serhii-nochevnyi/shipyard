@@ -30,10 +30,6 @@ export const meta = {
 //     deliveryRulesHint, // short reminder of the delivery-block/scope contract
 //     prBodyGuide,       // one-line reminder of the PR body sections
 //     artifactLanguage,  // optional; language for shipped artifacts (default English)
-//     claudeCapabilities,       // explicit capabilities from the Claude host
-//     dispatchRecorder,          // durable receipt recorder from the host
-//     claudeApplicationEvidence, // host callback returning actual launch_id/applied_model/applied_effort
-//     claudeHost,                // optional host object carrying the same fields
 //   }
 // returns: [ { id, branch, status: 'committed'|'blocked', prBodyPath, evidencePath, summary, receipt } ]
 //
@@ -269,10 +265,6 @@ const results = await parallel(
         dispatchId: t.dispatch_id || t.dispatchId,
         previousDispatchId: t.previous_dispatch_id || t.previousDispatchId,
         context: { ticket: t.id },
-        capabilities: argv.claudeCapabilities,
-        recorder: argv.dispatchRecorder,
-        applicationEvidence: argv.claudeApplicationEvidence,
-        host: argv.claudeHost,
         label: `exec:${t.id}`,
         agentOptions: {
           label: `exec:${t.id}`,

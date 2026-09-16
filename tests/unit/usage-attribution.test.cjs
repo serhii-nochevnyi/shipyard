@@ -1493,8 +1493,8 @@ test('Codex and Claude retain separate concrete model palettes in policy dimensi
   assert.deepEqual(summary.by_runtime, { claude: 1, codex: 1 });
   assert.deepEqual(summary.by_rung, { 'very-complex': 1, critical: 1 });
   assert.equal(summary.by_concrete_model['gpt-6-astra'], 1);
-  assert.equal(summary.by_concrete_model.fable, 1);
+  assert.equal(summary.by_concrete_model.opus, 1);
   assert.equal(summary.by_concrete_model.astra, undefined);
-  assert.equal(claude.requested_model, 'fable', 'Claude keeps its native Fable alias');
+  assert.equal(claude.requested_model, 'opus', 'Claude keeps its native Opus alias');
   assert.equal(codex.requested_model, 'gpt-6-astra', 'Codex uses its concrete Astra id');
 });
