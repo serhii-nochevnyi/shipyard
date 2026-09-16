@@ -902,19 +902,23 @@ ${CLAUDE_PLUGIN_ROOT}/workflows/fix-round.mjs    # Step 4 — one parallel fix p
 ```
 
 The production Workflow host binding is
-`${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs`. It loads one of these
-DSL scripts, supplies the native `agent`/`parallel` callbacks, and injects
-`__createClaudeWorkflowDispatch` as the sixth binding. The binding owns the
+`${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs`. Register it once with
+the native `agent`/`parallel` callbacks; its `run` method pins one of the
+shipped DSL scripts and injects `__createClaudeWorkflowDispatch` as the sixth
+binding. The binding owns the
 capabilities, frozen durable recorder, and application-evidence callback; those
 resources must never be smuggled through serializable `args`:
 
 ```text
-runClaudeWorkflow({ scriptPath, args, agent, parallel, phase, log,
+const workflowHost = registerClaudeWorkflowHost({ agent, parallel, phase, log,
   capabilities, recorder, applicationEvidence })
+await workflowHost.run('drift-gate', { args })
 ```
 
-This is the only production Workflow launch path. A host that cannot provide
-that binding refuses before the workflow evaluates or calls `agent()`.
+This registration is the production Workflow launch path; the wrapper's
+`run` method is the non-test caller that connects the native callbacks to the
+DSL. A host that cannot provide that binding refuses before the workflow
+evaluates or calls `agent()`.
 
 The fix-round adapter receives one already-validated boundary selection per PR;
 its argument shape remains explicit so the base-merge and evidence contract
@@ -1321,12 +1325,13 @@ For the Workflow runtime, invoke the drift workflow through the production host
 binding and let its injected bridge cross the one boundary:
 
 ```text
-runClaudeWorkflow({
-  scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/drift-gate.mjs",
-  args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
-          driftRefPath, recordCmd, graphDir },
+const workflowHost = registerClaudeWorkflowHost({
   agent, parallel, phase, log,
   capabilities, recorder, applicationEvidence
+})
+await workflowHost.run('drift-gate', {
+  args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
+          driftRefPath, recordCmd, graphDir },
 })
 ```
 

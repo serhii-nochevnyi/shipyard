@@ -15,6 +15,7 @@ const {
 } = require('../../plugins/delivery-pipeline/scripts/claude-workflow-host.cjs');
 const {
   INVESTIGATION_RESEARCH_SCRIPT,
+  registerInvestigationWorkflowHost,
   runInvestigationResearch,
 } = require('../../plugins/delivery-pipeline/scripts/claude-investigation-host.cjs');
 
@@ -93,21 +94,26 @@ test('production investigation entry point pins the research workflow and runs a
   const calls = [];
   const lines = ['system-state', 'alternatives', 'constraints', 'risks'].map((id) => ({
     id,
-    label: id,
+    label: {
+      'system-state': 'system state',
+      alternatives: 'alternatives',
+      constraints: 'constraints',
+      risks: 'risks and unknowns',
+    }[id],
     model: 'opus',
     effort: 'medium',
     signals: id === 'alternatives' ? { type: 'alternatives' } : { type: 'facts' },
   }));
   try {
-    const value = await runInvestigationResearch({
-      args: {
+    const args = {
         invId: 'INV-HOST',
         invPath: '/repo/.planning/investigations/INV-HOST',
         problemStatement: 'Test the production research entry point',
         referencePath: '/plugin/references/inv-research.md',
         artifactLanguage: 'English',
         lines,
-      },
+      };
+    const value = await registerInvestigationWorkflowHost({
       agent: async (_prompt, options) => {
         calls.push(options);
         const result = {
@@ -129,7 +135,7 @@ test('production investigation entry point pins the research workflow and runs a
       capabilities: OPUS_CAPABILITIES,
       recorder,
       applicationEvidence: ({ result }) => evidence.get(result),
-    });
+    }).run(args);
     assert.match(INVESTIGATION_RESEARCH_SCRIPT, /workflows[\\/]investigation-research\.mjs$/);
     assert.equal(value.length, 4);
     assert.equal(calls.length, 4);
@@ -222,6 +228,55 @@ return await __createClaudeWorkflowDispatch({
     assert.equal(value.receipt.applied_model, 'opus');
     assert.equal(value.receipt.applied_effort, 'medium');
     assert.ok(recorder.getVerifiedRecord(value.receipt.dispatch_id));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('refuses a typed GSD dispatch without host-owned role and mechanism evidence', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-workflow-typed-evidence-'));
+  const scriptPath = path.join(root, 'workflow.mjs');
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  fs.writeFileSync(scriptPath, `
+export const meta = { name: 'typed-evidence-test' }
+return await __createClaudeWorkflowDispatch({
+  agent,
+  prompt: 'typed GSD prompt',
+  role: 'decomposition',
+  model: 'opus',
+  effort: 'medium',
+  gsdRole: 'gsd-planner',
+  context: { ticket: 'T-36-typed-evidence-test' },
+})
+`);
+  let typedCalls = 0;
+  try {
+    await assert.rejects(
+      () => runClaudeWorkflow({
+        scriptPath,
+        agent: async () => { throw new Error('generic callback must not run'); },
+        typedGsdCallback: async (prompt, options, gsdRole) => {
+          typedCalls++;
+          return {
+            prompt,
+            launch_id: 'typed-evidence-launch',
+            applied_model: options.model,
+            applied_effort: options.effort,
+            observed_model: options.model,
+            observed_effort: options.effort,
+            // Deliberately omit gsd_role and gsd_launch_mechanism. A generic
+            // application-evidence callback must not be able to self-attest
+            // these claims for a typed GSD launch.
+          };
+        },
+        parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+        capabilities: OPUS_CAPABILITIES,
+        recorder,
+        applicationEvidence: ({ result }) => result,
+      }),
+      /host application evidence must attest gsd-planner through typed-gsd-callback/
+    );
+    assert.equal(typedCalls, 1);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

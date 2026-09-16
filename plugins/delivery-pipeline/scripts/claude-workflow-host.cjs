@@ -5,11 +5,18 @@
 // a sixth binding. The serializable `args` object is data only; capabilities,
 // the durable recorder, and application evidence stay in this closure.
 const fs = require('node:fs');
+const path = require('node:path');
 const { createClaudeWorkflowDispatch } = require('./claude-dispatch-adapter.cjs');
-const { isDurableRecorder } = require('./dispatch-boundary.cjs');
+const { GSD_LAUNCH_MECHANISM, isDurableRecorder } = require('./dispatch-boundary.cjs');
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const WORKFLOW_PARAMETERS = ['agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch'];
+const WORKFLOW_SCRIPTS = Object.freeze({
+  'drift-gate': path.join(__dirname, '..', 'workflows', 'drift-gate.mjs'),
+  executors: path.join(__dirname, '..', 'workflows', 'executors.mjs'),
+  'fix-round': path.join(__dirname, '..', 'workflows', 'fix-round.mjs'),
+  'investigation-research': path.join(__dirname, '..', 'workflows', 'investigation-research.mjs'),
+});
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -31,6 +38,61 @@ function hostResource(options, name) {
   return host && host[name] !== undefined ? host[name] : options[name];
 }
 
+function registeredHostOptions(options) {
+  return Object.freeze({
+    agent: options.agent,
+    parallel: options.parallel,
+    phase: options.phase,
+    log: options.log,
+    capabilities: hostResource(options, 'capabilities'),
+    recorder: hostResource(options, 'recorder'),
+    applicationEvidence: hostResource(options, 'applicationEvidence'),
+    typedGsdCallback: hostResource(options, 'typedGsdCallback'),
+  });
+}
+
+// Native Workflow has no module-import surface. This is the executable host
+// registration used by the command adapters: native callbacks are registered
+// once, workflow names are pinned to shipped DSL files, and only serializable
+// `args` may vary per run. Keeping the callback/resource closure here is what
+// makes the sixth binding available on the actual production path rather than
+// only in a unit-test AsyncFunction constructor.
+function registerClaudeWorkflowHost(options = {}) {
+  if (!object(options)) reject('options must be an object');
+  if (typeof options.agent !== 'function') reject('agent is required');
+  if (typeof options.parallel !== 'function') reject('parallel is required');
+  const hostOptions = registeredHostOptions(options);
+  // Fail at registration, before a command can advertise a runnable Workflow,
+  // if the host cannot satisfy the boundary's durable-evidence contract.
+  createClaudeWorkflowDispatchBridge(hostOptions);
+  return Object.freeze({
+    run(name, runOptions = {}) {
+      if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(WORKFLOW_SCRIPTS, name)) {
+        reject(`unknown registered workflow ${JSON.stringify(name)}`);
+      }
+      if (!object(runOptions)) reject('workflow run options must be an object');
+      if (Object.prototype.hasOwnProperty.call(runOptions, 'scriptPath')) {
+        reject('registered workflow owns scriptPath');
+      }
+      for (const key of [
+        'agent', 'parallel', 'phase', 'log', 'capabilities', 'recorder',
+        'applicationEvidence', 'typedGsdCallback', 'host',
+      ]) {
+        if (Object.prototype.hasOwnProperty.call(runOptions, key)) {
+          reject(`registered host owns ${key}`);
+        }
+      }
+      return runClaudeWorkflow({
+        ...hostOptions,
+        ...(Object.prototype.hasOwnProperty.call(runOptions, 'args')
+          ? { args: runOptions.args }
+          : {}),
+        scriptPath: WORKFLOW_SCRIPTS[name],
+      });
+    },
+  });
+}
+
 function createClaudeWorkflowDispatchBridge(options = {}) {
   if (!object(options)) reject('options must be an object');
   for (const name of ['agent', 'parallel']) {
@@ -50,10 +112,26 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   // These are the only resources the workflow bridge can trust. A workflow's
   // JSON args may contain same-named values for compatibility, but they cannot
   // replace this host-owned closure.
+  const verifiedApplicationEvidence = function verifiedApplicationEvidence(input = {}) {
+    let evidence;
+    try {
+      evidence = applicationEvidence.call(options.host || options, input);
+    } catch (error) {
+      throw error;
+    }
+    const context = input && input.context;
+    if (context && context.gsd_role !== undefined
+        && (!object(evidence)
+          || evidence.gsd_role !== context.gsd_role
+          || evidence.gsd_launch_mechanism !== GSD_LAUNCH_MECHANISM)) {
+      reject(`host application evidence must attest ${context.gsd_role} through ${GSD_LAUNCH_MECHANISM}`);
+    }
+    return evidence;
+  };
   const host = Object.freeze({
     capabilities,
     recorder,
-    applicationEvidence,
+    applicationEvidence: verifiedApplicationEvidence,
     ...(typedGsdCallback ? { typedGsdCallback } : {}),
   });
   return Object.freeze((dispatchOptions = {}) => {
@@ -95,5 +173,7 @@ async function runClaudeWorkflow(options = {}) {
 
 module.exports = Object.freeze({
   createClaudeWorkflowDispatchBridge,
+  registerClaudeWorkflowHost,
   runClaudeWorkflow,
+  WORKFLOW_SCRIPTS,
 });

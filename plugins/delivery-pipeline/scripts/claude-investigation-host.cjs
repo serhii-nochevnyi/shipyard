@@ -3,18 +3,29 @@
 // Production entry point for /shipyard:investigate. Keep the workflow path
 // owned by the command adapter so callers cannot silently substitute a
 // different DSL script while still claiming to run the research contract.
-const path = require('node:path');
-const { runClaudeWorkflow } = require('./claude-workflow-host.cjs');
+const {
+  registerClaudeWorkflowHost,
+  WORKFLOW_SCRIPTS,
+} = require('./claude-workflow-host.cjs');
 
-const INVESTIGATION_RESEARCH_SCRIPT = path.join(
-  __dirname,
-  '..',
-  'workflows',
-  'investigation-research.mjs',
-);
+const INVESTIGATION_RESEARCH_SCRIPT = WORKFLOW_SCRIPTS['investigation-research'];
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function registerInvestigationWorkflowHost(options = {}) {
+  const registered = registerClaudeWorkflowHost(options);
+  return Object.freeze({
+    run(args) {
+      if (!isObject(args)) {
+        const error = new Error('claude-investigation-host: workflow args must be an object');
+        error.code = 'INVALID_HOST';
+        throw error;
+      }
+      return registered.run('investigation-research', { args });
+    },
+  });
 }
 
 function runInvestigationResearch(options = {}) {
@@ -28,13 +39,12 @@ function runInvestigationResearch(options = {}) {
     error.code = 'INVALID_HOST';
     throw error;
   }
-  return runClaudeWorkflow({
-    ...options,
-    scriptPath: INVESTIGATION_RESEARCH_SCRIPT,
-  });
+  const { args, ...hostOptions } = options;
+  return registerInvestigationWorkflowHost(hostOptions).run(args);
 }
 
 module.exports = Object.freeze({
   INVESTIGATION_RESEARCH_SCRIPT,
+  registerInvestigationWorkflowHost,
   runInvestigationResearch,
 });

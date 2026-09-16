@@ -16,6 +16,12 @@ export const meta = {
 // this script can only pass the explicit pair and exact signal evidence onward.
 
 const REQUIRED_LINES = ['system-state', 'alternatives', 'constraints', 'risks']
+const LINE_LABELS = Object.freeze({
+  'system-state': 'system state',
+  alternatives: 'alternatives',
+  constraints: 'constraints',
+  risks: 'risks and unknowns',
+})
 const OUT = {
   type: 'object',
   additionalProperties: false,
@@ -62,9 +68,14 @@ const lines = argv.lines.map((line, index) => {
       || !isObject(line.signals)) {
     throw new Error(`investigation-research: line ${index + 1} requires id, label, model, effort, and signals`)
   }
+  const id = line.id.trim()
+  const label = line.label.trim()
+  if (!Object.prototype.hasOwnProperty.call(LINE_LABELS, id) || label !== LINE_LABELS[id]) {
+    throw new Error(`investigation-research: line ${index + 1} label must be the canonical label for ${id}`)
+  }
   return {
-    id: line.id.trim(),
-    label: line.label.trim(),
+    id,
+    label: LINE_LABELS[id],
     model: line.model.trim(),
     effort: line.effort.trim(),
     signals: line.signals,
@@ -138,7 +149,7 @@ const linePrompt = (line) => [
 
 phase('Research')
 
-return await parallel(lines.map((line) => async () => {
+const results = await parallel(lines.map((line) => async () => {
   try {
     const dispatched = await createClaudeWorkflowDispatch({
       agent,
@@ -179,3 +190,24 @@ return await parallel(lines.map((line) => async () => {
     throw error
   }
 }))
+
+if (!Array.isArray(results)) {
+  throw new Error('investigation-research: parallel must return an array')
+}
+const resultIds = results.map((result) => isObject(result) ? result.id : undefined)
+const expectedIds = new Set(REQUIRED_LINES)
+const resultIdCounts = new Map()
+for (const id of resultIds) {
+  resultIdCounts.set(id, (resultIdCounts.get(id) || 0) + 1)
+}
+const missing = REQUIRED_LINES.filter((id) => resultIdCounts.get(id) !== 1)
+const surplus = [...resultIdCounts.keys()].filter((id) => !expectedIds.has(id))
+if (missing.length || surplus.length || resultIds.length !== REQUIRED_LINES.length) {
+  const details = []
+  if (missing.length) details.push(`missing or duplicated: ${missing.join(', ')}`)
+  if (surplus.length) details.push(`unexpected: ${surplus.join(', ')}`)
+  if (!details.length) details.push(`expected ${REQUIRED_LINES.length} results, got ${resultIds.length}`)
+  throw new Error(`investigation-research: parallel must return exactly one result for each research line (${details.join('; ')})`)
+}
+
+return results

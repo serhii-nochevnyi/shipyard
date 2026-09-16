@@ -72,15 +72,18 @@ Read `.planning/investigations/` (may not exist):
    the generic host binding. The host call is:
 
    ```text
-   runInvestigationResearch({
-     args: { invId, invPath, problemStatement, referencePath,
-             artifactLanguage, lines },
+   const workflowHost = registerInvestigationWorkflowHost({
      agent, parallel, phase, log,
      capabilities, recorder, applicationEvidence
    })
+   await workflowHost.run({ invId, invPath, problemStatement, referencePath,
+                            artifactLanguage, lines })
    ```
 
-   The typed `createClaudeWorkflowDispatch` bridge is injected as the sixth
+   `registerInvestigationWorkflowHost` is the production host registration;
+   it pins the research DSL and invokes `runClaudeWorkflow` with the native
+   callbacks, so this is not a unit-test-only constructor. The typed
+   `createClaudeWorkflowDispatch` bridge is injected as the sixth
    workflow binding; the durable recorder, capabilities, and
    application-evidence callback stay outside serializable `args`. The workflow
    dispatches all four lines through that bridge in parallel and refuses if any
