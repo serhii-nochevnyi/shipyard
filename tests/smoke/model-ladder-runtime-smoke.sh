@@ -222,7 +222,7 @@ fs.cpSync(args[2], path.join(process.env.GSD_CAPABILITIES_DIR, 'delivery-pipelin
   write(manifestFile, manifestBytes);
   const agentFile = path.join(agentsDir, policy.codexAgentFile('research', 'base'));
   const agentBytes = fs.readFileSync(agentFile);
-  write(agentFile, agentBytes.toString().replace('model_reasoning_effort = "low"', 'model_reasoning_effort = "medium"'));
+  write(agentFile, agentBytes.toString().replace('model_reasoning_effort = "high"', 'model_reasoning_effort = "xhigh"'));
   assert.throws(() => boundaries.codex.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'tampered-agent' }),
     (error) => error.code === 'STALE_GENERATED_AGENT');
   assert.equal(launches, beforeStale);

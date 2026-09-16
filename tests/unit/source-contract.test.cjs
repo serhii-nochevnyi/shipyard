@@ -696,8 +696,8 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'gsd-phase-researcher',
     'gsd-planner',
     'gsd-plan-checker',
-    'Astra/low',
-    'Astra/medium',
+    'Sol/high',
+    'Sol/xhigh',
     'receipt.compliance',
     'generic-agent',
     'inherited',
@@ -892,7 +892,7 @@ test('delivery launch docs route every role through the boundary and the generat
   }
 
   for (const pair of [
-    'Luna/max', 'Luna/medium', 'Astra/low', 'Astra/medium',
+    'Luna/max', 'Luna/medium', 'Sol/high', 'Sol/xhigh',
     'Sonnet/max', 'Sonnet/high', 'Opus/medium', 'Opus/high', 'Opus/max',
     'Fable/medium',
   ]) {
@@ -1041,7 +1041,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
 
   assert.deepStrictEqual(
     [codexResearch.model, codexResearch.effort, codexResearch.rung],
-    [policy.CODEX_MODEL_IDS.astra, 'low', 'base']
+    [policy.CODEX_MODEL_IDS.sol, 'high', 'base']
   );
   assert.deepStrictEqual(
     [claudeResearch.model, claudeResearch.effort, claudeResearch.rung],
@@ -1049,7 +1049,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
   assert.deepStrictEqual(
     [codexDecomposition.model, codexDecomposition.effort, codexDecomposition.rung],
-    [policy.CODEX_MODEL_IDS.astra, 'low', 'base']
+    [policy.CODEX_MODEL_IDS.sol, 'high', 'base']
   );
   assert.deepStrictEqual(
     [claudeDecomposition.model, claudeDecomposition.effort, claudeDecomposition.rung],
@@ -1080,11 +1080,11 @@ test('research and decomposition use the canonical runtime ladders and only decl
 
   // Decomposition's critical effort differs from the executor's critical effort.
   for (const [role, signals, model, effort, rung] of [
-    ['research', { complexity: 'very-complex' }, policy.CODEX_MODEL_IDS.astra, 'medium', 'very-complex'],
-    ['decomposition', { critical: true }, policy.CODEX_MODEL_IDS.astra, 'medium', 'critical'],
+    ['research', { complexity: 'very-complex' }, policy.CODEX_MODEL_IDS.sol, 'xhigh', 'very-complex'],
+    ['decomposition', { critical: true }, policy.CODEX_MODEL_IDS.sol, 'xhigh', 'critical'],
     ['executor', {}, policy.CODEX_MODEL_IDS.luna, 'max', 'base'],
-    ['executor', { critical: true }, policy.CODEX_MODEL_IDS.astra, 'low', 'critical'],
-    ['executor', { checkpoint: true }, policy.CODEX_MODEL_IDS.astra, 'low', 'critical'],
+    ['executor', { critical: true }, policy.CODEX_MODEL_IDS.sol, 'high', 'critical'],
+    ['executor', { checkpoint: true }, policy.CODEX_MODEL_IDS.sol, 'high', 'critical'],
   ]) {
     const selection = dispatchResolution('codex', role, signals, `contract-${role}-${Object.keys(signals).join('-') || 'base'}`);
     assert.deepStrictEqual([selection.model, selection.effort, selection.rung], [model, effort, rung]);
@@ -1903,7 +1903,7 @@ test('the routed-launch source sweep rejects native launches in shipped Markdown
 });
 
 const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
-  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '6fd1478f8b6a26098e4b86485541cf20be371675aa2cf424b8dd7902433540bc',
+  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '11126e9bbf4dac883b495f48e55504990ec358f739c8f314a4d147789c3ad346',
   'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '712a83e2a496b5ac1e2e3f139ff69173837230e19e4d945b2e3808092d9dc72e',
 });
 

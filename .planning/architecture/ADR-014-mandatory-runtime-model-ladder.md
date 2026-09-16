@@ -1,7 +1,7 @@
 # ADR-014 — mandatory runtime model ladder
 
 - **Status:** accepted
-- **Date:** 2026-09-12; amended 2026-09-15
+- **Date:** 2026-09-12; amended 2026-09-16
 - **Decision owner:** repository operator
 - **Scope:** Shipyard roles dispatched through Claude Code and Codex
 - **Supersedes:** ADR-005 and ADR-012 where they define model/effort selection
@@ -11,7 +11,7 @@
 The delivery pipeline currently has a shared classifier, a Claude tier resolver,
 generated Codex agent files, and several runtime-specific launch callers. Those
 surfaces are not one executable contract. Codex currently exposes a two-entry
-Astra compatibility palette, decomposition is outside the delivery role list, and
+Luna/Sol routed ladder, while decomposition is outside the delivery role list, and
 inline or child-thread paths can inherit the parent session model. Claude
 callers can also substitute literal defaults after a route was resolved.
 
@@ -28,17 +28,20 @@ model IDs or provider configuration is explicitly out of scope.
 ### 1. One boundary contract, two independent runtime grids
 
 Shipyard defines one versioned dispatch contract, but each runtime owns an
-independent role/rung/model grid. Claude does not resolve Codex's Luna/Astra
+independent role/rung/model grid. Claude does not resolve Codex's Luna/Sol
 logical names through aliases. Its grid names the existing Claude Code aliases
 directly. Generated Codex `.toml` files are adapter output and never an
 independent policy source.
 
-Codex model IDs are:
+Codex model IDs used by the current ladder are:
 
 | Logical model | Concrete Codex model |
 |---|---|
 | Luna | `gpt-5.6-luna` |
-| Astra | `gpt-6-astra` |
+| Sol | `gpt-5.6-sol` |
+
+The adapter keeps `gpt-6-astra` registered for older explicit configurations,
+but no current routed rung selects it.
 
 Claude's existing native palette is:
 
@@ -52,22 +55,22 @@ Claude's existing native palette is:
 
 | Role | Base selection | Escalation 1 | Escalation 2 | Escalation signals |
 |---|---|---|---|---|
-| research | Astra/low | — | Astra/medium | explicit `very-complex` |
-| decomposition | Astra/low | — | Astra/medium | explicit `critical` or `checkpoint` |
-| executor | Luna/max | Astra/low | — | explicit `critical` or `checkpoint` |
+| research | Sol/high | — | Sol/xhigh | explicit `very-complex` |
+| decomposition | Sol/high | — | Sol/xhigh | explicit `critical` or `checkpoint` |
+| executor | Luna/max | Sol/high | — | explicit `critical` or `checkpoint` |
 | pr-sentinel | Luna/medium | — | — | gate strategy only |
-| integrator | Astra/low | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
+| integrator | Sol/high | — | Sol/xhigh | `contested`, explicit `critical`/`checkpoint`, measured window |
 | drift-check | Luna/max | — | — | evidence/gate strategy only |
-| arch-review | Astra/low | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
-| ci-fix | Luna/max | Astra/low | Astra/medium | verified `repeat`; `repeat_exhausted` |
-| review-fix | Luna/max | Astra/low | Astra/medium | verified `repeat`; `repeat_exhausted` |
+| arch-review | Sol/high | — | Sol/xhigh | `contested`, explicit `critical`/`checkpoint`, measured window |
+| ci-fix | Luna/max | Sol/high | Sol/xhigh | verified `repeat`; `repeat_exhausted` |
+| review-fix | Luna/max | Sol/high | Sol/xhigh | verified `repeat`; `repeat_exhausted` |
 
 Research promotes only on an explicit, durable `very-complex` classification.
-Executor keeps Luna/max for its ordinary lane and selects Astra/low only from
+Executor keeps Luna/max for its ordinary lane and selects Sol/high only from
 explicit `critical` or `checkpoint` evidence; global risk, context-window
 pressure, and normal complexity do not promote it. For repair roles, `repeat`
 is valid only when the previous Luna launch has an applied receipt;
-`repeat_exhausted` is valid only when the previous Astra/low launch has an
+`repeat_exhausted` is valid only when the previous Sol/high launch has an
 applied receipt. A terminal `flake` or `plan_defect` is a gate/strategy outcome,
 not an automatic model promotion.
 
@@ -154,7 +157,7 @@ fields are enforcement failures and remain visible in reports.
 
 ### Positive
 
-- Codex uses Luna and Astra for the roles that need them.
+- Codex uses Luna and Sol for the roles that need them.
 - Research, judgement, repair, and fixed mechanical lanes are distinguishable.
 - Claude retains its working model palette while its role/rung grid can evolve
   independently of Codex's model vocabulary.

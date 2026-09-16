@@ -92,9 +92,9 @@ boundary is called.
 | Duty | Codex | Workflow runtime |
 | --- | --- | --- |
 | sentinel | Luna/medium, fixed | Sonnet/high, fixed |
-| ci-fix / review-fix | Luna/max → Astra/low on verified `repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
-| arch-review | Astra/low → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/max for critical/contested/checkpoint evidence → Fable/medium for a measured window |
-| integrator | Astra/low → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/high for the same evidence |
+| ci-fix / review-fix | Luna/max → Sol/high on verified `repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+| arch-review | Sol/high → Sol/xhigh for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/max for critical/contested/checkpoint evidence → Fable/medium for a measured window |
+| integrator | Sol/high → Sol/xhigh for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/high for the same evidence |
 
 When a host boundary dispatches a Codex static duty, it uses the generated files named by the selector:
 `shipyard-pr-sentinel.toml`, `shipyard-ci-fix.toml`,
@@ -317,7 +317,7 @@ points here instead of creating a second launch protocol.
    )
    ```
 
-   Codex resolves Astra/low → Astra/medium for measured-window, contested,
+   Codex resolves Sol/high → Sol/xhigh for measured-window, contested,
    critical, or checkpoint evidence and validates the generated
    `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
    The Workflow runtime resolves Opus/medium → Opus/max for

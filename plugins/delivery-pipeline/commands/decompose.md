@@ -103,9 +103,9 @@ ladder into the other.
 
 | GSD launch | Boundary role | Base selection | Escalation selections | Declared escalation signals |
 | --- | --- | --- | --- | --- |
-| `gsd-phase-researcher` | `research` | Astra/low | Astra/medium | `complexity: very-complex` |
-| `gsd-planner` | `decomposition` | Astra/low | Astra/medium | `critical: true` or `checkpoint: true` |
-| `gsd-plan-checker` | `decomposition` | Astra/low | Astra/medium | `critical: true` or `checkpoint: true` |
+| `gsd-phase-researcher` | `research` | Sol/high | Sol/xhigh | `complexity: very-complex` |
+| `gsd-planner` | `decomposition` | Sol/high | Sol/xhigh | `critical: true` or `checkpoint: true` |
+| `gsd-plan-checker` | `decomposition` | Sol/high | Sol/xhigh | `critical: true` or `checkpoint: true` |
 
 **Workflow-native alias runtime — native alias ladder**
 
@@ -115,9 +115,9 @@ ladder into the other.
 | `gsd-planner` | `decomposition` | opus/medium | opus/max | `critical: true` or `checkpoint: true` |
 | `gsd-plan-checker` | `decomposition` | opus/medium | opus/max | `critical: true` or `checkpoint: true` |
 
-On the Codex ladder, research and decomposition start at Astra/low. Research
-may escalate to Astra/medium only for `complexity: very-complex`; `type:
-alternatives` is inert. Decomposition may escalate to Astra/medium only for
+On the Codex ladder, research and decomposition start at Sol/high. Research
+may escalate to Sol/xhigh only for `complexity: very-complex`; `type:
+alternatives` is inert. Decomposition may escalate to Sol/xhigh only for
 the declared critical or checkpoint signal. On the native alias ladder,
 research starts at opus/medium and escalates to opus/max only for the declared
 `complexity: very-complex` signal; `type: alternatives` is inert. Decomposition
