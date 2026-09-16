@@ -14,6 +14,7 @@ const canonicalPolicy = require('./model-policy-internal.cjs');
 const canonicalResolveDispatch = canonicalPolicy.resolveDispatch;
 const canonicalValidateResolution = canonicalPolicy.validateResolution;
 const canonicalStableStringify = canonicalPolicy.stableStringify;
+const { resolveTaskLevel } = require('./pipeline-config.cjs');
 
 const OBSERVATION_UNKNOWN = 'unknown';
 const CLAIM_TTL_MS = 60 * 60 * 1000;
@@ -297,6 +298,11 @@ function createDurableRecorder(storeDir) {
     return {
       dispatch_id: dispatchId,
       purpose,
+      // Projection owns the fenced section through a synchronous graph+journal
+      // commit. That callback cannot run a heartbeat while the event loop is
+      // blocked, so a live owner must not be treated as stale merely because
+      // the recovery TTL elapsed. A dead process remains recoverable below.
+      fenced_until_release: purpose === 'projection',
       lock_token: newFenceToken(),
       owner_pid: process.pid,
       acquired_at: new Date(now).toISOString(),
@@ -316,7 +322,19 @@ function createDurableRecorder(storeDir) {
       if (!error || error.code !== 'ENOENT') throw error;
     }
   };
+  const lockOwnerIsAlive = (lock) => {
+    if (!lock || lock.fenced_until_release !== true) return false;
+    const pid = Number(lock.owner_pid);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return Boolean(error && error.code === 'EPERM');
+    }
+  };
   const lockIsStale = (lock) => {
+    if (lockOwnerIsAlive(lock)) return false;
     const leaseExpiresAt = lock && typeof lock.lease_expires_at === 'string'
       ? Date.parse(lock.lease_expires_at)
       : lock && typeof lock.acquired_at === 'string'
@@ -674,6 +692,13 @@ function createDurableRecorder(storeDir) {
       const stored = readStored(latestFile(runtime, role));
       return stored ? stored.payload : null;
     },
+    isConsumed(dispatchId) {
+      // The record remains readable as audit history after a repair consumes
+      // it, but it can no longer authorize another consumer. A repair commit
+      // has the same terminal meaning while recovering a partially completed
+      // repair: claim() already treats it as consumed before a marker exists.
+      return fs.existsSync(consumedFile(dispatchId)) || Boolean(recoverRepairCommit(dispatchId));
+    },
     claim(dispatchId, consumerId) {
       try {
         if (fs.existsSync(consumedFile(dispatchId))) return { claimed: false };
@@ -761,6 +786,39 @@ function createDurableRecorder(storeDir) {
         throw boundaryError('RECORD_FAILED', `durable receipt claim renewal failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
+    withClaim(dispatchId, consumerId, claimAuthority, callback) {
+      if (typeof callback !== 'function') {
+        throw boundaryError('INVALID_INPUT', 'durable receipt claim fence requires a callback', { dispatch_id: dispatchId });
+      }
+      try {
+        // The projection writer holds this same fenced lock while it mutates
+        // dispatch-record's graph. A separate repair can therefore neither
+        // take over nor consume the receipt between the ownership check and
+        // the projection commit. A heartbeat alone is insufficient: it would
+        // leave exactly that check→write gap open.
+        const lockOwner = acquireClaimLock(dispatchId, 'projection');
+        if (!lockOwner) return { committed: false };
+        try {
+          if (fs.existsSync(consumedFile(dispatchId))) return { committed: false };
+          const current = readJsonFile(claimFile(dispatchId));
+          if (!sameClaimFence(current, claimAuthority) || claimIsStale(current)) {
+            return { committed: false };
+          }
+          atomicReplaceJson(claimFile(dispatchId), claimPayload(
+            dispatchId,
+            consumerId,
+            current.generation,
+            current.claim_token,
+          ));
+          if (fs.existsSync(consumedFile(dispatchId))) return { committed: false };
+          return { committed: true, value: callback() };
+        } finally {
+          releaseClaimLock(dispatchId, lockOwner);
+        }
+      } catch (error) {
+        throw boundaryError('RECORD_FAILED', `durable receipt claim fence failed: ${error.message}`, { dispatch_id: dispatchId });
+      }
+    },
     consume(dispatchId, consumerId, claimAuthority) {
       try {
         const repairCommit = recoverRepairCommit(dispatchId);
@@ -841,6 +899,17 @@ function nonEmpty(value, label) {
     refuse('INVALID_RECEIPT', `${label} must be a non-empty, whitespace-free string`, { label });
   }
   return value;
+}
+
+function ticketFromContext(context) {
+  const ticket = typeof context === 'string'
+    ? context
+    : isObject(context) ? context.ticket : undefined;
+  if (ticket === undefined) return undefined;
+  if (typeof ticket !== 'string' || ticket.trim() === '' || /[\s\u0000-\u001f\u007f]/.test(ticket)) {
+    refuse('INVALID_INPUT', 'launch context ticket must be a non-empty, whitespace-free string');
+  }
+  return ticket;
 }
 
 function newDispatchId() {
@@ -1308,6 +1377,12 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
   if (receipt.mechanism !== undefined && receipt.mechanism !== resolution.mechanism) {
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt mechanism does not match the resolved mechanism', { expected: resolution.mechanism, actual: receipt.mechanism });
   }
+  for (const field of ['launch_arguments', 'logical_rung', 'rung', 'signals']) {
+    if (Object.prototype.hasOwnProperty.call(receipt, field)
+        && canonicalStableStringify(receipt[field]) !== canonicalStableStringify(resolution[field] === undefined ? null : resolution[field])) {
+      refuse('NONCOMPLIANT_RECEIPT', `application receipt ${field} contradicts the resolution`, { field });
+    }
+  }
   if (options.requireComplianceProof !== false) {
     if (receipt.compliance !== 'verified' || !isObject(receipt.compliance_proof)) {
       refuse('NONCOMPLIANT_RECEIPT', 'application receipt must carry boundary compliance proof');
@@ -1564,6 +1639,15 @@ function recorderConsume(recorder, dispatchId, consumerId, claimAuthority) {
   state.consumed.add(dispatchId);
 }
 
+function recorderIsConsumed(recorder, dispatchId) {
+  const target = recorderMethod(recorder, ['isConsumed', 'isReceiptConsumed']);
+  if (target) {
+    return affirmative(invokeSync(target.fn, target.receiver, [dispatchId], 'receipt consumption lookup'), 'consumed');
+  }
+  const state = sharedRecorderState(recorder);
+  return Boolean(state && state.consumed.has(dispatchId));
+}
+
 function receiptFromStoredRecord(value) {
   if (isObject(value) && isObject(value.receipt)) return value.receipt;
   if (isObject(value) && isObject(value.application_receipt)) return value.application_receipt;
@@ -1627,12 +1711,20 @@ function createDispatchBoundary(options = {}) {
       const memoryResolution = memoryResolutionEntry && memoryResolutionEntry.recorder === recorder
         ? memoryResolutionEntry.value
         : null;
+      const memoryTicket = memoryResolutionEntry && memoryResolutionEntry.recorder === recorder
+        ? memoryResolutionEntry.ticket
+        : undefined;
       if (memoryReceipt
           && memoryReceipt.dispatch_id === dispatchId
           && memoryResolution
           && memoryResolution.dispatch_id === dispatchId) {
         return {
-          record: { dispatch_id: dispatchId, receipt: memoryReceipt, resolution: memoryResolution },
+          record: {
+            dispatch_id: dispatchId,
+            ...(memoryTicket !== undefined ? { ticket: memoryTicket } : {}),
+            receipt: memoryReceipt,
+            resolution: memoryResolution,
+          },
           receipt: memoryReceipt,
           resolution: memoryResolution,
         };
@@ -1676,7 +1768,7 @@ function createDispatchBoundary(options = {}) {
     }
   }
 
-  function verifyPriorReceipt(input, recorder) {
+  function verifyPriorReceipt(input, recorder, ticket) {
     const prerequisite = repairPrerequisiteFor(input);
     if (!prerequisite) return null;
     const raw = priorReceiptFor(input);
@@ -1695,6 +1787,33 @@ function createDispatchBoundary(options = {}) {
     const receipt = receiptFromStoredRecord(raw) || raw;
     if (!trusted || !isObject(receipt) || stableReceipt(receipt) !== stableReceipt(trusted.receipt)) {
       refuse('UNVERIFIED_RECEIPT', `${prerequisite.role} ${prerequisite.signatureState} escalation requires the receipt returned by the durable dispatch boundary`, { dispatch_id: previousDispatchId });
+    }
+    const predecessorTicket = trusted.record && trusted.record.ticket;
+    // Cross-process repair authority is always ticket-bound. The small
+    // in-process recorder contract remains compatible with its historical
+    // ticket-less fixtures; it is not a durable trust root and cannot survive
+    // or authorize a repair across a process boundary.
+    const requiresTicketBinding = DURABLE_RECORDERS.has(recorder);
+    if (requiresTicketBinding && ticket === undefined) {
+      refuse(
+        'INVALID_INPUT',
+        'repair dispatch requires a ticket in its launch context before a predecessor receipt can be consumed',
+        { dispatch_id: previousDispatchId },
+      );
+    }
+    if (requiresTicketBinding && predecessorTicket === undefined) {
+      refuse(
+        'NONCOMPLIANT_RECEIPT',
+        'the preceding receipt is not bound to a ticket and cannot authorize a repair dispatch',
+        { expected_ticket: ticket, actual_ticket: null, dispatch_id: previousDispatchId },
+      );
+    }
+    if (predecessorTicket !== ticket) {
+      refuse(
+        'NONCOMPLIANT_RECEIPT',
+        'the preceding receipt ticket does not match the repair dispatch ticket',
+        { expected_ticket: ticket || null, actual_ticket: predecessorTicket || null, dispatch_id: previousDispatchId },
+      );
     }
     const runtime = String(input.runtime || '').trim();
     const expectedModel = prerequisite.model;
@@ -1728,7 +1847,11 @@ function createDispatchBoundary(options = {}) {
       refuse('DUPLICATE_DISPATCH_ID', 'dispatch id was already registered; replay cannot be recorded twice', { dispatch_id: stored.dispatch_id });
     }
     trustedReceipts.set(stored.dispatch_id, { recorder, value: stored });
-    trustedResolutions.set(stored.dispatch_id, { recorder, value: deepFreeze(snapshot(resolution)) });
+    trustedResolutions.set(stored.dispatch_id, {
+      recorder,
+      value: deepFreeze(snapshot(resolution)),
+      ...(recordInput && recordInput.ticket !== undefined ? { ticket: recordInput.ticket } : {}),
+    });
     recorderRecordRemember(recorder, recordInput);
     return stored;
   }
@@ -1763,13 +1886,13 @@ function createDispatchBoundary(options = {}) {
     return safe;
   }
 
-  function resolve(input, recorder) {
+  function resolve(input, recorder, ticket) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
     const withId = Object.prototype.hasOwnProperty.call(input, 'dispatch_id')
       || Object.prototype.hasOwnProperty.call(input, 'dispatchId')
       ? input
       : { ...input, dispatch_id: newDispatchId() };
-    const prior = verifyPriorReceipt(withId, recorder);
+    const prior = verifyPriorReceipt(withId, recorder, ticket);
     const canonicalInput = inputWithoutReceipt(withId);
     if (prior) {
       markBoundaryVerifiedReceipt(prior.receipt);
@@ -1783,11 +1906,24 @@ function createDispatchBoundary(options = {}) {
     if (requireGsdRole && GSD_TYPED_ROLES[resolved.role] && gsdRole === undefined) {
       refuse('INVALID_INPUT', `GSD typed role is required for boundary role ${resolved.role}`);
     }
-    const output = snapshot(prior ? { ...resolved, ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}), prior_applied: {
+    // Task level is a policy decision used by the legacy telemetry readers,
+    // not a runtime-selected model value. Keep it boundary-owned alongside the
+    // canonical resolution so reconciliation cannot accept a caller's claim.
+    const task_level = resolveTaskLevel(resolved.role, resolved.signals);
+    const output = snapshot(prior ? {
+      ...resolved,
+      task_level,
+      ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}),
+      prior_applied: {
       dispatch_id: prior.dispatch_id,
       model: prior.model,
       effort: prior.effort,
-    } } : { ...resolved, ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}) });
+      }
+    } : {
+      ...resolved,
+      task_level,
+      ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}),
+    });
     // snapshot() deliberately severs every other caller reference. Rebrand
     // this one cloned predecessor only because `prior` was re-read from the
     // durable recorder immediately above.
@@ -1821,12 +1957,64 @@ function createDispatchBoundary(options = {}) {
     return deepFreeze(snapshot(withoutBoundaryClaims(evidence)));
   }
 
+  // Reconciliation consumes authenticated storage, never caller-supplied proof.
+  function reconcile(dispatchId, context = {}) {
+    if (!options.recorder) {
+      refuse('RECORD_UNAVAILABLE', 'reconcile requires an explicitly configured durable dispatch recorder');
+    }
+    const ticket = ticketFromContext(context);
+    if (ticket === undefined) {
+      refuse('INVALID_INPUT', 'reconcile requires the ticket from the boundary launch context');
+    }
+    nonEmpty(dispatchId, 'dispatch_id');
+    if (consumedReceiptIds.has(dispatchId) || recorderIsConsumed(options.recorder, dispatchId)) {
+      refuse('UNVERIFIED_RECEIPT', 'dispatch receipt was already consumed by another repair dispatch', { dispatch_id: dispatchId });
+    }
+    const trusted = trustedRecordFor(options.recorder, dispatchId);
+    if (!trusted) refuse('UNVERIFIED_RECEIPT', 'dispatch has no current compliant applied receipt', { dispatch_id: dispatchId });
+    if (!trusted.record || trusted.record.ticket !== ticket) {
+      refuse(
+        'NONCOMPLIANT_RECEIPT',
+        'dispatch receipt ticket does not match the reconciliation ticket',
+        { expected_ticket: ticket, actual_ticket: trusted.record && trusted.record.ticket || null, dispatch_id: dispatchId },
+      );
+    }
+    const { resolution, receipt: applied } = trusted;
+    return deepFreeze(snapshot({
+      dispatch_id: dispatchId,
+      ticket,
+      policy_version: resolution.policy_version,
+      policy_hash: resolution.policy_hash,
+      role: resolution.role,
+      task_level: resolution.task_level,
+      logical_rung: resolution.logical_rung,
+      rung: resolution.rung,
+      signals: resolution.signals,
+      signals_fired: resolution.signals_fired,
+      route: resolution.route,
+      runtime: resolution.runtime,
+      backend: resolution.backend,
+      mechanism: resolution.mechanism,
+      launch_id: applied.launch_id,
+      agent_file: resolution.agent_file,
+      launch_arguments: resolution.launch_arguments || null,
+      requested_model: resolution.requested_model,
+      requested_effort: resolution.requested_effort,
+      applied_model: applied.applied_model,
+      applied_effort: applied.applied_effort,
+      observed_model: applied.observed_model,
+      observed_effort: applied.observed_effort,
+      application_receipt: applied,
+    }));
+  }
+
   function dispatch(input, context = {}) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
+    const ticket = ticketFromContext(context);
     const runtime = typeof input.runtime === 'string' ? input.runtime.trim() : input.runtime;
     const adapter = adapterFor(adapters, runtime);
     const record = recorderFor(options, adapter);
-    const resolution = resolve(input, record);
+    const resolution = resolve(input, record, ticket);
     if (!record) {
       refuse('RECORD_UNAVAILABLE', 'durable dispatch recording is mandatory; refusing to launch without a recorder');
     }
@@ -1878,15 +2066,22 @@ function createDispatchBoundary(options = {}) {
       const applicationReceipt = finalizeApplicationReceipt(validatedResolution, applicationEvidence, adapter, observationCapabilities);
       const baseTrace = {
         dispatch_id: validatedResolution.dispatch_id,
+        ...(ticket !== undefined ? { ticket } : {}),
         policy_version: validatedResolution.policy_version,
         policy_hash: validatedResolution.policy_hash,
         runtime: validatedResolution.runtime,
         role: validatedResolution.role,
+        task_level: validatedResolution.task_level,
         logical_rung: validatedResolution.logical_rung,
         rung: validatedResolution.rung,
         route: validatedResolution.route,
         backend: validatedResolution.backend,
         mechanism: validatedResolution.mechanism,
+        signals: validatedResolution.signals,
+        signals_fired: validatedResolution.signals_fired,
+        launch_id: applicationReceipt.launch_id,
+        agent_file: validatedResolution.agent_file,
+        launch_arguments: validatedResolution.launch_arguments || null,
         resolution: validatedResolution,
         requested: { model: validatedResolution.requested_model, effort: validatedResolution.requested_effort },
         applied: { model: applicationReceipt.applied_model, effort: applicationReceipt.applied_effort },
@@ -1961,7 +2156,7 @@ function createDispatchBoundary(options = {}) {
     }
   }
 
-  return Object.freeze({ resolve, validate, receipt, dispatch });
+  return Object.freeze({ resolve, validate, receipt, reconcile, dispatch });
 }
 
 function resolveDispatch(input) {
