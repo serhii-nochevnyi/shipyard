@@ -30,6 +30,9 @@ command-backed evidence is not verification.
   signature, the hypothesis it acted on, and how it ended. It is rendered from
   the delivery journal by the orchestrator, so it is what previous rounds
   actually did, not a recollection of it.
+- A trusted artifact destination: `${worktree}/.shipyard-repair-evidence.md`.
+  Write the complete review decision and verification record there; the host
+  archives and validates it after the result crosses the dispatch boundary.
 
 ## Procedure — for EACH thread independently
 
@@ -83,6 +86,14 @@ and escalate rather than cycle through one of them again.
    complete outcome, not an open question. The only thread you leave open is one
    you are escalating to a human, and then you say so explicitly.
 
+6. Before returning, write the complete repair record to
+   `${worktree}/.shipyard-repair-evidence.md`: every thread id and disposition,
+   the batch hypothesis, changed paths, exact verification commands with
+   relevant output/exit status, and every unresolved or escalated finding.
+   Keep it complete when no code changed. Do not use a symlink or substitute
+   another path; the trusted host seals it as the dispatch's
+   `shipyard.repair-result.v1` evidence.
+
 ## After all threads
 - One commit for all accepted fixes: `review(T-XX-YY): address review round N`.
 - Push. **If the PR is APPROVED**, the push dismisses that approval — push anyway
@@ -115,6 +126,7 @@ and escalate rather than cycle through one of them again.
   and burns an attempt from this ticket's budget.
 
 ## Output (final message, structured)
+- `status: fixed | no-op | escalate` and `pushed: true | false`
 - `hypothesis: <one sentence>` — what you believed was wrong and what your
   changes target; when you changed nothing, why the threads did not warrant it.
   This is not a summary of the per-thread lines: the orchestrator records it on
@@ -125,3 +137,8 @@ and escalate rather than cycle through one of them again.
 - `unresolved_after`: the count `reviewers.cjs unresolved` reports at the end,
   and for anything non-zero, which threads and why they stay open
 - verification evidence for accepted changes
+
+Return only the compact repair fields (`id`, `pr`, `status`, `pushed`, `notes`,
+`hypothesis`). Do not return a receipt, application evidence, artifact path,
+digest, or complete evidence text. Missing/malformed evidence is a failed
+result, never `no-op` or a blind redispatch.

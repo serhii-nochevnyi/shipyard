@@ -197,6 +197,54 @@ function canonicalArtifact(value) {
   return Object.freeze(output);
 }
 
+const ROLE_ARTIFACT_ROLES = new Set(['ci-fix', 'review-fix', 'drift-check']);
+
+function roleArtifactRole(options, artifact) {
+  const role = artifact && typeof artifact.role === 'string' ? artifact.role : options.role;
+  return ROLE_ARTIFACT_ROLES.has(role) ? role : null;
+}
+
+function boundedResultForArtifact(result, artifact, role) {
+  const envelope = artifact.envelope;
+  const reference = {
+    artifact_ref: artifact.artifact_ref || artifact.artifact_path,
+    artifact_digest: artifact.artifact_digest,
+    evidence_index: artifact.evidence_index,
+    ...(artifact.findings_index ? { findings_index: artifact.findings_index } : {}),
+  };
+  if (role === 'ci-fix' || role === 'review-fix') {
+    return {
+      id: envelope.ticket,
+      pr: envelope.pr,
+      pushed: envelope.pushed,
+      status: envelope.status,
+      notes: envelope.notes || envelope.summary,
+      hypothesis: envelope.hypothesis,
+      ...reference,
+    };
+  }
+  if (role === 'drift-check') {
+    return {
+      id: envelope.ticket,
+      verdict: envelope.verdict,
+      moved_count: envelope.moved_count,
+      reuse_candidates_count: envelope.reuse_candidates_count,
+      evidence_count: envelope.evidence_count,
+      summary: envelope.summary,
+      ...reference,
+    };
+  }
+  // Executor consumers still need their existing bounded fields. Do not copy
+  // the raw reply: receipts/application evidence remain boundary-owned.
+  return {
+    ...(result && typeof result.id === 'string' ? { id: result.id } : {}),
+    status: envelope.outcome,
+    summary: envelope.summary,
+    actionable_delta: envelope.actionable_delta,
+    blocking_count: envelope.blocking_count,
+  };
+}
+
 function durableRecorder(value) {
   return isDurableRecorder(value);
 }
@@ -475,6 +523,7 @@ function createClaudeWorkflowDispatch(options = {}) {
       refuse('INVALID_INPUT', `artifact metadata must be JSON-serializable: ${error.message}`);
     }
   }
+  const role = roleArtifactRole(options, artifactMetadata);
   // Artifact-required workflows must prove that their trusted consumer and
   // identity inputs exist before the boundary reserves a dispatch or invokes
   // an agent. Deferring this check until after launch can spend a model call on
@@ -623,8 +672,8 @@ function createClaudeWorkflowDispatch(options = {}) {
   if (options.priorReceipt !== undefined) input.priorReceipt = options.priorReceipt;
   if (options.dispatchId !== undefined) input.dispatch_id = options.dispatchId;
   if (options.previousDispatchId !== undefined) input.previous_dispatch_id = options.previousDispatchId;
-  const complete = (record, artifact) => Object.freeze({
-    result: agentResult,
+  const complete = (record, artifact, result = agentResult) => Object.freeze({
+    result,
     receipt: record.receipt,
     record,
     ...(artifact ? { artifact } : {}),
@@ -633,7 +682,15 @@ function createClaudeWorkflowDispatch(options = {}) {
     if (!object(record) || !object(record.receipt) || record.receipt.compliance !== 'verified') {
       refuse('MISSING_RECEIPT', 'Claude workflow dispatch completed without a boundary-verified application receipt');
     }
-    if (!artifactRequired || !agentResult || agentResult.status !== 'committed') return complete(record);
+    if (role && !agentResult) {
+      refuse('MISSING_ARTIFACT', `Claude ${role} dispatch returned no repair/drift result to seal`);
+    }
+    const shouldSeal = artifactRequired && agentResult
+      && (role !== null || agentResult.status === 'committed');
+    if (!shouldSeal) return complete(record);
+    if (typeof artifactConsumer !== 'function') {
+      refuse('MISSING_ARTIFACT', 'Claude workflow dispatch completed an artifact-required result without the trusted role-artifact consumer');
+    }
     let sealed;
     try {
       sealed = artifactConsumer.call(suppliedHost || host, {
@@ -653,7 +710,43 @@ function createClaudeWorkflowDispatch(options = {}) {
     const finishArtifact = (artifact) => {
       try {
         const boundedArtifact = canonicalArtifact(artifact);
-        return complete(record, boundedArtifact);
+        if (role !== null) {
+          const expectedEnvelopeSchema = role === 'drift-check'
+            ? 'shipyard.drift-result.v1'
+            : 'shipyard.repair-result.v1';
+          if (boundedArtifact.envelope.schema !== expectedEnvelopeSchema
+              || boundedArtifact.envelope.role !== role
+              || boundedArtifact.envelope.version !== 1
+              || boundedArtifact.envelope.ticket !== artifactMetadata.ticket
+              || !object(boundedArtifact.envelope.evidence_index_ref)
+              || !isDeepStrictEqual(
+                boundedArtifact.evidence_index,
+                boundedArtifact.envelope.evidence_index,
+              )
+              || !isDeepStrictEqual(
+                boundedArtifact.envelope.evidence_index,
+                boundedArtifact.envelope.evidence_index_ref,
+              )
+              || !object(boundedArtifact.findings_index)
+              || !object(boundedArtifact.envelope.findings_index)
+              || !object(boundedArtifact.envelope.findings_index_ref)
+              || !isDeepStrictEqual(
+                boundedArtifact.findings_index,
+                boundedArtifact.envelope.findings_index,
+              )
+              || !isDeepStrictEqual(
+                boundedArtifact.envelope.findings_index,
+                boundedArtifact.envelope.findings_index_ref,
+              )) {
+            throw boundaryFailure('INVALID_ARTIFACT', 'trusted repair/drift artifact envelope does not match its role contract');
+          }
+        }
+        return complete(
+          record,
+          boundedArtifact,
+          role ? boundedResultForArtifact(agentResult, boundedArtifact, role)
+            : boundedResultForArtifact(agentResult, boundedArtifact, null),
+        );
       } catch (error) {
         if (isBoundaryFailure(error)) throw error;
         throw boundaryFailure(

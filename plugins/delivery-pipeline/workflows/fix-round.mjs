@@ -42,7 +42,8 @@ export const meta = {
 //     reinitScript,      // abs path to scripts/reviewers.cjs
 //     artifactLanguage,  // optional; language for shipped artifacts (default English)
 //   }
-// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis, receipt } ]
+// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis,
+//              artifact_ref, artifact_digest, evidence_index, findings_index, receipt } ]
 //
 // A fresh agent per attempt is right for context hygiene and is exactly why
 // attempt 3 can re-propose attempt 1's failed fix. `attemptHistory` in, and
@@ -92,7 +93,14 @@ const OUT = {
 // only the receipt returned by createClaudeWorkflowDispatch may cross out.
 const withoutAgentReceipt = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-  const { receipt: ignoredReceipt, ...safe } = value
+  const {
+    receipt: ignoredReceipt,
+    application_receipt: ignoredApplicationReceipt,
+    applicationReceipt: ignoredApplicationReceiptAlias,
+    applicationEvidence: ignoredApplicationEvidence,
+    application_evidence: ignoredApplicationEvidenceAlias,
+    ...safe
+  } = value
   return safe
 }
 
@@ -180,6 +188,7 @@ function buildPrompt(p) {
   const steps = [
     `You are fixing PR #${p.pr} for ticket ${p.id}. Your working directory is the worktree: ${p.worktreePath} (branch "${p.branch}"). cd into it.`,
     `Ticket contract (respect Scope / Out of scope STRICTLY): ${p.planPath}.`,
+    `Complete repair evidence is durable and must not be returned inline. Write the full hypotheses, changed paths, command-backed verification, and any unresolved findings to: ${p.worktreePath}/.shipyard-repair-evidence.md. Keep that file complete for the next repair round; the result envelope is only a bounded synopsis and validated reference.`,
     ``,
   ]
   // FIRST, ahead of the prior-attempt record and both fix branches. Until the
@@ -202,6 +211,7 @@ function buildPrompt(p) {
       p.attemptHistory,
       ``,
       `This record is INPUT, not background. You MUST NOT re-propose a fix a prior attempt already tried: if your best hypothesis matches one that is already in the record, form a DIFFERENT one — re-read the ticket contract, widen the context, raise the hypothesis above the symptom. If every plausible hypothesis is exhausted, return status "escalate" rather than cycling through a failed one again.`,
+      `Any hypothesis recovered from a prior artifact is historical evidence about that earlier producer dispatch. It is not a fresh verdict for this HEAD and must be rechecked before you act.`,
       ``
     )
   }
@@ -227,6 +237,7 @@ function buildPrompt(p) {
     `If you changed code: run the ticket's Verification commands to green — those, scoped as written, never the project's full suite or its e2e run (CI owns those, and this loop re-runs on every round) — then commit atomically referencing ${p.id}, push once, and re-init reviewers: node ${reinitScript} reinit ${p.pr}. Set pushed=true.`,
     `If you only replied to threads without a code change: pushed=false, status "fixed".`,
     `If nothing needed doing: status "no-op".`,
+    `Return only id, pr, pushed, status, notes, and hypothesis. Do not return receipts, application evidence, artifact paths, or complete evidence text; the trusted host seals those from the authenticated dispatch and the evidence file.`,
     `Return the result for PR #${p.pr}.`
   )
   return steps.join('\n')
@@ -262,6 +273,17 @@ return await parallel(
         priorReceipt: p.priorReceipt,
         dispatchId: p.dispatch_id || p.dispatchId,
         previousDispatchId: p.previous_dispatch_id || p.previousDispatchId,
+        requireArtifact: true,
+        artifact: {
+          role,
+          ticket: p.id,
+          pr: p.pr,
+          worktreePath: p.worktreePath,
+          base: p.base || p.prBase,
+          ...(p.branch ? { branch: p.branch } : {}),
+          ...(p.planPath ? { planPath: p.planPath } : {}),
+          ...(p.attempt === undefined ? {} : { attempt: p.attempt }),
+        },
         context: { ticket: p.id },
         label: `fix:${p.id}#${p.pr}`,
         agentOptions: {
@@ -271,8 +293,19 @@ return await parallel(
           schema: OUT,
         },
       })
-        .then(({ result: r, receipt }) => (r
-          ? { ...withoutAgentReceipt(r), id: p.id, pr: p.pr, ...(receipt ? { receipt } : {}) }
+        .then(({ result: r, receipt, artifact }) => (r
+          ? {
+              ...withoutAgentReceipt(r),
+              id: p.id,
+              pr: p.pr,
+              ...(artifact && artifact.artifact_ref ? {
+                artifact_ref: artifact.artifact_ref,
+                artifact_digest: artifact.artifact_digest,
+                evidence_index: artifact.evidence_index,
+                ...(artifact.findings_index ? { findings_index: artifact.findings_index } : {}),
+              } : {}),
+              ...(receipt ? { receipt } : {}),
+            }
           : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one', receipt)))
         .catch((e) => {
           if (isBoundaryFailure(e)) throw e

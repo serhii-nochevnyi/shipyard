@@ -3,7 +3,7 @@
 
 // Render what has already been tried on ONE ticket, as data for the next fixer.
 //
-//   attempt-history.cjs <ticket> [--json] [--limit <n>] [--graph <dir>]
+//   attempt-history.cjs <ticket> [--json] [--details] [--limit <n>] [--graph <dir>]
 //
 // Why this exists (ADR-001 D5): a fresh subagent per attempt is the right call
 // for context hygiene, and it is precisely why attempt 3 can re-propose the fix
@@ -35,10 +35,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const roleArtifact = require('./role-artifact.cjs');
 
 const argvAll = process.argv.slice(2);
 
-const USAGE = 'usage: attempt-history.cjs <ticket> [--json] [--limit <n>] [--graph <dir>]';
+const USAGE = 'usage: attempt-history.cjs <ticket> [--json] [--details] [--limit <n>] [--graph <dir>]';
 
 function usage(msg) {
   console.error(`attempt-history: ${msg}\n${USAGE}`);
@@ -80,6 +81,7 @@ const GRAPH_DIR = GRAPH_EXPLICIT
 // at the end is a trap for the caller who puts it first, and here it would be
 // read as the ticket id.
 let asJson = false;
+let details = false;
 let limitRaw = null;
 const positional = [];
 for (let i = 0; i < argvAll.length; i++) {
@@ -87,6 +89,7 @@ for (let i = 0; i < argvAll.length; i++) {
   if (a === '--graph') { i++; continue; }
   if (a === '--limit') { limitRaw = argvAll[++i]; continue; }
   if (a === '--json') { asJson = true; continue; }
+  if (a === '--details' || a === '--resolve-artifacts') { details = true; continue; }
   positional.push(a);
 }
 
@@ -152,6 +155,86 @@ const ordered = events
 // order is what shows a fixer that a hypothesis was tried and did not hold.
 const shown = limit === null ? ordered : ordered.slice(-limit);
 
+// A journal row carries only references. Resolving one is an explicit request
+// because the next fixer needs the complete hypothesis, while the ordinary
+// history view must remain a small, non-authorizing record. Every detail read
+// crosses the same durable receipt and identity checks as the live consumer;
+// missing store/worktree/base metadata is a refusal, never an empty hypothesis.
+function artifactFailure(message) {
+  console.error(`attempt-history: ${message}\n${USAGE}`);
+  process.exit(1);
+}
+
+function artifactWorktree(reference) {
+  const marker = `${path.sep}${roleArtifact.ARTIFACT_ARCHIVE_DIR}${path.sep}`;
+  const at = reference.lastIndexOf(marker);
+  return at > 0 ? reference.slice(0, at) : null;
+}
+
+function resolveArtifact(event) {
+  if (event.artifact_ref === undefined) return null;
+  if (typeof event.artifact_ref !== 'string' || !event.artifact_ref.trim()) {
+    artifactFailure('attempt references an empty artifact_ref');
+  }
+  if (typeof event.artifact_digest !== 'string' || !event.artifact_digest.trim()) {
+    artifactFailure(`attempt ${event.artifact_ref} has no artifact_digest; refusing unverified history`);
+  }
+  const worktreePath = event.artifact_worktree || artifactWorktree(event.artifact_ref);
+  const boundaryStore = event.boundary_store || event.boundary_store_path;
+  const dispatchId = event.dispatch_id || event.dispatchId;
+  const role = event.artifact_role || event.role;
+  const base = event.artifact_base || event.base || event.baseRef;
+  if (typeof worktreePath !== 'string' || !worktreePath.trim()) {
+    artifactFailure(`attempt ${event.artifact_ref} has no contained artifact worktree`);
+  }
+  if (typeof boundaryStore !== 'string' || !boundaryStore.trim()) {
+    artifactFailure(`attempt ${event.artifact_ref} has no durable boundary store`);
+  }
+  if (typeof dispatchId !== 'string' || !dispatchId.trim()) {
+    artifactFailure(`attempt ${event.artifact_ref} has no authenticated dispatch_id`);
+  }
+  if (typeof role !== 'string' || !role.trim() || typeof base !== 'string' || !base.trim()) {
+    artifactFailure(`attempt ${event.artifact_ref} has incomplete role/base identity`);
+  }
+  const input = {
+    worktreePath,
+    boundaryStore,
+    dispatchId,
+    role,
+    ticket,
+    base,
+    artifactPath: event.artifact_ref,
+    artifactDigest: event.artifact_digest,
+    historical: true,
+  };
+  if (event.pr !== undefined) input.pr = event.pr;
+  try {
+    return roleArtifact.read(input);
+  } catch (error) {
+    artifactFailure(
+      `referenced ${event.artifact_ref} is not a verified historical artifact `
+      + `(${error.code || error.name || 'INVALID_ARTIFACT'}): ${error.message}`,
+    );
+  }
+}
+
+const detailed = details ? shown.map((event) => {
+  const artifact = resolveArtifact(event);
+  if (!artifact) return event;
+  const findings = artifact.findings && typeof artifact.findings === 'object' ? artifact.findings : {};
+  return {
+    ...event,
+    artifact_historical: true,
+    ...(findings.hypothesis === undefined ? {} : { artifact_hypothesis: findings.hypothesis }),
+    ...(findings.notes === undefined ? {} : { artifact_notes: findings.notes }),
+    ...(findings.verdict === undefined ? {} : { artifact_verdict: findings.verdict }),
+    ...(findings.moved_count === undefined ? {} : { artifact_moved_count: findings.moved_count }),
+    ...(findings.reuse_candidates_count === undefined
+      ? {} : { artifact_reuse_candidates_count: findings.reuse_candidates_count }),
+    ...(findings.evidence_count === undefined ? {} : { artifact_evidence_count: findings.evidence_count }),
+  };
+}) : shown;
+
 // The attempt NUMBER, derived from the same ordered array rather than a second
 // pass over the journal. Two rules make it the number the loop can act on:
 //
@@ -168,7 +251,7 @@ if (asJson) {
   // the two derived numbers beside it. `next_n` is the key deliver.md names, so
   // it is spelled in one place, here. A JSON consumer must never be handed the
   // prose line below, and an empty history is `events: []` with `next_n: 1`.
-  console.log(JSON.stringify({ ticket, attempts, next_n: nextN, events: shown }, null, 2));
+  console.log(JSON.stringify({ ticket, attempts, next_n: nextN, events: detailed }, null, 2));
   process.exit(0);
 }
 
@@ -201,7 +284,10 @@ const HIDDEN = new Set(['ts', 'event', 'ticket', 'by']);
 const ORDER = [
   'n', 'role', 'model', 'effort', 'effort_applied', 'task_level', 'runtime',
   'backend', 'agent_file', 'observed_model', 'observed_effort', 'pr', 'signature',
-  'head', 'outcome', 'pushed', 'verdict', 'reason', 'hypothesis',
+  'head', 'artifact_ref', 'artifact_digest', 'artifact_historical',
+  'artifact_hypothesis', 'artifact_notes', 'artifact_verdict',
+  'artifact_moved_count', 'artifact_reuse_candidates_count', 'artifact_evidence_count',
+  'outcome', 'pushed', 'verdict', 'reason', 'hypothesis',
 ];
 
 // A hypothesis is a sentence. Quoted, it stays ONE field instead of shredding
@@ -211,7 +297,7 @@ const value = (v) => {
   return s === '' || /[\s"]/.test(s) ? JSON.stringify(s) : s;
 };
 
-for (const e of shown) {
+for (const e of detailed) {
   const keys = [
     ...ORDER.filter((k) => Object.prototype.hasOwnProperty.call(e, k)),
     ...Object.keys(e).filter((k) => !HIDDEN.has(k) && !ORDER.includes(k)),

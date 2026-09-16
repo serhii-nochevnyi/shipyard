@@ -63,23 +63,69 @@ const workflowApplicationEvidence = ({ result }) => {
 const workflowArtifactConsumer = ({ artifact, result, record }) => {
   const ref = `${artifact && artifact.worktreePath ? artifact.worktreePath : '/test-worktree'}/.shipyard-role-artifact.json`;
   const evidenceIndex = {
-    path: '.shipyard-evidence.md',
+    path: artifact && artifact.role === 'drift-check'
+      ? '.shipyard-drift-evidence.md'
+      : artifact && ['ci-fix', 'review-fix'].includes(artifact.role)
+        ? '.shipyard-repair-evidence.md'
+        : '.shipyard-evidence.md',
     bytes: 0,
     content_bytes: 0,
     sha256: '0'.repeat(64),
     digest: '0'.repeat(64),
   };
-  const envelope = {
-    schema: 'shipyard.executor-result.v1',
-    version: 1,
-    role: artifact && artifact.role ? artifact.role : record.receipt.role,
-    ticket: artifact && artifact.ticket ? artifact.ticket : record.ticket,
-    outcome: result.status,
-    actionable_delta: null,
-    summary: typeof result.summary === 'string' ? result.summary.slice(0, 500) : '',
-    blocking_count: result.blocking_count || 0,
-    evidence_index: evidenceIndex,
+  const role = artifact && artifact.role ? artifact.role : record.receipt.role;
+  const ticket = artifact && artifact.ticket ? artifact.ticket : record.ticket;
+  const findingsIndex = {
+    path: `.shipyard-role-artifacts/${record.receipt.dispatch_id}/findings.json`,
+    bytes: 0,
+    sha256: '0'.repeat(64),
   };
+  const envelope = ['ci-fix', 'review-fix'].includes(role)
+    ? {
+        schema: `shipyard.repair-result.v1`,
+        version: 1,
+        role,
+        ticket,
+        subject: ticket,
+        pr: artifact.pr || result.pr || 1,
+        status: result.status || 'escalate',
+        pushed: typeof result.pushed === 'boolean' ? result.pushed : false,
+        summary: typeof result.notes === 'string' ? result.notes.slice(0, 500) : '',
+        notes: typeof result.notes === 'string' ? result.notes.slice(0, 500) : '',
+        hypothesis: typeof result.hypothesis === 'string' ? result.hypothesis.slice(0, 500) : 'test hypothesis',
+        evidence_index: evidenceIndex,
+        evidence_index_ref: evidenceIndex,
+        findings_index: findingsIndex,
+        findings_index_ref: findingsIndex,
+      }
+    : role === 'drift-check'
+      ? {
+          schema: 'shipyard.drift-result.v1',
+          version: 1,
+          role,
+          ticket,
+          subject: ticket,
+          verdict: result.verdict || 'fresh',
+          moved_count: Array.isArray(result.moved) ? result.moved.length : 0,
+          reuse_candidates_count: Array.isArray(result.reuse_candidates) ? result.reuse_candidates.length : 0,
+          evidence_count: Array.isArray(result.evidence) ? result.evidence.length : 0,
+          summary: typeof result.summary === 'string' ? result.summary.slice(0, 500) : '',
+          evidence_index: evidenceIndex,
+          evidence_index_ref: evidenceIndex,
+          findings_index: findingsIndex,
+          findings_index_ref: findingsIndex,
+        }
+      : {
+          schema: 'shipyard.executor-result.v1',
+          version: 1,
+          role,
+          ticket,
+          outcome: result.status,
+          actionable_delta: null,
+          summary: typeof result.summary === 'string' ? result.summary.slice(0, 500) : '',
+          blocking_count: result.blocking_count || 0,
+          evidence_index: evidenceIndex,
+        };
   return {
     schema: 'shipyard.role-artifact.v1',
     artifact_ref: ref,
@@ -87,6 +133,7 @@ const workflowArtifactConsumer = ({ artifact, result, record }) => {
     artifact_digest: '1'.repeat(64),
     envelope,
     evidence_index: evidenceIndex,
+    ...(envelope.findings_index ? { findings_index: findingsIndex } : {}),
   };
 };
 const testDispatchFactory = (options) => createClaudeWorkflowDispatch({
