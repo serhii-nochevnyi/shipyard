@@ -74,6 +74,14 @@ function isBoundaryVerifiedReceipt(receipt) {
   return isObject(receipt) && BOUNDARY_VERIFIED_RECEIPTS.has(receipt);
 }
 
+// The durable recorder is a trust root for repair receipts. Expose only a
+// predicate, never the private WeakSet, so adapters and hosts can reject
+// frozen structural lookalikes before a workflow is evaluated.
+function isDurableRecorder(recorder) {
+  return !!recorder && (typeof recorder === 'function' || typeof recorder === 'object')
+    && DURABLE_RECORDERS.has(recorder);
+}
+
 // A recorder is the durable owner of dispatch identity. Explicit recorder
 // injection remains supported for small in-process callers, so this table
 // supplies instance/process uniqueness for that opt-in contract. Adapter
@@ -2182,6 +2190,7 @@ module.exports = Object.freeze({
   generatedAgentEvidence,
   validateGsdRole,
   isBoundaryVerifiedReceipt,
+  isDurableRecorder,
   resolveDispatch,
   validateDispatch,
   dispatch,

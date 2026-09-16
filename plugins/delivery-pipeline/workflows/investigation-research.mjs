@@ -29,7 +29,6 @@ const OUT = {
 }
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
-const cap = (value) => String(value || '').slice(0, 500)
 
 let argv
 if (typeof args === 'string') {
@@ -91,6 +90,32 @@ const withoutAgentReceipt = (value) => {
   return safe
 }
 
+const invalidResult = (line, reason) => {
+  const error = new Error(`research line ${line.id} returned an invalid result: ${reason}`)
+  error.name = 'InvestigationResearchResultError'
+  error.code = 'INVALID_RESULT'
+  return error
+}
+
+const validateResult = (line, value) => {
+  if (!isObject(value)) throw invalidResult(line, 'result must be an object')
+  const result = withoutAgentReceipt(value)
+  const allowed = new Set(['id', 'status', 'summary', 'draft'])
+  const unknown = Object.keys(result).filter((key) => !allowed.has(key))
+  if (unknown.length) throw invalidResult(line, `unexpected field(s): ${unknown.join(', ')}`)
+  if (result.id !== line.id) throw invalidResult(line, `id must be ${line.id}`)
+  if (result.status !== 'completed' && result.status !== 'blocked') {
+    throw invalidResult(line, 'status must be completed or blocked')
+  }
+  if (typeof result.summary !== 'string' || result.summary.length > 500) {
+    throw invalidResult(line, 'summary must be a string of at most 500 characters')
+  }
+  if (result.draft !== undefined && typeof result.draft !== 'string') {
+    throw invalidResult(line, 'draft must be a string when present')
+  }
+  return result
+}
+
 const linePrompt = (line) => [
   `You are the ${line.label} research worker for investigation ${argv.invId}.`,
   `Read the full research contract from: ${argv.referencePath}.`,
@@ -118,6 +143,11 @@ return await parallel(lines.map((line) => async () => {
       role: 'research',
       model: line.model,
       effort: line.effort,
+      // Investigation research is a Shipyard research fan-out, not one of
+      // the three named GSD decomposition callbacks. Keep the boundary
+      // explicit about that distinction; a GSD role must be supplied by the
+      // decomposition host, while this workflow must not invent one.
+      requireGsdRole: false,
       signals: line.signals,
       context: {
         ticket: argv.invId,
@@ -134,29 +164,15 @@ return await parallel(lines.map((line) => async () => {
     if (!dispatched || !dispatched.receipt || dispatched.receipt.compliance !== 'verified') {
       throw new Error(`research line ${line.id} completed without a boundary-verified receipt`)
     }
-    const result = dispatched.result
-    if (!isObject(result)) {
-      return {
-        id: line.id,
-        status: 'blocked',
-        summary: `research line ${line.id} returned no structured result`,
-        receipt: dispatched.receipt,
-      }
-    }
+    const result = validateResult(line, dispatched.result)
     return {
-      ...withoutAgentReceipt(result),
-      id: line.id,
-      status: result.status === 'blocked' ? 'blocked' : 'completed',
-      summary: cap(result.summary || `research line ${line.id} completed`),
-      ...(typeof result.draft === 'string' ? { draft: result.draft } : {}),
+      ...result,
       receipt: dispatched.receipt,
     }
   } catch (error) {
-    if (error && (error.name === 'DispatchBoundaryError' || error.name === 'DispatchPolicyError')) throw error
-    return {
-      id: line.id,
-      status: 'blocked',
-      summary: cap(`research line ${line.id} failed: ${error && error.message ? error.message : error}`),
-    }
+    // A host/bridge failure or malformed agent result is a failed workflow,
+    // not an ordinary blocked research line. Only an explicit `status:
+    // blocked` result is allowed to enter the artifact stream as blocked.
+    throw error
   }
 }))

@@ -1796,7 +1796,7 @@ test('the boundary launches every native base and escalation tuple for both runt
         'review-fix': ['gpt-5.6-luna', 'max'],
       },
       claude: {
-        research: ['sonnet', 'high'],
+        research: ['opus', 'medium'],
         decomposition: ['opus', 'medium'],
         executor: ['sonnet', 'max'],
         'pr-sentinel': ['sonnet', 'high'],
@@ -1815,10 +1815,10 @@ test('the boundary launches every native base and escalation tuple for both runt
       ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6-astra', 'medium'],
       ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
       ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
-      ['claude', 'research', { type: 'alternatives' }, 'alternatives', 'opus', 'medium'],
-      ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'fable', 'medium'],
-      ['claude', 'decomposition', { checkpoint: true }, 'critical', 'fable', 'medium'],
-      ['claude', 'executor', { critical: true }, 'critical', 'opus', 'high'],
+      ['claude', 'research', { type: 'alternatives' }, 'base', 'opus', 'medium'],
+      ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'max'],
+      ['claude', 'decomposition', { checkpoint: true }, 'critical', 'opus', 'max'],
+      ['claude', 'executor', { critical: true }, 'critical', 'opus', 'low'],
       ['claude', 'integrator', { contested: true }, 'critical', 'opus', 'high'],
       ['claude', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'medium'],
     ];

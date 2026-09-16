@@ -54,11 +54,17 @@ Read `.planning/investigations/` (may not exist):
    the routed `pipeline-config.cjs` `resolveDispatch` bridge before launching.
    Never call the compatibility `pipeline-config.cjs model` reader, compose a
    model or effort in this command, or let a session/default selection leak into
-   the launch. For Claude, the base is Opus/medium and only an explicit
+   the launch. For the Workflow runtime, the base is Opus/medium and only an explicit
    `complexity: very-complex` signal escalates research to Opus/max; the
    `alternatives` line does not promote the rung. For Codex, the base is
    Astra/low and the same explicit very-complex signal escalates to Astra/medium.
-   Keep the resolved `{ model, effort, signals }` on every line.
+   Keep the resolved `{ model, effort, signals }` on every line. For Codex,
+   pass those exact signals to the selector for each line — for example,
+   `--type alternatives` for the alternatives line and
+   `--complexity very-complex` for the explicitly very-complex line — and
+   preserve the selector's returned model/file and effort when calling the
+   boundary. Do not select once for the fan-out and do not re-resolve a line
+   from its model/effort pair.
 
    For the Workflow runtime, invoke `${CLAUDE_PLUGIN_ROOT}/workflows/investigation-research.mjs`
    through the production host binding
@@ -70,8 +76,11 @@ Read `.planning/investigations/` (may not exist):
    native Agent tool, a generic session, an in-process fallback, or a direct
    `agent()` call. For Codex, use the generated agent selected by
    `codex-agent.cjs select research --json --capabilities-file
-   ${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json` and the same dispatch boundary
-   via `createCodexDispatchAdapter`; do not call `spawn_agent` directly.
+   ${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json [canonical line signals]` and
+   the same dispatch boundary via `createCodexDispatchAdapter`; do not call
+   `spawn_agent` directly. The selector's `--json` result is preflight
+   evidence, not launch authority by itself: the returned selection must still
+   cross `createDispatchBoundary` and produce a durable application receipt.
 
    Accept a research result only after its durable boundary receipt is verified.
    Pass each line the problem statement, the INV path, and the brief

@@ -898,7 +898,8 @@ test('delivery launch docs route every role through the boundary and the generat
   ]) {
     assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
   }
-  for (const [name, doc] of [['deliver', deliver], ['pr-sentinel', sentinel]]) {
+  const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
+  for (const [name, doc] of [['deliver', deliver], ['pr-sentinel', sentinel], ['investigate', investigate]]) {
     assert.ok(doc.includes('Workflow runtime'), `${name} must name the Workflow runtime by mechanism`);
     assert.ok(!/\bClaude\b/.test(doc), `${name} must not use converter-rewritten Claude prose`);
   }
@@ -1012,7 +1013,7 @@ test('every GSD callback requires routed configuration validation on both runtim
 
       const conflicting = runtime === 'codex'
         ? { pipeline: { models: { research: 'sonnet' } } }
-        : { pipeline: { fable: 'auto', models: { research: 'opus' } } };
+        : { pipeline: { fable: 'auto', models: { research: 'sonnet' } } };
       const badConfig = writeConfig(runtime, conflicting);
       assert.throws(
         () => pipelineConfig.resolveDispatch({
@@ -1903,7 +1904,7 @@ test('the routed-launch source sweep rejects native launches in shipped Markdown
 
 const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
   'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '6fd1478f8b6a26098e4b86485541cf20be371675aa2cf424b8dd7902433540bc',
-  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '453e6ff85d0ee303eb31f810a3e1fdb6f38569f20b6ba2059c68eca4188bcfef',
+  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '712a83e2a496b5ac1e2e3f139ff69173837230e19e4d945b2e3808092d9dc72e',
 });
 
 test('Claude palette and provider adapter sources match their checked-in baselines and remain native', () => {

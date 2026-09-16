@@ -177,11 +177,12 @@ mismatched cases as well as the successful typed path.
 declares the callback contract; the production Workflow host binding is
 `${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs`. It injects the typed
 `__createClaudeWorkflowDispatch` callback as the sixth workflow binding and
-keeps capabilities, the durable recorder, and application evidence outside
-serializable `args`. The host must provide and enforce the named-role and
-launch-mechanism attestations, then invoke `boundary.dispatch` for the three
-callbacks. Until that binding exists, treat the callback as unavailable and
-stop before launch. `context.gsd_role`,
+keeps capabilities, the durable recorder, application evidence, and the
+optional host-owned `typedGsdCallback` outside serializable `args`. The host
+must provide and enforce the named-role and launch-mechanism attestations,
+then invoke `boundary.dispatch` for the three callbacks. When the
+`typedGsdCallback` resource is absent, the host must refuse the named callback
+before launch; a generic `agent` binding is not a substitute. `context.gsd_role`,
 `agentType`, `agent_type`, bare Agent/Task markers, and self-asserted
 application evidence are not attestation; this command and its source-contract
 fixtures must not simulate them.

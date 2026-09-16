@@ -21,6 +21,13 @@ const CAPABILITIES = Object.freeze({
   observedEffort: true,
 });
 
+const OPUS_CAPABILITIES = Object.freeze({
+  supportedModels: [CLAUDE_MODEL_ALIASES.opus],
+  supportedEfforts: ['medium'],
+  observedModel: true,
+  observedEffort: true,
+});
+
 suite('claude-workflow-host — production sixth binding');
 
 test('binds the real workflow bridge with host-owned receipt services', async () => {
@@ -91,6 +98,88 @@ test('refuses before evaluating a workflow when the host bridge is incomplete', 
       /durable receipt recorder is required/
     );
     assert.equal(launches, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('routes a named GSD callback through the host-owned typed resource', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-workflow-typed-host-'));
+  const scriptPath = path.join(root, 'workflow.mjs');
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  fs.writeFileSync(scriptPath, `
+export const meta = { name: 'typed-host-test' }
+return await __createClaudeWorkflowDispatch({
+  agent,
+  prompt: 'typed GSD prompt',
+  role: 'decomposition',
+  model: 'opus',
+  effort: 'medium',
+  gsdRole: 'gsd-planner',
+  context: { ticket: 'T-36-typed-host-test' },
+})
+`);
+  let genericCalls = 0;
+  let typedCalls = 0;
+  try {
+    const value = await runClaudeWorkflow({
+      scriptPath,
+      agent: async () => {
+        genericCalls++;
+        throw new Error('generic callback must not run for a typed GSD dispatch');
+      },
+      typedGsdCallback: async (prompt, options, gsdRole) => {
+        typedCalls++;
+        return {
+          prompt,
+          launch_id: 'typed-host-launch',
+          applied_model: options.model,
+          applied_effort: options.effort,
+          observed_model: options.model,
+          observed_effort: options.effort,
+          gsd_role: gsdRole,
+          gsd_launch_mechanism: options.gsd_launch_mechanism,
+        };
+      },
+      parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+      capabilities: OPUS_CAPABILITIES,
+      recorder,
+      applicationEvidence: ({ result }) => result,
+    });
+    assert.equal(typedCalls, 1);
+    assert.equal(genericCalls, 0);
+    assert.equal(value.receipt.gsd_role, 'gsd-planner');
+    assert.equal(value.receipt.gsd_launch_mechanism, 'typed-gsd-callback');
+    assert.equal(value.receipt.applied_model, 'opus');
+    assert.equal(value.receipt.applied_effort, 'medium');
+    assert.ok(recorder.getVerifiedRecord(value.receipt.dispatch_id));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects a frozen structural recorder lookalike before workflow evaluation', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-workflow-lookalike-'));
+  const scriptPath = path.join(root, 'workflow.mjs');
+  fs.writeFileSync(scriptPath, 'return []\n');
+  const lookalike = Object.freeze({
+    reserve() {},
+    record() {},
+    getReceipt() { return null; },
+    getVerifiedRecord() { return null; },
+  });
+  try {
+    await assert.rejects(
+      () => runClaudeWorkflow({
+        scriptPath,
+        agent: async () => {},
+        parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+        capabilities: CAPABILITIES,
+        recorder: lookalike,
+        applicationEvidence: () => ({}),
+      }),
+      /frozen durable receipt recorder is required/
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

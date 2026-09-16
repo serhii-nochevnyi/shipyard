@@ -38,7 +38,7 @@ test('dispatches all four lines through the typed boundary and returns verified 
   const agent = async (prompt, options) => {
     calls.push({ prompt, options });
     const result = {
-      id: options.label,
+      id: options.label.split(':').pop(),
       status: 'completed',
       summary: `${options.label} completed`,
       draft: `draft for ${options.label}`,
@@ -95,6 +95,53 @@ test('dispatches all four lines through the typed boundary and returns verified 
       assert.match(call.prompt, new RegExp(`Research line: ${line.id}`));
       assert.match(call.prompt, /Rule zero:/);
     }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects a malformed research response instead of normalizing it to completed', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-investigation-research-invalid-'));
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  const evidence = new WeakMap();
+  const agent = async (_prompt, options) => {
+    const result = { id: options.label.split(':').pop(), status: 'succeeded', summary: 'not a contract status' };
+    evidence.set(result, {
+      launch_id: `investigation-research-invalid-${options.label}`,
+      applied_model: options.model,
+      applied_effort: options.effort,
+      observed_model: options.model,
+      observed_effort: options.effort,
+    });
+    return result;
+  };
+  const dispatch = (options) => createClaudeWorkflowDispatch({
+    ...options,
+    capabilities,
+    recorder,
+    applicationEvidence: ({ result }) => evidence.get(result),
+  });
+
+  try {
+    await assert.rejects(
+      () => new AsyncFunction(
+        'agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch', source
+      )(
+        agent,
+        async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+        () => {},
+        () => {},
+        {
+          invId: 'INV-INVALID',
+          invPath: '/inv',
+          problemStatement: 'test',
+          referencePath: '/ref',
+          lines,
+        },
+        dispatch,
+      ),
+      (error) => error && error.code === 'INVALID_RESULT' && /status must be completed or blocked/.test(error.message),
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

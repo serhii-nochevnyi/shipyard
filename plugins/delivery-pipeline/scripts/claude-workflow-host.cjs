@@ -6,13 +6,10 @@
 // the durable recorder, and application evidence stay in this closure.
 const fs = require('node:fs');
 const { createClaudeWorkflowDispatch } = require('./claude-dispatch-adapter.cjs');
+const { isDurableRecorder } = require('./dispatch-boundary.cjs');
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const WORKFLOW_PARAMETERS = ['agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch'];
-const RECORDER_METHODS = [
-  'reserve', 'record', 'finalize', 'getVerifiedRecord', 'getLatestReceipt',
-  'claim', 'release', 'renewClaim', 'consume',
-];
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -25,11 +22,7 @@ function reject(message) {
 }
 
 function durableRecorder(value) {
-  return object(value)
-    && Object.isFrozen(value)
-    && typeof value.storeDir === 'string'
-    && value.storeDir.trim() !== ''
-    && RECORDER_METHODS.every((method) => typeof value[method] === 'function');
+  return isDurableRecorder(value);
 }
 
 function hostResource(options, name) {
@@ -46,14 +39,23 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   const capabilities = hostResource(options, 'capabilities');
   const recorder = hostResource(options, 'recorder');
   const applicationEvidence = hostResource(options, 'applicationEvidence');
+  const typedGsdCallback = hostResource(options, 'typedGsdCallback');
   if (!object(capabilities)) reject('explicit host capabilities are required');
   if (!durableRecorder(recorder)) reject('a frozen durable receipt recorder is required');
   if (typeof applicationEvidence !== 'function') reject('host application evidence is required');
+  if (typedGsdCallback !== undefined && typeof typedGsdCallback !== 'function') {
+    reject('typedGsdCallback must be a function when provided');
+  }
 
   // These are the only resources the workflow bridge can trust. A workflow's
   // JSON args may contain same-named values for compatibility, but they cannot
   // replace this host-owned closure.
-  const host = Object.freeze({ capabilities, recorder, applicationEvidence });
+  const host = Object.freeze({
+    capabilities,
+    recorder,
+    applicationEvidence,
+    ...(typedGsdCallback ? { typedGsdCallback } : {}),
+  });
   return Object.freeze((dispatchOptions = {}) => {
     if (!object(dispatchOptions)) reject('dispatch options must be an object');
     return createClaudeWorkflowDispatch({

@@ -533,7 +533,7 @@ reinit is not optional.
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
   delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
-  `dispatch-record.cjs mark <T> <role> --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <rung> --graph <project>/.planning/graph`
+  `dispatch-record.cjs mark <T> <role> --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as

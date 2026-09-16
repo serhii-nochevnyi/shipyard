@@ -11,6 +11,7 @@ const {
   createDispatchBoundary,
   GSD_LAUNCH_MECHANISM,
   validateGsdRole,
+  isDurableRecorder,
 } = require('./dispatch-boundary.cjs');
 
 const REPAIR = 'Install an ADR-014-capable Claude host with explicit workflow model and effort support; provide current host capabilities and retry the exact selection.';
@@ -35,12 +36,7 @@ function object(value) {
 }
 
 function durableRecorder(value) {
-  return object(value)
-    && Object.isFrozen(value)
-    && typeof value.storeDir === 'string'
-    && value.storeDir.trim() !== ''
-    && ['reserve', 'record', 'finalize', 'getVerifiedRecord', 'getLatestReceipt', 'claim', 'release', 'renewClaim', 'consume']
-      .every((method) => typeof value[method] === 'function');
+  return isDurableRecorder(value);
 }
 
 function validateAvailability(resolution, capabilities) {
@@ -276,6 +272,9 @@ function createClaudeWorkflowDispatch(options = {}) {
   if (options.agentOptions !== undefined && !object(options.agentOptions)) {
     refuse('INVALID_INPUT', 'agentOptions must be an object');
   }
+  if (options.requireGsdRole !== undefined && typeof options.requireGsdRole !== 'boolean') {
+    refuse('INVALID_INPUT', 'requireGsdRole must be boolean when provided');
+  }
   const agentOptions = options.agentOptions === undefined ? {} : { ...options.agentOptions };
   if (options.signals !== undefined && !object(options.signals)) {
     refuse('INVALID_SIGNAL', 'signals must be an object');
@@ -369,7 +368,8 @@ function createClaudeWorkflowDispatch(options = {}) {
     },
   });
   const boundary = createDispatchBoundary({
-    adapters: { claude: adapter }, recorder, requireGsdRole: true,
+    adapters: { claude: adapter }, recorder,
+    requireGsdRole: options.requireGsdRole !== false,
   });
   const input = {
     runtime: 'claude',

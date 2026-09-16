@@ -473,14 +473,14 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
     tickets: [{
       ...TICKETS[0],
       model: 'opus',
-      effort: 'high',
+      effort: 'low',
       signals: combinedSignals,
     }],
   });
   assert.strictEqual(executor.calls.length, 1);
   assert.deepStrictEqual(
     [executor.calls[0].opts.model, executor.calls[0].opts.effort],
-    ['opus', 'high'],
+    ['opus', 'low'],
   );
   const executorRecord = WORKFLOW_RECORDER.getVerifiedRecord(executor.value[0].receipt.dispatch_id);
   assert.equal(executorRecord.resolution.logical_rung, 'critical');
