@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 21c160f88b6d84493806b12cbd6be2eb23a29400b564d0f16a2728601387c170 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 91e4942cc8b98b9c604cb5e8653c1d0460432d41a1d5215e87a51b3d23357a78 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -112,12 +112,12 @@
 - [x] **REQ-102**: Synchronization is local-only, atomic, idempotent, and checkable without mutation, with deterministic refusal on conflicting files or ambiguous plan/ticket identity.
 - [x] **REQ-103**: Claude and Codex consume the same canonical synchronizer through generated/bundled installer surfaces, with smoke coverage for both.
 - [ ] **REQ-104**: Sentinel stack guards accept the observed PR branch recorded for a validated ticket when GitHub's live branch name differs from the canonical graph slug, while preserving same-phase and checkpoint boundaries.
-- [ ] **REQ-105**: The delivery policy defines one versioned, role-scoped model ladder with explicit model, effort, and escalation signals for research, decomposition, execution, sentinel, integration, drift, architecture review, CI-fix, and review-fix.
-- [ ] **REQ-106**: Codex resolves the approved Terra/Sol/Luna/Astra concrete model IDs and efforts, generates/registers every required static variant, and fails closed on unavailable, stale, missing, or conflicting model configuration.
-- [ ] **REQ-107**: Claude Code consumes the canonical role/escalation decision via its existing palette without changing that palette, and both runtime adapters reject unsupported or implicit model/effort application.
-- [ ] **REQ-108**: Every routed dispatch, including decomposition and dynamic executor paths, passes through one mandatory resolve → validate → launch boundary; inline fallback, parent-session inheritance, and conflicting GSD or per-role overrides cannot bypass the selected model.
-- [ ] **REQ-109**: Repair escalation is evidence-backed (`Luna/max` → `Sol/medium` → `Astra/medium`), judgement escalation retains all fired signals, fixed Luna roles are not globally promoted, and missing prior application evidence prevents escalation.
-- [ ] **REQ-110**: Dispatch telemetry records policy fingerprint, logical rung, requested/applied/observed model and effort, runtime, backend, agent or launch identity, signals, and receipt; negative tests prove enforcement on both runtimes and preserve Claude palette files/configuration. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [x] **REQ-105**: The delivery policy defines one versioned, role-scoped model ladder with explicit model, effort, and escalation signals for research, decomposition, execution, sentinel, integration, drift, architecture review, CI-fix, and review-fix.
+- [x] **REQ-106**: Codex resolves the approved Terra/Sol/Luna/Astra concrete model IDs and efforts, generates/registers every required static variant, and fails closed on unavailable, stale, missing, or conflicting model configuration.
+- [x] **REQ-107**: Claude Code consumes the canonical role/escalation decision via its existing palette without changing that palette, and both runtime adapters reject unsupported or implicit model/effort application.
+- [x] **REQ-108**: Every routed dispatch, including decomposition and dynamic executor paths, passes through one mandatory resolve → validate → launch boundary; inline fallback, parent-session inheritance, and conflicting GSD or per-role overrides cannot bypass the selected model.
+- [x] **REQ-109**: Repair escalation is evidence-backed (`Luna/max` → `Sol/medium` → `Astra/medium`), judgement escalation retains all fired signals, fixed Luna roles are not globally promoted, and missing prior application evidence prevents escalation.
+- [x] **REQ-110**: Dispatch telemetry records policy fingerprint, logical rung, requested/applied/observed model and effort, runtime, backend, agent or launch identity, signals, and receipt; negative tests prove enforcement on both runtimes and preserve Claude palette files/configuration. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
 ## Out of Scope
 
@@ -234,12 +234,12 @@
 | REQ-102 | Phase 35 | Complete |
 | REQ-103 | Phase 35 | Complete |
 | REQ-104 | Phase 30 | In Progress |
-| REQ-105 | Phase 36 | In Progress |
-| REQ-106 | Phase 36 | In Progress |
-| REQ-107 | Phase 36 | In Progress |
-| REQ-108 | Phase 36 | In Progress |
-| REQ-109 | Phase 36 | In Progress |
-| REQ-110 | Phase 36 | In Progress |
+| REQ-105 | Phase 36 | Complete |
+| REQ-106 | Phase 36 | Complete |
+| REQ-107 | Phase 36 | Complete |
+| REQ-108 | Phase 36 | Complete |
+| REQ-109 | Phase 36 | Complete |
+| REQ-110 | Phase 36 | Complete |
 
 **Coverage:**
 - v1 requirements: 110 total

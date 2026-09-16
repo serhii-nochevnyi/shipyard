@@ -1,7 +1,7 @@
 # ADR-014 — mandatory runtime model ladder
 
 - **Status:** accepted
-- **Date:** 2026-09-12; amended 2026-09-14
+- **Date:** 2026-09-12; amended 2026-09-15
 - **Decision owner:** repository operator
 - **Scope:** Shipyard roles dispatched through Claude Code and Codex
 - **Supersedes:** ADR-005 and ADR-012 where they define model/effort selection
@@ -11,7 +11,7 @@
 The delivery pipeline currently has a shared classifier, a Claude tier resolver,
 generated Codex agent files, and several runtime-specific launch callers. Those
 surfaces are not one executable contract. Codex currently exposes a two-entry
-Terra/Astra palette, decomposition is outside the delivery role list, and
+Astra compatibility palette, decomposition is outside the delivery role list, and
 inline or child-thread paths can inherit the parent session model. Claude
 callers can also substitute literal defaults after a route was resolved.
 
@@ -28,7 +28,7 @@ model IDs or provider configuration is explicitly out of scope.
 ### 1. One boundary contract, two independent runtime grids
 
 Shipyard defines one versioned dispatch contract, but each runtime owns an
-independent role/rung/model grid. Claude does not resolve Codex's Terra/Sol/Luna/Astra
+independent role/rung/model grid. Claude does not resolve Codex's Luna/Astra
 logical names through aliases. Its grid names the existing Claude Code aliases
 directly. Generated Codex `.toml` files are adapter output and never an
 independent policy source.
@@ -37,8 +37,6 @@ Codex model IDs are:
 
 | Logical model | Concrete Codex model |
 |---|---|
-| Terra | `gpt-5.6-terra` |
-| Sol | `gpt-5.6-sol` |
 | Luna | `gpt-5.6-luna` |
 | Astra | `gpt-6-astra` |
 
@@ -54,25 +52,24 @@ Claude's existing native palette is:
 
 | Role | Base selection | Escalation 1 | Escalation 2 | Escalation signals |
 |---|---|---|---|---|
-| research | Terra/high | Sol/medium | Astra/medium | `alternatives`; explicit `very-complex` |
-| decomposition | Sol/medium | — | Astra/medium | explicit `critical` or `checkpoint` |
-| executor | Luna/max | Astra/medium | — | explicit `critical` or `checkpoint` |
+| research | Astra/low | — | Astra/medium | explicit `very-complex` |
+| decomposition | Astra/low | — | Astra/medium | explicit `critical` or `checkpoint` |
+| executor | Luna/max | Astra/low | — | explicit `critical` or `checkpoint` |
 | pr-sentinel | Luna/medium | — | — | gate strategy only |
-| integrator | Sol/medium | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
+| integrator | Astra/low | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
 | drift-check | Luna/max | — | — | evidence/gate strategy only |
-| arch-review | Sol/medium | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
-| ci-fix | Luna/max | Sol/medium | Astra/medium | verified `repeat`; `repeat_exhausted` |
-| review-fix | Luna/max | Sol/medium | Astra/medium | verified `repeat`; `repeat_exhausted` |
+| arch-review | Astra/low | — | Astra/medium | `contested`, explicit `critical`/`checkpoint`, measured window |
+| ci-fix | Luna/max | Astra/low | Astra/medium | verified `repeat`; `repeat_exhausted` |
+| review-fix | Luna/max | Astra/low | Astra/medium | verified `repeat`; `repeat_exhausted` |
 
-For research, `alternatives` selects the middle rung; it does not by itself
-mean `very-complex`. A very-complex classification is explicit and durable in
-the dispatch input. Executor keeps Luna/max for its ordinary lane and selects
-Astra/medium only from explicit `critical` or `checkpoint` evidence; global
-risk, context-window pressure, and normal complexity do not promote it. For
-repair roles, `repeat` is valid only when the previous Luna launch has an
-applied receipt; `repeat_exhausted` is valid only when the previous Sol launch
-has an applied receipt. A terminal `flake` or `plan_defect` is a gate/strategy
-outcome, not an automatic model promotion.
+Research promotes only on an explicit, durable `very-complex` classification.
+Executor keeps Luna/max for its ordinary lane and selects Astra/low only from
+explicit `critical` or `checkpoint` evidence; global risk, context-window
+pressure, and normal complexity do not promote it. For repair roles, `repeat`
+is valid only when the previous Luna launch has an applied receipt;
+`repeat_exhausted` is valid only when the previous Astra/low launch has an
+applied receipt. A terminal `flake` or `plan_defect` is a gate/strategy outcome,
+not an automatic model promotion.
 
 ### 3. Approved Claude Code role ladder
 
@@ -81,9 +78,9 @@ aliases as its model keys:
 
 | Role | Base selection | Escalation 1 | Escalation 2 | Escalation signals |
 |---|---|---|---|---|
-| research | Sonnet/high | Opus/medium | Fable/medium | `alternatives`; explicit `very-complex` |
-| decomposition | Opus/medium | — | Fable/medium | explicit `critical` or `checkpoint` |
-| executor | Sonnet/max | Opus/high | — | explicit `critical` or `checkpoint` |
+| research | Opus/medium | Opus/max | — | explicit `very-complex` |
+| decomposition | Opus/medium | Opus/max | — | explicit `critical` or `checkpoint` |
+| executor | Sonnet/max | Opus/low | — | explicit `critical` or `checkpoint` |
 | pr-sentinel | Sonnet/high | — | — | gate strategy only |
 | integrator | Opus/medium | Opus/high | — | `contested`, explicit `critical`/`checkpoint`, measured window |
 | drift-check | Opus/max | — | — | evidence/gate strategy only |
@@ -94,6 +91,11 @@ aliases as its model keys:
 For Claude architecture review, explicit critical/checkpoint/contested evidence
 selects Opus/max. Measured input above the policy window threshold selects the
 Fable/medium ceiling; when both classes of evidence fire, the ceiling wins.
+Research's `alternatives` classification is retained as evidence but does not
+promote the base Opus/medium rung; only an explicit `very-complex` classification
+selects Opus/max. Decomposition's explicit critical/checkpoint escalation also
+stays within the Opus palette at max effort, and executor's critical/checkpoint
+escalation uses Opus/low as its second rung.
 Claude repair roles require a boundary-verified receipt from the immediately
 preceding Claude rung. `repeat_exhausted` records a distinct receipt-chain
 state but remains at the requested Opus/max ceiling; it does not add a Fable
@@ -152,7 +154,7 @@ fields are enforcement failures and remain visible in reports.
 
 ### Positive
 
-- Codex can use Terra, Sol, Luna, and Astra for the roles that need them.
+- Codex uses Luna and Astra for the roles that need them.
 - Research, judgement, repair, and fixed mechanical lanes are distinguishable.
 - Claude retains its working model palette while its role/rung grid can evolve
   independently of Codex's model vocabulary.
@@ -166,7 +168,7 @@ fields are enforcement failures and remain visible in reports.
 - Some hosts cannot expose applied effort/model evidence; those launches will
   fail closed rather than be counted as compliant.
 - Existing ADR-005/012 documentation and tests must be amended so stale
-  Terra/Astra-only and `opus`-floor assertions do not recreate the old policy.
+  Terra/Sol and `opus`-floor assertions do not recreate the old policy.
 
 ## Scope fences
 

@@ -14,6 +14,7 @@ const canonicalPolicy = require('./model-policy-internal.cjs');
 const canonicalResolveDispatch = canonicalPolicy.resolveDispatch;
 const canonicalValidateResolution = canonicalPolicy.validateResolution;
 const canonicalStableStringify = canonicalPolicy.stableStringify;
+const { resolveTaskLevel } = require('./pipeline-config.cjs');
 
 const OBSERVATION_UNKNOWN = 'unknown';
 const CLAIM_TTL_MS = 60 * 60 * 1000;
@@ -29,6 +30,41 @@ const AUTHORITY_KEY_BYTES = 32;
 // predicate deliberately exposes verification but no way to mint membership.
 const BOUNDARY_VERIFIED_RECEIPTS = new WeakSet();
 
+// GSD's decomposition callbacks are a narrower contract than the logical
+// research/decomposition policy roles.  The coordinator supplies the exact
+// typed role, while the runtime host proves that it actually used the typed
+// callback.  A context field alone is intentionally insufficient evidence.
+const GSD_TYPED_ROLES = Object.freeze({
+  research: Object.freeze(['gsd-phase-researcher']),
+  decomposition: Object.freeze(['gsd-planner', 'gsd-plan-checker']),
+});
+const GSD_LAUNCH_MECHANISM = 'typed-gsd-callback';
+
+function validateGsdRole(resolution) {
+  if (!isObject(resolution) || resolution.gsd_role === undefined) return undefined;
+  const role = resolution.gsd_role;
+  const allowed = GSD_TYPED_ROLES[resolution.role];
+  if (typeof role !== 'string' || role.trim() === '' || !allowed || !allowed.includes(role)) {
+    refuse('INVALID_RESOLUTION', `GSD typed role ${JSON.stringify(role)} is not valid for ${resolution && resolution.role}`, {
+      role: resolution && resolution.role,
+      gsd_role: role,
+      allowed: allowed || [],
+    });
+  }
+  return role;
+}
+
+function gsdRoleFromInput(input, resolution) {
+  if (Object.prototype.hasOwnProperty.call(input, 'gsdRole')) {
+    refuse('UNSUPPORTED_SELECTION', 'gsdRole is not part of the ADR-014 resolver interface; use gsd_role');
+  }
+  if (!Object.prototype.hasOwnProperty.call(input, 'gsd_role')) return undefined;
+  if (typeof input.gsd_role !== 'string' || input.gsd_role.trim() === '') {
+    refuse('INVALID_INPUT', 'gsd_role must be a non-empty typed GSD role');
+  }
+  return validateGsdRole({ ...resolution, gsd_role: input.gsd_role });
+}
+
 function markBoundaryVerifiedReceipt(receipt) {
   if (isObject(receipt)) BOUNDARY_VERIFIED_RECEIPTS.add(receipt);
   return receipt;
@@ -36,6 +72,14 @@ function markBoundaryVerifiedReceipt(receipt) {
 
 function isBoundaryVerifiedReceipt(receipt) {
   return isObject(receipt) && BOUNDARY_VERIFIED_RECEIPTS.has(receipt);
+}
+
+// The durable recorder is a trust root for repair receipts. Expose only a
+// predicate, never the private WeakSet, so adapters and hosts can reject
+// frozen structural lookalikes before a workflow is evaluated.
+function isDurableRecorder(recorder) {
+  return !!recorder && (typeof recorder === 'function' || typeof recorder === 'object')
+    && DURABLE_RECORDERS.has(recorder);
 }
 
 // A recorder is the durable owner of dispatch identity. Explicit recorder
@@ -262,6 +306,11 @@ function createDurableRecorder(storeDir) {
     return {
       dispatch_id: dispatchId,
       purpose,
+      // Projection owns the fenced section through a synchronous graph+journal
+      // commit. That callback cannot run a heartbeat while the event loop is
+      // blocked, so a live owner must not be treated as stale merely because
+      // the recovery TTL elapsed. A dead process remains recoverable below.
+      fenced_until_release: purpose === 'projection',
       lock_token: newFenceToken(),
       owner_pid: process.pid,
       acquired_at: new Date(now).toISOString(),
@@ -281,7 +330,19 @@ function createDurableRecorder(storeDir) {
       if (!error || error.code !== 'ENOENT') throw error;
     }
   };
+  const lockOwnerIsAlive = (lock) => {
+    if (!lock || lock.fenced_until_release !== true) return false;
+    const pid = Number(lock.owner_pid);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return Boolean(error && error.code === 'EPERM');
+    }
+  };
   const lockIsStale = (lock) => {
+    if (lockOwnerIsAlive(lock)) return false;
     const leaseExpiresAt = lock && typeof lock.lease_expires_at === 'string'
       ? Date.parse(lock.lease_expires_at)
       : lock && typeof lock.acquired_at === 'string'
@@ -639,6 +700,13 @@ function createDurableRecorder(storeDir) {
       const stored = readStored(latestFile(runtime, role));
       return stored ? stored.payload : null;
     },
+    isConsumed(dispatchId) {
+      // The record remains readable as audit history after a repair consumes
+      // it, but it can no longer authorize another consumer. A repair commit
+      // has the same terminal meaning while recovering a partially completed
+      // repair: claim() already treats it as consumed before a marker exists.
+      return fs.existsSync(consumedFile(dispatchId)) || Boolean(recoverRepairCommit(dispatchId));
+    },
     claim(dispatchId, consumerId) {
       try {
         if (fs.existsSync(consumedFile(dispatchId))) return { claimed: false };
@@ -726,6 +794,39 @@ function createDurableRecorder(storeDir) {
         throw boundaryError('RECORD_FAILED', `durable receipt claim renewal failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
+    withClaim(dispatchId, consumerId, claimAuthority, callback) {
+      if (typeof callback !== 'function') {
+        throw boundaryError('INVALID_INPUT', 'durable receipt claim fence requires a callback', { dispatch_id: dispatchId });
+      }
+      try {
+        // The projection writer holds this same fenced lock while it mutates
+        // dispatch-record's graph. A separate repair can therefore neither
+        // take over nor consume the receipt between the ownership check and
+        // the projection commit. A heartbeat alone is insufficient: it would
+        // leave exactly that check→write gap open.
+        const lockOwner = acquireClaimLock(dispatchId, 'projection');
+        if (!lockOwner) return { committed: false };
+        try {
+          if (fs.existsSync(consumedFile(dispatchId))) return { committed: false };
+          const current = readJsonFile(claimFile(dispatchId));
+          if (!sameClaimFence(current, claimAuthority) || claimIsStale(current)) {
+            return { committed: false };
+          }
+          atomicReplaceJson(claimFile(dispatchId), claimPayload(
+            dispatchId,
+            consumerId,
+            current.generation,
+            current.claim_token,
+          ));
+          if (fs.existsSync(consumedFile(dispatchId))) return { committed: false };
+          return { committed: true, value: callback() };
+        } finally {
+          releaseClaimLock(dispatchId, lockOwner);
+        }
+      } catch (error) {
+        throw boundaryError('RECORD_FAILED', `durable receipt claim fence failed: ${error.message}`, { dispatch_id: dispatchId });
+      }
+    },
     consume(dispatchId, consumerId, claimAuthority) {
       try {
         const repairCommit = recoverRepairCommit(dispatchId);
@@ -806,6 +907,17 @@ function nonEmpty(value, label) {
     refuse('INVALID_RECEIPT', `${label} must be a non-empty, whitespace-free string`, { label });
   }
   return value;
+}
+
+function ticketFromContext(context) {
+  const ticket = typeof context === 'string'
+    ? context
+    : isObject(context) ? context.ticket : undefined;
+  if (ticket === undefined) return undefined;
+  if (typeof ticket !== 'string' || ticket.trim() === '' || /[\s\u0000-\u001f\u007f]/.test(ticket)) {
+    refuse('INVALID_INPUT', 'launch context ticket must be a non-empty, whitespace-free string');
+  }
+  return ticket;
 }
 
 function newDispatchId() {
@@ -1077,8 +1189,43 @@ function revalidateGeneratedAgent(resolution, adapter) {
 }
 
 function validateWithAdapter(resolution, adapter) {
-  canonicalValidateResolution(resolution, { requireDispatchId: true });
+  // The logical policy role and the typed GSD callback role are separate
+  // facts.  Validate the latter at the boundary before any adapter can
+  // reserve an id or invoke a generic launch method.
+  validateGsdRole(resolution);
+  // A Codex adapter may hold loader-private provenance for a dynamic effective
+  // model.  Validate its canonical ADR-014 selection, while preserving the
+  // effective model as the expected application result.  Other adapters (and
+  // ordinary canonical selections) have no such contract.
+  const effective = adapter && typeof adapter.effectiveResolution === 'function'
+    ? invokeSync(adapter.effectiveResolution, adapter, [resolution], 'adapter.effectiveResolution')
+    : null;
+  if (resolution.runtime === 'codex' && effective !== null) {
+    refuse('INVALID_RESOLUTION', 'Codex adapters must validate the resolver canonical concrete model without an effective-model substitution');
+  }
+  const canonical = effective === null ? resolution : effective && effective.canonical;
+  if (effective !== null
+      && (!isObject(effective)
+        || !isObject(canonical)
+        || typeof effective.effective_model !== 'string'
+        || effective.effective_model.trim() === '')) {
+    refuse('INVALID_RESOLUTION', 'adapter effective selection must contain canonical resolution and concrete model');
+  }
+  canonicalValidateResolution(canonical, { requireDispatchId: true });
   adapterSupports(adapter, resolution);
+  let adapterValidated = false;
+  // Keep the adapter's repair guidance on a pre-existing static artifact
+  // failure, then independently inspect the published paths below to obtain
+  // the immutable boundary handoff.  This is intentionally limited to the
+  // concrete Codex adapter; generic adapters retain their existing hook order.
+  if (resolution.agent_file && adapter && adapter.runtime === 'codex' && typeof adapter.validate === 'function') {
+    const result = invokeSync(adapter.validate, adapter, [resolution], 'adapter.validate');
+    if (result === false || result && result.valid === false) {
+      const reason = result && typeof result.reason === 'string' ? `: ${result.reason}` : '';
+      refuse('UNSUPPORTED_SELECTION', `adapter validation refused the resolved selection${reason}`, { resolution });
+    }
+    adapterValidated = true;
+  }
   let validatedResolution = resolution;
   if (resolution.agent_file) {
     const evidence = generatedAgentEvidence(resolution, adapter)
@@ -1103,7 +1250,7 @@ function validateWithAdapter(resolution, adapter) {
     }
     validatedResolution = deepFreeze(snapshot({ ...resolution, agent_file_digest: evidence.agent_file_digest }));
   }
-  if (typeof adapter.validate === 'function') {
+  if (!adapterValidated && typeof adapter.validate === 'function') {
     const result = invokeSync(adapter.validate, adapter, [validatedResolution], 'adapter.validate');
     if (result === false || result && result.valid === false) {
       const reason = result && typeof result.reason === 'string' ? `: ${result.reason}` : '';
@@ -1111,6 +1258,23 @@ function validateWithAdapter(resolution, adapter) {
     }
   }
   return validatedResolution;
+}
+
+function expectedSelectionForReceipt(resolution, adapter) {
+  const effective = adapter && typeof adapter.effectiveResolution === 'function'
+    ? invokeSync(adapter.effectiveResolution, adapter, [resolution], 'adapter.effectiveResolution')
+    : null;
+  if (resolution.runtime === 'codex' && effective !== null) {
+    refuse('INVALID_RESOLUTION', 'Codex receipts must use the resolver canonical concrete model without an effective-model substitution');
+  }
+  if (effective === null) return { canonical: resolution, applied_model: resolution.model };
+  if (!isObject(effective)
+      || !isObject(effective.canonical)
+      || typeof effective.effective_model !== 'string'
+      || effective.effective_model.trim() === '') {
+    refuse('INVALID_RESOLUTION', 'adapter effective selection must contain canonical resolution and concrete model');
+  }
+  return { canonical: effective.canonical, applied_model: effective.effective_model };
 }
 
 function unwrapReceipt(value) {
@@ -1140,6 +1304,9 @@ function observedValue(receipt, field, applied, allowUnknown) {
 
 function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) {
   const receipt = unwrapReceipt(rawReceipt);
+  const expectedSelection = expectedSelectionForReceipt(resolution, options.adapter);
+  const canonical = expectedSelection.canonical;
+  const gsdRole = validateGsdRole(resolution);
   if (!isObject(receipt)) {
     refuse('MISSING_RECEIPT', 'launch did not return an application receipt; a successful process exit is not evidence of application');
   }
@@ -1155,6 +1322,7 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
     'applied_effort',
     'policy_hash',
   ];
+  if (gsdRole !== undefined) requiredFields.push('gsd_role', 'gsd_launch_mechanism');
   if (options.requireComplianceProof !== false) {
     requiredFields.push('compliance', 'compliance_proof');
   }
@@ -1180,15 +1348,27 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt dispatch_id does not match the boundary dispatch', { expected: resolution.dispatch_id, actual: receipt.dispatch_id });
   }
   nonEmpty(receipt.launch_id, 'launch_id');
-  if (receipt.requested_model !== resolution.requested_model || receipt.requested_effort !== resolution.requested_effort) {
+  if (gsdRole !== undefined) {
+    nonEmpty(receipt.gsd_role, 'gsd_role');
+    nonEmpty(receipt.gsd_launch_mechanism, 'gsd_launch_mechanism');
+    if (receipt.gsd_role !== gsdRole || receipt.gsd_launch_mechanism !== GSD_LAUNCH_MECHANISM) {
+      refuse('NONCOMPLIANT_RECEIPT', 'GSD application receipt does not attest the exact typed callback role and launch mechanism', {
+        expected: { gsd_role: gsdRole, gsd_launch_mechanism: GSD_LAUNCH_MECHANISM },
+        actual: { gsd_role: receipt.gsd_role, gsd_launch_mechanism: receipt.gsd_launch_mechanism },
+      });
+    }
+  } else if (receipt.gsd_role !== undefined || receipt.gsd_launch_mechanism !== undefined) {
+    refuse('NONCOMPLIANT_RECEIPT', 'a non-GSD launch cannot claim typed GSD callback attestation');
+  }
+  if (receipt.requested_model !== canonical.requested_model || receipt.requested_effort !== canonical.requested_effort) {
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt requested values do not match the immutable resolution', {
-      expected: { model: resolution.requested_model, effort: resolution.requested_effort },
+      expected: { model: canonical.requested_model, effort: canonical.requested_effort },
       actual: { model: receipt.requested_model, effort: receipt.requested_effort },
     });
   }
-  if (receipt.applied_model !== resolution.model || receipt.applied_effort !== resolution.effort) {
+  if (receipt.applied_model !== expectedSelection.applied_model || receipt.applied_effort !== canonical.effort) {
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt applied values do not match the resolved selection', {
-      expected: { model: resolution.model, effort: resolution.effort },
+      expected: { model: expectedSelection.applied_model, effort: canonical.effort },
       actual: { model: receipt.applied_model, effort: receipt.applied_effort },
     });
   }
@@ -1204,6 +1384,12 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
   }
   if (receipt.mechanism !== undefined && receipt.mechanism !== resolution.mechanism) {
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt mechanism does not match the resolved mechanism', { expected: resolution.mechanism, actual: receipt.mechanism });
+  }
+  for (const field of ['launch_arguments', 'logical_rung', 'rung', 'signals']) {
+    if (Object.prototype.hasOwnProperty.call(receipt, field)
+        && canonicalStableStringify(receipt[field]) !== canonicalStableStringify(resolution[field] === undefined ? null : resolution[field])) {
+      refuse('NONCOMPLIANT_RECEIPT', `application receipt ${field} contradicts the resolution`, { field });
+    }
   }
   if (options.requireComplianceProof !== false) {
     if (receipt.compliance !== 'verified' || !isObject(receipt.compliance_proof)) {
@@ -1461,6 +1647,15 @@ function recorderConsume(recorder, dispatchId, consumerId, claimAuthority) {
   state.consumed.add(dispatchId);
 }
 
+function recorderIsConsumed(recorder, dispatchId) {
+  const target = recorderMethod(recorder, ['isConsumed', 'isReceiptConsumed']);
+  if (target) {
+    return affirmative(invokeSync(target.fn, target.receiver, [dispatchId], 'receipt consumption lookup'), 'consumed');
+  }
+  const state = sharedRecorderState(recorder);
+  return Boolean(state && state.consumed.has(dispatchId));
+}
+
 function receiptFromStoredRecord(value) {
   if (isObject(value) && isObject(value.receipt)) return value.receipt;
   if (isObject(value) && isObject(value.application_receipt)) return value.application_receipt;
@@ -1477,6 +1672,7 @@ function createDispatchBoundary(options = {}) {
     refuse('INVALID_INPUT', 'boundary policy must expose resolveDispatch and validateResolution');
   }
   const adapters = options.adapters || {};
+  const requireGsdRole = options.requireGsdRole === true;
   const trustedReceipts = new Map();
   const trustedResolutions = new Map();
   const consumedReceiptIds = new Set();
@@ -1523,12 +1719,20 @@ function createDispatchBoundary(options = {}) {
       const memoryResolution = memoryResolutionEntry && memoryResolutionEntry.recorder === recorder
         ? memoryResolutionEntry.value
         : null;
+      const memoryTicket = memoryResolutionEntry && memoryResolutionEntry.recorder === recorder
+        ? memoryResolutionEntry.ticket
+        : undefined;
       if (memoryReceipt
           && memoryReceipt.dispatch_id === dispatchId
           && memoryResolution
           && memoryResolution.dispatch_id === dispatchId) {
         return {
-          record: { dispatch_id: dispatchId, receipt: memoryReceipt, resolution: memoryResolution },
+          record: {
+            dispatch_id: dispatchId,
+            ...(memoryTicket !== undefined ? { ticket: memoryTicket } : {}),
+            receipt: memoryReceipt,
+            resolution: memoryResolution,
+          },
           receipt: memoryReceipt,
           resolution: memoryResolution,
         };
@@ -1572,7 +1776,7 @@ function createDispatchBoundary(options = {}) {
     }
   }
 
-  function verifyPriorReceipt(input, recorder) {
+  function verifyPriorReceipt(input, recorder, ticket) {
     const prerequisite = repairPrerequisiteFor(input);
     if (!prerequisite) return null;
     const raw = priorReceiptFor(input);
@@ -1591,6 +1795,33 @@ function createDispatchBoundary(options = {}) {
     const receipt = receiptFromStoredRecord(raw) || raw;
     if (!trusted || !isObject(receipt) || stableReceipt(receipt) !== stableReceipt(trusted.receipt)) {
       refuse('UNVERIFIED_RECEIPT', `${prerequisite.role} ${prerequisite.signatureState} escalation requires the receipt returned by the durable dispatch boundary`, { dispatch_id: previousDispatchId });
+    }
+    const predecessorTicket = trusted.record && trusted.record.ticket;
+    // Cross-process repair authority is always ticket-bound. The small
+    // in-process recorder contract remains compatible with its historical
+    // ticket-less fixtures; it is not a durable trust root and cannot survive
+    // or authorize a repair across a process boundary.
+    const requiresTicketBinding = DURABLE_RECORDERS.has(recorder);
+    if (requiresTicketBinding && ticket === undefined) {
+      refuse(
+        'INVALID_INPUT',
+        'repair dispatch requires a ticket in its launch context before a predecessor receipt can be consumed',
+        { dispatch_id: previousDispatchId },
+      );
+    }
+    if (requiresTicketBinding && predecessorTicket === undefined) {
+      refuse(
+        'NONCOMPLIANT_RECEIPT',
+        'the preceding receipt is not bound to a ticket and cannot authorize a repair dispatch',
+        { expected_ticket: ticket, actual_ticket: null, dispatch_id: previousDispatchId },
+      );
+    }
+    if (predecessorTicket !== ticket) {
+      refuse(
+        'NONCOMPLIANT_RECEIPT',
+        'the preceding receipt ticket does not match the repair dispatch ticket',
+        { expected_ticket: ticket || null, actual_ticket: predecessorTicket || null, dispatch_id: previousDispatchId },
+      );
     }
     const runtime = String(input.runtime || '').trim();
     const expectedModel = prerequisite.model;
@@ -1624,7 +1855,11 @@ function createDispatchBoundary(options = {}) {
       refuse('DUPLICATE_DISPATCH_ID', 'dispatch id was already registered; replay cannot be recorded twice', { dispatch_id: stored.dispatch_id });
     }
     trustedReceipts.set(stored.dispatch_id, { recorder, value: stored });
-    trustedResolutions.set(stored.dispatch_id, { recorder, value: deepFreeze(snapshot(resolution)) });
+    trustedResolutions.set(stored.dispatch_id, {
+      recorder,
+      value: deepFreeze(snapshot(resolution)),
+      ...(recordInput && recordInput.ticket !== undefined ? { ticket: recordInput.ticket } : {}),
+    });
     recorderRecordRemember(recorder, recordInput);
     return stored;
   }
@@ -1659,13 +1894,13 @@ function createDispatchBoundary(options = {}) {
     return safe;
   }
 
-  function resolve(input, recorder) {
+  function resolve(input, recorder, ticket) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
     const withId = Object.prototype.hasOwnProperty.call(input, 'dispatch_id')
       || Object.prototype.hasOwnProperty.call(input, 'dispatchId')
       ? input
       : { ...input, dispatch_id: newDispatchId() };
-    const prior = verifyPriorReceipt(withId, recorder);
+    const prior = verifyPriorReceipt(withId, recorder, ticket);
     const canonicalInput = inputWithoutReceipt(withId);
     if (prior) {
       markBoundaryVerifiedReceipt(prior.receipt);
@@ -1675,11 +1910,28 @@ function createDispatchBoundary(options = {}) {
       };
     }
     const resolved = canonicalResolveDispatch(canonicalInput);
-    const output = snapshot(prior ? { ...resolved, prior_applied: {
+    const gsdRole = gsdRoleFromInput(withId, resolved);
+    if (requireGsdRole && GSD_TYPED_ROLES[resolved.role] && gsdRole === undefined) {
+      refuse('INVALID_INPUT', `GSD typed role is required for boundary role ${resolved.role}`);
+    }
+    // Task level is a policy decision used by the legacy telemetry readers,
+    // not a runtime-selected model value. Keep it boundary-owned alongside the
+    // canonical resolution so reconciliation cannot accept a caller's claim.
+    const task_level = resolveTaskLevel(resolved.role, resolved.signals);
+    const output = snapshot(prior ? {
+      ...resolved,
+      task_level,
+      ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}),
+      prior_applied: {
       dispatch_id: prior.dispatch_id,
       model: prior.model,
       effort: prior.effort,
-    } } : resolved);
+      }
+    } : {
+      ...resolved,
+      task_level,
+      ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}),
+    });
     // snapshot() deliberately severs every other caller reference. Rebrand
     // this one cloned predecessor only because `prior` was re-read from the
     // durable recorder immediately above.
@@ -1713,12 +1965,65 @@ function createDispatchBoundary(options = {}) {
     return deepFreeze(snapshot(withoutBoundaryClaims(evidence)));
   }
 
+  // Reconciliation consumes authenticated storage, never caller-supplied proof.
+  function reconcile(dispatchId, context = {}) {
+    if (!options.recorder) {
+      refuse('RECORD_UNAVAILABLE', 'reconcile requires an explicitly configured durable dispatch recorder');
+    }
+    const ticket = ticketFromContext(context);
+    if (ticket === undefined) {
+      refuse('INVALID_INPUT', 'reconcile requires the ticket from the boundary launch context');
+    }
+    nonEmpty(dispatchId, 'dispatch_id');
+    if (consumedReceiptIds.has(dispatchId) || recorderIsConsumed(options.recorder, dispatchId)) {
+      refuse('UNVERIFIED_RECEIPT', 'dispatch receipt was already consumed by another repair dispatch', { dispatch_id: dispatchId });
+    }
+    const trusted = trustedRecordFor(options.recorder, dispatchId);
+    if (!trusted) refuse('UNVERIFIED_RECEIPT', 'dispatch has no current compliant applied receipt', { dispatch_id: dispatchId });
+    if (!trusted.record || trusted.record.ticket !== ticket) {
+      refuse(
+        'NONCOMPLIANT_RECEIPT',
+        'dispatch receipt ticket does not match the reconciliation ticket',
+        { expected_ticket: ticket, actual_ticket: trusted.record && trusted.record.ticket || null, dispatch_id: dispatchId },
+      );
+    }
+    const { resolution, receipt: applied } = trusted;
+    return deepFreeze(snapshot({
+      dispatch_id: dispatchId,
+      ticket,
+      policy_version: resolution.policy_version,
+      policy_hash: resolution.policy_hash,
+      role: resolution.role,
+      task_level: resolution.task_level,
+      logical_rung: resolution.logical_rung,
+      rung: resolution.rung,
+      signals: resolution.signals,
+      signals_fired: resolution.signals_fired,
+      ...(resolution.prior_applied ? { prior_applied: resolution.prior_applied } : {}),
+      route: resolution.route,
+      runtime: resolution.runtime,
+      backend: resolution.backend,
+      mechanism: resolution.mechanism,
+      launch_id: applied.launch_id,
+      agent_file: resolution.agent_file,
+      launch_arguments: resolution.launch_arguments || null,
+      requested_model: resolution.requested_model,
+      requested_effort: resolution.requested_effort,
+      applied_model: applied.applied_model,
+      applied_effort: applied.applied_effort,
+      observed_model: applied.observed_model,
+      observed_effort: applied.observed_effort,
+      application_receipt: applied,
+    }));
+  }
+
   function dispatch(input, context = {}) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
+    const ticket = ticketFromContext(context);
     const runtime = typeof input.runtime === 'string' ? input.runtime.trim() : input.runtime;
     const adapter = adapterFor(adapters, runtime);
     const record = recorderFor(options, adapter);
-    const resolution = resolve(input, record);
+    const resolution = resolve(input, record, ticket);
     if (!record) {
       refuse('RECORD_UNAVAILABLE', 'durable dispatch recording is mandatory; refusing to launch without a recorder');
     }
@@ -1770,15 +2075,22 @@ function createDispatchBoundary(options = {}) {
       const applicationReceipt = finalizeApplicationReceipt(validatedResolution, applicationEvidence, adapter, observationCapabilities);
       const baseTrace = {
         dispatch_id: validatedResolution.dispatch_id,
+        ...(ticket !== undefined ? { ticket } : {}),
         policy_version: validatedResolution.policy_version,
         policy_hash: validatedResolution.policy_hash,
         runtime: validatedResolution.runtime,
         role: validatedResolution.role,
+        task_level: validatedResolution.task_level,
         logical_rung: validatedResolution.logical_rung,
         rung: validatedResolution.rung,
         route: validatedResolution.route,
         backend: validatedResolution.backend,
         mechanism: validatedResolution.mechanism,
+        signals: validatedResolution.signals,
+        signals_fired: validatedResolution.signals_fired,
+        launch_id: applicationReceipt.launch_id,
+        agent_file: validatedResolution.agent_file,
+        launch_arguments: validatedResolution.launch_arguments || null,
         resolution: validatedResolution,
         requested: { model: validatedResolution.requested_model, effort: validatedResolution.requested_effort },
         applied: { model: applicationReceipt.applied_model, effort: applicationReceipt.applied_effort },
@@ -1792,6 +2104,10 @@ function createDispatchBoundary(options = {}) {
         observed_effort: applicationReceipt.observed_effort,
         application_evidence: strippedEvidence,
         receipt: applicationReceipt,
+        ...(validatedResolution.gsd_role !== undefined ? {
+          gsd_role: validatedResolution.gsd_role,
+          gsd_launch_mechanism: applicationReceipt.gsd_launch_mechanism,
+        } : {}),
         ...(prior ? {
           predecessor_dispatch_id: prior.dispatch_id,
           predecessor_consumer_id: claimConsumerId,
@@ -1849,7 +2165,7 @@ function createDispatchBoundary(options = {}) {
     }
   }
 
-  return Object.freeze({ resolve, validate, receipt, dispatch });
+  return Object.freeze({ resolve, validate, receipt, reconcile, dispatch });
 }
 
 function resolveDispatch(input) {
@@ -1866,11 +2182,15 @@ function dispatch(input, options = {}) {
 
 module.exports = Object.freeze({
   OBSERVATION_UNKNOWN,
+  GSD_TYPED_ROLES,
+  GSD_LAUNCH_MECHANISM,
   newDispatchId,
   createDurableRecorder,
   createDispatchBoundary,
   generatedAgentEvidence,
+  validateGsdRole,
   isBoundaryVerifiedReceipt,
+  isDurableRecorder,
   resolveDispatch,
   validateDispatch,
   dispatch,

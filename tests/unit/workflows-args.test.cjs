@@ -21,13 +21,23 @@
 // The plan names `new Function('agent','parallel','phase','log','args', src)`;
 // the constructor used here is the async Function constructor with that exact
 // parameter list, because plain `new Function` rejects `return await
-// parallel(...)` outright. Same wrap, same five bindings.
+// parallel(...)` outright. Successful fixtures explicitly install an ADR-014
+// host bridge; separate DSL-only fixtures assert that its absence blocks.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const {
+  createDispatchBoundary,
+  createDurableRecorder,
+} = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const {
+  CLAUDE_MODEL_ALIASES,
+  createClaudeDispatchAdapter,
+  createClaudeWorkflowDispatch,
+} = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
 
 const WORKFLOWS = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'workflows'
@@ -35,12 +45,43 @@ const WORKFLOWS = path.join(
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
+const WORKFLOW_CAPABILITIES = Object.freeze({
+  supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
+  supportedEfforts: ['low', 'high', 'medium', 'max'],
+  observedModel: false,
+  observedEffort: false,
+});
+const workflowStores = [fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-dispatch-'))];
+const WORKFLOW_RECORDER = createDurableRecorder(workflowStores[0]);
+const hostEvidence = new WeakMap();
+let workflowLaunch = 0;
+const workflowApplicationEvidence = ({ result }) => {
+  const evidence = hostEvidence.get(result);
+  if (!evidence) throw new Error('test Claude host returned no application evidence');
+  return evidence;
+};
+const testDispatchFactory = (options) => createClaudeWorkflowDispatch({
+  ...options,
+  capabilities: options.capabilities === undefined ? WORKFLOW_CAPABILITIES : options.capabilities,
+  recorder: options.recorder === undefined ? WORKFLOW_RECORDER : options.recorder,
+  applicationEvidence: options.applicationEvidence === undefined
+    ? workflowApplicationEvidence
+    : options.applicationEvidence,
+});
+process.on('exit', () => {
+  for (const store of workflowStores) {
+    try { fs.rmSync(store, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+  }
+});
+
 function load(name) {
   const src = fs.readFileSync(path.join(WORKFLOWS, `${name}.mjs`), 'utf8')
     // the one module-level construct the runtime's wrap strips, mirrored from
     // the smoke test's canary (`sed 's/^export const meta/const meta/'`)
     .replace(/^export const meta/m, 'const meta');
-  return new AsyncFunction('agent', 'parallel', 'phase', 'log', 'args', src);
+  return new AsyncFunction(
+    'agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch', src
+  );
 }
 
 // `results` rewrites what the fan-out hands back AFTER every thunk has run.
@@ -55,7 +96,15 @@ function harness({ agent, results = (all) => all } = {}) {
     calls,
     agent: async (prompt, opts) => {
       calls.push({ prompt, opts });
-      return agent ? agent(prompt, opts) : {};
+      const value = agent ? await agent(prompt, opts) : {};
+      if (value && typeof value === 'object') {
+        hostEvidence.set(value, {
+          launch_id: `test-workflow-launch-${++workflowLaunch}`,
+          applied_model: opts.model,
+          applied_effort: opts.effort,
+        });
+      }
+      return value;
     },
     parallel: async (thunks) => results(await Promise.all(thunks.map((f) => f()))),
     phase: () => {},
@@ -65,7 +114,15 @@ function harness({ agent, results = (all) => all } = {}) {
 
 async function run(name, args, opts) {
   const h = harness(opts);
-  const value = await load(name)(h.agent, h.parallel, h.phase, h.log, args);
+  const dispatchFactory = opts && opts.noDispatchFactory
+    ? undefined
+    : opts && opts.dispatchFactory
+      ? opts.dispatchFactory
+      : (dispatchOptions) => testDispatchFactory({
+          ...dispatchOptions,
+          ...(opts && opts.recorder ? { recorder: opts.recorder } : {}),
+        });
+  const value = await load(name)(h.agent, h.parallel, h.phase, h.log, args, dispatchFactory);
   return { value, calls: h.calls };
 }
 
@@ -93,10 +150,16 @@ const parseErrorOf = (s) => {
 };
 
 const TICKETS = [
-  { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99' },
-  { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99' },
-  { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99' },
+  { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', model: 'sonnet', effort: 'max' },
+  { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', model: 'sonnet', effort: 'max' },
+  { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', model: 'sonnet', effort: 'max' },
 ];
+
+const driftTickets = (tickets) => tickets.map((ticket) => ({
+  ...ticket,
+  model: 'opus',
+  effort: 'max',
+}));
 
 // Each script's own required args, beside `tickets`. drift-gate refuses
 // without `driftRefPath`, so its cases carry one.
@@ -106,7 +169,7 @@ const SCRIPTS = [
 ];
 
 for (const { name, base } of SCRIPTS) {
-  const args = (tickets) => ({ ...base, tickets });
+  const args = (tickets) => ({ ...base, tickets: name === 'drift-gate' ? driftTickets(tickets) : tickets });
 
   suite(`${name}.mjs — args validation before dispatch`);
 
@@ -203,12 +266,12 @@ for (const { name, base } of SCRIPTS) {
   });
 }
 
-suite('executors.mjs — a dead or throwing agent is still a result');
+suite('executors.mjs — agent outcomes stay inside the boundary contract');
 
-test('a null agent result is a blocked verdict, not a gap', async () => {
-  const { value } = await run('executors', { tickets: TICKETS }, { agent: async () => null });
-  assert.strictEqual(value.length, 3);
-  assert.deepStrictEqual([...new Set(value.map((r) => r.status))], ['blocked']);
+test('a null agent result fails closed because it cannot produce a receipt', async () => {
+  const error = await rejects('executors', { tickets: TICKETS }, { agent: async () => null });
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
+  assert.strictEqual(error.code, 'MISSING_RECEIPT');
 });
 
 suite('drift-gate.mjs — a dead or throwing judge is still a verdict');
@@ -216,7 +279,7 @@ suite('drift-gate.mjs — a dead or throwing judge is still a verdict');
 test('a throwing judge is a drifted verdict, not a gap', async () => {
   const { value } = await run(
     'drift-gate',
-    { tickets: TICKETS, driftRefPath: '/x/drift-check.md' },
+    { tickets: driftTickets(TICKETS), driftRefPath: '/x/drift-check.md' },
     { agent: async () => { throw new Error('judge exploded'); } }
   );
   assert.strictEqual(value.length, 3);
@@ -242,7 +305,7 @@ test('a committed ticket returns paths and a short summary, never the documents,
     const longPrBody = `Ticket: T-99-01\n${'x'.repeat(11000)}`;
     const longEvidence = `$ node tests/unit/x.test.cjs\n${'y'.repeat(9000)}`;
     const longSummary = 'z'.repeat(900);
-    const ticket = { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath };
+    const ticket = { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath, model: 'sonnet', effort: 'max' };
     const stubAgent = async (prompt) => {
       // The real agent is told exactly where to write — assert the prompt
       // actually names both paths, so a future edit can't drop the instruction
@@ -282,7 +345,7 @@ test('a committed ticket returns paths and a short summary, never the documents,
 });
 
 test('a blocked ticket returns its reason inline — no file, no path, the loop acts without a file read', async () => {
-  const ticket = { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', worktreePath: '/does/not/exist' };
+  const ticket = { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', worktreePath: '/does/not/exist', model: 'sonnet', effort: 'max' };
   const reason = 'the plan requires editing deliver.md, which is out of files_modified';
   const { value } = await run('executors', { tickets: [ticket] }, {
     agent: async () => ({ id: ticket.id, status: 'blocked', summary: reason }),
@@ -296,143 +359,618 @@ test('a blocked ticket returns its reason inline — no file, no path, the loop 
 });
 
 test('a dead or throwing agent still returns a capped reason inline, with no worktreePath required', async () => {
-  const ticket = { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99' };
-  const dead = await run('executors', { tickets: [ticket] }, { agent: async () => null });
-  assert.strictEqual(dead.value[0].status, 'blocked');
-  assert.ok(dead.value[0].summary.length <= 500);
-  assert.strictEqual(dead.value[0].prBodyPath, '');
+  const ticket = { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', model: 'sonnet', effort: 'max' };
+  const dead = await rejects('executors', { tickets: [ticket] }, { agent: async () => null });
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(dead.name));
+  assert.strictEqual(dead.code, 'MISSING_RECEIPT');
 
   const threw = await run('executors', { tickets: [ticket] }, { agent: async () => { throw new Error('boom'); } });
   assert.strictEqual(threw.value[0].status, 'blocked');
   assert.match(threw.value[0].summary, /boom/);
 });
 
-// ── THE DISPATCH DEFAULTS ARE THE LADDER'S ANSWER (T-27-01, ADR-006 D1) ──────
+// ── BOUNDARY-MEDIATED WORKFLOW LAUNCH INPUT (T-36-05, ADR-014) ──────────────
 //
-// `pipeline-config.cjs` is the single source for "which tier and how deep" — and
-// the WORKFLOW PATH is the only path where `effort` is enforced at all, because
-// the Agent tool carries no such parameter. So a literal in one of these scripts
-// is not a harmless fallback: it is the effort a judge or a fixer actually thinks
-// at whenever the caller omits one, and nothing else in the system would notice
-// it disagreeing with the policy. `drift-gate.mjs` shipped `effort: 'low'` with
-// the comment "cheap effort on purpose" while the ladder had moved drift-check to
-// `high` — the role now expected to notice a plan the codebase has outgrown,
-// which is the work the executor stopped doing.
-//
-// Resolved in a CONFIG-FREE temp cwd, through the CLI the skills themselves call:
-// `pipeline-config.cjs` reads `process.cwd()` and nothing else, so this pins
-// SHIPPED policy rather than whatever this checkout happens to be tuned to.
-//
-// Two designs are legitimate here and the table records WHICH each file uses,
-// because a silent move between them is the drift this suite exists to catch:
-//
-//   'default'  the script carries a literal — allowed only where the role's row
-//              is constant, and it must equal the row (drift-check → high);
-//   'caller'   the script passes no effort at all and the orchestrator's resolved
-//              value is the only one in force. Required where the row is keyed on
-//              a signal a literal cannot express: the executor's is `xhigh` at
-//              `--risk high` or `--checkpoint`, so any literal there would be
-//              wrong for half the board.
-suite('workflows/*.mjs — model and effort defaults equal the ladder\'s answer');
-
-const CONFIG_FREE = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-ladder-'));
-const RESOLVER = path.join(
-  __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-config.cjs'
-);
-function policyFor(role) {
-  const r = spawnSync(process.execPath, [RESOLVER, 'model', role, '--json'],
-    { cwd: CONFIG_FREE, encoding: 'utf8', timeout: 30000 });
-  assert.strictEqual(r.status, 0, `pipeline-config model ${role} exited ${r.status}: ${r.stderr}`);
-  return JSON.parse(r.stdout);
-}
+// A Workflow's agent callback is the Claude host launch. It must be reached
+// through createClaudeDispatchAdapter/createDispatchBoundary, so model/effort
+// values are checked against the role grid and the application receipt is
+// recorded before the workflow consumes the agent result.
+suite('workflows/*.mjs — explicit resolver model and effort boundary');
 
 const PR = {
   id: 'T-99-01', pr: 7, branch: 'ticket/T-99-01', worktreePath: '/w/T-99-01',
   planPath: '/p/99-01-PLAN.md', needsCiFix: true, needsReviewFix: true,
+  model: 'opus', effort: 'medium',
 };
 const DISPATCH = [
   {
     name: 'executors',
-    // One agent per ticket, so one ticket is one dispatch to read the opts off.
-    args: (over = {}) => ({ tickets: [{ ...TICKETS[0], ...over }] }),
-    roles: ['executor'],
-    effort: 'caller',
+    args: (over = {}) => ({ tickets: [{ ...TICKETS[0], model: 'sonnet', effort: 'max', ...over }] }),
+    resolved: { model: 'sonnet', effort: 'max' },
   },
   {
     name: 'fix-round',
     args: (over = {}) => ({
-      prs: [{ ...PR, ...over }],
+      prs: [{ ...PR, model: 'opus', effort: 'medium', ...over }],
       ciFixRefPath: '/x/ci-fix.md', reviewFixRefPath: '/x/review-fix.md',
       reinitScript: '/x/scripts/reviewers.cjs',
     }),
-    // One fixer owns both roles for a round, so both must resolve to the tier it
-    // is dispatched at — that is the premise the single agent rests on.
-    roles: ['ci-fix', 'review-fix'],
-    effort: 'caller',
+    resolved: { model: 'opus', effort: 'medium' },
   },
   {
     name: 'drift-gate',
     args: (over = {}) => ({
-      tickets: [{ ...TICKETS[0], ...over }],
+      tickets: [{ ...TICKETS[0], model: 'opus', effort: 'max', ...over }],
       driftRefPath: '/x/drift-check.md',
     }),
-    roles: ['drift-check'],
-    effort: 'default',
+    resolved: { model: 'opus', effort: 'max' },
   },
 ];
 
 for (const spec of DISPATCH) {
-  const optsOf = async (over) => {
-    const { calls } = await run(spec.name, spec.args(over));
-    assert.strictEqual(calls.length, 1, `${spec.name}: expected exactly one dispatch`);
-    return calls[0].opts;
+  const runSpec = async (over = {}, withRecorder = false) => {
+    const args = spec.args(over);
+    let recorder = WORKFLOW_RECORDER;
+    if (withRecorder) {
+      const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-dispatch-'));
+      workflowStores.push(storeDir);
+      recorder = createDurableRecorder(storeDir);
+    }
+    const result = await run(spec.name, args, withRecorder ? { recorder } : undefined);
+    return { ...result, recorder };
   };
 
-  test(`${spec.name}.mjs dispatches at the tier the ladder resolves for ${spec.roles.join('/')}`, async () => {
-    const policies = spec.roles.map((role) => ({ role, ...policyFor(role) }));
-    // A file that dispatches two roles from one agent needs them to agree; if
-    // they ever stop agreeing, this file needs two agents and not a new literal.
-    const tiers = [...new Set(policies.map((p) => p.model))];
-    assert.strictEqual(tiers.length, 1,
-      `${spec.name}: ${spec.roles.join('/')} resolve to different tiers (${tiers.join(', ')}) — one agent cannot carry both`);
-    const opts = await optsOf();
-    assert.strictEqual(opts.model, tiers[0],
-      `${spec.name}: dispatches model "${opts.model}", the ladder says "${tiers[0]}"`);
+  test(`${spec.name}.mjs applies the caller-resolved model and effort only after boundary validation`, async () => {
+    const { calls } = await runSpec();
+    assert.strictEqual(calls.length, 1, `${spec.name}: expected exactly one boundary-mediated dispatch`);
+    assert.strictEqual(calls[0].opts.model, spec.resolved.model);
+    assert.strictEqual(calls[0].opts.effort, spec.resolved.effort);
   });
 
-  if (spec.effort === 'default') {
-    test(`${spec.name}.mjs carries an effort default, and it is the ladder's row`, async () => {
-      const want = policyFor(spec.roles[0]).effort;
-      const opts = await optsOf();
-      // PRESENT is half the assertion: on this path `effort` is the only place
-      // depth is enforced, so dropping the key hands the judge the runtime's
-      // default and nothing anywhere would say so.
-      assert.ok('effort' in opts,
-        `${spec.name}: no effort default — the ${spec.roles[0]} row (${want}) would not be in force`);
-      assert.strictEqual(opts.effort, want,
-        `${spec.name}: dispatches effort "${opts.effort}", the ladder says "${want}"`);
-    });
+  test(`${spec.name}.mjs records a boundary-verified application receipt before returning`, async () => {
+    const { calls, value, recorder } = await runSpec({}, true);
+    assert.strictEqual(calls.length, 1, `${spec.name}: expected one host launch`);
+    assert.ok(value[0].receipt, `${spec.name}: workflow must return its boundary receipt`);
+    assert.strictEqual(value[0].receipt.compliance, 'verified');
+    assert.strictEqual(value[0].receipt.applied_model, spec.resolved.model);
+    assert.strictEqual(value[0].receipt.applied_effort, spec.resolved.effort);
+    const stored = recorder.getVerifiedRecord(value[0].receipt.dispatch_id);
+    assert.ok(stored, `${spec.name}: receipt must be durably stored`);
+    assert.deepStrictEqual(stored.receipt, value[0].receipt);
+  });
 
-    test(`${spec.name}.mjs still lets the caller's resolved effort win`, async () => {
-      const opts = await optsOf({ effort: 'xhigh' });
-      assert.strictEqual(opts.effort, 'xhigh',
-        'the orchestrator resolves per dispatch (a signal-keyed row, a repeated signature); the literal is only the floor');
-    });
-  } else {
-    test(`${spec.name}.mjs passes NO effort literal — the row it dispatches is signal-keyed`, async () => {
-      const opts = await optsOf();
-      assert.ok(!('effort' in opts),
-        `${spec.name}: a literal cannot express a signal-keyed row (executor: xhigh at --risk high), `
-        + `so this file must carry none — got "${opts.effort}"`);
-    });
-
-    test(`${spec.name}.mjs passes the caller's resolved effort straight through`, async () => {
-      const want = policyFor(spec.roles[0]).effort;
-      const opts = await optsOf({ effort: want });
-      assert.strictEqual(opts.effort, want, 'the ladder reaches the dispatch, or the table is decorative');
-    });
-  }
+  test(`${spec.name}.mjs refuses omitted launch values without invoking the host`, async () => {
+    if (spec.name === 'executors' || spec.name === 'fix-round' || spec.name === 'drift-gate') {
+      const error = await rejects(spec.name, spec.args({ model: undefined, effort: undefined }));
+      assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
+      return;
+    }
+    const { calls, value } = await runSpec({ model: undefined, effort: undefined });
+    assert.strictEqual(calls.length, 0, `${spec.name}: missing selection must fail before agent()`);
+    assert.ok(value.length === 1);
+    assert.ok(['blocked', 'drifted', 'escalate'].includes(value[0].status || value[0].verdict));
+  });
 }
+
+test('executor critical selection is resolved by signals and preserves Claude Sonnet/max → Opus/low', async () => {
+  const { calls } = await run('executors', {
+    tickets: [{ ...TICKETS[0], model: 'opus', effort: 'low', signals: { critical: true } }],
+  });
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].opts.model, 'opus');
+  assert.strictEqual(calls[0].opts.effort, 'low');
+});
+
+test('workflow fan-outs retain combined signal evidence and never infer an omitted promotion signal', async () => {
+  const combinedSignals = {
+    risk: 'high',
+    critical: true,
+    checkpoint: true,
+    contested: true,
+    inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
+  };
+  const executor = await run('executors', {
+    tickets: [{
+      ...TICKETS[0],
+      model: 'opus',
+      effort: 'low',
+      signals: combinedSignals,
+    }],
+  });
+  assert.strictEqual(executor.calls.length, 1);
+  assert.deepStrictEqual(
+    [executor.calls[0].opts.model, executor.calls[0].opts.effort],
+    ['opus', 'low'],
+  );
+  const executorRecord = WORKFLOW_RECORDER.getVerifiedRecord(executor.value[0].receipt.dispatch_id);
+  assert.equal(executorRecord.resolution.logical_rung, 'critical');
+  assert.equal(executorRecord.resolution.signal_reasons.length, Object.keys(combinedSignals).length);
+  for (const field of Object.keys(combinedSignals)) {
+    assert.ok(executorRecord.resolution.signal_reasons.some((reason) => reason.source === `signals.${field}`), `executor retains ${field}`);
+  }
+  assert.ok(executorRecord.resolution.signal_reasons.some((reason) => reason.signal === 'risk' && reason.applies === false));
+
+  const omitted = await run('executors', {
+    tickets: [{
+      ...TICKETS[0],
+      model: 'sonnet',
+      effort: 'max',
+      signals: { risk: 'high', contested: true, inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 },
+    }],
+  });
+  assert.strictEqual(omitted.calls.length, 1, 'global context without executor evidence remains a base launch');
+  assert.deepStrictEqual(
+    [omitted.calls[0].opts.model, omitted.calls[0].opts.effort],
+    ['sonnet', 'max'],
+  );
+  const omittedRecord = WORKFLOW_RECORDER.getVerifiedRecord(omitted.value[0].receipt.dispatch_id);
+  assert.equal(omittedRecord.resolution.logical_rung, 'base');
+  assert.ok(omittedRecord.resolution.signals_fired.includes('risk'));
+  assert.ok(omittedRecord.resolution.signals_fired.includes('contested'));
+  assert.ok(omittedRecord.resolution.signals_fired.includes('window'));
+  assert.equal(omittedRecord.resolution.selected_signals.length, 0, 'no absent critical signal is inferred');
+
+  const fixed = await run('drift-gate', {
+    tickets: [{
+      ...driftTickets([TICKETS[0]])[0],
+      signals: combinedSignals,
+    }],
+    driftRefPath: '/x/drift-check.md',
+  });
+  assert.strictEqual(fixed.calls.length, 1);
+  assert.deepStrictEqual(
+    [fixed.calls[0].opts.model, fixed.calls[0].opts.effort],
+    ['opus', 'max'],
+    'fixed drift-check remains on its native base tuple',
+  );
+  const fixedRecord = WORKFLOW_RECORDER.getVerifiedRecord(fixed.value[0].receipt.dispatch_id);
+  assert.equal(fixedRecord.resolution.logical_rung, 'base');
+  assert.equal(fixedRecord.resolution.signal_reasons.length, Object.keys(combinedSignals).length);
+  assert.ok(fixedRecord.resolution.signal_reasons.every((reason) => reason.applies === false));
+});
+
+for (const spec of DISPATCH) {
+  test(`${spec.name} refuses the documented DSL-only host without launching`, async () => {
+    const source = fs.readFileSync(path.join(WORKFLOWS, `${spec.name}.mjs`), 'utf8')
+      .replace(/^export const meta/m, 'const meta');
+    const h = harness();
+    const workflow = new AsyncFunction('agent', 'parallel', 'phase', 'log', 'args', source);
+    await assert.rejects(
+      () => workflow(h.agent, h.parallel, h.phase, h.log, JSON.stringify(spec.args())),
+      /host must bind createClaudeWorkflowDispatch/,
+    );
+    assert.strictEqual(h.calls.length, 0);
+  });
+}
+
+test('executor preserves canonical risk/checkpoint facts and rejects contradictory or legacy tuples', async () => {
+  for (const facts of [
+    { risk: 'high', checkpoint: true },
+    { risk: 'low', critical: true },
+    { signals: { risk: 'high', checkpoint: true }, risk: 'high', checkpoint: true },
+  ]) {
+    const { calls, value } = await run('executors', DISPATCH[0].args({
+      ...facts, model: 'opus', effort: 'low',
+    }));
+    assert.strictEqual(calls.length, 1);
+    const record = WORKFLOW_RECORDER.getVerifiedRecord(value[0].receipt.dispatch_id);
+    assert.strictEqual(record.resolution.signals.risk, facts.risk);
+    assert.strictEqual(record.resolution.logical_rung, 'critical');
+  }
+  const inert = await run('executors', DISPATCH[0].args({ risk: 'high' }));
+  assert.strictEqual(inert.calls.length, 1, 'high risk alone must retain the canonical base tuple');
+  for (const facts of [
+    { risk: 'high', model: 'opus', effort: 'high' },
+    { checkpoint: true, signals: { checkpoint: false } },
+    { risk: 'high', signals: { risk: 'low' } },
+    { signals: [] },
+  ]) {
+    const error = await rejects('executors', DISPATCH[0].args(facts));
+    assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
+  }
+  const legacy = await rejects('drift-gate', DISPATCH[2].args({ model: 'sonnet', effort: 'high' }));
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(legacy.name),
+    'compatibility tuples must not silently replace the canonical decision');
+});
+
+for (const role of ['ci-fix', 'review-fix']) {
+  test(`${role} carries a serialized predecessor through base, repeat and exhausted workflow rounds`, async () => {
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-chain-'));
+    workflowStores.push(storeDir);
+    let prior;
+    for (const state of ['first', 'repeat', 'repeat_exhausted']) {
+      // Reopen the durable store for each invocation, as the next host would.
+      const recorder = createDurableRecorder(storeDir);
+      const args = DISPATCH[1].args({
+        needsCiFix: role === 'ci-fix', needsReviewFix: role === 'review-fix',
+        signatureState: state, signals: { signatureState: state },
+        model: 'opus', effort: state === 'first' ? 'medium' : 'max',
+        ...(prior ? {
+          priorReceipt: JSON.parse(JSON.stringify(prior)),
+          previous_dispatch_id: prior.dispatch_id,
+        } : {}),
+      });
+      const { calls, value } = await run('fix-round', args, { recorder });
+      assert.strictEqual(calls.length, 1, JSON.stringify(value));
+      const receipt = value[0].receipt;
+      const record = recorder.getVerifiedRecord(receipt.dispatch_id);
+      assert.strictEqual(record.resolution.signals.signatureState, state);
+      assert.strictEqual(record.resolution.role, role);
+      assert.strictEqual(record.receipt.applied_effort, state === 'first' ? 'medium' : 'max');
+      if (prior) assert.strictEqual(record.predecessor_dispatch_id, prior.dispatch_id);
+      prior = receipt;
+    }
+  });
+}
+
+test('repair refuses absent, invented or contradictory predecessor inputs before launch', async () => {
+  for (const over of [
+    { signatureState: 'repeat' },
+    { signatureState: 'repeat_exhausted', previous_dispatch_id: 'invented', priorReceipt: {} },
+    { signatureState: 'repeat', signals: { signatureState: 'first' } },
+    { signatureState: 'repeat', priorReceipt: {}, priorApplied: { dispatch_id: 'different' } },
+  ]) {
+    const error = await rejects('fix-round', DISPATCH[1].args({
+      model: 'opus', effort: 'max', ...over,
+    }));
+    assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
+  }
+});
+
+test('workflow agent options and context cannot bypass selection checks or reserve a dispatch', () => {
+  for (const invalid of [
+    { inherit: true }, { inline: true }, { session_inherited: true }, { session: { inherit: true } },
+    { requested_effort: 'high' }, { applied_effort: 'high' },
+    { model: 'opus' }, { effort: 'high' }, [],
+  ]) {
+    for (const field of ['agentOptions', 'context']) {
+      const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-options-'));
+      workflowStores.push(storeDir);
+      const recorder = createDurableRecorder(storeDir);
+      let launched = false;
+      assert.throws(() => createClaudeWorkflowDispatch({
+        agent: () => { launched = true; }, prompt: 'test', role: 'executor',
+        model: 'sonnet', effort: 'max', dispatchId: 'refused-options',
+        capabilities: WORKFLOW_CAPABILITIES, recorder,
+        applicationEvidence: workflowApplicationEvidence, [field]: invalid,
+      }));
+      assert.strictEqual(launched, false);
+      assert.deepStrictEqual(fs.readdirSync(storeDir), [], 'invalid options must fail before reservation');
+    }
+  }
+});
+
+test('workflow-native dispatch rejects unsupported runtime tuples and copied application values before recording', () => {
+  const invalidSelections = [
+    { model: 'gpt-6-astra', effort: 'max' },
+    { model: 'sonnet', effort: 'unsupported-effort' },
+    { model: 'inherit', effort: 'max' },
+  ];
+  for (const [index, selection] of invalidSelections.entries()) {
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-negative-selection-'));
+    workflowStores.push(storeDir);
+    const recorder = createDurableRecorder(storeDir);
+    let launched = false;
+    assert.throws(
+      () => createClaudeWorkflowDispatch({
+        agent: () => { launched = true; return {}; },
+        prompt: 'test',
+        role: 'executor',
+        ...selection,
+        dispatchId: `workflow-negative-selection-${index}`,
+        capabilities: WORKFLOW_CAPABILITIES,
+        recorder,
+        applicationEvidence: () => ({
+          launch_id: `negative-${index}`,
+          applied_model: selection.model,
+          applied_effort: selection.effort,
+        }),
+      }),
+      (error) => ['CONFLICTING_OVERRIDE', 'UNSUPPORTED_SELECTION'].includes(error.code),
+      `invalid Claude selection ${index}`,
+    );
+    assert.strictEqual(launched, false);
+    assert.deepStrictEqual(fs.readdirSync(storeDir), [], `invalid selection ${index} must not reserve a record`);
+  }
+
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-copied-evidence-'));
+  workflowStores.push(storeDir);
+  const recorder = createDurableRecorder(storeDir);
+  let launches = 0;
+  assert.throws(
+    () => createClaudeWorkflowDispatch({
+      agent: () => { launches += 1; return {}; },
+      prompt: 'test',
+      role: 'executor',
+      model: 'sonnet',
+      effort: 'max',
+      dispatchId: 'workflow-copied-evidence',
+      capabilities: WORKFLOW_CAPABILITIES,
+      recorder,
+      applicationEvidence: () => ({
+        launch_id: 'copied-evidence',
+        requested_model: 'sonnet',
+        requested_effort: 'max',
+      }),
+    }),
+    (error) => error.code === 'MISSING_RECEIPT',
+  );
+  assert.strictEqual(launches, 1, 'the host was called but its requested-only report is not application evidence');
+  assert.equal(recorder.getVerifiedRecord('workflow-copied-evidence'), null);
+});
+
+test('unsupported or contradictory workflow selections fail closed before agent()', async () => {
+  const executor = await rejects('executors', {
+    tickets: [{ ...TICKETS[0], model: 'sonnet', effort: 'xhigh' }],
+  });
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(executor.name));
+
+  const drift = await rejects('drift-gate', {
+    tickets: [{ ...TICKETS[0], model: 'fable', effort: 'high' }],
+    driftRefPath: '/x/drift-check.md',
+  });
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(drift.name));
+
+  const fix = await rejects('fix-round', {
+    prs: [{ ...PR, model: 'sonnet', effort: 'max' }],
+    ciFixRefPath: '/x/ci-fix.md', reviewFixRefPath: '/x/review-fix.md',
+    reinitScript: '/x/scripts/reviewers.cjs',
+  });
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(fix.name));
+});
+
+test('fix-round refuses before rendering an unsupported launch prompt', async () => {
+  let rendered = 0;
+  const dispatchFactory = (options) => {
+    const prompt = options.prompt;
+    return testDispatchFactory({
+      ...options,
+      prompt: () => {
+        rendered += 1;
+        return prompt();
+      },
+    });
+  };
+  const error = await rejects('fix-round', {
+    prs: [{ ...PR, model: 'sonnet', effort: 'max' }],
+    ciFixRefPath: '/x/ci-fix.md', reviewFixRefPath: '/x/review-fix.md',
+    reinitScript: '/x/scripts/reviewers.cjs',
+  }, { dispatchFactory });
+  assert.strictEqual(rendered, 0, 'boundary refusal must precede prompt construction');
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
+});
+
+test('drift-gate propagates host receipt failures instead of inventing drift', async () => {
+  const dispatchFactory = (options) => testDispatchFactory({
+    ...options,
+    applicationEvidence: () => { throw new Error('host receipt unavailable'); },
+  });
+  const error = await rejects('drift-gate', {
+    tickets: driftTickets([TICKETS[0]]),
+    driftRefPath: '/x/drift-check.md',
+  }, { dispatchFactory });
+  assert.strictEqual(error.name, 'DispatchBoundaryError');
+  assert.strictEqual(error.code, 'MISSING_RECEIPT');
+});
+
+test('executors propagates host receipt failures instead of blocking a ticket', async () => {
+  const dispatchFactory = (options) => testDispatchFactory({
+    ...options,
+    applicationEvidence: () => { throw new Error('host receipt unavailable'); },
+  });
+  const error = await rejects('executors', {
+    tickets: [TICKETS[0]],
+  }, { dispatchFactory });
+  assert.strictEqual(error.name, 'DispatchBoundaryError');
+  assert.strictEqual(error.code, 'MISSING_RECEIPT');
+});
+
+test('workflow dispatch has no implicit host resources and rejects self-attested application evidence', async () => {
+  const strict = await rejects('executors', { tickets: [TICKETS[0]] }, {
+    dispatchFactory: createClaudeWorkflowDispatch,
+  });
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(strict.name));
+  assert.match(strict.message, /explicit host capabilities/);
+
+  const base = {
+    agent: () => ({}),
+    prompt: 'test prompt',
+    role: 'executor',
+    model: 'sonnet',
+    effort: 'max',
+    capabilities: WORKFLOW_CAPABILITIES,
+  };
+  assert.throws(
+    () => createClaudeWorkflowDispatch(base),
+    (error) => error.code === 'RECORD_UNAVAILABLE',
+  );
+
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-dispatch-'));
+  workflowStores.push(storeDir);
+  const recorder = createDurableRecorder(storeDir);
+  assert.throws(
+    () => createClaudeWorkflowDispatch({ ...base, recorder }),
+    (error) => error.code === 'MISSING_RECEIPT',
+  );
+  assert.throws(
+    () => createClaudeWorkflowDispatch({
+      ...base,
+      recorder,
+      applicationEvidence: () => ({
+        launch_id: 'host-launch',
+        applied_model: 'opus',
+        applied_effort: 'medium',
+      }),
+    }),
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+  );
+});
+
+test('explicit Claude host owns workflow capabilities and receipt services', async () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-host-'));
+  workflowStores.push(storeDir);
+  const recorder = createDurableRecorder(storeDir);
+  const host = {
+    capabilities: WORKFLOW_CAPABILITIES,
+    recorder,
+    applicationEvidence: workflowApplicationEvidence,
+  };
+  const calls = [];
+  const result = await createClaudeWorkflowDispatch({
+    agent: async (prompt, options) => {
+      calls.push(options);
+      assert.ok(Object.isFrozen(options), 'Claude launch options must be immutable at the host boundary');
+      assert.throws(() => { options.model = 'fable'; }, TypeError);
+      assert.throws(() => Object.defineProperty(options, 'effort', { value: 'low' }), TypeError);
+      const value = {};
+      hostEvidence.set(value, {
+        launch_id: 'host-owned-launch',
+        applied_model: options.model,
+        applied_effort: options.effort,
+      });
+      return value;
+    },
+    prompt: 'host-owned prompt',
+    role: 'executor',
+    model: 'sonnet',
+    effort: 'max',
+    host,
+    // Contradictory caller values must not override the explicit host.
+    capabilities: { supportedModels: ['fable'], supportedEfforts: ['ultra'] },
+    recorder: {},
+    applicationEvidence: () => ({
+      launch_id: 'spoofed-launch', applied_model: 'fable', applied_effort: 'ultra',
+    }),
+  });
+  assert.strictEqual(calls[0].model, 'sonnet');
+  assert.strictEqual(calls[0].effort, 'max');
+  assert.strictEqual(result.receipt.launch_id, 'host-owned-launch');
+});
+
+suite('strict Claude adapter — native aliases and explicit application evidence (T-36-05)');
+
+const CLAUDE_CAPABILITIES = {
+  supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
+  supportedEfforts: ['high', 'medium', 'max'],
+  observedModel: false,
+  observedEffort: false,
+};
+
+function claudeFixture(extra = {}) {
+  const calls = [];
+  const host = {
+    capabilities: CLAUDE_CAPABILITIES,
+    launch: (selection) => {
+      calls.push(selection);
+      return {
+        launch_id: `claude-launch-${calls.length}`,
+        applied_model: selection.model,
+        applied_effort: selection.effort,
+      };
+    },
+    ...(extra.host || {}),
+  };
+  const adapter = createClaudeDispatchAdapter({ ...extra, host });
+  const recorder = extra.recorder || (() => true);
+  const boundary = createDispatchBoundary({ adapters: { claude: adapter }, recorder });
+  return { calls, adapter, boundary, recorder };
+}
+
+test('Claude receives the canonical native alias and effort for every base role', () => {
+  const f = claudeFixture();
+  for (const role of policy.ROLES) {
+    const result = f.boundary.dispatch({ runtime: 'claude', role });
+    const launch = f.calls.at(-1);
+    assert.ok(Object.values(CLAUDE_MODEL_ALIASES).includes(launch.model), `${role} must use a Claude alias`);
+    assert.ok(!/^gpt-/.test(launch.model), `${role} must not receive a Codex model id`);
+    assert.strictEqual(result.applied_model, launch.model);
+    assert.strictEqual(result.applied_effort, launch.effort);
+    assert.strictEqual(result.observed_model, 'unknown');
+    assert.strictEqual(result.observed_effort, 'unknown');
+    assert.strictEqual(result.receipt.compliance, 'verified');
+  }
+});
+
+test('Claude repair launches consume the preceding boundary receipt and preserve the escalated tuple', () => {
+  const f = claudeFixture();
+  const base = f.boundary.dispatch({ runtime: 'claude', role: 'ci-fix' });
+  const repeat = f.boundary.dispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    previous_dispatch_id: base.dispatch_id,
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+  });
+  assert.deepStrictEqual(f.calls.map((selection) => [selection.model, selection.effort]), [
+    ['opus', 'medium'],
+    ['opus', 'max'],
+  ]);
+  assert.strictEqual(repeat.receipt.compliance, 'verified');
+  assert.strictEqual(repeat.receipt.applied_model, 'opus');
+  assert.strictEqual(repeat.receipt.applied_effort, 'max');
+});
+
+test('missing capabilities, launch methods, and application evidence fail closed before dispatch', () => {
+  const missingCapabilities = claudeFixture({ capabilities: {} });
+  assert.throws(
+    () => missingCapabilities.boundary.dispatch({ runtime: 'claude', role: 'executor' }),
+    (error) => error.code === 'UNSUPPORTED_SELECTION',
+  );
+  assert.strictEqual(missingCapabilities.calls.length, 0);
+
+  const missingLaunch = claudeFixture({ host: { launch: undefined } });
+  assert.strictEqual(missingLaunch.adapter.launch, undefined, 'missing host.launch must not expose adapter.launch');
+  assert.throws(
+    () => missingLaunch.boundary.dispatch({ runtime: 'claude', role: 'executor' }),
+    (error) => error.code === 'MISSING_ADAPTER',
+  );
+  assert.strictEqual(missingLaunch.calls.length, 0);
+
+  const reservations = [];
+  const missingLaunchWithRecorder = claudeFixture({
+    host: { launch: undefined },
+    recorder: {
+      reserve(dispatchId) {
+        reservations.push(dispatchId);
+        return { reserved: true };
+      },
+      record() { return { recorded: true }; },
+    },
+  });
+  assert.throws(
+    () => missingLaunchWithRecorder.boundary.dispatch({ runtime: 'claude', role: 'executor' }),
+    (error) => error.code === 'MISSING_ADAPTER',
+  );
+  assert.strictEqual(reservations.length, 0, 'a missing launch method must not reserve a durable dispatch id');
+
+  const badEvidence = claudeFixture({ host: {
+    launch: () => ({ launch_id: 'bad', applied_model: 'sonnet', applied_effort: 'low' }),
+  } });
+  assert.throws(
+    () => badEvidence.boundary.dispatch({ runtime: 'claude', role: 'executor' }),
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+  );
+});
+
+test('Claude rejects contradictory, inherited, and stale launch selections', () => {
+  const f = claudeFixture();
+  for (const context of [
+    { model: 'opus' },
+    { effort: 'medium' },
+    { launch_arguments: { model: 'fable' } },
+    { session: { inherit: true } },
+  ]) {
+    assert.throws(
+      () => f.boundary.dispatch({ runtime: 'claude', role: 'executor' }, context),
+      (error) => ['CONFLICTING_OVERRIDE', 'UNSUPPORTED_SELECTION'].includes(error.code),
+    );
+  }
+  const resolution = f.boundary.resolve({ runtime: 'claude', role: 'executor', dispatch_id: 'stale-claude' });
+  assert.throws(
+    () => f.adapter.launch({ ...resolution, policy_hash: 'stale-policy' }),
+    (error) => error.code === 'STALE_POLICY',
+  );
+  assert.strictEqual(f.calls.length, 0);
+});
 
 // ── ONE DISPATCH, ONE BASE (T-27-06) ────────────────────────────────────────
 //
@@ -450,7 +988,7 @@ for (const spec of DISPATCH) {
 suite('drift-gate.mjs — one dispatch carries one base (T-27-06)');
 
 const driftArgs = (tickets, over = {}) => ({
-  tickets, driftRefPath: '/x/drift-check.md', ...over,
+  tickets: driftTickets(tickets), driftRefPath: '/x/drift-check.md', ...over,
 });
 const promptFor = (calls, id) => {
   const c = calls.find((x) => x.opts && x.opts.label === `drift:${id}`);

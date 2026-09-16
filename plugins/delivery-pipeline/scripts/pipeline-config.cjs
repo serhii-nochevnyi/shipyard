@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+// Routed selection uses resolveDispatch (ADR-014). The tier/effort readers below
+// retain the older policy exclusively for non-routed compatibility callers.
 // Single deterministic reader for the conveyor's configuration, plus the model
 // policy — a floor, a role-keyed effort table and an earned ceiling — and the
 // repair STRATEGY a failure signature's history implies.
@@ -86,7 +88,13 @@
 
 const fs = require('fs');
 const path = require('path');
-const { resolveRuntime } = require('./runtime-context.cjs');
+const { resolveRuntime, readInheritedConfig } = require('./runtime-context.cjs');
+const modelPolicy = require('./model-policy.cjs');
+
+// A dispatch context is issued by loadConfig, not by a caller mutating the
+// returned config. Keep that binding private so routed readers can reject a
+// replacement before they fall back to compatibility behavior.
+const LOADED_DISPATCH_CONTEXTS = new WeakMap();
 
 // GSD resolves project-relative agent skills without consulting config.runtime,
 // which is the only form that remains correct when Claude and Codex share one
@@ -152,6 +160,7 @@ function integerSignal(value) {
 }
 
 function taskLevelRoute(role, signals = {}, cfg = {}) {
+  requireCompatibility(cfg, 'taskLevelRoute');
   const requested = TASK_LEVELS.includes(signals.taskLevel) ? signals.taskLevel : null;
   let value;
   let rule;
@@ -257,13 +266,12 @@ function taskLevelRoute(role, signals = {}, cfg = {}) {
 // — so an unknown id cannot be distinguished from a new one, and a hardcoded
 // allowlist here would go stale faster than the models do.
 //
-// `gpt-5.6-sol` is deliberately absent: with `xhigh`/`max` retired on that
-// runtime its only distinguishing property (advertising `ultra`) buys nothing, so
-// no built-in path selects it. It stays a value a person may configure — see the
-// capability's declared default, which mirrors this list.
+// Astra is the compatibility workhorse and ceiling. Routed Codex dispatch reads
+// ADR-014 directly; this palette remains a compatibility input for callers that
+// do not request a routed decision.
 const DEFAULT_CODEX_MODELS = [
-  { model: 'gpt-5.6-terra', effort: 'high' },
-  { model: 'gpt-6-astra', effort: 'high', min_cli: '0.153.1' },
+  { model: 'gpt-6-astra', effort: 'low', min_cli: '0.153.1' },
+  { model: 'gpt-6-astra', effort: 'medium', min_cli: '0.153.1' },
 ];
 const CODEX_MODEL_KEYS = new Set(['model', 'effort', 'min_cli']);
 
@@ -574,7 +582,12 @@ const DEFAULTS = {
 
 const KNOWN_KEYS = new Set(Object.keys(DEFAULTS));
 const KNOWN_JIRA_KEYS = new Set(['enabled', 'project', 'issue_type', 'epic_issue_type']);
-const ROLES = ['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research', 'pr-sentinel'];
+const COMPATIBILITY_ROLES = Object.freeze(['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research', 'pr-sentinel']);
+// Existing board/recorder consumers use ROLES with their compatibility tables.
+// Routed consumers share the canonical vocabulary, including decomposition,
+// explicitly; expanding ROLES would advertise support those tables do not have.
+const ROLES = COMPATIBILITY_ROLES;
+const ROUTED_ROLES = modelPolicy.ROLES;
 
 // Judgment roles are never cheapened: there is no mechanical safety net above
 // them, so a false verdict is the most expensive kind of error in the pipeline.
@@ -931,9 +944,38 @@ function loadConfig(root, options = {}) {
   // loadConfig() in the same process returns.
   const runtimeContext = resolveRuntime(base, {
     ...options,
+    // Parse/configuration validity is the first refusal for routed loads. The
+    // strict runtime context is resolved below, after malformed project and
+    // inherited configuration can be reported with their own source.
+    routed: false,
     scriptPath: options.scriptPath || __filename,
   });
+  // Keep a strict context even for compatibility loads. A later routed caller
+  // must see the original error/overrides, not the parser's sanitized defaults.
+  let dispatchRuntime;
+  let dispatchError;
+  let inheritedConfig = {};
+  try {
+    if (error) throw modelPolicy.policyError('INVALID_CONFIG', error.message, { source: file });
+    inheritedConfig = readInheritedConfig(base, options);
+    dispatchRuntime = resolveRuntime(base, { ...options, scriptPath: options.scriptPath || __filename, routed: true });
+  } catch (failure) {
+    if (options.routed === true) throw failure;
+    dispatchError = { code: failure.code, message: failure.message, details: failure.details };
+  }
 
+  const dispatchContext = {
+    // This is the immutable mode boundary. `cfg.routed` remains as a legacy
+    // compatibility field for readers, but routed selection must never trust a
+    // caller-controlled copy of it after this context has been created.
+    mode: options.routed === true ? 'routed' : 'compatibility',
+    routed: options.routed === true,
+    runtime: dispatchRuntime || null,
+    error: dispatchError || null,
+    // Store selection inputs before namespace merging and validation. In
+    // particular a rejected full model ID must not disappear at this boundary.
+    configuration: selectionConfig({ ...inheritedConfig, ...raw }),
+  };
   const cfg = {
     ...DEFAULTS,
     jira: { ...DEFAULTS.jira },
@@ -943,7 +985,12 @@ function loadConfig(root, options = {}) {
     codex_models: DEFAULT_CODEX_MODELS.map((e) => ({ ...e })),
     jira_transitions: {},
     jira_todo_statuses: [],
+    routed: options.routed === true,
+    policy_version: modelPolicy.POLICY_VERSION,
+    policy_hash: modelPolicy.POLICY_HASH,
+    dispatch_context: dispatchContext,
   };
+  LOADED_DISPATCH_CONTEXTS.set(cfg, dispatchContext);
   for (const [key, value] of Object.entries(merged)) {
     if (!KNOWN_KEYS.has(key)) {
       warnings.push(`unknown pipeline config key "${key}" — ignored (known: ${[...KNOWN_KEYS].sort().join(', ')})`);
@@ -1176,6 +1223,16 @@ function loadConfig(root, options = {}) {
   cfg.use_workflow = cfg.use_workflow === false || cfg.use_workflow === 'false' ? false : 'auto';
   cfg.graph_gate = cfg.graph_gate !== false;
 
+  // These values are the normalized pipeline controls the routed bridge passes
+  // to the canonical resolver. Keep the normalized copy inside the frozen
+  // context so a post-load mutation of the compatibility-shaped `cfg` cannot
+  // change consent or the window threshold after the boundary was crossed.
+  dispatchContext.normalized = {
+    fable: cfg.fable,
+    fable_window_tokens: cfg.fable_window_tokens,
+    model_policy: cfg.model_policy,
+  };
+
   // ── GSD's own settings the conveyor must agree with ───────────────────────
   const git = obj(raw.git);
   const workflow = obj(raw.workflow);
@@ -1246,7 +1303,496 @@ function loadConfig(root, options = {}) {
     }
   }
 
+  freezeSelection(dispatchContext);
   return { config: cfg, warnings, file, exists, valid: error === null, error };
+}
+
+function freezeSelection(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeSelection(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function selectionConfig(raw) {
+  const keys = ['models', 'effort', 'model_overrides', 'model', 'reasoning_effort',
+    'override', 'overrides', 'selection', 'inline', 'inherit', 'session_inherited',
+    'model_profile', 'model_policy', 'fable', 'fable_window_tokens', 'codex_models'];
+  const pick = (object) => Object.fromEntries(keys
+    .filter((key) => Object.prototype.hasOwnProperty.call(object, key))
+    .map((key) => [key, object[key]]));
+  const result = pick(raw);
+  // GSD's Codex remap namespaces are not pipeline configuration, but they are
+  // still launch inputs. Keep the raw values so a later routed call cannot
+  // validate a sanitized pipeline view while the Codex adapter reads these
+  // entries independently.
+  for (const namespace of ['model_policy', 'model_profile_overrides']) {
+    if (Object.prototype.hasOwnProperty.call(raw, namespace)) result[namespace] = raw[namespace];
+  }
+  for (const namespace of ['pipeline', 'delivery_pipeline', 'gsd']) {
+    if (raw[namespace] && typeof raw[namespace] === 'object') result[namespace] = pick(raw[namespace]);
+  }
+  return result;
+}
+
+const GSD_ROLE_KEYS = Object.freeze({
+  research: ['research', 'gsd-project-researcher', 'gsd-phase-researcher'],
+  decomposition: ['planning', 'gsd-planner', 'gsd-plan-checker'],
+  executor: ['execution', 'gsd-executor'],
+  'pr-sentinel': ['verification', 'gsd-verifier'],
+  integrator: ['verification', 'gsd-integration-checker'],
+  'drift-check': ['verification', 'gsd-verifier'],
+  'arch-review': ['verification', 'gsd-code-reviewer'],
+  'ci-fix': ['execution', 'gsd-debugger'],
+  'review-fix': ['execution', 'gsd-code-fixer'],
+});
+
+function codexRemapSelection(value) {
+  const object = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  const model = typeof value === 'string'
+    ? value.trim()
+    : object && typeof object.model === 'string'
+      ? object.model.trim()
+      : null;
+  // codex-model-remap accepts a string or {model}; keep any effort fields so a
+  // contradictory compound GSD entry cannot hide behind its matching model.
+  return object ? { ...object, model } : { model: model || value };
+}
+
+function isGsdStageTier(name, value) {
+  return ['planning', 'execution', 'research', 'verification'].includes(name)
+    && ['opus', 'sonnet', 'haiku'].includes(value);
+}
+
+function configurationSelections(raw, role, runtime, modelKey) {
+  const selections = [];
+  const addSelection = (source, selection) => {
+    if (selection !== undefined) selections.push({ source, selection });
+  };
+  const add = (source, field, value) => {
+    addSelection(source, value === undefined ? undefined : { [field]: value });
+  };
+  // GSD's canonical policy resolver treats these as configuration override
+  // sources. Keep them in the canonical request below and mirror the same
+  // source-level validation here for compatibility-shaped namespaces.
+  const modelPolicy = raw.model_policy;
+  if (modelPolicy !== undefined) {
+    if (!modelPolicy || typeof modelPolicy !== 'object' || Array.isArray(modelPolicy)) {
+      add('config.model_policy', 'model', modelPolicy);
+    } else {
+      add('config.model_policy.runtime', 'runtime', modelPolicy.runtime);
+      const values = modelPolicy.models;
+      if (values !== undefined) {
+        if (!values || typeof values !== 'object' || Array.isArray(values)) {
+          add('config.model_policy.models', 'model', values);
+        } else {
+          add(`config.model_policy.models.${role}`, 'model', values[role]);
+        }
+      }
+    }
+  }
+  if (runtime === 'codex') {
+    for (const [source, values] of [
+      ['model_policy.runtime_tiers.codex', raw.model_policy?.runtime_tiers?.codex],
+      ['model_profile_overrides.codex', raw.model_profile_overrides?.codex],
+    ]) {
+      if (values === undefined) continue;
+      if (!values || typeof values !== 'object' || Array.isArray(values)) {
+        addSelection(`config.${source}`, { model: values });
+        continue;
+      }
+      const tier = { luna: 'sonnet', astra: 'opus' }[modelKey];
+      if (tier && Object.prototype.hasOwnProperty.call(values, tier)) {
+        addSelection(`config.${source}.${tier}`, codexRemapSelection(values[tier]));
+      }
+    }
+  }
+  for (const [prefix, cfg] of [['config', raw], ...['pipeline', 'delivery_pipeline', 'gsd']
+    .filter((key) => raw[key]).map((key) => [key, raw[key]])]) {
+    const gsdNamespace = prefix === 'config' || prefix === 'gsd';
+    const keys = new Set([role, ...(gsdNamespace ? GSD_ROLE_KEYS[role] || [] : [])]);
+    for (const [key, field] of [['models', 'model'], ['effort', 'effort'], ['model_overrides', 'model']]) {
+      const values = cfg[key];
+      if (values === undefined) continue;
+      if (!values || typeof values !== 'object' || Array.isArray(values)) {
+        add(`${prefix}.${key}`, field, values);
+        continue;
+      }
+      for (const name of keys) {
+        // gsd-tune's stage tiers are portable GSD preferences, not concrete
+        // Shipyard selections (even when their spelling is a Claude alias).
+        // Only this vocabulary at these stage keys is superseded by ADR-014;
+        // role/agent keys, model_overrides and concrete stage IDs still validate.
+        if (gsdNamespace && key === 'models' && isGsdStageTier(name, values[name])) continue;
+        add(`${prefix}.${key}.${name}`, field, values[name]);
+      }
+      if (key === 'effort') {
+        for (const name of keys) add(`${prefix}.effort.agent_overrides.${name}`, field, values.agent_overrides?.[name]);
+        // Generic GSD tier defaults do not select a routed role's effort.
+        // Preserve validation of unknown tiers/values and concrete overrides.
+        for (const [tier, effort] of Object.entries(values.routing_tier_defaults || {})) {
+          if (gsdNamespace && ['light', 'standard', 'heavy'].includes(tier)
+              && ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) continue;
+          add(`${prefix}.effort.routing_tier_defaults.${tier}`, field, effort);
+        }
+      }
+    }
+    for (const field of ['model', 'reasoning_effort', 'inline', 'inherit', 'session_inherited']) {
+      add(`${prefix}.${field}`, field, cfg[field]);
+    }
+    for (const field of ['override', 'overrides', 'selection']) {
+      if (cfg[field] !== undefined) selections.push({ source: `${prefix}.${field}`, selection: cfg[field] });
+    }
+  }
+  return selections;
+}
+
+function validateSelection(request, source, selection) {
+  try {
+    if (typeof selection === 'string') selection = { model: selection };
+    if (!selection || typeof selection !== 'object' || Array.isArray(selection)) {
+      throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'selection must be an object or model string');
+    }
+    for (const field of ['inline', 'inherit', 'session_inherited']) {
+      if (selection[field] !== undefined && typeof selection[field] !== 'boolean') {
+        throw modelPolicy.policyError('UNSUPPORTED_SELECTION', `${field} must be a boolean`);
+      }
+    }
+    modelPolicy.resolveDispatch({ ...request, override: selection });
+    // Check every alias independently: one matching model/effort must not hide
+    // a contradictory requested/applied value in the same override object.
+    for (const field of ['requested_model', 'applied_model', 'reasoning_effort', 'requested_effort', 'applied_effort']) {
+      if (selection[field] !== undefined) {
+        const key = field.endsWith('model') ? 'model' : 'effort';
+        modelPolicy.resolveDispatch({ ...request, override: { [key]: selection[field] } });
+      }
+    }
+  } catch (error) {
+    throw modelPolicy.policyError(error.code, `${source}: ${error.message}`, { ...error.details, source });
+  }
+}
+
+const GSD_MODEL_PROFILES = new Set(['quality', 'balanced', 'budget', 'adaptive', 'inherit']);
+const GSD_PROFILE_FOR_POLICY = Object.freeze({
+  economy: 'budget',
+  balanced: 'balanced',
+  premium: 'quality',
+});
+
+function boundDispatchContext(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return null;
+  const context = LOADED_DISPATCH_CONTEXTS.get(cfg);
+  if (!context) {
+    // Copies retain routed intent but lose the loader's private binding. Never
+    // interpret that loss of provenance as permission to use compatibility.
+    if (cfg.routed === true || cfg.dispatch_context?.mode === 'routed' || cfg.dispatch_context?.routed === true) {
+      throw modelPolicy.policyError(
+        'INVALID_CONFIG',
+        'config.dispatch_context lacks a loadConfig binding for routed intent; reload with routed: true',
+        { source: 'config.dispatch_context' },
+      );
+    }
+    return null;
+  }
+  if (cfg.dispatch_context !== context) {
+    throw modelPolicy.policyError(
+      'INVALID_CONFIG',
+      'config.dispatch_context was replaced after loadConfig',
+      { source: 'config.dispatch_context' },
+    );
+  }
+  return context;
+}
+
+function routedConfig(cfg) {
+  const context = boundDispatchContext(cfg);
+  return Boolean(context && context.mode === 'routed' && context.routed === true);
+}
+
+function normalizedRoutedControls(cfg, context) {
+  const normalized = context.normalized;
+  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+    throw modelPolicy.policyError(
+      'INVALID_CONFIG',
+      'config.dispatch_context.normalized is missing from the frozen routed context',
+      { source: 'config.dispatch_context.normalized' },
+    );
+  }
+  // `loadConfig` normalizes an unknown pipeline profile to `balanced` for
+  // compatibility readers. Routed readers must retain the raw nested value so
+  // an explicit typo cannot become indistinguishable from an omitted control.
+  for (const [namespace, values] of [
+    ['pipeline', context.configuration?.pipeline],
+    ['delivery_pipeline', context.configuration?.delivery_pipeline],
+    ['gsd', context.configuration?.gsd],
+  ]) {
+    if (!values || typeof values !== 'object' || Array.isArray(values)) continue;
+    for (const [field, valid] of [
+      ['fable', (value) => ['auto', 'off'].includes(value)],
+      ['fable_window_tokens', (value) => value === modelPolicy.WINDOW_THRESHOLD_TOKENS],
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(values, field) && !valid(values[field])) {
+        const source = `${namespace}.${field}`;
+        throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
+          `${source} ${JSON.stringify(values[field])} is not a canonical routed control`, { source });
+      }
+      if (field === 'fable' && Object.prototype.hasOwnProperty.call(values, field)
+          && values[field] !== normalized.fable) {
+        const source = `${namespace}.${field}`;
+        throw modelPolicy.policyError(
+          'CONFLICTING_OVERRIDE',
+          `${source} selects "${values[field]}", but pipeline.fable requires "${normalized.fable}"`,
+          { source, expected: normalized.fable, actual: values[field] },
+        );
+      }
+    }
+    if (!Object.prototype.hasOwnProperty.call(values, 'model_policy')) continue;
+    const raw = values.model_policy;
+    const profile = typeof raw === 'string' ? PROFILE_ALIASES[raw] || raw : null;
+    if (!['economy', 'balanced', 'premium'].includes(profile)) {
+      throw modelPolicy.policyError(
+        'UNSUPPORTED_SELECTION',
+        `${namespace}.model_policy ${JSON.stringify(raw)} is not a supported pipeline profile`,
+        { source: `${namespace}.model_policy` },
+      );
+    }
+    if (profile !== normalized.model_policy) {
+      throw modelPolicy.policyError(
+        'CONFLICTING_OVERRIDE',
+        `${namespace}.model_policy selects "${profile}", but pipeline.model_policy requires "${normalized.model_policy}"`,
+        { source: `${namespace}.model_policy`, expected: normalized.model_policy, actual: profile },
+      );
+    }
+  }
+  for (const [field, source] of [
+    ['fable', 'pipeline.fable'],
+    ['fable_window_tokens', 'pipeline.fable_window_tokens'],
+    ['model_policy', 'pipeline.model_policy'],
+  ]) {
+    if (cfg[field] !== normalized[field]) {
+      throw modelPolicy.policyError(
+        'INVALID_CONFIG',
+        `${source} changed after the routed configuration was loaded`,
+        { source },
+      );
+    }
+  }
+  if (!['auto', 'off'].includes(normalized.fable)) {
+    throw modelPolicy.policyError(
+      'INVALID_CONFIG',
+      `pipeline.fable "${normalized.fable}" is not a normalized consent value`,
+      { source: 'pipeline.fable' },
+    );
+  }
+  if (!Number.isInteger(normalized.fable_window_tokens) || normalized.fable_window_tokens <= 0) {
+    throw modelPolicy.policyError(
+      'INVALID_CONFIG',
+      'pipeline.fable_window_tokens is not a normalized positive integer',
+      { source: 'pipeline.fable_window_tokens' },
+    );
+  }
+  // ADR-014 fingerprints the threshold. The canonical resolver has no mutable
+  // per-dispatch threshold input, so a different normalized value must refuse
+  // instead of silently routing on the policy constant.
+  if (normalized.fable_window_tokens !== modelPolicy.WINDOW_THRESHOLD_TOKENS) {
+    throw modelPolicy.policyError(
+      'UNSUPPORTED_SELECTION',
+      `pipeline.fable_window_tokens is ${normalized.fable_window_tokens}, but the canonical resolver is fixed at ${modelPolicy.WINDOW_THRESHOLD_TOKENS}`,
+      { source: 'pipeline.fable_window_tokens', expected: modelPolicy.WINDOW_THRESHOLD_TOKENS, actual: normalized.fable_window_tokens },
+    );
+  }
+  return {
+    fable: normalized.fable,
+    fable_window_tokens: normalized.fable_window_tokens,
+    model_policy: normalized.model_policy,
+  };
+}
+
+function validateModelProfile(context, modelPolicyConfig, cfg, input) {
+  const configuration = context.configuration;
+  if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) {
+    throw modelPolicy.policyError('INVALID_CONFIG', 'config.dispatch_context.configuration is missing', {
+      source: 'config.dispatch_context.configuration',
+    });
+  }
+  const hasProfile = Object.prototype.hasOwnProperty.call(configuration, 'model_profile');
+  // GSD's project profile default is balanced. Treating an omitted field as that
+  // fixed default keeps the routed bridge deterministic while still refusing an
+  // explicit inherited/unknown profile that could select another ladder.
+  const profiles = [['config.model_profile', hasProfile ? configuration.model_profile : 'balanced']];
+  for (const [source, object] of [['input', input], ['config', cfg],
+    ['pipeline', configuration.pipeline], ['delivery_pipeline', configuration.delivery_pipeline],
+    ['gsd', configuration.gsd], ['config.gsd', cfg.gsd]]) {
+    if (object && Object.prototype.hasOwnProperty.call(object, 'model_profile')) {
+      profiles.push([`${source}.model_profile`, object.model_profile]);
+    }
+  }
+  const expected = GSD_PROFILE_FOR_POLICY[modelPolicyConfig.model_policy] || 'balanced';
+  for (const [source, profile] of profiles) {
+    if (!GSD_MODEL_PROFILES.has(profile)) {
+      throw modelPolicy.policyError(
+        'UNSUPPORTED_SELECTION',
+        `${source} ${JSON.stringify(profile)} is not a supported GSD profile`,
+        { source },
+      );
+    }
+    if (profile !== expected) {
+      throw modelPolicy.policyError(
+        'CONFLICTING_OVERRIDE',
+        `${source} selects "${profile}", but pipeline.model_policy requires "${expected}"`,
+        { source, expected, actual: profile },
+      );
+    }
+  }
+}
+
+// Public configuration bridge. Pass {root, runtime, role, signals, dispatch_id}
+// or a config returned by loadConfig. Never call a compatibility tier reader to
+// supply a missing model/effort. Receipt-backed repair escalation stays private
+// to dispatch-boundary.cjs; this reader cannot manufacture receipt authority.
+function resolveDispatch(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw modelPolicy.policyError('INVALID_INPUT', 'dispatch input must be an object', { source: 'input' });
+  }
+  const cfg = input.config === undefined
+    ? loadConfig(input.root, { ...input, routed: true }).config : input.config;
+  const context = boundDispatchContext(cfg);
+  if (!context) throw modelPolicy.policyError('INVALID_CONFIG', 'config must come from loadConfig', { source: 'config' });
+  if (!routedConfig(cfg)) {
+    throw modelPolicy.policyError(
+      'UNSUPPORTED_SELECTION',
+      'config is compatibility-only; routed callers must load with routed: true',
+      { source: 'config.dispatch_context.mode' },
+    );
+  }
+  if (context.error) throw modelPolicy.policyError(context.error.code, context.error.message, context.error.details);
+  const controls = normalizedRoutedControls(cfg, context);
+  const runtime = context.runtime;
+  for (const [source, identity] of [['config', cfg], ['config.dispatch_context.runtime', runtime]]) {
+    for (const [field, expected] of [['policy_version', modelPolicy.POLICY_VERSION], ['policy_hash', modelPolicy.POLICY_HASH]]) {
+      if (identity?.[field] !== expected) {
+        const location = `${source}.${field}`;
+        throw modelPolicy.policyError('INVALID_CONFIG', `${location} has a missing or stale policy fingerprint`, { source: location });
+      }
+    }
+  }
+  const identity = resolveRuntime(null, {
+    runtime: input.runtime !== undefined ? input.runtime : runtime.runtime,
+    runtimeMarker: runtime.runtime,
+    env: {},
+    routed: true,
+    ...(input.dispatch_id !== undefined
+      ? { dispatch_id: input.dispatch_id }
+      : runtime.dispatch_id !== undefined ? { dispatch_id: runtime.dispatch_id } : {}),
+  });
+  if (input.dispatch_id !== undefined && runtime.dispatch_id !== undefined
+      && identity.dispatch_id !== runtime.dispatch_id) {
+    throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'input.dispatch_id conflicts with runtime context', { source: 'input.dispatch_id' });
+  }
+  validateModelProfile(context, controls, cfg, input);
+  if (runtime.runtime === 'codex') {
+    for (const [source, object] of [['input', input], ['config', context.configuration],
+      ['pipeline', context.configuration.pipeline], ['delivery_pipeline', context.configuration.delivery_pipeline],
+      ['gsd', context.configuration.gsd]]) {
+      if (object && Object.prototype.hasOwnProperty.call(object, 'codex_models')) {
+        throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
+          `${source}.codex_models is compatibility-only; routed dispatch uses the canonical grid`,
+          { source: `${source}.codex_models` });
+      }
+    }
+    if (JSON.stringify(cfg.codex_models) !== JSON.stringify(DEFAULT_CODEX_MODELS)) {
+      throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
+        'config.codex_models changed from the compatibility default', { source: 'config.codex_models' });
+    }
+  }
+  const canonicalConfig = {
+    ...context.configuration,
+    // Carry the normalized controls on the request even though the current
+    // canonical policy only consumes its fixed threshold. The post-resolution
+    // gate below refuses any fable result that the consent cannot authorize.
+    fable: controls.fable,
+    fable_window_tokens: controls.fable_window_tokens,
+    pipeline: {
+      ...(context.configuration.pipeline && typeof context.configuration.pipeline === 'object'
+        && !Array.isArray(context.configuration.pipeline) ? context.configuration.pipeline : {}),
+      fable: controls.fable,
+      fable_window_tokens: controls.fable_window_tokens,
+    },
+  };
+  // `research` is both a GSD stage and a Shipyard role. Remove only recognized
+  // stage tiers from the canonical input, retaining the frozen raw configuration
+  // for source validation; concrete IDs and pipeline.models remain untouched.
+  if (canonicalConfig.models && typeof canonicalConfig.models === 'object'
+      && !Array.isArray(canonicalConfig.models)) {
+    canonicalConfig.models = Object.fromEntries(Object.entries(canonicalConfig.models)
+      .filter(([name, value]) => !isGsdStageTier(name, value)));
+  }
+  const request = { ...input, config: canonicalConfig, runtime: runtime.runtime };
+  if (identity.dispatch_id !== undefined) request.dispatch_id = identity.dispatch_id;
+  const resolution = modelPolicy.resolveDispatch(request);
+  if (resolution.model === 'fable' && controls.fable !== 'auto') {
+    throw modelPolicy.policyError(
+      'CONFLICTING_OVERRIDE',
+      `pipeline.fable is "${controls.fable}", so the canonical fable selection is not consented`,
+      { source: 'pipeline.fable', expected: 'auto', actual: controls.fable },
+    );
+  }
+  const selections = configurationSelections(context.configuration, resolution.role, runtime.runtime, resolution.model_key);
+  if (cfg.gsd?.runtime !== runtime.runtime) {
+    throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'config.gsd.runtime conflicts with runtime context', { source: 'config.gsd.runtime' });
+  }
+  // Also validate current parsed values, so edits made after loadConfig cannot
+  // bypass checks against the original configuration.
+  selections.push(...configurationSelections({ pipeline: cfg }, resolution.role, runtime.runtime, resolution.model_key));
+  for (const field of ['inline', 'inherit', 'session_inherited']) {
+    if (input[field] !== undefined) selections.push({ source: `input.${field}`, selection: { [field]: input[field] } });
+  }
+  for (const field of ['inlineOverride', 'session', 'sessionOverride', 'inherited',
+    'override', 'overrides', 'selection', 'launch_arguments', 'gsdOverride', 'perRoleOverride', 'configOverride']) {
+    if (input[field] !== undefined) selections.push({ source: `input.${field}`, selection: input[field] });
+  }
+  for (const { source, selection } of selections) {
+    validateSelection(request, source, selection);
+  }
+  return resolution;
+}
+
+// JSON dispatch is an input boundary, so an unknown top-level field must not be
+// mistaken for an omitted signal or override. Keep this allowlist aligned with
+// the fields the bridge and canonical resolver inspect; nested signals retain
+// their own canonical validation.
+const DISPATCH_INPUT_KEYS = new Set([
+  'root', 'runtime', 'role', 'signals', 'dispatch_id', 'dispatchId', 'config',
+  'model_profile', 'model', 'requested_model', 'applied_model',
+  'effort', 'requested_effort', 'applied_effort', 'reasoning_effort',
+  'backend', 'mechanism', 'agent_file', 'logical_model', 'logical_rung', 'rung', 'rung_index',
+  'override', 'overrides', 'selection', 'launch_arguments',
+  'gsdOverride', 'perRoleOverride', 'configOverride',
+  'inline', 'inherit', 'session_inherited',
+  'inlineOverride', 'session', 'sessionOverride', 'inherited',
+]);
+
+function validateJsonDispatchInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw modelPolicy.policyError('INVALID_INPUT', 'dispatch input must be an object', { source: 'input' });
+  }
+  const unknown = Object.keys(input).filter((key) => !DISPATCH_INPUT_KEYS.has(key));
+  if (unknown.length) {
+    throw modelPolicy.policyError(
+      'INVALID_INPUT',
+      `dispatch input has unsupported top-level field(s): ${unknown.join(', ')}`,
+      { source: 'input', fields: unknown },
+    );
+  }
+  return input;
+}
+
+function requireCompatibility(cfg, source) {
+  if (routedConfig(cfg)) {
+    throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
+      `${source} is compatibility-only; routed callers must use resolveDispatch`, { source });
+  }
 }
 
 // `fable` exists on the Claude runtime only. GSD's tier vocabulary is
@@ -1347,6 +1893,7 @@ const runtimeToken = (cfg) => {
 // `opus` at `max` effort, which is the ADR's own escalation ORDER (opus at depth
 // first, fable after) with the reason printed rather than silently swallowed.
 function fableRoute(role, signals = {}, cfg = DEFAULTS) {
+  requireCompatibility(cfg, 'fableRoute');
   let route = null;
   let why = '';
   // R1 — window pressure. The CALLER measures its own input and passes the
@@ -1456,6 +2003,7 @@ function modelRoute(role, signals = {}, cfg = DEFAULTS) {
 
 // role × signals routing. Returns a tier alias the Agent tool accepts.
 function resolveModel(role, signals = {}, cfg = DEFAULTS) {
+  if (routedConfig(cfg)) return resolveDispatch({ role, signals, config: cfg }).model;
   return modelRoute(role, signals, cfg).value;
 }
 
@@ -1543,7 +2091,8 @@ function effortRoute(role, model, cfg = DEFAULTS, signals = null) {
   return routed(row ? row(signals || {}) : DEFAULT_EFFORT_ROW, row ? 'row' : 'row:default');
 }
 
-function resolveEffort(role, model, cfg = DEFAULTS, signals = null) {
+function resolveEffort(role, model, cfg = DEFAULTS, signals = undefined) {
+  if (routedConfig(cfg)) return resolveDispatch({ role, signals, config: cfg, model }).effort;
   return effortRoute(role, model, cfg, signals).value;
 }
 
@@ -1567,6 +2116,15 @@ function resolveTaskLevel(role, signals = {}, cfg = DEFAULTS) {
 const ROUTE_RE = /^tier=([a-z][a-z0-9:+-]*)\(([a-z]+)\) effort=([a-z][a-z0-9:+-]*)\(([a-z]+)\)$/;
 
 function routeOf(role, signals = {}, cfg = DEFAULTS) {
+  // Legacy consumers parse tier/effort aliases; a canonical route alone loses
+  // the dispatch identity and cannot be recorded through that grammar.
+  if (routedConfig(cfg)) {
+    throw modelPolicy.policyError(
+      'UNSUPPORTED_SELECTION',
+      'routeOf is compatibility-only; routed callers must use the complete resolveDispatch result',
+      { source: 'routeOf' },
+    );
+  }
   const m = modelRoute(role, signals, cfg);
   const e = effortRoute(role, m.value, cfg, signals);
   return `tier=${m.rule}(${m.value}) effort=${e.rule}(${e.value})`;
@@ -1627,6 +2185,7 @@ const SIGNAL_GAPS = {
 
 // The rows this dispatch could not reach for want of a signal, as sentences.
 function signalGaps(role, signals = {}, cfg = DEFAULTS) {
+  requireCompatibility(cfg, 'signalGaps');
   const rows = Object.prototype.hasOwnProperty.call(SIGNAL_GAPS, role) ? SIGNAL_GAPS[role] : [];
   const out = rows.filter((r) => r.absent(signals)).map((r) => `${role} reads ${r.flag} and did not get it — ${r.cost}`);
   if (cfg.model_ladder === 'adaptive'
@@ -1642,6 +2201,7 @@ function signalGaps(role, signals = {}, cfg = DEFAULTS) {
 }
 
 module.exports = {
+  resolveDispatch, COMPATIBILITY_ROLES, ROUTED_ROLES,
   loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps,
   routeOf, parseRoute, ROUTE_RE, runtimeToken,
   parseCodexModelEntry, normalizeCodexModels,
@@ -1656,6 +2216,52 @@ module.exports = {
 // ── CLI ─────────────────────────────────────────────────────────────────────
 if (require.main === module) {
   const [, , cmd, ...rest] = process.argv;
+  // Routed CLI output is always the complete immutable launch decision.
+  // Parse before the compatibility flags can ignore an invalid signal.
+  if (cmd === 'dispatch' || rest.includes('--routed')) {
+    try {
+      let input;
+      if (cmd === 'dispatch') {
+        if (rest.length > 1) throw new Error('dispatch accepts one JSON argument and no trailing arguments');
+        input = validateJsonDispatchInput(JSON.parse(rest.length === 1 ? rest[0] : fs.readFileSync(0, 'utf8')));
+      } else {
+        if (cmd !== 'model') throw new Error('--routed requires model <role> or dispatch <json>');
+        input = { role: rest[0], signals: {} };
+        const flags = {
+          '--runtime': [input, 'runtime'], '--dispatch-id': [input, 'dispatch_id'],
+          '--model': [input, 'model'], '--effort': [input, 'effort'],
+          '--risk': [input.signals, 'risk'], '--type': [input.signals, 'type'],
+          '--complexity': [input.signals, 'complexity'], '--signature-state': [input.signals, 'signatureState'],
+          '--input-tokens': [input.signals, 'inputTokens'],
+        };
+        const seen = new Set();
+        for (let i = 1; i < rest.length; i++) {
+          const flag = rest[i];
+          if (seen.has(flag)) throw new Error(`duplicate routed flag ${flag}`);
+          seen.add(flag);
+          if (['--routed', '--json', '--explain'].includes(flag)) continue;
+          if (['--critical', '--checkpoint', '--contested'].includes(flag)) {
+            input.signals[flag.slice(2)] = true;
+          } else if (['--inline', '--inherit', '--session-inherited'].includes(flag)) {
+            input[flag.slice(2).replace(/-/g, '_')] = true;
+          } else if (flags[flag]) {
+            const value = rest[++i];
+            if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+            const [target, key] = flags[flag];
+            // Preserve the raw token text so the canonical signal validator can
+            // distinguish an explicit blank from numeric zero.
+            target[key] = value;
+          } else {
+            throw new Error(`unsupported routed flag ${flag}`);
+          }
+        }
+      }
+      process.stdout.write(JSON.stringify(resolveDispatch(input)) + '\n');
+    } catch (error) {
+      process.stderr.write(`pipeline-config: ${error.code || 'INVALID_INPUT'}: ${error.message}\n`);
+      process.exitCode = 1;
+    }
+  } else {
   const runtimeIndex = rest.indexOf('--runtime');
   const runtimeFlag = runtimeIndex === -1 ? undefined : rest[runtimeIndex + 1];
   const { config, warnings, file, exists, valid, error } = loadConfig(
@@ -1811,4 +2417,5 @@ if (require.main === module) {
     '            other two used to gate)\n'
   );
   process.exit(2);
+  }
 }

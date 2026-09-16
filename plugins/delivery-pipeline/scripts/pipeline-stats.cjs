@@ -25,6 +25,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig, ROLES, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const usageAttribution = require(path.join(__dirname, 'usage-attribution.cjs'));
 
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
@@ -68,6 +69,13 @@ const journal = fs.existsSync(JOURNAL)
       try { return [JSON.parse(line)]; } catch { return []; }
     })
   : [];
+
+// Usage attribution is a later join, not a substitute for dispatch telemetry.
+// Read its latest revision for the coverage report, while leaving malformed
+// lines visible as a separate data-quality warning instead of discarding the
+// whole ledger or treating every dispatch as joined.
+const usageLedger = usageAttribution.readLedger(GRAPH_DIR);
+const attributionRecords = usageAttribution.latestRecords(usageLedger.records);
 
 const loadedConfig = loadConfig(process.cwd());
 const { config: cfg } = loadedConfig;
@@ -308,7 +316,26 @@ const staticCodexNeedsFile = (event) =>
 // sentence, treating the row as comparable would silently compare one policy
 // against another. The dispatch recorder writes these fields from the route,
 // so equality is the integrity check for older or hand-written journal rows.
+const canonicalRouteParts = (route) => {
+  if (typeof route !== 'string') return null;
+  const match = /^role=([^\s]+)\s+rung=([^\s]+)\s+model=([^\s]+)\s+signals=(\S+)$/.exec(route.trim());
+  return match ? { role: match[1], rung: match[2], model_key: match[3] } : null;
+};
 const routeValid = (event) => {
+  // ADR-014 routes use concrete runtime selections and a structured rung. Keep
+  // this check intentionally structural: policy fingerprint and receipt
+  // compliance are reported by the independent reconciliation facts below.
+  // A stale but well-formed historical route is still a route, never rewritten
+  // into today's policy.
+  const canonicalRoute = present(event, 'route') ? event.route : event.reason;
+  if (present(event, 'route') || present(event, 'policy_hash') || present(event, 'rung')) {
+    const parsed = canonicalRouteParts(canonicalRoute);
+    return Boolean(parsed)
+      && (!present(event, 'role') || parsed.role === event.role)
+      && (!present(event, 'rung') || parsed.rung === event.rung)
+      && (!present(event, 'logical_rung') || parsed.rung === event.logical_rung)
+      && (!present(event, 'logical_model') || parsed.model_key === event.logical_model);
+  }
   if (!present(event, 'reason')) return false;
   const route = parseRoute(event.reason);
   return Boolean(route)
@@ -332,6 +359,35 @@ const attributionStatus = (event) => {
   if (requestedComparable(event)) return 'requested_complete';
   return 'incomplete';
 };
+
+// The ledger and journal are joined only for this report. No source row is
+// mutated, and a dispatch with no attribution record remains unjoined even if
+// it contains an observed provider model. Multiple current records for one
+// dispatch are kept visible as ambiguous rather than selecting one silently.
+// Build the durable-ledger index once: the journal window is bounded but the
+// append-only attribution ledger is not, so scanning it per dispatch makes the
+// report slower as history grows.
+const attributionsByDispatch = new Map();
+for (const record of attributionRecords) {
+  if (!record || !present(record, 'dispatch_id') || !present(record, 'runtime')
+      || !usageAttribution.hasTranscriptIdentity(record)) continue;
+  const matches = attributionsByDispatch.get(record.dispatch_id) || [];
+  matches.push(record);
+  attributionsByDispatch.set(record.dispatch_id, matches);
+}
+const ladderFacts = ladderEvents.map((event) => {
+  const matches = (attributionsByDispatch.get(event.dispatch_id) || [])
+    .filter((record) => present(event, 'runtime') && record.runtime === event.runtime);
+  return usageAttribution.reconcileTelemetry(event, {
+    usageMatches: matches,
+    usageAmbiguous: matches.length > 1,
+  });
+});
+const reconciliation = usageAttribution.summarizeTelemetry(ladderFacts);
+const attributionReconciliation = usageAttribution.summarizeTelemetry(attributionRecords);
+const telemetry = Object.fromEntries(
+  Object.entries(reconciliation).filter(([key]) => key !== 'records')
+);
 const missingAttribution = Object.fromEntries([
   'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'role', 'agent_file',
   'effort_applied', 'observed_model', 'observed_effort', 'dispatch_id',
@@ -373,6 +429,27 @@ const ladder = {
   by_observed_model: countField('observed_model'),
   by_observed_effort: countField('observed_effort'),
   by_dispatch_id: countField('dispatch_id'),
+  // Policy-aware dimensions are additive to the historical aliases above.
+  // They are sourced from the resolved/applied/observed facts, so a requested
+  // tier alias is never relabelled as a concrete provider model.
+  by_rung: reconciliation.by_rung,
+  by_concrete_model: reconciliation.by_concrete_model,
+  by_fired_signal: reconciliation.by_fired_signal,
+  by_requested_model: reconciliation.by_requested_model,
+  by_requested_effort: reconciliation.by_requested_effort,
+  by_applied_effort: reconciliation.by_applied_effort,
+  by_observed_effort_policy: reconciliation.by_observed_effort,
+  findings: reconciliation.findings,
+  by_finding: reconciliation.findings,
+  reconciliation,
+  telemetry,
+  policy_resolution: reconciliation.coverage.policy_resolution,
+  runtime_application: reconciliation.coverage.runtime_application,
+  provider_observation: reconciliation.coverage.provider_observation,
+  usage_join: reconciliation.coverage.usage_join,
+  resolution: reconciliation.coverage.policy_resolution,
+  application: reconciliation.coverage.runtime_application,
+  observation: reconciliation.coverage.provider_observation,
 };
 // Keep the status grouping derived from the same predicates above. It is added
 // after the generic field counters so the journal rows themselves are never
@@ -411,12 +488,19 @@ if (asJson) {
     reuse_scans: reuseScans.length,
     reuse_hits: reuseHits,
     journal_events: journal.length,
+    usage_attribution_records: attributionRecords.length,
+    usage_attribution_warnings: usageLedger.warnings,
+    usage_reconciliation: attributionReconciliation,
     prs_truncated: prsTruncated,
     // A zero-row result is not the same as a reachable repository with no
     // matching PRs. Keep the outage visible to JSON consumers too; otherwise
     // automation can treat incomplete GitHub data as a clean pending board.
     unreachable_repos: unreachableRepos,
     ladder,
+    // The detailed per-dispatch facts live under ladder.reconciliation. Keep
+    // the top-level alias summary-only so JSON consumers get the same coverage
+    // without serializing every fact twice.
+    reconciliation: telemetry,
   }, null, 2));
   process.exit(0);
 }
@@ -426,6 +510,9 @@ if (prsTruncated) {
 if (unreachableRepos.length) {
   const unreachableLabels = unreachableRepos.map((repo) => repo || 'the project repository');
   console.log(`⚠ could not list PRs for ${unreachableLabels.join(', ')} — every ticket in ${unreachableRepos.length > 1 ? 'those repos' : 'that repo'} reads as pending here regardless of what actually shipped`);
+}
+if (usageLedger.warnings.length) {
+  console.log(`⚠ [${windowLabel}] usage attribution ledger has ${usageLedger.warnings.length} malformed line(s) — those joins remain unknown`);
 }
 if (ladder.dispatches) {
   console.log(
@@ -453,6 +540,20 @@ if (ladder.dispatches) {
   if (ladder.missing_dispatch_id) gaps.push(`${ladder.missing_dispatch_id} missing dispatch correlation id`);
   if (gaps.length) {
     console.log(`⚠ [${windowLabel}] ladder telemetry gaps: ${gaps.join(', ')} — those dispatches cannot be compared for cost or quality`);
+  }
+  const coverage = reconciliation.coverage;
+  console.log(
+    `telemetry [${windowLabel}]: ${coverage.policy_resolution.current}/${ladder.dispatches} policy-resolved, ` +
+    `${coverage.runtime_application.applied}/${ladder.dispatches} runtime-applied, ` +
+    `${coverage.provider_observation.observed}/${ladder.dispatches} provider-observed, ` +
+    `${coverage.usage_join.joined}/${ladder.dispatches} usage-joined; ` +
+    `${reconciliation.compliant} compliant, ${reconciliation.comparison_ready} comparison-ready`
+  );
+  const findings = Object.entries(reconciliation.findings)
+    .filter(([, count]) => count > 0)
+    .map(([name, count]) => `${count} ${name}`);
+  if (findings.length) {
+    console.log(`⚠ [${windowLabel}] policy reconciliation findings: ${findings.join(', ')} — each fact remains independently visible`);
   }
 }
 

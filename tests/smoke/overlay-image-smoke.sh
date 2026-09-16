@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd "$(dirname "$0")/../.."
+
 [[ -f Dockerfile ]] || { echo "missing Dockerfile"; exit 1; }
 [[ -f scripts/sync-karpathy-skills.sh ]] || { echo "missing scripts/sync-karpathy-skills.sh"; exit 1; }
 [[ -f scripts/install-claude-plugins.sh ]] || { echo "missing scripts/install-claude-plugins.sh"; exit 1; }
@@ -15,7 +17,9 @@ for f in commands/route.md commands/investigate.md commands/decompose.md command
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
          scripts/usage-attribution.cjs scripts/usage-report.cjs \
          scripts/frontmatter.cjs scripts/pipeline-config.cjs scripts/front.cjs \
-         workflows/drift-gate.mjs workflows/executors.mjs workflows/fix-round.mjs; do
+         scripts/claude-workflow-host.cjs scripts/claude-investigation-host.cjs \
+         workflows/drift-gate.mjs workflows/executors.mjs workflows/fix-round.mjs \
+         workflows/investigation-research.mjs; do
   [[ -f "plugins/delivery-pipeline/$f" ]] || { echo "missing delivery-pipeline $f"; exit 1; }
 done
 bash -n plugins/delivery-pipeline/scripts/epic-branch.sh || { echo "epic-branch.sh syntax error"; exit 1; }
@@ -44,7 +48,7 @@ NODE
 # is expected to fail with "Illegal return statement". The runtime wraps the body
 # in an async function — replicate that wrap, THEN check, to catch real syntax
 # errors (typos) without false-failing on the intended top-level return.
-for wf in drift-gate executors fix-round; do
+for wf in drift-gate executors fix-round investigation-research; do
   f="plugins/delivery-pipeline/workflows/$wf.mjs"
   {
     echo "let agent,parallel,phase,log,args;"
@@ -83,6 +87,13 @@ CAP_VER="$(node -p 'require("./capabilities/delivery-pipeline/capability.json").
 [[ ! -f scripts/sync-dev-copilot.sh ]] || { echo "sync-dev-copilot.sh should be gone"; exit 1; }
 [[ ! -f scripts/install-dev-copilot.sh ]] || { echo "install-dev-copilot.sh should be gone"; exit 1; }
 
+if ! command -v docker >/dev/null 2>&1; then
+  echo "overlay image smoke: SKIP image-backed checks (Docker unavailable)" >&2
+  exit 0
+fi
+
+# Always build the images from the current checkout. Reusing locally tagged
+# images would let this smoke test pass against stale Dockerfiles or sources.
 rm -rf .build/karpathy-skills
 KARPATHY_SKILLS_REPO="${KARPATHY_SKILLS_REPO:-https://github.com/multica-ai/andrej-karpathy-skills}" \
 KARPATHY_SKILLS_REF="${KARPATHY_SKILLS_REF:-2c606141936f1eeef17fa3043a72095b4765b9c2}" \
@@ -107,8 +118,13 @@ docker build -f Dockerfile -t claude-shipyard:test \
   --build-arg KARPATHY_SKILLS_DIR=.build/karpathy-skills \
   .
 
-docker run --rm claude-shipyard:test bash -lc '
+docker run --rm \
+  -e SHIPYARD_EXPECTED_POLICY_HASH="$(node -p 'require("./plugins/delivery-pipeline/scripts/model-policy.cjs").POLICY_HASH')" \
+  claude-shipyard:test bash -lc '
   set -euo pipefail
+  test -f /opt/delivery-pipeline/scripts/model-policy.cjs \
+    || { echo "overlay image smoke: image lacks ADR-014 model policy; rebuild the smoke image" >&2; exit 1; }
+  node -e "require(\"assert/strict\").equal(require(\"/opt/delivery-pipeline/scripts/model-policy.cjs\").POLICY_HASH, process.env.SHIPYARD_EXPECTED_POLICY_HASH)"
   test -d /opt/karpathy-skills
   test -d /opt/delivery-pipeline
   test -x /opt/delivery-pipeline/scripts/validate-graph.cjs
@@ -119,9 +135,12 @@ docker run --rm claude-shipyard:test bash -lc '
   test -f /opt/delivery-pipeline/scripts/usage-report.cjs
   test -f /opt/delivery-pipeline/scripts/frontmatter.cjs
   test -f /opt/delivery-pipeline/scripts/pipeline-config.cjs
+  test -f /opt/delivery-pipeline/scripts/claude-workflow-host.cjs
+  test -f /opt/delivery-pipeline/scripts/claude-investigation-host.cjs
   test -f /opt/delivery-pipeline/workflows/executors.mjs
   test -f /opt/delivery-pipeline/workflows/drift-gate.mjs
   test -f /opt/delivery-pipeline/workflows/fix-round.mjs
+  test -f /opt/delivery-pipeline/workflows/investigation-research.mjs
   test -x /usr/local/bin/install-claude-plugins.sh
   test -x /usr/local/bin/shipyard-trust
   command -v claude >/dev/null

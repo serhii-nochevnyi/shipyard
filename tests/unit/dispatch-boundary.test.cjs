@@ -113,12 +113,17 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   });
   assert.deepStrictEqual(calls[0].context, { ticket: 'T-36-01' });
   assert.equal(result.requested_model, 'gpt-5.6-luna');
+  assert.equal(result.resolution.task_level, 'complex');
   assert.equal(result.applied_model, 'gpt-5.6-luna');
   assert.equal(result.observed_effort, 'max');
   assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'record', 'receipt']);
   assert.equal(result.trace.at(-1).status, 'passed');
   assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].ticket, 'T-36-01');
   assert.equal(recorded[0].receipt.compliance, 'verified');
+  assert.equal(recorded[0].launch_id, result.receipt.launch_id);
+  assert.deepStrictEqual(recorded[0].launch_arguments, calls[0].resolution.launch_arguments);
+  assert.deepStrictEqual(recorded[0].signals, calls[0].resolution.signals);
   assert.deepStrictEqual(recorded[0].receipt, result.receipt);
   assert.equal(recorded[0].receipt.compliance_proof.boundary, 'adr-014.dispatch-boundary');
   assert.equal(result.receipt.compliance, 'verified');
@@ -128,7 +133,126 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   assert.ok(Object.isFrozen(result.trace));
 });
 
-test('executor critical dispatch uses the Astra/medium escalation rung', () => {
+test('reconciliation requires authenticated current receipt evidence across boundary instances', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-reconcile-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
+    const writer = boundaryModule.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
+    const result = writer.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-36-08' });
+    const reader = boundaryModule.createDispatchBoundary({ recorder });
+    const facts = reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' });
+    assert.equal(facts.applied_model, result.receipt.applied_model);
+    assert.equal(facts.ticket, 'T-36-08');
+    assert.equal(facts.task_level, result.resolution.task_level);
+    assert.deepStrictEqual(facts.application_receipt, result.receipt);
+    assert.deepStrictEqual(facts.launch_arguments, result.resolution.launch_arguments);
+    assert.throws(() => reader.reconcile('absent', { ticket: 'T-36-08' }), /compliant applied receipt/);
+    // A recorder claim is the lease used by dispatch-record reconciliation.
+    // A repair cannot consume the receipt while the record writer still owns
+    // that lease between its trusted read and durable record write.
+    const recordClaim = recorder.claim(result.dispatch_id, 'dispatch-record-mark');
+    assert.equal(recordClaim.claimed, true);
+    const competingRepair = recorder.claim(result.dispatch_id, 'repair-dispatch');
+    assert.equal(competingRepair.claimed, false);
+    assert.deepStrictEqual(recorder.release(result.dispatch_id, 'dispatch-record-mark', recordClaim), { released: true });
+    const file = path.join(dir, 'receipts', `record-${crypto.createHash('sha256').update(result.dispatch_id).digest('hex')}.json`);
+    const original = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const mutate of [
+      (record) => { delete record.receipt; },
+      (record) => { record.receipt.applied_model = 'invented'; },
+      (record) => { record.receipt.policy_hash = 'stale'; },
+    ]) {
+      const envelope = JSON.parse(JSON.stringify(original));
+      mutate(envelope.payload);
+      fs.writeFileSync(file, JSON.stringify(envelope));
+      assert.throws(() => reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' }), /compliant applied receipt/);
+    }
+    fs.writeFileSync(file, JSON.stringify(original.payload));
+    assert.throws(() => reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' }), /compliant applied receipt/);
+    fs.writeFileSync(file, JSON.stringify(original));
+    const claim = recorder.claim(result.dispatch_id, 'repair-dispatch');
+    assert.equal(claim.claimed, true);
+    assert.deepStrictEqual(recorder.consume(result.dispatch_id, 'repair-dispatch', claim), { consumed: true });
+    assert.ok(recorder.getReceipt(result.dispatch_id), 'consumed receipt remains durable history');
+    assert.throws(() => reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' }), /already consumed/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('reconciliation refuses without an explicitly configured recorder', () => {
+  const reader = boundaryModule.createDispatchBoundary();
+  assert.throws(
+    () => reader.reconcile('dispatch-without-recorder'),
+    (error) => error.code === 'RECORD_UNAVAILABLE'
+      && /explicitly configured durable dispatch recorder/.test(error.message),
+  );
+});
+
+test('receipts and repair predecessors remain bound to their launch ticket', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-ticket-binding-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter() },
+      recorder,
+    });
+    const base = boundary.dispatch({
+      runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' },
+    }, { ticket: 'T-36-A' });
+    assert.throws(
+      () => boundary.reconcile(base.dispatch_id, { ticket: 'T-36-B' }),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /ticket/.test(error.message),
+    );
+    assert.throws(
+      () => boundary.dispatch({
+        runtime: 'codex', role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: base.receipt },
+        previous_dispatch_id: base.dispatch_id,
+      }, { ticket: 'T-36-B' }),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /ticket/.test(error.message),
+    );
+    const sameTicketRepair = boundary.dispatch({
+      runtime: 'codex', role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+    }, { ticket: 'T-36-A' });
+    assert.equal(sameTicketRepair.ticket, 'T-36-A');
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('an unticketed repair cannot consume an unticketed predecessor', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-missing-ticket-'));
+  try {
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter() },
+      recorder: boundaryModule.createDurableRecorder(storeDir),
+    });
+    const base = boundary.dispatch({
+      runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' },
+    });
+    const repair = {
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+    };
+    assert.throws(
+      () => boundary.dispatch(repair),
+      (error) => error.code === 'INVALID_INPUT' && /ticket.*launch context/.test(error.message),
+    );
+    assert.throws(
+      () => boundary.dispatch(repair, { ticket: 'T-36-MISSING' }),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /not bound to a ticket/.test(error.message),
+    );
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('executor critical dispatch uses the Astra/low escalation rung', () => {
   let launched;
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: {
@@ -143,10 +267,10 @@ test('executor critical dispatch uses the Astra/medium escalation rung', () => {
   });
   assert.deepStrictEqual(launched.launch_arguments, {
     model: 'gpt-6-astra',
-    reasoning_effort: 'medium',
+    reasoning_effort: 'low',
   });
   assert.equal(result.applied_model, 'gpt-6-astra');
-  assert.equal(result.applied_effort, 'medium');
+  assert.equal(result.applied_effort, 'low');
 });
 
 test('static Codex roles pass the resolver-selected generated file to the adapter', () => {
@@ -160,9 +284,9 @@ test('static Codex roles pass the resolver-selected generated file to the adapte
   const result = boundary.dispatch({
     runtime: 'codex',
     role: 'research',
-    signals: { type: 'alternatives' },
+    signals: { complexity: 'very-complex' },
   });
-  assert.equal(launched.agent_file, 'shipyard-inv-research-alternatives.toml');
+  assert.equal(launched.agent_file, 'shipyard-inv-research-critical.toml');
   assert.equal(result.receipt.agent_file, launched.agent_file);
   assert.equal(launched.launch_arguments, undefined);
 });
@@ -185,8 +309,36 @@ test('Claude launches use the independent native grid with an explicit effort', 
   assert.equal(result.receipt.policy_hash, policy.POLICY_HASH);
 });
 
+test('Claude applies the amended research, decomposition, and executor ladder at the boundary', () => {
+  const cases = [
+    ['research', {}, 'opus', 'medium'],
+    ['research', { type: 'alternatives' }, 'opus', 'medium'],
+    ['research', { complexity: 'very-complex' }, 'opus', 'max'],
+    ['decomposition', {}, 'opus', 'medium'],
+    ['decomposition', { critical: true }, 'opus', 'max'],
+    ['decomposition', { checkpoint: true }, 'opus', 'max'],
+    ['executor', {}, 'sonnet', 'max'],
+    ['executor', { critical: true }, 'opus', 'low'],
+    ['executor', { checkpoint: true }, 'opus', 'low'],
+  ];
+  for (const [role, signals, model, effort] of cases) {
+    let launched;
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        claude: fakeAdapter({ onLaunch: (resolution) => { launched = resolution; } }),
+      },
+      recorder: () => true,
+    });
+    const result = boundary.dispatch({ runtime: 'claude', role, signals });
+    assert.deepStrictEqual(launched.launch_arguments, { model, effort }, `${role}/${JSON.stringify(signals)}`);
+    assert.equal(result.applied_model, model, `${role} model`);
+    assert.equal(result.applied_effort, effort, `${role} effort`);
+  }
+});
+
 test('Claude repair receipts authorize only the Claude-native predecessor rung', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-claude-chain-'));
+  const ticket = 'T-36-CLAUDE';
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: { claude: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -195,7 +347,7 @@ test('Claude repair receipts authorize only the Claude-native predecessor rung',
     runtime: 'claude',
     role: 'ci-fix',
     signals: { signatureState: 'first' },
-  });
+  }, { ticket });
   assert.equal(base.applied_model, 'opus');
   assert.equal(base.applied_effort, 'medium');
   const repeat = boundary.dispatch({
@@ -203,7 +355,7 @@ test('Claude repair receipts authorize only the Claude-native predecessor rung',
     role: 'ci-fix',
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
-  });
+  }, { ticket });
   assert.equal(repeat.applied_model, 'opus');
   assert.equal(repeat.applied_effort, 'max');
   const exhausted = boundary.dispatch({
@@ -211,7 +363,7 @@ test('Claude repair receipts authorize only the Claude-native predecessor rung',
     role: 'ci-fix',
     signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
     previous_dispatch_id: repeat.dispatch_id,
-  });
+  }, { ticket });
   assert.equal(exhausted.applied_model, 'opus');
   assert.equal(exhausted.applied_effort, 'max');
 });
@@ -312,6 +464,7 @@ test('a caller cannot replay a reserved dispatch id', () => {
 
 test('repair escalations require the boundary receipt chain and consume each predecessor once', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-chain-'));
+  const ticket = 'T-36-CHAIN';
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -328,22 +481,23 @@ test('repair escalations require the boundary receipt chain and consume each pre
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'first' },
-  });
+  }, { ticket });
   const repeat = boundary.dispatch({
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
-  });
+  }, { ticket });
   assert.equal(base.applied_model, 'gpt-5.6-luna');
-  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_model, 'gpt-6-astra');
+  assert.equal(repeat.applied_effort, 'low');
   assert.throws(
     () => boundary.dispatch({
       runtime: 'codex',
       role: 'ci-fix',
       signals: { signatureState: 'repeat', priorApplied: base.receipt },
       previous_dispatch_id: base.dispatch_id,
-    }),
+    }, { ticket }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
   const exhausted = boundary.dispatch({
@@ -351,13 +505,14 @@ test('repair escalations require the boundary receipt chain and consume each pre
     role: 'ci-fix',
     signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
     previous_dispatch_id: repeat.dispatch_id,
-  });
+  }, { ticket });
   assert.equal(exhausted.applied_model, 'gpt-6-astra');
   assert.equal(exhausted.applied_effort, 'medium');
 });
 
 test('same-boundary function recorders can authorize their own in-memory repair chain', () => {
   const recorder = () => true;
+  const ticket = 'T-36-FUNCTION';
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder,
@@ -367,15 +522,16 @@ test('same-boundary function recorders can authorize their own in-memory repair 
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'function-recorder-base',
-  });
+  }, { ticket });
   const repeat = boundary.dispatch({
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'function-recorder-repeat',
-  });
-  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  }, { ticket });
+  assert.equal(repeat.applied_model, 'gpt-6-astra');
+  assert.equal(repeat.applied_effort, 'low');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
 });
 
@@ -558,6 +714,9 @@ test('requested values copied without adapter-applied evidence are not a receipt
 
 test('receipt contradictions, stale policy, and wrong agent file are rejected', () => {
   const cases = [
+    [{ launch_arguments: { model: 'invented' } }, 'NONCOMPLIANT_RECEIPT'],
+    [{ logical_rung: 'invented' }, 'NONCOMPLIANT_RECEIPT'],
+    [{ signals: { critical: true } }, 'NONCOMPLIANT_RECEIPT'],
     [
       { applied_model: 'gpt-5.6-sol' },
       'NONCOMPLIANT_RECEIPT',
@@ -571,7 +730,7 @@ test('receipt contradictions, stale policy, and wrong agent file are rejected', 
       'NONCOMPLIANT_RECEIPT',
     ],
     [
-      { observed_effort: 'low' },
+      { observed_effort: 'medium' },
       'NONCOMPLIANT_RECEIPT',
     ],
   ];
@@ -955,6 +1114,7 @@ test('separate boundary instances share durable reservation and finalized receip
 
 test('durable receipt repair survives a fresh boundary instance and consumes once', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-repair-'));
+  const ticket = 'T-36-DURABLE';
   const firstBoundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -964,7 +1124,7 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'durable-repair-base',
-  });
+  }, { ticket });
   const makeFreshBoundary = () => boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -975,8 +1135,9 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'durable-repair-repeat',
-  });
-  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  }, { ticket });
+  assert.equal(repeat.applied_model, 'gpt-6-astra');
+  assert.equal(repeat.applied_effort, 'low');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
   assert.throws(
     () => makeFreshBoundary().dispatch({
@@ -985,13 +1146,14 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
       signals: { signatureState: 'repeat', priorApplied: base.receipt },
       previous_dispatch_id: base.dispatch_id,
       dispatch_id: 'durable-repair-repeat-again',
-    }),
+    }, { ticket }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
 });
 
 test('an unsigned legacy repair commit cannot recover a successor or block replay', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-repair-crash-'));
+  const ticket = 'T-36-CRASH';
   const base = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -1000,7 +1162,7 @@ test('an unsigned legacy repair commit cannot recover a successor or block repla
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'crash-commit-base',
-  });
+  }, { ticket });
   const successorId = 'crash-commit-successor';
   const recordInput = {
     dispatch_id: successorId,
@@ -1038,12 +1200,13 @@ test('an unsigned legacy repair commit cannot recover a successor or block repla
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'legacy-repair-replacement',
-  });
+  }, { ticket });
   assert.equal(repaired.dispatch_id, 'legacy-repair-replacement');
 });
 
 test('an authenticated repair commit makes its predecessor non-replayable before physical consumption', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-recorded-crash-'));
+  const ticket = 'T-36-RECORDED';
   const base = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -1052,7 +1215,7 @@ test('an authenticated repair commit makes its predecessor non-replayable before
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'recorded-crash-base',
-  });
+  }, { ticket });
   const successorId = 'recorded-crash-successor';
   const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
   const child = spawnSync(process.execPath, ['-e', `
@@ -1087,7 +1250,7 @@ test('an authenticated repair commit makes its predecessor non-replayable before
       signals: { signatureState: 'repeat', priorApplied: prior },
       previous_dispatch_id: process.argv[4],
       dispatch_id: ${JSON.stringify(successorId)},
-    });
+    }, { ticket: ${JSON.stringify(ticket)} });
   `, modulePath, storeDir, JSON.stringify(base.receipt), base.dispatch_id], { encoding: 'utf8' });
   assert.equal(child.status, 73, child.stderr);
 
@@ -1106,7 +1269,7 @@ test('an authenticated repair commit makes its predecessor non-replayable before
       signals: { signatureState: 'repeat', priorApplied: base.receipt },
       previous_dispatch_id: base.dispatch_id,
       dispatch_id: 'recorded-crash-replay',
-    }),
+    }, { ticket }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
 });
@@ -1196,6 +1359,8 @@ test('a self-consistent forged Claude predecessor from a custom recorder cannot 
 
 test('independent repair chains do not share a global latest receipt lane', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-parallel-repair-'));
+  const ticketA = 'T-36-PARALLEL-A';
+  const ticketB = 'T-36-PARALLEL-B';
   const makeBoundary = () => boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -1205,37 +1370,39 @@ test('independent repair chains do not share a global latest receipt lane', () =
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'parallel-base-a',
-  });
+  }, { ticket: ticketA });
   const baseB = makeBoundary().dispatch({
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'parallel-base-b',
-  });
+  }, { ticket: ticketB });
   const repeatA = makeBoundary().dispatch({
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'repeat', priorApplied: baseA.receipt },
     previous_dispatch_id: baseA.dispatch_id,
     dispatch_id: 'parallel-repeat-a',
-  });
+  }, { ticket: ticketA });
   const repeatB = makeBoundary().dispatch({
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'repeat', priorApplied: baseB.receipt },
     previous_dispatch_id: baseB.dispatch_id,
     dispatch_id: 'parallel-repeat-b',
-  });
+  }, { ticket: ticketB });
   assert.equal(repeatA.resolution.prior_applied.dispatch_id, baseA.dispatch_id);
   assert.equal(repeatB.resolution.prior_applied.dispatch_id, baseB.dispatch_id);
 });
 
 test('top-level dispatch continues a repair chain with the same durable recorder', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-convenience-'));
+  const ticket = 'T-36-CONVENIENCE';
   const recorder = boundaryModule.createDurableRecorder(storeDir);
   const options = {
     adapters: { codex: fakeAdapter() },
     recorder,
+    context: { ticket },
   };
   const base = boundaryModule.dispatch({
     runtime: 'codex',
@@ -1250,12 +1417,14 @@ test('top-level dispatch continues a repair chain with the same durable recorder
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'convenience-repeat',
   }, options);
-  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_model, 'gpt-6-astra');
+  assert.equal(repeat.applied_effort, 'low');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
 });
 
 test('a failed repair launch releases its predecessor claim for a later attempt', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-retry-'));
+  const ticket = 'T-36-RETRY';
   const recorder = boundaryModule.createDurableRecorder(storeDir);
   const baseBoundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
@@ -1266,7 +1435,7 @@ test('a failed repair launch releases its predecessor claim for a later attempt'
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'retry-base',
-  });
+  }, { ticket });
   const failing = boundaryModule.createDispatchBoundary({
     adapters: {
       codex: fakeAdapter({ onLaunch: () => { throw new Error('launch failed'); } }),
@@ -1280,7 +1449,7 @@ test('a failed repair launch releases its predecessor claim for a later attempt'
       signals: { signatureState: 'repeat', priorApplied: base.receipt },
       previous_dispatch_id: base.dispatch_id,
       dispatch_id: 'retry-failed',
-    }),
+    }, { ticket }),
     /launch failed/,
   );
   const retry = boundaryModule.createDispatchBoundary({
@@ -1292,8 +1461,9 @@ test('a failed repair launch releases its predecessor claim for a later attempt'
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'retry-success',
-  });
-  assert.equal(retry.applied_model, 'gpt-5.6-sol');
+  }, { ticket });
+  assert.equal(retry.applied_model, 'gpt-6-astra');
+  assert.equal(retry.applied_effort, 'low');
 });
 
 test('durable recorder writes require boundary authority', () => {
@@ -1357,8 +1527,42 @@ test('an active owner renews its lease, but expiry permits takeover despite a li
   assert.deepStrictEqual(recorder.renewClaim('live-claim-id', 'other-owner', takeover), { renewed: true });
 });
 
+test('a projection fence survives lock expiry while its process is still committing', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-live-projection-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const claim = recorder.claim('live-projection-id', 'dispatch-record');
+  assert.equal(claim.claimed, true);
+  const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
+  const lockName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-recovery-') && name.endsWith('.json'));
+  assert.ok(claimName);
+  assert.equal(lockName, undefined, 'the projection lock is created only while the fence callback runs');
+
+  const result = recorder.withClaim('live-projection-id', 'dispatch-record', claim, () => {
+    const claimPath = path.join(storeDir, claimName);
+    const currentClaim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+    currentClaim.lease_expires_at = new Date(Date.now() - 1000).toISOString();
+    fs.writeFileSync(claimPath, JSON.stringify(currentClaim) + '\n');
+
+    const activeLockName = fs.readdirSync(storeDir)
+      .find((name) => name.startsWith('claim-recovery-') && name.endsWith('.json'));
+    assert.ok(activeLockName);
+    const lockPath = path.join(storeDir, activeLockName);
+    const activeLock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    assert.equal(activeLock.fenced_until_release, true);
+    activeLock.lease_expires_at = new Date(Date.now() - 1000).toISOString();
+    fs.writeFileSync(lockPath, JSON.stringify(activeLock) + '\n');
+
+    const contender = boundaryModule.createDurableRecorder(storeDir);
+    assert.deepStrictEqual(contender.claim('live-projection-id', 'repair'), { claimed: false });
+  });
+
+  assert.equal(result.committed, true);
+  assert.deepStrictEqual(recorder.release('live-projection-id', 'dispatch-record', claim), { released: true });
+});
+
 test('a superseded claim owner cannot commit after an expired-lease takeover', async () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-fenced-claim-'));
+  const ticket = 'T-36-FENCED';
   const base = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -1367,7 +1571,7 @@ test('a superseded claim owner cannot commit after an expired-lease takeover', a
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'fenced-base',
-  });
+  }, { ticket });
   let finishLaunch;
   const pendingLaunch = new Promise((resolve) => { finishLaunch = resolve; });
   const oldOwner = boundaryModule.createDispatchBoundary({
@@ -1384,7 +1588,7 @@ test('a superseded claim owner cannot commit after an expired-lease takeover', a
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'fenced-old-successor',
-  });
+  }, { ticket });
 
   const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
   const claimPath = path.join(storeDir, claimName);
@@ -1473,6 +1677,7 @@ test('directory fsync failure preserves a complete exclusive reservation', () =>
 test('durable observation capabilities survive process restart independently', () => {
   for (const unavailable of [{ model: true, effort: true }, { model: true, effort: false }, { model: false, effort: true }]) {
     const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-observation-restart-'));
+    const ticket = 'T-36-OBSERVATION';
     const base = boundaryModule.createDispatchBoundary({
       adapters: { codex: fakeAdapter({
         capabilities: { observedModel: !unavailable.model, observedEffort: !unavailable.effort },
@@ -1482,7 +1687,7 @@ test('durable observation capabilities survive process restart independently', (
         },
       }) },
       recorder: boundaryModule.createDurableRecorder(storeDir),
-    }).dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' });
+    }).dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' }, { ticket });
     assert.deepStrictEqual(base.observation_unavailable, unavailable);
     const child = spawnSync(process.execPath, ['-e', `
       const b = require(process.argv[1]);
@@ -1493,7 +1698,7 @@ test('durable observation capabilities survive process restart independently', (
       const boundary = b.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
       const result = boundary.dispatch({ runtime: 'codex', role: 'ci-fix',
         signals: { signatureState: 'repeat', priorApplied: base.receipt },
-        previous_dispatch_id: 'base', dispatch_id: 'repeat' });
+        previous_dispatch_id: 'base', dispatch_id: 'repeat' }, { ticket: ${JSON.stringify('T-36-OBSERVATION')} });
       process.stdout.write(JSON.stringify(result.resolution));
     `, require.resolve('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'), storeDir], { encoding: 'utf8' });
     assert.equal(child.status, 0, child.stderr);
@@ -1512,16 +1717,17 @@ test('durable observation capabilities survive process restart independently', (
       assert.throws(() => boundaryModule.createDispatchBoundary({ recorder: freshRecorder }).resolve({
         runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'repeat', priorApplied: base.receipt },
         previous_dispatch_id: 'base', dispatch_id: `missing-${field}`,
-      }, freshRecorder), (error) => error.code === 'UNVERIFIED_RECEIPT');
+      }, freshRecorder, ticket), (error) => error.code === 'UNVERIFIED_RECEIPT');
     }
   }
 });
 
 test('caller capability claims cannot relax stored observation requirements', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-observation-forged-'));
+  const ticket = 'T-36-FORGED-OBSERVATION';
   const recorder = boundaryModule.createDurableRecorder(storeDir);
   const base = boundaryModule.createDispatchBoundary({ adapters: { codex: fakeAdapter() }, recorder })
-    .dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' });
+    .dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' }, { ticket });
   const forged = { ...base.receipt, observed_model: 'unknown', observed_effort: 'unknown',
     observation_unavailable: { model: true, effort: true } };
   const freshRecorder = boundaryModule.createDurableRecorder(storeDir);
@@ -1529,7 +1735,7 @@ test('caller capability claims cannot relax stored observation requirements', ()
   assert.throws(() => fresh.resolve({ runtime: 'codex', role: 'ci-fix',
     observation_unavailable: { model: true, effort: true },
     signals: { signatureState: 'repeat', priorApplied: forged },
-    previous_dispatch_id: base.dispatch_id, dispatch_id: 'forged' }, freshRecorder),
+    previous_dispatch_id: base.dispatch_id, dispatch_id: 'forged' }, freshRecorder, ticket),
   (error) => error.code === 'UNVERIFIED_RECEIPT');
 });
 
@@ -1572,6 +1778,438 @@ test('file-backed reservation is atomic across concurrent Node processes', async
   const files = fs.readdirSync(storeDir);
   assert.equal(files.length, 1);
   assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, files[0]), 'utf8')).dispatch_id, 'atomic-id');
+});
+
+test('the boundary launches every native base and escalation tuple for both runtimes', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-runtime-matrix-'));
+  try {
+    const base = {
+      codex: {
+        research: ['gpt-6-astra', 'low'],
+        decomposition: ['gpt-6-astra', 'low'],
+        executor: ['gpt-5.6-luna', 'max'],
+        'pr-sentinel': ['gpt-5.6-luna', 'medium'],
+        integrator: ['gpt-6-astra', 'low'],
+        'drift-check': ['gpt-5.6-luna', 'max'],
+        'arch-review': ['gpt-6-astra', 'low'],
+        'ci-fix': ['gpt-5.6-luna', 'max'],
+        'review-fix': ['gpt-5.6-luna', 'max'],
+      },
+      claude: {
+        research: ['opus', 'medium'],
+        decomposition: ['opus', 'medium'],
+        executor: ['sonnet', 'max'],
+        'pr-sentinel': ['sonnet', 'high'],
+        integrator: ['opus', 'medium'],
+        'drift-check': ['opus', 'max'],
+        'arch-review': ['opus', 'medium'],
+        'ci-fix': ['opus', 'medium'],
+        'review-fix': ['opus', 'medium'],
+      },
+    };
+    const escalations = [
+      ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6-astra', 'medium'],
+      ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6-astra', 'medium'],
+      ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
+      ['codex', 'executor', { critical: true }, 'critical', 'gpt-6-astra', 'low'],
+      ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6-astra', 'medium'],
+      ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
+      ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
+      ['claude', 'research', { type: 'alternatives' }, 'base', 'opus', 'medium'],
+      ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'max'],
+      ['claude', 'decomposition', { checkpoint: true }, 'critical', 'opus', 'max'],
+      ['claude', 'executor', { critical: true }, 'critical', 'opus', 'low'],
+      ['claude', 'integrator', { contested: true }, 'critical', 'opus', 'high'],
+      ['claude', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'medium'],
+    ];
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const launched = [];
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: fakeAdapter({ onLaunch: (resolution) => launched.push(resolution) }),
+        claude: fakeAdapter({ onLaunch: (resolution) => launched.push(resolution) }),
+      },
+      recorder,
+    });
+    const bases = new Map();
+    const dispatchAndAssert = (runtime, role, signals, expected, dispatchId, extra = {}) => {
+      const result = boundary.dispatch(
+        { runtime, role, signals, dispatch_id: dispatchId, ...extra },
+        { ticket: `T-36-MATRIX-${runtime}-${role}` },
+      );
+      assert.deepStrictEqual(
+        [result.resolution.logical_rung, result.applied_model, result.applied_effort],
+        expected,
+        `${runtime}/${role}/${JSON.stringify(signals)}`,
+      );
+      assert.equal(result.receipt.requested_model, result.resolution.requested_model);
+      assert.equal(result.receipt.requested_effort, result.resolution.requested_effort);
+      assert.equal(result.receipt.applied_model, result.resolution.model);
+      assert.equal(result.receipt.applied_effort, result.resolution.effort);
+      assert.equal(result.receipt.observed_model, result.receipt.applied_model);
+      assert.equal(result.receipt.observed_effort, result.receipt.applied_effort);
+      const stored = recorder.getVerifiedRecord(dispatchId);
+      assert.ok(stored, `${dispatchId} must be durably recorded`);
+      assert.deepStrictEqual(stored.resolution.signals, result.resolution.signals);
+      assert.deepStrictEqual(stored.receipt, result.receipt);
+      for (const source of Object.keys(signals)) {
+        assert.ok(result.resolution.signal_reasons.some((reason) => reason.source === `signals.${source}`), `${dispatchId} retains ${source}`);
+      }
+      return result;
+    };
+
+    for (const runtime of policy.SUPPORTED_RUNTIMES) {
+      for (const role of policy.ROLES) {
+        const [model, effort] = base[runtime][role];
+        bases.set(`${runtime}:${role}`, dispatchAndAssert(
+          runtime,
+          role,
+          {},
+          ['base', model, effort],
+          `matrix-${runtime}-${role}-base`,
+        ));
+      }
+    }
+    for (const [runtime, role, signals, rung, model, effort] of escalations) {
+      dispatchAndAssert(
+        runtime,
+        role,
+        signals,
+        [rung, model, effort],
+        `matrix-${runtime}-${role}-${rung}-${Object.keys(signals).join('-')}`,
+      );
+    }
+
+    for (const runtime of policy.SUPPORTED_RUNTIMES) {
+      for (const role of ['ci-fix', 'review-fix']) {
+        const baseResult = bases.get(`${runtime}:${role}`);
+        const repeat = dispatchAndAssert(
+          runtime,
+          role,
+          { signatureState: 'repeat', priorApplied: baseResult.receipt },
+          ['repeat', runtime === 'codex' ? 'gpt-6-astra' : 'opus', runtime === 'codex' ? 'low' : 'max'],
+          `matrix-${runtime}-${role}-repeat`,
+          { previous_dispatch_id: baseResult.dispatch_id },
+        );
+        dispatchAndAssert(
+          runtime,
+          role,
+          { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
+          ['repeat_exhausted', runtime === 'codex' ? 'gpt-6-astra' : 'opus', runtime === 'codex' ? 'medium' : 'max'],
+          `matrix-${runtime}-${role}-repeat-exhausted`,
+          { previous_dispatch_id: repeat.dispatch_id },
+        );
+      }
+    }
+
+    for (const [runtime, role, signals, rung] of [
+      ['codex', 'integrator', {
+        risk: 'high', critical: true, checkpoint: true, contested: true,
+        inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
+      }, 'critical'],
+      ['claude', 'arch-review', {
+        risk: 'high', critical: true, checkpoint: true, contested: true,
+        inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
+      }, 'ceiling'],
+    ]) {
+      const id = `matrix-${runtime}-${role}-combined`;
+      const result = dispatchAndAssert(runtime, role, signals, [
+        rung,
+        runtime === 'codex' ? 'gpt-6-astra' : 'fable',
+        runtime === 'codex' ? 'medium' : 'medium',
+      ], id);
+      assert.equal(new Set(result.resolution.signals_fired).size, Object.keys(signals).length);
+      assert.equal(result.resolution.signal_reasons.length, Object.keys(signals).length);
+      assert.equal(result.resolution.signal_reasons.find((reason) => reason.signal === 'risk').applies, false);
+    }
+    assert.ok(launched.length >= policy.SUPPORTED_RUNTIMES.length * policy.ROLES.length, 'every matrix case reached its explicit adapter');
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('invalid runtime, overrides, host selections, and generated files fail before reservation or launch', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-negative-matrix-'));
+  try {
+    let launches = 0;
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const adapters = {
+      codex: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+      claude: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+      undefined: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+      both: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+    };
+    const boundary = boundaryModule.createDispatchBoundary({ adapters, recorder });
+    const expectCode = (input, code, label) => {
+      const dispatchId = input.dispatch_id;
+      assert.throws(() => boundary.dispatch(input), (error) => error.code === code, label);
+      assert.equal(recorder.getVerifiedRecord(dispatchId), null, `${label} has no phantom record`);
+    };
+
+    for (const [index, runtime] of [undefined, 'both'].entries()) {
+      expectCode({ runtime, role: 'executor', dispatch_id: `negative-runtime-${index}` }, 'UNKNOWN_RUNTIME', `ambiguous runtime ${runtime}`);
+    }
+    for (const [index, input] of [
+      { runtime: 'codex', role: 'executor', model: 'gpt-6-astra' },
+      { runtime: 'claude', role: 'executor', effort: 'unsupported-effort' },
+      { runtime: 'codex', role: 'executor', selection: { inline: true } },
+      { runtime: 'claude', role: 'executor', selection: { inherit: true } },
+      { runtime: 'codex', role: 'executor', config: { models: { executor: 'unsupported-model' } } },
+    ].entries()) {
+      const code = input.selection ? 'UNSUPPORTED_SELECTION' : 'CONFLICTING_OVERRIDE';
+      expectCode({ ...input, dispatch_id: `negative-selection-${index}` }, code, `selection refusal ${index}`);
+    }
+    assert.equal(launches, 0, 'policy and implicit-selection refusals never launch');
+
+    for (const [index, [runtime, options, code]] of [
+      ['codex', { supportedModels: ['not-a-codex-model'] }, 'UNSUPPORTED_SELECTION'],
+      ['codex', { supportedModels: ['gpt-5.6-luna'], supportedEfforts: ['not-an-effort'] }, 'UNSUPPORTED_SELECTION'],
+      ['claude', { supportedModels: ['not-a-claude-alias'] }, 'UNSUPPORTED_SELECTION'],
+      ['claude', { supportedModels: ['sonnet'], supportedEfforts: ['not-an-effort'] }, 'UNSUPPORTED_SELECTION'],
+    ].entries()) {
+      const hostBoundary = boundaryModule.createDispatchBoundary({
+        adapters: { [runtime]: fakeAdapter({ ...options, onLaunch: () => { launches += 1; } }) },
+        recorder,
+      });
+      const dispatchId = `negative-host-${index}`;
+      assert.throws(
+        () => hostBoundary.dispatch({ runtime, role: 'executor', dispatch_id: dispatchId }),
+        (error) => error.code === code,
+        `${runtime} unsupported host selection`,
+      );
+      assert.equal(recorder.getVerifiedRecord(dispatchId), null, `${runtime} unsupported host selection has no record`);
+    }
+
+    const emptyAgents = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-missing-agents-'));
+    try {
+      const staticBoundary = boundaryModule.createDispatchBoundary({
+        adapters: { codex: fakeAdapter({ agentsDir: emptyAgents, onLaunch: () => { launches += 1; } }) },
+        recorder,
+      });
+      const dispatchId = 'negative-missing-generated-agent';
+      assert.throws(
+        () => staticBoundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: dispatchId }),
+        (error) => error.code === 'STALE_GENERATED_AGENT',
+      );
+      assert.equal(recorder.getVerifiedRecord(dispatchId), null, 'missing generated file has no phantom record');
+    } finally {
+      fs.rmSync(emptyAgents, { recursive: true, force: true });
+    }
+    assert.equal(launches, 0, 'unsupported selections and missing files fail before launch');
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('both runtimes reject copied requested values, missing receipts, and stale receipt policy hashes', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-receipt-negative-matrix-'));
+  try {
+    let copiedLaunches = 0;
+    const copiedRecorder = boundaryModule.createDurableRecorder(path.join(storeDir, 'copied'));
+    const copiedBoundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: {
+          launch: (resolution) => {
+            copiedLaunches += 1;
+            const receipt = receiptFor(resolution);
+            delete receipt.applied_model;
+            delete receipt.applied_effort;
+            return receipt;
+          },
+        },
+        claude: {
+          launch: (resolution) => {
+            copiedLaunches += 1;
+            const receipt = receiptFor(resolution);
+            delete receipt.applied_model;
+            delete receipt.applied_effort;
+            return receipt;
+          },
+        },
+      },
+      recorder: copiedRecorder,
+    });
+    for (const runtime of policy.SUPPORTED_RUNTIMES) {
+      const dispatchId = `negative-copied-${runtime}`;
+      assert.throws(
+        () => copiedBoundary.dispatch({ runtime, role: 'executor', dispatch_id: dispatchId }),
+        (error) => error.code === 'MISSING_RECEIPT' && /applied_model/.test(error.message),
+        `${runtime} copied requested values are not applied evidence`,
+      );
+      assert.equal(copiedRecorder.getVerifiedRecord(dispatchId), null, `${runtime} copied values create no record`);
+    }
+    assert.equal(copiedLaunches, 2);
+
+    let missingLaunches = 0;
+    const missingRecorder = boundaryModule.createDurableRecorder(path.join(storeDir, 'missing'));
+    const missingBoundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: { launch: () => { missingLaunches += 1; return undefined; } },
+        claude: { launch: () => { missingLaunches += 1; return undefined; } },
+      },
+      recorder: missingRecorder,
+    });
+    for (const runtime of policy.SUPPORTED_RUNTIMES) {
+      const dispatchId = `negative-missing-receipt-${runtime}`;
+      assert.throws(
+        () => missingBoundary.dispatch({ runtime, role: 'executor', dispatch_id: dispatchId }),
+        (error) => error.code === 'MISSING_RECEIPT',
+        `${runtime} missing application receipt`,
+      );
+      assert.equal(missingRecorder.getVerifiedRecord(dispatchId), null, `${runtime} missing receipt creates no record`);
+    }
+    assert.equal(missingLaunches, 2, 'missing receipts are refused after the unsubstantiated host call');
+
+    let staleLaunches = 0;
+    const staleRecorder = boundaryModule.createDurableRecorder(path.join(storeDir, 'stale'));
+    const staleBoundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: fakeAdapter({ extra: { policy_hash: 'stale-policy' }, onLaunch: () => { staleLaunches += 1; } }),
+        claude: fakeAdapter({ extra: { policy_hash: 'stale-policy' }, onLaunch: () => { staleLaunches += 1; } }),
+      },
+      recorder: staleRecorder,
+    });
+    for (const runtime of policy.SUPPORTED_RUNTIMES) {
+      const dispatchId = `negative-stale-policy-${runtime}`;
+      assert.throws(
+        () => staleBoundary.dispatch({ runtime, role: 'executor', dispatch_id: dispatchId }),
+        (error) => error.code === 'STALE_POLICY',
+        `${runtime} stale receipt policy hash`,
+      );
+      assert.equal(staleRecorder.getVerifiedRecord(dispatchId), null, `${runtime} stale receipt creates no record`);
+    }
+    assert.equal(staleLaunches, 2);
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('repair promotion requires the immediately preceding boundary receipt on the same runtime and rung', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-prior-receipt-matrix-'));
+  try {
+    let launches = 0;
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+        claude: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+      },
+      recorder,
+    });
+    const codexTicket = 'T-36-PRIOR-CODEX';
+    const claudeTicket = 'T-36-PRIOR-CLAUDE';
+    const codexBase = boundary.dispatch(
+      { runtime: 'codex', role: 'ci-fix', dispatch_id: 'prior-codex-base' },
+      { ticket: codexTicket },
+    );
+    const claudeBase = boundary.dispatch(
+      { runtime: 'claude', role: 'ci-fix', dispatch_id: 'prior-claude-base' },
+      { ticket: claudeTicket },
+    );
+    const launchCountAfterBases = launches;
+    for (const [index, input] of [
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat' },
+        dispatch_id: 'prior-missing-receipt',
+      },
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: codexBase.receipt },
+        previous_dispatch_id: 'prior-not-found',
+        dispatch_id: 'prior-missing-record',
+      },
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: { ...codexBase.receipt, applied_model: 'gpt-6-astra' } },
+        previous_dispatch_id: codexBase.dispatch_id,
+        dispatch_id: 'prior-copied-receipt',
+      },
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat_exhausted', priorApplied: codexBase.receipt },
+        previous_dispatch_id: codexBase.dispatch_id,
+        dispatch_id: 'prior-exhausted-from-base',
+      },
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: claudeBase.receipt },
+        previous_dispatch_id: claudeBase.dispatch_id,
+        dispatch_id: 'prior-wrong-runtime',
+      },
+      {
+        runtime: 'claude',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat' },
+        dispatch_id: 'prior-claude-missing-receipt',
+      },
+      {
+        runtime: 'claude',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: { ...claudeBase.receipt, applied_effort: 'high' } },
+        previous_dispatch_id: claudeBase.dispatch_id,
+        dispatch_id: 'prior-claude-copied-receipt',
+      },
+      {
+        runtime: 'claude',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat_exhausted', priorApplied: claudeBase.receipt },
+        previous_dispatch_id: claudeBase.dispatch_id,
+        dispatch_id: 'prior-claude-exhausted-from-base',
+      },
+    ].entries()) {
+      const expected = [0, 5].includes(index) ? 'MISSING_RECEIPT'
+        : [3, 4, 7].includes(index) ? 'NONCOMPLIANT_RECEIPT' : 'UNVERIFIED_RECEIPT';
+      assert.throws(
+        () => boundary.dispatch(input, { ticket: input.runtime === 'codex' ? codexTicket : claudeTicket }),
+        (error) => error.code === expected,
+        `repair prerequisite ${index}`,
+      );
+      assert.equal(recorder.getVerifiedRecord(input.dispatch_id), null, `repair refusal ${index} has no phantom record`);
+    }
+    assert.equal(launches, launchCountAfterBases, 'all invalid repair prerequisites fail before a successor launch');
+
+    const repeat = boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: codexBase.receipt },
+      previous_dispatch_id: codexBase.dispatch_id,
+      dispatch_id: 'prior-valid-repeat',
+    }, { ticket: codexTicket });
+    const exhausted = boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
+      previous_dispatch_id: repeat.dispatch_id,
+      dispatch_id: 'prior-valid-exhausted',
+    }, { ticket: codexTicket });
+    assert.deepStrictEqual([repeat.applied_model, repeat.applied_effort], ['gpt-6-astra', 'low']);
+    assert.deepStrictEqual([exhausted.applied_model, exhausted.applied_effort], ['gpt-6-astra', 'medium']);
+
+    const claudeRepeat = boundary.dispatch({
+      runtime: 'claude',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: claudeBase.receipt },
+      previous_dispatch_id: claudeBase.dispatch_id,
+      dispatch_id: 'prior-claude-valid-repeat',
+    }, { ticket: claudeTicket });
+    const claudeExhausted = boundary.dispatch({
+      runtime: 'claude',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat_exhausted', priorApplied: claudeRepeat.receipt },
+      previous_dispatch_id: claudeRepeat.dispatch_id,
+      dispatch_id: 'prior-claude-valid-exhausted',
+    }, { ticket: claudeTicket });
+    assert.deepStrictEqual([claudeRepeat.applied_model, claudeRepeat.applied_effort], ['opus', 'max']);
+    assert.deepStrictEqual([claudeExhausted.applied_model, claudeExhausted.applied_effort], ['opus', 'max']);
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
 });
 
 done();

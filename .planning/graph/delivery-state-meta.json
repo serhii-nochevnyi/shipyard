@@ -1,7 +1,9 @@
 {
-  "generation": 230,
-  "observed_at": "2026-09-14T12:38:06.416Z",
-  "generated_at": "2026-09-14T12:38:06.416Z",
+  "generation": 325,
+  "generation_identity": "8ed43722-c6c7-45ce-b098-12468b0fe498",
+  "previous_generation_identity": "16777229:150398456:1789578007208112400:22ef06595b2bcb42307c1fb550f74f2b695b08900531229651806d89c489f45d",
+  "observed_at": "2026-09-16T17:20:49.458Z",
+  "generated_at": "2026-09-16T17:20:49.458Z",
   "by": "state-sync",
-  "pid": 72892
+  "pid": 95614
 }

@@ -20,7 +20,10 @@ command-backed evidence is not verification.
 
 ## Input (provided by the orchestrator)
 - The list of guarded tickets (id, PR number, branch, worktree path, repo, base).
-- `SHIPYARD_ROOT` — the absolute path of the plugin scripts directory.
+- `SHIPYARD_ROOT` — the absolute path of the installed bundle/plugin root;
+  its deterministic commands are under `$SHIPYARD_ROOT/scripts`.
+- On the Codex bundle, the durable host-evidence file is
+  `$SHIPYARD_ROOT/codex-capabilities.json`; pass it to every Codex selector.
 - The project root (where `.planning/` lives) and, per ticket, the checkout its
   repo lives in (a multi-repo phase has more than one).
 - `maxAttempts` (default 5), `plan_defect_signatures` (default 3 — the K of the
@@ -36,6 +39,76 @@ command-backed evidence is not verification.
   nowhere). None of them answers from nowhere, and on the reading side that is
   the point: "no prior attempts" read out of a worktree is indistinguishable from
   a fresh ticket.
+
+## Mandatory dispatch boundary
+
+Every model-backed sentinel duty — the sentinel guard itself, `ci-fix`,
+`review-fix`, `arch-review`, and any integrator hand-off — uses one mandatory
+`resolve → validate → launch → receipt` boundary. Initialize
+`createDispatchBoundary` with `createCodexDispatchAdapter` or
+`createClaudeDispatchAdapter` and a `createDurableRecorder`, then make the
+launch through one typed call:
+
+```text
+boundary.dispatch(
+  { runtime, role, signals,
+    dispatch_id, previous_dispatch_id },
+  { ticket, pr, worktreePath, promptPath, evidence, graphPath }
+)
+```
+
+The boundary is the only resolver and launcher. It validates the policy
+fingerprint, concrete selection, generated Codex file or Workflow-runtime native
+arguments, and application receipt before it records success. A missing runtime,
+adapter, recorder, model, effort, typed capability, or receipt is a refusal.
+Literal model strings, omitted effort, inline callbacks, inherited guards or
+sessions, copied/stale/phantom records, and undocumented escalation are all
+refused. Do not call a compatibility model command, `Agent`, `Workflow`, or a
+Codex command as a second launch path; those are adapter internals reached only
+by the boundary.
+
+This is the host-orchestrator protocol, not a self-contained static Codex launch
+recipe. A generated Codex agent file has no host-injected adapter, generated-agent
+capabilities, durable recorder, or application-evidence callback with which to
+instantiate this boundary or launch a follow-on duty. It must not attempt a direct
+model call or pretend to provide the boundary; it can only return its evidence to
+the host orchestrator. The host adapter must perform the boundary dispatch, and a
+missing host bridge is a refusal/parked outcome.
+
+Pass the complete evidence, not a summary: `risk`, `type`, `complexity`,
+`critical`, `checkpoint`, `contested`, measured `inputTokens`, signed
+`signatureState`, and boundary-issued `priorApplied` where applicable. A repair
+repeat also carries the immediately preceding `previous_dispatch_id`; its
+receipt must be `compliance: verified` and durably issued by this boundary.
+`flake` and `plan_defect` are gate outcomes and do not launch a fixer. Record the
+overlay only after the receipt returns a real launch identity; a refused launch
+must never leave a dispatch record behind.
+
+The runtime grids are independent and explicit. A Workflow-runtime Fable route
+first requires the config-aware routed resolver to confirm `pipeline.fable: auto`;
+the default `off` refuses an unconsented Fable selection before the config-blind
+boundary is called.
+
+| Duty | Codex | Workflow runtime |
+| --- | --- | --- |
+| sentinel | Luna/medium, fixed | Sonnet/high, fixed |
+| ci-fix / review-fix | Luna/max → Astra/low on verified `repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+| arch-review | Astra/low → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/max for critical/contested/checkpoint evidence → Fable/medium for a measured window |
+| integrator | Astra/low → Astra/medium for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/high for the same evidence |
+
+When a host boundary dispatches a Codex static duty, it uses the generated files named by the selector:
+`shipyard-pr-sentinel.toml`, `shipyard-ci-fix.toml`,
+`shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml`,
+`shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`,
+`shipyard-review-fix-deep.toml`, `shipyard-arch-review.toml`,
+`shipyard-arch-review-critical.toml`, `shipyard-integrator.toml`, and
+`shipyard-integrator-critical.toml`. No sentinel recovery variant or additional
+architecture-review `repeat_exhausted` variant is generated. Codex dynamic roles
+`decomposition` and `executor`, when handed back by the main loop, receive
+explicit model and effort arguments from the same receipt. The Workflow adapter receives its independent native
+alias and explicit effort; a native Agent surface without an effort parameter
+must refuse. Never invent a file, translate a logical Codex name into a Workflow
+native alias, or inherit the caller's session.
 
 ## The loop (repeat until your duty list is clear)
 
@@ -89,43 +162,46 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   Your parked set inherits it for free — it is one store, so `duty` stops offering
   the ticket without any flag from you. Moving the PR does NOT lift this park;
   re-decomposing the plan file does.
-- **`first` / `progress` / `repeat`** — fix it. Resolve model, effort and strategy
-  with `pipeline-config.cjs model ci-fix --json --explain --risk <r> --signature-state
-  <verdict>`; on `repeat` the strategy is `rethink` — the SAME tier at a deeper
-  effort and a DIFFERENT hypothesis, because a bigger model on the hypothesis that
-  just failed is the failure mode, not the remedy. Read the prior-attempt record
-  before you settle on an explanation (`attempt-history.cjs <T> --graph
-  <project>/.planning/graph`): a hypothesis already in it was tried and did not
-  hold, so it is EXCLUDED, not a candidate to refine.
+- **`first` / `progress` / `repeat` / `repeat_exhausted`** — fix it through the
+  mandatory boundary. Read the prior-attempt record before settling on an
+  explanation (`attempt-history.cjs <T> --graph <project>/.planning/graph`): a
+  hypothesis already in it was tried and did not hold, so it is EXCLUDED.
+  Require a typed boundary adapter that explicitly applies the resolved model
+  and effort and returns a concrete application receipt. Otherwise hard-refuse
+  before constructing a prompt, spawning, or recording; no Agent, prompt,
+  session, or in-process fallback may perform or record this ci-fix.
+  `failure-signature.cjs verdict` returns verdict/history facts, not a strategy.
+  Derive the caller-owned fixer strategy before this call: `first` → `fix`,
+  `progress` → `continue`, and `repeat`/`repeat_exhausted` → `rethink`. Supply
+  the failure log, signature, that derived strategy, full ticket evidence, and the
+  signed `signatureState` to:
 
-  **`critical` — the resolver classified this `ci-fix` dispatch from high risk
-  or a checkpoint.** On Codex, select the matching `-critical` agent file with
-  `codex-agent.cjs select ci-fix --json --checkpoint [--project-dir <project>]`
-  and record that file alongside the resolver's model, effort and route. Run
-  it from the conveyor project, or pass `--project-dir <project>` from a ticket
-  worktree so the selector reads the project's adaptive policy. The
-  `pr-sentinel` guard is mechanical and has no first-attempt `-critical` file:
-  checkpointed sentinel work stays on `shipyard-pr-sentinel`, while
-  `shipyard-pr-sentinel-deep` is reserved for `repeat_exhausted`.
+  ```text
+  boundary.dispatch(
+    { runtime, role: "ci-fix",
+      signals: { risk, type, critical, checkpoint, signatureState, priorApplied },
+      dispatch_id, previous_dispatch_id },
+    { ticket, pr, worktreePath, planPath, failureLog, signature, strategy,
+      attemptHistory, graphPath }
+  )
+  ```
 
-  **`repeat_exhausted` — the signature came back AFTER a `rethink`.** The deeper
-  effort has already been spent on this failure, so repeating it buys nothing.
-  Where an agent is a static file and the effort axis is flat (the Codex bundle),
-  the only escalation left is the model, and it has its own file: dispatch
-  `$shipyard-ci-fix-deep` or `$shipyard-review-fix-deep` — the same contract at
-  the palette's ceiling model — and use `$shipyard-pr-sentinel-deep` for a guard
-  round on that PR. ONE such dispatch per signature; if it comes back again the
-  ticket is a human's (`escalation-record.cjs mark`), not a third model's. Where
-  the harness passes `model`/`effort` per call there is no separate agent to
-  name: the resolver's own answer already carries the escalation. A `-deep` agent
-  the generator did not write does not exist — check before naming it.
+  On `repeat`, the strategy is `rethink`: a different hypothesis at the next
+  receipt-verified rung. On `repeat_exhausted`, only the receipt-verified ceiling
+  rung is allowed; one more failure is a human escalation, not another launch.
+  Codex resolves and validates `shipyard-ci-fix.toml` →
+  `shipyard-ci-fix-repeat.toml` → `shipyard-ci-fix-deep.toml`; the Workflow runtime resolves
+  Opus/medium → Opus/max with explicit native effort. The boundary refuses a
+  missing predecessor receipt, undocumented escalation, literal model, omitted
+  effort, inline callback, or inherited session.
 
-Then the fix itself: `gh run view <run-id> --log-failed` for the real
-failing assertion, reproduce it in the ticket's worktree with the plan's
-Verification commands, make the SMALLEST fix inside the ticket's `files_modified`
-scope, re-verify locally, commit `fix(<T>): <what was wrong>`, push. A fix that
-needs out-of-scope changes is `escalate: out-of-scope` — park the PR, keep the
-others moving. Follow `references/ci-fix.md` — it is the same contract.
+Only the boundary-dispatched fixer may now act: use `gh run view <run-id>
+--log-failed` for the real failing assertion, reproduce it in the ticket's
+worktree with the plan's Verification commands, make the SMALLEST fix inside the
+ticket's `files_modified` scope, re-verify locally, commit `fix(<T>): <what was
+wrong>`, and push. A fix that needs out-of-scope changes is
+`escalate: out-of-scope` — park the PR, keep the others moving. Follow
+`references/ci-fix.md` — it is the same contract.
 
 **`base-merge`** — the base moved under the branch. TWO different facts with one
 remedy, and the duty does not blur them: `mergeStateStatus: BEHIND`, or
@@ -176,22 +252,41 @@ unanswered comment is not "resolved" either. Read the prior-attempt record here
 too (`attempt-history.cjs <T> --graph <project>/.planning/graph`): the same
 exclusion rule applies, and a thread serviced with a fix that already failed comes
 straight back. When this PR also carries a signed failure history, pass its
-verdict — `pipeline-config.cjs model review-fix --json --explain [--no-code-change]
-[--signature-state <verdict>]` — it is a repair role, so a `repeat` deepens the
-effort at the same tier.
+`signatureState`, the full review evidence, and the immediately preceding
+boundary-verified receipt to the mandatory boundary:
+
+```text
+boundary.dispatch(
+  { runtime, role: "review-fix",
+    signals: { risk, type, critical, checkpoint, signatureState, priorApplied },
+    dispatch_id, previous_dispatch_id },
+  { ticket, pr, worktreePath, reviewEvidence, codeChange,
+    attemptHistory, graphPath }
+)
+```
+
+Codex uses `shipyard-review-fix.toml` → `shipyard-review-fix-repeat.toml` →
+`shipyard-review-fix-deep.toml`; the Workflow runtime uses Opus/medium → Opus/max with
+explicit native effort. No fixer may launch or record an attempt until the
+boundary returns a verified receipt.
+
+Before constructing a review-fix prompt, spawning a fixer, or recording a routed
+dispatch or attempt, invoke the mandatory dispatch boundary and require its
+receipt to name the concrete applied model and effort. If the boundary cannot
+return that receipt, hard-refuse before those side effects: no Agent, prompt,
+session, or in-process fallback may perform or record this `review-fix`.
 
 **`arch-review`** — green, but no verdict is recorded. **Judgment is ONE
-procedure, and this is where it is stated: measure → resolve → dispatch →
-record.** All four, in that order, on whichever path reached this PR — the
-inline cycle in `commands/deliver.md` points HERE instead of restating them,
-because two copies drifting apart is how this path came to read a
-`verdict=violation` that nothing on it ever wrote.
+procedure: measure → resolve → validate → launch → receipt → record.** It uses
+the same boundary on every path, and the inline cycle in `commands/deliver.md`
+points here instead of creating a second launch protocol.
 
 1. **MEASURE the judged input.** Two facts, and an absent measurement cannot
    fire the route that needs it, by design. The SIZE of what the judge reads —
    bytes ÷ 4 over `gh pr diff <pr> --repo <owner/name>` plus the ADR corpus it
-   re-reads — is the `<n>` of step 2. Whether this is a CONTESTED re-judgement
-   is a fact about the journal and not an impression:
+   re-reads — is the `<n>` of step 2 and is carried as `--input-tokens <n>` in
+   the resolver evidence. Whether this is a CONTESTED re-judgement is a fact
+   about the journal and not an impression; pass it as `--contested` evidence:
 
    ```bash
    grep '"event":"arch_review"' <project>/.planning/graph/delivery-log.jsonl \
@@ -203,38 +298,39 @@ because two copies drifting apart is how this path came to read a
    this ticket's own `conform` — as a contest. A prior line for THIS ticket
    carrying `verdict=violation` is what `--contested` reports.
 
-2. **RESOLVE model and effort from the ladder** — never assumed, and never
-   inherited from whatever this guard itself is running at:
+   The old compatibility invocation `pipeline-config.cjs model arch-review` is
+   named here only as a prohibition: do not execute it or use its output.
+   `boundary.dispatch` resolves and validates the canonical selection, so the
+   actual launch never contains that literal model command.
 
-   ```bash
-   node $SHIPYARD_ROOT/scripts/pipeline-config.cjs model arch-review --json --explain \
-        --input-tokens <n> [--risk <r>] [--checkpoint] [--contested]
+2. **RESOLVE, VALIDATE, and LAUNCH through the boundary** — never assume or
+   inherit the guard's own selection. Measure `<n>` and then call:
+
+   ```text
+   boundary.dispatch(
+     { runtime, role: "arch-review",
+       signals: { risk, type, critical, checkpoint, contested, inputTokens },
+       dispatch_id },
+     { promptPath: "$SHIPYARD_ROOT/references/arch-review.md", ticket, pr,
+       head, diff, architecturePath, measuredInputTokens, contestedEvidence,
+       worktreePath, graphPath }
+   )
    ```
 
-   `opus`/`xhigh` ordinarily, and the critical lane when the ticket is high-risk
-   or checkpointed; the ceiling only where the input it is about
-   has actually grown. Where the harness passes the resolved pair into every
-   call, that answer IS the escalation and there is no second agent to name. On
-   the Codex bundle a `.toml` carries one model and nothing is passed per
-   dispatch, so a contested re-judgement is a different AGENT instead:
-   `$shipyard-arch-review-critical` for a first-attempt critical task, or
-   `$shipyard-arch-review-deep` after a contested judgement, the same contract at the palette's ceiling
-   model — a second reading at the same depth is what produced the contested
-   verdict in the first place. There is no `$shipyard-integrator-deep`; the
-   integrator runs at the ceiling on every call, and an agent the generator did
-   not write does not exist, so check before naming one.
+   Codex resolves Astra/low → Astra/medium for measured-window, contested,
+   critical, or checkpoint evidence and validates the generated
+   `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
+   The Workflow runtime resolves Opus/medium → Opus/max for
+   critical/contested/checkpoint evidence → Fable/medium for a measured window,
+   with explicit native effort and routed Fable consent. The judge's measured
+   input is the diff plus the architecture corpus, not the diff alone.
+   Threads are serviced by `review-fix` before this duty. A missing measurement,
+   typed capability, or documented signal is a refusal; no
+   architecture-review ceiling variant beyond the generated critical file is a
+   valid target. The judge's prompt is
+   `references/arch-review.md` plus the measured diff and architecture corpus.
 
-3. **DISPATCH the judge**, judgment work — do not cheapen it. Its prompt is
-   `references/arch-review.md`, plus the diff it is about and
-   `.planning/architecture/`; then append the trailer as the LAST line of the PR
-   body (it survives a squash merge). Threads are NOT part of this action any
-   more: they are serviced by `review-fix` as soon as they appear, ahead of a
-   still-running CI, so by the time a PR reaches here the thread count is
-   already zero. A `violation` or `adr-outdated` verdict ends the action — do
-   not undraft a PR the judge just faulted; that is fix work or a human's call,
-   and bundling the two used to make both outcomes look alike.
-
-4. **RECORD the verdict — every verdict, before you leave this PR:**
+3. **RECORD the verdict — every verdict, before you leave this PR:**
 
    ```bash
    node $SHIPYARD_ROOT/scripts/log-event.cjs arch_review ticket=<T> pr=<N> \
@@ -352,7 +448,7 @@ git -C <worktree> rev-parse HEAD                     # must equal the pushed hea
 node $SHIPYARD_ROOT/scripts/reviewers.cjs reinit <pr> [--repo owner/name]
 node $SHIPYARD_ROOT/scripts/log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> \
      role=<ci-fix|review-fix> model=<tier> \
-     effort_applied=<level|unsupported|unknown> \
+     effort_applied=<applied-level> \
      outcome=<pushed|no-op|escalate|flake> \
      signature=<sig> head=<full 40-char sha> hypothesis="<one sentence: what you believed was wrong>" \
      --graph <project>/.planning/graph
@@ -364,23 +460,22 @@ re-propose what this one already ruled out. Write the fixer's own sentence, neve
 an invented one: an invented hypothesis enters the record as something tried and
 excluded. `outcome=flake` is logged at an UNCHANGED `n`.
 
-**`effort_applied` is the depth the SPAWN carried, and it belongs on THIS row.**
-`failure-signature.cjs` reads the `attempt` row and nothing else, and it will
-only claim `repeat_exhausted` — the rung that opens the ceiling model and then
-spends a person's attention — off a prior round whose row NAMES a real level. So
-an unrecorded depth reads as not-yet-spent and the loop rethinks once more
-instead of escalating early. `dispatch-record.cjs --effort-applied` records the
-same fact about the DISPATCH, on a `dispatch` event, and is NOT a substitute for
-this key: the escalation rule never reads that event, so a guard that recorded
-only the flag has left the rung unreachable and every one of its rounds reads as
-not-yet-spent. Write what the spawn carried, never what the resolver decided —
-the two fields are separate exactly so the check cannot become a synonym. A
-fixer the Workflow tool carried has an effort to name (the one you passed it); a
-fixer the Agent tool spawned, or a fix you made in-process, has none, and the
-honest value is then the literal `unknown`, written rather than omitted. Levels
-are the resolver's own vocabulary (`low|medium|high|xhigh|max`), or `unknown`;
-anything else is WARNED about and still logged as written, and reads downstream
-exactly like absence.
+**`effort_applied` is the concrete depth the mandatory boundary's receipt proves,
+and it belongs on THIS row.** `failure-signature.cjs` reads the `attempt` row and
+nothing else, and it will only claim `repeat_exhausted` — the rung that opens the
+ceiling model and then spends a person's attention — off a prior round whose row
+NAMES a real level. A new routed `ci-fix` or `review-fix` therefore accepts only
+`low|medium|high|xhigh|max`, and only after the mandatory boundary has returned a
+concrete applied model-and-effort receipt. Otherwise hard-refuse before prompt, spawn, or record;
+do not use an Agent, session, or in-process fallback. Existing historical
+telemetry may contain `unsupported` or `unknown`, but it is non-compliant history
+and never authorizes a new routed attempt. `dispatch-record.cjs --effort-applied`
+records the same fact about the DISPATCH, on a `dispatch` event, and is NOT a
+substitute for this key: the escalation rule never reads that event, so a guard
+that recorded only the flag has left the rung unreachable and every one of its
+rounds reads as not-yet-spent. Write what the boundary receipt proves, never what
+the resolver decided — the two fields are separate exactly so the check cannot
+become a synonym.
 
 The attempt number is READ, never kept: `attempt-history.cjs <T> --json --graph
 <project>/.planning/graph` gives `next_n` (the `n=` this round logs) and
@@ -438,32 +533,38 @@ reinit is not optional.
   carry the returned `{ticket, dispatch_id}` pair for each completion so a
   delayed result cannot clear a newer dispatch. `clear <T> <dispatch_id>` is the
   one-ticket form, and
-  `dispatch-record.cjs mark <T> <role> --model <model> --effort <effort> --route "<route>" --task-level <level> --runtime <runtime> --backend <backend> --graph <project>/.planning/graph`
+  `dispatch-record.cjs mark <T> <role> --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph`
   again if you hand it to a fixer you do not wait for — **after that fixer is
   actually launched, never before.** A mark ahead of a launch that then fails (the
   tool refused, the fallback was not taken) leaves a dispatch the front reports as
-  `waiting.dispatched` for 90 minutes: work in flight that is not. The launch's
-  own id (the task id the Workflow tool returns, or the agent id the Agent tool
-  returns) belongs in your report — `mark` stores the ticket, the role, the time,
-  what you dispatched it at and a generated `dispatch_id`. Once the runtime
+  `waiting.dispatched` for 90 minutes: work in flight that is not. The boundary
+  receipt supplies the model, effort, route, runtime, backend, launch identity,
+  and application evidence; never reconstruct those fields with manual flags.
+  The launch's own id (the task id the Workflow tool returns, or the agent id the
+  Agent tool returns) belongs in your report — `mark` stores the ticket, the role,
+  the time, what you dispatched it at and a generated `dispatch_id`. Once the runtime
   exposes the transcript session/request/message id, connect it with
   `usage-attribution.cjs record --stdin --graph <project>/.planning/graph`: use
   `provider=anthropic` for Workflow/Agent-tool launches and `provider=openai` for
   `codex-agent.cjs` launches, and keep concrete observed model/effort separate
   from the requested tier/effort. Missing observations remain unknown and are
   excluded from efficiency comparisons.
-  **The pair AND the route are the ones `pipeline-config.cjs model <role> --json …`
-  just gave you**, including the `rethink` deepening — re-deriving either here
-  would record the ladder's opinion instead of your dispatch, and recording
-  nothing is why the journal cannot today say what any fix round ran at. Add
-  `--effort-applied <effort>` only when the
-  Workflow tool carried the fixer (its `agent()` takes an effort); an `Agent`-spawned
-  fixer has no such parameter, so pass `unsupported` when that is known, `unknown`
-  when the host did not expose what ran, or omit the flag when no observation is
-  available. On the Codex bundle add
-  `--agent-file shipyard-<role>[-critical|-deep]`, which is where that runtime's
-  model choice lives — `codex-agent.cjs select <role> --json [--project-dir <project>]`
-  gives the exact file. A dispatch that does not name the selected file does not record the
+  **Keep the boundary and recorder representations separate.** The boundary
+  receipt keeps its canonical `role=… rung=… model=… signals=…` route. The
+  recorder adapter supplies its separately validated compatibility tier/effort/
+  route projection; do not pass the boundary route to `--route` or re-derive a
+  ladder decision here. A routed
+  fixer must launch only through a surface that explicitly applies the resolved
+  model and effort and returns that application receipt; record its concrete
+  `--effort-applied <effort>`. If that surface is unavailable, hard-refuse before
+  constructing a prompt, spawning, or recording — no Agent, prompt, or session
+  fallback may turn `unsupported`, `unknown`, or an omitted receipt into a routed
+  dispatch. Historical rows may retain those states as telemetry only. On the
+  Codex bundle add the selector's `agent_file` name without its `.toml` suffix,
+  which is where that runtime's model choice lives — `node $SHIPYARD_ROOT/scripts/codex-agent.cjs
+  select <role> --json --capabilities-file "$SHIPYARD_ROOT/codex-capabilities.json"
+  [--project-dir <project>]` gives the exact file. A dispatch that does not name
+  the selected file does not record the
   escalation. Neither call is a cleanup you can forget
   safely-but-late: the record lifts on the OWNER'S OUTPUT — your own dispatch
   when the PR merges or its base moves, a fixer's when the PR's head moves — and
