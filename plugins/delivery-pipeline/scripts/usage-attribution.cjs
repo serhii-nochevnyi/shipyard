@@ -144,7 +144,7 @@ const RECEIPT_FIELDS = Object.freeze({
   observed_model: 'text', observed_effort: 'text', policy_id: 'text', policy_version: 'text',
   policy_hash: 'text', backend: 'text', mechanism: 'text', agent_file: 'text', agent_file_digest: 'text',
   logical_rung: 'text', rung: 'text', compliance: 'text', compliance_proof: 'object',
-  launch_arguments: 'object', signals: 'object', observation_unavailable: 'boolean',
+  launch_arguments: 'nullable_object', signals: 'object', observation_unavailable: 'boolean',
 });
 const RESOLUTION_FIELDS = Object.freeze({
   policy_version: 'text', policy_hash: 'text', runtime: 'text', role: 'text', task_level: 'text',
@@ -181,7 +181,7 @@ function validateReceiptProvenance(value, field) {
     const proofIssue = provenanceIssue(value.compliance_proof, `${field}.compliance_proof`, PROOF_FIELDS);
     if (proofIssue) fail(proofIssue);
   }
-  if (value.launch_arguments !== undefined) {
+  if (value.launch_arguments !== undefined && value.launch_arguments !== null) {
     const argsIssue = provenanceIssue(value.launch_arguments, `${field}.launch_arguments`, LAUNCH_ARGUMENT_FIELDS);
     if (argsIssue) fail(argsIssue);
   }
@@ -198,6 +198,9 @@ function validateProvenance(record) {
   ];
   for (const [field, schema, options] of schemas) {
     if (record[field] === undefined) continue;
+    // Static Codex selection uses an agent file and records no launch arguments.
+    // Reconciliation checks whether null is valid for the selected mechanism.
+    if (field === 'launch_arguments' && record[field] === null) continue;
     const issue = provenanceIssue(record[field], field, schema, options);
     if (issue) fail(issue);
     const nested = record[field];
@@ -559,7 +562,7 @@ function expectedSelection(runtime, role, rung) {
 }
 
 function canonicalAgentFile(value) {
-  if (!present(value)) return value;
+  if (!present(value) || typeof value !== 'string') return value;
   return value.endsWith('.toml') ? value : `${value}.toml`;
 }
 
@@ -763,6 +766,10 @@ function reconcileTelemetry(raw, options = {}) {
     resolutionMissing.push('launch_arguments');
   }
   const resolutionContradictions = [];
+  if (resolutionSources.some((source) => source?.agent_file !== undefined
+      && source.agent_file !== null && !nonEmptyString(source.agent_file))) {
+    resolutionContradictions.push('agent_file');
+  }
   if (runtime !== undefined && !supportedRuntime(runtime)) resolutionContradictions.push('unsupported_runtime');
   for (const field of [
     'runtime', 'role', 'policy_id', 'policy_version', 'policy_hash', 'logical_model',
@@ -889,8 +896,12 @@ function reconcileTelemetry(raw, options = {}) {
 
   const applicationMissing = [];
   const applicationContradictions = [];
-  for (const source of resolutionSources) {
-    if (hasOwn(source, 'launch_id') && !nonEmptyString(source.launch_id)) applicationMissing.push('launch_id');
+  for (const source of allSources) {
+    for (const field of ['launch_id', 'agent_id']) {
+      if (!hasOwn(source, field)) continue;
+      if (!nonEmptyString(source[field])) applicationMissing.push(field);
+      if (source[field] !== launchId) applicationContradictions.push('launch_id_source_conflict');
+    }
   }
   if (conflictBetween(resolutionSources, 'launch_id')) applicationContradictions.push('launch_id_source_conflict');
   for (const source of [raw, usageEvidence]) {
@@ -934,6 +945,12 @@ function reconcileTelemetry(raw, options = {}) {
   // Preferred evidence supplies report values, but cannot mask a malformed or
   // contradictory copy supplied alongside it (including joined usage evidence).
   for (const receipt of receipts) {
+    if (hasOwn(receipt, 'signals') && (!object(receipt.signals)
+        || stableStringify(receipt.signals) !== stableStringify(signals))) {
+      applicationContradictions.push('signals');
+    }
+    if (receipt.agent_file !== undefined && receipt.agent_file !== null
+        && !nonEmptyString(receipt.agent_file)) applicationContradictions.push('agent_file');
     for (const field of receiptFields) {
       if (!hasOwn(receipt, field)
           || (field !== 'compliance_proof' && !nonEmptyString(receipt[field]))) applicationMissing.push(field);

@@ -960,6 +960,59 @@ test('reconciliation validates rung and launch argument claims in every receipt 
   }
 });
 
+test('every receipt signal claim must match canonical resolution signals', () => {
+  for (const runtime of ['claude', 'codex']) {
+    const resolution = routed(runtime, 'executor', {}, `receipt-signals-${runtime}`);
+    const valid = applicationReceipt(resolution);
+    for (const location of ['receipt', 'application_receipt', 'joined_receipt', 'joined_application_receipt']) {
+      for (const claims of [{}, { signals: { ...resolution.signals } },
+        ...[{ critical: true }, null, undefined, 42, []].map((signals) => ({ signals }))]) {
+        const raw = { ...resolution, receipt: valid, application_receipt: valid };
+        const usage = {
+          dispatch_id: resolution.dispatch_id, runtime,
+          provider: runtime === 'claude' ? 'anthropic' : 'openai', session_id: 'joined',
+        };
+        const claimed = { ...valid, ...claims };
+        if (location.startsWith('joined_')) usage[location.slice(7)] = claimed;
+        else raw[location] = claimed;
+        const facts = reconcileTelemetry(raw, { usageRecords: [usage] });
+        const matches = !Object.hasOwn(claims, 'signals')
+          || JSON.stringify(claims.signals) === JSON.stringify(resolution.signals);
+        const label = `${runtime}/${location}: ${JSON.stringify(claims)}`;
+        assert.equal(facts.compliant, matches, label);
+        assert.equal(facts.comparison_ready, matches, label);
+        if (!matches) {
+          assert.ok(facts.runtime_application.contradictions.includes('signals'), label);
+          assert.ok(facts.findings.includes('contradictory_application'), label);
+        }
+      }
+    }
+  }
+});
+
+test('malformed agent files fail closed in every resolution and receipt source without throwing', () => {
+  const resolution = routed('codex', 'arch-review', {}, 'malformed-agent-file');
+  const valid = applicationReceipt(resolution);
+  for (const location of ['outer', 'resolution', 'receipt', 'application_receipt', 'joined_receipt', 'joined_application_receipt']) {
+    for (const value of [42, {}, [], true]) {
+      const raw = { ...resolution, resolution, receipt: valid, application_receipt: valid };
+      const usage = {
+        dispatch_id: resolution.dispatch_id, runtime: 'codex', provider: 'openai', session_id: 'joined',
+      };
+      if (location === 'outer') raw.agent_file = value;
+      else if (location === 'resolution') raw.resolution = { ...resolution, agent_file: value };
+      else if (location.startsWith('joined_')) usage[location.slice(7)] = { ...valid, agent_file: value };
+      else raw[location] = { ...valid, agent_file: value };
+      const facts = reconcileTelemetry(raw, { usageRecords: [usage] });
+      const label = `${location}: ${JSON.stringify(value)}`;
+      assert.equal(facts.compliant, false, label);
+      assert.equal(facts.comparison_ready, false, label);
+      assert.ok(facts.policy_resolution.contradictions.includes('agent_file')
+        || facts.runtime_application.contradictions.includes('agent_file'), label);
+    }
+  }
+});
+
 test('valid optional receipt rung and launch arguments remain comparison-ready', () => {
   for (const [runtime, role] of [['claude', 'executor'], ['codex', 'executor'], ['codex', 'arch-review']]) {
     const resolution = routed(runtime, role, {}, `valid-receipt-selection-${runtime}-${role}`);
@@ -1010,6 +1063,20 @@ test('static Codex boundary projections reject non-null outer launch arguments',
   const trace = boundary.dispatch({ runtime: 'codex', role: 'arch-review' }, context);
   const projection = JSON.parse(JSON.stringify(boundary.reconcile(trace.dispatch_id, context)));
   assert.equal(projection.launch_arguments, null);
+  for (const includeArguments of [false, true]) {
+    const receipt = { ...projection.application_receipt };
+    if (!includeArguments) delete receipt.launch_arguments;
+    const record = normalizeRecord({
+      dispatch_id: trace.dispatch_id, runtime: 'codex', provider: 'openai', session_id: 'static-session',
+      resolution: trace.resolution, receipt, application_receipt: receipt,
+      ...(includeArguments ? { launch_arguments: null } : {}),
+    });
+    assert.equal(Object.hasOwn(record, 'launch_arguments'), includeArguments);
+    assert.equal(Object.hasOwn(record.receipt, 'launch_arguments'), includeArguments);
+    const facts = reconcileTelemetry(record, { usageJoined: true });
+    assert.equal(facts.compliant, true);
+    assert.equal(facts.comparison_ready, true);
+  }
   const options = { usageRecords: [{
     dispatch_id: trace.dispatch_id, runtime: 'codex', provider: 'openai', session_id: 'static-session',
   }] };
@@ -1062,6 +1129,34 @@ test('explicit invalid outer launch identities cannot fall back to valid receipt
       const facts = reconcileTelemetry(raw, { usageJoined: true });
       assert.equal(facts.compliant, false, JSON.stringify(raw));
       assert.equal(facts.comparison_ready, false);
+    }
+  }
+});
+
+test('valid launch identities cannot mask conflicting or malformed legacy agent identities', () => {
+  const resolution = routed('claude', 'executor', {}, 'legacy-agent-identity');
+  const receipt = applicationReceipt(resolution);
+  for (const location of ['outer', 'resolution', 'joined', 'joined_resolution']) {
+    for (const value of [receipt.launch_id, 'other-launch', null, undefined, '', '  ', 42, {}, []]) {
+      const raw = { ...resolution, launch_id: receipt.launch_id, application_receipt: receipt };
+      const usage = {
+        dispatch_id: resolution.dispatch_id, runtime: 'claude', provider: 'anthropic', session_id: 'joined',
+      };
+      if (location === 'outer') raw.agent_id = value;
+      else if (location === 'resolution') raw.resolution = { ...resolution, agent_id: value };
+      else if (location === 'joined') usage.agent_id = value;
+      else usage.resolution = { agent_id: value };
+      const facts = reconcileTelemetry(raw, { usageRecords: [usage] });
+      const matches = value === receipt.launch_id;
+      const label = `${location}: ${JSON.stringify(value)}`;
+      assert.equal(facts.compliant, matches, label);
+      assert.equal(facts.comparison_ready, matches, label);
+      if (!matches) {
+        assert.ok(facts.runtime_application.missing_fields.includes('agent_id')
+          || facts.runtime_application.contradictions.includes('launch_id_source_conflict'), label);
+        assert.ok(facts.findings.includes('contradictory_application')
+          || facts.findings.includes('missing_receipt'), label);
+      }
     }
   }
 });
