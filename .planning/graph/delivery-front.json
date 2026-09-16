@@ -1,33 +1,21 @@
 {
-  "generated_at": "2026-09-15T15:07:15.489Z",
-  "observed_at": "2026-09-15T15:07:15.489Z",
-  "generation": 324,
+  "generated_at": "2026-09-16T17:20:49.458Z",
+  "observed_at": "2026-09-16T17:20:49.458Z",
+  "generation": 325,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-15T15:07:15.489Z",
+  "dispatches_applied_at": "2026-09-16T17:20:49.458Z",
   "actionable": {
     "execute": [],
     "publish": [],
-    "fix": [
-      "T-36-07"
-    ],
-    "finalize": [
-      "T-36-08",
-      "T-36-09"
-    ],
+    "fix": [],
+    "finalize": [],
     "merge": []
   },
   "waiting": {
-    "ci": [
-      "T-36-05",
-      "T-36-06"
-    ],
+    "ci": [],
     "dispatched": [],
-    "parent": [
-      "T-36-10",
-      "T-36-11",
-      "T-36-12"
-    ],
+    "parent": [],
     "merge_human": [],
     "human": []
   },
@@ -141,64 +129,48 @@
       "T-36-01",
       "T-36-02",
       "T-36-03",
-      "T-36-04"
+      "T-36-04",
+      "T-36-05",
+      "T-36-06",
+      "T-36-07",
+      "T-36-08",
+      "T-36-09",
+      "T-36-10",
+      "T-36-11",
+      "T-36-12"
     ]
   },
-  "why": {
-    "T-36-05": "PR #140: 1 check(s) still running",
-    "T-36-06": "PR #141: 1 check(s) still running",
-    "T-36-07": "PR #142: the base moved: `ticket/T-36-06-route-gsd-decomposition-through-the-mand` is 49 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
-    "T-36-08": "PR #143: green and still a draft — threads, arch-review, conform gate",
-    "T-36-09": "PR #144: green and still a draft — threads, arch-review, conform gate",
-    "T-36-10": "PR #145: stacked on T-36-09 (PR #144: still a draft) — driving this one to green now buys a green the base move will undo. Drive the parent; this follows when it lands.",
-    "T-36-11": "PR #146: stacked on T-36-10 (PR #145: still a draft) — driving this one to green now buys a green the base move will undo. Drive the parent; this follows when it lands.",
-    "T-36-12": "PR #147: stacked on T-36-10 (PR #145: still a draft) — driving this one to green now buys a green the base move will undo. Drive the parent; this follows when it lands."
-  },
+  "why": {},
   "counts": {
     "execute": 0,
     "publish": 0,
-    "fix": 1,
-    "finalize": 2,
+    "fix": 0,
+    "finalize": 0,
     "merge": 0,
-    "ci": 2,
+    "ci": 0,
     "dispatched": 0,
-    "parent": 3,
+    "parent": 0,
     "merge_human": 0,
     "human": 0,
     "blocked": 0,
-    "done": 108
+    "done": 116
   },
-  "parent_of": {
-    "T-36-10": "T-36-09",
-    "T-36-11": "T-36-10",
-    "T-36-12": "T-36-10"
-  },
-  "actionable_count": 3,
+  "parent_of": {},
+  "actionable_count": 0,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
-  "fixpoint": false,
+  "fixpoint": true,
   "capacity": {
     "max": 4,
     "in_flight": 0,
     "free": 4
   },
   "sentinel": {
-    "duty": [
-      "T-36-07",
-      "T-36-08",
-      "T-36-09"
-    ],
-    "waiting_ci": [
-      "T-36-05",
-      "T-36-06"
-    ],
-    "waiting_parent": [
-      "T-36-10",
-      "T-36-11",
-      "T-36-12"
-    ],
+    "duty": [],
+    "waiting_ci": [],
+    "waiting_parent": [],
     "dispatched": [],
-    "clear": false
+    "clear": true
   },
   "roles": {
     "execute": [

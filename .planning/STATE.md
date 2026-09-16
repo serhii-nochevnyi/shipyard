@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e46a5fae91a892f975e137fcc31e453f44224562738a4011ed1bb3d99a2e7021
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 91e4942cc8b98b9c604cb5e8653c1d0460432d41a1d5215e87a51b3d23357a78
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 17
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 116
-  completed_plans: 108
-  percent: 93
+  completed_plans: 116
+  percent: 100
 ---
 
 # Project State
@@ -24,13 +24,13 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 Phase: 1 of 17 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
-Last activity: 2026-09-15 — Shipyard projection synchronized
+Last activity: 2026-09-16 — Shipyard projection synchronized
 
-Progress: [█████████░] 93%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
-- Total plans completed: 108
+- Total plans completed: 116
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -54,7 +54,7 @@ Progress: [█████████░] 93%
 | 33 | 0 | 0 | pending |
 | 34 | 0 | 0 | pending |
 | 35 | 3 | 3 | passed |
-| 36 | 12 | 4 | pending |
+| 36 | 12 | 12 | passed |
 
 ## Accumulated Context
 
@@ -69,14 +69,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-36-05: delivery status is pr-open
-- T-36-06: delivery status is pr-open
-- T-36-07: delivery status is pr-open
-- T-36-08: delivery status is pr-open
-- T-36-09: delivery status is pr-open
-- T-36-10: delivery status is pr-open
-- T-36-11: delivery status is pr-open
-- T-36-12: delivery status is pr-open
+- Phase 20: INTEGRATION.md is missing
+- Phase 21: INTEGRATION.md is missing
+- Phase 22: INTEGRATION.md is missing
+- Phase 23: INTEGRATION.md is missing
+- Phase 24: integration evidence records a finding or failed verdict
+- Phase 26: verification evidence records a failed check
+- Phase 27: integration evidence records a finding or failed verdict
+- Phase 28: integration evidence records a finding or failed verdict
 
 ## Deferred Items
 
@@ -86,6 +86,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-15 14:47
+Last session: 2026-09-16 17:20
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

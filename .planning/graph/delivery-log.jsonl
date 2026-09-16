@@ -1236,3 +1236,11 @@
 {"ts":"2026-09-15T14:29:57.973Z","event":"dispatch","ticket":"T-36-11","role":"executor","pr":null,"effort_applied":"low","observed_model":"gpt-6-astra","observed_effort":"low","agent_id":"01a0a579-557a-7cb3-b43c-2254d806839d","dispatch_id":"t36-11-executor-20260915-01","by":"dispatch-record"}
 {"ts":"2026-09-15T14:45:05.271Z","event":"status_change","ticket":"T-36-12","from":"pending","to":"pr-open","pr":147}
 {"ts":"2026-09-15T14:47:14.238Z","event":"status_change","ticket":"T-36-11","from":"pending","to":"pr-open","pr":146}
+{"ts":"2026-09-16T17:20:49.458Z","event":"status_change","ticket":"T-36-05","from":"pr-open","to":"merged","pr":140}
+{"ts":"2026-09-16T17:20:49.458Z","event":"status_change","ticket":"T-36-06","from":"pr-open","to":"merged","pr":141}
+{"ts":"2026-09-16T17:20:49.458Z","event":"status_change","ticket":"T-36-07","from":"pr-open","to":"merged","pr":142}
+{"ts":"2026-09-16T17:20:49.458Z","event":"status_change","ticket":"T-36-08","from":"pr-open","to":"merged","pr":143}
+{"ts":"2026-09-16T17:20:49.458Z","event":"status_change","ticket":"T-36-09","from":"pr-open","to":"merged","pr":144}
+{"ts":"2026-09-16T17:20:49.458Z","event":"status_change","ticket":"T-36-10","from":"pr-open","to":"merged","pr":145}
+{"ts":"2026-09-16T17:20:49.458Z","event":"status_change","ticket":"T-36-11","from":"pr-open","to":"merged","pr":146}
+{"ts":"2026-09-16T17:20:49.458Z","event":"status_change","ticket":"T-36-12","from":"pr-open","to":"merged","pr":147}
