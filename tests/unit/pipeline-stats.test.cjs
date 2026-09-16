@@ -556,7 +556,7 @@ test('ADR-014 reconciliation keeps resolution, application, observation and join
     total: 5, applied: 2, verified: 2, missing_receipt: 2, unverifiable: 0, contradictory: 1,
   });
   assert.deepStrictEqual(reconciliation.coverage.provider_observation, {
-    total: 5, observed: 3, unknown: 2, missing: 2,
+    total: 5, observed: 3, unknown: 2, missing: 2, contradictory: 0,
   });
   assert.deepStrictEqual(reconciliation.coverage.usage_join, {
     total: 5, joined: 1, unjoined: 4, ambiguous: 0, missing_dispatch_id: 0,
@@ -564,6 +564,7 @@ test('ADR-014 reconciliation keeps resolution, application, observation and join
   assert.deepStrictEqual(reconciliation.findings, {
     stale_policy: 1,
     contradictory_application: 1,
+    contradictory_observation: 0,
     missing_receipt: 2,
     unknown_observation: 2,
     legacy: 1,
@@ -613,6 +614,31 @@ test('usage joins require matching runtime and transcript identity, then merge l
   assert.equal(merged.comparison_ready, true);
   assert.equal(facts.find((fact) => fact.dispatch_id === 'cross-runtime').usage_join_status, 'unjoined');
   assert.equal(facts.find((fact) => fact.dispatch_id === 'no-identity').usage_join_status, 'unjoined');
+});
+
+test('serialized usage-ledger fact claims are reconciled before pipeline stats counts them', () => {
+  const forged = {
+    observation_id: 'forged-fact',
+    dispatch_id: 'forged-dispatch',
+    runtime: 'claude',
+    provider: 'anthropic',
+    session_id: 'forged-session',
+    role: 'executor',
+    policy_resolution: { status: 'resolved', resolved: true, current: true, complete: true },
+    runtime_application: { status: 'applied', applied: true, verified: true, receipt_present: true },
+    provider_observation: { status: 'observed', observed: true },
+    usage_join: { status: 'joined', joined: true },
+    compliant: true,
+    comparison_ready: true,
+  };
+  const { code, json } = asJson({
+    tickets: {}, journal: [], attributions: [forged], prs: [],
+  });
+  assert.equal(code, 0);
+  assert.equal(json.usage_reconciliation.compliant, 0);
+  assert.equal(json.usage_reconciliation.comparison_ready, 0);
+  assert.equal(json.usage_reconciliation.records[0].application_status, 'missing_receipt');
+  assert.equal(json.usage_reconciliation.findings.missing_receipt, 1);
 });
 
 done();
