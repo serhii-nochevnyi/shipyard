@@ -746,12 +746,12 @@ fixed routed `pr-sentinel` role for either signal.
 
 The logical Codex keys resolve to concrete IDs only in the Codex adapter. Claude
 uses its existing native aliases directly; its grid never translates Luna or
-Astra into a Claude selection.
+Sol into a Claude selection.
 
 | Logical key | Codex concrete model | Claude Code selection |
 |---|---|---|
 | Luna | `gpt-5.6-luna` | — |
-| Astra | `gpt-6-astra` | — |
+| Sol | `gpt-5.6-sol` | — |
 | Sonnet | — | `sonnet` |
 | Opus | — | `opus` |
 | Fable | — | `fable` |
@@ -760,15 +760,15 @@ The canonical role/rung/signal ladder is:
 
 | Role | Codex base and evidence-based escalation | Claude Code base and evidence-based escalation |
 |---|---|---|
-| `research` | Astra/low → Astra/medium on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Opus/medium → Opus/max on explicit `complexity: very-complex`; `type: alternatives` stays at base |
-| `decomposition` | Astra/low → Astra/medium on `critical` or `checkpoint` | Opus/medium → Opus/max on `critical` or `checkpoint` |
-| `executor` | Luna/max → Astra/low on explicit `critical` or `checkpoint` | Sonnet/max → Opus/low on explicit `critical` or `checkpoint` |
+| `research` | Sol/high → Sol/xhigh on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Opus/medium → Opus/max on explicit `complexity: very-complex`; `type: alternatives` stays at base |
+| `decomposition` | Sol/high → Sol/xhigh on `critical` or `checkpoint` | Opus/medium → Opus/max on `critical` or `checkpoint` |
+| `executor` | Luna/max → Sol/high on explicit `critical` or `checkpoint` | Sonnet/max → Opus/low on explicit `critical` or `checkpoint` |
 | `pr-sentinel` | Luna/medium, fixed; gate strategy only | Sonnet/high, fixed; gate strategy only |
-| `integrator` | Astra/low → Astra/medium on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on the same evidence |
+| `integrator` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on the same evidence |
 | `drift-check` | Luna/max, fixed; gate strategy only | Opus/max, fixed; gate strategy only |
-| `arch-review` | Astra/low → Astra/medium on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/max on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
-| `ci-fix` | Luna/max → Astra/low on verified `signatureState: repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
-| `review-fix` | Luna/max → Astra/low on verified `signatureState: repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+| `arch-review` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/max on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
+| `ci-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+| `review-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
 
 **Canonical-table assertion.** This table is a normative transcription of
 `plugins/delivery-pipeline/scripts/model-policy.cjs`, not of the compatibility
@@ -1005,7 +1005,7 @@ human's, so GSD's "no auto-merge" boundary is preserved where it matters.
   `uat-gate.cjs ${PHASE_NUMBER}` wraps the fail-closed predicate
   `phase uat-passed` — /gsd-ship will not pass without verification evidence
   (switch: `delivery_pipeline.uat_gate`). Without a phase in context — skip.
-- **GSD projection gates** (capability v0.53.0): `gsd-sync.cjs` writes after
+- **GSD projection gates** (capability v0.53.2): `gsd-sync.cjs` writes after
   `plan:post`, `execute:post`, and `verify:post`, then runs in `--check` mode at
   `ship:pre` (switch: `delivery_pipeline.gsd_sync`). The launcher is inert when
   no plan carries a Shipyard `delivery:` block, so ordinary GSD projects are not

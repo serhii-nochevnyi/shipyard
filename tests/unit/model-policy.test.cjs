@@ -39,13 +39,13 @@ function priorReceipt(role, model, effort, dispatchId) {
 }
 
 const CODEx_BASE = {
-  research: ['astra', 'gpt-6-astra', 'low'],
-  decomposition: ['astra', 'gpt-6-astra', 'low'],
+  research: ['sol', 'gpt-5.6-sol', 'high'],
+  decomposition: ['sol', 'gpt-5.6-sol', 'high'],
   executor: ['luna', 'gpt-5.6-luna', 'max'],
   'pr-sentinel': ['luna', 'gpt-5.6-luna', 'medium'],
-  integrator: ['astra', 'gpt-6-astra', 'low'],
+  integrator: ['sol', 'gpt-5.6-sol', 'high'],
   'drift-check': ['luna', 'gpt-5.6-luna', 'max'],
-  'arch-review': ['astra', 'gpt-6-astra', 'low'],
+  'arch-review': ['sol', 'gpt-5.6-sol', 'high'],
   'ci-fix': ['luna', 'gpt-5.6-luna', 'max'],
   'review-fix': ['luna', 'gpt-5.6-luna', 'max'],
 };
@@ -57,6 +57,7 @@ test('exposes exactly the nine routed roles and the concrete Codex palette', () 
   assert.deepStrictEqual(policy.CODEX_MODEL_IDS, {
     luna: 'gpt-5.6-luna',
     astra: 'gpt-6-astra',
+    sol: 'gpt-5.6-sol',
   });
   assert.equal(policy.POLICY.version, policy.POLICY_VERSION);
   assert.equal(policy.POLICY_HASH, policy.fingerprintPolicy(policy.POLICY));
@@ -157,7 +158,7 @@ test('Codex research promotes only explicit very-complex and retains inert alter
     complexity: 'very-complex',
   });
   assert.equal(result.logical_rung, 'very-complex');
-  assert.equal(result.model, 'gpt-6-astra');
+  assert.equal(result.model, 'gpt-5.6-sol');
   assert.deepStrictEqual(result.signals_fired, ['type', 'very-complex']);
   assert.deepStrictEqual(result.selected_signals.map((item) => item.signal), ['very-complex']);
   assert.equal(result.signal_reasons.length, 2);
@@ -186,12 +187,12 @@ test('judgement roles promote only on ADR-014 scoped signals and preserve all fi
     ]) {
       const result = codex(role, signals);
       assert.equal(result.logical_rung, 'critical', `${role}/${JSON.stringify(signals)}`);
-      assert.equal(result.model, 'gpt-6-astra');
-      assert.equal(result.effort, 'medium');
+      assert.equal(result.model, 'gpt-5.6-sol');
+      assert.equal(result.effort, 'xhigh');
     }
     const riskOnly = codex(role, { risk: 'high' });
     assert.equal(riskOnly.logical_rung, 'base', `${role}/risk`);
-    assert.equal(riskOnly.model, 'gpt-6-astra');
+    assert.equal(riskOnly.model, 'gpt-5.6-sol');
     assert.ok(riskOnly.signal_reasons.some((item) => item.signal === 'risk' && item.applies === false));
     const combined = codex(role, {
       risk: 'high',
@@ -240,7 +241,7 @@ test('window escalation uses only measured input against the fingerprinted thres
   );
 });
 
-test('executor keeps Luna/max by default and escalates to Astra/low on explicit critical evidence', () => {
+test('executor keeps Luna/max by default and escalates to Sol/high on explicit critical evidence', () => {
   const base = codex('executor', { risk: 'high', inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 });
   assert.equal(base.logical_rung, 'base');
   assert.equal(base.logical_model, 'luna');
@@ -252,9 +253,9 @@ test('executor keeps Luna/max by default and escalates to Astra/low on explicit 
   for (const signal of ['critical', 'checkpoint']) {
     const result = codex('executor', { [signal]: true });
     assert.equal(result.logical_rung, 'critical', signal);
-    assert.equal(result.logical_model, 'astra', signal);
-    assert.equal(result.model, 'gpt-6-astra', signal);
-    assert.equal(result.effort, 'low', signal);
+    assert.equal(result.logical_model, 'sol', signal);
+    assert.equal(result.model, 'gpt-5.6-sol', signal);
+    assert.equal(result.effort, 'high', signal);
     assert.ok(result.signal_reasons.some((item) => item.signal === signal && item.applies === true));
   }
 });
@@ -525,13 +526,13 @@ test('canonical policy ignores caller mutation attempts against runtime adapter 
 test('exhaustive runtime matrix covers every native base tuple and scoped escalation rung', () => {
   const base = {
     codex: {
-      research: ['gpt-6-astra', 'low'],
-      decomposition: ['gpt-6-astra', 'low'],
+      research: ['gpt-5.6-sol', 'high'],
+      decomposition: ['gpt-5.6-sol', 'high'],
       executor: ['gpt-5.6-luna', 'max'],
       'pr-sentinel': ['gpt-5.6-luna', 'medium'],
-      integrator: ['gpt-6-astra', 'low'],
+      integrator: ['gpt-5.6-sol', 'high'],
       'drift-check': ['gpt-5.6-luna', 'max'],
-      'arch-review': ['gpt-6-astra', 'low'],
+      'arch-review': ['gpt-5.6-sol', 'high'],
       'ci-fix': ['gpt-5.6-luna', 'max'],
       'review-fix': ['gpt-5.6-luna', 'max'],
     },
@@ -548,20 +549,20 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
     },
   };
   const escalations = [
-    ['codex', 'research', { type: 'alternatives' }, 'base', 'gpt-6-astra', 'low'],
-    ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6-astra', 'medium'],
-    ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6-astra', 'medium'],
-    ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
-    ['codex', 'executor', { critical: true }, 'critical', 'gpt-6-astra', 'low'],
-    ['codex', 'executor', { checkpoint: true }, 'critical', 'gpt-6-astra', 'low'],
-    ['codex', 'integrator', { critical: true }, 'critical', 'gpt-6-astra', 'medium'],
-    ['codex', 'integrator', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
-    ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6-astra', 'medium'],
-    ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
-    ['codex', 'arch-review', { critical: true }, 'critical', 'gpt-6-astra', 'medium'],
-    ['codex', 'arch-review', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
-    ['codex', 'arch-review', { contested: true }, 'critical', 'gpt-6-astra', 'medium'],
-    ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
+    ['codex', 'research', { type: 'alternatives' }, 'base', 'gpt-5.6-sol', 'high'],
+    ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-5.6-sol', 'xhigh'],
+    ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+    ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+    ['codex', 'executor', { critical: true }, 'critical', 'gpt-5.6-sol', 'high'],
+    ['codex', 'executor', { checkpoint: true }, 'critical', 'gpt-5.6-sol', 'high'],
+    ['codex', 'integrator', { critical: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+    ['codex', 'integrator', { checkpoint: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+    ['codex', 'integrator', { contested: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+    ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+    ['codex', 'arch-review', { critical: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+    ['codex', 'arch-review', { checkpoint: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+    ['codex', 'arch-review', { contested: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+    ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-5.6-sol', 'xhigh'],
     ['claude', 'research', { type: 'alternatives' }, 'base', 'opus', 'medium'],
     ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'max'],
     ['claude', 'decomposition', { critical: true }, 'critical', 'opus', 'max'],

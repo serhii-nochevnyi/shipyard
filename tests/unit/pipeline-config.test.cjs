@@ -2512,7 +2512,7 @@ test('refuses original overrides before compatibility parsing or namespace mergi
 
 test('decomposition validates planner and checker GSD override keys for both runtimes', () => {
   for (const runtime of ['codex', 'claude']) {
-    const effort = runtime === 'codex' ? 'high' : 'low';
+    const effort = runtime === 'codex' ? 'xhigh' : 'low';
     const cases = [
       [{ model_overrides: { 'gsd-plan-checker': 'haiku' } }, 'config.model_overrides.gsd-plan-checker'],
       [{ effort: { agent_overrides: { 'gsd-plan-checker': effort } } }, 'config.effort.agent_overrides.gsd-plan-checker'],
@@ -2756,7 +2756,7 @@ test('routed CLI returns full decisions and exits nonzero without stdout on inva
   const good = cli(['model', 'decomposition', '--routed', '--runtime', 'codex', '--checkpoint', '--dispatch-id', 'cli-launch']);
   assert.equal(good.status, 0, good.stderr);
   const decision = JSON.parse(good.stdout);
-  assert.equal(decision.model, 'gpt-6-astra');
+  assert.equal(decision.model, 'gpt-5.6-sol');
   assert.equal(decision.policy_hash, canonicalPolicy.POLICY_HASH);
   assert.equal(decision.dispatch_id, 'cli-launch');
   for (const args of [
@@ -2917,7 +2917,7 @@ test('JSON dispatch rejects unknown top-level fields instead of losing escalatio
     assert.equal(result.status, 0, result.stderr);
     const decision = JSON.parse(result.stdout);
     assert.equal(decision.rung, 'critical');
-    assert.equal(decision.model, 'gpt-6-astra');
+    assert.equal(decision.model, 'gpt-5.6-sol');
     assert.equal(decision.dispatch_id, 'critical-json');
   }
 });
@@ -2946,7 +2946,7 @@ test('Codex remaps validate the selected tier without rejecting unrelated tiers'
       : { model_profile_overrides: { codex: tiers } };
     const { config } = routedConfig(raw);
     assert.equal(resolveDispatch({ config, role: 'executor' }).model, 'gpt-5.6-luna');
-    assert.equal(resolveDispatch({ config, role: 'executor', signals: { critical: true } }).model, 'gpt-6-astra');
+    assert.equal(resolveDispatch({ config, role: 'executor', signals: { critical: true } }).model, 'gpt-5.6-sol');
     assert.doesNotThrow(() => resolveDispatch({ config, role: 'research' }));
   }
 });
@@ -2960,7 +2960,7 @@ test('unconfigured projects inspect inherited GSD selection and reject conflicti
     fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify(raw));
     const { config } = loadConfig(dir, { routed: true, runtime: 'codex', env: { GSD_HOME: home } });
     if (raw.model_profile === 'balanced') {
-      assert.equal(resolveDispatch({ config, role: 'decomposition' }).model, 'gpt-6-astra');
+      assert.equal(resolveDispatch({ config, role: 'decomposition' }).model, 'gpt-5.6-sol');
     } else {
       refusesSource(() => resolveDispatch({ config, role: 'decomposition' }),
         raw.model_profile ? 'config.model_profile' : 'config.model_overrides.gsd-planner');
