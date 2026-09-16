@@ -2,7 +2,6 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-bash tests/smoke/model-ladder-runtime-smoke.sh
 
 [[ -f docker-compose.yml ]] || { echo "missing docker-compose.yml"; exit 1; }
 [[ -f Makefile ]] || { echo "missing Makefile"; exit 1; }

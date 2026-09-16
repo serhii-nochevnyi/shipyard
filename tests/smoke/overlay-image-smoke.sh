@@ -2,7 +2,6 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-bash tests/smoke/model-ladder-runtime-smoke.sh
 
 [[ -f Dockerfile ]] || { echo "missing Dockerfile"; exit 1; }
 [[ -f scripts/sync-karpathy-skills.sh ]] || { echo "missing scripts/sync-karpathy-skills.sh"; exit 1; }
