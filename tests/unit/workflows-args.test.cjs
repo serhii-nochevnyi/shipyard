@@ -60,6 +60,33 @@ const workflowApplicationEvidence = ({ result }) => {
   if (!evidence) throw new Error('test Claude host returned no application evidence');
   return evidence;
 };
+const workflowArtifactConsumer = ({ artifact, result, record }) => {
+  const ref = `${artifact && artifact.worktreePath ? artifact.worktreePath : '/test-worktree'}/.shipyard-role-artifact.json`;
+  const evidenceIndex = {
+    path: '.shipyard-evidence.md',
+    bytes: 0,
+    sha256: '0'.repeat(64),
+  };
+  const envelope = {
+    schema: 'shipyard.executor-result.v1',
+    version: 1,
+    role: artifact && artifact.role ? artifact.role : record.receipt.role,
+    ticket: artifact && artifact.ticket ? artifact.ticket : record.ticket,
+    outcome: result.status,
+    actionable_delta: null,
+    summary: typeof result.summary === 'string' ? result.summary.slice(0, 500) : '',
+    blocking_count: result.blocking_count || 0,
+    evidence_index: evidenceIndex,
+  };
+  return {
+    schema: 'shipyard.role-artifact.v1',
+    artifact_ref: ref,
+    artifact_path: ref,
+    artifact_digest: '1'.repeat(64),
+    envelope,
+    evidence_index: evidenceIndex,
+  };
+};
 const testDispatchFactory = (options) => createClaudeWorkflowDispatch({
   ...options,
   capabilities: options.capabilities === undefined ? WORKFLOW_CAPABILITIES : options.capabilities,
@@ -67,6 +94,9 @@ const testDispatchFactory = (options) => createClaudeWorkflowDispatch({
   applicationEvidence: options.applicationEvidence === undefined
     ? workflowApplicationEvidence
     : options.applicationEvidence,
+  artifactConsumer: options.artifactConsumer === undefined
+    ? workflowArtifactConsumer
+    : options.artifactConsumer,
 });
 process.on('exit', () => {
   for (const store of workflowStores) {
@@ -326,6 +356,9 @@ test('a committed ticket returns paths and a short summary, never the documents,
     // here only by accident of `worktreePath` being a short mkdtemp path.
     assert.ok(r.summary.length <= 500, `summary is ${r.summary.length} chars, over the 500-char cap`);
     assert.strictEqual(r.status, 'committed');
+    assert.ok(r.artifact_ref, 'committed results need a trusted artifact reference');
+    assert.ok(r.artifact_digest, 'committed results need the sealed manifest digest');
+    assert.ok(r.evidence_index, 'committed results need a complete evidence index reference');
     assert.ok(!('prBody' in r), 'prBody must not cross back — that is the whole point of this ticket');
     assert.ok(!('evidence' in r), 'evidence text must not cross back — that is the whole point of this ticket');
     assert.ok(path.isAbsolute(r.prBodyPath), `prBodyPath must be absolute: ${r.prBodyPath}`);
@@ -353,9 +386,39 @@ test('a blocked ticket returns its reason inline — no file, no path, the loop 
   assert.strictEqual(value.length, 1);
   const r = value[0];
   assert.strictEqual(r.status, 'blocked');
+  assert.ok(!('artifact_ref' in r), 'blocked results must not carry a publishable artifact reference');
+  assert.ok(r.summary.length <= 500, 'blocked summaries are bounded too');
   assert.strictEqual(r.summary, reason);
   assert.strictEqual(r.prBodyPath, '', 'a blocked ticket writes no PR body');
   assert.strictEqual(r.evidencePath, '', 'a blocked ticket writes no evidence file');
+});
+
+test('a committed result without a trusted artifact consumer cannot report committed', async () => {
+  const ticket = { id: 'T-99-04', planPath: '/p/99-04-PLAN.md', branch: 'ticket/T-99-04', prBase: 'epic/99', worktreePath: '/w/T-99-04', model: 'sonnet', effort: 'max' };
+  const dispatchFactory = (dispatchOptions) => createClaudeWorkflowDispatch({
+    ...dispatchOptions,
+    capabilities: WORKFLOW_CAPABILITIES,
+    recorder: WORKFLOW_RECORDER,
+    applicationEvidence: workflowApplicationEvidence,
+  });
+  const error = await rejects('executors', { tickets: [ticket] }, {
+    dispatchFactory,
+    agent: async () => ({ id: ticket.id, status: 'committed', summary: 'claimed complete' }),
+  });
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
+  assert.strictEqual(error.code, 'MISSING_ARTIFACT');
+});
+
+test('blocked results with oversized summaries stay explicit and bounded', async () => {
+  const ticket = { id: 'T-99-05', planPath: '/p/99-05-PLAN.md', branch: 'ticket/T-99-05', prBase: 'epic/99', worktreePath: '/does/not/exist', model: 'sonnet', effort: 'max' };
+  const { value } = await run('executors', { tickets: [ticket] }, {
+    agent: async () => ({ id: ticket.id, status: 'blocked', summary: 'b'.repeat(900), blocking_count: 2 }),
+  });
+  assert.strictEqual(value[0].status, 'blocked');
+  assert.ok(value[0].summary.length <= 500);
+  assert.strictEqual(value[0].prBodyPath, '');
+  assert.strictEqual(value[0].evidencePath, '');
+  assert.ok(!('artifact_ref' in value[0]));
 });
 
 test('a dead or throwing agent still returns a capped reason inline, with no worktreePath required', async () => {

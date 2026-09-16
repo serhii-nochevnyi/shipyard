@@ -1531,8 +1531,10 @@ may be dispatched at all: fix the file.
      creating all worktrees, invoke the typed Workflow callback only as the
      boundary's launch adapter. It receives the validated per-ticket selection
      and returns `{id, status: committed|blocked, prBodyPath, evidencePath,
-     summary}` per ticket. Do not call `Workflow(...)` directly from the
-     command or let it resolve a model on its own.
+     summary, artifact_ref, artifact_digest, evidence_index}` per ticket. A
+     committed result also carries a bounded envelope reference; the complete
+     PR body and evidence stay in the worktree. Do not call `Workflow(...)`
+     directly from the command or let it resolve a model on its own.
      `reuseCandidates` is that ticket's `reuse_candidates` from Step 2 (omit when the
      ticket skipped drift-check or the list was empty).
    - **No opaque fallback**: if the selected host cannot carry the boundary
@@ -1541,6 +1543,25 @@ may be dispatched at all: fix the file.
      `reuse_candidates` INSIDE `<TICKET-CONTRACT>` for any supported typed
      callback, with the instruction to read each one before writing and to build
      on it rather than add a parallel layer.
+   - **Direct Codex producer contract**: the supported Agent path emits the same
+     complete `.shipyard-pr-body.md` and `.shipyard-evidence.md` files and only
+     the bounded result fields `{id, status, summary, actionable_delta,
+     blocking_count}`. It must not emit a receipt, expected dispatch/head/base,
+     digest, or alternate file path. Once the boundary has finalized the
+     authenticated receipt, the trusted delivery consumer writes that result
+     to a disposable JSON result file and runs:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
+       --worktree <worktree> --role executor --ticket <T> --base <state[T].base> \
+       --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+       --result-file <trusted-result.json>
+     ```
+
+     The seal derives the repository/worktree identity, committed HEAD/base,
+     policy hash, fixed paths, bytes, and SHA-256 values from trusted host and
+     boundary state. A missing receipt or any refusal is a boundary failure;
+     never turn it into a committed or publishable result.
 4a. **Record the dispatch — AFTER the boundary returned a verified receipt, never
     before.** The receipt carries the launch identity (the Workflow task id or
     typed Agent id); once it exists, and only then, for every ticket you just
@@ -1624,11 +1645,50 @@ may be dispatched at all: fix the file.
    quietly drops someone else's change.
    A violation is a decision, never a retry: revert the stray edit and escalate
    (it belongs to another ticket), or re-plan the ticket with the path declared.
-6. There are commits → push the branch (`git -C <worktree> push -u origin <branch>`),
-   then read the returned `prBodyPath` (and `evidencePath` when recording the
-   verification) from the worktree and run `gh pr create --base <state[T].base> --head <branch> --draft
-   --title "<T>: <title>" --body-file <prBodyPath>` (add
-   `--repo <state[T].repo>` for a foreign-repo ticket).
+
+5c. **Validate executor evidence (MANDATORY, TRUSTED CONSUMER).** After the
+   did-work and scope gates pass, seal a direct Codex result as described in
+   Step 4. The Workflow path must use its returned `artifact_ref` only as a
+   reference, never as proof: validate both paths against the authenticated
+   boundary-store record and the live worktree before publication:
+
+   ```text
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate \
+     --worktree <worktree> --role executor --ticket <T> --base <state[T].base> \
+     --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+     --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
+   ```
+
+   Missing or surplus result IDs, missing files, escaped/symlinked paths,
+   wrong dispatch, stale HEAD/base, policy mismatch, forged receipt, or digest
+   mismatch are refusals. Commit/scope checks do not replace this live gate;
+   cached metadata and artifact digests never authorize mutation or merge.
+
+6. There are commits → revalidate at the publication boundary and obtain one
+   validated byte snapshot. If `git -C <worktree> rev-parse HEAD` differs from
+   the sealed manifest, rerun `role-artifact validate` and stop if it refuses.
+   Then run `node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs read` in the same trusted consumer, optionally with
+   `--pr-body-out <validated-body-file>` and `--evidence-out
+   <validated-evidence-file>`, and use those validated bytes for publication:
+
+   ```text
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs read \
+     --worktree <worktree> --role executor --ticket <T> --base <state[T].base> \
+     --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+     --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest> \
+     --pr-body-out <validated-body-file> --evidence-out <validated-evidence-file>
+   ```
+
+   push the branch (`git -C <worktree> push -u origin <branch>`), then run
+   `gh pr create --base <state[T].base> --head <branch> --draft --title
+   "<T>: <title>" --body-file <validated-body-file>` (add `--repo
+   <state[T].repo>` for a foreign-repo ticket). Do not reopen the agent path
+   directly after validation or substitute a caller-supplied body. Record the
+   validated evidence reference/ranges, not both complete documents in parent
+   model context. For a parent needing findings, request only a bounded range
+   with `--evidence-start <offset> --evidence-end <offset>`; the complete
+   evidence remains available through the validated reference for publication
+   or audit.
    `--base` is the RESOLVED base of the ticket, NOT main directly in
    epic-stacked. **The base is one field with two jobs: it decides what the
    review diff shows AND where the squash LANDS.** A primary parent's ticket
@@ -1655,8 +1715,9 @@ may be dispatched at all: fix the file.
    PR body: the FIRST line — a machine-readable marker `Ticket: <T>` (a safety net for
    state-sync matching if a re-decomposition renames the canonical branch);
    then Problem / Scope / Dependency slice / Test evidence /
-   Rollout-Rollback (for risky). Verify that first line is present before creating
-   the PR; add it yourself if the agent omitted it. The PR title ALWAYS starts with
+   Rollout-Rollback (for risky). Verify that first line is present in the validated
+   byte snapshot before creating the PR; a missing marker is a publication refusal,
+   not an invitation to mutate the agent file. The PR title ALWAYS starts with
    `<T>: ` — this is the second anchor of the same matching.
 7. Immediately the first `reviewers.cjs reinit <pr>`.
 8. Update delivery-state (`state-sync.cjs`) — once, AFTER all of Phase C.

@@ -284,9 +284,27 @@ test('the generator writes nothing outside --out and preserves a valid stage on 
 test('the bundle carries canonical payloads and rewrites installed Shipyard references', () => {
   withFixture({}, (f) => {
     const manifest = generated(f);
-    for (const file of ['model-policy.cjs', 'model-policy-internal.cjs', 'runtime-adapters.cjs']) {
+    for (const file of [
+      'model-policy.cjs',
+      'model-policy-internal.cjs',
+      'runtime-adapters.cjs',
+      'dispatch-boundary.cjs',
+      'role-artifact.cjs',
+      'claude-dispatch-adapter.cjs',
+      'claude-workflow-host.cjs',
+    ]) {
       assert.strictEqual(read(path.join(f.out, 'bundle/scripts', file)), read(path.join(PLUGIN, 'scripts', file)));
     }
+    const generatedDeliver = read(path.join(f.out, 'skills/shipyard-deliver/SKILL.md'));
+    assert.match(generatedDeliver, /role-artifact\.cjs seal/);
+    assert.match(generatedDeliver, /role-artifact\.cjs validate/);
+    assert.match(generatedDeliver, /role-artifact\.cjs read/);
+    assert.ok(!generatedDeliver.includes('${CLAUDE_PLUGIN_ROOT}'));
+    assert.ok(manifest.bundle_files.includes('scripts/role-artifact.cjs'));
+    assert.equal(
+      read(path.join(f.out, 'bundle/workflows/executors.mjs')),
+      read(path.join(PLUGIN, 'workflows/executors.mjs')),
+    );
     assert.strictEqual(read(path.join(f.out, 'bundle/skills/delivery-rules/SKILL.md')),
       read(path.join(PLUGIN, 'skills/delivery-rules/SKILL.md')));
     const texts = [
