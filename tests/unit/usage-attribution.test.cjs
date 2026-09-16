@@ -8,7 +8,7 @@ const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  normalizeRecord, readLedger, latestRecords, recordBatch,
+  LEDGER_NAME, normalizeRecord, readLedger, latestRecords, recordBatch,
   reconcileTelemetry, summarizeTelemetry, POLICY_HASH, POLICY_VERSION,
 } = require('../../plugins/delivery-pipeline/scripts/usage-attribution.cjs');
 const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -422,6 +422,37 @@ test('policy-aware attribution retains provenance and compares nested facts idem
   }
 });
 
+test('serialized fact-shaped ledger rows are reconciled instead of trusted as facts', () => {
+  const resolution = routed('claude', 'executor', {}, 'serialized-fact-row');
+  const receipt = applicationReceipt(resolution);
+  const inProcessFact = reconcileTelemetry({
+    ...resolution, receipt, application_receipt: receipt,
+  }, { usageJoined: true });
+  assert.equal(summarizeTelemetry([inProcessFact]).compliant, 1);
+  assert.equal(Object.isFrozen(inProcessFact), true);
+
+  // This is exactly the shape a report emits after a JSON round trip: it has
+  // both derived dimensions and can claim green booleans, but it has no receipt
+  // left from which those claims could be reconciled.
+  const serialized = JSON.parse(JSON.stringify(inProcessFact));
+  assert.equal(Object.hasOwn(serialized, 'application_receipt'), false);
+  serialized.policy_resolution.current = true;
+  serialized.runtime_application.verified = true;
+  serialized.compliant = true;
+  serialized.comparison_ready = true;
+
+  const { graph } = project();
+  try {
+    fs.writeFileSync(path.join(graph, LEDGER_NAME), `${JSON.stringify(serialized)}\n`);
+    const summary = summarizeTelemetry(readLedger(graph).records, { usageJoined: true });
+    assert.equal(summary.compliant, 0);
+    assert.equal(summary.comparison_ready, 0);
+    assert.equal(summary.records[0].application_status, 'missing_receipt');
+  } finally {
+    fs.rmSync(path.resolve(graph, '..', '..'), { recursive: true, force: true });
+  }
+});
+
 test('boundary resolution accepts task level and bounded repair provenance', () => {
   const resolved = routed('claude', 'executor', {}, 'boundary-resolution');
   const resolution = {
@@ -561,6 +592,48 @@ test('reconciliation rejects concrete observed values that disagree with the app
   assert.ok(effortMismatch.runtime_application.contradictions.includes('observed_effort'));
 });
 
+test('reconciliation rejects conflicting canonical and legacy effort aliases in every source', () => {
+  for (const runtime of ['codex', 'claude']) {
+    const resolution = routed(runtime, 'executor', {}, `effort-aliases-${runtime}`);
+    const receipt = applicationReceipt(resolution);
+    const otherEffort = resolution.requested_effort === 'max' ? 'low' : 'max';
+    for (const location of ['outer', 'resolution', 'joined']) {
+      for (const [field, dimension] of [
+        ['effort', 'resolution'], ['effort_applied', 'application'],
+      ]) {
+        const raw = {
+          ...resolution,
+          receipt: JSON.parse(JSON.stringify(receipt)),
+          application_receipt: JSON.parse(JSON.stringify(receipt)),
+        };
+        const usage = {
+          dispatch_id: resolution.dispatch_id,
+          runtime,
+          provider: runtime === 'codex' ? 'openai' : 'anthropic',
+          session_id: `joined-${runtime}`,
+        };
+        if (location === 'outer') raw[field] = otherEffort;
+        else if (location === 'resolution') raw.resolution = { ...resolution, [field]: otherEffort };
+        else usage[field] = otherEffort;
+
+        const facts = reconcileTelemetry(JSON.parse(JSON.stringify(raw)), location === 'joined'
+          ? { usageRecords: [usage] }
+          : { usageJoined: true });
+        const label = `${runtime}/${location}/${field}`;
+        assert.equal(facts.compliant, false, label);
+        assert.equal(facts.comparison_ready, false, label);
+        if (dimension === 'resolution') {
+          assert.equal(facts.resolution_status, 'contradictory', label);
+          assert.ok(facts.policy_resolution.contradictions.includes('requested_effort'), label);
+        } else {
+          assert.equal(facts.application_status, 'contradictory', label);
+          assert.ok(facts.runtime_application.contradictions.includes('applied_effort'), label);
+        }
+      }
+    }
+  }
+});
+
 test('reconciliation compares outer and joined observations with an unknown-observation receipt', () => {
   for (const runtime of ['codex', 'claude']) {
     const resolution = routed(runtime, 'executor', {}, `joined-observation-${runtime}`);
@@ -607,6 +680,52 @@ test('reconciliation compares outer and joined observations with an unknown-obse
             assert.ok(facts.runtime_application.contradictions.includes(field), label);
           }
         }
+      }
+    }
+  }
+});
+
+test('reconciliation rejects malformed observations across outer, nested and joined sources', () => {
+  for (const runtime of ['codex', 'claude']) {
+    const resolution = routed(runtime, 'executor', {}, `observation-sources-${runtime}`);
+    const validReceipt = applicationReceipt(resolution);
+    for (const field of ['observed_model', 'observed_effort']) {
+      for (const location of [
+        'outer', 'resolution', 'receipt', 'application_receipt',
+        'joined', 'joined_resolution', 'joined_receipt', 'joined_application_receipt',
+      ]) {
+        const raw = {
+          ...resolution,
+          receipt: JSON.parse(JSON.stringify(validReceipt)),
+          application_receipt: JSON.parse(JSON.stringify(validReceipt)),
+        };
+        const usage = {
+          dispatch_id: resolution.dispatch_id,
+          runtime,
+          provider: runtime === 'codex' ? 'openai' : 'anthropic',
+          session_id: `observed-${runtime}`,
+        };
+        if (location === 'outer') raw[field] = 42;
+        else if (location === 'resolution') raw.resolution = { ...resolution, [field]: 42 };
+        else if (location === 'receipt') raw.receipt = { ...validReceipt, [field]: 42 };
+        else if (location === 'application_receipt') raw.application_receipt = { ...validReceipt, [field]: 42 };
+        else if (location === 'joined') usage[field] = 42;
+        else if (location === 'joined_resolution') usage.resolution = { ...resolution, [field]: 42 };
+        else if (location === 'joined_receipt') usage.receipt = { ...validReceipt, [field]: 42 };
+        else usage.application_receipt = { ...validReceipt, [field]: 42 };
+
+        const facts = reconcileTelemetry(JSON.parse(JSON.stringify(raw)), {
+          usageRecords: [usage],
+        });
+        const label = `${runtime}/${location}/${field}`;
+        assert.equal(facts.observed_model, validReceipt.observed_model, label);
+        assert.equal(facts.observed_effort, validReceipt.observed_effort, label);
+        assert.equal(facts.provider_observation.status, 'contradictory', label);
+        assert.equal(facts.provider_observation.contradictory, true, label);
+        assert.ok(facts.provider_observation.contradictions.includes(field), label);
+        assert.ok(facts.findings.includes('contradictory_observation'), label);
+        assert.equal(facts.compliant, false, label);
+        assert.equal(facts.comparison_ready, false, label);
       }
     }
   }
@@ -921,6 +1040,39 @@ test('serialized signal-reason receipt copies reject wrong or malformed applied 
           assert.equal(facts.comparison_ready, false, label);
         }
       }
+    }
+  }
+});
+
+test('serialized repair chains recursively validate a forged grandparent receipt', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const role of ['review-fix', 'ci-fix']) {
+      const [repeat, exhausted] = repairChain(runtime, role);
+      const resolution = JSON.parse(JSON.stringify(exhausted.resolution));
+      const immediate = resolution.signals.priorApplied;
+      const grandparent = JSON.parse(JSON.stringify(repeat.resolution.signals.priorApplied));
+      grandparent.applied_model = 'forged-grandparent-model';
+      immediate.signals = {
+        signatureState: 'repeat',
+        priorApplied: grandparent,
+      };
+      const nestedEvaluation = modelPolicy.evaluateSignals(role, immediate.signals, { runtime });
+      immediate.signal_reasons = JSON.parse(JSON.stringify(nestedEvaluation.reasons));
+      immediate.signals_fired = [...nestedEvaluation.signals_fired];
+
+      // Keep the outer serialized signal-reason copy internally consistent so
+      // only recursive validation of the forged grandparent can reject it.
+      const outerReason = resolution.signal_reasons.find((item) => item.signal === 'priorApplied');
+      outerReason.value = JSON.parse(JSON.stringify(immediate));
+      const facts = reconcileTelemetry({
+        resolution,
+        application_receipt: JSON.parse(JSON.stringify(exhausted.receipt)),
+      }, { usageJoined: true });
+      const label = `${runtime}/${role}`;
+      assert.equal(facts.resolution_status, 'contradictory', label);
+      assert.ok(facts.policy_resolution.contradictions.includes('signals'), label);
+      assert.equal(facts.compliant, false, label);
+      assert.equal(facts.comparison_ready, false, label);
     }
   }
 });
