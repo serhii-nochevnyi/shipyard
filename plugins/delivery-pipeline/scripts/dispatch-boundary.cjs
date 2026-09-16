@@ -298,6 +298,11 @@ function createDurableRecorder(storeDir) {
     return {
       dispatch_id: dispatchId,
       purpose,
+      // Projection owns the fenced section through a synchronous graph+journal
+      // commit. That callback cannot run a heartbeat while the event loop is
+      // blocked, so a live owner must not be treated as stale merely because
+      // the recovery TTL elapsed. A dead process remains recoverable below.
+      fenced_until_release: purpose === 'projection',
       lock_token: newFenceToken(),
       owner_pid: process.pid,
       acquired_at: new Date(now).toISOString(),
@@ -317,7 +322,19 @@ function createDurableRecorder(storeDir) {
       if (!error || error.code !== 'ENOENT') throw error;
     }
   };
+  const lockOwnerIsAlive = (lock) => {
+    if (!lock || lock.fenced_until_release !== true) return false;
+    const pid = Number(lock.owner_pid);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return Boolean(error && error.code === 'EPERM');
+    }
+  };
   const lockIsStale = (lock) => {
+    if (lockOwnerIsAlive(lock)) return false;
     const leaseExpiresAt = lock && typeof lock.lease_expires_at === 'string'
       ? Date.parse(lock.lease_expires_at)
       : lock && typeof lock.acquired_at === 'string'
@@ -767,6 +784,39 @@ function createDurableRecorder(storeDir) {
         }
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable receipt claim renewal failed: ${error.message}`, { dispatch_id: dispatchId });
+      }
+    },
+    withClaim(dispatchId, consumerId, claimAuthority, callback) {
+      if (typeof callback !== 'function') {
+        throw boundaryError('INVALID_INPUT', 'durable receipt claim fence requires a callback', { dispatch_id: dispatchId });
+      }
+      try {
+        // The projection writer holds this same fenced lock while it mutates
+        // dispatch-record's graph. A separate repair can therefore neither
+        // take over nor consume the receipt between the ownership check and
+        // the projection commit. A heartbeat alone is insufficient: it would
+        // leave exactly that check→write gap open.
+        const lockOwner = acquireClaimLock(dispatchId, 'projection');
+        if (!lockOwner) return { committed: false };
+        try {
+          if (fs.existsSync(consumedFile(dispatchId))) return { committed: false };
+          const current = readJsonFile(claimFile(dispatchId));
+          if (!sameClaimFence(current, claimAuthority) || claimIsStale(current)) {
+            return { committed: false };
+          }
+          atomicReplaceJson(claimFile(dispatchId), claimPayload(
+            dispatchId,
+            consumerId,
+            current.generation,
+            current.claim_token,
+          ));
+          if (fs.existsSync(consumedFile(dispatchId))) return { committed: false };
+          return { committed: true, value: callback() };
+        } finally {
+          releaseClaimLock(dispatchId, lockOwner);
+        }
+      } catch (error) {
+        throw boundaryError('RECORD_FAILED', `durable receipt claim fence failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
     consume(dispatchId, consumerId, claimAuthority) {

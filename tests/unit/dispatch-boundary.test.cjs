@@ -1500,6 +1500,39 @@ test('an active owner renews its lease, but expiry permits takeover despite a li
   assert.deepStrictEqual(recorder.renewClaim('live-claim-id', 'other-owner', takeover), { renewed: true });
 });
 
+test('a projection fence survives lock expiry while its process is still committing', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-live-projection-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const claim = recorder.claim('live-projection-id', 'dispatch-record');
+  assert.equal(claim.claimed, true);
+  const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
+  const lockName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-recovery-') && name.endsWith('.json'));
+  assert.ok(claimName);
+  assert.equal(lockName, undefined, 'the projection lock is created only while the fence callback runs');
+
+  const result = recorder.withClaim('live-projection-id', 'dispatch-record', claim, () => {
+    const claimPath = path.join(storeDir, claimName);
+    const currentClaim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+    currentClaim.lease_expires_at = new Date(Date.now() - 1000).toISOString();
+    fs.writeFileSync(claimPath, JSON.stringify(currentClaim) + '\n');
+
+    const activeLockName = fs.readdirSync(storeDir)
+      .find((name) => name.startsWith('claim-recovery-') && name.endsWith('.json'));
+    assert.ok(activeLockName);
+    const lockPath = path.join(storeDir, activeLockName);
+    const activeLock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    assert.equal(activeLock.fenced_until_release, true);
+    activeLock.lease_expires_at = new Date(Date.now() - 1000).toISOString();
+    fs.writeFileSync(lockPath, JSON.stringify(activeLock) + '\n');
+
+    const contender = boundaryModule.createDurableRecorder(storeDir);
+    assert.deepStrictEqual(contender.claim('live-projection-id', 'repair'), { claimed: false });
+  });
+
+  assert.equal(result.committed, true);
+  assert.deepStrictEqual(recorder.release('live-projection-id', 'dispatch-record', claim), { released: true });
+});
+
 test('a superseded claim owner cannot commit after an expired-lease takeover', async () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-fenced-claim-'));
   const ticket = 'T-36-FENCED';
