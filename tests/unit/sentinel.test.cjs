@@ -1579,6 +1579,44 @@ const fixApplicationEvidence = ({ result }) => {
   if (!evidence) throw new Error('test Claude host returned no application evidence');
   return evidence;
 };
+const fixArtifactConsumer = ({ artifact, result, record }) => {
+  const evidenceIndex = {
+    path: '.shipyard-repair-evidence.md',
+    bytes: 0,
+    sha256: '0'.repeat(64),
+  };
+  const findingsIndex = {
+    path: `.shipyard-role-artifacts/${record.receipt.dispatch_id}/findings.json`,
+    bytes: 0,
+    sha256: '0'.repeat(64),
+  };
+  const envelope = {
+    schema: 'shipyard.repair-result.v1',
+    version: 1,
+    role: artifact.role,
+    ticket: artifact.ticket,
+    subject: artifact.ticket,
+    pr: artifact.pr,
+    status: result.status,
+    pushed: result.pushed,
+    notes: result.notes,
+    hypothesis: result.hypothesis,
+    summary: result.notes,
+    evidence_index: evidenceIndex,
+    evidence_index_ref: evidenceIndex,
+    findings_index: findingsIndex,
+    findings_index_ref: findingsIndex,
+  };
+  return {
+    schema: 'shipyard.role-artifact.v1',
+    artifact_ref: `${artifact.worktreePath}/.shipyard-role-artifact.json`,
+    artifact_path: `${artifact.worktreePath}/.shipyard-role-artifact.json`,
+    artifact_digest: '1'.repeat(64),
+    envelope,
+    evidence_index: evidenceIndex,
+    findings_index: findingsIndex,
+  };
+};
 const fixDispatchFactory = (options) => createClaudeWorkflowDispatch({
   ...options,
   capabilities: options.capabilities === undefined ? FIX_DISPATCH_CAPABILITIES : options.capabilities,
@@ -1586,6 +1624,9 @@ const fixDispatchFactory = (options) => createClaudeWorkflowDispatch({
   applicationEvidence: options.applicationEvidence === undefined
     ? fixApplicationEvidence
     : options.applicationEvidence,
+  artifactConsumer: options.artifactConsumer === undefined
+    ? fixArtifactConsumer
+    : options.artifactConsumer,
 });
 
 function runFixRound(args) {
