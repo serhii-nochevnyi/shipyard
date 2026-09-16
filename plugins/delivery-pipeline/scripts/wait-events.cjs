@@ -104,6 +104,11 @@ function identityOf(input = {}, io = {}) {
   return out;
 }
 
+function windowIdOf(input = {}, io = {}) {
+  return text(input.window_id !== undefined ? input.window_id : input.windowId,
+    text(io.window_id !== undefined ? io.window_id : io.windowId, null));
+}
+
 function validIdentity(identity) {
   return !!identity.run_id && !!identity.ticket && !!identity.pr;
 }
@@ -336,6 +341,8 @@ function validRecord(record) {
       || !Object.prototype.hasOwnProperty.call(record, 'repository')
       || !((typeof record.pr === 'string' && record.pr) || (typeof record.pr === 'number' && Number.isFinite(record.pr) && record.pr > 0))
       || typeof record.head !== 'string' || !record.head
+      || (record.window_id !== undefined && record.window_id !== null
+        && (typeof record.window_id !== 'string' || !record.window_id))
       || !Object.prototype.hasOwnProperty.call(record, 'observation_digest')
       || (record.observation_digest !== null && typeof record.observation_digest !== 'string')
       || (record.trusted_observation_digest !== null && record.trusted_observation_digest !== undefined
@@ -404,7 +411,7 @@ function actionFor(identity, observationDigest, sequence, createdAt) {
   };
 }
 
-function baseRecord(identity, now, interval, deadline) {
+function baseRecord(identity, now, interval, deadline, windowId = null) {
   return {
     schema_version: SCHEMA_VERSION,
     run_id: identity.run_id,
@@ -412,6 +419,7 @@ function baseRecord(identity, now, interval, deadline) {
     repository: identity.repository,
     pr: identity.pr,
     head: identity.head,
+    window_id: windowId,
     observation: null,
     observation_digest: null,
     trusted_observation: null,
@@ -443,6 +451,7 @@ function observe(input = {}, io = {}) {
   const identity = identityOf(input, io);
   if (!validIdentity(identity)) return refusal('INVALID_IDENTITY', 'run_id, ticket and PR are required; no event was written');
   const graphDir = identity.graphDir;
+  const requestedWindowId = windowIdOf(input, io);
   const observation = inputObservation(input);
   const observationDigest = digest({ head: identity.head, observation });
   const now = nowMs(input, io);
@@ -467,7 +476,28 @@ function observe(input = {}, io = {}) {
       const key = recordKey(identity);
       let record = store.records[key];
       const isNew = !record;
-      if (isNew) record = baseRecord(identity, now, interval, requestedDeadlineMs);
+      const persistedDeadline = record ? Date.parse(record.deadline || '') : NaN;
+      // A process killed in the middle of a window has no terminal marker, so a
+      // fresh caller is allowed to resume its persisted deadline. A completed
+      // timeout starts a new window with the caller's requested budget. The
+      // explicit id still lets a caller that owns a restart carry its identity
+      // across processes without silently extending an active window.
+      const resumeActiveWindow = !isNew && requestedWindowId
+        && record.window_id !== undefined && record.window_id !== null
+        && record.terminal === null && Number.isFinite(persistedDeadline) && now < persistedDeadline;
+      const sameWindow = !isNew && (!requestedWindowId || !record.window_id
+        || record.window_id === requestedWindowId || resumeActiveWindow);
+      const resetWindow = !isNew && requestedWindowId && !sameWindow;
+      if (isNew) record = baseRecord(identity, now, interval, requestedDeadlineMs, requestedWindowId);
+      if (resetWindow) {
+        record.window_id = requestedWindowId;
+        record.terminal = null;
+        record.deadline = iso(requestedDeadlineMs);
+        record.next_wake_at = iso(Math.min(now + interval, requestedDeadlineMs));
+        record.backoff = interval;
+      } else if (requestedWindowId && !record.window_id) {
+        record.window_id = requestedWindowId;
+      }
       record.actions = record.actions && typeof record.actions === 'object' && !Array.isArray(record.actions)
         ? record.actions : {};
       record.acknowledgments = record.acknowledgments
@@ -496,10 +526,10 @@ function observe(input = {}, io = {}) {
       record.observed_at = iso(now);
       record.interval_ms = interval;
       record.max_backoff_ms = positive(input.max_backoff_ms || io.max_backoff_ms, DEFAULT_MAX_BACKOFF_MS);
-      const persistedDeadline = Date.parse(record.deadline || '');
-      const deadline = Number.isFinite(persistedDeadline) ? persistedDeadline : requestedDeadlineMs;
+      const deadline = resetWindow ? requestedDeadlineMs
+        : Number.isFinite(persistedDeadline) ? persistedDeadline : requestedDeadlineMs;
       record.deadline = iso(deadline);
-      if (isNew) {
+      if (isNew || resetWindow) {
         record.backoff = interval;
       } else if (changed && availability === 'available') {
         record.backoff = interval;
@@ -507,13 +537,18 @@ function observe(input = {}, io = {}) {
         record.backoff = Math.min(record.max_backoff_ms, Math.max(interval, number(record.backoff, interval) * 2));
       }
       record.next_wake_at = iso(Math.min(deadline, now + record.backoff));
+      const interrupted = hasActionable(eligibility);
       let action = null;
-      if (availability === 'available') {
+      // Keep the last trusted observation when the wake is suppressed because
+      // another actionable item owns the turn. Advancing the baseline here
+      // would make the same CI/review transition look unchanged after that work
+      // is served, losing the only durable wake for this ticket.
+      if (availability === 'available' && !interrupted) {
         record.trusted_observation = observation;
         record.trusted_observation_digest = observationDigest;
       }
       const beforeDeadline = now < deadline;
-      if (trustedChanged && availability === 'available' && beforeDeadline && !hasActionable(eligibility)) {
+      if (trustedChanged && availability === 'available' && beforeDeadline && !interrupted) {
         action = actionFor(identity, observationDigest, number(record.transition_sequence, 0) + 1, iso(now));
         record.transition_sequence += 1;
         record.actions = record.actions && typeof record.actions === 'object' ? record.actions : {};
@@ -522,7 +557,6 @@ function observe(input = {}, io = {}) {
           record.pending_action = action;
         }
       }
-      const interrupted = hasActionable(eligibility);
       if (now >= deadline && !record.terminal) {
         record.terminal = { event_type: 'timeout', at: iso(now), deadline: iso(deadline) };
       }
@@ -534,6 +568,7 @@ function observe(input = {}, io = {}) {
         interrupted,
         transition_sequence: record.transition_sequence,
         observation_digest: observationDigest,
+        window_id: record.window_id || null,
         next_wake_at: record.next_wake_at,
         deadline: record.deadline,
         backoff: record.backoff,
@@ -766,9 +801,10 @@ function cli() {
   const argv = process.argv.slice(2);
   const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : 'pending';
   const graphDir = cliValue(argv, '--graph', process.env.SHIPYARD_GRAPH_DIR);
+  const resolvedGraphDir = path.resolve(graphDir || path.join(process.cwd(), '.planning', 'graph'));
   const input = {
-    graphDir: graphDir || undefined,
-    run_id: cliValue(argv, '--run-id', process.env.SHIPYARD_RUN_ID || 'delivery'),
+    graphDir: resolvedGraphDir,
+    run_id: cliValue(argv, '--run-id', process.env.SHIPYARD_RUN_ID || `ci-wait:${resolvedGraphDir}`),
     ticket: cliValue(argv, '--ticket'),
     repository: cliValue(argv, '--repository', cliValue(argv, '--repo')),
     pr: cliValue(argv, '--pr'),

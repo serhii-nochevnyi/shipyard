@@ -254,7 +254,10 @@ test('it returns the moment a PR settles, green', () => {
   assert.equal(json.waited, true, 'and reports that it waited');
   assert.equal(json.settled, 'T-01-01', 'naming which ticket moved');
   assert.equal(json.pr, 101, 'and its PR');
-  assert.deepEqual(json.checks, { total: 2, pending: 0, failing: 0 }, 'with the tally the caller needs');
+  assert.equal(json.checks.total, 2, 'with the tally the caller needs');
+  assert.equal(json.checks.pending, 0);
+  assert.equal(json.checks.failing, 0);
+  assert.equal(json.checks.rows.length, 2, 'the raw rows remain available for semantic observation');
 });
 
 test('RED counts as settled — a waiter must not hold a run hostage to a failure', () => {

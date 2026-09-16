@@ -2134,9 +2134,45 @@ stop at that: move on to the recomputation of the front below.
    asking for model work:
 
    ```sh
-   node plugins/delivery-pipeline/scripts/ci-wait.cjs --graph "$GRAPH" --run-id "$RUN_ID" --json
+   PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
+   GRAPH="${GRAPH:-$PROJECT_ROOT/.planning/graph}"
+   RUN_ID="${RUN_ID:-${SHIPYARD_RUN_ID:-ci-wait:$GRAPH}}"
+   WAIT_JSON="$(mktemp)"
+   trap 'rm -f "$WAIT_JSON"' EXIT
+
+   node plugins/delivery-pipeline/scripts/ci-wait.cjs --graph "$GRAPH" --run-id "$RUN_ID" --json >"$WAIT_JSON"
    (cd "$PROJECT_ROOT" && node plugins/delivery-pipeline/scripts/state-sync.cjs)
-   node plugins/delivery-pipeline/scripts/wait-events.cjs pending --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" --repository "$REPOSITORY" --pr "$PR" --json
+
+   # The waiter may watch several PRs. Extract the identity it actually returned;
+   # never reuse a stale caller-side TICKET/PR for the durable consumer.
+   EVENT_JSON="$(node -e '
+     const fs = require("node:fs");
+     const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+     const event = result.wait_event;
+     if (!event || !event.action_id || !event.dispatch_id || !event.ticket || event.pr === undefined) process.exit(1);
+     process.stdout.write(JSON.stringify({
+       ticket: String(event.ticket), repository: event.repository || "", pr: String(event.pr),
+       action_id: String(event.action_id), dispatch_id: String(event.dispatch_id),
+     }));
+   ' "$WAIT_JSON")" || EVENT_JSON=
+
+   if [ -n "$EVENT_JSON" ]; then
+     TICKET="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).ticket)' "$EVENT_JSON")"
+     REPOSITORY="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).repository)' "$EVENT_JSON")"
+     PR="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).pr)' "$EVENT_JSON")"
+     PENDING_JSON="$(node plugins/delivery-pipeline/scripts/wait-events.cjs pending \
+       --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" \
+       --repository "$REPOSITORY" --pr "$PR" --json)"
+     ACTION_ID="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).action_id)' "$PENDING_JSON")"
+     DISPATCH_ID="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).dispatch_id)' "$PENDING_JSON")"
+
+     # After the ADR-014 boundary has reserved this exact action, acknowledge
+     # the same identity. A duplicate acknowledgment is safe and idempotent.
+     node plugins/delivery-pipeline/scripts/wait-events.cjs acknowledge \
+       --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" \
+       --repository "$REPOSITORY" --pr "$PR" --action-id "$ACTION_ID" \
+       --dispatch-id "$DISPATCH_ID" --decision reserved --json
+   fi
    ```
 
    `pending` durably consumes the action and returns the same `action_id` and

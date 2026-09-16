@@ -295,6 +295,32 @@ test('the deadline and capped backoff survive a process restart', () => {
   assert.equal(late.action, null, 'a transition after the deadline cannot become a late model request');
 });
 
+test('an active window resumes, while a completed window gets a fresh deadline', () => {
+  const waitEvents = loadWaitEvents();
+  const graphDir = graph();
+  const ctx = context(graphDir);
+  const observationA = { checks: [{ name: 'build', state: 'IN_PROGRESS', bucket: 'pending' }] };
+  const observationB = { checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }] };
+  const first = waitEvents.observe({ ...ctx, observation: observationA, window_id: 'window-a' }, {
+    now: 1000, timeout_ms: 1000, interval_ms: 100,
+  });
+  const resumed = waitEvents.observe({ ...ctx, observation: observationA, window_id: 'window-b' }, {
+    now: 1100, timeout_ms: 999999, interval_ms: 100,
+  });
+  assert.equal(Date.parse(resumed.deadline), Date.parse(first.deadline),
+    'a restart before terminal expiry keeps the active window deadline');
+  const terminal = waitEvents.observe({ ...ctx, observation: observationA, window_id: 'window-a' }, {
+    now: 2000, timeout_ms: 999999, interval_ms: 100,
+  });
+  assert.equal(terminal.terminal.event_type, 'timeout');
+  const fresh = waitEvents.observe({ ...ctx, observation: observationB, window_id: 'window-c' }, {
+    now: 3000, timeout_ms: 1000, interval_ms: 100,
+  });
+  assert.equal(fresh.terminal, null, 'a new wait window clears the previous terminal marker');
+  assert.equal(Date.parse(fresh.deadline), 4000, 'the new window receives its own deadline');
+  assert.ok(fresh.action, 'a transition in the new window is eligible for delivery');
+});
+
 test('actionable work interrupts waiting without manufacturing a model event', () => {
   const waitEvents = loadWaitEvents();
   const graphDir = graph();
@@ -309,6 +335,50 @@ test('actionable work interrupts waiting without manufacturing a model event', (
   } }, { now: 2000 });
   assert.equal(result.interrupted, true, 'newly actionable work lifts the wait');
   assert.equal(result.action, null, 'the dispatcher, not the waiter, owns actionable work');
+});
+
+test('a suppressed transition remains pending until unrelated actionable work is served', () => {
+  const waitEvents = loadWaitEvents();
+  const graphDir = graph();
+  const ctx = context(graphDir);
+  const baseline = { checks: [{ name: 'build', state: 'IN_PROGRESS', bucket: 'pending' }] };
+  const changed = { checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }] };
+  waitEvents.observe({ ...ctx, observation: baseline }, { now: 1000 });
+  const suppressed = waitEvents.observe({ ...ctx, observation: changed, eligibility: {
+    actionable_count: 1,
+    left_behind_count: 0,
+    actionable: { execute: ['T-33-02'] },
+    waiting: { dispatched: [] },
+  } }, { now: 2000 });
+  assert.equal(suppressed.action, null, 'the active turn owns the actionable work');
+  const delivered = waitEvents.observe({ ...ctx, observation: changed, eligibility: {
+    actionable_count: 0,
+    left_behind_count: 0,
+    actionable: {},
+    waiting: { dispatched: [] },
+  } }, { now: 3000 });
+  assert.ok(delivered.action, 'the suppressed transition is emitted after the turn is free');
+});
+
+test('CLI observe and pending share the graph-derived run id by default', () => {
+  const graphDir = graph();
+  const observationFile = path.join(path.dirname(graphDir), 'observation.json');
+  fs.writeFileSync(observationFile, JSON.stringify({ checks: [{ name: 'build', state: 'IN_PROGRESS', bucket: 'pending' }] }));
+  const common = ['--graph', graphDir, '--ticket', 'T-33-01', '--repository', 'acme/widgets', '--pr', '101', '--head', 'head-a'];
+  const first = spawnSync(process.execPath, [SCRIPT, 'observe', ...common, '--observation-file', observationFile], {
+    encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(first.status, 0, 'the CLI baseline succeeds');
+  fs.writeFileSync(observationFile, JSON.stringify({ checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }] }));
+  const second = spawnSync(process.execPath, [SCRIPT, 'observe', ...common, '--observation-file', observationFile], {
+    encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(second.status, 0, 'the CLI transition succeeds');
+  const pending = spawnSync(process.execPath, [SCRIPT, 'pending', ...common], {
+    encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(pending.status, 0, 'pending uses the producer default run id');
+  assert.ok(JSON.parse(pending.stdout).action_id, 'the transition is addressable by the shared default');
 });
 
 test('duplicate acknowledgment is idempotent and leaves no pending action', () => {

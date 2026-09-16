@@ -195,7 +195,7 @@ function parkLines(parked) {
   }).join('\n');
 }
 
-const front = readJson(path.join(GRAPH, 'delivery-front.json'));
+let front = readJson(path.join(GRAPH, 'delivery-front.json'));
 let state = readJson(path.join(GRAPH, 'delivery-state.json'));
 if (!front || !state) {
   refuse(`no board at ${GRAPH}`,
@@ -301,25 +301,33 @@ if (orphanHeld.length) {
     'That is a board bug, not a wait: re-run state-sync.cjs.');
 }
 
-const watch = [];
-const byPr = new Map();
-const wanted = [
-  ...ciTickets.map((id) => ({ ticket: id, via: null })),
-  ...heldTickets.map((id) => ({ ticket: parentOf[id], via: id })),
-];
-for (const w of wanted) {
-  const s = state[w.ticket];
-  if (!s || !s.pr) continue;
-  const key = `${s.repo || ''}#${s.pr}`;
-  const seen = byPr.get(key);
-  if (seen) {
-    if (w.via && !seen.via.includes(w.via)) seen.via.push(w.via);
-    continue;
+function buildWatch() {
+  const currentCi = (front.waiting && front.waiting.ci) || [];
+  const currentHeld = (front.waiting && front.waiting.parent) || [];
+  const currentParentOf = (front.parent_of && typeof front.parent_of === 'object') ? front.parent_of : {};
+  const next = [];
+  const byPr = new Map();
+  const wanted = [
+    ...currentCi.map((id) => ({ ticket: id, via: null })),
+    ...currentHeld.map((id) => ({ ticket: currentParentOf[id], via: id })),
+  ];
+  for (const w of wanted) {
+    const s = state[w.ticket];
+    if (!s || !s.pr) continue;
+    const key = `${s.repo || ''}#${s.pr}`;
+    const seen = byPr.get(key);
+    if (seen) {
+      if (w.via && !seen.via.includes(w.via)) seen.via.push(w.via);
+      continue;
+    }
+    const entry = { id: w.ticket, pr: s.pr, repo: s.repo || null, via: w.via ? [w.via] : [] };
+    byPr.set(key, entry);
+    next.push(entry);
   }
-  const entry = { id: w.ticket, pr: s.pr, repo: s.repo || null, via: w.via ? [w.via] : [] };
-  byPr.set(key, entry);
-  watch.push(entry);
+  return next;
 }
+
+let watch = buildWatch();
 if (!watch.length) {
   const named = [
     ...(ciTickets.length ? [`waiting on CI: ${ciTickets.join(', ')}`] : []),
@@ -361,9 +369,11 @@ function checksOf({ pr, repo }) {
   // The vocabulary lives in check-state.cjs. This function used to carry its own
   // list, and it was the only one of three that called ACTION_REQUIRED failing —
   // three copies, three answers. The SHAPE stays {total, pending, failing}: it is
-  // what `--json` reports and what the settle test below reads.
+  // what `--json` reports and what the settle test below reads. Keep the raw
+  // rows too: semantic observation compares check identity/state, while these
+  // tallies are only enough to decide whether the PR settled.
   const c = classify(rows);
-  return { total: c.total, pending: c.pending, failing: c.failing };
+  return { total: c.total, pending: c.pending, failing: c.failing, rows };
 }
 
 // HOW MANY EMPTY WINDOWS BEFORE A PERSON IS ASKED. Three at the default 15m is
@@ -530,7 +540,9 @@ const startedAt = Date.now();
 let deadline = startedAt + TIMEOUT_S * 1000;
 let nextWakeAt = null;
 let lastWaitEvent = null;
-const label = watch.map((w) => `${w.id}#${w.pr}${w.via.length ? ` (holding ${w.via.join(', ')})` : ''}`).join(', ');
+const WAIT_WINDOW_ID = process.env.SHIPYARD_WAIT_WINDOW_ID
+  || `ci-wait:${RUN_ID}:${process.pid}:${startedAt}`;
+const label = () => watch.map((w) => `${w.id}#${w.pr}${w.via.length ? ` (holding ${w.via.join(', ')})` : ''}`).join(', ');
 // WHY waiting is the move, in the board's own terms. "Nothing but pipelines" is
 // false on a capacity-bound board — there IS other work, and the cap is what
 // makes waiting correct anyway — and a line that misdescribes the board it just
@@ -541,7 +553,7 @@ const offer = capBinds && actionableCount > 0
   : 'the board offers nothing but pipelines';
 if (!JSON_OUT) {
   process.stdout.write(
-    `ci-wait: ${offer} — waiting on ${label}\n` +
+    `ci-wait: ${offer} — waiting on ${label()}\n` +
     `  up to ${Math.round(TIMEOUT_S / 60)}m, polling every ${INTERVAL_S}s; returns the moment one settles\n` +
     `  window: ${Math.round(TIMEOUT_S)}s — ${windowSource}\n`
     + (CONFIG_REASON ? `  ⚠ ${CONFIG_REASON}\n` : ''));
@@ -588,10 +600,11 @@ function refreshPublishedState() {
   const current = readJson(path.join(GRAPH, 'delivery-front.json')) || {};
   const parked = Array.isArray(current.parked_by_run) ? current.parked_by_run : [];
   const args = parked.length ? [STATE_SYNC, '--parked', parked.join(',')] : [STATE_SYNC];
+  const remainingMs = Math.max(1, deadline - Date.now());
   const sync = spawnSync(process.execPath, args, {
     cwd: LOCK_ROOT,
     encoding: 'utf8',
-    timeout: 60000,
+    timeout: Math.max(1, Math.min(60000, Math.ceil(remainingMs))),
   });
   if (sync.error || sync.status !== 0) {
     publisherHealthy = false;
@@ -603,6 +616,14 @@ function refreshPublishedState() {
     return { enabled: true, ok: false, reason: published && published.reason ? published.reason : 'published state binding is unavailable' };
   }
   state = published.state;
+  front = readJson(path.join(GRAPH, 'delivery-front.json')) || front;
+  const previousWatch = watch;
+  const rebuiltWatch = buildWatch();
+  // A settled PR disappears from `waiting` during this refresh. Keep its last
+  // target for one final `gh pr checks` read so the waiter can return the
+  // settlement that caused the board to change; when the board still has a wait,
+  // the rebuilt list (including a changed parent target) fully replaces it.
+  watch = rebuiltWatch.length ? rebuiltWatch : previousWatch;
   publisherHealthy = true;
   return { enabled: true, ok: true };
 }
@@ -629,9 +650,11 @@ function observeWait(w, checks) {
     head: s.head_sha || 'unknown',
     observation,
     eligibility: readJson(path.join(GRAPH, 'delivery-front.json')),
+    window_id: WAIT_WINDOW_ID,
   }, { interval_ms: INTERVAL_S * 1000, timeout_ms: TIMEOUT_S * 1000 });
   if (result && result.ok) {
-    lastWaitEvent = result.action || null;
+    const wake = result.pending_action || result.action || null;
+    if (wake) lastWaitEvent = wake;
     const savedDeadline = Date.parse(result.deadline || '');
     if (Number.isFinite(savedDeadline)) deadline = Math.min(deadline, savedDeadline);
     const savedWake = Date.parse(result.next_wake_at || '');
@@ -676,12 +699,13 @@ for (;;) {
   // elapsed wake into the next round after a bounded sleep.
   nextWakeAt = null;
   const seen = [];
-  refreshPublishedState();
+  const refresh = refreshPublishedState();
   for (const w of watch) {
     const c = checksOf(w);
     if (c) goodEver.add(w.id);
     const event = observeWait(w, c);
-    seen.push({ ...w, checks: c, wait_event: event && event.action ? event.action : null });
+    const eventAction = event && (event.pending_action || event.action);
+    seen.push({ ...w, checks: c, wait_event: eventAction || null });
     if (event && event.interrupted) {
       finish(
         { settled: null, interrupted: true, reason: 'actionable work appeared while waiting', rounds,
@@ -713,11 +737,11 @@ for (;;) {
     // pending. That transition is the wake the durable inbox exists to carry;
     // waiting for a later CI settlement would suppress the model-work request
     // until the next unrelated event.
-    if (event && event.action) {
+    if (eventAction) {
       finish(
         { settled: null, transitioned: true, reason: 'semantic observation transition', rounds,
           waited_s: Math.round((Date.now() - startedAt) / 1000), watched: seen, escalated: [],
-          wait_event: event.action, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
+          wait_event: eventAction, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
           ...CONFIG_FIELDS },
         `ci-wait: semantic observation transition for ${w.id} (PR #${w.pr}) — ` +
         'the delivery consumer may serve the durable event. Re-sync and take the round.');
@@ -738,9 +762,9 @@ for (;;) {
         window_s: Math.round(TIMEOUT_S), window_source: windowSource,
         outage, ...CONFIG_FIELDS },
       (outage
-        ? `ci-wait: gh was unreachable for the whole ${Math.round(TIMEOUT_S / 60)}m window (${label}) — ` +
+        ? `ci-wait: gh was unreachable for the whole ${Math.round(TIMEOUT_S / 60)}m window (${label()}) — ` +
           'that is an outage, not a stall; nothing was recorded. Re-sync and try again once gh answers.'
-        : `ci-wait: ${Math.round(TIMEOUT_S / 60)}m passed and nothing settled (${label}). ` +
+        : `ci-wait: ${Math.round(TIMEOUT_S / 60)}m passed and nothing settled (${label()}). ` +
           'Re-sync anyway — the board may have moved for other reasons — then decide whether to wait again.')
       + (lines ? `\n${lines}` : ''));
   }
