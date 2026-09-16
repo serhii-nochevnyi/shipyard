@@ -86,6 +86,59 @@ const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
 // readers; THIS is the authority.
 const META = path.join(GRAPH_DIR, 'delivery-state-meta.json');
 const GSD_SYNC = path.join(__dirname, 'gsd-sync.cjs');
+const PUBLISH_SCHEMA_VERSION = 1;
+const FAIL_AFTER_PUBLISH = process.env.SHIPYARD_STATE_SYNC_FAIL_AFTER || null;
+
+// Test-only crash points for the publication boundary. Throwing from inside the
+// nested locks still releases them, while leaving the already-replaced payload
+// behind exactly where a killed process would; the next full sync must repair it.
+function failAfterPublish(point) {
+  if (FAIL_AFTER_PUBLISH === point) {
+    throw new Error(`injected state-sync publication failure after ${point}`);
+  }
+}
+
+function canonicalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])]));
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(canonicalValue(value));
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+// This projection is the observation identity consumed by wait-events.cjs. It
+// intentionally excludes URLs, status clocks, journal timestamps and dispatch
+// overlays: those facts may change without a new CI/review observation.
+function observationProjection(state) {
+  const tickets = {};
+  for (const id of Object.keys(state).sort()) {
+    const s = state[id] || {};
+    tickets[id] = {
+      status: s.status || null,
+      repository: s.repo || null,
+      pr: s.pr === undefined ? null : s.pr,
+      head: s.head_sha || null,
+      draft: s.draft === true,
+      base: s.pr_base || s.base || null,
+      merge_state: s.merge_state || null,
+      review_decision: s.review_decision || null,
+      checks: s.checks ? {
+        total: Number(s.checks.total || 0),
+        pending: Number(s.checks.pending || 0),
+        failing: Number(s.checks.failing || 0),
+        none_reported: s.checks.none_reported === true,
+        unavailable: s.checks.unavailable === true,
+      } : null,
+    };
+  }
+  return { tickets };
+}
 
 // Tickets the RUN parked (an agent returned `escalate`, attempts > max). GitHub
 // cannot know this, and a front that keeps re-offering an escalated PR is an
@@ -1036,7 +1089,11 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
     front.config_invalid = CONFIG_REFUSAL;
     front.fixpoint = false;
   }
-  writeAtomic(STATE, JSON.stringify(state, null, 2) + '\n');
+  const statePayload = JSON.stringify(state, null, 2) + '\n';
+  const projectedObservation = observationProjection(state);
+  const observationDigest = sha256(canonicalJson(projectedObservation));
+  writeAtomic(STATE, statePayload);
+  failAfterPublish('state');
   // The generation rides the human mirror as a comment: the yaml is keyed by
   // ticket id exactly like the JSON, so it has no more room for a metadata key
   // than the JSON does — but a person reading it can still see which snapshot
@@ -1046,6 +1103,7 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
     `# snapshot generation ${generation} — observed ${OBSERVED_AT}`,
     ...yaml.slice(1),
   ].join('\n') + '\n');
+  failAfterPublish('yaml');
   // `dispatches_applied_at` is stamped the way `refreshFront` stamps it, and
   // UNCONDITIONALLY — including when no dispatch is live. Its absence is the
   // signature of a writer blind to the overlay, which is exactly the defect this
@@ -1059,12 +1117,16 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   // them and the board carries no generation until the next sync. That is fine
   // for a reader and would be fatal for the compare-and-swap above, which is why
   // that reads META and never this.
-  writeAtomic(FRONT, JSON.stringify({ generated_at: nowIso, observed_at: OBSERVED_AT, generation, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', dispatches_applied_at: nowIso, ...front }, null, 2) + '\n');
+  const frontPayload = JSON.stringify({ generated_at: nowIso, observed_at: OBSERVED_AT, generation, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', dispatches_applied_at: nowIso, ...front }, null, 2) + '\n';
+  writeAtomic(FRONT, frontPayload);
+  failAfterPublish('front');
   // Written LAST, and that ordering is the publish itself: the generation on disk
   // only advances once the trio it describes is fully in place, so a sync that
   // dies mid-write leaves the previous generation standing and the next run
   // rewrites everything rather than trusting a half-published board.
+  failAfterPublish('metadata');
   writeAtomic(META, JSON.stringify({
+    schema_version: PUBLISH_SCHEMA_VERSION,
     generation,
     generation_identity: generationIdentity,
     previous_generation_identity: previousGenerationIdentity,
@@ -1072,6 +1134,15 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
     generated_at: nowIso,
     by: 'state-sync',
     pid: process.pid,
+    observation_generation: generation,
+    observation_projection: projectedObservation,
+    binding: {
+      schema_version: PUBLISH_SCHEMA_VERSION,
+      state_digest: sha256(statePayload),
+      front_digest: sha256(frontPayload),
+      observation_digest: observationDigest,
+      observation_generation: generation,
+    },
   }, null, 2) + '\n');
   return { front, generation };
 }, { label: 'state-sync' }), { label: 'state-sync tracker snapshot' });

@@ -2119,7 +2119,7 @@ stop at that: move on to the recomputation of the front below.
    ending the run. The board says this for itself once the hand-overs are
    recorded: `sentinel: clear` never appears while a ticket is out with the
    guard, and `fixpoint` stays NO while anything is dispatched.
-6. Only `waiting.ci` is left → **`ci-wait.cjs` and stay in the turn.** This is the
+6. Only `waiting.ci` or `waiting.parent` is left → **`ci-wait.cjs` and stay in the turn.** This is the
    one legitimate wait, and it is a script rather than your judgement because the
    run cannot come back on its own: the babysit loop is driven by agent-completion
    wake-ups, and when the only thing left is CI there is no agent to complete.
@@ -2128,11 +2128,40 @@ stop at that: move on to the recomputation of the front below.
    person came back. Waiting in the foreground closes that hole by construction:
    the turn never ends, so nothing has to wake it.
 
+   The waiter also publishes a compact, durable semantic event. Give it the
+   stable delivery run id (`--run-id` or `SHIPYARD_RUN_ID`), let it persist the
+   observation before returning, and consume it through the real inbox before
+   asking for model work:
+
+   ```sh
+   node plugins/delivery-pipeline/scripts/ci-wait.cjs --graph "$GRAPH" --run-id "$RUN_ID" --json
+   (cd "$PROJECT_ROOT" && node plugins/delivery-pipeline/scripts/state-sync.cjs)
+   node plugins/delivery-pipeline/scripts/wait-events.cjs pending --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" --repository "$REPOSITORY" --pr "$PR" --json
+   ```
+
+   `pending` durably consumes the action and returns the same `action_id` and
+   `dispatch_id` after a restart. Route any model work only through the
+   ADR-014 dispatch boundary, with fresh role, repository/worktree, head/base,
+   policy and live evidence. After a durable dispatch reservation or durable
+   no-action decision, acknowledge that exact identity:
+
+   ```sh
+   node plugins/delivery-pipeline/scripts/wait-events.cjs acknowledge --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" --repository "$REPOSITORY" --pr "$PR" --action-id "$ACTION_ID" --dispatch-id "$DISPATCH_ID" --decision reserved --json
+   ```
+
+   Missing, corrupt, newer-schema or unbound publication evidence is a resync
+   refusal, never a wake or a launch. A wait event never authorizes push, review,
+   or merge: the sentinel's live head, review, architecture, human-approval and
+   integration gates remain authoritative. Newly actionable work interrupts the
+   wait; re-sync and take that work rather than acknowledging an absent
+   reservation.
+
    `ci-wait.cjs` **refuses** (exit 3) whenever the board holds actionable work or a
    ticket is with an agent, so it cannot become the `gh pr checks --watch`
    serialization this conveyor removed — that rule was about opportunity cost, and
    there is none when the board has no other move. It returns the moment any
-   watched PR settles, green OR red, and on timeout returns 0 anyway. Either way:
+   watched PR settles, green OR red, or a complete CI/review observation changes;
+   on timeout it returns 0 anyway. Either way:
    re-sync and take the round. Never hand-roll a wait; if it refuses, it is
    telling you there is work.
 

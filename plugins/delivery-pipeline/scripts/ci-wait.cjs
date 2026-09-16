@@ -3,7 +3,7 @@
 
 // ci-wait.cjs — the one legitimate way for the conveyor to wait.
 //
-//   ci-wait.cjs [--graph <dir>] [--timeout <s>] [--interval <s>] [--json]
+//   ci-wait.cjs [--graph <dir>] [--run-id <id>] [--timeout <s>] [--interval <s>] [--json]
 //
 // ── WHY THIS EXISTS ──────────────────────────────────────────────────────────
 // The babysit loop is not a loop. It is driven by agent-completion wake-ups: an
@@ -89,6 +89,7 @@ const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock
 const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const waitEvents = require(path.join(__dirname, 'wait-events.cjs'));
 
 const argv = process.argv.slice(2);
 const JSON_OUT = argv.includes('--json');
@@ -143,6 +144,18 @@ function resolveGraphDir() {
 }
 
 const GRAPH = resolveGraphDir();
+const RUN_ID = (() => {
+  const at = argv.indexOf('--run-id');
+  if (at !== -1) {
+    const value = argv[at + 1];
+    if (!value || value.startsWith('--')) {
+      process.stderr.write(`ci-wait: --run-id needs a non-empty value (got ${value || 'nothing'})\n`);
+      process.exit(2);
+    }
+    return value;
+  }
+  return process.env.SHIPYARD_RUN_ID || `ci-wait:${GRAPH}`;
+})();
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
@@ -183,7 +196,7 @@ function parkLines(parked) {
 }
 
 const front = readJson(path.join(GRAPH, 'delivery-front.json'));
-const state = readJson(path.join(GRAPH, 'delivery-state.json'));
+let state = readJson(path.join(GRAPH, 'delivery-state.json'));
 if (!front || !state) {
   refuse(`no board at ${GRAPH}`,
     'Run state-sync.cjs from the project (or pass --graph <project>/.planning/graph).');
@@ -514,7 +527,9 @@ if (TIMEOUT_S_EXPLICIT) {
 }
 
 const startedAt = Date.now();
-const deadline = startedAt + TIMEOUT_S * 1000;
+let deadline = startedAt + TIMEOUT_S * 1000;
+let nextWakeAt = null;
+let lastWaitEvent = null;
 const label = watch.map((w) => `${w.id}#${w.pr}${w.via.length ? ` (holding ${w.via.join(', ')})` : ''}`).join(', ');
 // WHY waiting is the move, in the board's own terms. "Nothing but pipelines" is
 // false on a capacity-bound board — there IS other work, and the cap is what
@@ -559,13 +574,123 @@ let rounds = 0;
 // defect 1). Checked at the deadline, not per-poll, because a ticket that
 // answers on round 2 after failing round 1 is not an outage at all.
 const goodEver = new Set();
+const STATE_SYNC = path.join(__dirname, 'state-sync.cjs');
+const PUBLISH_META = path.join(GRAPH, 'delivery-state-meta.json');
+// A graph with the new metadata has a publisher to refresh. Older disposable
+// boards keep the established direct check poll until the caller performs its
+// required first state-sync; they must not be handed to a second unconfigured
+// publisher from inside this compatibility waiter.
+const publisherEnabled = fs.existsSync(PUBLISH_META);
+let publisherHealthy = !publisherEnabled;
+
+function refreshPublishedState() {
+  if (!publisherEnabled) return { enabled: false, ok: true };
+  const current = readJson(path.join(GRAPH, 'delivery-front.json')) || {};
+  const parked = Array.isArray(current.parked_by_run) ? current.parked_by_run : [];
+  const args = parked.length ? [STATE_SYNC, '--parked', parked.join(',')] : [STATE_SYNC];
+  const sync = spawnSync(process.execPath, args, {
+    cwd: LOCK_ROOT,
+    encoding: 'utf8',
+    timeout: 60000,
+  });
+  if (sync.error || sync.status !== 0) {
+    publisherHealthy = false;
+    return { enabled: true, ok: false, reason: `state-sync did not publish (${sync.error ? sync.error.message : `exit ${sync.status}`})` };
+  }
+  const published = waitEvents.readPublished({ graphDir: GRAPH });
+  if (!published || !published.ok) {
+    publisherHealthy = false;
+    return { enabled: true, ok: false, reason: published && published.reason ? published.reason : 'published state binding is unavailable' };
+  }
+  state = published.state;
+  publisherHealthy = true;
+  return { enabled: true, ok: true };
+}
+
+// Publish the live check/review fact to the durable event inbox without making
+// that inbox a second gate. A failed write is returned as data; the legacy CI
+// wait and its stall counter still run, while the delivery consumer refuses to
+// schedule from an unpersisted event.
+function observeWait(w, checks) {
+  const s = state[w.id] || {};
+  const observation = { checks };
+  if (publisherHealthy) {
+    if (s.review_decision !== undefined) observation.review_decision = s.review_decision;
+    if (s.head_sha !== undefined) observation.head = s.head_sha;
+  } else if (publisherEnabled) {
+    observation.reviews = { unavailable: true };
+  }
+  const result = waitEvents.observe({
+    graphDir: GRAPH,
+    run_id: RUN_ID,
+    ticket: w.id,
+    repository: w.repo,
+    pr: w.pr,
+    head: s.head_sha || 'unknown',
+    observation,
+    eligibility: readJson(path.join(GRAPH, 'delivery-front.json')),
+  }, { interval_ms: INTERVAL_S * 1000, timeout_ms: TIMEOUT_S * 1000 });
+  if (result && result.ok) {
+    lastWaitEvent = result.action || null;
+    const savedDeadline = Date.parse(result.deadline || '');
+    if (Number.isFinite(savedDeadline)) deadline = Math.min(deadline, savedDeadline);
+    const savedWake = Date.parse(result.next_wake_at || '');
+    if (Number.isFinite(savedWake)) nextWakeAt = nextWakeAt === null ? savedWake : Math.min(nextWakeAt, savedWake);
+    if (result.interrupted) return result;
+  }
+  return result;
+}
+
+function frontInterruptsWait() {
+  const current = readJson(path.join(GRAPH, 'delivery-front.json'));
+  if (!current) return { interrupted: true, reason: 'delivery-front.json is unreadable; re-sync before waiting' };
+  const currentActionable = current.actionable && typeof current.actionable === 'object'
+    ? current.actionable : {};
+  const listed = Object.values(currentActionable).reduce((total, entries) =>
+    total + (Array.isArray(entries) ? entries.length : 0), 0);
+  const actionableCount = typeof current.actionable_count === 'number' && Number.isFinite(current.actionable_count)
+    ? current.actionable_count : listed;
+  const leftBehindCount = typeof current.left_behind_count === 'number' && Number.isFinite(current.left_behind_count)
+    ? current.left_behind_count : 0;
+  const currentCapacity = current.capacity && typeof current.capacity === 'object' ? current.capacity : null;
+  const currentFree = currentCapacity && typeof currentCapacity.free === 'number' ? currentCapacity.free : null;
+  const currentMax = currentCapacity && typeof currentCapacity.max === 'number' ? currentCapacity.max : null;
+  const capped = currentFree !== null && currentMax !== null && currentFree <= 0;
+  if (actionableCount > 0
+      && leftBehindCount < actionableCount
+      && !capped) {
+    return { interrupted: true, reason: 'the board has newly actionable work' };
+  }
+  if ((current.waiting && current.waiting.dispatched || []).length) {
+    return { interrupted: true, reason: 'a ticket is now with an agent' };
+  }
+  if (!(current.waiting && ((current.waiting.ci || []).length || (current.waiting.parent || []).length))) {
+    return { interrupted: true, reason: 'the board no longer reports a CI wait' };
+  }
+  return { interrupted: false };
+}
+
 for (;;) {
   rounds += 1;
+  // The persisted wake belongs to this polling round. Do not carry an already
+  // elapsed wake into the next round after a bounded sleep.
+  nextWakeAt = null;
   const seen = [];
+  refreshPublishedState();
   for (const w of watch) {
     const c = checksOf(w);
     if (c) goodEver.add(w.id);
-    seen.push({ ...w, checks: c });
+    const event = observeWait(w, c);
+    seen.push({ ...w, checks: c, wait_event: event && event.action ? event.action : null });
+    if (event && event.interrupted) {
+      finish(
+        { settled: null, interrupted: true, reason: 'actionable work appeared while waiting', rounds,
+          waited_s: Math.round((Date.now() - startedAt) / 1000), watched: seen, escalated: [],
+          wait_event: lastWaitEvent, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
+          ...CONFIG_FIELDS },
+        `ci-wait: interrupted — ${event.reason || 'the wait is no longer the board\'s next move'}. Re-sync and take the round.`
+      );
+    }
     // Settled means the answer exists: green or red, both change the board and
     // both are the caller's business, not this script's. A waiter that only
     // returned on GREEN would hold a run hostage to a red pipeline.
@@ -577,11 +702,25 @@ for (;;) {
       const parked = recordOutcome(w.id, watch, goodEver);
       finish(
         { settled: w.id, pr: w.pr, checks: c, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
-          watched: seen, escalated: parked, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
+          watched: seen, escalated: parked, wait_event: lastWaitEvent,
+          window_s: Math.round(TIMEOUT_S), window_source: windowSource,
           ...CONFIG_FIELDS },
         `ci-wait: ${w.id} (PR #${w.pr}) settled after ${Math.round((Date.now() - startedAt) / 1000)}s — ` +
         `${c.total - c.failing}/${c.total} green${c.failing ? `, ${c.failing} failing` : ''}. ` +
         'Re-sync and take the round.');
+    }
+    // A review or other complete semantic fact can change while CI is still
+    // pending. That transition is the wake the durable inbox exists to carry;
+    // waiting for a later CI settlement would suppress the model-work request
+    // until the next unrelated event.
+    if (event && event.action) {
+      finish(
+        { settled: null, transitioned: true, reason: 'semantic observation transition', rounds,
+          waited_s: Math.round((Date.now() - startedAt) / 1000), watched: seen, escalated: [],
+          wait_event: event.action, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
+          ...CONFIG_FIELDS },
+        `ci-wait: semantic observation transition for ${w.id} (PR #${w.pr}) — ` +
+        'the delivery consumer may serve the durable event. Re-sync and take the round.');
     }
   }
   if (Date.now() >= deadline) {
@@ -595,7 +734,8 @@ for (;;) {
     const lines = parkLines(parked);
     finish(
       { settled: null, timed_out: true, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
-        watched: seen, escalated: parked, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
+        watched: seen, escalated: parked, wait_event: lastWaitEvent,
+        window_s: Math.round(TIMEOUT_S), window_source: windowSource,
         outage, ...CONFIG_FIELDS },
       (outage
         ? `ci-wait: gh was unreachable for the whole ${Math.round(TIMEOUT_S / 60)}m window (${label}) — ` +
@@ -604,5 +744,17 @@ for (;;) {
           'Re-sync anyway — the board may have moved for other reasons — then decide whether to wait again.')
       + (lines ? `\n${lines}` : ''));
   }
-  sleep(Math.min(INTERVAL_S, Math.max(1, (deadline - Date.now()) / 1000)));
+  const board = frontInterruptsWait();
+  if (board.interrupted) {
+    finish(
+      { settled: null, interrupted: true, reason: board.reason, rounds,
+        waited_s: Math.round((Date.now() - startedAt) / 1000), watched: seen, escalated: [],
+        wait_event: lastWaitEvent, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
+        ...CONFIG_FIELDS },
+      `ci-wait: interrupted — ${board.reason}. Re-sync and take the round.`
+    );
+  }
+  const eventSleep = nextWakeAt === null ? INTERVAL_S : Math.max(0, (nextWakeAt - Date.now()) / 1000);
+  const remaining = Math.max(0, (deadline - Date.now()) / 1000);
+  if (remaining > 0) sleep(Math.min(eventSleep || INTERVAL_S, remaining));
 }
