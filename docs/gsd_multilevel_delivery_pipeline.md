@@ -670,120 +670,207 @@ from a host install (`make install-shipyard-codex`) against the same state files
 
 ## 7.5. Model policy
 
-**The floor is `opus`, the depth is EFFORT, and `fable` is earned.** No built-in
-path resolves a role below `opus` except the two exemptions named in the table,
-each carrying the reason it is exempt — an exemption without one is a row the
-next reader deletes in good faith. With the tier nearly constant, what varies
-with the work is the reasoning effort. These are the DEFAULTS the resolver
-returns for a bare `model <role>`, and `tests/smoke/docs-smoke.sh` compares this
-table against `pipeline-config.cjs model <role> --json` for every role, so it
-cannot go stale silently again:
+The active policy is [ADR-014](../.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md).
+It is a **runtime-neutral dispatch contract** with two independent runtime
+grids. The contract shares role names, rung names, signal provenance, explicit
+launch selection, policy fingerprinting, and receipt requirements; Codex and
+Claude resolve those facts through their own adapters. ADR-005 and ADR-012 are
+historical records and are superseded for current model and effort selection.
+
+The following blocks are retained only as the compatibility projection of the
+legacy `pipeline-config.cjs model <role> --json` reader. They are not launch
+authority and must not be used to choose a routed model. The first block records
+the reader's default role rows, including the reason for each below-floor
+exemption. `tests/smoke/docs-smoke.sh` compares it with that compatibility
+reader so the diagnostic surface cannot drift silently:
 
 ```text
 role          tier     effort   why this row
 integrator    opus     xhigh    the last mechanical judgment before a person merges,
-                                so its effort never drops; its measured run is 291k
-                                tokens against a 1M window, which is why it holds no
-                                standing exception to the floor either
-arch-review   opus     xhigh    reads a whole diff against every ADR — one model at
-                                one effort, because caches are model-scoped and this
-                                guard re-reads the same corpus every round
+                                so its effort never drops; its measured run is a
+                                dispatch-specific fact, not a standing exception
+arch-review   opus     xhigh    reads a whole diff against every ADR; its effort is
+                                fixed by the compatibility reader, not by a runtime
+                                model preference
 executor      opus     high     it implements a contract; falsifying that contract
                                 belongs upstream of it
 ci-fix        opus     high     diagnosing a failing pipeline
 review-fix    opus     high     diagnosing review threads
 research      opus     high     gathering facts
-drift-check   sonnet   high     EXEMPT: its product is a file list and reuse pointers,
-                                not a judgment, and the plan-defect burden it now
-                                carries is bought with effort rather than with a tier
-pr-sentinel   sonnet   high     EXEMPT: the merge decision is not the model's —
-                                `sentinel.cjs merge` re-verifies
-                                open/undrafted/green/threads-zero/conform against live
-                                GitHub and refuses on anything unproven. The model
-                                drives a PR towards green; the script decides what
-                                lands. It is also the highest-volume role in the system
+drift-check   sonnet   high     EXEMPT: it returns a file list and reuse pointers;
+                                its plan-defect burden is bought with effort, not
+                                with a tier, while the gate remains mechanical
+pr-sentinel   sonnet   high     EXEMPT: the merge decision is enforced by
+                                sentinel.cjs against live GitHub, not by the model;
+                                the script decides what lands
 ```
 
-**The escalations are per DISPATCH, not per role**, which is why none of them is
-a row above: `executor` takes `xhigh` at `risk: high` or a `human_checkpoint`;
-`research` takes `xhigh` with `--type alternatives`; a repair role whose failure
-signature repeats after a `rethink` takes `max`. `fable` is assigned to no role
-at all — it is a ceiling reached mechanically, by caller-measured window
-pressure, by exhausted repair depth, or by a judgment already contested through
-a journalled `violation`, and only while `pipeline.fable` is `auto`.
-
-Those escalations are a TABLE too, for the same reason the rows above are: the
-sentence describing them was three reviews stale and no test could read it.
-`tests/unit/pipeline-config.test.cjs` compares every row below against the
-resolver AND sweeps every single signal the resolver reads, so an escalation that
-moves between signals fails, and one added in code with this table untouched
-fails as well. `*` is every role. The values are what the SHIPPED config
-resolves — with `pipeline.fable` at its default `off`, a fired ceiling route
-degrades to the floor model at `max` rather than reaching `fable`:
+The compatibility reader also has signal-specific diagnostics. This second
+block is exhaustive for that legacy surface and is deliberately separate from
+the authoritative ADR-014 table below; it exists so old non-routed callers and
+their documentation cannot silently disagree about what the compatibility CLI
+reports:
 
 ```text
 role          tier     effort   the dispatch signal that reaches it
+integrator    opus     max      --contested
+integrator    opus     max      --input-tokens over pipeline.fable_window_tokens
+arch-review   opus     max      --contested
+arch-review   opus     max      --input-tokens over pipeline.fable_window_tokens
 executor      opus     xhigh    --risk high
 executor      opus     xhigh    --checkpoint
-research      opus     xhigh    --type alternatives
+executor      opus     max      --input-tokens over pipeline.fable_window_tokens
 ci-fix        opus     max      --signature-state repeat
 ci-fix        opus     max      --signature-state repeat_exhausted
+ci-fix        opus     max      --input-tokens over pipeline.fable_window_tokens
 review-fix    opus     max      --signature-state repeat
 review-fix    opus     max      --signature-state repeat_exhausted
+review-fix    opus     max      --input-tokens over pipeline.fable_window_tokens
+drift-check   opus     max      --input-tokens over pipeline.fable_window_tokens
+research      opus     xhigh    --type alternatives
+research      opus     max      --input-tokens over pipeline.fable_window_tokens
 pr-sentinel   sonnet   max      --signature-state repeat
 pr-sentinel   opus     max      --signature-state repeat_exhausted
-arch-review   opus     max      --contested
-integrator    opus     max      --contested
-*             opus     max      --input-tokens over pipeline.fable_window_tokens
+pr-sentinel   opus     max      --input-tokens over pipeline.fable_window_tokens
 ```
 
-Two rows there are worth reading twice. `pr-sentinel` keeps its `sonnet`
-exemption on a repeating signature and LOSES it on an exhausted one, because a
-fired ceiling route outranks the exemption — the depth has already been spent, so
-what moves is the model. And the last row is why the threshold is named rather
-than written as a number: it is `pipeline.fable_window_tokens`, a knob, and a
-literal here would go stale the first time anyone tuned it.
+For the compatibility reader, `repeat` deepens only the effort route and does
+not enter `fableRoute`; therefore `pr-sentinel --signature-state repeat` retains
+its `sonnet` exemption at `max`. `repeat_exhausted` is the distinct ceiling
+signal, so it is the first repair state that resolves to `opus`/`max` when the
+legacy Fable consent is closed. These rows describe the current
+`pipeline-config.cjs` compatibility branch only; ADR-014 does not promote the
+fixed routed `pr-sentinel` role for either signal.
 
-Projects that opt into the accepted ADR-012 amendment can set
-`delivery_pipeline.model_ladder: adaptive`. The shared classifier then adds a
-bounded `routine` lane for low-risk executor/research dispatches with 1–4
-changed files, keeps ordinary work in `complex`, starts high-risk or checkpoint
-work in `critical`, and uses `recovery` after `repeat_exhausted` or a contested
-judgement for roles whose route supports that escalation. Claude
-uses `sonnet` for the routine lane and `opus` for the quality lanes. Codex uses
-the first palette entry for routine/complex work and selects generated
-`-critical`/`-deep` files at the ceiling where a role has a distinct variant;
-the generated Codex integrator file remains at the ceiling, while Claude
-reaches that ceiling only when an earned route fires. Missing evidence stays in
-the complex lane and is reported in dispatch telemetry. This is a canary
-configuration with no savings claim; evaluate it through the ADR-011 baseline
-and quality gates before changing the policy further.
+### 7.5.1. Runtime-native model grids
 
-**The policy is code, not prose.** `scripts/pipeline-config.cjs model <role>
-[--risk|--type|--files|--attempt|…]` returns the tier for a spawn, applying the
-role × risk × attempt matrix, the `model_policy` profile, and any
-`pipeline.models` override. The skills call it instead of reasoning a value out —
-which is also what keeps the emitted values valid.
+The logical Codex keys resolve to concrete IDs only in the Codex adapter. Claude
+uses its existing native aliases directly; its grid never translates Luna or
+Astra into a Claude selection.
 
-**Only tier aliases are valid `model` values on a spawn**: `opus`, `sonnet`,
-`haiku` — and `fable`, the earned ceiling of §7.5. The Agent tool validates
-`model` against exactly that set, so a full model ID (`claude-opus-…`) or a context-suffixed alias
-(`opus[1m]`) is rejected on input — an earlier revision of this document specified
-suffixed aliases, and every spawn following it would have failed validation. Full
-model ids and `inherit` DO exist, on a different surface: `model:` in a subagent's
-own frontmatter (`.claude/agents/*.md`), which is not the tool parameter a spawn
-passes — a model-config page listing them is not permission to emit one here.
-Deliberately no generation is pinned beyond what an alias itself means (`opus` is
-Opus 5 from Claude Code 2.1.219, `fable` is Claude Fable 5.1 from 2.1.255): model
-ids move, and a document that names one goes stale silently. A context window is
-selectable only as far as a TIER expresses one — `fable` is the alias that carries
-the 1M window, and nothing finer than that can be said in a spawn's `model`.
+| Logical key | Codex concrete model | Claude Code selection |
+|---|---|---|
+| Luna | `gpt-5.6-luna` | — |
+| Astra | `gpt-6-astra` | — |
+| Sonnet | — | `sonnet` |
+| Opus | — | `opus` |
+| Fable | — | `fable` |
 
-The GSD decomposition agents are governed by GSD's own mechanism
-(`model_profile` / `models` / `model_overrides` in the same config.json) —
-a separate namespace from `pipeline.*`. Recommendation: `models.planning: opus`;
-if you additionally pin a full id in `model_overrides.gsd-planner`, look it up in
-the current model catalog rather than copying it from here.
+The canonical role/rung/signal ladder is:
+
+| Role | Codex base and evidence-based escalation | Claude Code base and evidence-based escalation |
+|---|---|---|
+| `research` | Astra/low → Astra/medium on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Sonnet/high → Opus/medium on `type: alternatives` → Fable/medium on `complexity: very-complex` |
+| `decomposition` | Astra/low → Astra/medium on `critical` or `checkpoint` | Opus/medium → Fable/medium on `critical` or `checkpoint` |
+| `executor` | Luna/max → Astra/low on explicit `critical` or `checkpoint` | Sonnet/max → Opus/high on explicit `critical` or `checkpoint` |
+| `pr-sentinel` | Luna/medium, fixed; gate strategy only | Sonnet/high, fixed; gate strategy only |
+| `integrator` | Astra/low → Astra/medium on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on the same evidence |
+| `drift-check` | Luna/max, fixed; gate strategy only | Opus/max, fixed; gate strategy only |
+| `arch-review` | Astra/low → Astra/medium on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/max on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
+| `ci-fix` | Luna/max → Astra/low on verified `signatureState: repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+| `review-fix` | Luna/max → Astra/low on verified `signatureState: repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+
+**Canonical-table assertion.** This table is a normative transcription of
+`plugins/delivery-pipeline/scripts/model-policy.cjs`, not of the compatibility
+reader above: for every listed runtime/role pair, its base model/effort and each
+named escalation signal must equal the result of `model-policy.cjs resolve`.
+`node plugins/delivery-pipeline/scripts/model-policy.cjs fingerprint` identifies
+the policy revision being asserted. A change to either runtime grid, a role, or
+an escalation signal requires changing this table in the same review; the
+compatibility `pipeline-config.cjs model` rows cannot validate or override it.
+
+The canonical signal vocabulary is `type`, `complexity`, `risk`, `critical`,
+`checkpoint`, `contested`, measured `inputTokens`, `signatureState`, and the
+boundary-issued `priorApplied` receipt. Signals are role-scoped: `risk` is
+retained context, not a global promotion, and a missing signal never promotes a
+role. The measured-window route is `inputTokens` above the ADR-014 policy
+threshold (250000 tokens). When several allowed signals fire, the resolver
+retains every signal reason and selects the highest permitted rung. `flake` and
+`plan_defect` are terminal gate/strategy outcomes, not model promotions.
+
+Repair escalation is evidence-backed. `ci-fix` and `review-fix` may move only
+from the base rung to `repeat`, then to `repeat_exhausted`, and each promotion
+requires the immediately preceding rung's boundary-verified application receipt
+and `previous_dispatch_id`. Fixed Luna roles are not globally promoted, and
+contested evidence only promotes the judgement roles (`integrator` and
+`arch-review`). Claude's Fable rung is selected only by its declared policy
+signals and existing routed consent (`pipeline.fable: auto`); missing consent or
+host support is a refusal, never an implicit downgrade.
+
+### 7.5.2. Adapters, boundary, and receipts
+
+Every routed launch — research, decomposition, executor, sentinel, drift,
+architecture review, integration, CI-fix, or review-fix — crosses one mandatory
+boundary:
+
+```text
+resolve(runtime, role, signals)
+  → validate concrete model/effort and policy fingerprint
+  → launch with explicit runtime selection
+  → verify application receipt
+  → record requested + applied + observed evidence
+```
+
+The boundary is implemented with `createDispatchBoundary`, the active
+`createCodexDispatchAdapter` or `createClaudeDispatchAdapter`, and a
+`createDurableRecorder`. Runtime must be explicit and exactly `codex` or
+`claude`. The boundary is the only selection authority; GSD model profiles,
+`models`, `model_profile`, `model_overrides`, per-role overrides, compatibility
+readers, and parent-session state cannot select or replace the canonical result.
+
+Codex static roles use the selector's exact generated agent file and its
+validated content digest. Dynamic `decomposition` and `executor` launches use
+explicit `model` and `reasoning_effort` arguments. The generated static files
+are:
+
+| Role/rung | Generated Codex file(s) |
+|---|---|
+| `research` | `shipyard-inv-research.toml`, `shipyard-inv-research-critical.toml` |
+| `pr-sentinel` | `shipyard-pr-sentinel.toml` |
+| `integrator` | `shipyard-integrator.toml`, `shipyard-integrator-critical.toml` |
+| `drift-check` | `shipyard-drift-check.toml` |
+| `arch-review` | `shipyard-arch-review.toml`, `shipyard-arch-review-critical.toml` |
+| `ci-fix` | `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
+| `review-fix` | `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
+
+Claude is Workflow-native. Its adapter passes the selected native alias and
+explicit effort to the host and requires application evidence for that exact
+pair. Claude has no generated Codex agent file and never translates a Codex
+logical model name into an alias.
+
+The boundary hard-fails before launch on an unknown or ambiguous runtime,
+unsupported model/effort pair, stale or missing generated agent, missing
+adapter, omitted or conflicting effort, inline or parent-session-inherited
+selection, conflicting GSD/per-role override, undocumented escalation, or
+missing/phantom/unverified receipt. There is no session, lower-model, or
+compatibility fallback for routed delivery. A process exit or a model claimed by
+the prompt is not application evidence.
+
+Each durable dispatch receipt records the runtime, role, runtime-native model
+key, logical rung, concrete requested and applied model/effort, all fired
+signals, policy version/fingerprint, backend, selected agent file or explicit
+launch arguments, dispatch identity, application receipt, and observed
+model/effort when the host exposes them. The requested selection is never copied
+into the applied or observed fields. A refused launch must not create a dispatch
+record.
+
+### 7.5.3. Compatibility and palette fences
+
+`delivery_pipeline.codex_models` and `pipeline.codex_models` remain
+compatibility inputs for legacy/non-routed consumers. Their first/last palette
+semantics, Terra/Astra-only assumptions, version-filtered behavior, and
+one-entry or empty-palette fallbacks are superseded for routed delivery. The
+Codex generator reads the ADR-014 policy and emits the complete required bundle;
+it does not derive canonical agents from that list, a GSD remap, or a parent
+session. Missing host capability evidence, stale artifacts, or unsupported
+selections fail closed.
+
+Claude's palette/provider configuration is unchanged. ADR-014 references the
+existing `sonnet`, `opus`, and `fable` aliases only; it does not change Claude
+model IDs, provider, credentials, environment pins, or palette files. Historical
+dispatches are not relabeled as having used ADR-014. The task-level experiment
+in ADR-012 may remain historical context or telemetry, but it is not a second
+launch authority.
 
 ## 8. Gates (summary table)
 
