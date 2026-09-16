@@ -1991,6 +1991,7 @@ function createDispatchBoundary(options = {}) {
       rung: resolution.rung,
       signals: resolution.signals,
       signals_fired: resolution.signals_fired,
+      ...(resolution.prior_applied ? { prior_applied: resolution.prior_applied } : {}),
       route: resolution.route,
       runtime: resolution.runtime,
       backend: resolution.backend,
