@@ -66,15 +66,26 @@ Read `.planning/investigations/` (may not exist):
    boundary. Do not select once for the fan-out and do not re-resolve a line
    from its model/effort pair.
 
-   For the Workflow runtime, invoke `${CLAUDE_PLUGIN_ROOT}/workflows/investigation-research.mjs`
-   through the production host binding
-   `${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs`. It injects the typed
-   `createClaudeWorkflowDispatch` bridge as the sixth workflow binding and keeps
-   the durable recorder, capabilities, and application-evidence callback outside
-   serializable args; the workflow dispatches all four lines through that bridge
-   in parallel and refuses if any host dependency is absent. Do not use the
-   native Agent tool, a generic session, an in-process fallback, or a direct
-   `agent()` call. For Codex, use the generated agent selected by
+   For the Workflow runtime, invoke the production entry point
+   `${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs`, which pins
+   `${CLAUDE_PLUGIN_ROOT}/workflows/investigation-research.mjs` and delegates to
+   the generic host binding. The host call is:
+
+   ```text
+   runInvestigationResearch({
+     args: { invId, invPath, problemStatement, referencePath,
+             artifactLanguage, lines },
+     agent, parallel, phase, log,
+     capabilities, recorder, applicationEvidence
+   })
+   ```
+
+   The typed `createClaudeWorkflowDispatch` bridge is injected as the sixth
+   workflow binding; the durable recorder, capabilities, and
+   application-evidence callback stay outside serializable `args`. The workflow
+   dispatches all four lines through that bridge in parallel and refuses if any
+   host dependency is absent. Do not use the native Agent tool, a generic
+   session, an in-process fallback, or a direct `agent()` call. For Codex, use the generated agent selected by
    `codex-agent.cjs select research --json --capabilities-file
    ${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json [canonical line signals]` and
    the same dispatch boundary via `createCodexDispatchAdapter`; do not call

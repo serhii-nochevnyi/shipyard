@@ -147,6 +147,59 @@ test('rejects a malformed research response instead of normalizing it to complet
   }
 });
 
+test('requires a non-empty draft for completed research responses', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-investigation-research-draft-'));
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  const evidence = new WeakMap();
+  const agent = async (_prompt, options) => {
+    const result = {
+      id: options.label.split(':').pop(),
+      status: 'completed',
+      summary: 'summary without a substantive draft',
+      draft: '   ',
+    };
+    evidence.set(result, {
+      launch_id: `investigation-research-draft-${options.label}`,
+      applied_model: options.model,
+      applied_effort: options.effort,
+      observed_model: options.model,
+      observed_effort: options.effort,
+    });
+    return result;
+  };
+  const dispatch = (options) => createClaudeWorkflowDispatch({
+    ...options,
+    capabilities,
+    recorder,
+    applicationEvidence: ({ result }) => evidence.get(result),
+  });
+
+  try {
+    await assert.rejects(
+      () => new AsyncFunction(
+        'agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch', source
+      )(
+        agent,
+        async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+        () => {},
+        () => {},
+        {
+          invId: 'INV-DRAFT',
+          invPath: '/inv',
+          problemStatement: 'test',
+          referencePath: '/ref',
+          lines,
+        },
+        dispatch,
+      ),
+      (error) => error && error.code === 'INVALID_RESULT'
+        && /completed results require a non-empty draft/.test(error.message),
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('refuses before launch when the host bridge is absent', async () => {
   let launches = 0;
   await assert.rejects(

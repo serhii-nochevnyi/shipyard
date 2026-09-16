@@ -113,6 +113,9 @@ const validateResult = (line, value) => {
   if (result.draft !== undefined && typeof result.draft !== 'string') {
     throw invalidResult(line, 'draft must be a string when present')
   }
+  if (result.status === 'completed' && (!result.draft || !result.draft.trim())) {
+    throw invalidResult(line, 'completed results require a non-empty draft')
+  }
   return result
 }
 

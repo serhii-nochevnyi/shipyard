@@ -13,6 +13,10 @@ const {
 const {
   runClaudeWorkflow,
 } = require('../../plugins/delivery-pipeline/scripts/claude-workflow-host.cjs');
+const {
+  INVESTIGATION_RESEARCH_SCRIPT,
+  runInvestigationResearch,
+} = require('../../plugins/delivery-pipeline/scripts/claude-investigation-host.cjs');
 
 const CAPABILITIES = Object.freeze({
   supportedModels: [CLAUDE_MODEL_ALIASES.sonnet],
@@ -80,6 +84,71 @@ return await parallel([async () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('production investigation entry point pins the research workflow and runs all four lines', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-investigation-host-'));
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  const evidence = new WeakMap();
+  const calls = [];
+  const lines = ['system-state', 'alternatives', 'constraints', 'risks'].map((id) => ({
+    id,
+    label: id,
+    model: 'opus',
+    effort: 'medium',
+    signals: id === 'alternatives' ? { type: 'alternatives' } : { type: 'facts' },
+  }));
+  try {
+    const value = await runInvestigationResearch({
+      args: {
+        invId: 'INV-HOST',
+        invPath: '/repo/.planning/investigations/INV-HOST',
+        problemStatement: 'Test the production research entry point',
+        referencePath: '/plugin/references/inv-research.md',
+        artifactLanguage: 'English',
+        lines,
+      },
+      agent: async (_prompt, options) => {
+        calls.push(options);
+        const result = {
+          id: options.label.split(':').pop(),
+          status: 'completed',
+          summary: `completed ${options.label}`,
+          draft: `draft ${options.label}`,
+        };
+        evidence.set(result, {
+          launch_id: `investigation-host-${calls.length}`,
+          applied_model: options.model,
+          applied_effort: options.effort,
+          observed_model: options.model,
+          observed_effort: options.effort,
+        });
+        return result;
+      },
+      parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+      capabilities: OPUS_CAPABILITIES,
+      recorder,
+      applicationEvidence: ({ result }) => evidence.get(result),
+    });
+    assert.match(INVESTIGATION_RESEARCH_SCRIPT, /workflows[\\/]investigation-research\.mjs$/);
+    assert.equal(value.length, 4);
+    assert.equal(calls.length, 4);
+    for (const item of value) {
+      assert.equal(item.receipt.compliance, 'verified');
+      assert.equal(item.receipt.applied_model, 'opus');
+      assert.equal(item.receipt.applied_effort, 'medium');
+      assert.ok(recorder.getVerifiedRecord(item.receipt.dispatch_id));
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('production investigation entry point refuses a caller-supplied script', async () => {
+  assert.throws(
+    () => runInvestigationResearch({ scriptPath: '/tmp/not-the-research-workflow.mjs' }),
+    /scriptPath is fixed to the research workflow/
+  );
 });
 
 test('refuses before evaluating a workflow when the host bridge is incomplete', async () => {

@@ -1317,22 +1317,22 @@ attempts and landing nothing. When the script cannot measure, it says `needed`
 for exactly this reason: the failure it prevents is the most expensive one there
 is.
 
-For the Workflow runtime, dispatch each needed judge through the host-injected
-bridge and the one boundary:
+For the Workflow runtime, invoke the drift workflow through the production host
+binding and let its injected bridge cross the one boundary:
 
 ```text
-boundary.dispatch(
-  { runtime: "claude", role: "drift-check",
-    signals: { risk, type, complexity, checkpoint, critical }, dispatch_id },
-  { scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/drift-gate.mjs",
-    args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
-            driftRefPath, recordCmd, graphDir } }
-)
+runClaudeWorkflow({
+  scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/drift-gate.mjs",
+  args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
+          driftRefPath, recordCmd, graphDir },
+  agent, parallel, phase, log,
+  capabilities, recorder, applicationEvidence
+})
 ```
 
-The `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`,
-and `claudeHost` values are host-injected Workflow bridge resources, not
-serializable `args`; the active Workflow adapter supplies them. On Codex,
+The `capabilities`, `recorder`, `applicationEvidence`, and host callbacks are
+host-owned Workflow bridge resources, not serializable `args`; the active
+Workflow adapter supplies them. On Codex,
 there is no `drift-gate.mjs` bridge: the Codex adapter selects and validates
 the generated `shipyard-drift-check.toml` and invokes `launchStatic` through
 the boundary.
@@ -1476,9 +1476,9 @@ may be dispatched at all: fix the file.
      deliveryRulesHint, prBodyGuide, artifactLanguage }
    ```
 
-   `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`, and
-   `claudeHost` are host-injected Workflow bridge resources, not serializable
-   `args`; the active adapter supplies them. The Codex adapter receives its
+   `capabilities`, `recorder`, `applicationEvidence`, and host callbacks are
+   host-injected Workflow bridge resources, not serializable `args`; the active
+   adapter supplies them. The Codex adapter receives its
    generated-agent directory and capabilities through the boundary context.
 
    On Codex, `codex-agent.cjs select executor --json --capabilities-file
@@ -2012,9 +2012,9 @@ itself. The round order:
      artifactLanguage }
    ```
 
-   `claudeCapabilities`, `dispatchRecorder`, `claudeApplicationEvidence`, and
-   `claudeHost` are host-injected Workflow bridge resources, not serializable
-   `args`; the active adapter supplies them. The Codex adapter receives its
+   `capabilities`, `recorder`, `applicationEvidence`, and host callbacks are
+   host-injected Workflow bridge resources, not serializable `args`; the active
+   adapter supplies them. The Codex adapter receives its
    generated-agent directory and capabilities through the boundary context.
 
    The per-item boundary selection resolves the canonical ladder, validates the
