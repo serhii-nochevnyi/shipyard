@@ -5,6 +5,7 @@
 // different DSL script while still claiming to run the research contract.
 const {
   registerClaudeWorkflowHost,
+  runClaudeWorkflowCli,
   WORKFLOW_SCRIPTS,
 } = require('./claude-workflow-host.cjs');
 
@@ -43,8 +44,24 @@ function runInvestigationResearch(options = {}) {
   return registerInvestigationWorkflowHost(hostOptions).run(args);
 }
 
+function runInvestigationResearchCli(argv = process.argv.slice(2), stdout = process.stdout) {
+  return runClaudeWorkflowCli(
+    ['--workflow', 'investigation-research', ...argv],
+    stdout,
+    (host, args) => runInvestigationResearch({ ...host, args }),
+  );
+}
+
 module.exports = Object.freeze({
   INVESTIGATION_RESEARCH_SCRIPT,
   registerInvestigationWorkflowHost,
+  runInvestigationResearchCli,
   runInvestigationResearch,
 });
+
+if (require.main === module) {
+  runInvestigationResearchCli().catch((error) => {
+    process.stderr.write(`${error && error.message ? error.message : error}\n`);
+    process.exitCode = 1;
+  });
+}

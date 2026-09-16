@@ -920,6 +920,21 @@ This registration is the production Workflow launch path; the wrapper's
 DSL. A host that cannot provide that binding refuses before the workflow
 evaluates or calls `agent()`.
 
+For a host that cannot import CommonJS into the native Workflow tool, the
+same boundary is available as an executable bridge:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs \
+  --workflow drift-gate \
+  --args-file /absolute/path/workflow-args.json \
+  --host-module /absolute/path/claude-workflow-host-adapter.cjs
+```
+
+The args file is serializable data only. The host module supplies the native
+callbacks, capabilities, durable recorder, and application-evidence callback;
+the bridge pins the workflow name to the shipped DSL and still injects the
+sixth binding before evaluation.
+
 The fix-round adapter receives one already-validated boundary selection per PR;
 its argument shape remains explicit so the base-merge and evidence contract
 cannot disappear during a formatting-only edit:

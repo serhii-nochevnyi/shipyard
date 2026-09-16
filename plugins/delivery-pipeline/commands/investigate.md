@@ -96,6 +96,20 @@ Read `.planning/investigations/` (may not exist):
    evidence, not launch authority by itself: the returned selection must still
    cross `createDispatchBoundary` and produce a durable application receipt.
 
+   When the caller cannot import CommonJS into the native Workflow host, use
+   the executable fixed-route bridge instead. The JSON file contains only the
+   serializable `args`; the host module owns the native callbacks, capabilities,
+   durable recorder, and application evidence:
+
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs \
+     --args-file /absolute/path/investigation-args.json \
+     --host-module /absolute/path/claude-workflow-host-adapter.cjs
+   ```
+
+   This executable path invokes the same registered host and fixed research
+   workflow; it is not a direct Agent or an unverified subprocess fallback.
+
    Accept a research result only after its durable boundary receipt is verified.
    Pass each line the problem statement, the INV path, and the brief
    `${CLAUDE_PLUGIN_ROOT}/references/inv-research.md`. Bring verified results

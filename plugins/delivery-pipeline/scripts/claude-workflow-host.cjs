@@ -93,6 +93,81 @@ function registerClaudeWorkflowHost(options = {}) {
   });
 }
 
+function cliReject(message) {
+  const error = new Error(`claude-workflow-host: ${message}`);
+  error.code = 'INVALID_HOST';
+  throw error;
+}
+
+function parseCliArguments(argv) {
+  if (!Array.isArray(argv)) cliReject('CLI arguments must be an array');
+  const values = {};
+  for (let index = 0; index < argv.length; index++) {
+    const flag = argv[index];
+    if (!['--workflow', '--args-file', '--host-module'].includes(flag)) {
+      cliReject(`unknown CLI argument ${JSON.stringify(flag)}`);
+    }
+    const value = argv[++index];
+    if (typeof value !== 'string' || !value.trim() || value.startsWith('--')) {
+      cliReject(`${flag} requires a value`);
+    }
+    if (values[flag] !== undefined) cliReject(`${flag} may be provided only once`);
+    values[flag] = value;
+  }
+  for (const flag of ['--workflow', '--args-file', '--host-module']) {
+    if (values[flag] === undefined) cliReject(`${flag} is required`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(WORKFLOW_SCRIPTS, values['--workflow'])) {
+    cliReject(`unknown registered workflow ${JSON.stringify(values['--workflow'])}`);
+  }
+  return Object.freeze({
+    workflow: values['--workflow'],
+    argsFile: values['--args-file'],
+    hostModule: values['--host-module'],
+  });
+}
+
+function readJsonFile(filePath, label) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, 'utf8');
+  } catch (error) {
+    cliReject(`cannot read ${label} ${JSON.stringify(filePath)}: ${error.message}`);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    cliReject(`${label} ${JSON.stringify(filePath)} is not valid JSON: ${error.message}`);
+  }
+}
+
+function loadHostModule(modulePath) {
+  let loaded;
+  try {
+    loaded = require(path.resolve(modulePath));
+  } catch (error) {
+    cliReject(`cannot load host module ${JSON.stringify(modulePath)}: ${error.message}`);
+  }
+  if (!object(loaded)) cliReject('host module must export an object of host-owned callbacks and resources');
+  return loaded;
+}
+
+// Executable bridge for runtimes that cannot import CommonJS from the native
+// Workflow tool. The request file contains only serializable workflow args;
+// the host module is the non-serializable production side that owns native
+// callbacks, capabilities, the durable recorder, and application evidence.
+async function runClaudeWorkflowCli(argv = process.argv.slice(2), stdout = process.stdout, runner) {
+  const parsed = parseCliArguments(argv);
+  const args = readJsonFile(parsed.argsFile, 'args file');
+  const host = loadHostModule(parsed.hostModule);
+  const result = typeof runner === 'function'
+    ? await runner(host, args)
+    : await registerClaudeWorkflowHost(host).run(parsed.workflow, { args });
+  if (!stdout || typeof stdout.write !== 'function') cliReject('stdout must provide write()');
+  stdout.write(`${JSON.stringify(result)}\n`);
+  return result;
+}
+
 function createClaudeWorkflowDispatchBridge(options = {}) {
   if (!object(options)) reject('options must be an object');
   for (const name of ['agent', 'parallel']) {
@@ -175,5 +250,13 @@ module.exports = Object.freeze({
   createClaudeWorkflowDispatchBridge,
   registerClaudeWorkflowHost,
   runClaudeWorkflow,
+  runClaudeWorkflowCli,
   WORKFLOW_SCRIPTS,
 });
+
+if (require.main === module) {
+  runClaudeWorkflowCli().catch((error) => {
+    process.stderr.write(`${error && error.message ? error.message : error}\n`);
+    process.exitCode = 1;
+  });
+}

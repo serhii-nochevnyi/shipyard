@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const {
   createDurableRecorder,
@@ -155,6 +156,78 @@ test('production investigation entry point refuses a caller-supplied script', as
     () => runInvestigationResearch({ scriptPath: '/tmp/not-the-research-workflow.mjs' }),
     /scriptPath is fixed to the research workflow/
   );
+});
+
+test('executable investigation bridge invokes the registered host with args kept in a file', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-investigation-cli-'));
+  const argsPath = path.join(root, 'args.json');
+  const hostPath = path.join(root, 'host.cjs');
+  const receiptsPath = path.join(root, 'receipts');
+  const boundaryPath = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const lines = [
+    { id: 'system-state', label: 'system state', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
+    { id: 'alternatives', label: 'alternatives', model: 'opus', effort: 'medium', signals: { type: 'alternatives' } },
+    { id: 'constraints', label: 'constraints', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
+    { id: 'risks', label: 'risks and unknowns', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
+  ];
+  fs.writeFileSync(argsPath, JSON.stringify({
+    invId: 'INV-CLI',
+    invPath: '/repo/.planning/investigations/INV-CLI',
+    problemStatement: 'Test the executable investigation bridge',
+    referencePath: '/plugin/references/inv-research.md',
+    artifactLanguage: 'English',
+    lines,
+  }));
+  fs.writeFileSync(hostPath, `
+const { createDurableRecorder } = require(${JSON.stringify(boundaryPath)});
+const evidence = new WeakMap();
+let launch = 0;
+module.exports = {
+  capabilities: Object.freeze({
+    supportedModels: ['opus'], supportedEfforts: ['medium'],
+    observedModel: true, observedEffort: true,
+  }),
+  recorder: createDurableRecorder(${JSON.stringify(receiptsPath)}),
+  parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+  agent: async (_prompt, options) => {
+    const result = {
+      id: options.label.split(':').pop(),
+      status: 'completed',
+      summary: 'executable bridge result',
+      draft: 'executable bridge draft',
+    };
+    evidence.set(result, {
+      launch_id: 'cli-launch-' + (++launch),
+      applied_model: options.model,
+      applied_effort: options.effort,
+      observed_model: options.model,
+      observed_effort: options.effort,
+    });
+    return result;
+  },
+  applicationEvidence: ({ result }) => evidence.get(result),
+};
+`);
+  try {
+    const scriptPath = path.resolve(
+      __dirname,
+      '../../plugins/delivery-pipeline/scripts/claude-investigation-host.cjs',
+    );
+    const output = execFileSync(process.execPath, [
+      scriptPath,
+      '--args-file', argsPath,
+      '--host-module', hostPath,
+    ], { encoding: 'utf8' });
+    const value = JSON.parse(output);
+    assert.equal(value.length, 4);
+    assert.deepEqual(
+      value.map((item) => item.id).sort(),
+      ['alternatives', 'constraints', 'risks', 'system-state'],
+    );
+    for (const item of value) assert.equal(item.receipt.compliance, 'verified');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('refuses before evaluating a workflow when the host bridge is incomplete', async () => {
