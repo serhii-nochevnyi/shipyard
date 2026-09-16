@@ -12,7 +12,7 @@ const {
   reconcileTelemetry, summarizeTelemetry, POLICY_HASH, POLICY_VERSION,
 } = require('../../plugins/delivery-pipeline/scripts/usage-attribution.cjs');
 const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { createDispatchBoundary, createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { report } = require('../../plugins/delivery-pipeline/scripts/usage-report.cjs');
 
 const CLI = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/usage-attribution.cjs');
@@ -713,10 +713,17 @@ test('policy reconciliation rejects rungs unauthorized by canonical signals', ()
   }
 });
 
-function repairChain(runtime, role) {
-  const launch = (resolution) => applicationReceipt(resolution, resolution.agent_file
-    ? { agent_file_digest: resolution.agent_file_digest } : {});
+function repairChain(runtime, role, { recorder = () => true, onDispatch = () => {}, unknown = false } = {}) {
+  const launch = (resolution) => applicationReceipt(resolution, {
+    backend: resolution.backend,
+    mechanism: resolution.mechanism,
+    launch_arguments: resolution.launch_arguments || null,
+    rung: resolution.rung,
+    ...(resolution.agent_file ? { agent_file_digest: resolution.agent_file_digest } : {}),
+    ...(unknown ? { observed_model: 'unknown', observed_effort: 'unknown' } : {}),
+  });
   const adapter = {
+    capabilities: { observedModel: !unknown, observedEffort: !unknown },
     launch,
     launchStatic: launch,
     validateGeneratedAgent(resolution) {
@@ -729,21 +736,50 @@ function repairChain(runtime, role) {
       };
     },
   };
-  const boundary = createDispatchBoundary({ adapters: { [runtime]: adapter }, recorder: () => true });
-  const first = boundary.dispatch({ runtime, role, signals: { signatureState: 'first' } });
+  const boundary = createDispatchBoundary({ adapters: { [runtime]: adapter }, recorder });
+  const context = { ticket: 'T-36-09' };
+  const first = boundary.dispatch({ runtime, role, signals: { signatureState: 'first' } }, context);
+  onDispatch(first);
   const repeat = boundary.dispatch({
     runtime, role, signals: { signatureState: 'repeat', priorApplied: first.receipt },
     previous_dispatch_id: first.dispatch_id,
-  });
+  }, context);
+  onDispatch(repeat);
   const exhausted = boundary.dispatch({
     runtime, role, signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
     previous_dispatch_id: repeat.dispatch_id,
-  });
+  }, context);
+  onDispatch(exhausted);
   return [repeat, exhausted];
 }
 
 for (const runtime of ['codex', 'claude']) {
   for (const role of ['review-fix', 'ci-fix']) {
+    for (const unknown of [false, true]) {
+      test(`boundary repair projections reconcile for ${runtime}/${role} (unknown=${unknown})`, (t) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-repair-boundary-'));
+        t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+        repairChain(runtime, role, {
+          recorder: createDurableRecorder(dir), unknown,
+          onDispatch(trace) {
+            const reader = createDispatchBoundary({ recorder: createDurableRecorder(dir) });
+            const projection = reader.reconcile(trace.dispatch_id, { ticket: 'T-36-09' });
+            assert.deepEqual(projection.prior_applied, trace.resolution.prior_applied);
+            const serialized = JSON.parse(JSON.stringify(projection));
+            const facts = reconcileTelemetry(serialized, { usageRecords: [{
+              dispatch_id: trace.dispatch_id, runtime,
+              provider: runtime === 'codex' ? 'openai' : 'anthropic', session_id: 'repair-session',
+            }] });
+            assert.equal(facts.compliant, true, JSON.stringify(facts));
+            assert.equal(facts.comparison_ready, !unknown);
+            assert.equal(facts.observation_status, unknown ? 'unknown' : 'observed');
+            assert.equal(facts.observed_model, trace.receipt.observed_model);
+            assert.equal(facts.observed_effort, trace.receipt.observed_effort);
+            assert.deepEqual(serialized, projection, 'reconciliation must not rewrite evidence');
+          },
+        });
+      });
+    }
     test(`reconciliation validates repair predecessors for ${runtime}/${role}`, () => {
       for (const trace of repairChain(runtime, role)) {
         // Reports read serialized evidence; an in-process receipt capability
@@ -786,6 +822,15 @@ for (const runtime of ['codex', 'claude']) {
           'wrong requested effort': (r) => { r.signals.priorApplied.requested_effort = 'wrong'; },
           'wrong applied model': (r) => { r.signals.priorApplied.applied_model = 'wrong'; },
           'wrong applied effort': (r) => { r.signals.priorApplied.applied_effort = 'wrong'; },
+          'wrong observed model': (r) => { r.signals.priorApplied.observed_model = 'wrong'; },
+          'wrong observed effort': (r) => { r.signals.priorApplied.observed_effort = r.prior_applied.effort === 'low' ? 'max' : 'low'; },
+          'invalid observed effort': (r) => { r.signals.priorApplied.observed_effort = 'invented'; },
+          'missing observed model': (r) => { delete r.signals.priorApplied.observed_model; },
+          'wrong backend': (r) => { r.signals.priorApplied.backend = 'inline'; },
+          'wrong mechanism': (r) => { r.signals.priorApplied.mechanism = 'inherited'; },
+          'wrong launch arguments': (r) => { r.signals.priorApplied.launch_arguments = { model: 'wrong', effort: 'low' }; },
+          'malformed launch arguments': (r) => { r.signals.priorApplied.launch_arguments = 'inherited'; },
+          'wrong predecessor rung': (r) => { r.signals.priorApplied.rung = 'repeat_exhausted'; },
           'missing dispatch link': (r) => { delete r.prior_applied; },
           'wrong model link': (r) => { r.prior_applied.model = 'wrong'; },
           'wrong effort link': (r) => { r.prior_applied.effort = 'wrong'; },
@@ -798,6 +843,8 @@ for (const runtime of ['codex', 'claude']) {
         if (runtime === 'codex') {
           cases['wrong predecessor agent'] = (r) => { r.signals.priorApplied.agent_file = 'shipyard-executor.toml'; };
           cases['missing predecessor digest'] = (r) => { delete r.signals.priorApplied.agent_file_digest; };
+        } else {
+          cases['unexpected predecessor agent'] = (r) => { r.signals.priorApplied.agent_file = 'shipyard-ci-fix.toml'; };
         }
         for (const [label, mutate] of Object.entries(cases)) {
           const candidate = JSON.parse(JSON.stringify(resolution));
@@ -839,6 +886,53 @@ test('reconciliation rejects malformed receipt and proof identities', () => {
       assert.equal(malformedProof.compliant, false);
       assert.equal(malformedProof.comparison_ready, false);
       assert.ok(malformedProof.runtime_application.missing_fields.includes(`compliance_proof.${field}`));
+    }
+  }
+});
+
+test('reconciliation checks identities and proofs in every supplied receipt copy', () => {
+  const resolution = routed('claude', 'executor', {}, 'all-receipts');
+  const valid = applicationReceipt(resolution);
+  for (const location of ['receipt', 'application_receipt', 'joined_receipt', 'joined_application_receipt']) {
+    for (const field of ['launch_id', 'dispatch_id', 'policy_hash', 'runtime', 'role']) {
+      for (const proofOnly of ['runtime', 'role'].includes(field) ? [false] : [false, true]) {
+        for (const value of [undefined, null, '', '  ', 42, {}, [], 'contradictory']) {
+          const invalid = JSON.parse(JSON.stringify(valid));
+          (proofOnly ? invalid.compliance_proof : invalid)[field] = value;
+          const raw = { ...resolution, receipt: valid, application_receipt: valid };
+          const usage = { dispatch_id: resolution.dispatch_id, runtime: 'claude', provider: 'anthropic', session_id: 'joined' };
+          if (location.startsWith('joined_')) usage[location.slice(7)] = invalid;
+          else raw[location] = invalid;
+          const facts = reconcileTelemetry(raw, { usageRecords: [usage] });
+          const label = `${location}.${proofOnly ? 'compliance_proof.' : ''}${field}=${JSON.stringify(value)}`;
+          assert.equal(facts.compliant, false, label);
+          assert.equal(facts.comparison_ready, false, label);
+        }
+      }
+    }
+    for (const proof of [undefined, null, {}, { ...valid.compliance_proof, status: 'unverified' }]) {
+      const invalid = { ...valid, compliance_proof: proof };
+      const raw = { ...resolution, receipt: valid, application_receipt: valid };
+      const usage = { dispatch_id: resolution.dispatch_id, runtime: 'claude', provider: 'anthropic', session_id: 'joined' };
+      if (location.startsWith('joined_')) usage[location.slice(7)] = invalid;
+      else raw[location] = invalid;
+      assert.equal(reconcileTelemetry(raw, { usageRecords: [usage] }).comparison_ready, false, location);
+    }
+  }
+});
+
+test('explicit invalid outer launch identities cannot fall back to valid receipt evidence', () => {
+  const resolution = routed('claude', 'executor', {}, 'outer-launch');
+  const receipt = applicationReceipt(resolution);
+  for (const value of [null, undefined, '', '  ', 42, {}, []]) {
+    for (const raw of [
+      { ...resolution, launch_id: value, application_receipt: receipt },
+      { resolution: { ...resolution, launch_id: receipt.launch_id }, launch_id: value, application_receipt: receipt },
+      { ...resolution, launch_id: value, agent_id: receipt.launch_id, application_receipt: receipt },
+    ]) {
+      const facts = reconcileTelemetry(raw, { usageJoined: true });
+      assert.equal(facts.compliant, false, JSON.stringify(raw));
+      assert.equal(facts.comparison_ready, false);
     }
   }
 });

@@ -593,11 +593,23 @@ function repairEvidenceMatches(runtime, role, signals, priorApplied, dispatchId)
       || priorApplied.model !== prerequisite.model || priorApplied.effort !== prerequisite.effort
       || prior.requested_model !== prerequisite.model || prior.applied_model !== prerequisite.model
       || prior.requested_effort !== prerequisite.effort || prior.applied_effort !== prerequisite.effort) return false;
-  if (runtime === 'codex') {
-    const rungs = policy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role];
-    const previousRung = rungs[rungs.findIndex((entry) => entry.name === signals.signatureState) - 1];
-    if (canonicalAgentFile(prior.agent_file) !== canonicalAgentFile(policy.codexAgentFile(role, previousRung.name))
+  const rungs = policy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role];
+  const previousRung = rungs[rungs.findIndex((entry) => entry.name === signals.signatureState) - 1];
+  const expected = expectedSelection(runtime, role, previousRung?.name);
+  if (!expected
+      || (prior.policy_id !== undefined && prior.policy_id !== POLICY_ID)
+      || (!unknownEvidence(prior.observed_model) && prior.observed_model !== expected.model)
+      || (!unknownEvidence(prior.observed_effort) && prior.observed_effort !== expected.effort)
+      || (hasOwn(prior, 'backend') && prior.backend !== expected.backend)
+      || (hasOwn(prior, 'mechanism') && prior.mechanism !== expected.mechanism)
+      || (hasOwn(prior, 'launch_arguments')
+        && stableStringify(prior.launch_arguments) !== stableStringify(expected.launch_arguments))
+      || ['rung', 'logical_rung'].some((field) => hasOwn(prior, field) && prior[field] !== previousRung.name)) return false;
+  if (expected.agent_file) {
+    if (canonicalAgentFile(prior.agent_file) !== canonicalAgentFile(expected.agent_file)
         || !/^[a-f0-9]{64}$/.test(prior.agent_file_digest || '')) return false;
+  } else if (prior.agent_file !== undefined && prior.agent_file !== null) {
+    return false;
   }
   return true;
 }
@@ -703,9 +715,10 @@ function reconcileTelemetry(raw, options = {}) {
   // A receipt reports what it claims was launched. Prefer the selected dispatch
   // identity (including the journal's legacy agent_id projection) so the two
   // facts are actually compared instead of allowing the receipt to select it.
-  const dispatchLaunchId = firstValue(resolutionSources, 'launch_id')
-    ?? firstValue(resolutionSources, 'agent_id');
-  const launchId = dispatchLaunchId ?? firstValue(receipts, 'launch_id');
+  const explicitLaunchId = firstValue(resolutionSources, 'launch_id');
+  const dispatchLaunchId = explicitLaunchId !== undefined
+    ? explicitLaunchId : firstValue(resolutionSources, 'agent_id');
+  const launchId = dispatchLaunchId !== undefined ? dispatchLaunchId : firstValue(receipts, 'launch_id');
   const launchArguments = firstValue(resolutionSources, 'launch_arguments');
   const signals = firstValue(resolutionSources, 'signals');
   const signalsFired = firstValue(resolutionSources, 'signals_fired');
@@ -872,6 +885,15 @@ function reconcileTelemetry(raw, options = {}) {
 
   const applicationMissing = [];
   const applicationContradictions = [];
+  for (const source of resolutionSources) {
+    if (hasOwn(source, 'launch_id') && !nonEmptyString(source.launch_id)) applicationMissing.push('launch_id');
+  }
+  if (conflictBetween(resolutionSources, 'launch_id')) applicationContradictions.push('launch_id_source_conflict');
+  for (const source of [raw, usageEvidence]) {
+    for (const field of ['receipt', 'application_receipt']) {
+      if (hasOwn(source, field) && !object(source[field])) applicationMissing.push(field);
+    }
+  }
   for (const field of [
     'receipt_type', 'runtime', 'role', 'dispatch_id', 'launch_id', 'requested_model',
     'requested_effort', 'applied_model', 'applied_effort', 'observed_model', 'observed_effort',
@@ -904,10 +926,13 @@ function reconcileTelemetry(raw, options = {}) {
   if (expected && expected.agent_file) receiptFields.push('agent_file', 'agent_file_digest');
   if (!receipt) {
     applicationMissing.push('receipt');
-  } else {
+  }
+  // Preferred evidence supplies report values, but cannot mask a malformed or
+  // contradictory copy supplied alongside it (including joined usage evidence).
+  for (const receipt of receipts) {
     for (const field of receiptFields) {
       if (!hasOwn(receipt, field)
-          || (RECEIPT_IDENTITIES.includes(field) && !nonEmptyString(receipt[field]))) applicationMissing.push(field);
+          || (field !== 'compliance_proof' && !nonEmptyString(receipt[field]))) applicationMissing.push(field);
     }
     if (receipt.receipt_type !== undefined && receipt.receipt_type !== 'adr-014.application') {
       applicationContradictions.push('receipt_type');
@@ -987,6 +1012,8 @@ function reconcileTelemetry(raw, options = {}) {
             && nonEmptyString(receipt[field]) && proof[field] !== receipt[field])) {
         applicationContradictions.push('compliance_proof');
       }
+    } else {
+      applicationMissing.push('compliance_proof');
     }
     if (expected && currentPolicy) {
       if (concreteValue(receipt.applied_model) && receipt.applied_model !== expected.model) {
@@ -1018,11 +1045,11 @@ function reconcileTelemetry(raw, options = {}) {
         applicationContradictions.push('launch_arguments');
       }
     }
+    if (!concreteValue(receipt.applied_model)) applicationMissing.push('applied_model');
+    if (!effortValue(receipt.applied_effort)) applicationMissing.push('applied_effort');
+    if (expected && expected.agent_file
+        && !/^[a-f0-9]{64}$/.test(receipt.agent_file_digest || '')) applicationMissing.push('agent_file_digest');
   }
-  if (receipt && !concreteValue(receipt.applied_model)) applicationMissing.push('applied_model');
-  if (receipt && !effortValue(receipt.applied_effort)) applicationMissing.push('applied_effort');
-  if (expected && expected.agent_file && receipt
-      && !/^[a-f0-9]{64}$/.test(receipt.agent_file_digest || '')) applicationMissing.push('agent_file_digest');
   const proofPresent = Boolean(receipt && receipt.compliance === 'verified' && object(receipt.compliance_proof));
   const applicationVerified = Boolean(
     receipt
