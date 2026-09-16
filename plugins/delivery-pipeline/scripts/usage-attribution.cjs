@@ -566,6 +566,26 @@ function canonicalAgentFile(value) {
   return value.endsWith('.toml') ? value : `${value}.toml`;
 }
 
+function evidenceMatches(expected, actual, field) {
+  // Provider observations are allowed to become unknown while a persisted
+  // repair fact is being reconciled. Keep that compatibility for nested
+  // predecessor copies, but compare every selection/provenance field exactly.
+  if (['observed_model', 'observed_effort'].includes(field)
+      && (unknownEvidence(expected) || unknownEvidence(actual))) return true;
+  if (Array.isArray(expected) || Array.isArray(actual)) {
+    return Array.isArray(expected) && Array.isArray(actual)
+      && expected.length === actual.length
+      && expected.every((value, index) => evidenceMatches(value, actual[index], field));
+  }
+  if (object(expected) || object(actual)) {
+    if (!object(expected) || !object(actual)) return false;
+    const keys = new Set([...Object.keys(expected), ...Object.keys(actual)]);
+    return [...keys].every((key) => hasOwn(expected, key) && hasOwn(actual, key)
+      && evidenceMatches(expected[key], actual[key], key));
+  }
+  return stableStringify(expected) === stableStringify(actual);
+}
+
 function canonicalRouteParts(route) {
   if (typeof route !== 'string') return null;
   const match = /^role=([^\s]+)\s+rung=([^\s]+)\s+model=([^\s]+)\s+signals=(\S+)$/.exec(route.trim());
@@ -608,6 +628,21 @@ function repairEvidenceMatches(runtime, role, signals, priorApplied, dispatchId)
       || (hasOwn(prior, 'launch_arguments')
         && stableStringify(prior.launch_arguments) !== stableStringify(expected.launch_arguments))
       || ['rung', 'logical_rung'].some((field) => hasOwn(prior, field) && prior[field] !== previousRung.name)) return false;
+  if (hasOwn(prior, 'signals')) {
+    if (!object(prior.signals)) return false;
+    try {
+      const predecessorEvaluation = policy.evaluateSignals(role, prior.signals, { runtime });
+      if (stableStringify(predecessorEvaluation.signals) !== stableStringify(prior.signals)) return false;
+      let predecessorRung = rungs[0];
+      const selectedNames = new Set(predecessorEvaluation.selected.map((entry) => entry.rung));
+      for (const candidate of rungs) {
+        if (selectedNames.has(candidate.name)) predecessorRung = candidate;
+      }
+      if (!previousRung || predecessorRung.name !== previousRung.name) return false;
+    } catch {
+      return false;
+    }
+  }
   if (expected.agent_file) {
     if (canonicalAgentFile(prior.agent_file) !== canonicalAgentFile(expected.agent_file)
         || !/^[a-f0-9]{64}$/.test(prior.agent_file_digest || '')) return false;
@@ -827,7 +862,10 @@ function reconcileTelemetry(raw, options = {}) {
         const expectedRoute = `role=${role} rung=${authorizedRung.name} model=${authorizedRung.model_key} signals=${selectedRoute}`;
         if (stableStringify(evaluation.signals) !== stableStringify(signals)
             || route !== expectedRoute
-            || stableStringify(evaluation.signals_fired) !== stableStringify(signalsFired)) {
+            || stableStringify(evaluation.signals_fired) !== stableStringify(signalsFired)
+            || resolutionSources.some((source) => hasOwn(source, 'signal_reasons')
+              && (!Array.isArray(source.signal_reasons)
+                || !evidenceMatches(evaluation.reasons, source.signal_reasons)))) {
           resolutionContradictions.push('signals');
         }
       } catch {

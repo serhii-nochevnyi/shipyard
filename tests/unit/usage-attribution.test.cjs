@@ -863,6 +863,68 @@ for (const runtime of ['codex', 'claude']) {
   }
 }
 
+test('serialized repair predecessors reject malformed or wrong supplied signals in both runtimes', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const role of ['review-fix', 'ci-fix']) {
+      for (const trace of repairChain(runtime, role)) {
+        for (const suppliedSignals of [
+          { signatureState: 'repeat_exhausted' },
+          { signatureState: 'not-a-signature-state' },
+          null,
+          42,
+        ]) {
+          const resolution = JSON.parse(JSON.stringify(trace.resolution));
+          resolution.signals.priorApplied.signals = suppliedSignals;
+          const reason = resolution.signal_reasons.find((item) => item.signal === 'priorApplied');
+          reason.value = JSON.parse(JSON.stringify(resolution.signals.priorApplied));
+          const facts = reconcileTelemetry({
+            resolution,
+            application_receipt: JSON.parse(JSON.stringify(trace.receipt)),
+          }, { usageJoined: true });
+          const label = `${runtime}/${role}/${trace.rung}: ${JSON.stringify(suppliedSignals)}`;
+          assert.equal(facts.resolution_status, 'contradictory', label);
+          assert.ok(facts.policy_resolution.contradictions.includes('signals'), label);
+          assert.equal(facts.compliant, false, label);
+          assert.equal(facts.comparison_ready, false, label);
+        }
+      }
+    }
+  }
+});
+
+test('serialized signal-reason receipt copies reject wrong or malformed applied models in both runtimes', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const role of ['review-fix', 'ci-fix']) {
+      for (const trace of repairChain(runtime, role)) {
+        for (const appliedModel of ['wrong-model', 'unknown', 42, null]) {
+          const resolution = JSON.parse(JSON.stringify(trace.resolution));
+          const reason = resolution.signal_reasons.find((item) => item.signal === 'priorApplied');
+          reason.value.applied_model = appliedModel;
+          const candidate = appliedModel === 'wrong-model'
+            ? normalizeRecord({
+              dispatch_id: trace.dispatch_id,
+              runtime,
+              provider: runtime === 'codex' ? 'openai' : 'anthropic',
+              session_id: `serialized-${runtime}-${trace.dispatch_id}`,
+              resolution,
+              application_receipt: JSON.parse(JSON.stringify(trace.receipt)),
+            })
+            : {
+              resolution,
+              application_receipt: JSON.parse(JSON.stringify(trace.receipt)),
+            };
+          const facts = reconcileTelemetry(candidate, { usageJoined: true });
+          const label = `${runtime}/${role}/${trace.rung}: applied_model=${JSON.stringify(appliedModel)}`;
+          assert.equal(facts.resolution_status, 'contradictory', label);
+          assert.ok(facts.policy_resolution.contradictions.includes('signals'), label);
+          assert.equal(facts.compliant, false, label);
+          assert.equal(facts.comparison_ready, false, label);
+        }
+      }
+    }
+  }
+});
+
 test('reconciliation rejects malformed receipt and proof identities', () => {
   const resolution = routed('claude', 'executor', {}, 'identity-check');
   for (const value of [null, undefined, '', '  ', 42, {}, []]) {
