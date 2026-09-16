@@ -1338,7 +1338,7 @@ function selectionConfig(raw) {
 
 const GSD_ROLE_KEYS = Object.freeze({
   research: ['research', 'gsd-project-researcher', 'gsd-phase-researcher'],
-  decomposition: ['planning', 'gsd-planner'],
+  decomposition: ['planning', 'gsd-planner', 'gsd-plan-checker'],
   executor: ['execution', 'gsd-executor'],
   'pr-sentinel': ['verification', 'gsd-verifier'],
   integrator: ['verification', 'gsd-integration-checker'],

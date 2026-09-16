@@ -10,7 +10,11 @@ const path = require('path');
 const crypto = require('crypto');
 const policy = require('./model-policy.cjs');
 const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
-const { generatedAgentEvidence } = require('./dispatch-boundary.cjs');
+const {
+  generatedAgentEvidence,
+  GSD_LAUNCH_MECHANISM,
+  validateGsdRole,
+} = require('./dispatch-boundary.cjs');
 const { REPAIR } = require('./codex-model-remap.cjs');
 
 const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
@@ -113,6 +117,7 @@ function createCodexDispatchAdapter(options = {}) {
   const capabilities = JSON.parse(JSON.stringify(options.capabilities || host.capabilities || {}));
   const launchDynamic = host.launch;
   const launchStatic = host.launchStatic;
+  const launchTypedGsd = host.launchTypedGsd;
   const validatedRepairs = new Map();
 
   function canonicalResolution(resolution) {
@@ -184,6 +189,10 @@ function createCodexDispatchAdapter(options = {}) {
   function validate(resolution) {
     const canonical = canonicalResolution(resolution);
     validateAvailability(resolution, capabilities, canonical);
+    const gsdRole = validateGsdRole(canonical);
+    if (gsdRole !== undefined && typeof launchTypedGsd !== 'function') {
+      refuse('MISSING_ADAPTER', `Codex ${gsdRole} requires the host-owned launchTypedGsd callback`);
+    }
     if (canonical.agent_file) validateGeneratedAgent(canonical);
     return true;
   }
@@ -211,6 +220,14 @@ function createCodexDispatchAdapter(options = {}) {
       }
       observations[field] = observed;
     }
+    const gsdRole = validateGsdRole(resolution);
+    if (gsdRole !== undefined
+        && (applied.gsd_role !== gsdRole || applied.gsd_launch_mechanism !== GSD_LAUNCH_MECHANISM)) {
+      refuse('NONCOMPLIANT_RECEIPT', 'Codex host did not attest the exact typed GSD callback role and launch mechanism', {
+        expected: { gsd_role: gsdRole, gsd_launch_mechanism: GSD_LAUNCH_MECHANISM },
+        actual: { gsd_role: applied.gsd_role, gsd_launch_mechanism: applied.gsd_launch_mechanism },
+      });
+    }
     return Object.freeze({
       receipt_type: 'adr-014.application', runtime: 'codex', role: resolution.role,
       dispatch_id: resolution.dispatch_id, launch_id: applied.launch_id,
@@ -220,6 +237,10 @@ function createCodexDispatchAdapter(options = {}) {
       applied_model: applied.applied_model, applied_effort: applied.applied_effort,
       ...observations, policy_hash: resolution.policy_hash,
       backend: resolution.backend, mechanism: resolution.mechanism,
+      ...(gsdRole !== undefined ? {
+        gsd_role: gsdRole,
+        gsd_launch_mechanism: applied.gsd_launch_mechanism,
+      } : {}),
       ...(resolution.agent_file ? { agent_file: resolution.agent_file, agent_file_digest: applied.agent_file_digest } : {}),
     });
   }
@@ -230,6 +251,7 @@ function createCodexDispatchAdapter(options = {}) {
     validate(resolution);
     if (!object(context)) refuse('INVALID_INPUT', 'launch context must be an object');
     const effectiveModel = effectiveModelFor(resolution, canonical);
+    const gsdRole = validateGsdRole(canonical);
     for (const source of [context, context.launch_arguments, context.selection, context.session]) {
       if (source === undefined) continue;
       if (!object(source)) refuse('CONFLICTING_OVERRIDE', 'launch selection overrides must be objects');
@@ -237,13 +259,17 @@ function createCodexDispatchAdapter(options = {}) {
         ['model', effectiveModel], ['requested_model', effectiveModel], ['applied_model', effectiveModel],
         ['effort', canonical.effort], ['reasoning_effort', canonical.effort],
         ['model_reasoning_effort', canonical.effort], ['agent_file', canonical.agent_file],
+        ['gsd_role', gsdRole],
+        ['gsd_launch_mechanism', gsdRole === undefined ? undefined : GSD_LAUNCH_MECHANISM],
       ]) {
         if (source[field] !== undefined && source[field] !== expected) refuse('CONFLICTING_OVERRIDE', 'launch context contradicts resolved ' + field);
       }
       if (source.inherit || source.inline || source.session_inherited) refuse('UNSUPPORTED_SELECTION', 'launch context requests inherited or inline selection');
     }
     const staticRole = Boolean(canonical.agent_file);
-    const method = staticRole ? launchStatic : launchDynamic;
+    const method = gsdRole !== undefined
+      ? launchTypedGsd
+      : staticRole ? launchStatic : launchDynamic;
     if (typeof method !== 'function') refuse('MISSING_ADAPTER', 'host lacks the required explicit ' + (staticRole ? 'static' : 'dynamic') + ' launch method');
     let selection;
     if (staticRole) {
@@ -267,7 +293,14 @@ function createCodexDispatchAdapter(options = {}) {
     }
     Object.freeze(selection);
     validatedRepairs.delete(canonical.dispatch_id);
-    const result = method.call(host, selection, context);
+    const launchContext = gsdRole === undefined
+      ? context
+      : Object.freeze({
+        ...context,
+        gsd_role: gsdRole,
+        gsd_launch_mechanism: GSD_LAUNCH_MECHANISM,
+      });
+    const result = method.call(host, selection, launchContext, handoff);
     return result && typeof result.then === 'function'
       ? result.then((applied) => applicationReceipt(canonical, applied, selection))
       : applicationReceipt(canonical, result, selection);

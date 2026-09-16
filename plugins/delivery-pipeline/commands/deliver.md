@@ -101,7 +101,7 @@ instead, and the front reads it back by itself:
   the PR moves (push, review answer, undraft) or on `clear`.
 - `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
   Lifts when the plan is re-planned.
-- `dispatch-record.cjs mark <T> <role> --model <recorder tier alias> --effort <level> --effort-applied <receipt applied effort> --task-level <level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<recorder route>"` — an agent
+- `dispatch-record.cjs mark <T> <role> --model <recorder tier alias> --effort <level> --effort-applied <receipt applied effort> --task-level <recorder-task-level> --runtime <runtime> --backend <backend> --agent-id <launch id> --route "<recorder route>"` — an agent
   is working on it RIGHT NOW. The one fact here that is motion rather than a
   verdict, and the one the board could not see at all: nothing is pushed yet, so
   the live state still reads `execute`/`fix` and the stop gate refuses turns over
@@ -122,6 +122,15 @@ instead, and the front reads it back by itself:
   journal can say a judge was dispatched and not what it ran at, so every row of
   the ladder stays a matter of argument. With them a ladder review is one query
   (below).
+  **`--task-level` is a separate compatibility projection, not the canonical
+  boundary `rung`.** The adapter classifies the same dispatch facts with
+  `taskLevelRoute` and passes one of the recorder's supported values:
+  `mechanical|routine|complex|critical|recovery`. A fixed `base` dispatch for
+  `pr-sentinel` or `drift-check` maps to `mechanical`; ordinary work maps to
+  `routine` or `complex`; an earned critical lane maps to `critical`; and an
+  exhausted repair or contested judgement maps to `recovery`. Never pass
+  `base`, `very-complex`, `alternatives`, `repeat`, or `ceiling` verbatim as
+  `--task-level`; those are boundary rung names, not recorder task levels.
   **A sha the journal records is the full forty characters** — `$(git rev-parse HEAD)`,
   never `--short` and never an abbreviation pasted from a PR page. `log-event.cjs`
   refuses a shorter one outright: `gate_status` records a head that way, and a
@@ -361,6 +370,14 @@ CI fix, review fix, architecture review, and integrator — MUST cross one
 `resolve → validate → launch → receipt` boundary. The boundary's trace also
 records the requested, applied, and observed selection. There is no direct
 model call beside it, no inline launch, and no inherited guard or session.
+
+**Cardinality is per work item.** For executors, decomposition, drift-check,
+integrator, architecture review, and each CI/review fix, resolve and launch
+separately for every ticket or PR, and keep that item's receipt and dispatch
+record with its own result. Build batch arguments from those per-item
+selections; never reuse one ticket's model, effort, signals, or receipt for
+another. The only intentional shared dispatch is a round-scoped `pr-sentinel`
+guard over its guarded PR batch.
 
 Initialize one `createDispatchBoundary` with the active runtime adapter and a
 `createDurableRecorder`. The Codex adapter validates generated files; the
@@ -943,20 +960,26 @@ Rules:
 `use_workflow ≠ false` — **go the Workflow path**: it builds each agent's prompt
 deterministically from `args`, bypassing your context window, so incidental/foreign
 framing (harness reminders, remnants of a skill invocation) will NOT leak into the
-subagent's prompt. The Agent fallback is the **injection-exposed** path (the prompt
-is assembled by an LLM from its own context), keep it ONLY when the Workflow tool is
-genuinely absent from the session; when switching, tell the user explicitly
-(`⚠ Workflow tool unavailable → typed boundary adapter or refusal`). The
+subagent's prompt. A native Agent surface is not a compliant fallback: it cannot
+carry the resolved effort, so it must refuse. When the Workflow tool is genuinely
+absent from the session, use a typed adapter that proves the applied model/effort
+or announce and refuse (`⚠ Workflow tool unavailable → typed boundary adapter or refusal`). The
 `pipeline.use_workflow` flag in `.planning/config.json` defaults to auto
-(Workflow when available); `false` — force the Agent fallback only for non-repair
-roles, and return `repair blocked` for routed repair without a compliant typed
-boundary adapter. Every eligible adapter must explicitly apply model and effort
-and return a concrete application receipt; otherwise refuse the dispatch.
+(Workflow when available); `false` disables the Workflow path and never
+authorizes a native Agent fallback. A model-bearing launch then requires a typed
+adapter that explicitly applies model and effort and returns a concrete
+application receipt; if none exists, hard-refuse before prompt construction,
+spawning, or recording and continue only with the duty pass's mechanical work.
+Routed repair remains `repair blocked` without that adapter.
+The obsolete instruction “`false` — force the Agent fallback only for non-repair
+roles, and return `repair blocked`” is forbidden: it would authorize a launch
+that cannot prove the applied effort.
 
-**Agent fallback: prompt discipline (anti-injection).** On the Agent path you
-assemble the subagent's prompt — which is exactly where foreign content leaks in.
-Therefore assemble EVERY eligible Agent spawn (executor, drift-check, arch-review)
-as a fenced structured block. Do not construct an Agent prompt for routed
+**Typed Agent adapter: prompt discipline (anti-injection).** If a host offers a
+typed Agent adapter, its prompt is assembled by the adapter — which is exactly
+where foreign content must be contained. Assemble EVERY eligible Agent spawn
+(executor, drift-check, arch-review) as a fenced structured block. Do not
+construct an Agent prompt for routed
 `ci-fix`/`review-fix`: without the receipt-capable boundary above, return `repair
 blocked` before prompt construction, any session or in-process fallback, spawning,
 or recording.
@@ -1487,7 +1510,7 @@ may be dispatched at all: fix the file.
     before.** The receipt carries the launch identity (the Workflow task id or
     typed Agent id); once it exists, and only then, for every ticket you just
     handed out:
-    `dispatch-record.cjs mark <T> executor --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <receipt-applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <claude|codex> --backend <workflow|agent|codex-agent> --agent-id <launch id>`
+    `dispatch-record.cjs mark <T> executor --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <receipt-applied-effort> --route "<recorder-route>" --task-level <recorder-task-level> --runtime <claude|codex> --backend <workflow|agent|codex-agent> --agent-id <launch id>`
     The recorder adapter provides the compatibility tier/effort/route
     projection; it is not the canonical boundary route. Keep the concrete
     selector `model` for `--observed-model` when the host reports it.
@@ -1503,9 +1526,10 @@ may be dispatched at all: fix the file.
     filed. The launch id is now RECORDED as well as kept:
     the record stores the ticket, the role, the time, the resolved pair and the agent
     id, because the cap counts DISTINCT agents and the id is the only thing that tells
-    two of them apart. On the Workflow path one task id covers the whole batch, and
-    that is correct — an executor is one agent per ticket whatever the id says, so
-    there the id is provenance and not a count. The recorder also prints a generated
+    two of them apart. The Workflow host may expose one enclosing task id for a
+    batch, but that id is provenance only: each ticket still has its own boundary
+    dispatch, receipt, and generated `dispatch_id`, and its own recorder mark. The
+    recorder also prints a generated
     `dispatch_id`; capture that value from the `mark` result and keep it in your turn.
     The launch `agent_id` identifies the holder, while the generated `dispatch_id`
     is the compare-and-delete identity used to clear this ticket safely.
@@ -1626,7 +1650,7 @@ The boundary resolves the fixed Codex Luna/medium or Workflow runtime Sonnet/hig
 selection, validates the generated `shipyard-pr-sentinel.toml` or the native
 Workflow-runtime alias plus explicit effort, launches the typed guard, and returns a
 verified receipt. Only after that receipt exists may the overlay be updated:
-`dispatch-record.cjs mark <T> pr-sentinel --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <rung> --runtime <runtime> --backend <workflow|agent|codex-agent> --agent-id <launch id>` for
+`dispatch-record.cjs mark <T> pr-sentinel --model <recorder-tier-alias> --effort <recorder-effort> --effort-applied <applied-effort> --route "<recorder-route>" --task-level <recorder-task-level> --runtime <runtime> --backend <workflow|agent|codex-agent> --agent-id <launch id>` for
 every ticket on the guarded list, with the same returned launch id and the exact
 Codex `--agent-file` when applicable. Never create a mark for a refused or
 phantom launch. Clear each record when the guard's report comes back; a

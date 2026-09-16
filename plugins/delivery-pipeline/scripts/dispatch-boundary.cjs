@@ -30,6 +30,41 @@ const AUTHORITY_KEY_BYTES = 32;
 // predicate deliberately exposes verification but no way to mint membership.
 const BOUNDARY_VERIFIED_RECEIPTS = new WeakSet();
 
+// GSD's decomposition callbacks are a narrower contract than the logical
+// research/decomposition policy roles.  The coordinator supplies the exact
+// typed role, while the runtime host proves that it actually used the typed
+// callback.  A context field alone is intentionally insufficient evidence.
+const GSD_TYPED_ROLES = Object.freeze({
+  research: Object.freeze(['gsd-phase-researcher']),
+  decomposition: Object.freeze(['gsd-planner', 'gsd-plan-checker']),
+});
+const GSD_LAUNCH_MECHANISM = 'typed-gsd-callback';
+
+function validateGsdRole(resolution) {
+  if (!isObject(resolution) || resolution.gsd_role === undefined) return undefined;
+  const role = resolution.gsd_role;
+  const allowed = GSD_TYPED_ROLES[resolution.role];
+  if (typeof role !== 'string' || role.trim() === '' || !allowed || !allowed.includes(role)) {
+    refuse('INVALID_RESOLUTION', `GSD typed role ${JSON.stringify(role)} is not valid for ${resolution && resolution.role}`, {
+      role: resolution && resolution.role,
+      gsd_role: role,
+      allowed: allowed || [],
+    });
+  }
+  return role;
+}
+
+function gsdRoleFromInput(input, resolution) {
+  if (Object.prototype.hasOwnProperty.call(input, 'gsdRole')) {
+    refuse('UNSUPPORTED_SELECTION', 'gsdRole is not part of the ADR-014 resolver interface; use gsd_role');
+  }
+  if (!Object.prototype.hasOwnProperty.call(input, 'gsd_role')) return undefined;
+  if (typeof input.gsd_role !== 'string' || input.gsd_role.trim() === '') {
+    refuse('INVALID_INPUT', 'gsd_role must be a non-empty typed GSD role');
+  }
+  return validateGsdRole({ ...resolution, gsd_role: input.gsd_role });
+}
+
 function markBoundaryVerifiedReceipt(receipt) {
   if (isObject(receipt)) BOUNDARY_VERIFIED_RECEIPTS.add(receipt);
   return receipt;
@@ -263,6 +298,11 @@ function createDurableRecorder(storeDir) {
     return {
       dispatch_id: dispatchId,
       purpose,
+      // Projection owns the fenced section through a synchronous graph+journal
+      // commit. That callback cannot run a heartbeat while the event loop is
+      // blocked, so a live owner must not be treated as stale merely because
+      // the recovery TTL elapsed. A dead process remains recoverable below.
+      fenced_until_release: purpose === 'projection',
       lock_token: newFenceToken(),
       owner_pid: process.pid,
       acquired_at: new Date(now).toISOString(),
@@ -282,7 +322,19 @@ function createDurableRecorder(storeDir) {
       if (!error || error.code !== 'ENOENT') throw error;
     }
   };
+  const lockOwnerIsAlive = (lock) => {
+    if (!lock || lock.fenced_until_release !== true) return false;
+    const pid = Number(lock.owner_pid);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return Boolean(error && error.code === 'EPERM');
+    }
+  };
   const lockIsStale = (lock) => {
+    if (lockOwnerIsAlive(lock)) return false;
     const leaseExpiresAt = lock && typeof lock.lease_expires_at === 'string'
       ? Date.parse(lock.lease_expires_at)
       : lock && typeof lock.acquired_at === 'string'
@@ -734,6 +786,39 @@ function createDurableRecorder(storeDir) {
         throw boundaryError('RECORD_FAILED', `durable receipt claim renewal failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
+    withClaim(dispatchId, consumerId, claimAuthority, callback) {
+      if (typeof callback !== 'function') {
+        throw boundaryError('INVALID_INPUT', 'durable receipt claim fence requires a callback', { dispatch_id: dispatchId });
+      }
+      try {
+        // The projection writer holds this same fenced lock while it mutates
+        // dispatch-record's graph. A separate repair can therefore neither
+        // take over nor consume the receipt between the ownership check and
+        // the projection commit. A heartbeat alone is insufficient: it would
+        // leave exactly that check→write gap open.
+        const lockOwner = acquireClaimLock(dispatchId, 'projection');
+        if (!lockOwner) return { committed: false };
+        try {
+          if (fs.existsSync(consumedFile(dispatchId))) return { committed: false };
+          const current = readJsonFile(claimFile(dispatchId));
+          if (!sameClaimFence(current, claimAuthority) || claimIsStale(current)) {
+            return { committed: false };
+          }
+          atomicReplaceJson(claimFile(dispatchId), claimPayload(
+            dispatchId,
+            consumerId,
+            current.generation,
+            current.claim_token,
+          ));
+          if (fs.existsSync(consumedFile(dispatchId))) return { committed: false };
+          return { committed: true, value: callback() };
+        } finally {
+          releaseClaimLock(dispatchId, lockOwner);
+        }
+      } catch (error) {
+        throw boundaryError('RECORD_FAILED', `durable receipt claim fence failed: ${error.message}`, { dispatch_id: dispatchId });
+      }
+    },
     consume(dispatchId, consumerId, claimAuthority) {
       try {
         const repairCommit = recoverRepairCommit(dispatchId);
@@ -1096,6 +1181,10 @@ function revalidateGeneratedAgent(resolution, adapter) {
 }
 
 function validateWithAdapter(resolution, adapter) {
+  // The logical policy role and the typed GSD callback role are separate
+  // facts.  Validate the latter at the boundary before any adapter can
+  // reserve an id or invoke a generic launch method.
+  validateGsdRole(resolution);
   // A Codex adapter may hold loader-private provenance for a dynamic effective
   // model.  Validate its canonical ADR-014 selection, while preserving the
   // effective model as the expected application result.  Other adapters (and
@@ -1209,6 +1298,7 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
   const receipt = unwrapReceipt(rawReceipt);
   const expectedSelection = expectedSelectionForReceipt(resolution, options.adapter);
   const canonical = expectedSelection.canonical;
+  const gsdRole = validateGsdRole(resolution);
   if (!isObject(receipt)) {
     refuse('MISSING_RECEIPT', 'launch did not return an application receipt; a successful process exit is not evidence of application');
   }
@@ -1224,6 +1314,7 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
     'applied_effort',
     'policy_hash',
   ];
+  if (gsdRole !== undefined) requiredFields.push('gsd_role', 'gsd_launch_mechanism');
   if (options.requireComplianceProof !== false) {
     requiredFields.push('compliance', 'compliance_proof');
   }
@@ -1249,6 +1340,18 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt dispatch_id does not match the boundary dispatch', { expected: resolution.dispatch_id, actual: receipt.dispatch_id });
   }
   nonEmpty(receipt.launch_id, 'launch_id');
+  if (gsdRole !== undefined) {
+    nonEmpty(receipt.gsd_role, 'gsd_role');
+    nonEmpty(receipt.gsd_launch_mechanism, 'gsd_launch_mechanism');
+    if (receipt.gsd_role !== gsdRole || receipt.gsd_launch_mechanism !== GSD_LAUNCH_MECHANISM) {
+      refuse('NONCOMPLIANT_RECEIPT', 'GSD application receipt does not attest the exact typed callback role and launch mechanism', {
+        expected: { gsd_role: gsdRole, gsd_launch_mechanism: GSD_LAUNCH_MECHANISM },
+        actual: { gsd_role: receipt.gsd_role, gsd_launch_mechanism: receipt.gsd_launch_mechanism },
+      });
+    }
+  } else if (receipt.gsd_role !== undefined || receipt.gsd_launch_mechanism !== undefined) {
+    refuse('NONCOMPLIANT_RECEIPT', 'a non-GSD launch cannot claim typed GSD callback attestation');
+  }
   if (receipt.requested_model !== canonical.requested_model || receipt.requested_effort !== canonical.requested_effort) {
     refuse('NONCOMPLIANT_RECEIPT', 'application receipt requested values do not match the immutable resolution', {
       expected: { model: canonical.requested_model, effort: canonical.requested_effort },
@@ -1561,6 +1664,7 @@ function createDispatchBoundary(options = {}) {
     refuse('INVALID_INPUT', 'boundary policy must expose resolveDispatch and validateResolution');
   }
   const adapters = options.adapters || {};
+  const requireGsdRole = options.requireGsdRole === true;
   const trustedReceipts = new Map();
   const trustedResolutions = new Map();
   const consumedReceiptIds = new Set();
@@ -1685,6 +1789,25 @@ function createDispatchBoundary(options = {}) {
       refuse('UNVERIFIED_RECEIPT', `${prerequisite.role} ${prerequisite.signatureState} escalation requires the receipt returned by the durable dispatch boundary`, { dispatch_id: previousDispatchId });
     }
     const predecessorTicket = trusted.record && trusted.record.ticket;
+    // Cross-process repair authority is always ticket-bound. The small
+    // in-process recorder contract remains compatible with its historical
+    // ticket-less fixtures; it is not a durable trust root and cannot survive
+    // or authorize a repair across a process boundary.
+    const requiresTicketBinding = DURABLE_RECORDERS.has(recorder);
+    if (requiresTicketBinding && ticket === undefined) {
+      refuse(
+        'INVALID_INPUT',
+        'repair dispatch requires a ticket in its launch context before a predecessor receipt can be consumed',
+        { dispatch_id: previousDispatchId },
+      );
+    }
+    if (requiresTicketBinding && predecessorTicket === undefined) {
+      refuse(
+        'NONCOMPLIANT_RECEIPT',
+        'the preceding receipt is not bound to a ticket and cannot authorize a repair dispatch',
+        { expected_ticket: ticket, actual_ticket: null, dispatch_id: previousDispatchId },
+      );
+    }
     if (predecessorTicket !== ticket) {
       refuse(
         'NONCOMPLIANT_RECEIPT',
@@ -1779,15 +1902,28 @@ function createDispatchBoundary(options = {}) {
       };
     }
     const resolved = canonicalResolveDispatch(canonicalInput);
+    const gsdRole = gsdRoleFromInput(withId, resolved);
+    if (requireGsdRole && GSD_TYPED_ROLES[resolved.role] && gsdRole === undefined) {
+      refuse('INVALID_INPUT', `GSD typed role is required for boundary role ${resolved.role}`);
+    }
     // Task level is a policy decision used by the legacy telemetry readers,
     // not a runtime-selected model value. Keep it boundary-owned alongside the
     // canonical resolution so reconciliation cannot accept a caller's claim.
     const task_level = resolveTaskLevel(resolved.role, resolved.signals);
-    const output = snapshot(prior ? { ...resolved, task_level, prior_applied: {
+    const output = snapshot(prior ? {
+      ...resolved,
+      task_level,
+      ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}),
+      prior_applied: {
       dispatch_id: prior.dispatch_id,
       model: prior.model,
       effort: prior.effort,
-    } } : { ...resolved, task_level });
+      }
+    } : {
+      ...resolved,
+      task_level,
+      ...(gsdRole !== undefined ? { gsd_role: gsdRole } : {}),
+    });
     // snapshot() deliberately severs every other caller reference. Rebrand
     // this one cloned predecessor only because `prior` was re-read from the
     // durable recorder immediately above.
@@ -1959,6 +2095,10 @@ function createDispatchBoundary(options = {}) {
         observed_effort: applicationReceipt.observed_effort,
         application_evidence: strippedEvidence,
         receipt: applicationReceipt,
+        ...(validatedResolution.gsd_role !== undefined ? {
+          gsd_role: validatedResolution.gsd_role,
+          gsd_launch_mechanism: applicationReceipt.gsd_launch_mechanism,
+        } : {}),
         ...(prior ? {
           predecessor_dispatch_id: prior.dispatch_id,
           predecessor_consumer_id: claimConsumerId,
@@ -2033,10 +2173,13 @@ function dispatch(input, options = {}) {
 
 module.exports = Object.freeze({
   OBSERVATION_UNKNOWN,
+  GSD_TYPED_ROLES,
+  GSD_LAUNCH_MECHANISM,
   newDispatchId,
   createDurableRecorder,
   createDispatchBoundary,
   generatedAgentEvidence,
+  validateGsdRole,
   isBoundaryVerifiedReceipt,
   resolveDispatch,
   validateDispatch,

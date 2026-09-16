@@ -288,6 +288,39 @@ function releaseReconciliationClaims(decidedRecords) {
   for (const decided of decidedRecords) releaseReconciliationClaim(decided);
 }
 
+function withReconciliationClaims(decidedRecords, callback) {
+  const leases = decidedRecords
+    .map((decided) => decided && decided[RECONCILIATION_CLAIM])
+    .filter(Boolean);
+  const commit = (index) => {
+    if (index >= leases.length) return callback();
+    const lease = leases[index];
+    if (typeof lease.recorder.withClaim === 'function') {
+      const result = lease.recorder.withClaim(
+        lease.dispatchId,
+        lease.consumerId,
+        lease.claim,
+        () => commit(index + 1),
+      );
+      if (!result || result.committed !== true) {
+        throw new Error('boundary receipt claim was lost before the dispatch record commit');
+      }
+      return result.value;
+    }
+    // In-process compatibility recorders have no cross-process takeover path,
+    // but renew when they expose one so their callers still get a positive
+    // ownership check immediately before the graph mutation.
+    if (typeof lease.recorder.renewClaim === 'function') {
+      const renewed = lease.recorder.renewClaim(lease.dispatchId, lease.consumerId, lease.claim);
+      if (!renewed || renewed.renewed !== true) {
+        throw new Error('boundary receipt claim was lost before the dispatch record commit');
+      }
+    }
+    return commit(index + 1);
+  };
+  return commit(0);
+}
+
 // ── WHO holds it, not just WHAT it is (ADR-007 D1) ───────────────────────────
 //
 // The record named the ROLE and nothing about the agent, and `front.cjs` then
@@ -439,7 +472,7 @@ function codexAgentFiles(dir = codexAgentDir()) {
  * recorded silently is worse than no field, because it would be counted later as
  * fact.
  */
-function parseMarkFlags(argv, role, ticket) {
+function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
   const given = new Map();
   for (let i = 0; i < argv.length;) {
     const arg = String(argv[i]);
@@ -501,11 +534,22 @@ function parseMarkFlags(argv, role, ticket) {
       // The dispatch journal predates that vocabulary: its model/reason fields
       // are compatibility projections consumed by pipeline-stats. Preserve the
       // boundary facts in their own fields while deriving those legacy fields
-      // from the same role/signals using the existing legacy resolver.
-      const legacyModel = resolveModel(facts.role, facts.signals);
-      const legacyEffort = resolveEffort(facts.role, legacyModel, undefined, facts.signals);
-      const legacyRoute = routeOf(facts.role, facts.signals);
-      const legacyTaskLevel = resolveTaskLevel(facts.role, facts.signals);
+      // from the same role/signals using the existing legacy resolver and the
+      // project/runtime configuration that owns this graph. Without this load,
+      // a configured effort or model ladder could make the compatibility fields
+      // describe a different policy than the dispatch being reconciled.
+      const loaded = loadConfig(projectRoot, { runtime: facts.runtime });
+      if (!loaded.valid) {
+        throw new Error(
+          `project model configuration is invalid (${loaded.error && loaded.error.relative || loaded.file}); ` +
+          'refusing to write a compatibility projection'
+        );
+      }
+      const legacyConfig = loaded.config;
+      const legacyModel = resolveModel(facts.role, facts.signals, legacyConfig);
+      const legacyEffort = resolveEffort(facts.role, legacyModel, legacyConfig, facts.signals);
+      const legacyRoute = routeOf(facts.role, facts.signals, legacyConfig);
+      const legacyTaskLevel = resolveTaskLevel(facts.role, facts.signals, legacyConfig);
       if (facts.task_level !== legacyTaskLevel) {
         throw new Error('boundary task level does not match the resolver projection');
       }
@@ -765,18 +809,18 @@ function parseMarkFlags(argv, role, ticket) {
     }
     decided.agent_file = agentFile;
   }
-  // A resolver route is the declaration that this is a new routed launch, not
-  // merely an old ownership row.  Its requested/applied fields are execution
-  // claims, so accepting caller-supplied values here would let the normal
-  // delivery instructions write unverified telemetry.  The launch-flow caller
-  // is wired in a later ticket; until it passes the durable boundary receipt,
-  // fail closed rather than treating hand-written flags as evidence.
-  if (given.has('route')) {
+  if (given.has('route') && !given.has('boundary-store')) {
     fail(
-      'a routed dispatch requires --boundary-store and --dispatch-id from the completed dispatch boundary; ' +
-      'manual --model/--effort/--route values are not application evidence.'
+      'a new routed dispatch requires an authenticated application receipt — pass ' +
+      '--boundary-store <receipt store> and --dispatch-id <boundary dispatch id>.\n' +
+      '  Existing receiptless rows remain readable as historical telemetry; caller-supplied route or effort fields\n' +
+      '  cannot authorize a new routed record.'
     );
   }
+  // Receiptless records without a route remain readable compatibility telemetry
+  // for already-started or pre-boundary work. The routed branch above is
+  // deliberately fail-closed: a new route cannot be written until the boundary
+  // has authenticated the launch and supplied its application receipt.
   return decided;
 }
 
@@ -803,7 +847,7 @@ const BATCH_FIELDS = new Map([
   ['boundary_store', 'boundary-store'],
 ]);
 
-function parseBatchEntries(raw) {
+function parseBatchEntries(raw, projectRoot = process.cwd()) {
   if (!Array.isArray(raw)) {
     throw new Error('mark-many input must be a JSON array of dispatch objects');
   }
@@ -841,7 +885,7 @@ function parseBatchEntries(raw) {
     return {
       ticket: item.ticket,
       role: item.role,
-      decided: parseMarkFlags(flags, item.role, item.ticket),
+      decided: parseMarkFlags(flags, item.role, item.ticket, projectRoot),
     };
   });
 }
@@ -1039,21 +1083,25 @@ function withDispatchId(decided, store, cwd) {
 // reliably produced five). The lock sits beside the STORE, never at cwd: a mark
 // run from a ticket worktree would otherwise take a lock nobody else contends
 // for and serialize nothing.
-function mutate(cwd, fn) {
+function mutate(cwd, fn, fence = (commit) => commit()) {
   fs.mkdirSync(graphDir(cwd), { recursive: true });
   return withLock(lockDirFor(cwd), 'dispatch-record', () => {
     const store = load(cwd);
-    const extra = fn(store);
-    writeAtomic(path.join(graphDir(cwd), STORE_NAME), JSON.stringify(store, null, 2) + '\n');
-    if (extra) {
-      const events = Array.isArray(extra) ? extra : [extra];
-      if (events.length) {
-        fs.appendFileSync(
-          path.join(graphDir(cwd), 'delivery-log.jsonl'),
-          events.map((event) => JSON.stringify(event)).join('\n') + '\n'
-        );
+    const commit = () => {
+      const extra = fn(store);
+      writeAtomic(path.join(graphDir(cwd), STORE_NAME), JSON.stringify(store, null, 2) + '\n');
+      if (extra) {
+        const events = Array.isArray(extra) ? extra : [extra];
+        if (events.length) {
+          fs.appendFileSync(
+            path.join(graphDir(cwd), 'delivery-log.jsonl'),
+            events.map((event) => JSON.stringify(event)).join('\n') + '\n'
+          );
+        }
       }
-    }
+      return extra;
+    };
+    return fence(commit);
   }, { label: 'dispatch-record' });
 }
 
@@ -1320,7 +1368,7 @@ if (require.main === module) {
     // Parsed and validated BEFORE the state lookup and before anything is
     // written: a usage error must cost no lock and must never leave half a
     // record behind.
-    const decided = parseMarkFlags(rest.slice(2), role, ticket);
+    const decided = parseMarkFlags(rest.slice(2), role, ticket, cwd);
     const at = new Date().toISOString();
     let dispatchId;
     try {
@@ -1355,7 +1403,7 @@ if (require.main === module) {
         // `status_change` closes the interval, so a `clear` needs no event of its
         // own.
         return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...recorded, by: 'dispatch-record' };
-      });
+      }, (commit) => withReconciliationClaims([decided], commit));
     } catch (e) {
       try { releaseReconciliationClaim(decided); } catch (_) { /* keep the write failure */ }
       fail(e && e.message ? e.message : e);
@@ -1393,7 +1441,7 @@ if (require.main === module) {
     }
     let entries;
     try {
-      entries = parseBatchEntries(raw);
+      entries = parseBatchEntries(raw, cwd);
     } catch (e) {
       fail(e && e.message ? e.message : e);
     }
@@ -1444,7 +1492,10 @@ if (require.main === module) {
             });
           }
           return events;
-        });
+        }, (commit) => withReconciliationClaims(
+          entries.map((entry) => entry.decided),
+          commit,
+        ));
       } catch (e) {
         try { releaseReconciliationClaims(entries.map((entry) => entry.decided)); } catch (_) { /* keep the write failure */ }
         fail(e && e.message ? e.message : e);
