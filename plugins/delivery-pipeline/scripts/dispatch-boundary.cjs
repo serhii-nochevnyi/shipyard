@@ -1739,14 +1739,19 @@ function createDispatchBoundary(options = {}) {
       refuse('UNVERIFIED_RECEIPT', `${prerequisite.role} ${prerequisite.signatureState} escalation requires the receipt returned by the durable dispatch boundary`, { dispatch_id: previousDispatchId });
     }
     const predecessorTicket = trusted.record && trusted.record.ticket;
-    if (ticket === undefined) {
+    // Cross-process repair authority is always ticket-bound. The small
+    // in-process recorder contract remains compatible with its historical
+    // ticket-less fixtures; it is not a durable trust root and cannot survive
+    // or authorize a repair across a process boundary.
+    const requiresTicketBinding = DURABLE_RECORDERS.has(recorder);
+    if (requiresTicketBinding && ticket === undefined) {
       refuse(
         'INVALID_INPUT',
         'repair dispatch requires a ticket in its launch context before a predecessor receipt can be consumed',
         { dispatch_id: previousDispatchId },
       );
     }
-    if (predecessorTicket === undefined) {
+    if (requiresTicketBinding && predecessorTicket === undefined) {
       refuse(
         'NONCOMPLIANT_RECEIPT',
         'the preceding receipt is not bound to a ticket and cannot authorize a repair dispatch',
