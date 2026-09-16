@@ -55,6 +55,8 @@ const UNKNOWN_EVIDENCE = new Set(['unknown', 'unsupported']);
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 const present = (value) => value !== undefined && value !== null && value !== '';
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
+const nonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
+const RECEIPT_IDENTITIES = ['policy_hash', 'dispatch_id', 'launch_id'];
 
 function clone(value) {
   if (Array.isArray(value)) return value.map(clone);
@@ -567,6 +569,39 @@ function canonicalRouteParts(route) {
   return match ? { role: match[1], rung: match[2], model_key: match[3], signals: match[4] } : null;
 }
 
+function verifiedReceiptProof(receipt) {
+  const proof = receipt?.compliance_proof;
+  return receipt?.receipt_type === 'adr-014.application'
+    && receipt.compliance === 'verified' && object(proof)
+    && proof.status === 'verified' && proof.boundary === 'adr-014.dispatch-boundary'
+    && RECEIPT_IDENTITIES.every((field) => nonEmptyString(receipt[field])
+      && nonEmptyString(proof[field]) && proof[field] === receipt[field]);
+}
+
+function repairEvidenceMatches(runtime, role, signals, priorApplied, dispatchId) {
+  const prerequisite = policy.RUNTIME_REPAIR_PREREQUISITES[runtime]?.[role]?.[signals.signatureState];
+  if (!prerequisite) return true;
+  const prior = signals.priorApplied;
+  // Persisted telemetry cannot carry the boundary's object-identity capability.
+  // Check its recorded proof and predecessor linkage against the same ordered
+  // prerequisite table used by dispatch-boundary; never authorize a launch here.
+  if (!verifiedReceiptProof(prior)
+      || prior.runtime !== runtime || prior.role !== role || prior.policy_hash !== POLICY_HASH
+      || (prior.policy_version !== undefined && prior.policy_version !== POLICY_VERSION)
+      || prior.dispatch_id === dispatchId
+      || !object(priorApplied) || priorApplied.dispatch_id !== prior.dispatch_id
+      || priorApplied.model !== prerequisite.model || priorApplied.effort !== prerequisite.effort
+      || prior.requested_model !== prerequisite.model || prior.applied_model !== prerequisite.model
+      || prior.requested_effort !== prerequisite.effort || prior.applied_effort !== prerequisite.effort) return false;
+  if (runtime === 'codex') {
+    const rungs = policy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role];
+    const previousRung = rungs[rungs.findIndex((entry) => entry.name === signals.signatureState) - 1];
+    if (canonicalAgentFile(prior.agent_file) !== canonicalAgentFile(policy.codexAgentFile(role, previousRung.name))
+        || !/^[a-f0-9]{64}$/.test(prior.agent_file_digest || '')) return false;
+  }
+  return true;
+}
+
 // dispatch-boundary.reconcile deliberately returns durable dispatch facts, not
 // a duplicate resolver object. Its projection predates logical_model and
 // rung_index, but those values are deterministic only after the signed receipt
@@ -583,13 +618,8 @@ function boundaryProjection(receipt, values, expected) {
       || values.backend !== expected.backend || values.mechanism !== expected.mechanism
       || values.requestedModel !== expected.model || values.requestedEffort !== expected.effort
       || values.rung !== values.logicalRung) return null;
-  const proof = receipt.compliance_proof;
   const route = canonicalRouteParts(values.route);
-  if (receipt.receipt_type !== 'adr-014.application'
-      || receipt.compliance !== 'verified' || !object(proof)
-      || proof.status !== 'verified' || proof.boundary !== 'adr-014.dispatch-boundary'
-      || proof.policy_hash !== receipt.policy_hash || proof.dispatch_id !== receipt.dispatch_id
-      || proof.launch_id !== receipt.launch_id
+  if (!verifiedReceiptProof(receipt)
       || receipt.policy_hash !== values.policyHash
       || !route || route.role !== values.role || route.rung !== values.rung
       || route.model_key !== expected.model_key) return null;
@@ -756,10 +786,11 @@ function reconcileTelemetry(raw, options = {}) {
       resolutionContradictions.push('signals');
     } else {
       try {
-        // This is a report-time consistency check, never resolver authority.
-        // Repair signals legitimately retain a boundary-verified prior receipt;
-        // the public resolver rejects that input because it cannot verify the
-        // receipt capability outside the dispatch boundary.
+        if (!repairEvidenceMatches(runtime, role, signals,
+          firstValue(resolutionSources, 'prior_applied'), dispatchId)
+            || conflictBetween(resolutionSources, 'prior_applied')) {
+          resolutionContradictions.push('signals');
+        }
         const evaluation = policy.evaluateSignals(role, signals, { runtime });
         const rungs = policy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role];
         const selectedNames = new Set(evaluation.selected.map((entry) => entry.rung));
@@ -875,7 +906,8 @@ function reconcileTelemetry(raw, options = {}) {
     applicationMissing.push('receipt');
   } else {
     for (const field of receiptFields) {
-      if (!hasOwn(receipt, field)) applicationMissing.push(field);
+      if (!hasOwn(receipt, field)
+          || (RECEIPT_IDENTITIES.includes(field) && !nonEmptyString(receipt[field]))) applicationMissing.push(field);
     }
     if (receipt.receipt_type !== undefined && receipt.receipt_type !== 'adr-014.application') {
       applicationContradictions.push('receipt_type');
@@ -886,14 +918,14 @@ function reconcileTelemetry(raw, options = {}) {
     if (receipt.role !== undefined && role !== undefined && receipt.role !== role) {
       applicationContradictions.push('role');
     }
-    if (receipt.dispatch_id !== undefined && dispatchId !== undefined && receipt.dispatch_id !== dispatchId) {
+    if (nonEmptyString(receipt.dispatch_id) && dispatchId !== undefined && receipt.dispatch_id !== dispatchId) {
       applicationContradictions.push('dispatch_id');
     }
-    if (receipt.launch_id !== undefined && dispatchLaunchId !== undefined
+    if (nonEmptyString(receipt.launch_id) && dispatchLaunchId !== undefined
         && receipt.launch_id !== dispatchLaunchId) {
       applicationContradictions.push('launch_id');
     }
-    if (receipt.policy_hash !== undefined && policyHash !== undefined && receipt.policy_hash !== policyHash) {
+    if (nonEmptyString(receipt.policy_hash) && policyHash !== undefined && receipt.policy_hash !== policyHash) {
       applicationContradictions.push('policy_hash');
     }
     if (receipt.policy_version !== undefined && policyVersion !== undefined
@@ -906,7 +938,7 @@ function reconcileTelemetry(raw, options = {}) {
     if (receipt.policy_id !== undefined && receipt.policy_id !== POLICY_ID) {
       applicationContradictions.push('policy_id');
     }
-    if (receipt.policy_hash !== undefined && receipt.policy_hash !== POLICY_HASH) {
+    if (nonEmptyString(receipt.policy_hash) && receipt.policy_hash !== POLICY_HASH) {
       // A receipt from a different policy is both an application mismatch and
       // a stale-policy fact. The finding is added below without collapsing the
       // two dimensions into one status.
@@ -946,11 +978,13 @@ function reconcileTelemetry(raw, options = {}) {
     }
     if (receipt.compliance === 'verified' && object(receipt.compliance_proof)) {
       const proof = receipt.compliance_proof;
+      for (const field of RECEIPT_IDENTITIES) {
+        if (!nonEmptyString(proof[field])) applicationMissing.push(`compliance_proof.${field}`);
+      }
       if (proof.status !== 'verified'
           || proof.boundary !== 'adr-014.dispatch-boundary'
-          || proof.policy_hash !== receipt.policy_hash
-          || proof.dispatch_id !== receipt.dispatch_id
-          || proof.launch_id !== receipt.launch_id) {
+          || RECEIPT_IDENTITIES.some((field) => nonEmptyString(proof[field])
+            && nonEmptyString(receipt[field]) && proof[field] !== receipt[field])) {
         applicationContradictions.push('compliance_proof');
       }
     }

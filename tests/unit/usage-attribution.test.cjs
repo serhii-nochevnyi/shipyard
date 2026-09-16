@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const os = require('node:os');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
@@ -11,6 +12,7 @@ const {
   reconcileTelemetry, summarizeTelemetry, POLICY_HASH, POLICY_VERSION,
 } = require('../../plugins/delivery-pipeline/scripts/usage-attribution.cjs');
 const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { report } = require('../../plugins/delivery-pipeline/scripts/usage-report.cjs');
 
 const CLI = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/usage-attribution.cjs');
@@ -711,45 +713,134 @@ test('policy reconciliation rejects rungs unauthorized by canonical signals', ()
   }
 });
 
-test('reconciliation evaluates repair signal provenance without re-invoking receipt-gated resolution', () => {
-  const prior = applicationReceipt(routed('claude', 'executor', {}, 'repair-prior'));
-  const runtime = 'claude';
-  const role = 'review-fix';
-  const rung = modelPolicy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role]
-    .find((entry) => entry.name === 'repeat');
-  const model = modelPolicy.CLAUDE_MODEL_ALIASES[rung.model_key];
-  const evaluation = modelPolicy.evaluateSignals(role, {
-    signatureState: 'repeat', priorApplied: prior,
-  }, { runtime });
-  const resolution = {
-    policy_version: POLICY_VERSION,
-    policy_hash: POLICY_HASH,
-    runtime,
-    role,
-    model_key: rung.model_key,
-    logical_model: rung.logical_model || rung.model_key,
-    logical_rung: rung.name,
-    rung: rung.name,
-    rung_index: modelPolicy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role].indexOf(rung),
-    model,
-    effort: rung.effort,
-    requested_model: model,
-    requested_effort: rung.effort,
-    route: `role=${role} rung=${rung.name} model=${rung.model_key} signals=repeat->repeat`,
-    backend: 'workflow',
-    mechanism: 'workflow-explicit-selection',
-    launch_arguments: { model, effort: rung.effort },
-    signals: evaluation.signals,
-    signals_fired: evaluation.signals_fired,
-    dispatch_id: 'repair-current',
+function repairChain(runtime, role) {
+  const launch = (resolution) => applicationReceipt(resolution, resolution.agent_file
+    ? { agent_file_digest: resolution.agent_file_digest } : {});
+  const adapter = {
+    launch,
+    launchStatic: launch,
+    validateGeneratedAgent(resolution) {
+      const content = `adapter-owned:${resolution.agent_file}`;
+      return {
+        valid: true, exists: true, content_verified: true,
+        policy_hash: resolution.policy_hash, agent_file: resolution.agent_file,
+        agent_file_digest: crypto.createHash('sha256').update(content).digest('hex'),
+        agent_file_content: content,
+      };
+    },
   };
-  const facts = reconcileTelemetry({
-    ...resolution,
-    application_receipt: applicationReceipt(resolution),
+  const boundary = createDispatchBoundary({ adapters: { [runtime]: adapter }, recorder: () => true });
+  const first = boundary.dispatch({ runtime, role, signals: { signatureState: 'first' } });
+  const repeat = boundary.dispatch({
+    runtime, role, signals: { signatureState: 'repeat', priorApplied: first.receipt },
+    previous_dispatch_id: first.dispatch_id,
   });
-  assert.equal(facts.resolution_status, 'resolved');
-  assert.equal(facts.policy_resolution.contradictions.includes('signals'), false);
-  assert.equal(facts.compliant, true);
+  const exhausted = boundary.dispatch({
+    runtime, role, signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
+    previous_dispatch_id: repeat.dispatch_id,
+  });
+  return [repeat, exhausted];
+}
+
+for (const runtime of ['codex', 'claude']) {
+  for (const role of ['review-fix', 'ci-fix']) {
+    test(`reconciliation validates repair predecessors for ${runtime}/${role}`, () => {
+      for (const trace of repairChain(runtime, role)) {
+        // Reports read serialized evidence; an in-process receipt capability
+        // cannot be a substitute for checking its persisted provenance.
+        const resolution = JSON.parse(JSON.stringify(trace.resolution));
+        const report = (candidate, receipt = trace.receipt) => reconcileTelemetry({
+          resolution: candidate, application_receipt: receipt,
+        }, { usageJoined: true });
+        const valid = report(resolution);
+        assert.equal(valid.compliant, true);
+        assert.equal(valid.comparison_ready, true);
+        const unknown = report(resolution, {
+          ...trace.receipt, observed_model: 'unknown', observed_effort: 'unknown',
+        });
+        assert.equal(unknown.compliant, true);
+        assert.equal(unknown.comparison_ready, false);
+        assert.equal(unknown.observation_status, 'unknown');
+        const unknownPrior = JSON.parse(JSON.stringify(resolution));
+        unknownPrior.signals.priorApplied.observed_model = 'unknown';
+        unknownPrior.signals.priorApplied.observed_effort = 'unknown';
+        assert.equal(report(unknownPrior).compliant, true);
+        const historical = { ...resolution, policy_version: 'adr-014.v2', policy_hash: 'old' };
+        const stale = report(historical, applicationReceipt(historical));
+        assert.equal(stale.resolution_status, 'stale');
+        assert.equal(stale.compliant, false);
+        assert.equal(stale.comparison_ready, false);
+
+        const cases = {
+          'executor receipt': (r) => { r.signals.priorApplied = applicationReceipt(routed(runtime, 'executor', {}, 'executor-prior')); },
+          'missing receipt': (r) => { delete r.signals.priorApplied; },
+          'receipt shorthand': (r) => { r.signals.priorApplied = { model: 'opus', effort: 'medium', dispatchId: 'fake' }; },
+          'missing proof': (r) => { delete r.signals.priorApplied.compliance_proof; },
+          'forged boundary': (r) => { r.signals.priorApplied.compliance_proof.boundary = 'caller'; },
+          'wrong runtime': (r) => { r.signals.priorApplied.runtime = runtime === 'claude' ? 'codex' : 'claude'; },
+          'wrong role': (r) => { r.signals.priorApplied.role = role === 'ci-fix' ? 'review-fix' : 'ci-fix'; },
+          'wrong receipt type': (r) => { r.signals.priorApplied.receipt_type = 'caller.application'; },
+          'stale predecessor': (r) => { r.signals.priorApplied.policy_hash = r.signals.priorApplied.compliance_proof.policy_hash = 'old'; },
+          'unverified predecessor': (r) => { r.signals.priorApplied.compliance = 'unverified'; },
+          'wrong requested model': (r) => { r.signals.priorApplied.requested_model = 'wrong'; },
+          'wrong requested effort': (r) => { r.signals.priorApplied.requested_effort = 'wrong'; },
+          'wrong applied model': (r) => { r.signals.priorApplied.applied_model = 'wrong'; },
+          'wrong applied effort': (r) => { r.signals.priorApplied.applied_effort = 'wrong'; },
+          'missing dispatch link': (r) => { delete r.prior_applied; },
+          'wrong model link': (r) => { r.prior_applied.model = 'wrong'; },
+          'wrong effort link': (r) => { r.prior_applied.effort = 'wrong'; },
+          'wrong dispatch link': (r) => { r.prior_applied.dispatch_id = 'other'; },
+          'self predecessor': (r) => { r.prior_applied.dispatch_id = r.signals.priorApplied.dispatch_id = r.signals.priorApplied.compliance_proof.dispatch_id = r.dispatch_id; },
+          'null predecessor launch': (r) => { r.signals.priorApplied.launch_id = r.signals.priorApplied.compliance_proof.launch_id = null; },
+          'wrong proof launch': (r) => { r.signals.priorApplied.compliance_proof.launch_id = 'other'; },
+          'wrong proof dispatch': (r) => { r.signals.priorApplied.compliance_proof.dispatch_id = 'other'; },
+        };
+        if (runtime === 'codex') {
+          cases['wrong predecessor agent'] = (r) => { r.signals.priorApplied.agent_file = 'shipyard-executor.toml'; };
+          cases['missing predecessor digest'] = (r) => { delete r.signals.priorApplied.agent_file_digest; };
+        }
+        for (const [label, mutate] of Object.entries(cases)) {
+          const candidate = JSON.parse(JSON.stringify(resolution));
+          mutate(candidate);
+          // Keep the signal route internally consistent so the predecessor
+          // contract, rather than an unrelated route check, rejects the input.
+          const evaluation = modelPolicy.evaluateSignals(role, candidate.signals, { runtime });
+          candidate.signals_fired = evaluation.signals_fired;
+          const facts = report(candidate);
+          assert.equal(facts.compliant, false, `${trace.rung}: ${label}`);
+          assert.equal(facts.comparison_ready, false, `${trace.rung}: ${label}`);
+          assert.ok(facts.policy_resolution.contradictions.includes('signals'), label);
+        }
+      }
+    });
+  }
+}
+
+test('reconciliation rejects malformed receipt and proof identities', () => {
+  const resolution = routed('claude', 'executor', {}, 'identity-check');
+  for (const value of [null, undefined, '', '  ', 42, {}, []]) {
+    for (const field of ['launch_id', 'dispatch_id', 'policy_hash']) {
+      const receipt = applicationReceipt(resolution, { [field]: value });
+      const facts = reconcileTelemetry({
+        ...resolution, [field]: value, application_receipt: receipt,
+      }, { usageJoined: true });
+      assert.equal(facts.application_status, 'unverifiable', `${field}: ${JSON.stringify(value)}`);
+      assert.equal(facts.compliant, false);
+      assert.equal(facts.comparison_ready, false);
+      assert.equal(facts.observation_status, 'observed');
+      assert.ok(facts.runtime_application.missing_fields.includes(field));
+
+      const proofOnly = applicationReceipt(resolution);
+      proofOnly.compliance_proof[field] = value;
+      const malformedProof = reconcileTelemetry({
+        ...resolution, application_receipt: proofOnly,
+      }, { usageJoined: true });
+      assert.equal(malformedProof.application_status, 'unverifiable');
+      assert.equal(malformedProof.compliant, false);
+      assert.equal(malformedProof.comparison_ready, false);
+      assert.ok(malformedProof.runtime_application.missing_fields.includes(`compliance_proof.${field}`));
+    }
+  }
 });
 
 test('reconciliation rejects a receipt whose launch differs from the selected dispatch launch', () => {
