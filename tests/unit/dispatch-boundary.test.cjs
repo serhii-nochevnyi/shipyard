@@ -223,6 +223,35 @@ test('receipts and repair predecessors remain bound to their launch ticket', () 
   }
 });
 
+test('an unticketed repair cannot consume an unticketed predecessor', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-missing-ticket-'));
+  try {
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter() },
+      recorder: boundaryModule.createDurableRecorder(storeDir),
+    });
+    const base = boundary.dispatch({
+      runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' },
+    });
+    const repair = {
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+    };
+    assert.throws(
+      () => boundary.dispatch(repair),
+      (error) => error.code === 'INVALID_INPUT' && /ticket.*launch context/.test(error.message),
+    );
+    assert.throws(
+      () => boundary.dispatch(repair, { ticket: 'T-36-MISSING' }),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /not bound to a ticket/.test(error.message),
+    );
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
 test('executor critical dispatch uses the Astra/low escalation rung', () => {
   let launched;
   const boundary = boundaryModule.createDispatchBoundary({
@@ -282,6 +311,7 @@ test('Claude launches use the independent native grid with an explicit effort', 
 
 test('Claude repair receipts authorize only the Claude-native predecessor rung', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-claude-chain-'));
+  const ticket = 'T-36-CLAUDE';
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: { claude: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -290,7 +320,7 @@ test('Claude repair receipts authorize only the Claude-native predecessor rung',
     runtime: 'claude',
     role: 'ci-fix',
     signals: { signatureState: 'first' },
-  });
+  }, { ticket });
   assert.equal(base.applied_model, 'opus');
   assert.equal(base.applied_effort, 'medium');
   const repeat = boundary.dispatch({
@@ -298,7 +328,7 @@ test('Claude repair receipts authorize only the Claude-native predecessor rung',
     role: 'ci-fix',
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
-  });
+  }, { ticket });
   assert.equal(repeat.applied_model, 'opus');
   assert.equal(repeat.applied_effort, 'max');
   const exhausted = boundary.dispatch({
@@ -306,7 +336,7 @@ test('Claude repair receipts authorize only the Claude-native predecessor rung',
     role: 'ci-fix',
     signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
     previous_dispatch_id: repeat.dispatch_id,
-  });
+  }, { ticket });
   assert.equal(exhausted.applied_model, 'opus');
   assert.equal(exhausted.applied_effort, 'max');
 });
@@ -407,6 +437,7 @@ test('a caller cannot replay a reserved dispatch id', () => {
 
 test('repair escalations require the boundary receipt chain and consume each predecessor once', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-chain-'));
+  const ticket = 'T-36-CHAIN';
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -423,13 +454,13 @@ test('repair escalations require the boundary receipt chain and consume each pre
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'first' },
-  });
+  }, { ticket });
   const repeat = boundary.dispatch({
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
-  });
+  }, { ticket });
   assert.equal(base.applied_model, 'gpt-5.6-luna');
   assert.equal(repeat.applied_model, 'gpt-6-astra');
   assert.equal(repeat.applied_effort, 'low');
@@ -439,7 +470,7 @@ test('repair escalations require the boundary receipt chain and consume each pre
       role: 'ci-fix',
       signals: { signatureState: 'repeat', priorApplied: base.receipt },
       previous_dispatch_id: base.dispatch_id,
-    }),
+    }, { ticket }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
   const exhausted = boundary.dispatch({
@@ -447,13 +478,14 @@ test('repair escalations require the boundary receipt chain and consume each pre
     role: 'ci-fix',
     signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
     previous_dispatch_id: repeat.dispatch_id,
-  });
+  }, { ticket });
   assert.equal(exhausted.applied_model, 'gpt-6-astra');
   assert.equal(exhausted.applied_effort, 'medium');
 });
 
 test('same-boundary function recorders can authorize their own in-memory repair chain', () => {
   const recorder = () => true;
+  const ticket = 'T-36-FUNCTION';
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder,
@@ -463,14 +495,14 @@ test('same-boundary function recorders can authorize their own in-memory repair 
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'function-recorder-base',
-  });
+  }, { ticket });
   const repeat = boundary.dispatch({
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'function-recorder-repeat',
-  });
+  }, { ticket });
   assert.equal(repeat.applied_model, 'gpt-6-astra');
   assert.equal(repeat.applied_effort, 'low');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
@@ -1055,6 +1087,7 @@ test('separate boundary instances share durable reservation and finalized receip
 
 test('durable receipt repair survives a fresh boundary instance and consumes once', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-repair-'));
+  const ticket = 'T-36-DURABLE';
   const firstBoundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -1064,7 +1097,7 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'durable-repair-base',
-  });
+  }, { ticket });
   const makeFreshBoundary = () => boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -1075,7 +1108,7 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'durable-repair-repeat',
-  });
+  }, { ticket });
   assert.equal(repeat.applied_model, 'gpt-6-astra');
   assert.equal(repeat.applied_effort, 'low');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
@@ -1086,13 +1119,14 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
       signals: { signatureState: 'repeat', priorApplied: base.receipt },
       previous_dispatch_id: base.dispatch_id,
       dispatch_id: 'durable-repair-repeat-again',
-    }),
+    }, { ticket }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
 });
 
 test('an unsigned legacy repair commit cannot recover a successor or block replay', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-repair-crash-'));
+  const ticket = 'T-36-CRASH';
   const base = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -1101,7 +1135,7 @@ test('an unsigned legacy repair commit cannot recover a successor or block repla
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'crash-commit-base',
-  });
+  }, { ticket });
   const successorId = 'crash-commit-successor';
   const recordInput = {
     dispatch_id: successorId,
@@ -1139,12 +1173,13 @@ test('an unsigned legacy repair commit cannot recover a successor or block repla
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'legacy-repair-replacement',
-  });
+  }, { ticket });
   assert.equal(repaired.dispatch_id, 'legacy-repair-replacement');
 });
 
 test('an authenticated repair commit makes its predecessor non-replayable before physical consumption', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-recorded-crash-'));
+  const ticket = 'T-36-RECORDED';
   const base = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -1153,7 +1188,7 @@ test('an authenticated repair commit makes its predecessor non-replayable before
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'recorded-crash-base',
-  });
+  }, { ticket });
   const successorId = 'recorded-crash-successor';
   const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
   const child = spawnSync(process.execPath, ['-e', `
@@ -1188,7 +1223,7 @@ test('an authenticated repair commit makes its predecessor non-replayable before
       signals: { signatureState: 'repeat', priorApplied: prior },
       previous_dispatch_id: process.argv[4],
       dispatch_id: ${JSON.stringify(successorId)},
-    });
+    }, { ticket: ${JSON.stringify(ticket)} });
   `, modulePath, storeDir, JSON.stringify(base.receipt), base.dispatch_id], { encoding: 'utf8' });
   assert.equal(child.status, 73, child.stderr);
 
@@ -1207,7 +1242,7 @@ test('an authenticated repair commit makes its predecessor non-replayable before
       signals: { signatureState: 'repeat', priorApplied: base.receipt },
       previous_dispatch_id: base.dispatch_id,
       dispatch_id: 'recorded-crash-replay',
-    }),
+    }, { ticket }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
 });
@@ -1297,6 +1332,8 @@ test('a self-consistent forged Claude predecessor from a custom recorder cannot 
 
 test('independent repair chains do not share a global latest receipt lane', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-parallel-repair-'));
+  const ticketA = 'T-36-PARALLEL-A';
+  const ticketB = 'T-36-PARALLEL-B';
   const makeBoundary = () => boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -1306,37 +1343,39 @@ test('independent repair chains do not share a global latest receipt lane', () =
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'parallel-base-a',
-  });
+  }, { ticket: ticketA });
   const baseB = makeBoundary().dispatch({
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'parallel-base-b',
-  });
+  }, { ticket: ticketB });
   const repeatA = makeBoundary().dispatch({
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'repeat', priorApplied: baseA.receipt },
     previous_dispatch_id: baseA.dispatch_id,
     dispatch_id: 'parallel-repeat-a',
-  });
+  }, { ticket: ticketA });
   const repeatB = makeBoundary().dispatch({
     runtime: 'codex',
     role: 'ci-fix',
     signals: { signatureState: 'repeat', priorApplied: baseB.receipt },
     previous_dispatch_id: baseB.dispatch_id,
     dispatch_id: 'parallel-repeat-b',
-  });
+  }, { ticket: ticketB });
   assert.equal(repeatA.resolution.prior_applied.dispatch_id, baseA.dispatch_id);
   assert.equal(repeatB.resolution.prior_applied.dispatch_id, baseB.dispatch_id);
 });
 
 test('top-level dispatch continues a repair chain with the same durable recorder', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-convenience-'));
+  const ticket = 'T-36-CONVENIENCE';
   const recorder = boundaryModule.createDurableRecorder(storeDir);
   const options = {
     adapters: { codex: fakeAdapter() },
     recorder,
+    context: { ticket },
   };
   const base = boundaryModule.dispatch({
     runtime: 'codex',
@@ -1358,6 +1397,7 @@ test('top-level dispatch continues a repair chain with the same durable recorder
 
 test('a failed repair launch releases its predecessor claim for a later attempt', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-retry-'));
+  const ticket = 'T-36-RETRY';
   const recorder = boundaryModule.createDurableRecorder(storeDir);
   const baseBoundary = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
@@ -1368,7 +1408,7 @@ test('a failed repair launch releases its predecessor claim for a later attempt'
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'retry-base',
-  });
+  }, { ticket });
   const failing = boundaryModule.createDispatchBoundary({
     adapters: {
       codex: fakeAdapter({ onLaunch: () => { throw new Error('launch failed'); } }),
@@ -1382,7 +1422,7 @@ test('a failed repair launch releases its predecessor claim for a later attempt'
       signals: { signatureState: 'repeat', priorApplied: base.receipt },
       previous_dispatch_id: base.dispatch_id,
       dispatch_id: 'retry-failed',
-    }),
+    }, { ticket }),
     /launch failed/,
   );
   const retry = boundaryModule.createDispatchBoundary({
@@ -1394,7 +1434,7 @@ test('a failed repair launch releases its predecessor claim for a later attempt'
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'retry-success',
-  });
+  }, { ticket });
   assert.equal(retry.applied_model, 'gpt-6-astra');
   assert.equal(retry.applied_effort, 'low');
 });
@@ -1462,6 +1502,7 @@ test('an active owner renews its lease, but expiry permits takeover despite a li
 
 test('a superseded claim owner cannot commit after an expired-lease takeover', async () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-fenced-claim-'));
+  const ticket = 'T-36-FENCED';
   const base = boundaryModule.createDispatchBoundary({
     adapters: { codex: fakeAdapter() },
     recorder: boundaryModule.createDurableRecorder(storeDir),
@@ -1470,7 +1511,7 @@ test('a superseded claim owner cannot commit after an expired-lease takeover', a
     role: 'ci-fix',
     signals: { signatureState: 'first' },
     dispatch_id: 'fenced-base',
-  });
+  }, { ticket });
   let finishLaunch;
   const pendingLaunch = new Promise((resolve) => { finishLaunch = resolve; });
   const oldOwner = boundaryModule.createDispatchBoundary({
@@ -1487,7 +1528,7 @@ test('a superseded claim owner cannot commit after an expired-lease takeover', a
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'fenced-old-successor',
-  });
+  }, { ticket });
 
   const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
   const claimPath = path.join(storeDir, claimName);
@@ -1576,6 +1617,7 @@ test('directory fsync failure preserves a complete exclusive reservation', () =>
 test('durable observation capabilities survive process restart independently', () => {
   for (const unavailable of [{ model: true, effort: true }, { model: true, effort: false }, { model: false, effort: true }]) {
     const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-observation-restart-'));
+    const ticket = 'T-36-OBSERVATION';
     const base = boundaryModule.createDispatchBoundary({
       adapters: { codex: fakeAdapter({
         capabilities: { observedModel: !unavailable.model, observedEffort: !unavailable.effort },
@@ -1585,7 +1627,7 @@ test('durable observation capabilities survive process restart independently', (
         },
       }) },
       recorder: boundaryModule.createDurableRecorder(storeDir),
-    }).dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' });
+    }).dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' }, { ticket });
     assert.deepStrictEqual(base.observation_unavailable, unavailable);
     const child = spawnSync(process.execPath, ['-e', `
       const b = require(process.argv[1]);
@@ -1596,7 +1638,7 @@ test('durable observation capabilities survive process restart independently', (
       const boundary = b.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
       const result = boundary.dispatch({ runtime: 'codex', role: 'ci-fix',
         signals: { signatureState: 'repeat', priorApplied: base.receipt },
-        previous_dispatch_id: 'base', dispatch_id: 'repeat' });
+        previous_dispatch_id: 'base', dispatch_id: 'repeat' }, { ticket: ${JSON.stringify('T-36-OBSERVATION')} });
       process.stdout.write(JSON.stringify(result.resolution));
     `, require.resolve('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'), storeDir], { encoding: 'utf8' });
     assert.equal(child.status, 0, child.stderr);
@@ -1615,16 +1657,17 @@ test('durable observation capabilities survive process restart independently', (
       assert.throws(() => boundaryModule.createDispatchBoundary({ recorder: freshRecorder }).resolve({
         runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'repeat', priorApplied: base.receipt },
         previous_dispatch_id: 'base', dispatch_id: `missing-${field}`,
-      }, freshRecorder), (error) => error.code === 'UNVERIFIED_RECEIPT');
+      }, freshRecorder, ticket), (error) => error.code === 'UNVERIFIED_RECEIPT');
     }
   }
 });
 
 test('caller capability claims cannot relax stored observation requirements', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-observation-forged-'));
+  const ticket = 'T-36-FORGED-OBSERVATION';
   const recorder = boundaryModule.createDurableRecorder(storeDir);
   const base = boundaryModule.createDispatchBoundary({ adapters: { codex: fakeAdapter() }, recorder })
-    .dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' });
+    .dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' }, { ticket });
   const forged = { ...base.receipt, observed_model: 'unknown', observed_effort: 'unknown',
     observation_unavailable: { model: true, effort: true } };
   const freshRecorder = boundaryModule.createDurableRecorder(storeDir);
@@ -1632,7 +1675,7 @@ test('caller capability claims cannot relax stored observation requirements', ()
   assert.throws(() => fresh.resolve({ runtime: 'codex', role: 'ci-fix',
     observation_unavailable: { model: true, effort: true },
     signals: { signatureState: 'repeat', priorApplied: forged },
-    previous_dispatch_id: base.dispatch_id, dispatch_id: 'forged' }, freshRecorder),
+    previous_dispatch_id: base.dispatch_id, dispatch_id: 'forged' }, freshRecorder, ticket),
   (error) => error.code === 'UNVERIFIED_RECEIPT');
 });
 
