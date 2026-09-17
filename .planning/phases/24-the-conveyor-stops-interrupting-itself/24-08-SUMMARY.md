@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: db2f91b8378d89976b74e96a0444bd6fe575d1e2d2c7c984b0b9dae8bcc127ee
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4cdbe86012380357f7bc5435b1f557c6e25dd2335f61e4c097f04de6a8894bea
 phase: 24-the-conveyor-stops-interrupting-itself
 plan: 08
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: db2f91b8378d89976b74e96a0444bd6fe575d1e2d2c7c984b0b9dae8bcc127ee
+shipyard_source_fingerprint: 4cdbe86012380357f7bc5435b1f557c6e25dd2335f61e4c097f04de6a8894bea
 ---
 
 # Phase 24: A record is lifted only by a fact its owner moves — Delivery Projection

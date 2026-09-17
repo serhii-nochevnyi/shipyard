@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: db2f91b8378d89976b74e96a0444bd6fe575d1e2d2c7c984b0b9dae8bcc127ee
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4cdbe86012380357f7bc5435b1f557c6e25dd2335f61e4c097f04de6a8894bea
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 17
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 130
-  completed_plans: 129
-  percent: 99
+  completed_plans: 130
+  percent: 100
 ---
 
 # Project State
@@ -26,11 +26,11 @@ Plan: 6 of 6 merged
 Status: pending
 Last activity: 2026-09-17 — Shipyard projection synchronized
 
-Progress: [█████████░] 99%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
-- Total plans completed: 129
+- Total plans completed: 130
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -52,7 +52,7 @@ Progress: [█████████░] 99%
 | 31 | 7 | 7 | pending |
 | 32 | 7 | 7 | passed |
 | 33 | 9 | 9 | passed |
-| 34 | 5 | 4 | pending |
+| 34 | 5 | 5 | passed |
 | 35 | 3 | 3 | passed |
 | 36 | 12 | 12 | passed |
 
@@ -69,7 +69,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-34-05: delivery status is pr-open
 - Phase 20: INTEGRATION.md is missing
 - Phase 21: INTEGRATION.md is missing
 - Phase 22: INTEGRATION.md is missing
@@ -77,6 +76,7 @@ Review and resolve phase integration findings shown in the phase artifacts.
 - Phase 24: integration evidence records a finding or failed verdict
 - Phase 26: verification evidence records a failed check
 - Phase 27: integration evidence records a finding or failed verdict
+- Phase 28: integration evidence records a finding or failed verdict
 
 ## Deferred Items
 
@@ -86,6 +86,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-17 16:20
+Last session: 2026-09-17 16:29
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

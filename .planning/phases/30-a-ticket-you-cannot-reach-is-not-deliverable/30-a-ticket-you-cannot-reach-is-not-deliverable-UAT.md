@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: db2f91b8378d89976b74e96a0444bd6fe575d1e2d2c7c984b0b9dae8bcc127ee
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4cdbe86012380357f7bc5435b1f557c6e25dd2335f61e4c097f04de6a8894bea
 phase: 30
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: db2f91b8378d89976b74e96a0444bd6fe575d1e2d2c7c984b0b9dae8bcc127ee
+shipyard_source_fingerprint: 4cdbe86012380357f7bc5435b1f557c6e25dd2335f61e4c097f04de6a8894bea
 ---
 
 # Phase 30: A ticket you cannot reach is not deliverable — UAT Projection

@@ -1284,3 +1284,4 @@
 {"ts":"2026-09-17T16:19:24.785Z","event":"status_change","ticket":"T-34-05","from":null,"to":"pr-open","pr":171}
 {"ts":"2026-09-17T16:20:00.050Z","event":"status_change","ticket":"T-34-02","from":"pending","to":"merged","pr":168}
 {"ts":"2026-09-17T16:20:00.050Z","event":"status_change","ticket":"T-34-04","from":"pending","to":"merged","pr":170}
+{"ts":"2026-09-17T16:29:11.941Z","event":"status_change","ticket":"T-34-05","from":"pr-open","to":"merged","pr":171}

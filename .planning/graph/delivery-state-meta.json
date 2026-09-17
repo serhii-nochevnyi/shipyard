@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 343,
-  "generation_identity": "90067e47-bc11-4763-9e75-62a72661eb0f",
-  "previous_generation_identity": "16777229:152850145:1789661971558037500:d31d5c146ae878f590cacda032017443f61b6012011771f1ece5c7157a55f769",
-  "observed_at": "2026-09-17T16:20:00.050Z",
-  "generated_at": "2026-09-17T16:20:00.050Z",
+  "generation": 345,
+  "generation_identity": "2b0e71ed-4d79-4477-9197-9100b3d0f0ae",
+  "previous_generation_identity": "16777229:152851770:1789662556243261200:113c42e017a8f2961d92b10d0b89866a2f111ec23dfa9e866c0ca114cd6e202e",
+  "observed_at": "2026-09-17T16:38:21.563Z",
+  "generated_at": "2026-09-17T16:38:21.563Z",
   "by": "state-sync",
-  "pid": 37824,
-  "observation_generation": 343,
+  "pid": 99068,
+  "observation_generation": 345,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1265,21 +1265,15 @@
         "checks": null
       },
       "T-34-05": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 171,
-        "head": "893038cbd8c24d3ec89da2fa35f1e23904a4ce82",
+        "head": null,
         "draft": false,
         "base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
-        "merge_state": "UNSTABLE",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 1,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-35-01": {
         "status": "merged",
@@ -1450,9 +1444,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "056c3de226ccec7fdfed521b080cd724640e2311faa3d83139ade5c4a3a867bb",
-    "front_digest": "b26196eca9d86b518e7fe4d68c6e9fa608785cef0bf87e32dbf532df3772222a",
-    "observation_digest": "154b560ed180eb2fa1dfecb00309c5bdfe8dd6019a20633500464fbbed69713d",
-    "observation_generation": 343
+    "state_digest": "077baaca5f874a42e2ccd8dd694a24e96ae7f8cdcb16895b473f892dcdfd2d8b",
+    "front_digest": "c02816f0eccd91b5b118dbdf6f615e94091ba4777357d47aead60134511c15c6",
+    "observation_digest": "a68765e9a0925193dcec7adc2d964d623a27e755e572c48a9a87306c0a40a649",
+    "observation_generation": 345
   }
 }
