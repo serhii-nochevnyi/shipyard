@@ -652,9 +652,9 @@ existing Claude palette is a read-only compatibility surface.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `4cdbe86012380357f7bc5435b1f557c6e25dd2335f61e4c097f04de6a8894bea`
+- Source fingerprint: `07b1508c8b220f2915a806af15f6d11e3790d79bbaeb5b3036b82c3ccbf25cc7`
 - Plans merged: 130/130
-- Phases verified: 7/17
+- Phases verified: 9/17
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -669,8 +669,8 @@ existing Claude palette is a read-only compatibility surface.
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
-| 30 — A ticket you cannot reach is not deliverable | 10 | 10 | pending |
-| 31 — Not every ticket is available work | 7 | 7 | pending |
+| 30 — A ticket you cannot reach is not deliverable | 10 | 10 | passed |
+| 31 — Not every ticket is available work | 7 | 7 | passed |
 | 32 — Measure usage and make the backlog actionable | 7 | 7 | passed |
 | 33 — Reduce orchestration context and transfer sessions safely | 9 | 9 | passed |
 | 34 — Improve convergence and tune from measured outcomes | 5 | 5 | passed |

@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4cdbe86012380357f7bc5435b1f557c6e25dd2335f61e4c097f04de6a8894bea
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 07b1508c8b220f2915a806af15f6d11e3790d79bbaeb5b3036b82c3ccbf25cc7
 phase: 31
-status: pending
-result: pending
+status: passed
+result: passed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 4cdbe86012380357f7bc5435b1f557c6e25dd2335f61e4c097f04de6a8894bea
+shipyard_source_fingerprint: 07b1508c8b220f2915a806af15f6d11e3790d79bbaeb5b3036b82c3ccbf25cc7
 ---
 
 # Phase 31: Not every ticket is available work — UAT Projection
@@ -17,11 +17,11 @@ expected: all 7 phase plan(s) are merged
 actual: 7 merged
 
 ### 2. Integration evidence is explicit
-result: pending
+result: passed
 expected: an explicit passed verdict in .planning/phases/31-not-every-ticket-is-available-work/INTEGRATION.md
-actual: pending — INTEGRATION.md is missing
+actual: passed — integration evidence records passed
 
 ### 3. Phase verification is evidence-backed
-result: pending
+result: passed
 expected: positive repository-local verification evidence is present
-actual: pending — INTEGRATION.md is missing
+actual: passed — integration evidence records repository-local verification facts

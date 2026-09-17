@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4cdbe86012380357f7bc5435b1f557c6e25dd2335f61e4c097f04de6a8894bea
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 07b1508c8b220f2915a806af15f6d11e3790d79bbaeb5b3036b82c3ccbf25cc7
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 17
-  completed_phases: 7
+  completed_phases: 9
   total_plans: 130
   completed_plans: 130
   percent: 100
@@ -48,8 +48,8 @@ Progress: [██████████] 100%
 | 27 | 9 | 9 | gaps_found |
 | 28 | 9 | 9 | gaps_found |
 | 29 | 8 | 8 | passed |
-| 30 | 10 | 10 | pending |
-| 31 | 7 | 7 | pending |
+| 30 | 10 | 10 | passed |
+| 31 | 7 | 7 | passed |
 | 32 | 7 | 7 | passed |
 | 33 | 9 | 9 | passed |
 | 34 | 5 | 5 | passed |
