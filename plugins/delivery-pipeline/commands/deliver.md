@@ -1454,7 +1454,7 @@ to a disposable file and seals it only after the authenticated receipt exists:
 node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
   --worktree <worktree> --role drift-check
 node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
-  --worktree <worktree> --role drift-check --ticket <T> --base <state[T].base> \
+  --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
   --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
   --result-file <trusted-result.json>
 ```
@@ -1469,11 +1469,11 @@ artifact-bound drift execution additionally requires the per-ticket
 
 ```text
 node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate \
-  --worktree <worktree> --role drift-check --ticket <T> --base <state[T].base> \
+  --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
   --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
   --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
 node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs read \
-  --worktree <worktree> --role drift-check --ticket <T> --base <state[T].base> \
+  --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
   --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
   --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
 ```
@@ -2213,7 +2213,7 @@ itself. The round order:
    node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
      --worktree <worktree> --role <ci-fix|review-fix>
    node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
-     --worktree <worktree> --role <ci-fix|review-fix> --ticket <T> --pr <p.pr> --base <state[T].base> \
+     --worktree <worktree> --role <ci-fix|review-fix> --ticket <T> --pr <p.pr> --base origin/<state[T].base> \
      --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
      --result-file <trusted-result.json>
    ```

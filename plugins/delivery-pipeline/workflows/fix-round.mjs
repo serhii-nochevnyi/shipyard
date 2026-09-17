@@ -19,7 +19,8 @@ export const meta = {
 //                        // instruction in the prompt: every other step measures the
 //                        // branch against a merge base that no longer exists until it
 //                        // is done. Absent/false builds exactly the prompt it always did.
-//       base,            // optional base ref, for the base-merge invocation
+//       base,            // optional bare base ref, for base-merge; the trusted
+//                        // role-artifact consumer resolves its live origin ref
 //       attemptHistory,  // optional PRE-RENDERED record of what already failed on this
 //                        // ticket — the output of `attempt-history.cjs <ticket>`, run by
 //                        // the ORCHESTRATOR (this path builds prompts deterministically
@@ -286,11 +287,14 @@ return await parallel(
         dispatchId: p.dispatch_id || p.dispatchId,
         previousDispatchId: p.previous_dispatch_id || p.previousDispatchId,
         requireArtifact: true,
-        artifact: {
+          artifact: {
           role,
           ticket: p.id,
           pr: p.pr,
           worktreePath: p.worktreePath,
+          // The artifact consumer canonicalizes a bare board base to the live
+          // origin ref before binding its integration-base identity. Keep the
+          // caller's value here for compatibility with base-merge's contract.
           base: p.base || p.prBase,
           ...(p.branch ? { branch: p.branch } : {}),
           ...(p.planPath ? { planPath: p.planPath } : {}),

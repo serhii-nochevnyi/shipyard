@@ -159,6 +159,37 @@ function git(input, worktree, args, label) {
   }
 }
 
+function gitCommitIfPresent(input, worktree, ref) {
+  const { execFileSync: run } = ioFor(input);
+  try {
+    const result = run('git', ['-C', worktree, 'rev-parse', '--verify', '-q', `${ref}^{commit}`], { encoding: 'utf8' });
+    const output = Buffer.isBuffer(result) ? result.toString('utf8') : String(result);
+    return output.trim() || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Delivery state stores the human-readable base branch. The live identity
+// must use origin's edition whenever the worktree has it, because a bare local
+// branch can lag after a parent squash-merges. Explicit remote/local refs and
+// object ids retain their caller-selected meaning; legacy bare names gain the
+// same origin preference as base-merge and scope-gate.
+function liveBaseRef(input, worktree) {
+  const requested = nonEmpty(input.base || input.baseRef, 'base revision');
+  const candidates = [];
+  if (requested.startsWith('refs/') || requested.startsWith('origin/')
+      || /^[a-f0-9]{40}$/i.test(requested)) {
+    candidates.push(requested);
+  } else {
+    candidates.push(`origin/${requested}`, requested);
+  }
+  for (const candidate of candidates) {
+    if (gitCommitIfPresent(input, worktree, candidate)) return candidate;
+  }
+  return requested;
+}
+
 function gitIdentity(input, worktree) {
   const root = safeRealpath(ioFor(input).fs, git(input, worktree, ['rev-parse', '--show-toplevel'], 'repository root'), 'repository root');
   const commonValue = git(input, worktree, ['rev-parse', '--git-common-dir'], 'repository identity');
@@ -169,7 +200,7 @@ function gitIdentity(input, worktree) {
   );
   const head = git(input, worktree, ['rev-parse', '--verify', 'HEAD^{commit}'], 'committed HEAD');
   const headTree = git(input, worktree, ['rev-parse', '--verify', 'HEAD^{tree}'], 'committed HEAD tree');
-  const base = nonEmpty(input.base || input.baseRef, 'base revision');
+  const base = liveBaseRef(input, worktree);
   const baseCommit = git(input, worktree, ['rev-parse', '--verify', `${base}^{commit}`], 'base revision');
   const baseTree = git(input, worktree, ['rev-parse', '--verify', `${baseCommit}^{tree}`], 'base tree');
   const worktreeRealpath = safeRealpath(ioFor(input).fs, worktree, 'worktree');
@@ -811,7 +842,7 @@ function ensureArchiveDirectory(fsApi, worktree, dispatchId) {
     } catch (error) {
       if (error && error.code === 'ENOENT') {
         try {
-          fsApi.mkdirSync(directory, { mode: 0o700 });
+          fsApi.mkdirSync(directory, { recursive: true, mode: 0o700 });
           stat = fsApi.lstatSync(directory);
         } catch (mkdirError) {
           fail('ARTIFACT_WRITE', `artifact archive directory could not be created: ${mkdirError.message}`, {

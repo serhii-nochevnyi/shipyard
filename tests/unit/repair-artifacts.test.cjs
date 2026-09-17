@@ -179,6 +179,48 @@ test('the direct prepare command rotates fixed producer evidence before launch',
   }
 });
 
+test('artifact identity prefers the live origin base over a stale bare branch', async () => {
+  const fixture = repairFixture();
+  const baseCommit = git(fixture.root, ['rev-parse', 'main']);
+  git(fixture.root, ['update-ref', 'refs/remotes/origin/main', baseCommit]);
+  try {
+    const [bounded] = await fixture.host.run('fix-round', {
+      args: {
+        prs: [{
+          id: TICKET,
+          pr: 303,
+          branch: `ticket/${TICKET}`,
+          worktreePath: fixture.root,
+          planPath: path.join(fixture.root, 'PLAN.md'),
+          base: 'main',
+          needsCiFix: true,
+          needsReviewFix: false,
+          model: 'opus',
+          effort: 'medium',
+        }],
+        ciFixRefPath: '/plugin/references/ci-fix.md',
+        reviewFixRefPath: '/plugin/references/review-fix.md',
+        reinitScript: '/plugin/scripts/reviewers.cjs',
+      },
+    });
+    const resolved = roleArtifact.read({
+      worktreePath: fixture.root,
+      role: 'ci-fix',
+      ticket: TICKET,
+      pr: 303,
+      base: 'main',
+      recorder: fixture.recorder,
+      dispatchId: bounded.receipt.dispatch_id,
+      artifactPath: bounded.artifact_ref,
+      artifactDigest: bounded.artifact_digest,
+    });
+    assert.equal(resolved.base, 'origin/main');
+    assert.equal(resolved.envelope.role, 'ci-fix');
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('a real fix round returns a bounded, validated artifact reference', async () => {
   const fixture = repairFixture();
   try {
