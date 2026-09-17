@@ -3,11 +3,13 @@
 // Runtime-owned concrete palettes. The canonical policy owns the role grids and
 // evidence rules; each runtime names its own native model keys. Claude's keys
 // are the existing aliases themselves and are intentionally not translations of
-// Codex's Luna/Astra vocabulary.
+// Codex's Luna/Sol vocabulary. Astra remains registered for compatibility with
+// older explicit configurations, but is not selected by the current grid.
 
 const CODEX_MODEL_IDS = Object.freeze({
   luna: 'gpt-5.6-luna',
   astra: 'gpt-6-astra',
+  sol: 'gpt-5.6-sol',
 });
 
 const CLAUDE_MODEL_ALIASES = Object.freeze({

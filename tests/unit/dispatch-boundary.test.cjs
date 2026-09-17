@@ -252,7 +252,7 @@ test('an unticketed repair cannot consume an unticketed predecessor', () => {
   }
 });
 
-test('executor critical dispatch uses the Astra/low escalation rung', () => {
+test('executor critical dispatch uses the Sol/high escalation rung', () => {
   let launched;
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: {
@@ -266,11 +266,11 @@ test('executor critical dispatch uses the Astra/low escalation rung', () => {
     signals: { critical: true },
   });
   assert.deepStrictEqual(launched.launch_arguments, {
-    model: 'gpt-6-astra',
-    reasoning_effort: 'low',
+    model: 'gpt-5.6-sol',
+    reasoning_effort: 'high',
   });
-  assert.equal(result.applied_model, 'gpt-6-astra');
-  assert.equal(result.applied_effort, 'low');
+  assert.equal(result.applied_model, 'gpt-5.6-sol');
+  assert.equal(result.applied_effort, 'high');
 });
 
 test('static Codex roles pass the resolver-selected generated file to the adapter', () => {
@@ -489,8 +489,8 @@ test('repair escalations require the boundary receipt chain and consume each pre
     previous_dispatch_id: base.dispatch_id,
   }, { ticket });
   assert.equal(base.applied_model, 'gpt-5.6-luna');
-  assert.equal(repeat.applied_model, 'gpt-6-astra');
-  assert.equal(repeat.applied_effort, 'low');
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_effort, 'high');
   assert.throws(
     () => boundary.dispatch({
       runtime: 'codex',
@@ -506,8 +506,8 @@ test('repair escalations require the boundary receipt chain and consume each pre
     signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
     previous_dispatch_id: repeat.dispatch_id,
   }, { ticket });
-  assert.equal(exhausted.applied_model, 'gpt-6-astra');
-  assert.equal(exhausted.applied_effort, 'medium');
+  assert.equal(exhausted.applied_model, 'gpt-5.6-sol');
+  assert.equal(exhausted.applied_effort, 'xhigh');
 });
 
 test('same-boundary function recorders can authorize their own in-memory repair chain', () => {
@@ -530,8 +530,8 @@ test('same-boundary function recorders can authorize their own in-memory repair 
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'function-recorder-repeat',
   }, { ticket });
-  assert.equal(repeat.applied_model, 'gpt-6-astra');
-  assert.equal(repeat.applied_effort, 'low');
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_effort, 'high');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
 });
 
@@ -718,7 +718,7 @@ test('receipt contradictions, stale policy, and wrong agent file are rejected', 
     [{ logical_rung: 'invented' }, 'NONCOMPLIANT_RECEIPT'],
     [{ signals: { critical: true } }, 'NONCOMPLIANT_RECEIPT'],
     [
-      { applied_model: 'gpt-5.6-sol' },
+      { applied_model: 'gpt-6-astra' },
       'NONCOMPLIANT_RECEIPT',
     ],
     [
@@ -1136,8 +1136,8 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'durable-repair-repeat',
   }, { ticket });
-  assert.equal(repeat.applied_model, 'gpt-6-astra');
-  assert.equal(repeat.applied_effort, 'low');
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_effort, 'high');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
   assert.throws(
     () => makeFreshBoundary().dispatch({
@@ -1417,8 +1417,8 @@ test('top-level dispatch continues a repair chain with the same durable recorder
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'convenience-repeat',
   }, options);
-  assert.equal(repeat.applied_model, 'gpt-6-astra');
-  assert.equal(repeat.applied_effort, 'low');
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_effort, 'high');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
 });
 
@@ -1462,8 +1462,8 @@ test('a failed repair launch releases its predecessor claim for a later attempt'
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'retry-success',
   }, { ticket });
-  assert.equal(retry.applied_model, 'gpt-6-astra');
-  assert.equal(retry.applied_effort, 'low');
+  assert.equal(retry.applied_model, 'gpt-5.6-sol');
+  assert.equal(retry.applied_effort, 'high');
 });
 
 test('durable recorder writes require boundary authority', () => {
@@ -1785,13 +1785,13 @@ test('the boundary launches every native base and escalation tuple for both runt
   try {
     const base = {
       codex: {
-        research: ['gpt-6-astra', 'low'],
-        decomposition: ['gpt-6-astra', 'low'],
+        research: ['gpt-5.6-sol', 'high'],
+        decomposition: ['gpt-5.6-sol', 'high'],
         executor: ['gpt-5.6-luna', 'max'],
         'pr-sentinel': ['gpt-5.6-luna', 'medium'],
-        integrator: ['gpt-6-astra', 'low'],
+        integrator: ['gpt-5.6-sol', 'high'],
         'drift-check': ['gpt-5.6-luna', 'max'],
-        'arch-review': ['gpt-6-astra', 'low'],
+        'arch-review': ['gpt-5.6-sol', 'high'],
         'ci-fix': ['gpt-5.6-luna', 'max'],
         'review-fix': ['gpt-5.6-luna', 'max'],
       },
@@ -1808,13 +1808,13 @@ test('the boundary launches every native base and escalation tuple for both runt
       },
     };
     const escalations = [
-      ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6-astra', 'medium'],
-      ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6-astra', 'medium'],
-      ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6-astra', 'medium'],
-      ['codex', 'executor', { critical: true }, 'critical', 'gpt-6-astra', 'low'],
-      ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6-astra', 'medium'],
-      ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
-      ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-astra', 'medium'],
+      ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-5.6-sol', 'xhigh'],
+      ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+      ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+      ['codex', 'executor', { critical: true }, 'critical', 'gpt-5.6-sol', 'high'],
+      ['codex', 'integrator', { contested: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+      ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+      ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-5.6-sol', 'xhigh'],
       ['claude', 'research', { type: 'alternatives' }, 'base', 'opus', 'medium'],
       ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'max'],
       ['claude', 'decomposition', { checkpoint: true }, 'critical', 'opus', 'max'],
@@ -1887,7 +1887,7 @@ test('the boundary launches every native base and escalation tuple for both runt
           runtime,
           role,
           { signatureState: 'repeat', priorApplied: baseResult.receipt },
-          ['repeat', runtime === 'codex' ? 'gpt-6-astra' : 'opus', runtime === 'codex' ? 'low' : 'max'],
+          ['repeat', runtime === 'codex' ? 'gpt-5.6-sol' : 'opus', runtime === 'codex' ? 'high' : 'max'],
           `matrix-${runtime}-${role}-repeat`,
           { previous_dispatch_id: baseResult.dispatch_id },
         );
@@ -1895,7 +1895,7 @@ test('the boundary launches every native base and escalation tuple for both runt
           runtime,
           role,
           { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
-          ['repeat_exhausted', runtime === 'codex' ? 'gpt-6-astra' : 'opus', runtime === 'codex' ? 'medium' : 'max'],
+          ['repeat_exhausted', runtime === 'codex' ? 'gpt-5.6-sol' : 'opus', runtime === 'codex' ? 'xhigh' : 'max'],
           `matrix-${runtime}-${role}-repeat-exhausted`,
           { previous_dispatch_id: repeat.dispatch_id },
         );
@@ -1915,8 +1915,8 @@ test('the boundary launches every native base and escalation tuple for both runt
       const id = `matrix-${runtime}-${role}-combined`;
       const result = dispatchAndAssert(runtime, role, signals, [
         rung,
-        runtime === 'codex' ? 'gpt-6-astra' : 'fable',
-        runtime === 'codex' ? 'medium' : 'medium',
+        runtime === 'codex' ? 'gpt-5.6-sol' : 'fable',
+        runtime === 'codex' ? 'xhigh' : 'medium',
       ], id);
       assert.equal(new Set(result.resolution.signals_fired).size, Object.keys(signals).length);
       assert.equal(result.resolution.signal_reasons.length, Object.keys(signals).length);
@@ -2188,8 +2188,8 @@ test('repair promotion requires the immediately preceding boundary receipt on th
       previous_dispatch_id: repeat.dispatch_id,
       dispatch_id: 'prior-valid-exhausted',
     }, { ticket: codexTicket });
-    assert.deepStrictEqual([repeat.applied_model, repeat.applied_effort], ['gpt-6-astra', 'low']);
-    assert.deepStrictEqual([exhausted.applied_model, exhausted.applied_effort], ['gpt-6-astra', 'medium']);
+    assert.deepStrictEqual([repeat.applied_model, repeat.applied_effort], ['gpt-5.6-sol', 'high']);
+    assert.deepStrictEqual([exhausted.applied_model, exhausted.applied_effort], ['gpt-5.6-sol', 'xhigh']);
 
     const claudeRepeat = boundary.dispatch({
       runtime: 'claude',

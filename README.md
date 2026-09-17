@@ -205,24 +205,27 @@ The canonical runtime palettes are:
 | Runtime | Native model key | Concrete selection |
 |---|---|---|
 | Codex | `Luna` | `gpt-5.6-luna` |
-| Codex | `Astra` | `gpt-6-astra` |
+| Codex | `Sol` | `gpt-5.6-sol` |
 | Claude Code | `Sonnet` | native alias `sonnet` |
 | Claude Code | `Opus` | native alias `opus` |
 | Claude Code | `Fable` | native alias `fable` |
+
+`gpt-6-astra` remains registered by the Codex adapter for older explicit
+configurations, but it is not selected by the current routed ladder.
 
 The canonical role/rung ladder and its evidence are:
 
 | Role | Codex | Claude Code |
 |---|---|---|
-| `research` | Astra/low → Astra/medium on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Opus/medium → Opus/max on explicit `complexity: very-complex`; `type: alternatives` stays at base |
-| `decomposition` | Astra/low → Astra/medium on `critical` or `checkpoint` | Opus/medium → Opus/max on `critical` or `checkpoint` |
-| `executor` | Luna/max → Astra/low on explicit `critical` or `checkpoint` | Sonnet/max → Opus/low on explicit `critical` or `checkpoint` |
+| `research` | Sol/high → Sol/xhigh on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Opus/medium → Opus/max on explicit `complexity: very-complex`; `type: alternatives` stays at base |
+| `decomposition` | Sol/high → Sol/xhigh on `critical` or `checkpoint` | Opus/medium → Opus/max on `critical` or `checkpoint` |
+| `executor` | Luna/max → Sol/high on explicit `critical` or `checkpoint` | Sonnet/max → Opus/low on explicit `critical` or `checkpoint` |
 | `pr-sentinel` | Luna/medium, fixed; gate strategy only | Sonnet/high, fixed; gate strategy only |
-| `integrator` | Astra/low → Astra/medium on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on the same evidence |
+| `integrator` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on the same evidence |
 | `drift-check` | Luna/max, fixed; gate strategy only | Opus/max, fixed; gate strategy only |
-| `arch-review` | Astra/low → Astra/medium on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/max on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
-| `ci-fix` | Luna/max → Astra/low on verified `signatureState: repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
-| `review-fix` | Luna/max → Astra/low on verified `signatureState: repeat` → Astra/medium on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+| `arch-review` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/max on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
+| `ci-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+| `review-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
 
 Signals are role-scoped, not global promotions. The shared vocabulary is
 `type`, `complexity`, `risk`, `critical`, `checkpoint`, `contested`, measured
@@ -347,7 +350,7 @@ configuration consumers. It is an ordered `model[:effort][@min_cli]` list, not
 the ADR-014 launch policy:
 
 ```json
-{ "delivery_pipeline": { "codex_models": "gpt-6-astra:low@0.153.1, gpt-6-astra:medium@0.153.1" } }
+{ "delivery_pipeline": { "codex_models": "gpt-5.6-sol:high@0.153.1, gpt-5.6-sol:xhigh@0.153.1" } }
 ```
 
 - The compatibility resolver may inspect the first or last entry for its own

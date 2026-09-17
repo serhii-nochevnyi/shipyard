@@ -15,7 +15,7 @@ const {
 } = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
 
 const capabilities = {
-  supportedModels: ['gpt-5.6-luna', 'gpt-6-astra'],
+  supportedModels: ['gpt-5.6-luna', 'gpt-6-astra', 'gpt-5.6-sol'],
   supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], cliVersion: '0.200.0',
 };
 function fixture(raw = {}) {
@@ -59,8 +59,8 @@ test('static selections expose exact policy filename, identity, model and effort
     assert.equal(r.role, 'research');
     assert.equal(r.agent_file, 'shipyard-inv-research.toml');
     assert.equal(r.agent_path, path.join(f.agentDir, r.agent_file));
-    assert.equal(r.model, 'gpt-6-astra');
-    assert.equal(r.effort, 'low');
+    assert.equal(r.model, 'gpt-5.6-sol');
+    assert.equal(r.effort, 'high');
     assert.equal(r.policy_hash, policy.POLICY_HASH);
     assert.match(r.agent_file_digest, /^[a-f0-9]{64}$/);
     assert.equal(r.fallback, undefined);
@@ -71,13 +71,13 @@ test('static selections expose exact policy filename, identity, model and effort
 test('dynamic executor and decomposition always expose both explicit arguments', () => {
   const f = fixture();
   try {
-    for (const [role, model, effort, criticalEffort] of [['executor', 'gpt-5.6-luna', 'max', 'low'], ['decomposition', 'gpt-6-astra', 'low', 'medium']]) {
+    for (const [role, model, effort, criticalModel, criticalEffort] of [['executor', 'gpt-5.6-luna', 'max', 'gpt-5.6-sol', 'high'], ['decomposition', 'gpt-5.6-sol', 'high', 'gpt-5.6-sol', 'xhigh']]) {
       const r = selectAgent(role, f.options);
       assert.equal(r.agent_file, null);
       assert.equal(r.agent_path, null);
       assert.deepEqual(r.launch_arguments, { model, reasoning_effort: effort });
       const critical = selectAgent(role, { ...f.options, signals: { critical: true } });
-      assert.deepEqual(critical.launch_arguments, { model: 'gpt-6-astra', reasoning_effort: criticalEffort });
+      assert.deepEqual(critical.launch_arguments, { model: criticalModel, reasoning_effort: criticalEffort });
     }
   } finally { clean(f); }
 });
@@ -160,14 +160,14 @@ test('an arbitrary Codex palette id fails closed while named palette assertions 
 
 test('a configured effort above the canonical effort is accepted but the host receives canonical effort', () => {
   const f = fixture({ delivery_pipeline: { codex_models: [
-    { model: 'gpt-6-astra', effort: 'high' },
+    { model: 'gpt-5.6-sol', effort: 'xhigh' },
   ] } });
   try {
     const resolution = policy.resolveDispatch({ runtime: 'codex', role: 'decomposition' });
     assert.equal(validateCodexConfiguration(resolution, readProjectConfig(f.root), capabilities), true);
     const result = selectAgent('decomposition', f.options);
-    assert.equal(result.effort, 'low');
-    assert.deepEqual(result.launch_arguments, { model: 'gpt-6-astra', reasoning_effort: 'low' });
+    assert.equal(result.effort, 'high');
+    assert.deepEqual(result.launch_arguments, { model: 'gpt-5.6-sol', reasoning_effort: 'high' });
   } finally { clean(f); }
 });
 
@@ -175,23 +175,23 @@ test('matching named configuration is an assertion, independent of palette order
   const f = fixture({
     model_policy: { runtime_tiers: { codex: { luna: 'gpt-5.6-luna' } } },
     model_profile_overrides: { codex: { luna: 'gpt-5.6-luna' } },
-    delivery_pipeline: { codex_models: [{ model: 'gpt-6-astra' }, { model: 'gpt-5.6-luna' }] },
+    delivery_pipeline: { codex_models: [{ model: 'gpt-5.6-sol' }, { model: 'gpt-5.6-luna' }] },
   });
   try {
     assert.equal(selectAgent('executor', f.options).model, 'gpt-5.6-luna');
-    assert.equal(selectAgent('executor', { ...f.options, signals: { checkpoint: true } }).model, 'gpt-6-astra');
+    assert.equal(selectAgent('executor', { ...f.options, signals: { checkpoint: true } }).model, 'gpt-5.6-sol');
   } finally { clean(f); }
 });
 
 test('documented comma-separated Codex palettes are normalized before strict validation', () => {
   const f = fixture({
     delivery_pipeline: {
-      codex_models: 'gpt-6-astra:low@0.153.1, gpt-6-astra:medium@0.153.1',
+      codex_models: 'gpt-5.6-sol:high@0.153.1, gpt-5.6-sol:xhigh@0.153.1',
     },
   });
   try {
     assert.equal(selectAgent('executor', f.options).model, 'gpt-5.6-luna');
-    assert.equal(selectAgent('executor', { ...f.options, signals: { critical: true } }).model, 'gpt-6-astra');
+    assert.equal(selectAgent('executor', { ...f.options, signals: { critical: true } }).model, 'gpt-5.6-sol');
   } finally { clean(f); }
 });
 
@@ -218,7 +218,7 @@ test('model, effort and inheritance overrides cannot replace canonical launch ar
 
 test('unknown or old CLI version refuses the requested model instead of falling back', () => {
   const f = fixture({ delivery_pipeline: { codex_models: [
-    { model: 'gpt-5.6-luna' }, { model: 'gpt-6-astra', min_cli: '0.153.1' },
+    { model: 'gpt-5.6-luna' }, { model: 'gpt-5.6-sol', effort: 'high', min_cli: '0.153.1' },
   ] } });
   try {
     for (const cliVersion of [undefined, '0.100.0', '0.999.0-local']) {
@@ -226,7 +226,7 @@ test('unknown or old CLI version refuses the requested model instead of falling 
         ...f.options, capabilities: { ...capabilities, cliVersion }, signals: { critical: true },
       }), /requires Codex CLI 0.153.1/);
     }
-    assert.equal(selectAgent('executor', { ...f.options, signals: { critical: true } }).model, 'gpt-6-astra');
+    assert.equal(selectAgent('executor', { ...f.options, signals: { critical: true } }).model, 'gpt-5.6-sol');
   } finally { clean(f); }
 });
 
@@ -308,7 +308,7 @@ test('CLI plain and JSON output both preserve explicit dynamic model and effort'
       '--capabilities-file', path.join(f.root, 'capabilities.json')],
     { cwd: ROOT, encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });
     assert.equal(staticPlain.status, 0, staticPlain.stderr);
-    assert.equal(staticPlain.stdout.trim(), 'shipyard-inv-research.toml low');
+    assert.equal(staticPlain.stdout.trim(), 'shipyard-inv-research.toml high');
 
     const refused = spawnSync(process.execPath, [SCRIPT, 'select', 'executor', '--project-dir', f.root],
       { encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });

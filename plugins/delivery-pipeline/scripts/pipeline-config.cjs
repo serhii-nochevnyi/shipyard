@@ -266,12 +266,12 @@ function taskLevelRoute(role, signals = {}, cfg = {}) {
 // — so an unknown id cannot be distinguished from a new one, and a hardcoded
 // allowlist here would go stale faster than the models do.
 //
-// Astra is the compatibility workhorse and ceiling. Routed Codex dispatch reads
-// ADR-014 directly; this palette remains a compatibility input for callers that
-// do not request a routed decision.
+// Sol is the compatibility workhorse and ceiling for the current cost-efficient
+// Codex palette. Routed Codex dispatch reads ADR-014 directly; this palette
+// remains a compatibility input for callers that do not request a routed decision.
 const DEFAULT_CODEX_MODELS = [
-  { model: 'gpt-6-astra', effort: 'low', min_cli: '0.153.1' },
-  { model: 'gpt-6-astra', effort: 'medium', min_cli: '0.153.1' },
+  { model: 'gpt-5.6-sol', effort: 'high', min_cli: '0.153.1' },
+  { model: 'gpt-5.6-sol', effort: 'xhigh', min_cli: '0.153.1' },
 ];
 const CODEX_MODEL_KEYS = new Set(['model', 'effort', 'min_cli']);
 

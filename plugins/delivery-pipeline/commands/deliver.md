@@ -415,15 +415,15 @@ to bypass the boundary or to launch a different file.
 
 | Role | Base | Evidence-based escalation | Codex launch form |
 | --- | --- | --- | --- |
-| `research` | Astra/low | `complexity: very-complex` → Astra/medium; `type: alternatives` alone stays at base | generated `shipyard-inv-research.toml`, `shipyard-inv-research-critical.toml` |
-| `decomposition` | Astra/low | `critical` or `checkpoint` → Astra/medium | explicit model + `reasoning_effort` |
-| `executor` | Luna/max | `critical` or `checkpoint` → Astra/low | explicit model + `reasoning_effort` |
+| `research` | Sol/high | `complexity: very-complex` → Sol/xhigh; `type: alternatives` alone stays at base | generated `shipyard-inv-research.toml`, `shipyard-inv-research-critical.toml` |
+| `decomposition` | Sol/high | `critical` or `checkpoint` → Sol/xhigh | explicit model + `reasoning_effort` |
+| `executor` | Luna/max | `critical` or `checkpoint` → Sol/high | explicit model + `reasoning_effort` |
 | `pr-sentinel` | Luna/medium | none; gate strategy only | generated `shipyard-pr-sentinel.toml` |
 | `drift-check` | Luna/max | none; gate strategy only | generated `shipyard-drift-check.toml` |
-| `integrator` | Astra/low | measured window, `contested`, `critical`, or `checkpoint` → Astra/medium | generated `shipyard-integrator.toml` or `shipyard-integrator-critical.toml` |
-| `arch-review` | Astra/low | measured window, `contested`, `critical`, or `checkpoint` → Astra/medium | generated `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml` |
-| `ci-fix` | Luna/max | verified `repeat` → Astra/low → verified `repeat_exhausted` → Astra/medium | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
-| `review-fix` | Luna/max | verified `repeat` → Astra/low → verified `repeat_exhausted` → Astra/medium | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
+| `integrator` | Sol/high | measured window, `contested`, `critical`, or `checkpoint` → Sol/xhigh | generated `shipyard-integrator.toml` or `shipyard-integrator-critical.toml` |
+| `arch-review` | Sol/high | measured window, `contested`, `critical`, or `checkpoint` → Sol/xhigh | generated `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml` |
+| `ci-fix` | Luna/max | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
+| `review-fix` | Luna/max | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
 
 The Codex dynamic roles are `decomposition` and `executor`; both have
 `agent_file: null` and receive their selected concrete `model` and `effort`
@@ -1680,7 +1680,7 @@ may be dispatched at all: fix the file.
    changed-file count plus any `reuseCandidates` in fenced context; do not
    summarize away a signal. The executor resolves to
    Codex Luna/max or, only for explicit `critical`/`checkpoint` evidence,
-   Astra/low. The Workflow runtime uses its independent Sonnet/max or evidence-based
+   Sol/high. The Workflow runtime uses its independent Sonnet/max or evidence-based
    Opus/low native selection.
 
    ```text
@@ -2192,8 +2192,8 @@ loop:
      )
      ```
 
-     Codex resolves Astra/low or, only for measured/contested/critical/
-     checkpoint evidence, Astra/medium and validates the generated
+     Codex resolves Sol/high or, only for measured/contested/critical/
+     checkpoint evidence, Sol/xhigh and validates the generated
      `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
      The Workflow runtime independently resolves Opus/medium, Opus/max for critical evidence,
      or Fable/medium for the measured ceiling, always with explicit effort.
@@ -2692,7 +2692,7 @@ driving PRs hands the user a half-truth.
      consumer, so the authenticated dispatch cannot be reused for a different
      integration set.
 
-     Codex resolves Astra/low and escalates to Astra/medium only for the
+     Codex resolves Sol/high and escalates to Sol/xhigh only for the
      measured-window, contested, critical, or checkpoint evidence, validating
      `shipyard-integrator.toml` or `shipyard-integrator-critical.toml`.
      The Workflow runtime independently resolves Opus/medium or Opus/high with explicit

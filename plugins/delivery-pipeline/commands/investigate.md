@@ -57,7 +57,7 @@ Read `.planning/investigations/` (may not exist):
    the launch. For the Workflow runtime, the base is Opus/medium and only an explicit
    `complexity: very-complex` signal escalates research to Opus/max; the
    `alternatives` line does not promote the rung. For Codex, the base is
-   Astra/low and the same explicit very-complex signal escalates to Astra/medium.
+   Sol/high and the same explicit very-complex signal escalates to Sol/xhigh.
    Keep the resolved `{ model, effort, signals }` on every line. For Codex,
    pass those exact signals to the selector for each line — for example,
    `--type alternatives` for the alternatives line and
