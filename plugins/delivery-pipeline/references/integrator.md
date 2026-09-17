@@ -50,6 +50,17 @@ bounded result is returned and keep every acceptance observation, command,
 file:line finding, fix ticket, and human question in it. A short `summary` is
 only a transport synopsis and cannot replace the document.
 
+Before the authenticated dispatch, the host clears the role-owned
+`INTEGRATION.md` scratch file for this worktree:
+
+```bash
+node $SHIPYARD_ROOT/scripts/role-artifact.cjs prepare \
+  --worktree <worktree> --role integrator
+```
+
+Write the fresh complete evidence to `INTEGRATION.md` in that worktree. A prior
+archive or another path is not a valid evidence source.
+
 Return a structured result containing the exact combined revision and the
 complete merged ticket set:
 
@@ -85,7 +96,7 @@ node $SHIPYARD_ROOT/scripts/role-artifact.cjs seal \
   --worktree <worktree> --role integrator --ticket <phase-subject> \
   --phase <phase> --base <default-branch> --boundary-store <receipt-store> \
   --dispatch-id <dispatch-id> --ticket-set-file <ticket-set.json> \
-  --result-file <result.json> --evidence-path <path/to/INTEGRATION.md>
+  --result-file <result.json> --evidence-path INTEGRATION.md
 node $SHIPYARD_ROOT/scripts/role-artifact.cjs validate \
   --worktree <worktree> --role integrator --ticket <phase-subject> \
   --phase <phase> --base <default-branch> --boundary-store <receipt-store> \

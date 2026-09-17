@@ -107,6 +107,18 @@ keeps every violating ADR, section, hunk, and remediation. An `adr-outdated`
 finding keeps the decision, the contradictory reality, and the precise human
 decision. Do not collapse these into the summary or add an agent-owned receipt.
 
+Before the authenticated dispatch, the host clears the role-owned evidence
+scratch file for this worktree:
+
+```bash
+node $SHIPYARD_ROOT/scripts/role-artifact.cjs prepare \
+  --worktree <worktree> --role arch-review
+```
+
+Write the fresh complete evidence to
+`.shipyard-arch-review-evidence.md` in that worktree. A prior archive or another
+path is not a valid evidence source.
+
 The host seals the result at the consuming boundary, after the authenticated
 dispatch receipt returns:
 
@@ -115,7 +127,7 @@ node $SHIPYARD_ROOT/scripts/role-artifact.cjs seal \
   --worktree <worktree> --role arch-review --ticket <T> --pr <N> \
   --base <base-ref> --boundary-store <receipt-store> \
   --dispatch-id <dispatch-id> --result-file <result.json> \
-  --evidence-path <complete-evidence-file>
+  --evidence-path .shipyard-arch-review-evidence.md
 node $SHIPYARD_ROOT/scripts/role-artifact.cjs validate \
   --worktree <worktree> --role arch-review --ticket <T> --pr <N> \
   --base <base-ref> --boundary-store <receipt-store> \

@@ -39,6 +39,8 @@ const JUDGMENT_EVIDENCE_NAMES = Object.freeze({
   'pr-sentinel': '.shipyard-sentinel-evidence.md',
   integrator: 'INTEGRATION.md',
 });
+const SENTINEL_PERFORMED_STATUSES = new Set(['complete', 'handed-back']);
+const SENTINEL_REFUSED_STATUSES = new Set(['refused']);
 
 function fail(code, message, details = {}) {
   throw boundaryError(code, message, details);
@@ -798,18 +800,28 @@ function producerEvidenceName(role) {
   fail('INVALID_ARTIFACT', `no producer evidence path is registered for ${role}`);
 }
 
-// Clear the fixed producer scratch file before a new role dispatch. Without
-// this rotation, a fixer that dies before writing could seal an earlier
-// attempt's evidence under the new authenticated receipt.
+// Clear the fixed role-owned scratch file before a new dispatch. Without this
+// rotation, a producer that dies before writing could seal an earlier attempt's
+// evidence under the new authenticated receipt.
 function prepareRoleArtifact(value, options) {
   const input = normalizeCall(value, options);
   const fsApi = ioFor(input).fs;
   const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
   const role = input.role;
-  if (!REPAIR_ROLES.has(role) && role !== 'drift-check') {
+  if (!REPAIR_ROLES.has(role) && role !== 'drift-check' && !JUDGMENT_ROLES.has(role)) {
     fail('INVALID_ARTIFACT', `role artifact preparation does not support ${role}`);
   }
-  const file = fixedPath(worktree, producerEvidenceName(role), 'producer evidence');
+  const defaultName = JUDGMENT_ROLES.has(role) ? judgmentEvidenceName(role) : producerEvidenceName(role);
+  const requested = input.evidencePath || input.evidence_path || defaultName;
+  const file = JUDGMENT_ROLES.has(role)
+    ? judgmentEvidencePath(fsApi, worktree, role, requested, 'complete judgment evidence')
+    : fixedPath(worktree, producerEvidenceName(role), 'producer evidence');
+  assertContainedRegularPath(
+    fsApi,
+    worktree,
+    file,
+    JUDGMENT_ROLES.has(role) ? 'complete judgment evidence' : 'producer evidence',
+  );
   let stat;
   try {
     stat = fsApi.lstatSync(file);
@@ -1049,6 +1061,18 @@ function judgmentEvidenceName(role) {
   return name;
 }
 
+function judgmentEvidencePath(fsApi, worktree, role, requested, label) {
+  const expected = fixedPath(worktree, judgmentEvidenceName(role), label);
+  const candidate = requestedPathInWorktree(fsApi, worktree, requested, label);
+  if (candidate !== expected) {
+    fail('ARTIFACT_IDENTITY_MISMATCH', `${label} must use the prepared role-owned evidence path`, {
+      expected,
+      actual: candidate,
+    });
+  }
+  return expected;
+}
+
 function requestedPathInWorktree(fsApi, worktree, requested, label) {
   if (!path.isAbsolute(requested)) return path.resolve(worktree, requested);
   // macOS commonly exposes temporary directories through a symlink such as
@@ -1254,7 +1278,7 @@ function canonicalTicketSet(value, label) {
   return entries.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function ticketSetFor(input, result, role) {
+function ticketSetFor(input, result, role, metadata) {
   if (role !== 'pr-sentinel' && role !== 'integrator') return { entries: [], digest: null };
   const supplied = aliasValue(input, ['ticketSet', 'ticket_set'], `${role} input ticket set`);
   const resultValue = aliasValue(result, ['ticket_set', 'ticketSet'], `${role} result ticket set`);
@@ -1286,10 +1310,19 @@ function ticketSetFor(input, result, role) {
       actual: suppliedDigest,
     });
   }
+  if (role === 'pr-sentinel') {
+    const expectedSubject = `round:${expectedDigest}`;
+    if (!metadata || metadata.ticket !== expectedSubject) {
+      fail('JUDGMENT_IDENTITY_MISMATCH', 'sentinel ticket set does not match the authenticated round subject', {
+        expected: expectedSubject,
+        actual: metadata && metadata.ticket,
+      });
+    }
+  }
   return { entries: expected, digest: expectedDigest };
 }
 
-function reviewedIdentity(result, role, identity) {
+function reviewedIdentity(result, role, identity, input) {
   const requireSha = (value, label, expected) => {
     if (value === undefined) fail('MISSING_REVIEWED_REVISION', `${role} result must report ${label}`);
     const actual = sha(value, label);
@@ -1355,11 +1388,14 @@ function reviewedIdentity(result, role, identity) {
   }
   const rawBaseValue = aliasValue(result, ['base', 'base_ref'], 'reviewed integration base');
   const rawBase = rawBaseValue === undefined ? undefined : compactIdentity(rawBaseValue, 'reviewed integration base');
-  const base = rawBase === identity.base
+  const resolvedBaseCommit = rawBase === undefined
+    ? null
+    : /^[a-f0-9]{40}$/i.test(rawBase)
+      ? rawBase.toLowerCase()
+      : gitCommitIfPresent(input || {}, identity.worktree, rawBase);
+  const base = resolvedBaseCommit === identity.base_commit.toLowerCase()
     ? identity.base
-    : /^[a-f0-9]{40}$/i.test(rawBase || '') && rawBase.toLowerCase() === identity.base_commit.toLowerCase()
-      ? identity.base
-      : rawBase;
+    : rawBase;
   if (base !== identity.base) {
     fail('JUDGMENT_IDENTITY_MISMATCH', `${role} result base does not match the live integration base`, {
       expected: identity.base,
@@ -1378,7 +1414,7 @@ function reviewedIdentity(result, role, identity) {
   };
 }
 
-function dutyEntries(value, label, ticketIds, requireReason) {
+function dutyEntries(value, label, ticketIds, kind) {
   if (!Array.isArray(value)) fail('MISSING_ARTIFACT', `${label} must be an array`);
   return value.map((entry, index) => {
     if (!object(entry)) fail('INCOMPLETE_DUTY', `${label}[${index}] must be an object`);
@@ -1390,8 +1426,17 @@ function dutyEntries(value, label, ticketIds, requireReason) {
     const statusValue = aliasValue(entry, ['status', 'outcome'], `${label}[${index}].status`);
     if (statusValue === undefined) fail('INCOMPLETE_DUTY', `${label}[${index}].status is required`);
     const status = roleText(statusValue, `${label}[${index}].status`);
-    if (requireReason) roleText(entry.reason, `${label}[${index}].reason`);
-    return { ...entry, ticket, duty, status };
+    const allowed = kind === 'performed' ? SENTINEL_PERFORMED_STATUSES : SENTINEL_REFUSED_STATUSES;
+    if (!allowed.has(status)) {
+      fail('INCOMPLETE_DUTY', `${label}[${index}].status must be ${[...allowed].join(' or ')}`, {
+        status,
+      });
+    }
+    if (kind === 'refused') roleText(entry.reason, `${label}[${index}].reason`);
+    const occurrence = entry.duty_id === undefined && entry.occurrence === undefined
+      ? undefined
+      : compactAlias(entry, ['duty_id', 'occurrence'], `${label}[${index}].duty_id`);
+    return { ...entry, ticket, duty, status, ...(occurrence === undefined ? {} : { duty_id: occurrence }) };
   });
 }
 
@@ -1408,7 +1453,7 @@ function judgmentResultData(result, metadata, input, identity) {
   assertAgentReceiptIsNotForged(result, metadata.trusted);
   if (!object(result)) fail('INVALID_RESULT', 'judgment result must be an object');
   const role = metadata.role;
-  const ticketSet = ticketSetFor(input, result, role);
+  const ticketSet = ticketSetFor(input, result, role, metadata);
   if (role === 'arch-review') {
     if (result.id !== metadata.ticket) {
       fail('ARTIFACT_IDENTITY_MISMATCH', 'architecture judgment id does not match the authenticated ticket', {
@@ -1427,13 +1472,13 @@ function judgmentResultData(result, metadata, input, identity) {
       fail('INVALID_RESULT', 'architecture judgment verdict must be conform, violation, or adr-outdated', { verdict });
     }
     const findings = completeFindingIndex(result, role);
-    if (verdict === 'conform' && findings.blocking_count !== 0) {
-      fail('JUDGMENT_OUTCOME_MISMATCH', 'conform architecture judgment cannot contain blocking findings');
+    if (verdict === 'conform' && findings.finding_count !== 0) {
+      fail('JUDGMENT_OUTCOME_MISMATCH', 'conform architecture judgment must retain an empty finding index');
     }
     if (verdict !== 'conform' && findings.blocking_count === 0) {
       fail('JUDGMENT_OUTCOME_MISMATCH', `${verdict} architecture judgment must retain its blocking findings`);
     }
-    const reviewed = reviewedIdentity(result, role, identity);
+    const reviewed = reviewedIdentity(result, role, identity, input);
     return {
       role,
       subject: judgmentSubject(role, metadata, identity, input, ticketSet, pr),
@@ -1468,10 +1513,17 @@ function judgmentResultData(result, metadata, input, identity) {
     if (outcome !== 'passed' && findings.blocking_count === 0) {
       fail('JUDGMENT_OUTCOME_MISMATCH', `${outcome} integration judgment must retain its complete findings`);
     }
-    const reviewed = reviewedIdentity(result, role, identity);
+    const subject = judgmentSubject(role, metadata, identity, input, ticketSet);
+    if (metadata.ticket !== subject) {
+      fail('JUDGMENT_IDENTITY_MISMATCH', 'integrator result does not match the authenticated phase subject', {
+        expected: subject,
+        actual: metadata.ticket,
+      });
+    }
+    const reviewed = reviewedIdentity(result, role, identity, input);
     return {
       role,
-      subject: judgmentSubject(role, metadata, identity, input, ticketSet),
+      subject,
       phase,
       outcome,
       summary: roleText(result.summary || outcome, 'integration judgment summary'),
@@ -1488,17 +1540,22 @@ function judgmentResultData(result, metadata, input, identity) {
     fail('INVALID_RESULT', 'sentinel outcome must be clear, blocked, or awaiting-human', { outcome });
   }
   const ticketIds = new Set(ticketSet.entries.map((entry) => entry.id));
-  const performed = dutyEntries(result.performed, 'sentinel performed duties', ticketIds, false);
-  const refused = dutyEntries(result.refused, 'sentinel refused duties', ticketIds, true);
+  const performed = dutyEntries(result.performed, 'sentinel performed duties', ticketIds, 'performed');
+  const refused = dutyEntries(result.refused, 'sentinel refused duties', ticketIds, 'refused');
   const allDuties = [...performed, ...refused];
-  const duplicateTickets = new Set();
+  const dutyKeys = new Set();
+  const covered = new Set();
   for (const entry of allDuties) {
-    if (duplicateTickets.has(entry.ticket)) {
-      fail('DUPLICATE_DUTY_TICKET', `sentinel result reports more than one duty for ${entry.ticket}`);
+    const dutyKey = `${entry.ticket}\u0000${entry.duty}\u0000${entry.duty_id || ''}`;
+    if (dutyKeys.has(dutyKey)) {
+      fail('DUPLICATE_DUTY', `sentinel result reports the same duty occurrence more than once for ${entry.ticket}`, {
+        ticket: entry.ticket,
+        duty: entry.duty,
+      });
     }
-    duplicateTickets.add(entry.ticket);
+    dutyKeys.add(dutyKey);
+    covered.add(entry.ticket);
   }
-  const covered = duplicateTickets;
   if (covered.size !== ticketIds.size || [...ticketIds].some((id) => !covered.has(id))) {
     fail('INCOMPLETE_DUTY_SET', 'sentinel result does not report a duty for every guarded ticket');
   }
@@ -1536,7 +1593,7 @@ function judgmentResultData(result, metadata, input, identity) {
         ? identity.head
         : result.head || result.head_sha,
       ...(result.head_tree === undefined ? {} : { head_tree: result.head_tree }),
-    }, role, identity),
+    }, role, identity, input),
     ticket_set_digest: ticketSet.digest,
     findings: [],
   };
@@ -1637,7 +1694,7 @@ function sealJudgment(value, options) {
   const result = input.result;
   const data = judgmentResultData(result, metadata, input, identity);
   const requestedEvidence = input.evidencePath || input.evidence_path || judgmentEvidenceName(role);
-  const evidencePath = requestedPathInWorktree(fsApi, worktree, requestedEvidence, 'complete judgment evidence');
+  const evidencePath = judgmentEvidencePath(fsApi, worktree, role, requestedEvidence, 'complete judgment evidence');
   assertContainedRegularPath(fsApi, worktree, evidencePath, 'complete judgment evidence');
   const sourceEvidence = readImmutableFile(fsApi, evidencePath, 'complete judgment evidence');
   if (!sourceEvidence.length) fail('MISSING_ARTIFACT', 'complete judgment evidence is empty');
@@ -1753,7 +1810,7 @@ function validateJudgmentManifest(value, options) {
   const evidence = expectedRoleReference(fsApi, worktree, dispatchId, judgmentEvidenceName(role), manifest.files.evidence, 'judgment evidence');
   const findings = expectedRoleReference(fsApi, worktree, dispatchId, FINDINGS_NAME, manifest.files.findings, 'judgment findings');
   if (!evidence.content.length) fail('MISSING_ARTIFACT', 'judgment evidence archive is empty');
-  if (typeof manifest.source_evidence_path !== 'string' || manifest.source_evidence_path.trim() === '') {
+  if (manifest.source_evidence_path !== judgmentEvidenceName(role)) {
     fail('MISSING_ARTIFACT', 'judgment artifact manifest is missing the complete evidence source path');
   }
   const sourceEvidencePath = path.resolve(worktree, manifest.source_evidence_path);

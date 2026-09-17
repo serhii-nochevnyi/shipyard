@@ -1806,14 +1806,15 @@ boundary.dispatch(
 The boundary resolves the fixed Codex Luna/medium or Workflow runtime Sonnet/high
 selection, validates the generated `shipyard-pr-sentinel.toml` or the native
 Workflow-runtime alias plus explicit effort, launches the typed guard, and returns a
-verified receipt. Only after that receipt exists may the overlay be updated:
-`dispatch-record.cjs mark <T> pr-sentinel --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph` for
-every ticket on the guarded list, using the returned boundary receipt and the
-exact Codex `--agent-file` when applicable. Never create a mark for a refused or
-phantom launch. Clear each record when the guard's report comes back; a
-`pr-sentinel` record also lifts when the PR merges or its base moves. New PRs get
-the same boundary call or the existing typed guard context, never an inherited
-guard/session.
+verified receipt. This round launch is the staged T-33-08 interface: the
+`round:<digest>` subject is required for the trusted consumer, but the current
+`dispatch-record.cjs` overlay remains ticket-bound. Do not run a shared round
+launch through the current per-ticket reconciliation path until T-33-08 supplies
+the authenticated membership bridge. After that bridge exists, only after the
+receipt does `dispatch-record.cjs mark <T> pr-sentinel --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph` apply to a corresponding ticket. Never pass a round receipt to a per-ticket mark or create a mark for a refused or phantom launch. Clear each
+record when the guard's report comes back; a `pr-sentinel` record also lifts when
+the PR merges or its base moves. New PRs get the same boundary call or the
+existing typed guard context, never an inherited guard/session.
 
 The mandatory boundary must support explicit model and effort application and return a concrete application receipt. Otherwise hard-refuse before constructing a prompt, spawning, or recording. Do not substitute `effort_applied=unsupported`, `unknown`, or absent evidence; Agent, prompt, session, or in-process fallback cannot authorize a routed launch.
 When no compliant background surface exists, use the documented inline sentinel
@@ -1992,6 +1993,14 @@ loop:
      `critical`/`checkpoint` evidence, then use the same boundary for the whole
      `resolve → validate → launch → receipt` operation:
 
+     Before constructing the judge prompt, clear its role-owned evidence
+     scratch file in the reviewed worktree:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+       --worktree <worktree> --role arch-review
+     ```
+
      ```text
      boundary.dispatch(
        { runtime, role: "arch-review",
@@ -2017,12 +2026,12 @@ loop:
      worktree:
 
      ```text
-     role-artifact.cjs seal --role arch-review --ticket <T> --pr <N>
-       --base <base-ref> --boundary-store <receipt-store>
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal --role arch-review --ticket <T> --pr <N>
+       --worktree <worktree> --base <base-ref> --boundary-store <receipt-store>
        --dispatch-id <dispatch-id> --result-file <result.json>
-       --evidence-path <complete-arch-review-evidence>
-     role-artifact.cjs validate --role arch-review --ticket <T> --pr <N>
-       --base <base-ref> --boundary-store <receipt-store>
+       --evidence-path .shipyard-arch-review-evidence.md
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate --role arch-review --ticket <T> --pr <N>
+       --worktree <worktree> --base <base-ref> --boundary-store <receipt-store>
        --dispatch-id <dispatch-id> --artifact <artifact-ref>
        --artifact-digest <artifact-digest>
      ```
@@ -2476,6 +2485,14 @@ driving PRs hands the user a half-truth.
      proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
 
+     Before constructing the integrator prompt, clear its role-owned
+     `INTEGRATION.md` scratch file in the integration worktree:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+       --worktree <worktree> --role integrator
+     ```
+
      ```text
      boundary.dispatch(
        { runtime, role: "integrator",
@@ -2501,13 +2518,13 @@ driving PRs hands the user a half-truth.
      branch:
 
      ```text
-     role-artifact.cjs seal --role integrator --ticket <phase-subject>
-       --phase <phase> --base <default-branch>
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal --role integrator --ticket <phase-subject>
+       --worktree <worktree> --phase <phase> --base <default-branch>
        --boundary-store <receipt-store> --dispatch-id <dispatch-id>
        --ticket-set-file <ticket-set.json> --result-file <result.json>
-       --evidence-path <path/to/INTEGRATION.md>
-     role-artifact.cjs validate --role integrator --ticket <phase-subject>
-       --phase <phase> --base <default-branch>
+       --evidence-path INTEGRATION.md
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate --role integrator --ticket <phase-subject>
+       --worktree <worktree> --phase <phase> --base <default-branch>
        --boundary-store <receipt-store> --dispatch-id <dispatch-id>
        --ticket-set-file <ticket-set.json> --artifact <artifact-ref>
        --artifact-digest <artifact-digest>

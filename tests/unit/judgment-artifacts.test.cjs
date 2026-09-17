@@ -46,6 +46,18 @@ function fakeAdapter() {
   };
 }
 
+const INTEGRATION_PHASE = '33-reduce-orchestration-context-and-transfer-sessions-safely';
+
+function roundSubject(ticketSet) {
+  return `round:${crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex')}`;
+}
+
+function phaseSubject(root) {
+  const common = git(root, ['rev-parse', '--git-common-dir']);
+  const repository = fs.realpathSync(path.resolve(root, common));
+  return `phase=${INTEGRATION_PHASE};repository=${repository}`;
+}
+
 function fixture(role, boundaryTicket) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-judgment-artifact-'));
   git(root, ['init', '--quiet', '--initial-branch=main']);
@@ -55,7 +67,9 @@ function fixture(role, boundaryTicket) {
   fs.writeFileSync(path.join(root, 'base.txt'), 'base\n');
   git(root, ['add', 'base.txt']);
   git(root, ['commit', '--quiet', '-m', 'judgment artifact base']);
-  git(root, ['switch', '--quiet', '-c', `ticket/${boundaryTicket}`]);
+  git(root, ['update-ref', 'refs/remotes/origin/main', git(root, ['rev-parse', 'main'])]);
+  const branchName = `ticket/${role}-fixture`;
+  git(root, ['switch', '--quiet', '-c', branchName]);
   fs.writeFileSync(path.join(root, 'change.txt'), 'change\n');
   git(root, ['add', 'change.txt']);
   git(root, ['commit', '--quiet', '-m', 'judgment artifact change']);
@@ -65,11 +79,12 @@ function fixture(role, boundaryTicket) {
     adapters: { claude: fakeAdapter() },
     recorder,
   });
+  const ticket = typeof boundaryTicket === 'function' ? boundaryTicket(root) : boundaryTicket;
   const dispatch = boundary.dispatch(
     { runtime: 'claude', role, signals: {} },
-    { ticket: boundaryTicket },
+    { ticket },
   );
-  return { root, recorder, dispatch, boundaryTicket };
+  return { root, recorder, dispatch, boundaryTicket: ticket, branchName };
 }
 
 function revision(root) {
@@ -199,12 +214,66 @@ test('architecture evidence without the reviewed head or merge-base tree cannot 
   }
 });
 
+test('judgment preparation rotates stale role evidence before a fresh dispatch result', () => {
+  const value = fixture('arch-review', 'T-33-04-arch-rotation');
+  try {
+    const evidencePath = evidence(value.root, '.shipyard-arch-review-evidence.md', 'evidence from an earlier attempt');
+    const prepared = roleArtifact.prepareRoleArtifact({
+      worktreePath: value.root,
+      role: 'arch-review',
+    });
+    assert.equal(prepared.path, path.join(fs.realpathSync(value.root), path.basename(evidencePath)));
+    assert.equal(prepared.cleared, true);
+    assert.equal(fs.existsSync(evidencePath), false);
+    assert.throws(
+      () => roleArtifact.seal(sealInput(value, archResult(value.root, value.boundaryTicket), {
+        role: 'arch-review',
+        evidencePath,
+      })),
+      (error) => error && error.code === 'MISSING_ARTIFACT',
+    );
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test('a conform architecture judgment cannot hide a non-blocking ADR finding', () => {
+  const value = fixture('arch-review', 'T-33-04-arch-nonblocking');
+  try {
+    const result = archResult(value.root, value.boundaryTicket, {
+      verdict: 'conform',
+      blocking_count: 0,
+      findings: [{
+        id: 'informational-violation',
+        type: 'violation',
+        blocking: false,
+        adr: 'ADR-014',
+        section: '§4 mandatory dispatch boundary',
+        file: 'plugins/delivery-pipeline/scripts/role-artifact.cjs',
+        line: 44,
+        hunk: 'role-artifact.cjs:44',
+        remediation: 'retain the finding instead of reporting conform',
+        summary: 'non-blocking finding still records an ADR violation',
+      }],
+    });
+    assert.throws(
+      () => roleArtifact.seal(sealInput(value, result, {
+        role: 'arch-review',
+        evidencePath: evidence(value.root, '.shipyard-arch-review-evidence.md', 'complete evidence'),
+      })),
+      (error) => error && error.code === 'JUDGMENT_OUTCOME_MISMATCH',
+    );
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
 test('a sentinel round is bound to its complete guarded ticket set, not one fabricated ticket', () => {
-  const value = fixture('pr-sentinel', 'round-33-04');
   const tickets = [
     { id: 'T-33-A', pr: 501, head: 'a'.repeat(40), base: 'epic/33' },
     { id: 'T-33-B', pr: 502, head: 'b'.repeat(40), base: 'epic/33' },
   ];
+  const value = fixture('pr-sentinel', roundSubject(tickets));
   try {
     const result = {
       outcome: 'clear',
@@ -244,8 +313,8 @@ test('a sentinel round is bound to its complete guarded ticket set, not one fabr
 });
 
 test('sentinel surplus duties and refused gates cannot be presented as a clear round', () => {
-  const value = fixture('pr-sentinel', 'round-33-04-surplus');
   const tickets = [{ id: 'T-33-A', pr: 503, head: 'c'.repeat(40), base: 'epic/33' }];
+  const value = fixture('pr-sentinel', roundSubject(tickets));
   try {
     const result = {
       outcome: 'clear',
@@ -268,9 +337,86 @@ test('sentinel surplus duties and refused gates cannot be presented as a clear r
   }
 });
 
+test('a sentinel round authenticates its ticket-set digest and allows separate duties per ticket', () => {
+  const tickets = [{ id: 'T-33-A', pr: 504, head: 'd'.repeat(40), base: 'epic/33' }];
+  const value = fixture('pr-sentinel', roundSubject(tickets));
+  try {
+    const result = {
+      outcome: 'clear',
+      blocking_count: 0,
+      summary: 'all duties completed',
+      ticket_set: tickets,
+      performed: [
+        { ticket: 'T-33-A', duty: 'wait-ci', status: 'complete' },
+        { ticket: 'T-33-A', duty: 'undraft', status: 'complete' },
+      ],
+      refused: [],
+    };
+    const sealed = roleArtifact.seal(sealInput(value, result, {
+      role: 'pr-sentinel',
+      ticketSet: tickets,
+      evidencePath: evidence(value.root, '.shipyard-sentinel-evidence.md', 'complete evidence'),
+    }));
+    assert.equal(sealed.envelope.performed_count, 2);
+
+    const duplicateDuty = {
+      ...result,
+      performed: [result.performed[0], { ...result.performed[0] }],
+    };
+    assert.throws(
+      () => roleArtifact.seal(sealInput(value, duplicateDuty, {
+        role: 'pr-sentinel',
+        ticketSet: tickets,
+        evidencePath: path.join(value.root, '.shipyard-sentinel-evidence.md'),
+      })),
+      (error) => error && error.code === 'DUPLICATE_DUTY',
+    );
+
+    const refusedStatusInPerformed = {
+      ...result,
+      performed: [{ ticket: 'T-33-A', duty: 'wait-ci', status: 'refused' }],
+    };
+    assert.throws(
+      () => roleArtifact.seal(sealInput(value, refusedStatusInPerformed, {
+        role: 'pr-sentinel',
+        ticketSet: tickets,
+        evidencePath: path.join(value.root, '.shipyard-sentinel-evidence.md'),
+      })),
+      (error) => error && error.code === 'INCOMPLETE_DUTY',
+    );
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test('a sentinel receipt for another round cannot seal this ticket set', () => {
+  const tickets = [{ id: 'T-33-A', pr: 505, head: 'e'.repeat(40), base: 'epic/33' }];
+  const value = fixture('pr-sentinel', 'round:wrong-ticket-set');
+  try {
+    const result = {
+      outcome: 'clear',
+      blocking_count: 0,
+      summary: 'wrong round',
+      ticket_set: tickets,
+      performed: [{ ticket: 'T-33-A', duty: 'wait-ci', status: 'complete' }],
+      refused: [],
+    };
+    assert.throws(
+      () => roleArtifact.seal(sealInput(value, result, {
+        role: 'pr-sentinel',
+        ticketSet: tickets,
+        evidencePath: evidence(value.root, '.shipyard-sentinel-evidence.md', 'complete evidence'),
+      })),
+      (error) => error && error.code === 'JUDGMENT_IDENTITY_MISMATCH',
+    );
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
 test('integrator preserves human-review-required findings and rejects duplicate or tampered delivery', () => {
-  const value = fixture('integrator', 'phase-33');
   const tickets = ['T-33-01', 'T-33-02', 'T-33-03'];
+  const value = fixture('integrator', (root) => phaseSubject(root));
   try {
     const identity = revision(value.root);
     const integrationPath = evidence(value.root, 'INTEGRATION.md', [
@@ -302,7 +448,7 @@ test('integrator preserves human-review-required findings and rejects duplicate 
         ticket_set_digest: '0'.repeat(64),
       }, {
         role: 'integrator',
-        phase: '33-reduce-orchestration-context-and-transfer-sessions-safely',
+        phase: INTEGRATION_PHASE,
         ticketSet: tickets,
         evidencePath: integrationPath,
       })),
@@ -317,7 +463,7 @@ test('integrator preserves human-review-required findings and rejects duplicate 
         findings: [{ ...result.findings[0], id: 'surplus-finding' }],
       }, {
         role: 'integrator',
-        phase: '33-reduce-orchestration-context-and-transfer-sessions-safely',
+        phase: INTEGRATION_PHASE,
         ticketSet: tickets,
         evidencePath: integrationPath,
       })),
@@ -325,7 +471,7 @@ test('integrator preserves human-review-required findings and rejects duplicate 
     );
     const sealed = roleArtifact.seal(sealInput(value, result, {
       role: 'integrator',
-      phase: '33-reduce-orchestration-context-and-transfer-sessions-safely',
+      phase: INTEGRATION_PHASE,
       ticketSet: tickets,
       evidencePath: integrationPath,
     }));
@@ -338,7 +484,7 @@ test('integrator preserves human-review-required findings and rejects duplicate 
 
     const duplicate = roleArtifact.seal(sealInput(value, result, {
       role: 'integrator',
-      phase: '33-reduce-orchestration-context-and-transfer-sessions-safely',
+      phase: INTEGRATION_PHASE,
       ticketSet: tickets,
       evidencePath: integrationPath,
     }));
@@ -349,7 +495,7 @@ test('integrator preserves human-review-required findings and rejects duplicate 
       () => roleArtifact.validate({
         ...sealInput(value, undefined, {
           role: 'integrator',
-          phase: '33-reduce-orchestration-context-and-transfer-sessions-safely',
+          phase: INTEGRATION_PHASE,
           ticketSet: tickets,
           artifactPath: sealed.artifact_ref,
           artifactDigest: sealed.artifact_digest,
@@ -363,7 +509,7 @@ test('integrator preserves human-review-required findings and rejects duplicate 
 });
 
 test('integrator refuses missing or empty complete integration evidence', () => {
-  const value = fixture('integrator', 'phase-33-empty');
+  const value = fixture('integrator', (root) => phaseSubject(root));
   try {
     const identity = revision(value.root);
     const result = {
@@ -383,7 +529,7 @@ test('integrator refuses missing or empty complete integration evidence', () => 
     assert.throws(
       () => roleArtifact.seal(sealInput(value, result, {
         role: 'integrator',
-        phase: '33-reduce-orchestration-context-and-transfer-sessions-safely',
+        phase: INTEGRATION_PHASE,
         ticketSet: [],
         evidencePath: integrationPath,
       })),
@@ -392,11 +538,11 @@ test('integrator refuses missing or empty complete integration evidence', () => 
     assert.throws(
       () => roleArtifact.seal(sealInput(value, result, {
         role: 'integrator',
-        phase: '33-reduce-orchestration-context-and-transfer-sessions-safely',
+        phase: INTEGRATION_PHASE,
         ticketSet: [],
         evidencePath: path.join(value.root, 'missing-INTEGRATION.md'),
       })),
-      (error) => error && error.code === 'MISSING_ARTIFACT',
+      (error) => error && error.code === 'ARTIFACT_IDENTITY_MISMATCH',
     );
   } finally {
     fs.rmSync(value.root, { recursive: true, force: true });
@@ -404,7 +550,7 @@ test('integrator refuses missing or empty complete integration evidence', () => 
 });
 
 test('a changed combined base refuses an already passed integrator result', () => {
-  const value = fixture('integrator', 'phase-33-stale-base');
+  const value = fixture('integrator', (root) => phaseSubject(root));
   try {
     const identity = revision(value.root);
     const tickets = ['T-33-01'];
@@ -423,7 +569,7 @@ test('a changed combined base refuses an already passed integrator result', () =
     };
     const sealed = roleArtifact.seal(sealInput(value, result, {
       role: 'integrator',
-      phase: '33-reduce-orchestration-context-and-transfer-sessions-safely',
+      phase: INTEGRATION_PHASE,
       ticketSet: tickets,
       evidencePath: integrationPath,
     }));
@@ -431,12 +577,13 @@ test('a changed combined base refuses an already passed integrator result', () =
     git(value.root, ['switch', '--quiet', 'main']);
     git(value.root, ['add', 'base-new.txt']);
     git(value.root, ['commit', '--quiet', '-m', 'move integration base']);
-    git(value.root, ['switch', '--quiet', `ticket/${value.boundaryTicket}`]);
+    git(value.root, ['update-ref', 'refs/remotes/origin/main', git(value.root, ['rev-parse', 'main'])]);
+    git(value.root, ['switch', '--quiet', value.branchName]);
     assert.throws(
       () => roleArtifact.validate({
         ...sealInput(value, undefined, {
           role: 'integrator',
-          phase: '33-reduce-orchestration-context-and-transfer-sessions-safely',
+          phase: INTEGRATION_PHASE,
           ticketSet: tickets,
           artifactPath: sealed.artifact_ref,
           artifactDigest: sealed.artifact_digest,

@@ -284,6 +284,17 @@ stand in for the round. Keep complete evidence in a regular file inside the
 sentinel worktree, including the live commands, the tickets checked, performed
 duties, refused duties with reasons, and the resulting outcome.
 
+Before the authenticated round dispatch, the host clears the role-owned
+evidence scratch file for this worktree:
+
+```bash
+node $SHIPYARD_ROOT/scripts/role-artifact.cjs prepare \
+  --worktree <worktree> --role pr-sentinel
+```
+
+Write the fresh complete evidence to `.shipyard-sentinel-evidence.md` in that
+worktree. A prior archive or another path is not a valid evidence source.
+
 The result passed to the host has this shape:
 
 ```json
@@ -306,7 +317,7 @@ node $SHIPYARD_ROOT/scripts/role-artifact.cjs seal \
   --worktree <worktree> --role pr-sentinel --ticket <round-subject> \
   --base <base-ref> --boundary-store <receipt-store> --dispatch-id <dispatch-id> \
   --ticket-set-file <ticket-set.json> --result-file <result.json> \
-  --evidence-path <complete-sentinel-evidence-file>
+  --evidence-path .shipyard-sentinel-evidence.md
 node $SHIPYARD_ROOT/scripts/role-artifact.cjs validate \
   --worktree <worktree> --role pr-sentinel --ticket <round-subject> \
   --base <base-ref> --boundary-store <receipt-store> --dispatch-id <dispatch-id> \
@@ -318,6 +329,11 @@ node $SHIPYARD_ROOT/scripts/role-artifact.cjs validate \
 boundary launch context for this shared sentinel dispatch; it is not an
 individual ticket id. The ticket-set file used by both commands is the same
 complete set that produced that round subject.
+
+This contract requires a boundary that authenticates the round subject and its
+complete ticket-set membership. The existing per-ticket `dispatch-record.cjs`
+receipt cannot be reused as that round subject; T-33-08 owns the membership
+bridge between the round artifact and the per-ticket overlay.
 
 The envelope contains bounded counts and references; the complete ticket set
 and duties remain in the authenticated findings artifact. Its round subject is
