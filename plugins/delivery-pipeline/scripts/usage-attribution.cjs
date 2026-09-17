@@ -37,6 +37,7 @@ const FIELDS = new Set([
   'runtime', 'provider', 'backend', 'kind', 'source', 'session_id',
   'request_id', 'message_id', 'pass_id', 'model', 'effort', 'effort_applied',
   'observed_model', 'observed_effort', 'completion_status',
+  'treatment_id', 'treatment', 'arm', 'cohort_arm', 'account_scope', 'provider_account_scope',
   // ADR-014 resolution/application provenance. These are deliberately stored
   // as facts supplied by the boundary; this ledger never upgrades a legacy
   // observation or manufactures a receipt.
@@ -340,7 +341,8 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
     'project_id', 'run_id', 'dispatch_id', 'ticket', 'role', 'task_level',
     'backend', 'source', 'session_id', 'request_id', 'message_id', 'pass_id',
     'model', 'effort', 'effort_applied', 'observed_model', 'observed_effort',
-    'completion_status',
+    'completion_status', 'treatment_id', 'treatment', 'arm', 'cohort_arm',
+    'account_scope', 'provider_account_scope',
   ]) {
     if (raw[key] !== undefined) record[key] = raw[key];
   }
@@ -369,7 +371,8 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
     fail(`kind must be ordinary or advisor (got "${record.kind}")`);
   }
   for (const key of ['dispatch_id', 'project_id', 'run_id', 'ticket', 'role', 'source',
-    'session_id', 'request_id', 'message_id', 'pass_id', 'model', 'observed_model']) {
+    'session_id', 'request_id', 'message_id', 'pass_id', 'model', 'observed_model',
+    'treatment_id', 'treatment', 'account_scope', 'provider_account_scope']) {
     if (record[key] === undefined) continue;
     const issue = textIssue(record[key], key, { whitespace: key === 'dispatch_id' });
     if (issue) fail(issue);
@@ -429,6 +432,14 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
   }
   if (record.completion_status !== undefined && !COMPLETION_STATES.has(record.completion_status)) {
     fail(`completion_status must be one of ${[...COMPLETION_STATES].join(', ')}`);
+  }
+  if (record.arm === undefined && record.cohort_arm !== undefined) record.arm = record.cohort_arm;
+  if (record.arm !== undefined && !['baseline', 'treatment'].includes(record.arm)) {
+    fail(`arm must be baseline or treatment (got "${record.arm}")`);
+  }
+  if (record.treatment_id === undefined && record.treatment !== undefined) record.treatment_id = record.treatment;
+  if (record.account_scope === undefined && record.provider_account_scope !== undefined) {
+    record.account_scope = record.provider_account_scope;
   }
   // The ledger can outlive the checkout that recorded it. Store transcript
   // sources as absolute paths at write time so a later report process in a
