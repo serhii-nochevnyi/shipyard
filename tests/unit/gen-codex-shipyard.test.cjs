@@ -292,6 +292,9 @@ test('the bundle carries canonical payloads and rewrites installed Shipyard refe
       'role-artifact.cjs',
       'claude-dispatch-adapter.cjs',
       'claude-workflow-host.cjs',
+      'session-handoff.cjs',
+      'orchestration-overhead.cjs',
+      'runtime-context.cjs',
     ]) {
       assert.strictEqual(read(path.join(f.out, 'bundle/scripts', file)), read(path.join(PLUGIN, 'scripts', file)));
     }
@@ -317,6 +320,30 @@ test('the bundle carries canonical payloads and rewrites installed Shipyard refe
     }
     assert.ok(texts.some((text) => text.includes(path.join(f.codexHome, 'shipyard'))));
     assert.ok(texts.some((text) => text.includes('$shipyard-')));
+  });
+});
+
+test('the generated bundle keeps recommendation, checkpoint and capability refusals executable', () => {
+  withFixture({}, (f) => {
+    const manifest = generated(f);
+    const generatedDeliver = read(path.join(f.out, 'skills/shipyard-deliver/SKILL.md'));
+    assert.ok(manifest.bundle_files.includes('scripts/session-handoff.cjs'));
+    assert.ok(manifest.bundle_files.includes('scripts/orchestration-overhead.cjs'));
+    assert.ok(manifest.bundle_files.includes('scripts/runtime-context.cjs'));
+    assert.match(generatedDeliver, /rotation_recommendation\.state/);
+    assert.match(generatedDeliver, /automatic_transfer\.allowed/);
+    assert.match(generatedDeliver, /checkpoint_collection/);
+    assert.match(generatedDeliver, /successor_startup/);
+    assert.match(generatedDeliver, /cache_warmup/);
+    const handoff = require(path.join(f.out, 'bundle/scripts/session-handoff.cjs'));
+    const runtime = require(path.join(f.out, 'bundle/scripts/runtime-context.cjs'));
+    const overhead = require(path.join(f.out, 'bundle/scripts/orchestration-overhead.cjs'));
+    assert.equal(typeof handoff.recommendRotation, 'function');
+    assert.equal(typeof handoff.createSessionHandoff, 'function');
+    assert.equal(typeof runtime.reportTransferCapability, 'function');
+    assert.equal(runtime.TRANSFER_PROOF_CATEGORIES.length, 6);
+    assert.equal(typeof overhead.recordHandoffCost, 'function');
+    assert.ok(overhead.STAGES.has('successor_startup'));
   });
 });
 

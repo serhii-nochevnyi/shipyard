@@ -66,6 +66,35 @@ shows model turns and tool calls as `unknown`, never as zero. Usage attribution
 is joined read-only from its own ledger; it is not copied into or replaced by
 the overhead stream.
 
+## Handoff, recommendation and capability verdicts
+
+Handoff evidence is reported in separate dimensions. Offline correctness of the
+owner fence, generated-runtime smoke, real clean-boundary manual resume,
+economic pilot and automatic capability are distinct verdicts and must not be
+collapsed into one phase result. A successful fixture can therefore be
+`verified-offline` while the real manual, economic or automatic rows remain
+`unexecuted`, `inconclusive` or `unsupported`.
+
+The rotation recommendation is an advisory observation. It is `recommend` at a
+completed phase boundary or when the last five comparable ordinary passes each
+exceed twice the prospective startup median for the same role, runtime and
+backend. It is `not-recommended` when that comparison is complete but false,
+and `unknown` when startup evidence is missing, dimensions are mixed or only
+advisor measurements exist. The report retains sample IDs, metric/unit and the
+comparison. It never starts a successor or interrupts a live session.
+
+Automatic transfer remains `unsupported`/`unproven` until a strict active
+runtime context and host-version-bound proving-ground evidence cover fresh
+bounded context, supported launch API, active-child enumeration, durable owner
+acknowledgement, dispatch application-evidence continuity and crash recovery.
+CLI help, a resume/fork flag, an installed version, a synthetic acknowledgement
+or caller-supplied booleans are not evidence. Missing or stale evidence cannot
+bypass a live gate or the ADR-014 dispatch boundary.
+
+Checkpoint collection, successor startup and cache warm-up are recorded as
+separate metadata-only cost stages. A real cache measurement must be supplied
+by the host; the collector never invents a zero for an unobserved cost.
+
 ## Cohort and accounting rules
 
 Freeze comparable strata before assignment: implementation, repair or review;
@@ -112,6 +141,13 @@ stream. It never revives a superseded session owner, bypasses a live sentinel or
 creates a model receipt. A regression records its failure signature, affected
 policy and reproduction as a linked backlog candidate; it does not launch a
 repair automatically.
+
+For handoff specifically, rollback turns off recommendation/context treatment
+for the affected cohort while retaining acknowledged owner fencing, pending
+work, dispatch receipts, live gates and ADR-014 selection. Automatic capability
+is never promoted by an incomplete savings report; provider/account-window
+coverage and the seven-day defect window remain required for an economic
+decision.
 
 Offline fixtures verify measurement plumbing and refusal behavior. They do not
 prove economic benefit, provider quota savings, runtime-specific transfer, or

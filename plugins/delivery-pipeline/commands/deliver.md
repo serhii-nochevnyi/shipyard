@@ -805,6 +805,39 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs inspect \
   --cwd <project> --json
 ```
 
+The same status surface is the delivery consumer for rotation advice. Give it
+the append-only overhead observations and, when applicable, the completed
+phase-boundary marker:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs status \
+  --cwd <project> --scope-id <scope> \
+  --overhead-file <project>/.planning/graph/orchestration-overhead.jsonl \
+  --phase-boundary <phase-boundary.json> --runtime <active-runtime>
+```
+
+`rotation_recommendation.state` is `recommend`, `not-recommended` or
+`unknown`. A recommendation contains the sample IDs, metric/unit, startup
+median, threshold and per-sample comparison. It is advisory: it never starts a
+timer, kills a process, forks or resumes a session, launches a successor,
+acknowledges ownership or dispatches work. Safe-boundary blockers remain in
+`rotation_recommendation.safety.blockers`, and the explicit manual
+checkpoint/resume/acknowledge sequence remains available.
+
+`transfer_capability` is tied to the strict active runtime context, host
+version and the required proving-ground evidence. Until a separately reviewed
+runtime-specific path supplies fresh bounded context, a supported launch API,
+active-child enumeration, durable owner acknowledgement, application-evidence
+continuity and crash recovery, it reports `unsupported`/`unproven` with
+`automatic_transfer.allowed: false`. CLI flags, resume/fork help, a synthetic
+acknowledgement or a caller boolean cannot change that result.
+
+Record checkpoint collection, successor startup and cache warm-up as separate
+metadata-only overhead stages (`checkpoint_collection`, `successor_startup`,
+`cache_warmup`). Keep runtime, backend, policy and treatment dimensions on each
+row; missing or mixed evidence remains unknown and is excluded from savings
+claims.
+
 The current owner first writes a complete checkpoint at a safe boundary. The
 checkpoint names the repository, run/session, epoch, phase/ticket scope,
 plan/policy digests, head/base, worktrees, snapshot, pending waits/actions,

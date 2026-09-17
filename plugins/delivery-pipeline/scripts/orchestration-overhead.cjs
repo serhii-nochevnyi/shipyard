@@ -22,8 +22,10 @@ const TREATMENT_VALUES = Object.freeze({
 });
 const STAGES = new Set([
   'startup', 'ordinary_input', 'parent_reingestion', 'checkpoint_collection',
-  'cache_warmup', 'wait_poll', 'model_turn', 'tool_call',
+  'successor_startup', 'cache_warmup', 'wait_poll', 'model_turn', 'tool_call',
 ]);
+const HANDOFF_COST_STAGES = new Set(['checkpoint_collection', 'successor_startup', 'cache_warmup']);
+const PASS_KINDS = new Set(['ordinary', 'advisor']);
 const EVIDENCE = new Set(['usage', 'transcript', 'wait-event', 'controller', 'none']);
 const COUNT_KEYS = Object.freeze(['polls', 'model_turns', 'tool_calls']);
 const QUALITY_KEYS = Object.freeze([
@@ -186,6 +188,12 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
   const policyId = raw.policy_id === undefined || raw.policy_id === null ? null : text(raw.policy_id, 'policy_id');
   const policyVersion = raw.policy_version === undefined || raw.policy_version === null
     ? null : text(raw.policy_version, 'policy_version');
+  const passKind = raw.pass_kind === undefined || raw.pass_kind === null
+    ? null : text(raw.pass_kind, 'pass_kind');
+  if (passKind !== null && !PASS_KINDS.has(passKind)) fail('INVALID_OBSERVATION', `unsupported pass_kind ${passKind}`);
+  const passId = raw.pass_id === undefined || raw.pass_id === null
+    ? (raw.sample_id === undefined || raw.sample_id === null ? null : text(raw.sample_id, 'sample_id'))
+    : text(raw.pass_id, 'pass_id');
   const dimensions = {
     run_id: text(raw.run_id || raw.runId, 'run_id'),
     dispatch_id: raw.dispatch_id === undefined || raw.dispatch_id === null ? null : text(raw.dispatch_id, 'dispatch_id'),
@@ -198,6 +206,8 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
     treatment,
     stage,
     source: raw.source === undefined || raw.source === null ? null : text(raw.source, 'source'),
+    pass_id: passId,
+    pass_kind: passKind,
     cost_category: raw.cost_category === undefined || raw.cost_category === null
       ? 'orchestration' : text(raw.cost_category, 'cost_category'),
     source_refs: normalizeSourceRefs(raw.source_refs),
@@ -304,6 +314,18 @@ function recordMeasurement(recorder, value) {
   return recorder.record(value);
 }
 
+function recordHandoffCost(recorder, value = {}) {
+  if (!object(value)) fail('INVALID_OBSERVATION', 'handoff cost must be an object');
+  if (!HANDOFF_COST_STAGES.has(value.stage)) {
+    fail('INVALID_OBSERVATION', `handoff cost stage must be one of ${[...HANDOFF_COST_STAGES].join(', ')}`);
+  }
+  return recordMeasurement(recorder, {
+    ...value,
+    evidence: value.evidence === undefined ? 'controller' : value.evidence,
+    source: value.source === undefined ? 'session-handoff' : value.source,
+  });
+}
+
 function recordModelEvidence(recorder, value = {}) {
   if (!object(value)) fail('INVALID_OBSERVATION', 'model evidence must be an object');
   const stage = value.stage || 'model_turn';
@@ -370,6 +392,12 @@ function metricSet(rows) {
     parent_reingestion_bytes: sumStage('parent_reingestion', 'bytes'),
     startup_estimated_tokens: metricStats(rows.filter((row) => row.stage === 'startup').map((row) => row.estimated_tokens)),
     parent_reingestion_estimated_tokens: metricStats(rows.filter((row) => row.stage === 'parent_reingestion').map((row) => row.estimated_tokens)),
+    checkpoint_collection_bytes: sumStage('checkpoint_collection', 'bytes'),
+    checkpoint_collection_estimated_tokens: sumStage('checkpoint_collection', 'estimated_tokens'),
+    successor_startup_bytes: sumStage('successor_startup', 'bytes'),
+    successor_startup_estimated_tokens: sumStage('successor_startup', 'estimated_tokens'),
+    cache_warmup_bytes: sumStage('cache_warmup', 'bytes'),
+    cache_warmup_estimated_tokens: sumStage('cache_warmup', 'estimated_tokens'),
     wait_polls: count('polls'), model_turns: modelTurns, tool_calls: toolCalls, provider_tokens: providerTokens,
   };
 }
@@ -477,8 +505,9 @@ function cli(argv = process.argv.slice(2)) {
 
 module.exports = Object.freeze({
   SCHEMA_VERSION, STREAM_NAME, REPORT_SCHEMA, ESTIMATOR_VERSION, STAGES,
+  HANDOFF_COST_STAGES, PASS_KINDS,
   TREATMENT_KEYS, TREATMENT_VALUES, OverheadError, normalizeTreatment, treatmentId,
-  normalizeObservation, recordBatch, recordMeasurement, recordModelEvidence,
+  normalizeObservation, recordBatch, recordMeasurement, recordHandoffCost, recordModelEvidence,
   readStream, latestRows, report, createRecorder,
 });
 

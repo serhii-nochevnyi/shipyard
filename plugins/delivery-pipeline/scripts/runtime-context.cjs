@@ -10,6 +10,16 @@ const fs = require('fs');
 const path = require('path');
 
 const KNOWN_RUNTIMES = new Set(['claude', 'codex']);
+const TRANSFER_CAPABILITY_SCHEMA = 'shipyard.session-transfer-capability.v1';
+const TRANSFER_PROOF_CATEGORIES = Object.freeze([
+  'fresh_bounded_context',
+  'supported_launch_api',
+  'active_child_enumeration',
+  'durable_owner_acknowledgment',
+  'dispatch_application_evidence_continuity',
+  'crash_recovery',
+]);
+const TRANSFER_REFUSAL = 'automatic transfer is unsupported and unproven until a reviewed runtime-specific proving ground supplies every required evidence category';
 
 function normalizeRuntime(value) {
   if (typeof value !== 'string') return null;
@@ -242,11 +252,113 @@ function resolveDispatchContext(root, options = {}) {
   return Object.freeze(context);
 }
 
+function cleanEvidenceText(value) {
+  return typeof value === 'string' && value.trim() && !/[\u0000-\u001f\u007f]/.test(value)
+    ? value.trim().slice(0, 256) : null;
+}
+
+function capabilityContext(root, options = {}) {
+  const supplied = options.runtime_context || options.runtimeContext;
+  const context = supplied || resolveDispatchContext(root, {
+    ...options,
+    routed: true,
+  });
+  if (!context || !KNOWN_RUNTIMES.has(context.runtime)) {
+    throw runtimeError('UNKNOWN_RUNTIME', 'transfer-capability', 'a strict active runtime context is required');
+  }
+  const { POLICY_VERSION, POLICY_HASH } = require('./model-policy.cjs');
+  if (context.policy_version !== POLICY_VERSION || context.policy_hash !== POLICY_HASH) {
+    throw runtimeError('STALE_POLICY', 'transfer-capability', 'runtime context policy evidence is stale or missing');
+  }
+  if (options.runtime !== undefined && normalizeRuntime(options.runtime) !== context.runtime) {
+    throw runtimeError('AMBIGUOUS_RUNTIME', 'transfer-capability',
+      `requested runtime ${JSON.stringify(options.runtime)} conflicts with active runtime ${context.runtime}`);
+  }
+  return context;
+}
+
+function reportTransferCapability(options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw runtimeError('INVALID_INPUT', 'transfer-capability', 'capability options must be an object');
+  }
+  const context = capabilityContext(options.root || options.cwd || null, options);
+  const host = options.host || options.host_capabilities || options.hostCapabilities || {};
+  if (!host || typeof host !== 'object' || Array.isArray(host)) {
+    throw runtimeError('INVALID_INPUT', 'transfer-capability', 'host evidence must be an object');
+  }
+  const hostRuntime = normalizeRuntime(host.runtime);
+  if (hostRuntime && hostRuntime !== context.runtime) {
+    throw runtimeError('AMBIGUOUS_RUNTIME', 'transfer-capability',
+      `host runtime ${hostRuntime} conflicts with active runtime ${context.runtime}`);
+  }
+  const hostVersion = cleanEvidenceText(host.version || host.host_version || options.host_version);
+  const rawEvidence = options.evidence || options.proof || {};
+  if (!rawEvidence || typeof rawEvidence !== 'object' || Array.isArray(rawEvidence)) {
+    throw runtimeError('INVALID_INPUT', 'transfer-capability', 'transfer proof evidence must be an object');
+  }
+  const evidence = {};
+  const missing = [];
+  for (const category of TRANSFER_PROOF_CATEGORIES) {
+    const raw = rawEvidence[category];
+    const sameHost = raw && raw.runtime === context.runtime && raw.host_version === hostVersion;
+    const usable = sameHost && raw.status === 'proven'
+      && cleanEvidenceText(raw.evidence_id)
+      && raw.synthetic !== true
+      && raw.reviewed === true
+      && cleanEvidenceText(raw.source)
+      && raw.source !== 'synthetic-fixture'
+      && raw.source !== 'cli';
+    evidence[category] = {
+      status: usable ? 'unproven' : (raw ? 'missing' : 'missing'),
+      evidence_id: usable ? cleanEvidenceText(raw.evidence_id) : null,
+      source: usable ? cleanEvidenceText(raw.source) : null,
+      runtime: raw && cleanEvidenceText(raw.runtime),
+      host_version: raw && cleanEvidenceText(raw.host_version),
+      reason: usable ? 'a positive observation still needs the separately reviewed host adapter contract' : 'no trusted host-bound proving-ground evidence',
+    };
+    if (!usable) missing.push(category);
+  }
+  if (!hostVersion) missing.unshift('host_version');
+  if (!missing.includes('reviewed_host_adapter_contract')) missing.push('reviewed_host_adapter_contract');
+  if (!missing.includes('real_proving_ground_run')) missing.push('real_proving_ground_run');
+  return Object.freeze({
+    schema: TRANSFER_CAPABILITY_SCHEMA,
+    version: 1,
+    runtime: context.runtime,
+    runtime_source: context.source,
+    policy_version: context.policy_version,
+    policy_hash: context.policy_hash,
+    host: Object.freeze({ runtime: hostRuntime || null, version: hostVersion, evidence_source: cleanEvidenceText(host.source) }),
+    evidence: Object.freeze(evidence),
+    required_evidence: Object.freeze([...TRANSFER_PROOF_CATEGORIES]),
+    missing_evidence: Object.freeze([...new Set(missing)]),
+    status: 'unsupported',
+    confidence: 'unproven',
+    reason: TRANSFER_REFUSAL,
+    automatic_transfer: Object.freeze({
+      allowed: false,
+      status: 'unsupported',
+      confidence: 'unproven',
+      side_effect: 'none',
+      reason: TRANSFER_REFUSAL,
+    }),
+    manual_resume: Object.freeze({
+      status: 'available',
+      required: true,
+      instruction: 'checkpoint at a clean boundary, then explicitly resume and acknowledge the successor after live revalidation',
+    }),
+  });
+}
+
 module.exports = {
   KNOWN_RUNTIMES,
+  TRANSFER_CAPABILITY_SCHEMA,
+  TRANSFER_PROOF_CATEGORIES,
+  TRANSFER_REFUSAL,
   normalizeRuntime,
   readJsonRuntime,
   resolveRuntime,
   resolveDispatchContext,
+  reportTransferCapability,
   readInheritedConfig,
 };
