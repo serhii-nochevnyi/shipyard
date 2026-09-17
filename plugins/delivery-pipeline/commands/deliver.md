@@ -1552,9 +1552,56 @@ may be dispatched at all: fix the file.
 
    ```text
    executors.mjs args: { tickets: [{ id, planPath, branch, worktreePath, prBase,
-     model, effort, signals, risk, critical, checkpoint, reuseCandidates }],
-     deliveryRulesHint, prBodyGuide, artifactLanguage }
+     model, effort, signals, risk, critical, checkpoint, reuseCandidates,
+     contextPacket, contextPacketRequired: true }],
+     deliveryRulesHint, prBodyGuide, artifactLanguage, contextPacketRequired: true }
    ```
+
+   Before assembling those arguments, the trusted delivery loop builds one
+   serializable packet per ticket with
+   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs`:
+
+   ```text
+   buildContextPacket({
+     root: worktreePath,
+     role: 'executor', subject: id, sourceRevision: liveHead,
+     policy: ADR014_POLICY, policyHash: resolution.policy_hash,
+     planPath, requiredRefs: [planPath, ...contextReads],
+     scope: { files_modified, acceptance, verification },
+     roleContext: { plan, scope, acceptance, verification, backlog },
+     selectedBacklogIds, whySelected, backend: runtime,
+   })
+   ```
+
+   The builder reads each required source completely, stores SHA-256 identity
+   and selected backlog source hashes, and records the `ceil(UTF-8 bytes / 4)`
+   estimate with the backend and the 12,000-token soft ceiling. A legitimate
+   empty selection is serialized as `backlog.empty: true`; a missing requested
+   id, stale source or symlink escape blocks packet creation. Overflow keeps all
+   required policy, scope, ADR and gate material and records indexed optional
+   references in `overflow`; it never drops a constraint to fit a model turn.
+   Pass the packet through `context.contextPacket` on the boundary and fence the
+   same JSON as data in the Workflow prompt. The packet is not a model or host
+   selection surface: capabilities, callbacks, model, effort, receipts and
+   inherited session state stay in the host-owned boundary closure.
+
+   The same builder/validator contract applies to every delivery role. The
+   role-specific `roleContext` must contain:
+
+   | role | required targeted inputs |
+   | --- | --- |
+   | executor | plan, scope, acceptance, verification, selected backlog |
+   | ci-fix / review-fix | failure evidence, prior hypothesis |
+   | drift-check | integration base, plan |
+   | arch-review | relevant ADR references, exact diff, integration base |
+   | integrator | complete phase contracts, combined diff |
+   | research | problem statement, source references |
+   | decomposition | ADR references, requirements, research references, context |
+   | pr-sentinel | PR state, CI/review observations |
+
+   Fix and drift packets carry their failure/base evidence as fenced data. The
+   live sentinel, scope, review, architecture and integration gates still run
+   after the child returns; a packet cannot authorize a mutation or merge.
 
    `capabilities`, `recorder`, `applicationEvidence`, and host callbacks are
    host-injected Workflow bridge resources, not serializable `args`; the active

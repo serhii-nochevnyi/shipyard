@@ -77,8 +77,25 @@ Read `.planning/investigations/` (may not exist):
      capabilities, recorder, applicationEvidence
    })
    await workflowHost.run({ invId, invPath, problemStatement, referencePath,
-                            artifactLanguage, lines })
+                            artifactLanguage, contextPacketRequired: true, lines })
    ```
+
+   Before the fan-out, build one packet for each research line with
+   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs`. Use the investigation
+   worktree as `root`, role `research`, subject `${invId}:${line.id}`, the
+   authenticated `sourceRevision`, the ADR-014 policy object and its
+   `policy_hash`, the full problem/contract reference plus every declared
+   source reference, and `roleContext: { problem_statement, source_refs }`.
+   Include the current backlog selection, source hashes and a
+   `whySelected` map. Put the resulting serializable object in
+   `line.contextPacket`; the research workflow passes it as
+   `context.contextPacket` and fences it as DATA in each line prompt. The
+   adapter validates the role, subject, policy hash, root and live source
+   digests before the callback runs. Missing ids, altered sources, symlink
+   escapes and a packet carrying model/capability/callback fields are hard
+   failures. The packet's explicit empty backlog and overflow record remain
+   visible to the researcher; required problem, ADR and gate material is never
+   summarized away.
 
    `registerInvestigationWorkflowHost` is the production host registration;
    it pins the research DSL and invokes `runClaudeWorkflow` with the native

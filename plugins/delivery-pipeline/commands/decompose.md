@@ -261,6 +261,21 @@ context first, then one callback set, then materialization verification.
    or the durable recorder is unavailable, refuse before launching or making
    any callback; do not prompt the user to run an external command and do not
    run the Skill opaquely.
+   Build the callback context with
+   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs` before the first typed
+   launch. The decomposition packet uses the resolved project root and source
+   revision, role `decomposition`, subject
+   `phase=<N>;repository=<repo>;adr=<ADR digest>`, the ADR-014 policy object and
+   `policy_hash`, complete ADR/requirements/research/context references, and
+   `roleContext: { adr_refs, requirements, research_refs, context }`. Select
+   backlog items through `backlog-index.cjs`, carry their source hashes and
+   `whySelected` metadata, and set `contextPacketRequired: true`. Researcher,
+   planner and checker callbacks receive the packet in their boundary context;
+   their prompts fence it as DATA. A missing requested item, stale verification,
+   altered reference, symlink escape or forged model/capability/callback field
+   refuses the callback before reservation. The packet keeps the full ADR,
+   requirements and mandatory GSD policy even when the estimated UTF-8/4 size
+   exceeds 12,000 tokens, recording overflow and indexed optional references.
 3. With that context fixed, the Skill makes exactly one set of three typed,
    boundary-owned callbacks, in this order:
    - `gsd-phase-researcher` → `role: research`, with only the declared research
