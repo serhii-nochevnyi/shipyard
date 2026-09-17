@@ -111,9 +111,26 @@ Read `.planning/investigations/` (may not exist):
    workflow; it is not a direct Agent or an unverified subprocess fallback.
 
    Accept a research result only after its durable boundary receipt is verified.
-   Pass each line the problem statement, the INV path, and the brief
-   `${CLAUDE_PLUGIN_ROOT}/references/inv-research.md`. Bring verified results
-   into RESEARCH.md, OPTIONS.md, RISKS.md, and OPEN-QUESTIONS.md.
+   Pass the workflow `artifactContract: planning.v1`, the absolute worktree and
+   investigation paths, the authenticated `sourceRevision`, repository identity,
+   policy hash, and one contained `artifactPaths.<line-id>` for each of the four
+   lines. The prompt tells each worker to write its complete finding to that
+   exact path. The host-owned trusted consumer validates the file bytes and
+   seals a `shipyard.role-artifact.v1` envelope with
+   `shipyard.research-result.v1`, subject `<INV-ID>:<line-id>`, the exact source
+   revision, repository, policy hash, and an `artifact_index` reference. The
+   shared runtime adapter rejects a stale subject/source/policy identity, a
+   missing or altered index, and a forged application receipt before the
+   bounded result is accepted. The callback may return only the line id,
+   `completed|blocked`, a summary of at most 500 characters, and the validated
+   artifact reference; never return a full draft inline.
+
+   The synthesizer reads the four validated references by targeted ranges or
+   files and copies every source, constraint, uncertainty, and command-backed
+   finding into `RESEARCH.md`, `OPTIONS.md`, `RISKS.md`, and
+   `OPEN-QUESTIONS.md`. Missing or duplicated canonical lines remain hard
+   errors. The Codex command path uses the same validator and boundary receipt;
+   it has no inline or direct researcher fallback.
 6. Show the user a summary: how many options, key risks, the list of
    open questions. Next — Step 2.
 

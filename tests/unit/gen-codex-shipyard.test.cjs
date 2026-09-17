@@ -320,6 +320,54 @@ test('the bundle carries canonical payloads and rewrites installed Shipyard refe
   });
 });
 
+test('the generated bundle covers all nine canonical roles and planning references', () => {
+  withFixture({}, (f) => {
+    const manifest = generated(f);
+    const bundle = path.join(f.out, 'bundle');
+    const staticReferences = new Set(policy.CODEX_STATIC_ROLES.map((role) =>
+      role === 'research' ? 'inv-research' : role));
+    for (const reference of staticReferences) {
+      const file = `references/${reference}.md`;
+      assert.ok(manifest.bundle_files.includes(file), `missing canonical reference ${file}`);
+      assert.ok(fs.existsSync(path.join(bundle, file)), `missing generated payload ${file}`);
+    }
+
+    // Dynamic roles have no static agent file, but they must still be present
+    // in the generated executable surface that owns their callback contract.
+    const generatedSkills = new Map([
+      ['research', 'skills/shipyard-investigate/SKILL.md'],
+      ['decomposition', 'skills/shipyard-decompose/SKILL.md'],
+      ['executor', 'bundle/workflows/executors.mjs'],
+    ]);
+    for (const [role, relative] of generatedSkills) {
+      assert.ok(fs.existsSync(path.join(f.out, relative)), `missing generated role surface for ${role}`);
+      assert.ok(read(path.join(f.out, relative)).length > 0, `empty generated role surface for ${role}`);
+    }
+    assert.deepStrictEqual(new Set(policy.ROLES), new Set([
+      'research', 'decomposition', 'executor', 'pr-sentinel', 'integrator',
+      'drift-check', 'arch-review', 'ci-fix', 'review-fix',
+    ]));
+    assert.ok(read(path.join(f.out, 'skills/shipyard-investigate/SKILL.md')).includes('planning.v1'));
+    assert.ok(read(path.join(f.out, 'skills/shipyard-decompose/SKILL.md')).includes('artifact_index'));
+  });
+});
+
+test('the generated manifest refuses a stale planning consumer payload', () => {
+  withFixture({}, (f) => {
+    const manifest = generated(f);
+    const payload = path.join(f.out, 'bundle/scripts/claude-dispatch-adapter.cjs');
+    fs.appendFileSync(payload, '\n// stale planning payload\n');
+    assert.throws(
+      () => gen.validateCodexBundle(f.out, f.options),
+      /digest|payload|manifest/i,
+    );
+    // Keep the fixture mutation explicit: a caller cannot repair a stale
+    // generated payload by changing only the manifest digest.
+    const after = json(path.join(f.out, 'manifest.json'));
+    assert.equal(after.bundle_digests['scripts/claude-dispatch-adapter.cjs'], manifest.bundle_digests['scripts/claude-dispatch-adapter.cjs']);
+  });
+});
+
 suite('compatibility settings cannot tune the ADR-014 grid');
 
 const compatibilityConfigs = {

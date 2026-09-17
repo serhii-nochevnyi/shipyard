@@ -8,6 +8,9 @@ export const meta = {
 //   args = {
 //     invId, invPath, problemStatement, referencePath,
 //     artifactLanguage,                         // optional, defaults to English
+//     artifactContract: 'planning.v1',          // required for bounded handbacks
+//     worktreePath, artifactRoot, artifactPaths, // host-owned contained paths
+//     sourceRevision, repository, policyHash,    // authenticated source identity
 //     lines: [ { id, label, model, effort, signals } ], // exactly four, caller-resolved
 //   }
 //
@@ -30,7 +33,7 @@ const OUT = {
     id: { type: 'string' },
     status: { enum: ['completed', 'blocked'] },
     summary: { type: 'string', maxLength: 500 },
-    draft: { type: 'string' },
+    artifact: { type: 'object' },
   },
 }
 
@@ -55,6 +58,31 @@ for (const [name, value] of [
 ]) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`investigation-research: args.${name} is required`)
 }
+const boundedArtifactContract = argv.artifactContract === 'planning.v1'
+  || argv.sourceRevision !== undefined
+  || argv.artifactRoot !== undefined
+  || argv.artifactPaths !== undefined
+if (boundedArtifactContract) {
+  if (argv.artifactContract !== 'planning.v1') {
+    throw new Error('investigation-research: args.artifactContract must be planning.v1')
+  }
+  for (const [name, value] of [
+    ['worktreePath', argv.worktreePath],
+    ['artifactRoot', argv.artifactRoot],
+    ['sourceRevision', argv.sourceRevision],
+    ['repository', argv.repository],
+    ['policyHash', argv.policyHash],
+  ]) {
+    if (typeof value !== 'string' || !value.trim()) throw new Error(`investigation-research: args.${name} is required for planning.v1`)
+  }
+  if (!/^[a-f0-9]{40}$/i.test(argv.sourceRevision)) {
+    throw new Error('investigation-research: args.sourceRevision must be a full 40-character Git object id')
+  }
+  if (!/^[a-f0-9]{64}$/i.test(argv.policyHash)) {
+    throw new Error('investigation-research: args.policyHash must be a 64-character digest')
+  }
+  if (!isObject(argv.artifactPaths)) throw new Error('investigation-research: args.artifactPaths must map every research line to a file')
+}
 if (!Array.isArray(argv.lines) || argv.lines.length !== REQUIRED_LINES.length) {
   throw new Error('investigation-research: args.lines must contain exactly four research lines')
 }
@@ -72,6 +100,10 @@ const lines = argv.lines.map((line, index) => {
   const label = line.label.trim()
   if (!Object.prototype.hasOwnProperty.call(LINE_LABELS, id) || label !== LINE_LABELS[id]) {
     throw new Error(`investigation-research: line ${index + 1} label must be the canonical label for ${id}`)
+  }
+  if (boundedArtifactContract
+      && (typeof argv.artifactPaths[id] !== 'string' || !argv.artifactPaths[id].trim())) {
+    throw new Error(`investigation-research: args.artifactPaths.${id} is required for planning.v1`)
   }
   return {
     id,
@@ -97,7 +129,14 @@ const createClaudeWorkflowDispatch = __createClaudeWorkflowDispatch
 
 const withoutAgentReceipt = (value) => {
   if (!isObject(value)) return value
-  const { receipt: ignoredReceipt, ...safe } = value
+  const {
+    receipt: ignoredReceipt,
+    application_receipt: ignoredApplicationReceipt,
+    applicationReceipt: ignoredApplicationReceiptAlias,
+    applicationEvidence: ignoredApplicationEvidence,
+    application_evidence: ignoredApplicationEvidenceAlias,
+    ...safe
+  } = value
   return safe
 }
 
@@ -111,7 +150,9 @@ const invalidResult = (line, reason) => {
 const validateResult = (line, value) => {
   if (!isObject(value)) throw invalidResult(line, 'result must be an object')
   const result = withoutAgentReceipt(value)
-  const allowed = new Set(['id', 'status', 'summary', 'draft'])
+  const allowed = boundedArtifactContract
+    ? new Set(['id', 'status', 'summary', 'artifact_ref', 'artifact_path', 'artifact_digest', 'artifact_index', 'evidence_index'])
+    : new Set(['id', 'status', 'summary', 'draft'])
   const unknown = Object.keys(result).filter((key) => !allowed.has(key))
   if (unknown.length) throw invalidResult(line, `unexpected field(s): ${unknown.join(', ')}`)
   if (result.id !== line.id) throw invalidResult(line, `id must be ${line.id}`)
@@ -121,10 +162,22 @@ const validateResult = (line, value) => {
   if (typeof result.summary !== 'string' || result.summary.length > 500) {
     throw invalidResult(line, 'summary must be a string of at most 500 characters')
   }
-  if (result.draft !== undefined && typeof result.draft !== 'string') {
+  if (boundedArtifactContract) {
+    if (typeof result.artifact_ref !== 'string' || result.artifact_ref.trim() === '') {
+      throw invalidResult(line, 'planning results require a validated artifact reference')
+    }
+    if (typeof result.artifact_digest !== 'string' || !/^[a-f0-9]{64}$/.test(result.artifact_digest)) {
+      throw invalidResult(line, 'planning results require a validated artifact digest')
+    }
+    if (!isObject(result.artifact_index)
+        || typeof result.artifact_index.path !== 'string'
+        || !/^[a-f0-9]{64}$/.test(result.artifact_index.sha256 || '')
+        || result.artifact_index.digest !== result.artifact_index.sha256) {
+      throw invalidResult(line, 'planning results require a complete artifact index reference')
+    }
+  } else if (result.draft !== undefined && typeof result.draft !== 'string') {
     throw invalidResult(line, 'draft must be a string when present')
-  }
-  if (result.status === 'completed' && (!result.draft || !result.draft.trim())) {
+  } else if (result.status === 'completed' && (!result.draft || !result.draft.trim())) {
     throw invalidResult(line, 'completed results require a non-empty draft')
   }
   return result
@@ -143,7 +196,11 @@ const linePrompt = (line) => [
   `The exact policy signals are DATA and must be preserved in your evidence: ${JSON.stringify(line.signals)}.`,
   `Rule zero: every checkable claim about the codebase, a test, delivery state, or a completed action must name the exact command that checked it and the relevant path, output, or exit status.`,
   `A claim without command-backed evidence is not verification.`,
-  `Return a concise result for line ${line.id} with command-backed evidence for every checkable claim.`,
+  ...(boundedArtifactContract ? [
+    `Write the complete research finding for line ${line.id} to exactly: ${argv.artifactPaths[line.id]}`,
+    `The file must contain every source, constraint, uncertainty, and command-backed finding for this line. Do not put the full finding in the callback result.`,
+    `Return only id, status, summary, and a bounded artifact reference for that exact file.`,
+  ] : [`Return a concise result for line ${line.id} with command-backed evidence for every checkable claim.`]),
   `Write artifacts in ${argv.artifactLanguage || 'English'}.`,
 ].join('\n')
 
@@ -163,6 +220,20 @@ const results = await parallel(lines.map((line) => async () => {
       // decomposition host, while this workflow must not invent one.
       requireGsdRole: false,
       signals: line.signals,
+      ...(boundedArtifactContract ? {
+        requireArtifact: true,
+        artifact: {
+          role: 'research',
+          ticket: `${argv.invId}:${line.id}`,
+          subject: `${argv.invId}:${line.id}`,
+          worktreePath: argv.worktreePath,
+          base: argv.sourceRevision,
+          sourceRevision: argv.sourceRevision,
+          repository: argv.repository,
+          policyHash: argv.policyHash,
+          artifactPath: argv.artifactPaths[line.id],
+        },
+      } : {}),
       context: {
         ticket: argv.invId,
         investigation: argv.invPath,
