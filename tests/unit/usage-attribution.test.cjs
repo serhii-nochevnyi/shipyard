@@ -110,6 +110,21 @@ test('usage attribution keeps provider/runtime pairs explicit', () => {
   );
 });
 
+test('usage attribution preserves treatment and declared account scope metadata', () => {
+  const record = normalizeRecord(base({
+    treatment_id: 'phase-34-fable-medium',
+    arm: 'treatment',
+    account_scope: 'anthropic-max',
+  }));
+  assert.equal(record.treatment_id, 'phase-34-fable-medium');
+  assert.equal(record.arm, 'treatment');
+  assert.equal(record.account_scope, 'anthropic-max');
+  assert.throws(
+    () => normalizeRecord(base({ arm: 'candidate' })),
+    /arm must be baseline or treatment/
+  );
+});
+
 test('transcript sources are canonicalized before the durable ledger is written', () => {
   const transcript = path.join(os.tmpdir(), 'shipyard-source-root', 'logs', 'session.jsonl');
   const relative = path.relative(process.cwd(), transcript);

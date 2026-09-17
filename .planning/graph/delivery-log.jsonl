@@ -1277,3 +1277,10 @@
 {"ts":"2026-09-17T09:35:37.500Z","event":"status_change","ticket":"T-33-09","from":"pending","to":"pr-open","pr":162}
 {"ts":"2026-09-17T09:35:58.036Z","event":"merge","ticket":"T-33-09","pr":162,"base":"epic/33-reduce-orchestration-context-and-transfer-sessions-safely","repo":null,"by":"sentinel"}
 {"ts":"2026-09-17T09:36:22.933Z","event":"status_change","ticket":"T-33-09","from":"pr-open","to":"merged","pr":162}
+{"ts":"2026-09-17T16:19:24.785Z","event":"status_change","ticket":"T-34-01","from":null,"to":"merged","pr":167}
+{"ts":"2026-09-17T16:19:24.785Z","event":"status_change","ticket":"T-34-02","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-17T16:19:24.785Z","event":"status_change","ticket":"T-34-03","from":null,"to":"merged","pr":169}
+{"ts":"2026-09-17T16:19:24.785Z","event":"status_change","ticket":"T-34-04","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-17T16:19:24.785Z","event":"status_change","ticket":"T-34-05","from":null,"to":"pr-open","pr":171}
+{"ts":"2026-09-17T16:20:00.050Z","event":"status_change","ticket":"T-34-02","from":"pending","to":"merged","pr":168}
+{"ts":"2026-09-17T16:20:00.050Z","event":"status_change","ticket":"T-34-04","from":"pending","to":"merged","pr":170}

@@ -1,11 +1,11 @@
 ---
 # shipyard:gsd-sync generated; sync-version: 1; source fingerprint: db2f91b8378d89976b74e96a0444bd6fe575d1e2d2c7c984b0b9dae8bcc127ee
-phase: 30-a-ticket-you-cannot-reach-is-not-deliverable
-plan: 04
+phase: 34-improve-convergence-and-tune-from-measured-outcomes
+plan: 03
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Delivery evidence for T-30-04
+  - Delivery evidence for T-34-03
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -20,22 +20,22 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-12
+completed: 2026-09-17
 status: complete
 shipyard_sync: delivery-projection
 shipyard_source_fingerprint: db2f91b8378d89976b74e96a0444bd6fe575d1e2d2c7c984b0b9dae8bcc127ee
 ---
 
-# Phase 30: Require an explicit operator choice before cloning — Delivery Projection
+# Phase 34: Strengthen manual merge verdict carry — Delivery Projection
 
 **Plan delivery is evidenced by a merged ticket.**
 
 ## Delivery Evidence
 
-- Ticket: T-30-04
+- Ticket: T-34-03
 - Delivery status: merged
-- PR: #113
-- Source plan: .planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-04-PLAN.md
+- PR: #169
+- Source plan: .planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-03-PLAN.md
 - This summary is complete because the delivery state observes `merged`.
 
 ## Decisions & Deviations
