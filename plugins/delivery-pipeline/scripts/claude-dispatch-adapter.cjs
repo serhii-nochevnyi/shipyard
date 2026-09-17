@@ -14,6 +14,7 @@ const {
   isDurableRecorder,
 } = require('./dispatch-boundary.cjs');
 const { validateContextPacket } = require('./context-packet.cjs');
+const { snapshotFor } = require('./model-capability.cjs');
 
 const REPAIR = 'Install an ADR-014-capable Claude host with explicit workflow model and effort support; provide current host capabilities and retry the exact selection.';
 const ARTIFACT_ENVELOPE_MAX_BYTES = 8192;
@@ -467,6 +468,7 @@ function createClaudeDispatchAdapter(options = {}) {
   const capabilities = JSON.parse(JSON.stringify(options.capabilities || host.capabilities || {}));
   const launchNative = host.launch;
   const launchTypedGsd = host.launchTypedGsd;
+  const capacity = options.capacity || host.capacity;
 
   function validate(resolution) {
     validateAvailability(resolution, capabilities);
@@ -557,6 +559,8 @@ function createClaudeDispatchAdapter(options = {}) {
       observedModel: capabilities.observedModel !== false,
       observedEffort: capabilities.observedEffort !== false,
     }),
+    capabilitySnapshot: (resolution, context) => snapshotFor(capabilities, resolution, context),
+    ...(capacity !== undefined ? { capacity } : {}),
     supports: (resolution) => validateAvailability(resolution, capabilities),
     validate,
   };
@@ -608,6 +612,7 @@ function createClaudeWorkflowDispatch(options = {}) {
   // replace the host's recorder/evidence implementation.
   const capabilities = suppliedHost ? suppliedHost.capabilities : options.capabilities;
   const recorder = suppliedHost ? suppliedHost.recorder : options.recorder;
+  const capacity = suppliedHost ? suppliedHost.capacity : options.capacity;
   const applicationEvidence = suppliedHost
     ? suppliedHost.applicationEvidence
     : options.applicationEvidence;
@@ -826,6 +831,7 @@ function createClaudeWorkflowDispatch(options = {}) {
   });
   const boundary = createDispatchBoundary({
     adapters: { claude: adapter }, recorder,
+    ...(capacity !== undefined ? { capacity } : {}),
     requireGsdRole: options.requireGsdRole !== false,
   });
   const input = {

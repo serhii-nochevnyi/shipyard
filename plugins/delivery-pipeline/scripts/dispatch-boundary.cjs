@@ -15,6 +15,7 @@ const canonicalResolveDispatch = canonicalPolicy.resolveDispatch;
 const canonicalValidateResolution = canonicalPolicy.validateResolution;
 const canonicalStableStringify = canonicalPolicy.stableStringify;
 const { resolveTaskLevel } = require('./pipeline-config.cjs');
+const modelCapability = require('./model-capability.cjs');
 const {
   capabilityForBoundary,
   createSessionHandoff,
@@ -1678,6 +1679,13 @@ function createDispatchBoundary(options = {}) {
     refuse('INVALID_INPUT', 'boundary policy must expose resolveDispatch and validateResolution');
   }
   const adapters = options.adapters || {};
+  const capacity = options.capacity === undefined
+    ? Object.values(adapters).find((adapter) => adapter && adapter.capacity)?.capacity
+    : options.capacity;
+  if (capacity !== undefined && capacity !== null
+      && (typeof capacity.acquire !== 'function' || typeof capacity.release !== 'function')) {
+    refuse('INVALID_CAPACITY', 'dispatch capacity must expose synchronous acquire and release methods');
+  }
   const requireGsdRole = options.requireGsdRole === true;
   const adapterHandoff = Object.values(adapters).find((adapter) => adapter && adapter.handoff)?.handoff;
   const handoffInput = options.handoff
@@ -1716,6 +1724,7 @@ function createDispatchBoundary(options = {}) {
   const trustedResolutions = new Map();
   const consumedReceiptIds = new Set();
   const reservedDispatchIds = new Set();
+  const releasedCapacityLeases = new Set();
 
   function stableReceipt(receipt) {
     return canonicalStableStringify(receipt);
@@ -1980,6 +1989,111 @@ function createDispatchBoundary(options = {}) {
     return deepFreeze(output);
   }
 
+  function resolveWithCapability(input, recorder, ticket, adapter, context) {
+    const candidate = resolve(input, recorder, ticket);
+    if (!adapter || typeof adapter.capabilitySnapshot !== 'function'
+        || !modelCapability.isModelAxisEscalation(candidate)) return candidate;
+    let rawSnapshot;
+    try {
+      rawSnapshot = invokeSync(adapter.capabilitySnapshot, adapter, [candidate, context || {}], 'adapter.capabilitySnapshot');
+    } catch (error) {
+      rawSnapshot = { schema_version: 'unknown', runtime: candidate.runtime, reason: error.message };
+    }
+    const assessment = modelCapability.evaluate(rawSnapshot, candidate);
+    if (assessment.state === 'supported') {
+      const output = snapshot({
+        ...candidate,
+        capability: { state: assessment.state, reason: assessment.reason, snapshot: assessment.snapshot },
+      });
+      if (output.signals && output.signals.priorApplied) markBoundaryVerifiedReceipt(output.signals.priorApplied);
+      return deepFreeze(output);
+    }
+    const prior = candidate.signals && candidate.signals.priorApplied;
+    const fallback = modelCapability.previousRung(candidate);
+    if (!fallback) {
+      refuse('UNSUPPORTED_SELECTION', `no bounded fallback exists for ${candidate.runtime}/${candidate.role}/${candidate.rung}`, { capability: assessment });
+    }
+    const fallbackResolution = resolve(modelCapability.fallbackInput(input, candidate), recorder, ticket);
+    const output = snapshot({
+      ...fallbackResolution,
+      capability: {
+        state: assessment.state,
+        reason: assessment.reason,
+        requested: { model: candidate.model, effort: candidate.effort, rung: candidate.rung },
+        fallback: { model: fallbackResolution.model, effort: fallbackResolution.effort, rung: fallbackResolution.rung },
+        ...(prior ? { predecessor_dispatch_id: prior.dispatch_id || null } : {}),
+      },
+    });
+    if (output.signals && output.signals.priorApplied) markBoundaryVerifiedReceipt(output.signals.priorApplied);
+    return deepFreeze(output);
+  }
+
+  function capacityAgentId(context, resolution) {
+    const source = context && typeof context === 'object' ? context : {};
+    for (const value of [source.agent_id, source.agentId, source.agent]) {
+      if (typeof value === 'string' && value.trim()) return value;
+    }
+    return resolution.dispatch_id;
+  }
+
+  function acquireCapacity(resolution, context) {
+    if (!capacity) return null;
+    const result = invokeSync(capacity.acquire, capacity, [{
+      agent_id: capacityAgentId(context, resolution),
+      role: resolution.role,
+      ...(context && (context.parent_capacity_lease_id || context.parentCapacityLeaseId)
+        ? { parent_lease_id: context.parent_capacity_lease_id || context.parentCapacityLeaseId }
+        : {}),
+    }], 'capacity admission');
+    if (!result || result.admitted !== true) {
+      refuse('CAPACITY_FULL', `dispatch capacity refused ${resolution.runtime}/${resolution.role}`, {
+        capacity: result || null,
+      });
+    }
+    if (typeof result.lease_id !== 'string' || !result.lease_id.trim()) {
+      refuse('INVALID_CAPACITY', 'capacity admission did not return a lease identity', { capacity: result });
+    }
+    return result;
+  }
+
+  function releaseCapacity(lease, strict = false) {
+    if (!capacity || !lease || releasedCapacityLeases.has(lease.lease_id)) return;
+    const result = invokeSync(capacity.release, capacity, [lease.lease_id], 'capacity lease release');
+    if (result !== undefined && (!result || result.released !== true)) {
+      if (strict) refuse('CAPACITY_RELEASE_FAILED', 'capacity lease could not be released', { lease_id: lease.lease_id, result });
+      return;
+    }
+    releasedCapacityLeases.add(lease.lease_id);
+  }
+
+  function releaseCapacityBestEffort(lease) {
+    try { releaseCapacity(lease); } catch (_) { /* TTL/recovery remains the backstop */ }
+  }
+
+  function startCapacityHeartbeat(lease) {
+    if (!capacity || !lease || typeof capacity.heartbeat !== 'function') return null;
+    let failure = null;
+    const intervalMs = Number.isFinite(capacity.heartbeat_interval_ms)
+      && capacity.heartbeat_interval_ms > 0 ? capacity.heartbeat_interval_ms : 60_000;
+    const timer = setInterval(() => {
+      try {
+        const result = invokeSync(capacity.heartbeat, capacity, [lease.lease_id], 'capacity lease heartbeat');
+        if (result && result.renewed !== true) failure = boundaryError(
+          'CAPACITY_LEASE_LOST', 'capacity lease heartbeat was not renewed', { lease_id: lease.lease_id, result }
+        );
+      } catch (error) {
+        failure = error;
+      }
+    }, intervalMs);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    return {
+      assertHealthy() {
+        if (failure) throw failure;
+      },
+      stop() { clearInterval(timer); },
+    };
+  }
+
   function validate(resolution, validateOptions = {}) {
     const adapter = validateOptions.adapter || adapterFor(validateOptions.adapters || adapters, resolution && resolution.runtime);
     validateWithAdapter(resolution, adapter);
@@ -2074,7 +2188,7 @@ function createDispatchBoundary(options = {}) {
     const runtime = typeof input.runtime === 'string' ? input.runtime.trim() : input.runtime;
     const adapter = adapterFor(adapters, runtime);
     const record = recorderFor(options, adapter);
-    const resolution = resolve(input, record, ticket);
+    const resolution = resolveWithCapability(input, record, ticket, adapter, context);
     if (!record) {
       refuse('RECORD_UNAVAILABLE', 'durable dispatch recording is mandatory; refusing to launch without a recorder');
     }
@@ -2101,18 +2215,35 @@ function createDispatchBoundary(options = {}) {
         { runtime: resolution.runtime },
       );
     }
+    let capacityLease = null;
+    let capacityHeartbeat = null;
+    try {
+      capacityLease = acquireCapacity(validatedResolution, context);
+      capacityHeartbeat = startCapacityHeartbeat(capacityLease);
+    } catch (error) {
+      if (error && error.code === 'CAPACITY_FULL') throw error;
+      throw error;
+    }
     let handoffReservation = null;
     let launchStarted = false;
-    if (handoffCapability) {
-      handoffReservation = handoffController.reserveLaunch(handoffCapability, {
-        dispatch_id: validatedResolution.dispatch_id,
-        runtime: validatedResolution.runtime,
-        role: validatedResolution.role,
-      });
+    try {
+      if (handoffCapability) {
+        handoffReservation = handoffController.reserveLaunch(handoffCapability, {
+          dispatch_id: validatedResolution.dispatch_id,
+          runtime: validatedResolution.runtime,
+          role: validatedResolution.role,
+        });
+      }
+    } catch (error) {
+      if (capacityHeartbeat) capacityHeartbeat.stop();
+      releaseCapacityBestEffort(capacityLease);
+      throw error;
     }
     try {
       reserveDispatchId(validatedResolution.dispatch_id, record, validatedResolution);
     } catch (error) {
+      if (capacityHeartbeat) capacityHeartbeat.stop();
+      releaseCapacityBestEffort(capacityLease);
       if (handoffReservation) {
         try { handoffController.completeLaunch(handoffReservation, { recorded: true, aborted: true }); } catch (_) { /* preserve the reservation failure */ }
       }
@@ -2128,6 +2259,8 @@ function createDispatchBoundary(options = {}) {
         if (priorClaim) priorLease = startClaimLease(record, prior.dispatch_id, claimConsumerId, priorClaim);
       }
     } catch (error) {
+      if (capacityHeartbeat) capacityHeartbeat.stop();
+      releaseCapacityBestEffort(capacityLease);
       if (handoffReservation) {
         try { handoffController.completeLaunch(handoffReservation, { recorded: true, aborted: true }); } catch (_) { /* preserve the refusal */ }
       }
@@ -2135,6 +2268,7 @@ function createDispatchBoundary(options = {}) {
     }
     const observationCapabilities = adapterObservationCapabilities(adapter);
     const finish = (launchResult) => {
+      if (capacityHeartbeat) capacityHeartbeat.assertHealthy();
       if (priorLease) priorLease.assertHealthy();
       const rawReceipt = unwrapReceipt(launchResult);
       const applicationEvidence = verifyApplicationReceiptInternal(validatedResolution, rawReceipt, {
@@ -2193,6 +2327,16 @@ function createDispatchBoundary(options = {}) {
           predecessor_dispatch_id: prior.dispatch_id,
           predecessor_consumer_id: claimConsumerId,
         } : {}),
+        ...(capacityLease ? {
+          capacity: {
+            coverage: capacityLease.coverage || 'unknown',
+            degraded: capacityLease.degraded === true,
+            max: capacityLease.max,
+            in_flight: capacityLease.in_flight,
+            free: capacityLease.free,
+          },
+          capacity_lease: { lease_id: capacityLease.lease_id },
+        } : {}),
       };
       const recordInput = deepFreeze(snapshot({
         ...baseTrace,
@@ -2217,6 +2361,8 @@ function createDispatchBoundary(options = {}) {
       registerReceipt(applicationReceipt, validatedResolution, record, finalizedRecord);
       if (handoffReservation) handoffController.completeLaunch(handoffReservation, { recorded: true, receipt: applicationReceipt });
       if (priorLease) priorLease.stop();
+      if (capacityHeartbeat) capacityHeartbeat.stop();
+      releaseCapacityBestEffort(capacityLease);
       return finalizedRecord;
     };
     try {
@@ -2245,6 +2391,8 @@ function createDispatchBoundary(options = {}) {
           }
           if (priorLease) priorLease.stop();
           if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
+          if (capacityHeartbeat) capacityHeartbeat.stop();
+          releaseCapacityBestEffort(capacityLease);
           throw error;
         });
       }
@@ -2258,6 +2406,8 @@ function createDispatchBoundary(options = {}) {
       }
       if (priorLease) priorLease.stop();
       if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
+      if (capacityHeartbeat) capacityHeartbeat.stop();
+      releaseCapacityBestEffort(capacityLease);
       throw error;
     }
   }

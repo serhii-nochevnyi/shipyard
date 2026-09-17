@@ -44,7 +44,7 @@ const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-const { computeFront, formatFront, ciEstimates, epicKey } = require(path.join(__dirname, 'front.cjs'));
+const { computeFront, formatFront, ciEstimates, epicKey, agentsInFlight } = require(path.join(__dirname, 'front.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
 // The park RECORDS, never the flat `activeEscalations` view: the board's lifting
 // sentence is chosen from the park's KIND, and the flat map keeps the kind only
@@ -66,6 +66,7 @@ const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resol
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
 const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
+const { readCapacitySnapshot } = require(path.join(__dirname, 'capacity-lease.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -88,6 +89,10 @@ const META = path.join(GRAPH_DIR, 'delivery-state-meta.json');
 const GSD_SYNC = path.join(__dirname, 'gsd-sync.cjs');
 const PUBLISH_SCHEMA_VERSION = 1;
 const FAIL_AFTER_PUBLISH = process.env.SHIPYARD_STATE_SYNC_FAIL_AFTER || null;
+const CAPACITY_STORE = process.env.SHIPYARD_CAPACITY_STORE || null;
+const CAPACITY_PROVIDER = process.env.SHIPYARD_CAPACITY_PROVIDER || null;
+const CAPACITY_ACCOUNT_SCOPE = process.env.SHIPYARD_CAPACITY_ACCOUNT_SCOPE
+  || process.env.SHIPYARD_ACCOUNT_SCOPE || null;
 
 // Test-only crash points for the publication boundary. Throwing from inside the
 // nested locks still releases them, while leaving the already-replaced payload
@@ -316,6 +321,18 @@ function ghChecks(prNumber, repo) {
 const {
   config: cfg, warnings: cfgWarnings, valid: CFG_VALID, error: CFG_ERROR,
 } = loadConfig(ROOT);
+
+function sharedCapacityFor(dispatched) {
+  if (!CFG_VALID || !CAPACITY_STORE || !CAPACITY_PROVIDER || !CAPACITY_ACCOUNT_SCOPE) return null;
+  const max = Number(cfg.max_concurrent_agents);
+  if (!Number.isSafeInteger(max) || max < 1) return null;
+  return readCapacitySnapshot(CAPACITY_STORE, {
+    provider: CAPACITY_PROVIDER,
+    accountScope: CAPACITY_ACCOUNT_SCOPE,
+    max,
+    localActive: agentsInFlight(dispatched),
+  });
+}
 
 if (!fs.existsSync(TICKETS)) fail('missing .planning/graph/tickets.json — run validate-graph first');
 let graph;
@@ -1033,6 +1050,8 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
   }
+  const dispatchedNow = activeDispatches(ROOT, state);
+  const sharedCapacity = sharedCapacityFor(dispatchedNow);
   // Computed AFTER the append, in the SAME locked section, so THIS run's own
   // newly observed status_change events (a ticket that just reached `merged`,
   // say) feed ciEstimates immediately. Reading the journal before the append
@@ -1069,7 +1088,8 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
     // ("the READ, the COMPUTE and the WRITE all sit inside the `state` lock"),
     // which exists because reading first and locking only the write is the
     // lost-update this repo has already paid for twice.
-    dispatched: activeDispatches(ROOT, state),
+    dispatched: dispatchedNow,
+    ...(sharedCapacity ? { sharedCapacity } : {}),
     // Expected CI length per ticket, a per-repo median over the LOCAL journal —
     // the front's last ordering key before the id (front.cjs). Note what does
     // NOT feed it: no per-PR `gh` field. Adding one to the bulk window is the
