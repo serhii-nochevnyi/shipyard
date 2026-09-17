@@ -514,6 +514,7 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved|feedback|sta
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|root|list [--json]> ...
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|refresh|pr|status|retarget> ...
 node ${CLAUDE_PLUGIN_ROOT}/scripts/scope-gate.cjs <T> --worktree <p> --base <ref> [--json]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/comment-policy.cjs <check|clean> <T> --worktree <p> --base <ref> [--json] [--apply]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--graph <dir>]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs <mark|clear|list> …
@@ -1886,11 +1887,37 @@ may be dispatched at all: fix the file.
    A violation is a decision, never a retry: revert the stray edit and escalate
    (it belongs to another ticket), or re-plan the ticket with the path declared.
 
-5c. **Validate executor evidence (MANDATORY, TRUSTED CONSUMER).** After the
-   did-work and scope gates pass, seal a direct Codex result as described in
-   Step 4. The Workflow path must use its returned `artifact_ref` only as a
-   reference, never as proof: validate both paths against the authenticated
-   boundary-store record and the live worktree before publication:
+5c. **Comment policy gate (MANDATORY, MECHANICAL).** Before any publication,
+   check the branch diff against the resolved base:
+
+   ```text
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/comment-policy.cjs check <T> \
+     --worktree <worktree> --base <state[T].base> --json
+   ```
+
+   The gate measures only added lines in supported code/config files. In each
+   file, non-protected comment lines may not outnumber added code lines.
+   Directives, licence/generated markers and other required tool comments are
+   protected; Markdown and other prose files are outside this budget. A non-zero
+   result blocks the push. First preview the mechanical cleanup:
+
+   ```text
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/comment-policy.cjs clean <T> \
+     --worktree <worktree> --base <state[T].base> --json
+   ```
+
+   Review the listed lines, then use `clean --apply --json` only for the listed
+   full-line additions. It never deletes inline or multiline comments. After
+   cleanup, rerun the ticket Verification commands, amend the commit, and rerun
+   the did-work, scope and comment gates. Because the worktree and HEAD changed,
+   repeat the trusted artifact validation and read steps below. A remaining
+   manual finding is a refusal: do not push or open the PR.
+
+5d. **Validate executor evidence (MANDATORY, TRUSTED CONSUMER).** After the
+   did-work, scope and comment gates pass, seal a direct Codex result as
+   described in Step 4. The Workflow path must use its returned `artifact_ref`
+   only as a reference, never as proof: validate both paths against the
+   authenticated boundary-store record and the live worktree before publication:
 
    ```text
    node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate \

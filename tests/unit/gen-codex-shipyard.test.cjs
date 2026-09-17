@@ -295,6 +295,7 @@ test('the bundle carries canonical payloads and rewrites installed Shipyard refe
       'session-handoff.cjs',
       'orchestration-overhead.cjs',
       'runtime-context.cjs',
+      'comment-policy.cjs',
     ]) {
       assert.strictEqual(read(path.join(f.out, 'bundle/scripts', file)), read(path.join(PLUGIN, 'scripts', file)));
     }
@@ -302,6 +303,7 @@ test('the bundle carries canonical payloads and rewrites installed Shipyard refe
     assert.match(generatedDeliver, /role-artifact\.cjs seal/);
     assert.match(generatedDeliver, /role-artifact\.cjs validate/);
     assert.match(generatedDeliver, /role-artifact\.cjs read/);
+    assert.match(generatedDeliver, /comment-policy\.cjs check/);
     assert.ok(!generatedDeliver.includes('${CLAUDE_PLUGIN_ROOT}'));
     assert.ok(manifest.bundle_files.includes('scripts/role-artifact.cjs'));
     assert.equal(
@@ -330,6 +332,7 @@ test('the generated bundle keeps recommendation, checkpoint and capability refus
     assert.ok(manifest.bundle_files.includes('scripts/session-handoff.cjs'));
     assert.ok(manifest.bundle_files.includes('scripts/orchestration-overhead.cjs'));
     assert.ok(manifest.bundle_files.includes('scripts/runtime-context.cjs'));
+    assert.ok(manifest.bundle_files.includes('scripts/comment-policy.cjs'));
     assert.match(generatedDeliver, /rotation_recommendation\.state/);
     assert.match(generatedDeliver, /automatic_transfer\.allowed/);
     assert.match(generatedDeliver, /checkpoint_collection/);

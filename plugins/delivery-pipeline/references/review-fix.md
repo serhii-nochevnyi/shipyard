@@ -96,10 +96,22 @@ and escalate rather than cycle through one of them again.
 
 ## After all threads
 - One commit for all accepted fixes: `review(T-XX-YY): address review round N`.
-- Push. **If the PR is APPROVED**, the push dismisses that approval — push anyway
-  (an open thread on an approved PR is real work), but leave a PR comment naming
-  what changed and that the approval was dismissed by it, so the reviewer is
-  re-approving knowingly rather than discovering the dismissal. **If the push is rejected because the base moved** (a parent squashed into
+- Before pushing, run the mandatory comment gate against the PR base:
+
+  ```
+  node <plugin-root>/scripts/comment-policy.cjs check <ticket> \
+    --worktree <your worktree> --base <base ref> --json
+  ```
+
+  A non-zero result blocks the push. Preview cleanup with `clean <ticket>`;
+  after reviewing its output, `clean --apply` may remove only listed full-line
+  additions. It leaves inline and multiline comments for manual handling. If
+  cleanup runs, rerun Verification, amend the commit, and run the check again.
+  Push only after the gate passes. **If the PR is APPROVED**, the push dismisses
+  that approval — push anyway (an open thread on an approved PR is real work),
+  but leave a PR comment naming what changed and that the approval was dismissed
+  by it, so the reviewer is re-approving knowingly rather than discovering the
+  dismissal. **If the push is rejected because the base moved** (a parent squashed into
   the epic while you were working), merge the base in — never rebase onto it:
 
   ```

@@ -21,6 +21,16 @@ output, or exit status. If a claim cannot be checked by a command, label it as
 an assumption or unknown and state the next check. A claim without
 command-backed evidence is not verification.
 
+## Code comments
+
+Keep new code comments rare and purposeful. Use them for required directives,
+licences, generated-file markers, security constraints or non-obvious
+invariants; remove narration that repeats the code. Before a PR push, the
+conveyor runs `scripts/comment-policy.cjs` over added code/config lines and
+blocks a file whose non-protected comments outnumber its added code. Its
+explicit `clean --apply` action removes only listed full-line additions; review
+the dry-run first, then rerun verification and amend the commit.
+
 ## For planners (writing PLAN.md)
 
 1. **Full frontmatter, always**: `phase`, `plan`, `title`, `type`, `wave`,

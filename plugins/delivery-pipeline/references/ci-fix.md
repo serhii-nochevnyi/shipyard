@@ -76,7 +76,19 @@ command-backed evidence is not verification.
    is all you can run; that is a partial verification and must be reported as
    one, not written up as green.
 6. Commit with a message referencing the ticket id, e.g.
-   `fix(T-01-02): <what was actually wrong>`. Push.
+   `fix(T-01-02): <what was actually wrong>`. Before pushing, run the mandatory
+   comment gate against the PR base:
+
+   ```
+   node <plugin-root>/scripts/comment-policy.cjs check <ticket> \
+     --worktree <your worktree> --base <base ref> --json
+   ```
+
+   A non-zero result blocks the push. Preview cleanup with `clean <ticket>`;
+   after reviewing its output, `clean --apply` may remove only listed full-line
+   additions. It leaves inline and multiline comments for manual handling. If
+   cleanup runs, rerun Verification, amend the commit, and run the check again.
+   Push only after the gate passes.
    **If the PR is APPROVED** (`gh pr view <n> --json reviewDecision`), your push
    dismisses that approval — silently, from the reviewer's side. Push anyway (a
    red check on an approved PR is real work), but say so in a PR comment: what
