@@ -313,4 +313,29 @@ test('contains no compatibility model reader or direct launch fallback', () => {
   assert.ok(!source.includes('spawn_agent'));
 });
 
+test('planning.v1 refuses before launch when its authenticated artifact context is incomplete', async () => {
+  let launches = 0;
+  await assert.rejects(
+    () => new AsyncFunction(
+      'agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch', source
+    )(
+      async () => { launches++; },
+      async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+      () => {},
+      () => {},
+      {
+        artifactContract: 'planning.v1',
+        invId: 'INV-INCOMPLETE',
+        invPath: '/inv',
+        problemStatement: 'test',
+        referencePath: '/ref',
+        lines,
+      },
+      undefined,
+    ),
+    /worktreePath|planning\.v1|artifact/i,
+  );
+  assert.equal(launches, 0);
+});
+
 done();
