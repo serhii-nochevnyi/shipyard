@@ -1797,6 +1797,7 @@ boundary.dispatch(
     signals: { risk, type, checkpoint, critical, signatureState, priorApplied },
     dispatch_id },
   { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md",
+    ticket: roundSubject,
     guardedTickets: [{ ticket, pr, branch, worktreePath, repo, base, planPath }],
     scriptsPath, graphPath, maxAttempts, planDefectSignatures }
 )
@@ -1805,14 +1806,15 @@ boundary.dispatch(
 The boundary resolves the fixed Codex Luna/medium or Workflow runtime Sonnet/high
 selection, validates the generated `shipyard-pr-sentinel.toml` or the native
 Workflow-runtime alias plus explicit effort, launches the typed guard, and returns a
-verified receipt. Only after that receipt exists may the overlay be updated:
-`dispatch-record.cjs mark <T> pr-sentinel --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph` for
-every ticket on the guarded list, using the returned boundary receipt and the
-exact Codex `--agent-file` when applicable. Never create a mark for a refused or
-phantom launch. Clear each record when the guard's report comes back; a
-`pr-sentinel` record also lifts when the PR merges or its base moves. New PRs get
-the same boundary call or the existing typed guard context, never an inherited
-guard/session.
+verified receipt. This round launch is the staged T-33-08 interface: the
+`round:<digest>` subject is required for the trusted consumer, but the current
+`dispatch-record.cjs` overlay remains ticket-bound. Do not run a shared round
+launch through the current per-ticket reconciliation path until T-33-08 supplies
+the authenticated membership bridge. After that bridge exists, only after the
+receipt does `dispatch-record.cjs mark <T> pr-sentinel --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph` apply to a corresponding ticket. Never pass a round receipt to a per-ticket mark or create a mark for a refused or phantom launch. Clear each
+record when the guard's report comes back; a `pr-sentinel` record also lifts when
+the PR merges or its base moves. New PRs get the same boundary call or the
+existing typed guard context, never an inherited guard/session.
 
 The mandatory boundary must support explicit model and effort application and return a concrete application receipt. Otherwise hard-refuse before constructing a prompt, spawning, or recording. Do not substitute `effort_applied=unsupported`, `unknown`, or absent evidence; Agent, prompt, session, or in-process fallback cannot authorize a routed launch.
 When no compliant background surface exists, use the documented inline sentinel
@@ -1991,6 +1993,14 @@ loop:
      `critical`/`checkpoint` evidence, then use the same boundary for the whole
      `resolve → validate → launch → receipt` operation:
 
+     Before constructing the judge prompt, clear its role-owned evidence
+     scratch file in the reviewed worktree:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+       --worktree <worktree> --role arch-review
+     ```
+
      ```text
      boundary.dispatch(
        { runtime, role: "arch-review",
@@ -2011,6 +2021,26 @@ loop:
      measurement, typed host, or documented escalation is a
      refusal. No architecture-review ceiling variant beyond the generated
      critical file is a valid launch target.
+     Before the verdict can reach `gate-trailer.cjs`, the host must preserve the
+     complete result and evidence through the trusted consumer in the same
+     worktree:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal --role arch-review --ticket <T> --pr <N>
+       --worktree <worktree> --base <base-ref> --boundary-store <receipt-store>
+       --dispatch-id <dispatch-id> --result-file <result.json>
+       --evidence-path .shipyard-arch-review-evidence.md
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate --role arch-review --ticket <T> --pr <N>
+       --worktree <worktree> --base <base-ref> --boundary-store <receipt-store>
+       --dispatch-id <dispatch-id> --artifact <artifact-ref>
+       --artifact-digest <artifact-digest>
+     ```
+
+     The consumer checks the complete finding index, blocking count, exact
+     reviewed head and merge-base tree, immutable evidence, and current
+     revision. A bounded synopsis or a cached judgment cannot authorize a
+     conform trailer; only the validated artifact may proceed to the live
+     trailer writer and sentinel gate.
      the same step runs the degenerate-green detector over the diff it judged —
        `degenerate-green.cjs <T> --base <base> --worktree <wt> --json
         --graph <project>/.planning/graph`
@@ -2451,9 +2481,18 @@ driving PRs hands the user a half-truth.
      and it is actionable work, not a note);
    - an integrator run per `${CLAUDE_PLUGIN_ROOT}/references/integrator.md` — the
      epic diff against the default branch, not the individual ticket-PRs →
-     `INTEGRATION.md`. Measure the epic input (`bytes ÷ 4`), record any journal-
+     `.planning/phases/<phase>/INTEGRATION.md`. Measure the epic input (`bytes ÷ 4`), record any journal-
      proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
+
+     Before constructing the integrator prompt, clear its role-owned
+     `.planning/phases/<phase>/INTEGRATION.md` scratch file in the integration
+     worktree:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+       --worktree <worktree> --role integrator --phase <phase>
+     ```
 
      ```text
      boundary.dispatch(
@@ -2462,18 +2501,46 @@ driving PRs hands the user a half-truth.
                     priorApplied },
          dispatch_id, previous_dispatch_id },
        { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/integrator.md",
+         ticket: phaseSubject,
          epic, diff, defaultBranch, measuredInputTokens, contestedEvidence,
-         architecturePath, outputPath: "INTEGRATION.md" }
+         architecturePath, outputPath: ".planning/phases/<phase>/INTEGRATION.md" }
      )
      ```
+
+     `phaseSubject` is `phase=<phase>;repository=<repository identity>;tickets=<ticket-set-digest>`;
+     compute it from the same complete ticket-set file passed to the artifact
+     consumer, so the authenticated dispatch cannot be reused for a different
+     integration set.
 
      Codex resolves Astra/low and escalates to Astra/medium only for the
      measured-window, contested, critical, or checkpoint evidence, validating
      `shipyard-integrator.toml` or `shipyard-integrator-critical.toml`.
      The Workflow runtime independently resolves Opus/medium or Opus/high with explicit
-     effort. The receipt must be verified before accepting `INTEGRATION.md` or
+     effort. The receipt must be verified before accepting
+     `.planning/phases/<phase>/INTEGRATION.md` or
      `passed`/`needs-fix`; no literal model, omitted effort, inherited session,
      or undocumented escalation is permitted.
+     After the receipt, seal the complete `.planning/phases/<phase>/INTEGRATION.md` and validate the
+     artifact before projecting the result or entering any phase-completion
+     branch:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal --role integrator --ticket <phase-subject>
+       --worktree <worktree> --phase <phase> --base <default-branch>
+       --boundary-store <receipt-store> --dispatch-id <dispatch-id>
+       --ticket-set-file <ticket-set.json> --result-file <result.json>
+       --evidence-path .planning/phases/<phase>/INTEGRATION.md
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate --role integrator --ticket <phase-subject>
+       --worktree <worktree> --phase <phase> --base <default-branch>
+       --boundary-store <receipt-store> --dispatch-id <dispatch-id>
+       --ticket-set-file <ticket-set.json> --artifact <artifact-ref>
+       --artifact-digest <artifact-digest>
+     ```
+
+     Validation re-reads the complete evidence, finding index, outcome and
+     blocking count, and the current combined head/base/tree. Missing, changed,
+     stale, or contradictory integration evidence refuses both projection and
+     phase completion; `human-review-required` remains a human decision.
    - `passed` → remove draft from the epic-PR (`gh pr ready`) and hand it to the human to
      merge epic → default branch (the phase lands as one PR);
    - `needs-fix` → fix tickets as new plans in the same phase (their base — the epic) →
