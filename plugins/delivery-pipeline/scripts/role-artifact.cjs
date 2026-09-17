@@ -811,10 +811,12 @@ function prepareRoleArtifact(value, options) {
   if (!REPAIR_ROLES.has(role) && role !== 'drift-check' && !JUDGMENT_ROLES.has(role)) {
     fail('INVALID_ARTIFACT', `role artifact preparation does not support ${role}`);
   }
-  const defaultName = JUDGMENT_ROLES.has(role) ? judgmentEvidenceName(role) : producerEvidenceName(role);
+  const defaultName = JUDGMENT_ROLES.has(role)
+    ? judgmentEvidenceName(role, input.phase)
+    : producerEvidenceName(role);
   const requested = input.evidencePath || input.evidence_path || defaultName;
   const file = JUDGMENT_ROLES.has(role)
-    ? judgmentEvidencePath(fsApi, worktree, role, requested, 'complete judgment evidence')
+    ? judgmentEvidencePath(fsApi, worktree, role, requested, 'complete judgment evidence', input.phase)
     : fixedPath(worktree, producerEvidenceName(role), 'producer evidence');
   assertContainedRegularPath(
     fsApi,
@@ -1055,14 +1057,25 @@ function sanitizedRoleResult(result, trusted) {
   return safe;
 }
 
-function judgmentEvidenceName(role) {
+function judgmentEvidenceName(role, phase) {
   const name = JUDGMENT_EVIDENCE_NAMES[role];
   if (!name) fail('INVALID_ARTIFACT', `no complete evidence path is registered for ${role}`);
+  if (role === 'integrator') {
+    if (typeof phase !== 'string' || phase.trim() === '') {
+      fail('MISSING_JUDGMENT_CONTEXT', 'integrator evidence path requires the phase name');
+    }
+    const phaseName = compactIdentity(phase, 'integration phase');
+    if (phaseName === '.' || phaseName === '..'
+        || phaseName !== path.basename(phaseName) || phaseName.includes('\\')) {
+      fail('INVALID_ARTIFACT', 'integration phase must be one directory name', { phase: phaseName });
+    }
+    return path.join('.planning', 'phases', phaseName, name);
+  }
   return name;
 }
 
-function judgmentEvidencePath(fsApi, worktree, role, requested, label) {
-  const expected = fixedPath(worktree, judgmentEvidenceName(role), label);
+function judgmentEvidencePath(fsApi, worktree, role, requested, label, phase) {
+  const expected = fixedPath(worktree, judgmentEvidenceName(role, phase), label);
   const candidate = requestedPathInWorktree(fsApi, worktree, requested, label);
   if (candidate !== expected) {
     fail('ARTIFACT_IDENTITY_MISMATCH', `${label} must use the prepared role-owned evidence path`, {
@@ -1388,11 +1401,12 @@ function reviewedIdentity(result, role, identity, input) {
   }
   const rawBaseValue = aliasValue(result, ['base', 'base_ref'], 'reviewed integration base');
   const rawBase = rawBaseValue === undefined ? undefined : compactIdentity(rawBaseValue, 'reviewed integration base');
-  const resolvedBaseCommit = rawBase === undefined
+  const resolvedBaseRef = rawBase === undefined
     ? null
-    : /^[a-f0-9]{40}$/i.test(rawBase)
-      ? rawBase.toLowerCase()
-      : gitCommitIfPresent(input || {}, identity.worktree, rawBase);
+    : liveBaseRef({ ...(input || {}), base: rawBase, baseRef: undefined }, identity.worktree);
+  const resolvedBaseCommit = resolvedBaseRef === null
+    ? null
+    : gitCommitIfPresent(input || {}, identity.worktree, resolvedBaseRef);
   const base = resolvedBaseCommit === identity.base_commit.toLowerCase()
     ? identity.base
     : rawBase;
@@ -1444,7 +1458,7 @@ function judgmentSubject(role, metadata, identity, input, ticketSet, pr) {
   if (role === 'pr-sentinel') return `round:${ticketSet.digest}`;
   if (role === 'integrator') {
     const phase = compactIdentity(input.phase, 'integration phase');
-    return `phase=${phase};repository=${identity.repository.identity}`;
+    return `phase=${phase};repository=${identity.repository.identity};tickets=${ticketSet.digest}`;
   }
   return `ticket=${metadata.ticket};pr=${pr}`;
 }
@@ -1693,8 +1707,16 @@ function sealJudgment(value, options) {
   metadata.trusted = trusted;
   const result = input.result;
   const data = judgmentResultData(result, metadata, input, identity);
-  const requestedEvidence = input.evidencePath || input.evidence_path || judgmentEvidenceName(role);
-  const evidencePath = judgmentEvidencePath(fsApi, worktree, role, requestedEvidence, 'complete judgment evidence');
+  const sourceEvidenceName = judgmentEvidenceName(role, input.phase);
+  const requestedEvidence = input.evidencePath || input.evidence_path || sourceEvidenceName;
+  const evidencePath = judgmentEvidencePath(
+    fsApi,
+    worktree,
+    role,
+    requestedEvidence,
+    'complete judgment evidence',
+    input.phase,
+  );
   assertContainedRegularPath(fsApi, worktree, evidencePath, 'complete judgment evidence');
   const sourceEvidence = readImmutableFile(fsApi, evidencePath, 'complete judgment evidence');
   if (!sourceEvidence.length) fail('MISSING_ARTIFACT', 'complete judgment evidence is empty');
@@ -1707,7 +1729,7 @@ function sealJudgment(value, options) {
   }
   const dispatchId = trusted.dispatchId;
   ensureArchiveDirectory(fsApi, worktree, dispatchId);
-  const archiveEvidence = archivePath(worktree, dispatchId, judgmentEvidenceName(role), 'archived judgment evidence');
+  const archiveEvidence = archivePath(worktree, dispatchId, JUDGMENT_EVIDENCE_NAMES[role], 'archived judgment evidence');
   const archiveFindings = archivePath(worktree, dispatchId, FINDINGS_NAME, 'archived judgment findings');
   const evidenceBytes = writeImmutableArtifactFile(fsApi, archiveEvidence, sourceEvidence, 'archived judgment evidence');
   const findingsFileBytes = writeImmutableArtifactFile(fsApi, archiveFindings, findingsBytes, 'archived judgment findings');
@@ -1807,10 +1829,11 @@ function validateJudgmentManifest(value, options) {
   if (!object(manifest.files) || !object(manifest.files.evidence) || !object(manifest.files.findings)) {
     fail('MISSING_ARTIFACT', 'judgment artifact manifest is missing complete evidence and findings references');
   }
-  const evidence = expectedRoleReference(fsApi, worktree, dispatchId, judgmentEvidenceName(role), manifest.files.evidence, 'judgment evidence');
+  const sourceEvidenceName = judgmentEvidenceName(role, input.phase);
+  const evidence = expectedRoleReference(fsApi, worktree, dispatchId, JUDGMENT_EVIDENCE_NAMES[role], manifest.files.evidence, 'judgment evidence');
   const findings = expectedRoleReference(fsApi, worktree, dispatchId, FINDINGS_NAME, manifest.files.findings, 'judgment findings');
   if (!evidence.content.length) fail('MISSING_ARTIFACT', 'judgment evidence archive is empty');
-  if (manifest.source_evidence_path !== judgmentEvidenceName(role)) {
+  if (manifest.source_evidence_path !== sourceEvidenceName) {
     fail('MISSING_ARTIFACT', 'judgment artifact manifest is missing the complete evidence source path');
   }
   const sourceEvidencePath = path.resolve(worktree, manifest.source_evidence_path);
@@ -2491,6 +2514,8 @@ function cli(argv) {
     const prepared = prepareRoleArtifact({
       worktreePath: required(values, 'worktree'),
       role: required(values, 'role'),
+      ...(values.phase ? { phase: values.phase } : {}),
+      ...(values.evidencePath ? { evidencePath: values.evidencePath } : {}),
     });
     process.stdout.write(`${JSON.stringify(cliValue(prepared))}\n`);
     return 0;

@@ -2481,16 +2481,17 @@ driving PRs hands the user a half-truth.
      and it is actionable work, not a note);
    - an integrator run per `${CLAUDE_PLUGIN_ROOT}/references/integrator.md` — the
      epic diff against the default branch, not the individual ticket-PRs →
-     `INTEGRATION.md`. Measure the epic input (`bytes ÷ 4`), record any journal-
+     `.planning/phases/<phase>/INTEGRATION.md`. Measure the epic input (`bytes ÷ 4`), record any journal-
      proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
 
      Before constructing the integrator prompt, clear its role-owned
-     `INTEGRATION.md` scratch file in the integration worktree:
+     `.planning/phases/<phase>/INTEGRATION.md` scratch file in the integration
+     worktree:
 
      ```text
      node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
-       --worktree <worktree> --role integrator
+       --worktree <worktree> --role integrator --phase <phase>
      ```
 
      ```text
@@ -2502,18 +2503,24 @@ driving PRs hands the user a half-truth.
        { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/integrator.md",
          ticket: phaseSubject,
          epic, diff, defaultBranch, measuredInputTokens, contestedEvidence,
-         architecturePath, outputPath: "INTEGRATION.md" }
+         architecturePath, outputPath: ".planning/phases/<phase>/INTEGRATION.md" }
      )
      ```
+
+     `phaseSubject` is `phase=<phase>;repository=<repository identity>;tickets=<ticket-set-digest>`;
+     compute it from the same complete ticket-set file passed to the artifact
+     consumer, so the authenticated dispatch cannot be reused for a different
+     integration set.
 
      Codex resolves Astra/low and escalates to Astra/medium only for the
      measured-window, contested, critical, or checkpoint evidence, validating
      `shipyard-integrator.toml` or `shipyard-integrator-critical.toml`.
      The Workflow runtime independently resolves Opus/medium or Opus/high with explicit
-     effort. The receipt must be verified before accepting `INTEGRATION.md` or
+     effort. The receipt must be verified before accepting
+     `.planning/phases/<phase>/INTEGRATION.md` or
      `passed`/`needs-fix`; no literal model, omitted effort, inherited session,
      or undocumented escalation is permitted.
-     After the receipt, seal the complete `INTEGRATION.md` and validate the
+     After the receipt, seal the complete `.planning/phases/<phase>/INTEGRATION.md` and validate the
      artifact before projecting the result or entering any phase-completion
      branch:
 
@@ -2522,7 +2529,7 @@ driving PRs hands the user a half-truth.
        --worktree <worktree> --phase <phase> --base <default-branch>
        --boundary-store <receipt-store> --dispatch-id <dispatch-id>
        --ticket-set-file <ticket-set.json> --result-file <result.json>
-       --evidence-path INTEGRATION.md
+       --evidence-path .planning/phases/<phase>/INTEGRATION.md
      node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate --role integrator --ticket <phase-subject>
        --worktree <worktree> --phase <phase> --base <default-branch>
        --boundary-store <receipt-store> --dispatch-id <dispatch-id>

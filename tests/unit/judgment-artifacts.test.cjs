@@ -52,10 +52,15 @@ function roundSubject(ticketSet) {
   return `round:${crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex')}`;
 }
 
-function phaseSubject(root) {
+function phaseSubject(root, ticketSet) {
   const common = git(root, ['rev-parse', '--git-common-dir']);
   const repository = fs.realpathSync(path.resolve(root, common));
-  return `phase=${INTEGRATION_PHASE};repository=${repository}`;
+  const ticketSetDigest = crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex');
+  return `phase=${INTEGRATION_PHASE};repository=${repository};tickets=${ticketSetDigest}`;
+}
+
+function integrationEvidencePath(root) {
+  return path.join(root, '.planning', 'phases', INTEGRATION_PHASE, 'INTEGRATION.md');
 }
 
 function fixture(role, boundaryTicket) {
@@ -99,6 +104,7 @@ function revision(root) {
 
 function evidence(root, name, text) {
   const file = path.join(root, name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${text}\n`, 'utf8');
   return file;
 }
@@ -416,10 +422,19 @@ test('a sentinel receipt for another round cannot seal this ticket set', () => {
 
 test('integrator preserves human-review-required findings and rejects duplicate or tampered delivery', () => {
   const tickets = ['T-33-01', 'T-33-02', 'T-33-03'];
-  const value = fixture('integrator', (root) => phaseSubject(root));
+  const value = fixture('integrator', (root) => phaseSubject(root, tickets));
   try {
     const identity = revision(value.root);
-    const integrationPath = evidence(value.root, 'INTEGRATION.md', [
+    const prepared = roleArtifact.prepareRoleArtifact({
+      worktreePath: value.root,
+      role: 'integrator',
+      phase: INTEGRATION_PHASE,
+    });
+    assert.equal(prepared.path, path.join(
+      fs.realpathSync(value.root),
+      '.planning', 'phases', INTEGRATION_PHASE, 'INTEGRATION.md',
+    ));
+    const integrationPath = evidence(value.root, path.relative(value.root, integrationEvidencePath(value.root)), [
       '# Integration judgment',
       'Outcome: human-review-required',
       'Question: approve the retained live gate before phase completion.',
@@ -438,7 +453,7 @@ test('integrator preserves human-review-required findings and rejects duplicate 
         id: 'human-question-1',
         type: 'human-question',
         question: 'Should the phase land with the mandatory live gate retained?',
-        evidence: 'INTEGRATION.md:3',
+        evidence: '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/INTEGRATION.md:3',
         summary: 'phase completion needs a human decision',
       }],
     };
@@ -482,6 +497,21 @@ test('integrator preserves human-review-required findings and rejects duplicate 
     assert.equal(sealed.envelope.reviewed_head, identity.head);
     assert.equal(sealed.envelope.reviewed_base_tree, identity.baseTree);
 
+    const substitutedTickets = ['T-33-01', 'T-33-02'];
+    assert.throws(
+      () => roleArtifact.seal(sealInput(value, {
+        ...result,
+        ticket_set: substitutedTickets,
+        ticket_set_digest: crypto.createHash('sha256').update(JSON.stringify(substitutedTickets)).digest('hex'),
+      }, {
+        role: 'integrator',
+        phase: INTEGRATION_PHASE,
+        ticketSet: substitutedTickets,
+        evidencePath: integrationPath,
+      })),
+      (error) => error && error.code === 'JUDGMENT_IDENTITY_MISMATCH',
+    );
+
     const duplicate = roleArtifact.seal(sealInput(value, result, {
       role: 'integrator',
       phase: INTEGRATION_PHASE,
@@ -509,7 +539,8 @@ test('integrator preserves human-review-required findings and rejects duplicate 
 });
 
 test('integrator refuses missing or empty complete integration evidence', () => {
-  const value = fixture('integrator', (root) => phaseSubject(root));
+  const tickets = [];
+  const value = fixture('integrator', (root) => phaseSubject(root, tickets));
   try {
     const identity = revision(value.root);
     const result = {
@@ -524,7 +555,8 @@ test('integrator refuses missing or empty complete integration evidence', () => 
       summary: 'passed',
       findings: [],
     };
-    const integrationPath = path.join(value.root, 'INTEGRATION.md');
+    const integrationPath = integrationEvidencePath(value.root);
+    fs.mkdirSync(path.dirname(integrationPath), { recursive: true });
     fs.writeFileSync(integrationPath, '');
     assert.throws(
       () => roleArtifact.seal(sealInput(value, result, {
@@ -550,11 +582,11 @@ test('integrator refuses missing or empty complete integration evidence', () => 
 });
 
 test('a changed combined base refuses an already passed integrator result', () => {
-  const value = fixture('integrator', (root) => phaseSubject(root));
+  const tickets = ['T-33-01'];
+  const value = fixture('integrator', (root) => phaseSubject(root, tickets));
   try {
     const identity = revision(value.root);
-    const tickets = ['T-33-01'];
-    const integrationPath = evidence(value.root, 'INTEGRATION.md', 'complete integration evidence');
+    const integrationPath = evidence(value.root, path.relative(value.root, integrationEvidencePath(value.root)), 'complete integration evidence');
     const result = {
       outcome: 'passed',
       head: identity.head,
@@ -591,6 +623,45 @@ test('a changed combined base refuses an already passed integrator result', () =
       }),
       (error) => error && error.code === 'STALE_ARTIFACT',
     );
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test('integrator resolves a bare reported base with the live origin preference', () => {
+  const tickets = ['T-33-01'];
+  const value = fixture('integrator', (root) => phaseSubject(root, tickets));
+  try {
+    fs.writeFileSync(path.join(value.root, 'base-new.txt'), 'base moved forward\n');
+    git(value.root, ['switch', '--quiet', 'main']);
+    git(value.root, ['add', 'base-new.txt']);
+    git(value.root, ['commit', '--quiet', '-m', 'move remote integration base']);
+    const remoteBase = git(value.root, ['rev-parse', 'main']);
+    const remoteBaseTree = git(value.root, ['rev-parse', `${remoteBase}^{tree}`]);
+    git(value.root, ['update-ref', 'refs/remotes/origin/main', remoteBase]);
+    git(value.root, ['switch', '--quiet', value.branchName]);
+
+    const result = {
+      outcome: 'passed',
+      head: git(value.root, ['rev-parse', 'HEAD']),
+      head_tree: git(value.root, ['rev-parse', 'HEAD^{tree}']),
+      base: 'main',
+      base_tree: remoteBaseTree,
+      ticket_set: tickets,
+      ticket_set_digest: crypto.createHash('sha256').update(JSON.stringify(tickets)).digest('hex'),
+      blocking_count: 0,
+      summary: 'passed',
+      findings: [],
+    };
+    const sealed = roleArtifact.seal(sealInput(value, result, {
+      role: 'integrator',
+      phase: INTEGRATION_PHASE,
+      base: 'origin/main',
+      ticketSet: tickets,
+      evidencePath: evidence(value.root, path.relative(value.root, integrationEvidencePath(value.root)), 'complete integration evidence'),
+    }));
+    assert.equal(sealed.envelope.reviewed_base, 'origin/main');
+    assert.equal(sealed.envelope.reviewed_base_tree, remoteBaseTree);
   } finally {
     fs.rmSync(value.root, { recursive: true, force: true });
   }

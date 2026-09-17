@@ -51,15 +51,15 @@ file:line finding, fix ticket, and human question in it. A short `summary` is
 only a transport synopsis and cannot replace the document.
 
 Before the authenticated dispatch, the host clears the role-owned
-`INTEGRATION.md` scratch file for this worktree:
+`.planning/phases/<phase>/INTEGRATION.md` scratch file for this worktree:
 
 ```bash
 node $SHIPYARD_ROOT/scripts/role-artifact.cjs prepare \
-  --worktree <worktree> --role integrator
+  --worktree <worktree> --role integrator --phase <phase>
 ```
 
-Write the fresh complete evidence to `INTEGRATION.md` in that worktree. A prior
-archive or another path is not a valid evidence source.
+Write the fresh complete evidence to `.planning/phases/<phase>/INTEGRATION.md`
+in that worktree. A prior archive or another path is not a valid evidence source.
 
 Return a structured result containing the exact combined revision and the
 complete merged ticket set:
@@ -96,7 +96,8 @@ node $SHIPYARD_ROOT/scripts/role-artifact.cjs seal \
   --worktree <worktree> --role integrator --ticket <phase-subject> \
   --phase <phase> --base <default-branch> --boundary-store <receipt-store> \
   --dispatch-id <dispatch-id> --ticket-set-file <ticket-set.json> \
-  --result-file <result.json> --evidence-path INTEGRATION.md
+  --result-file <result.json> \
+  --evidence-path .planning/phases/<phase>/INTEGRATION.md
 node $SHIPYARD_ROOT/scripts/role-artifact.cjs validate \
   --worktree <worktree> --role integrator --ticket <phase-subject> \
   --phase <phase> --base <default-branch> --boundary-store <receipt-store> \
@@ -106,11 +107,15 @@ node $SHIPYARD_ROOT/scripts/role-artifact.cjs validate \
 
 `<phase-subject>` is the host-owned `ticket` passed in the authenticated
 boundary launch context for the integrator dispatch and must match the
-phase-subject supplied to both commands.
+phase-subject supplied to both commands. Its canonical form is
+`phase=<phase>;repository=<repository identity>;tickets=<ticket-set-digest>`;
+the digest is `SHA-256(JSON.stringify(ticket_set))` from the same complete
+ticket-set file supplied to both the boundary context and the artifact consumer.
 
-Validation binds the phase and repository subject, combined head and tree,
-default branch and tree, ticket-set digest, dispatch receipt, immutable
-`INTEGRATION.md`, complete findings, outcome, and blocking count. It rechecks
+Validation binds the phase, repository, and complete ticket-set subject, combined
+head and tree, default branch and tree, ticket-set digest, dispatch receipt,
+immutable `.planning/phases/<phase>/INTEGRATION.md`, complete findings, outcome,
+and blocking count. It rechecks
 the current combined revision before projection or phase completion. Missing,
 empty, changed, stale, or contradictory evidence is a refusal. The validated
 artifact preserves `human-review-required` as a stop for the human and never
