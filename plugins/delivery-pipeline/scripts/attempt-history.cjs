@@ -36,6 +36,7 @@
 const fs = require('fs');
 const path = require('path');
 const roleArtifact = require('./role-artifact.cjs');
+const { resourceState } = require('./failure-signature.cjs');
 
 const argvAll = process.argv.slice(2);
 
@@ -253,7 +254,7 @@ if (asJson) {
   // the two derived numbers beside it. `next_n` is the key deliver.md names, so
   // it is spelled in one place, here. A JSON consumer must never be handed the
   // prose line below, and an empty history is `events: []` with `next_n: 1`.
-  console.log(JSON.stringify({ ticket, attempts, next_n: nextN, events: detailed }, null, 2));
+  console.log(JSON.stringify({ ticket, attempts, next_n: nextN, resource: resourceState(ordered), events: detailed }, null, 2));
   process.exit(0);
 }
 
@@ -261,6 +262,8 @@ if (asJson) {
 // including for a ticket nobody has attempted, where `next_n=1` is the answer and
 // the sentence below is the evidence for it.
 console.log(`attempts=${attempts} next_n=${nextN}`);
+const resources = resourceState(ordered);
+if (resources.state !== 'unknown') console.log(`resource=${resources.state} checkpoint=${resources.checkpoint}`);
 
 if (!shown.length) {
   console.log(`no prior attempts recorded for ${ticket}`);

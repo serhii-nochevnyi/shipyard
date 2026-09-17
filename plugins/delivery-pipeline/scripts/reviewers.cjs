@@ -37,6 +37,7 @@
 // once the bot has actually responded to the previous ask (`--force` overrides).
 
 const { execFileSync } = require('child_process');
+const reviewSignatures = require('./review-signature.cjs');
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -329,14 +330,21 @@ const unresolved = threads
     // a silently truncated thread would hide the reviewer's actual point
     comment_count: t.comments.totalCount,
     comments_truncated: t.comments.pageInfo.hasNextPage === true,
-  }));
+  }))
+  .map(reviewSignatures.decorate);
 
 const truncatedThreads = unresolved.filter((t) => t.comments_truncated).map((t) => t.url);
+const reviewSnapshot = reviewSignatures.snapshot(unresolved);
 const threadReport = {
   pr,
   unresolved_count: unresolved.length,
   truncated_threads: truncatedThreads,
   threads: unresolved,
+  review_findings: reviewSnapshot.findings,
+  review_signatures: reviewSnapshot.signatures,
+  review_coverage: reviewSnapshot.coverage,
+  review_snapshot: reviewSnapshot,
+  review_progress: reviewSignatures.progress([], reviewSnapshot),
 };
 
 if (cmd === 'unresolved') {
