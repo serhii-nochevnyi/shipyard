@@ -561,6 +561,15 @@ function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
         'observed-model': facts.observed_model, 'observed-effort': facts.observed_effort,
         'agent-file': recorderAgentFile(facts.agent_file), 'agent-id': facts.launch_id,
       };
+      if (facts.session_handoff !== undefined) {
+        const handoff = facts.session_handoff;
+        if (!handoff || typeof handoff !== 'object' || Array.isArray(handoff)
+            || typeof handoff.scope_id !== 'string' || !handoff.scope_id
+            || typeof handoff.run_id !== 'string' || !handoff.run_id
+            || !Number.isInteger(handoff.epoch) || handoff.epoch < 1) {
+          throw new Error('boundary receipt session handoff evidence is malformed');
+        }
+      }
       for (const [flag, value] of given) {
         if (['boundary-store', 'dispatch-id'].includes(flag)) continue;
         if (!Object.prototype.hasOwnProperty.call(aliases, flag) || aliases[flag] !== value) {

@@ -17,6 +17,7 @@ const {
 } = require('./dispatch-boundary.cjs');
 const { REPAIR } = require('./codex-model-remap.cjs');
 const { validateContextPacket } = require('./context-packet.cjs');
+const { isOwnerCapability } = require('./session-handoff.cjs');
 
 const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
 function refuse(code, message) {
@@ -135,7 +136,16 @@ function createCodexDispatchAdapter(options = {}) {
   const launchDynamic = host.launch;
   const launchStatic = host.launchStatic;
   const launchTypedGsd = host.launchTypedGsd;
+  const handoff = options.handoff || options.sessionHandoff || host.handoff || host.sessionHandoff;
   const validatedRepairs = new Map();
+
+  function assertHandoff() {
+    if (handoff === undefined) return;
+    if (!isOwnerCapability(handoff) || !handoff.controller || typeof handoff.controller.assertOwner !== 'function') {
+      refuse('INVALID_HANDOFF', 'Codex launch requires the host-held acknowledged session capability');
+    }
+    handoff.controller.assertOwner(handoff);
+  }
 
   function canonicalResolution(resolution) {
     // The boundary adds the static digest by snapshotting the resolution. Its
@@ -263,6 +273,7 @@ function createCodexDispatchAdapter(options = {}) {
   }
 
   function launch(resolution, context = {}, handoff) {
+    assertHandoff();
     const canonical = canonicalResolution(resolution);
     policy.validateResolution(canonical, { requireDispatchId: true });
     validate(resolution);
@@ -281,6 +292,11 @@ function createCodexDispatchAdapter(options = {}) {
         ['gsd_launch_mechanism', gsdRole === undefined ? undefined : GSD_LAUNCH_MECHANISM],
       ]) {
         if (source[field] !== undefined && source[field] !== expected) refuse('CONFLICTING_OVERRIDE', 'launch context contradicts resolved ' + field);
+      }
+      for (const field of ['handoff', 'sessionHandoff', 'session_handoff', 'owner', 'ownerCapability', 'owner_capability', 'session_token']) {
+        if (Object.prototype.hasOwnProperty.call(source, field)) {
+          refuse('INVALID_HANDOFF', `serialized launch context cannot carry ${field}; the host closure owns session authority`);
+        }
       }
       if (source.inherit || source.inline || source.session_inherited) refuse('UNSUPPORTED_SELECTION', 'launch context requests inherited or inline selection');
     }
@@ -326,6 +342,7 @@ function createCodexDispatchAdapter(options = {}) {
 
   return Object.freeze({
     runtime: 'codex', models: CODEX_MODEL_IDS,
+    ...(handoff !== undefined ? { handoff } : {}),
     // These are immutable configuration facts, not launch input.  Publishing
     // them lets the boundary independently snapshot static content and honour
     // a non-default manifest path before it delegates to this adapter.
