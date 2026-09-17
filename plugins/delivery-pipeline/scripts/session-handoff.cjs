@@ -14,6 +14,9 @@ const { execFileSync } = require('node:child_process');
 
 const SCHEMA = 'shipyard.session-handoff.v1';
 const ENVELOPE = 'shipyard.session-handoff-envelope.v1';
+const ROTATION_RECOMMENDATION_SCHEMA = 'shipyard.session-rotation-recommendation.v1';
+const ROTATION_STATES = Object.freeze(['recommend', 'not-recommended', 'unknown']);
+const MANUAL_RESUME_INSTRUCTION = 'checkpoint at a clean boundary, then explicitly resume and acknowledge the successor after live revalidation';
 const LOCK_GRACE_MS = 2000;
 const CAPABILITIES = new WeakSet();
 const CONTROLLERS = new WeakSet();
@@ -54,6 +57,205 @@ function stable(value) {
   }
   return JSON.stringify(value);
 }
+
+function safeRecommendationText(value, fallback = null) {
+  if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/.test(value)) return fallback;
+  return value.trim().slice(0, 256);
+}
+
+function recommendationRows(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((row) => object(row));
+}
+
+function effectivePassKind(row) {
+  if (row.pass_kind === undefined || row.pass_kind === null || row.pass_kind === '') {
+    return row.stage === 'ordinary_input' ? 'ordinary' : null;
+  }
+  return row.pass_kind;
+}
+
+function comparableKey(row) {
+  return [row.role, row.backend, row.runtime].map((value) => String(value || '')).join('\u001f');
+}
+
+function hasComparableDimensions(row) {
+  return ['role', 'backend', 'runtime'].every((key) =>
+    typeof row[key] === 'string' && row[key].trim() && row[key] !== 'unknown');
+}
+
+function usableNumber(value) {
+  return Number.isFinite(value) && value >= 0;
+}
+
+function median(values) {
+  const sorted = values.slice().sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function recommendationBlockers(input = {}) {
+  const raw = input.safe_boundary_blockers || input.safeBoundaryBlockers || input.blockers || [];
+  const values = Array.isArray(raw) ? raw : [raw];
+  return [...new Set(values.map((value) => safeRecommendationText(value)).filter(Boolean))];
+}
+
+function recommendationSafety(blockers) {
+  return {
+    status: blockers.length ? 'blocked' : 'unverified',
+    blockers: [...blockers],
+    manual_resume: 'available',
+  };
+}
+
+function recommendationResult({ state, basis, reason, evidence, blockers }) {
+  const comparison = evidence.comparison || null;
+  const identity = { state, basis, evidence, comparison };
+  return Object.freeze({
+    schema: ROTATION_RECOMMENDATION_SCHEMA,
+    version: 1,
+    state,
+    basis,
+    reason,
+    advisory: true,
+    recommendation_id: digest(stable(identity)),
+    evidence,
+    comparison,
+    safety: recommendationSafety(blockers),
+    automatic_transfer: Object.freeze({ status: 'unsupported', confidence: 'unproven', allowed: false, side_effect: 'none' }),
+    manual_resume: Object.freeze({ status: 'available', instruction: MANUAL_RESUME_INSTRUCTION }),
+  });
+}
+
+function unknownRecommendation(reason, blockers = []) {
+  return recommendationResult({
+    state: 'unknown', basis: 'insufficient-evidence', reason,
+    evidence: {
+      sample_ids: [], startup_sample_ids: [], metric: null, unit: null, comparison: null,
+    }, blockers,
+  });
+}
+
+function phaseBoundary(input) {
+  const raw = input.phase_boundary || input.phaseBoundary || input.completed_phase_boundary;
+  if (raw === true) return { completed: true, id: 'completed-phase-boundary' };
+  if (!object(raw)) return null;
+  if (raw.completed !== true && raw.status !== 'completed') return null;
+  return { completed: true, id: safeRecommendationText(raw.id || raw.phase || raw.name, 'completed-phase-boundary') };
+}
+
+function recommendRotation(input = {}) {
+  if (!object(input)) refuse('INVALID_INPUT', 'rotation recommendation options must be an object');
+  const blockers = recommendationBlockers(input);
+  const boundary = phaseBoundary(input);
+  if (boundary) {
+    return recommendationResult({
+      state: 'recommend', basis: 'completed-phase-boundary',
+      reason: 'a completed phase boundary is an explicit safe stopping point for manual rotation review',
+      evidence: {
+        sample_ids: [boundary.id], startup_sample_ids: [], metric: 'phase_boundary', unit: 'phase-boundary',
+        comparison: { operator: 'completed', observed: true, threshold: true },
+      }, blockers,
+    });
+  }
+
+  const rows = recommendationRows(input.observations || input.measurements || input.rows);
+  const ordinary = rows.filter((row) => row.stage === 'ordinary_input' && effectivePassKind(row) === 'ordinary');
+  if (!ordinary.length) return unknownRecommendation('no comparable ordinary pass evidence is available', blockers);
+  if (ordinary.some((row) => !hasComparableDimensions(row))) {
+    return unknownRecommendation('ordinary pass evidence is missing a role, runtime or backend identity', blockers);
+  }
+  const groups = new Set(ordinary.map(comparableKey));
+  if (groups.size !== 1) return unknownRecommendation('ordinary pass evidence mixes role, runtime or backend dimensions', blockers);
+  const first = ordinary[0];
+  const matches = (row) => comparableKey(row) === comparableKey(first)
+    && (input.role === undefined || row.role === input.role)
+    && (input.runtime === undefined || row.runtime === input.runtime)
+    && (input.backend === undefined || row.backend === input.backend);
+  const scopedOrdinary = ordinary.filter(matches);
+  if (scopedOrdinary.length < 5) {
+    return unknownRecommendation(`only ${scopedOrdinary.length} comparable ordinary passes are available; five are required`, blockers);
+  }
+  const ordered = scopedOrdinary.slice().sort((left, right) => {
+    const byTime = String(left.observed_at || '').localeCompare(String(right.observed_at || ''));
+    return byTime || String(left.observation_id || left.pass_id || '').localeCompare(String(right.observation_id || right.pass_id || ''));
+  });
+  const samples = ordered.slice(-5);
+  const latestTime = samples[samples.length - 1].observed_at;
+  const startup = rows.filter((row) => row.stage === 'startup' && comparableKey(row) === comparableKey(first)
+    && (!latestTime || !row.observed_at || String(row.observed_at) <= String(latestTime)));
+  if (!startup.length) return unknownRecommendation('prospective startup evidence is missing for the comparable role and backend', blockers);
+
+  const metricDefinitions = [
+    { field: 'estimated_tokens', metric: 'estimated_tokens', unit: 'tokens' },
+    { field: 'bytes', metric: 'bytes', unit: 'bytes' },
+  ];
+  const definition = metricDefinitions.find((candidate) =>
+    samples.every((row) => usableNumber(row[candidate.field]))
+      && startup.every((row) => usableNumber(row[candidate.field])));
+  if (!definition) return unknownRecommendation('ordinary or prospective startup measurements are incomplete', blockers);
+  const startupValues = startup.map((row) => row[definition.field]);
+  const startupMedian = median(startupValues);
+  if (!usableNumber(startupMedian) || startupMedian <= 0) {
+    return unknownRecommendation('prospective startup median is unavailable or zero', blockers);
+  }
+  const threshold = startupMedian * 2;
+  const evidenceSamples = samples.map((row) => ({
+    sample_id: safeRecommendationText(row.pass_id || row.sample_id || row.observation_id, 'unknown-sample'),
+    observation_id: safeRecommendationText(row.observation_id, null),
+    value: row[definition.field],
+    comparison: row[definition.field] > threshold ? 'above-threshold' : 'at-or-below-threshold',
+  }));
+  const comparison = {
+    operator: '>', multiplier: 2, startup_median: startupMedian, threshold,
+    values: evidenceSamples.map((sample) => sample.value),
+    all_above_threshold: evidenceSamples.every((sample) => sample.comparison === 'above-threshold'),
+  };
+  const evidence = {
+    sample_ids: evidenceSamples.map((sample) => sample.sample_id),
+    startup_sample_ids: startup.map((row) => safeRecommendationText(row.pass_id || row.sample_id || row.observation_id, 'unknown-startup')),
+    metric: definition.metric,
+    unit: definition.unit,
+    startup_median: startupMedian,
+    threshold,
+    samples: evidenceSamples,
+    comparison,
+  };
+  return recommendationResult({
+    state: comparison.all_above_threshold ? 'recommend' : 'not-recommended',
+    basis: 'ordinary-passes',
+    reason: comparison.all_above_threshold
+      ? 'the last five comparable ordinary passes each exceeded twice the prospective startup median'
+      : 'the last five comparable ordinary passes did not all exceed twice the prospective startup median',
+    evidence, blockers,
+  });
+}
+
+function unprovenTransferCapability(reason = 'no strict active runtime context is available', runtime = null) {
+  return {
+    schema: 'shipyard.session-transfer-capability.v1', version: 1, runtime,
+    runtime_source: null, policy_version: null, policy_hash: null, host: null, evidence: {},
+    missing_evidence: ['active_runtime_context', 'host_version', 'real_proving_ground_run'],
+    status: 'unsupported', confidence: 'unproven', reason,
+    automatic_transfer: { allowed: false, status: 'unsupported', confidence: 'unproven', side_effect: 'none', reason },
+    manual_resume: { status: 'available', required: true, instruction: MANUAL_RESUME_INSTRUCTION },
+  };
+}
+
+function statusCapability(identity, options = {}) {
+  const hasRuntimeInput = options.runtime_context || options.runtimeContext || options.runtime
+    || options.env || options.scriptPath || options.gsdTools || options.gsdCoreHome;
+  if (!hasRuntimeInput) return unprovenTransferCapability();
+  try {
+    const { reportTransferCapability } = require('./runtime-context.cjs');
+    return reportTransferCapability({ root: identity.worktree, ...options });
+  } catch (error) {
+    return unprovenTransferCapability(error.message, options.runtime || options.runtime_context && options.runtime_context.runtime || null);
+  }
+}
+
+const HANDOFF_COST_STAGES = new Set(['checkpoint_collection', 'successor_startup', 'cache_warmup']);
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -257,8 +459,31 @@ function publicLaunch(launch) {
   return { reservation_id: launch.reservation_id, dispatch_id: launch.dispatch_id, run_id: launch.run_id, epoch: launch.epoch, state: launch.state, started_at: launch.started_at || null, reason: launch.reason || null };
 }
 
-function publicScopeState(scope) {
-  return { scope: publicScope(scope.scope), status: scope.status, epoch: scope.epoch, owner: publicOwner(scope.owner), candidates: scope.candidates.map((candidate) => ({ candidate_id: candidate.candidate_id, run_id: candidate.run_id, session_id: candidate.session_id, epoch: candidate.epoch, status: candidate.status, created_at: candidate.created_at })), checkpoint: publicCheckpoint(scope.checkpoint), pending_launch: publicLaunch(scope.pending_launch), history: scope.history.map((entry) => clone(entry)) };
+function publicScopeState(scope, options = {}) {
+  const base = {
+    scope: publicScope(scope.scope), status: scope.status, epoch: scope.epoch,
+    owner: publicOwner(scope.owner), candidates: scope.candidates.map((candidate) => ({
+      candidate_id: candidate.candidate_id, run_id: candidate.run_id, session_id: candidate.session_id,
+      epoch: candidate.epoch, status: candidate.status, created_at: candidate.created_at,
+    })),
+    checkpoint: publicCheckpoint(scope.checkpoint), pending_launch: publicLaunch(scope.pending_launch),
+    history: scope.history.map((entry) => clone(entry)),
+  };
+  if (options.includeEvidence !== true) return base;
+  const rotation = recommendRotation({
+    observations: options.observations || options.measurements || options.rows,
+    phase_boundary: options.phase_boundary || options.phaseBoundary || options.completed_phase_boundary,
+    safe_boundary_blockers: options.safe_boundary_blockers || options.safeBoundaryBlockers || options.blockers,
+    role: options.role,
+    runtime: options.runtime,
+    backend: options.backend,
+  });
+  return {
+    ...base,
+    rotation_recommendation: rotation,
+    transfer_capability: options.transfer_capability || options.transferCapability
+      || statusCapability(options.identity || { worktree: process.cwd() }, options),
+  };
 }
 
 function publicCapability(data, capability) {
@@ -270,8 +495,16 @@ function publicCapability(data, capability) {
   return Object.freeze(result);
 }
 
-function publicState(state, scopeId) {
-  return { schema: state.schema, version: state.version, repository_id: state.repository_id, common_dir: state.common_dir, next_epoch: state.next_epoch, scopes: Object.values(state.scopes).filter((scope) => scopeId === undefined || scope.scope.scope_id === scopeId).map(publicScopeState) };
+function publicState(state, scopeId, options = {}) {
+  return {
+    schema: state.schema, version: state.version, repository_id: state.repository_id,
+    common_dir: state.common_dir, next_epoch: state.next_epoch,
+    scopes: Object.values(state.scopes)
+      .filter((scope) => scopeId === undefined || scope.scope.scope_id === scopeId)
+      .map((scope) => publicScopeState(scope, {
+        ...options, includeEvidence: true, identity: options.identity || { worktree: process.cwd() },
+      })),
+  };
 }
 
 function containsForbiddenKey(key) {
@@ -423,6 +656,46 @@ function createSessionHandoff(options = {}) {
   const clock = options.clock || (() => Date.now());
   const controller = {};
   const data = { identity, store, clock, controller };
+  const lifecycleRecorder = options.overheadRecorder
+    || options.overhead && options.overhead.recorder;
+  const lifecycleDefaults = {
+    role: safeRecommendationText(options.role, 'session-handoff'),
+    backend: safeRecommendationText(options.backend, 'unknown'),
+    policy_hash: options.policy_hash || options.policyHash,
+    treatment: options.treatment || options.treatments,
+  };
+
+  function recordLifecycleCost(stage, details = {}) {
+    if (!lifecycleRecorder) return { recorded: false, skipped: 'no-recorder' };
+    if (!HANDOFF_COST_STAGES.has(stage)) refuse('INVALID_INPUT', `unsupported handoff cost stage ${stage}`);
+    const bytes = details.bytes === undefined ? null : details.bytes;
+    const estimatedTokens = details.estimated_tokens === undefined
+      ? (bytes === null ? null : Math.ceil(bytes / 4)) : details.estimated_tokens;
+    if (bytes === null && estimatedTokens === null) return { recorded: false, skipped: 'missing-observed-cost' };
+    try {
+      const { recordHandoffCost } = require('./orchestration-overhead.cjs');
+      return recordHandoffCost(lifecycleRecorder, {
+        observation_id: details.observation_id || `handoff:${stage}:${details.run_id || 'unknown'}:${details.epoch || 0}`,
+        run_id: details.run_id || 'session-handoff',
+        dispatch_id: details.dispatch_id === undefined ? null : details.dispatch_id,
+        role: details.role || lifecycleDefaults.role,
+        runtime: details.runtime || options.runtime || 'unknown',
+        backend: details.backend || lifecycleDefaults.backend,
+        ...(lifecycleDefaults.policy_hash ? { policy_hash: lifecycleDefaults.policy_hash } : {}),
+        treatment: details.treatment || lifecycleDefaults.treatment,
+        stage,
+        source: 'session-handoff',
+        evidence: 'controller',
+        bytes: bytes === null ? 0 : bytes,
+        estimated_tokens: estimatedTokens,
+      });
+    } catch (error) {
+      // Observability must never turn an already durable checkpoint or an
+      // explicit successor registration into a half-reported lifecycle event.
+      // The missing row remains visible as missing evidence in the report.
+      return { recorded: false, skipped: 'recording-error', error: error.code || error.message };
+    }
+  }
   CONTROLLERS.add(controller); CONTROLLER_DATA.set(controller, data);
 
   function read(scopeId) {
@@ -464,12 +737,28 @@ function createSessionHandoff(options = {}) {
 
   controller.identity = Object.freeze({ ...identity });
   controller.store = store;
-  controller.status = function status(scope) {
+  controller.status = function status(scope, options = {}) {
     const scopeId = typeof scope === 'string' ? scope : scope && (scope.scope_id || scope.scopeId);
-    const state = read(scopeId);
-    return scopeId && !state ? null : publicState(state, scopeId);
+    const state = read();
+    return scopeId && !state.scopes[scopeId] ? null : publicState(state, scopeId, { ...options, identity });
   };
   controller.inspect = controller.status;
+
+  controller.recommendRotation = function recommendRotationForStatus(options = {}) {
+    return recommendRotation(options);
+  };
+
+  controller.requestAutomaticTransfer = function requestAutomaticTransfer() {
+    // This is deliberately a refusal result rather than a launcher. No resume,
+    // fork, timer, kill, child process or dispatch callback is reachable here.
+    return Object.freeze({
+      schema: 'shipyard.session-transfer-capability.v1', version: 1,
+      status: 'unsupported', confidence: 'unproven', side_effect: 'none',
+      automatic_transfer: Object.freeze({ allowed: false, status: 'unsupported', confidence: 'unproven', side_effect: 'none' }),
+      manual_resume: Object.freeze({ status: 'available', instruction: MANUAL_RESUME_INSTRUCTION }),
+      reason: 'automatic transfer has no proven runtime-specific host path; use the explicit checkpoint/resume/acknowledge sequence',
+    });
+  };
 
   controller.begin = function begin(input = {}) {
     const scope = normalizeScope(input);
@@ -512,13 +801,19 @@ function createSessionHandoff(options = {}) {
     const timestamp = nowIso(clock);
     const value = makeCheckpoint(identity, current.owner, current.scope.scope, payload, timestamp);
     if (current.scope.pending_launch) refuse('AMBIGUOUS_LAUNCH', 'cannot checkpoint while a launch reservation is unresolved');
-    return mutate((state) => {
+    const result = mutate((state) => {
       const scope = state.scopes[current.owner.scope_id];
       if (!scope || scope.owner.token_hash !== digest(current.owner.token)) refuse('SESSION_FENCED', 'owner changed before checkpoint');
       scope.status = 'checkpointed'; scope.owner.status = 'checkpointed'; scope.checkpoint = value;
       scope.history.push({ event: 'checkpoint', run_id: current.owner.run_id, epoch: current.owner.epoch, at: timestamp });
       return publicScopeState(scope);
     });
+    recordLifecycleCost('checkpoint_collection', {
+      observation_id: `handoff:checkpoint:${current.owner.scope_id}:${current.owner.epoch}`,
+      run_id: current.owner.run_id, epoch: current.owner.epoch, runtime: current.owner.runtime,
+      bytes: Buffer.byteLength(JSON.stringify(value), 'utf8'),
+    });
+    return result;
   };
 
   controller.resume = function resume(input = {}) {
@@ -531,15 +826,22 @@ function createSessionHandoff(options = {}) {
     const runtime = input.runtime === undefined ? found.record.owner && found.record.owner.runtime : safeId(String(input.runtime), 'runtime');
     const timestamp = nowIso(clock);
     let capability;
-    return mutate((state) => {
+    let candidateId;
+    const result = mutate((state) => {
       const scope = state.scopes[found.record.scope.scope_id];
       if (!scope || scope.status !== 'checkpointed' || scope.pending_launch) refuse(scope && scope.pending_launch ? 'AMBIGUOUS_LAUNCH' : 'HANDOFF_LOST', 'checkpoint changed before successor registration');
-      const candidateId = randomId('candidate'); const token = randomId('successor');
+      candidateId = randomId('candidate'); const token = randomId('successor');
       const stored = { candidate_id: candidateId, run_id: runId, session_id: sessionId, epoch: scope.epoch, token_hash: digest(token), runtime, status: 'preparing', created_at: timestamp };
       scope.candidates.push(stored); scope.history.push({ event: 'resume', candidate_id: candidateId, run_id: runId, epoch: scope.epoch, at: timestamp });
       capability = makeCapability(controller, { kind: 'candidate', repository_id: identity.repository_id, scope_id: scope.scope.scope_id, run_id: runId, session_id: sessionId, epoch: scope.epoch, status: 'preparing', phase: scope.scope.phase, tickets: scope.scope.tickets, candidate_id: candidateId, token });
       return capability;
     });
+    recordLifecycleCost('successor_startup', {
+      observation_id: `handoff:successor-startup:${candidateId}`,
+      run_id: runId, epoch: found.record.epoch, runtime,
+      bytes: Buffer.byteLength(JSON.stringify(found.record.checkpoint), 'utf8'),
+    });
+    return result;
   };
 
   controller.acknowledge = function acknowledge(candidateValue, optionsForAck = {}) {
@@ -552,7 +854,7 @@ function createSessionHandoff(options = {}) {
     catch (error) { if (error && error.code) throw error; refuse('LIVE_STATE_STALE', `successor revalidation failed: ${error.message}`); }
     const timestamp = nowIso(clock);
     let capability;
-    return mutate((state) => {
+    const result = mutate((state) => {
       const scope = state.scopes[candidate.scope.scope.scope_id];
       const stored = scope && scope.candidates.find((entry) => entry.candidate_id === candidate.candidate.candidate_id);
       if (!scope || !stored || stored.token_hash !== digest(candidate.candidate.token) || scope.status !== 'checkpointed' || scope.pending_launch) {
@@ -567,6 +869,17 @@ function createSessionHandoff(options = {}) {
       capability = makeCapability(controller, { kind: 'owner', repository_id: identity.repository_id, scope_id: scope.scope.scope_id, run_id: candidate.candidate.run_id, session_id: candidate.candidate.session_id, epoch, status: 'acknowledged', phase: scope.scope.phase, tickets: scope.scope.tickets, token });
       return capability;
     });
+    const cacheWarmup = optionsForAck.cache_warmup || optionsForAck.cacheWarmup;
+    if (object(cacheWarmup)) {
+      recordLifecycleCost('cache_warmup', {
+        observation_id: `handoff:cache-warmup:${candidate.candidate.candidate_id}`,
+        run_id: candidate.candidate.run_id, epoch: candidate.candidate.epoch,
+        runtime: candidate.candidate.runtime,
+        bytes: cacheWarmup.bytes,
+        estimated_tokens: cacheWarmup.estimated_tokens,
+      });
+    }
+    return result;
   };
   controller.cancelBeforeAck = function cancelBeforeAck(candidateValue) {
     const candidate = requireCandidate(candidateValue); const timestamp = nowIso(clock);
@@ -664,12 +977,41 @@ function parseArgs(argv) {
   return result;
 }
 function readJson(file, label) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { refuse('INVALID_INPUT', `${label} is not readable JSON: ${error.message}`); } }
+function readMeasurements(file) {
+  const raw = fs.readFileSync(file, 'utf8');
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (object(parsed) && Array.isArray(parsed.rows)) return parsed.rows;
+    refuse('INVALID_INPUT', 'measurements file must contain an array or an object with rows');
+  } catch (error) {
+    if (error && error.code === 'INVALID_INPUT') throw error;
+    const rows = raw.split('\n').filter((line) => line.trim()).map((line, index) => {
+      try { return JSON.parse(line); }
+      catch (parseError) { refuse('INVALID_INPUT', `measurements file line ${index + 1} is not JSON: ${parseError.message}`); }
+    });
+    return rows;
+  }
+}
 function cliOutput(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function runCli(argv = process.argv.slice(2)) {
   const args = parseArgs(argv); const command = args._[0];
   if (!['status', 'inspect', 'begin', 'checkpoint', 'resume', 'acknowledge', 'cancel-before-ack'].includes(command)) refuse('INVALID_INPUT', 'usage: session-handoff.cjs <status|inspect|begin|checkpoint|resume|acknowledge|cancel-before-ack> [options]');
   const handoff = createSessionHandoff({ cwd: args.cwd || process.cwd(), storeDir: args.storeDir });
-  if (command === 'status' || command === 'inspect') return cliOutput(handoff.status(args.scopeId));
+  if (command === 'status' || command === 'inspect') {
+    const options = {};
+    if (args.measurementsFile || args.overheadFile) {
+      options.observations = readMeasurements(args.measurementsFile || args.overheadFile);
+    }
+    if (args.phaseBoundary !== undefined) {
+      options.phase_boundary = args.phaseBoundary === true ? { completed: true } : readJson(args.phaseBoundary, 'phase boundary file');
+    }
+    if (args.runtime !== undefined) options.runtime = args.runtime;
+    if (args.backend !== undefined) options.backend = args.backend;
+    if (args.hostVersion !== undefined) options.host = { runtime: args.runtime, version: args.hostVersion };
+    if (args.capabilityFile !== undefined) options.evidence = readJson(args.capabilityFile, 'capability evidence file');
+    return cliOutput(handoff.status(args.scopeId, options));
+  }
   const scope = { phase: args.phase, tickets: args.tickets ? String(args.tickets).split(',').filter(Boolean) : [], scopeId: args.scopeId };
   if (command === 'begin') { const value = handoff.begin({ ...scope, runId: args.runId, sessionId: args.sessionId, runtime: args.runtime, worktree: args.worktree }); return cliOutput({ ...value, token: value.token }); }
   if (command === 'resume') { const value = handoff.resume({ ...scope, runId: args.runId, sessionId: args.sessionId, runtime: args.runtime }); return cliOutput({ ...value, token: value.token }); }
@@ -679,7 +1021,12 @@ function runCli(argv = process.argv.slice(2)) {
   return cliOutput(handoff.cancelBeforeAck(attached));
 }
 
-module.exports = Object.freeze({ SCHEMA, resolveRepositoryIdentity, ownershipStorePath, createSessionHandoff, createSessionHandoffController, createHandoffController, isOwnerCapability, isSessionCapability, isSessionHandoff, capabilityForBoundary, withSessionHandoff, currentSessionHandoff, handoffError });
+module.exports = Object.freeze({
+  SCHEMA, ROTATION_RECOMMENDATION_SCHEMA, ROTATION_STATES,
+  resolveRepositoryIdentity, ownershipStorePath, createSessionHandoff, createSessionHandoffController,
+  createHandoffController, recommendRotation, isOwnerCapability, isSessionCapability, isSessionHandoff,
+  capabilityForBoundary, withSessionHandoff, currentSessionHandoff, handoffError,
+});
 
 if (require.main === module) {
   try { runCli(); } catch (error) { process.stderr.write(`${error && error.message ? error.message : error}\n`); process.exitCode = 1; }
