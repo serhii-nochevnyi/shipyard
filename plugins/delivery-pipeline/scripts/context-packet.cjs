@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { inventory, sections } = require('./backlog-index.cjs');
+const { recordMeasurement, ESTIMATOR_VERSION } = require('./orchestration-overhead.cjs');
 
 const CONTEXT_PACKET_SCHEMA = 'shipyard.context-packet.v1';
 const CONTEXT_PACKET_VERSION = 1;
@@ -315,6 +316,63 @@ function packetWithoutAccounting(packet) {
   return copy;
 }
 
+function packetSourceRefs(packet) {
+  const refs = [
+    ...(packet.required_refs || []),
+    ...(packet.optional_refs || []),
+    ...((packet.backlog && packet.backlog.selected) || []),
+  ];
+  const seen = new Set();
+  return refs.filter((ref) => {
+    if (!ref) return false;
+    const source = typeof ref.path === 'string' ? ref.path
+      : typeof ref.source === 'string' && ref.source.includes(':') ? ref.source.slice(ref.source.indexOf(':') + 1) : null;
+    if (!source || seen.has(source)) return false;
+    seen.add(source);
+    return true;
+  }).map((ref) => {
+    const source = typeof ref.path === 'string' ? ref.path : ref.source.slice(ref.source.indexOf(':') + 1);
+    const bytes = ref.bytes === undefined && typeof ref.content === 'string'
+      ? Buffer.byteLength(ref.content, 'utf8') : ref.bytes;
+    return {
+      path: source,
+      sha256: ref.sha256 || ref.source_hash,
+      ...(bytes === undefined ? {} : { bytes }),
+    };
+  });
+}
+
+function recordPacketMeasurement(packet, options) {
+  const recorder = options.overheadRecorder || options.overhead && options.overhead.recorder;
+  if (!recorder) return { recorded: false, skipped: 'no-recorder' };
+  const runId = options.runId || options.run_id || `context:${packet.subject}`;
+  const dispatchId = options.dispatchId || options.dispatch_id || null;
+  const runtime = options.runtime || options.runtimeName || 'unknown';
+  const treatment = options.treatment === undefined ? options.treatments : options.treatment;
+  return recordMeasurement(recorder, {
+    observation_id: options.measurementId || options.measurement_id
+      || `context-startup:${runId}:${dispatchId || packet.subject}:${packet.source_revision}`,
+    run_id: runId,
+    dispatch_id: dispatchId,
+    role: packet.role,
+    runtime,
+    backend: packet.accounting.backend,
+    ...(options.policyId || options.policy_id ? { policy_id: options.policyId || options.policy_id } : {}),
+    ...(options.policyVersion || options.policy_version ? { policy_version: options.policyVersion || options.policy_version } : {}),
+    policy_hash: packet.policy_hash,
+    treatment,
+    stage: 'startup',
+    source: 'context-packet',
+    source_refs: packetSourceRefs(packet),
+    bytes: packet.accounting.estimated_bytes,
+    estimated_tokens: packet.accounting.estimated_tokens,
+    estimator_version: ESTIMATOR_VERSION,
+    provider_tokens: null,
+    evidence: 'none',
+    counts: { polls: null, model_turns: null, tool_calls: null },
+  });
+}
+
 function buildContextPacket(options = {}) {
   if (!object(options)) fail('INVALID_CONTEXT_PACKET', 'builder options must be an object');
   const root = canonicalRoot(options.root || options.projectRoot || options.worktreePath);
@@ -434,6 +492,7 @@ function buildContextPacket(options = {}) {
     packet.accounting.estimated_tokens = estimate;
     packet.accounting.estimated_bytes = Buffer.byteLength(JSON.stringify(packetWithoutAccounting(packet)), 'utf8');
   }
+  recordPacketMeasurement(packet, options);
   return packet;
 }
 
@@ -567,5 +626,6 @@ module.exports = Object.freeze({
   ContextPacketError,
   estimateTokens,
   buildContextPacket,
+  recordPacketMeasurement,
   validateContextPacket,
 });

@@ -15,6 +15,10 @@ const {
   createDurableRecorder,
   isDurableRecorder,
 } = require('./dispatch-boundary.cjs');
+const {
+  recordMeasurement,
+  ESTIMATOR_VERSION,
+} = require('./orchestration-overhead.cjs');
 
 const ROLE_ARTIFACT_SCHEMA = 'shipyard.role-artifact.v1';
 const ENVELOPE_SCHEMA = 'shipyard.executor-result.v1';
@@ -717,6 +721,63 @@ function validateExecutor(value, options) {
   });
 }
 
+function artifactReadRecorder(input) {
+  return input.overheadRecorder || (object(input.overhead) ? input.overhead.recorder : null);
+}
+
+function artifactReadReference(file) {
+  if (!object(file) || typeof file.sha256 !== 'string') return null;
+  const relative = file.relative || file.path;
+  if (typeof relative !== 'string' || !relative) return null;
+  return {
+    path: relative,
+    sha256: file.sha256,
+    ...(Number.isSafeInteger(file.bytes) ? { bytes: file.bytes } : {}),
+  };
+}
+
+function recordArtifactRead(input, validated, files, selection = 'full') {
+  const recorder = artifactReadRecorder(input);
+  if (!recorder) return { recorded: false, skipped: 'no-recorder' };
+  const refs = files.map(artifactReadReference).filter(Boolean);
+  const bytesRead = files.reduce((total, file) => {
+    if (typeof file.content !== 'string') return total;
+    return total + Buffer.byteLength(file.content, 'utf8');
+  }, 0);
+  const range = input.evidenceRange || input.evidence_range;
+  const rangeId = Array.isArray(range) ? `${range[0]}-${range[1]}` : 'full';
+  const dispatchId = validated.manifest && (validated.manifest.dispatch_id || validated.manifest.producer_dispatch_id)
+    || input.dispatchId || input.dispatch_id || null;
+  const ticket = validated.ticket || input.ticket || 'unknown';
+  const runId = input.run_id || input.runId || `artifact-read:${ticket}`;
+  const policyHash = validated.manifest && validated.manifest.policy_hash
+    || input.policy_hash || input.policyHash || null;
+  return recordMeasurement(recorder, {
+    observation_id: input.measurementId || input.measurement_id
+      || `artifact-read:${dispatchId || ticket}:${selection}:${rangeId}:${validated.artifact_digest}`,
+    run_id: runId,
+    dispatch_id: dispatchId,
+    role: validated.role || input.role || 'unknown',
+    runtime: (validated.manifest && validated.manifest.runtime) || input.runtime || 'unknown',
+    backend: input.backend || (validated.manifest && validated.manifest.backend) || 'unknown',
+    ...((validated.manifest && validated.manifest.policy_id) || input.policy_id || input.policyId
+      ? { policy_id: (validated.manifest && validated.manifest.policy_id) || input.policy_id || input.policyId } : {}),
+    ...((validated.manifest && validated.manifest.policy_version) || input.policy_version || input.policyVersion
+      ? { policy_version: (validated.manifest && validated.manifest.policy_version) || input.policy_version || input.policyVersion } : {}),
+    policy_hash: policyHash,
+    treatment: input.treatment === undefined ? input.treatments : input.treatment,
+    stage: 'parent_reingestion',
+    source: 'role-artifact',
+    source_refs: refs,
+    bytes: bytesRead,
+    estimated_tokens: Math.ceil(bytesRead / 4),
+    estimator_version: ESTIMATOR_VERSION,
+    provider_tokens: null,
+    evidence: 'none',
+    counts: { polls: null, model_turns: null, tool_calls: null },
+  });
+}
+
 function range(value) {
   if (!Array.isArray(value) || value.length !== 2
       || !Number.isInteger(value[0]) || !Number.isInteger(value[1])
@@ -733,7 +794,10 @@ function readExecutor(value, options) {
   if (hasRange && !requested) {
     fail('INVALID_INPUT', `evidence range must contain two non-negative integer offsets no more than ${EVIDENCE_RANGE_MAX_CHARS} characters apart`);
   }
-  if (!requested) return validated;
+  if (!requested) {
+    recordArtifactRead(input, validated, [validated.files.pr_body, validated.files.evidence]);
+    return validated;
+  }
   const referenceOnlyFiles = Object.freeze({
     pr_body: Object.freeze({
       path: validated.files.pr_body.path,
@@ -746,7 +810,7 @@ function readExecutor(value, options) {
       sha256: validated.files.evidence.sha256,
     }),
   });
-  return Object.freeze({
+  const targeted = Object.freeze({
     schema: validated.schema,
     artifact_ref: validated.artifact_ref,
     artifact_path: validated.artifact_path,
@@ -768,6 +832,11 @@ function readExecutor(value, options) {
       content: Array.from(validated.evidence).slice(requested[0], requested[1]).join(''),
     }),
   });
+  recordArtifactRead(input, validated, [{
+    ...validated.files.evidence,
+    content: targeted.evidence_range.content,
+  }], 'selected');
+  return targeted;
 }
 
 // Repair and drift results use the same trusted manifest as executors, but their
@@ -2407,8 +2476,11 @@ function readRole(value, options) {
   const hasRange = input.evidenceRange !== undefined || input.evidence_range !== undefined;
   const requested = range(input.evidenceRange || input.evidence_range);
   if (hasRange && !requested) fail('INVALID_INPUT', 'evidence range must contain two non-negative integer offsets');
-  if (!requested) return validated;
-  return Object.freeze({
+  if (!requested) {
+    recordArtifactRead(input, validated, [validated.files.evidence, validated.files.findings]);
+    return validated;
+  }
+  const targeted = Object.freeze({
     schema: validated.schema,
     artifact_kind: validated.artifact_kind,
     artifact_ref: validated.artifact_ref,
@@ -2448,6 +2520,11 @@ function readRole(value, options) {
       content: Array.from(validated.evidence).slice(requested[0], requested[1]).join(''),
     }),
   });
+  recordArtifactRead(input, validated, [{
+    ...validated.files.evidence,
+    content: targeted.evidence_range.content,
+  }], 'selected');
+  return targeted;
 }
 
 function read(value, options) {
