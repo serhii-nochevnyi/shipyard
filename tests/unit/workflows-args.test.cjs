@@ -569,6 +569,14 @@ for (const spec of DISPATCH) {
   });
 }
 
+test('fix-round prompt requires the comment gate before a repair push', async () => {
+  const { calls } = await run('fix-round', DISPATCH[1].args());
+  assert.strictEqual(calls.length, 1);
+  assert.match(calls[0].prompt, /node \/x\/scripts\/comment-policy\.cjs check T-99-01/);
+  assert.match(calls[0].prompt, /comment-policy\.cjs clean T-99-01/);
+  assert.match(calls[0].prompt, /amend the commit/);
+});
+
 test('executor critical selection is resolved by signals and preserves Claude Sonnet/max → Opus/low', async () => {
   const { calls } = await run('executors', {
     tickets: [{ ...TICKETS[0], model: 'opus', effort: 'low', signals: { critical: true } }],

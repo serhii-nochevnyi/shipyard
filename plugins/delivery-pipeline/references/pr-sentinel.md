@@ -199,7 +199,16 @@ Only the boundary-dispatched fixer may now act: use `gh run view <run-id>
 --log-failed` for the real failing assertion, reproduce it in the ticket's
 worktree with the plan's Verification commands, make the SMALLEST fix inside the
 ticket's `files_modified` scope, re-verify locally, commit `fix(<T>): <what was
-wrong>`, and push. A fix that needs out-of-scope changes is
+wrong>`, and run the pre-push comment gate:
+
+```bash
+node $SHIPYARD_ROOT/scripts/comment-policy.cjs check <T> \
+  --worktree <worktree> --base <base ref> --json
+```
+
+If it blocks, preview `clean <T>` and use `clean --apply` only after reviewing
+the listed full-line additions. Rerun Verification, amend the commit and run
+the check again. Push only after it passes. A fix that needs out-of-scope changes is
 `escalate: out-of-scope` — park the PR, keep the others moving. Follow
 `references/ci-fix.md` — it is the same contract.
 
@@ -223,7 +232,9 @@ It takes the BASE's edition for a conflict in a file the ticket does not declare
 and stops on a conflict in a DECLARED one, which is real work: serve that half as
 `ci-fix` (`references/ci-fix.md` names this merge as its step 0). **Never
 rebase** — see the hard rule below; the PR is pushed, so a rebase is a
-force-push.
+force-push. Before that push, run `node $SHIPYARD_ROOT/scripts/comment-policy.cjs
+check <T> --worktree <worktree> --base <base ref> --json`; a blocked result must
+be cleaned or escalated before publication.
 
 **Journal the merge, and not as an attempt.** Once that push has landed:
 

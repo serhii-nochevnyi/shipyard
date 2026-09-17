@@ -163,6 +163,7 @@ const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
 // The base-merge script sits beside the reviewers one the orchestrator passed —
 // same scripts directory, and no module import is available in this runtime.
 const baseMergeScript = String(reinitScript).replace(/[^/]*$/, 'base-merge.cjs')
+const commentPolicyScript = String(reinitScript).replace(/[^/]*$/, 'comment-policy.cjs')
 
 // THE PINNED INVOCATION. `ci-fix.md` and `review-fix.md` state the same command
 // in the same order, and the duty that dispatches it is `base-merge`:
@@ -251,10 +252,11 @@ function buildPrompt(p) {
   steps.push(
     ``,
     `Rule zero: every checkable claim about the codebase, a test, delivery state, or a completed action must name the exact command that checked it and the relevant path, output, or exit status. If a claim cannot be checked by a command, label it as an assumption or unknown and state the next check. A claim without command-backed evidence is not verification.`,
+    `Keep added code comments rare and purposeful. Preserve required directives, licences, generated markers, security constraints and non-obvious invariants; remove narration that repeats the code.`,
     ``,
     `Language: every artifact you produce — code, comments, commit messages, review replies — is written in ${artifactLanguage}, regardless of the language used elsewhere in this project.`,
     ``,
-    `If you changed code: run the ticket's Verification commands to green — those, scoped as written, never the project's full suite or its e2e run (CI owns those, and this loop re-runs on every round) — then commit atomically referencing ${p.id}, push once, and re-init reviewers: node ${reinitScript} reinit ${p.pr}. Set pushed=true.`,
+    `If you changed code: run the ticket's Verification commands to green — those, scoped as written, never the project's full suite or its e2e run (CI owns those, and this loop re-runs on every round) — then commit atomically referencing ${p.id}. Before pushing, run: node ${commentPolicyScript} check ${p.id} --worktree ${p.worktreePath} --base ${p.base || p.prBase} --json. A non-zero result blocks the push: preview with node ${commentPolicyScript} clean ${p.id} --worktree ${p.worktreePath} --base ${p.base || p.prBase} --json, review the listed lines, and use node ${commentPolicyScript} clean ${p.id} --worktree ${p.worktreePath} --base ${p.base || p.prBase} --apply --json only for those full-line additions. Rerun Verification, amend the commit, and run the check again. Push once only after it passes, then re-init reviewers: node ${reinitScript} reinit ${p.pr}. Set pushed=true.`,
     `If you only replied to threads without a code change: pushed=false, status "fixed".`,
     `If nothing needed doing: status "no-op".`,
     `Return only id, pr, pushed, status, notes, and hypothesis. Do not return receipts, application evidence, artifact paths, or complete evidence text; the trusted host seals those from the authenticated dispatch and the evidence file.`,

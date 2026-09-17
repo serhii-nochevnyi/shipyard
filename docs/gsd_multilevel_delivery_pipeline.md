@@ -583,6 +583,12 @@ Notes on the reviewers' mechanics:
 - **Copilot code review**: after a push you must explicitly re-request via the
   `requested_reviewers` API (or `gh pr edit --add-reviewer` where supported);
   on its own it does not re-review.
+- Before every pipeline push, `comment-policy.cjs check` measures added lines in
+  supported code/config files. A file with more non-protected comment lines than
+  code lines blocks publication. The dry-run `clean` command previews removable
+  full-line additions; `clean --apply` is explicit, leaves inline/multiline
+  comments untouched, and requires verification plus an amended commit before
+  the gate is retried.
 - Both bots can be wrong: the fix agent is obliged to **verify every
   comment against the code** and has the right to respond with a reasoned disagreement. The goal
   of the cycle is "no unresolved threads", not "all the bots' whims fulfilled".
@@ -591,6 +597,7 @@ Notes on the reviewers' mechanics:
 
 - the PR is in the green state (criteria from step 3, including arch-review conform);
 - all changes in the PR belong to the ticket's scope (diff check against `files_modified`);
+- the pre-push `comment-policy.cjs` gate passed for the resolved base;
 - the ticket's verification commands are green locally and in CI;
 - for `human_checkpoint: true` — explicit human approval.
 
