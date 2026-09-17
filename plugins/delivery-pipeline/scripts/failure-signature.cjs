@@ -145,6 +145,56 @@ const UNMEASURED_EFFORTS = new Set(['unknown', 'unsupported']);
 const isAppliedEffort = (level) => typeof level === 'string'
   && !UNMEASURED_EFFORTS.has(level) && EFFORTS.includes(level);
 
+function numberField(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : NaN;
+}
+
+function resourceState(events = [], budgets = {}) {
+  const tokenBudget = numberField(budgets.tokenBudget ?? budgets.tokens ?? budgets.token_budget);
+  const timeBudget = numberField(budgets.timeBudgetMs ?? budgets.time_ms ?? budgets.time_budget_ms);
+  const capacityBudget = numberField(budgets.capacityBudget ?? budgets.capacity ?? budgets.capacity_budget);
+  const budget = { tokens: tokenBudget, time_ms: timeBudget, capacity: capacityBudget };
+  const used = { tokens: 0, time_ms: 0, capacity: 0 };
+  const seen = { tokens: false, time_ms: false, capacity: false };
+  let invalid = false;
+  let explicitExhausted = false;
+  for (const event of Array.isArray(events) ? events : []) {
+    const resource = event && event.resource && typeof event.resource === 'object' ? event.resource : event;
+    if (resource && ['exhausted', 'budget_exhausted', 'resource_exhausted'].includes(resource.resource_status)) {
+      explicitExhausted = true;
+    }
+    const tokenValues = [resource && resource.tokens_used, resource && resource.tokens,
+      resource && resource.input_tokens !== undefined && resource.output_tokens !== undefined
+        ? Number(resource.input_tokens) + Number(resource.output_tokens) : undefined];
+    const timeValues = [resource && resource.time_ms, resource && resource.elapsed_ms, resource && resource.duration_ms];
+    const capacityValues = [resource && resource.capacity_used, resource && resource.capacity];
+    for (const [key, values] of [['tokens', tokenValues], ['time_ms', timeValues], ['capacity', capacityValues]]) {
+      const value = values.find((item) => item !== undefined && item !== null && item !== '');
+      if (value === undefined) continue;
+      const parsed = numberField(value);
+      if (!Number.isFinite(parsed) || parsed < 0) { invalid = true; continue; }
+      used[key] += parsed;
+      seen[key] = true;
+    }
+  }
+  const budgetKnown = Object.values(budget).some((value) => Number.isFinite(value) && value >= 0);
+  const usageKnown = Object.values(seen).some(Boolean);
+  const badBudget = Object.values(budget).some((value) => Number.isNaN(value) || (value !== null && value < 0));
+  const exhausted = explicitExhausted || Object.entries(budget).some(([key, value]) =>
+    Number.isFinite(value) && value >= 0 && seen[key] && used[key] >= value);
+  return {
+    schema_version: 'shipyard.resource-state.v1',
+    state: invalid || badBudget ? 'invalid' : exhausted ? 'exhausted' : !budgetKnown || !usageKnown ? 'unknown' : 'available',
+    checkpoint: exhausted && !invalid && !badBudget,
+    verdict_eligible: !invalid && !badBudget,
+    budget,
+    used,
+    coverage: { budget_known: budgetKnown, usage_known: usageKnown, invalid: invalid || badBudget },
+  };
+}
+
 // A failure nobody could read SAYS SO IN ITS SIGNATURE. The k-rule reads nothing
 // but signature strings back out of the journal — no `error_class` is recorded
 // there — so the fact has to travel in the shape, or the exclusion below can
@@ -638,4 +688,5 @@ module.exports = {
   computeSignature, computeVerdict, normalize, relativize,
   isUnknownSignature, UNKNOWN_PREFIX, VERDICTS, DEFAULT_K,
   EXHAUSTED_PRIOR_REPEATS, UNMEASURED_EFFORT, UNMEASURED_EFFORTS,
+  resourceState,
 };

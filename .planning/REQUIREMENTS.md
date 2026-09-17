@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4e0d4cb514e33622bad736ff0616094aad727af435052626026ec6dfe8e92b5a -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4cdbe86012380357f7bc5435b1f557c6e25dd2335f61e4c097f04de6a8894bea -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -100,11 +100,11 @@
 - [x] **REQ-90**: Unchanged observations do not require repeated model turns; deterministic waiting remains bounded, recoverable and subordinate to live gates.
 - [x] **REQ-91**: Role boundaries return bounded summaries and complete referenced evidence; selected backlog and required policy remain available.
 - [x] **REQ-92**: Context rotation transfers durable state with one acknowledged owner, only at a safe boundary and on a supported runtime.
-- [ ] **REQ-93**: Review progress has evidence and signatures; resource budgets do not replace the retry backstop or fabricate a plan defect.
-- [ ] **REQ-94**: Model-axis escalation requires verified capability and a completed attempt; unknown effort never becomes applied depth, and role floors persist.
-- [ ] **REQ-95**: A manual-merge verdict carry proves ancestry, head tree, base tree and current PR identity; missing proof requires fresh review.
-- [ ] **REQ-96**: Participating projects count distinct nested agents through owned leases, report coverage, and never interpret store failure as unlimited capacity.
-- [ ] **REQ-97**: Each optimization has a versioned baseline, quality and recovery gates, rollback, and a report that feeds evidence into the next backlog decision.
+- [x] **REQ-93**: Review progress has evidence and signatures; resource budgets do not replace the retry backstop or fabricate a plan defect.
+- [x] **REQ-94**: Model-axis escalation requires verified capability and a completed attempt; unknown effort never becomes applied depth, and role floors persist.
+- [x] **REQ-95**: A manual-merge verdict carry proves ancestry, head tree, base tree and current PR identity; missing proof requires fresh review.
+- [x] **REQ-96**: Participating projects count distinct nested agents through owned leases, report coverage, and never interpret store failure as unlimited capacity.
+- [x] **REQ-97**: Each optimization has a versioned baseline, quality and recovery gates, rollback, and a report that feeds evidence into the next backlog decision.
 - [x] **REQ-98**: Shipyard publishes one deterministic native-GSD projection from the validated plan and delivery graph; no second execution authority is hand-maintained.
 - [x] **REQ-99**: The projection materializes the canonical STATE, REQUIREMENTS, plan summary, UAT, and verification artifacts with explicit ownership and source fingerprints.
 - [x] **REQ-100**: A plan or phase is marked complete only from positive delivery, integration, and verification evidence; missing evidence remains visible and non-green.
@@ -222,11 +222,11 @@
 | REQ-90 | Phase 33 | Complete |
 | REQ-91 | Phase 33 | Complete |
 | REQ-92 | Phase 33 | Complete |
-| REQ-93 | Phase 34 | In Progress |
-| REQ-94 | Phase 34 | In Progress |
-| REQ-95 | Phase 34 | In Progress |
-| REQ-96 | Phase 34 | In Progress |
-| REQ-97 | Phase 34 | In Progress |
+| REQ-93 | Phase 34 | Complete |
+| REQ-94 | Phase 34 | Complete |
+| REQ-95 | Phase 34 | Complete |
+| REQ-96 | Phase 34 | Complete |
+| REQ-97 | Phase 34 | Complete |
 | REQ-98 | Phase 35 | Complete |
 | REQ-99 | Phase 35 | Complete |
 | REQ-100 | Phase 35 | Complete |

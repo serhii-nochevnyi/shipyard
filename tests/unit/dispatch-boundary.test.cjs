@@ -133,6 +133,79 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   assert.ok(Object.isFrozen(result.trace));
 });
 
+test('capacity admission fences an in-flight launch and releases after its receipt', async () => {
+  let nextLease = 0;
+  const leases = new Set();
+  const capacity = {
+    heartbeat_interval_ms: 5,
+    acquire() {
+      if (leases.size >= 1) return { admitted: false, reason: 'capacity-full', max: 1, in_flight: 1, free: 0 };
+      const lease_id = `capacity-${++nextLease}`;
+      leases.add(lease_id);
+      return { admitted: true, lease_id, coverage: 'shared', max: 1, in_flight: 1, free: 0 };
+    },
+    heartbeat(lease_id) { return { renewed: leases.has(lease_id) }; },
+    release(lease_id) { leases.delete(lease_id); return { released: true, lease_id }; },
+  };
+  let finishLaunch;
+  let launches = 0;
+  const adapter = fakeAdapter({
+    onLaunch: () => { launches++; },
+    receipt: (resolution) => new Promise((resolve) => {
+      finishLaunch = () => resolve(receiptFor(resolution));
+    }),
+  });
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: adapter }, recorder: () => true, capacity,
+  });
+  const inFlight = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-cap-a', agent_id: 'agent-a' });
+  assert.equal(launches, 1);
+  assert.equal(leases.size, 1);
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-cap-b', agent_id: 'agent-b' }),
+    (error) => error.code === 'CAPACITY_FULL',
+  );
+  finishLaunch();
+  const result = await inFlight;
+  assert.deepStrictEqual(result.capacity, { coverage: 'shared', degraded: false, max: 1, in_flight: 1, free: 0 });
+  assert.equal(leases.size, 0);
+  const third = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-cap-c', agent_id: 'agent-c' });
+  assert.equal(leases.size, 1);
+  finishLaunch();
+  assert.equal((await third).capacity_lease.lease_id, 'capacity-2');
+  assert.equal(leases.size, 0);
+});
+
+test('model-axis capability evidence falls back within the same runtime policy', () => {
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      claude: fakeAdapter({
+        capabilitySnapshot: (resolution) => ({
+          schema_version: 'shipyard.model-capability.v1',
+          runtime: 'claude',
+          launch_id: `host-${resolution.dispatch_id}`,
+          supported_models: ['opus'],
+          supported_efforts: ['medium', 'max'],
+        }),
+      }),
+    },
+    recorder: () => true,
+  });
+  const critical = boundary.dispatch({
+    runtime: 'claude', role: 'arch-review', signals: { critical: true }, dispatch_id: 'arch-critical',
+  }, { ticket: 'T-capability' });
+  const ceiling = boundary.dispatch({
+    runtime: 'claude',
+    role: 'arch-review',
+    signals: { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 },
+    dispatch_id: 'arch-ceiling',
+  }, { ticket: 'T-capability' });
+  assert.equal(ceiling.resolution.rung, 'critical');
+  assert.equal(ceiling.resolution.capability.state, 'unsupported');
+  assert.equal(ceiling.resolution.capability.requested.rung, 'ceiling');
+  assert.equal(ceiling.resolution.capability.fallback.rung, 'critical');
+});
+
 test('reconciliation requires authenticated current receipt evidence across boundary instances', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-reconcile-'));
   try {

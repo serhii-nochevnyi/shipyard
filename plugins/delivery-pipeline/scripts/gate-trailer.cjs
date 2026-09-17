@@ -452,18 +452,26 @@ if (require.main === module) {
         + `${toTree}: the merge brought content, and content nobody has judged is not covered by `
         + 'the verdict', { from_tree: fromTree, to_tree: toTree });
     }
+    const ancestry = git(['merge-base', '--is-ancestor', from, to]);
+    if (ancestry.status !== 0) {
+      refuse(`the candidate head ${shortSha(to)} is not a descendant of the judged head ${shortSha(from)} — `
+        + 'the ancestry was rewritten or comes from another line, so fresh review is required');
+    }
 
     // ── the verdict on the PR, and what it says it judged ─────────────────────
     // `cwd: worktree`, matching every git call above: without `--repo` (the
     // common same-repo case — cross-repo tickets are the only ones that pass
     // it), `gh` resolves the repo from the process cwd, which is the caller's
     // (base-merge.cjs's own cwd), not necessarily this worktree.
-    const view = spawnSync('gh', ['pr', 'view', String(pr), ...repoArg, '--json', 'body,headRefOid,baseRefName'], { encoding: 'utf8', cwd: worktree });
+    const view = spawnSync('gh', ['pr', 'view', String(pr), ...repoArg, '--json', 'body,headRefOid,baseRefName,number'], { encoding: 'utf8', cwd: worktree });
     if (view.status !== 0) {
       die(`gh pr view ${pr} failed: ${(view.stderr || '').trim() || `exit ${view.status}`}`);
     }
     let live = {};
     try { live = JSON.parse(view.stdout); } catch (e) { die(`gh pr view returned unparseable JSON (${e.message})`); }
+    if (live.number !== undefined && Number(live.number) !== pr) {
+      refuse(`live PR identity is #${live.number}, but carry was requested for #${pr} — refusing to bind a verdict to another PR`);
+    }
     const gate = parseGate(live.body);
     if (!gate || String(gate['arch-review'] || '').toLowerCase() !== 'conform') {
       refuse('the PR body carries no `gate_status: arch-review=conform` trailer — there is no '
@@ -513,6 +521,21 @@ if (require.main === module) {
         + `merge base with ${baseRef} (${shortSha(mergeBase.out)}) is tree ${newBaseTree}: the same `
         + 'code against a different base is a different diff',
       { judged_base_tree: judgedBaseTree, new_base_tree: newBaseTree, base_ref: baseRef });
+    }
+
+    const latestView = spawnSync('gh', ['pr', 'view', String(pr), ...repoArg, '--json', 'body,headRefOid,baseRefName,number'], { encoding: 'utf8', cwd: worktree });
+    if (latestView.status !== 0) {
+      refuse(`live PR identity could not be rechecked before carry: ${(latestView.stderr || '').trim() || `exit ${latestView.status}`}`);
+    }
+    let latest = {};
+    try { latest = JSON.parse(latestView.stdout); } catch (e) {
+      refuse(`live PR identity recheck returned unparseable JSON (${e.message})`);
+    }
+    if ((latest.number !== undefined && Number(latest.number) !== pr)
+        || normSha(latest.headRefOid) !== from
+        || String(latest.baseRefName || '') !== baseName
+        || String(latest.body || '') !== String(live.body || '')) {
+      refuse('the live PR changed while carry was being proved — fresh review is required');
     }
 
     // ── proved: re-bind head=, and claim nothing else ─────────────────────────

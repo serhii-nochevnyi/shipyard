@@ -592,6 +592,20 @@ order so parents exist before links):
 5. Report a compact map to the user (ticket-id → Jira key, epic key) in the
    user's language.
 
+## Phase 34 experiment intake
+
+When a phase evaluates an optimization treatment, keep the baseline and
+treatment versions, runtime provider, declared account scope, cohort arm and
+policy revision in the plan metadata. Use one treatment per experiment and keep
+failed, parked and interrupted runs in the denominator. Missing attribution or
+quality evidence produces an inconclusive result and does not authorize a model
+ladder or orchestration change.
+
+At the experiment boundary, save the versioned report and register its linked
+candidate through `backlog-index.cjs candidate`. Candidate creation is a triage
+write with `auto_launch: false`; a later plan and review are required before any
+candidate becomes executable work.
+
 ## Rules
 
 - Do not write product code — only plans and frontmatter.

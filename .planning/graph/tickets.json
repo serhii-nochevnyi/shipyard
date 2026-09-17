@@ -112,6 +112,13 @@
       "repos": [
         null
       ]
+    },
+    "34-improve-convergence-and-tune-from-measured-outcomes": {
+      "branch": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
+      "base": null,
+      "repos": [
+        null
+      ]
     }
   },
   "tickets": {
@@ -3107,7 +3114,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/wait-events.cjs",
         "plugins/delivery-pipeline/scripts/ci-wait.cjs",
@@ -3140,7 +3147,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/role-artifact.cjs",
         "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
@@ -3174,7 +3181,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/workflows/fix-round.mjs",
         "plugins/delivery-pipeline/scripts/role-artifact.cjs",
@@ -3212,7 +3219,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/role-artifact.cjs",
         "plugins/delivery-pipeline/references/arch-review.md",
@@ -3243,7 +3250,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/workflows/investigation-research.mjs",
         "plugins/delivery-pipeline/references/inv-research.md",
@@ -3277,7 +3284,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/context-packet.cjs",
         "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
@@ -3312,7 +3319,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/orchestration-overhead.cjs",
         "plugins/delivery-pipeline/scripts/context-packet.cjs",
@@ -3344,7 +3351,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/session-handoff.cjs",
         "plugins/delivery-pipeline/scripts/dispatch-boundary.cjs",
@@ -3378,7 +3385,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/session-handoff.cjs",
         "plugins/delivery-pipeline/scripts/orchestration-overhead.cjs",
@@ -3397,6 +3404,161 @@
       "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
       "primary_parent": "T-33-08",
       "pr_base": "ticket/T-33-08-resume-a-checkpoint-with-one-fenced-ackn",
+      "jira": null
+    },
+    "T-34-01": {
+      "title": "Make review progress and resource budgets evidence based",
+      "plan": ".planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-01-PLAN.md",
+      "phase": "34-improve-convergence-and-tune-from-measured-outcomes",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-signature.cjs",
+        "plugins/delivery-pipeline/scripts/reviewers.cjs",
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "plugins/delivery-pipeline/scripts/failure-signature.cjs",
+        "plugins/delivery-pipeline/scripts/attempt-history.cjs",
+        "tests/unit/review-signature.test.cjs",
+        "tests/unit/failure-signature.test.cjs",
+        "tests/unit/attempt-history.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "execute",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-34-01-make-review-progress-and-resource-budget",
+      "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
+      "primary_parent": null,
+      "pr_base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
+      "jira": null
+    },
+    "T-34-02": {
+      "title": "Require runtime capability evidence for model-axis escalation",
+      "plan": ".planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-02-PLAN.md",
+      "phase": "34-improve-convergence-and-tune-from-measured-outcomes",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-34-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/model-capability.cjs",
+        "tests/unit/model-capability.test.cjs"
+      ],
+      "risk": "high",
+      "type": "execute",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-34-02-require-runtime-capability-evidence-for",
+      "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
+      "primary_parent": "T-34-01",
+      "pr_base": "ticket/T-34-01-make-review-progress-and-resource-budget",
+      "jira": null
+    },
+    "T-34-03": {
+      "title": "Strengthen manual merge verdict carry",
+      "plan": ".planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-03-PLAN.md",
+      "phase": "34-improve-convergence-and-tune-from-measured-outcomes",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/gate-trailer.cjs",
+        "tests/unit/trailer.test.cjs"
+      ],
+      "risk": "high",
+      "type": "execute",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-34-03-strengthen-manual-merge-verdict-carry",
+      "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
+      "primary_parent": null,
+      "pr_base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
+      "jira": null
+    },
+    "T-34-04": {
+      "title": "Admit distinct agents through shared account-scoped leases",
+      "plan": ".planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-04-PLAN.md",
+      "phase": "34-improve-convergence-and-tune-from-measured-outcomes",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-34-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/capacity-lease.cjs",
+        "plugins/delivery-pipeline/scripts/dispatch-boundary.cjs",
+        "plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs",
+        "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
+        "plugins/delivery-pipeline/scripts/claude-workflow-host.cjs",
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "plugins/delivery-pipeline/scripts/lock.cjs",
+        "tests/unit/capacity-lease.test.cjs",
+        "tests/unit/dispatch-boundary.test.cjs",
+        "tests/unit/front.test.cjs"
+      ],
+      "risk": "high",
+      "type": "execute",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-34-04-admit-distinct-agents-through-shared-acc",
+      "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
+      "primary_parent": "T-34-02",
+      "pr_base": "ticket/T-34-02-require-runtime-capability-evidence-for",
+      "jira": null
+    },
+    "T-34-05": {
+      "title": "Publish versioned optimization evidence and backlog candidates",
+      "plan": ".planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-05-PLAN.md",
+      "phase": "34-improve-convergence-and-tune-from-measured-outcomes",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-34-01",
+        "T-34-04"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/optimization-report.cjs",
+        "plugins/delivery-pipeline/scripts/pipeline-stats.cjs",
+        "plugins/delivery-pipeline/scripts/usage-attribution.cjs",
+        "plugins/delivery-pipeline/scripts/backlog-index.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/commands/decompose.md",
+        ".planning/architecture/ADR-011-ROLLOUT.md",
+        "tests/unit/optimization-report.test.cjs",
+        "tests/unit/pipeline-stats.test.cjs",
+        "tests/unit/backlog-index.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "execute",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-34-05-publish-versioned-optimization-evidence",
+      "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
+      "primary_parent": "T-34-04",
+      "pr_base": "ticket/T-34-04-admit-distinct-agents-through-shared-acc",
       "jira": null
     },
     "T-35-01": {

@@ -30,7 +30,8 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
+const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
+const reviewSignatures = require(path.join(__dirname, 'review-signature.cjs'));
 const { classify, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 // The checkpoint predicates live in front.cjs and are imported, not copied.
 // A `checkpointParentOf` used to exist here AND there, and the standing rule — the
@@ -68,6 +69,7 @@ const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const STATE = path.join(GRAPH_DIR, 'delivery-state.json');
 const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
+const REVIEW_HISTORY = path.join(GRAPH_DIR, 'review-observations.json');
 
 function fail(msg, code = 1) {
   console.error(`sentinel: ${msg}`);
@@ -401,21 +403,88 @@ const SCOPE = listFlag('scope');
 // "no threads", "no verdict" and "the base is fine" are three claims, and none of
 // them is what a failed call proves.
 const settlementCache = new Map();
+function reviewHistoryKey(pr, repo) { return `${repo || ''}#${pr}`; }
+function readReviewHistory(pr, repo) {
+  try {
+    const value = JSON.parse(fs.readFileSync(REVIEW_HISTORY, 'utf8'));
+    if (!value || value.schema_version !== 'shipyard.review-observations.v1'
+        || !value.observations || typeof value.observations !== 'object'
+        || Array.isArray(value.observations)) return null;
+    const rows = Array.isArray(value.observations[reviewHistoryKey(pr, repo)])
+      ? value.observations[reviewHistoryKey(pr, repo)] : [];
+    return rows.filter((row) => row && Array.isArray(row.signatures) && row.coverage);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    return null;
+  }
+}
+function saveReviewObservation(pr, repo, snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.signatures) || !snapshot.coverage) return;
+  withLock(lockDirFor(ROOT), 'review-observations', () => {
+    let store = { schema_version: 'shipyard.review-observations.v1', observations: {} };
+    try {
+      const value = JSON.parse(fs.readFileSync(REVIEW_HISTORY, 'utf8'));
+      if (!value || value.schema_version !== store.schema_version
+          || !value.observations || typeof value.observations !== 'object'
+          || Array.isArray(value.observations)) {
+        throw new Error('review observation history has an unknown schema');
+      }
+      store = value;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    const key = reviewHistoryKey(pr, repo);
+    const rows = Array.isArray(store.observations[key]) ? store.observations[key] : [];
+    const current = {
+      schema_version: reviewSignatures.SCHEMA_VERSION,
+      signatures: [...snapshot.signatures],
+      coverage: { ...snapshot.coverage },
+      digest: snapshot.digest || null,
+      observed_at: new Date().toISOString(),
+    };
+    if (!rows.some((row) => row && row.digest === current.digest
+        && JSON.stringify(row.coverage) === JSON.stringify(current.coverage))) {
+      store.observations[key] = [...rows, current].slice(-12);
+      writeAtomic(REVIEW_HISTORY, `${JSON.stringify(store, null, 2)}\n`);
+    }
+  }, { label: 'review-observations' });
+}
 function settlement(pr, repo) {
   const key = `${repo || ''}#${pr}`;
   if (settlementCache.has(key)) return settlementCache.get(key);
   const out = spawnSync('node', [path.join(__dirname, 'reviewers.cjs'), 'unresolved', String(pr), ...repoArg(repo)], { encoding: 'utf8' });
-  let v = { unresolved: null, review_decision: null, merge_state: null, base: null, head: null };
+  let v = {
+    unresolved: null, review_decision: null, merge_state: null, base: null, head: null,
+    review_signatures: null, review_coverage: null, review_progress: null,
+  };
   if (out.status === 0) {
     try {
       const j = JSON.parse(out.stdout);
+      const currentSnapshot = j.review_snapshot && typeof j.review_snapshot === 'object'
+        ? j.review_snapshot : null;
+      const priorHistory = readReviewHistory(pr, repo);
+      const firstProgress = currentSnapshot ? reviewSignatures.progress([], currentSnapshot) : null;
+      const reviewProgress = currentSnapshot
+        ? (priorHistory === null
+          ? {
+            ...firstProgress,
+            state: reviewSignatures.UNKNOWN,
+            progress: false,
+            evidence: { ...firstProgress.evidence, history_unavailable: true },
+          }
+          : reviewSignatures.progress(priorHistory, currentSnapshot))
+        : (j.review_progress || null);
       v = {
         unresolved: typeof j.unresolved_count === 'number' ? j.unresolved_count : null,
         review_decision: j.review_decision || null,
         merge_state: j.merge_state || null,
         base: j.base || null,
         head: j.head || null,
+        review_signatures: Array.isArray(j.review_signatures) ? j.review_signatures : null,
+        review_coverage: j.review_coverage || null,
+        review_progress: reviewProgress,
       };
+      if (priorHistory !== null) saveReviewObservation(pr, repo, currentSnapshot);
     } catch { /* keep the all-null answer */ }
   }
   settlementCache.set(key, v);
@@ -557,7 +626,11 @@ function dutyItems() {
     // review servicing on an API hiccup and walk into the merge gate's refusal
     // later. They fall through to the normal ordering, and the merge gate still
     // refuses to merge blind.
-    const unresolved = settlement(s.pr, s.repo || null).unresolved;
+    const reviewState = settlement(s.pr, s.repo || null);
+    const unresolved = reviewState.unresolved;
+    item.review_signatures = reviewState.review_signatures;
+    item.review_coverage = reviewState.review_coverage;
+    item.review_progress = reviewState.review_progress;
     // …and the base, read from the same call plus one compare. Recorded on the
     // item whatever the answer is, so a reader can tell "the base was checked and
     // is fine" from "nobody could check it" — the two used to look identical, and

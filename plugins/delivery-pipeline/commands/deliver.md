@@ -792,6 +792,36 @@ advisor coverage, failed/interrupted work and attribution gaps. See
 rollback and seven-day defect-window gates. A fixture report cannot promote a
 treatment or claim quota savings.
 
+## Phase 34 convergence and cost measurement
+
+Phase 34 keeps review progress, escalation, capacity and optimization evidence
+separate so a cheaper path cannot silently weaken delivery gates.
+
+Before a model-axis escalation, the dispatch boundary records the host capability
+snapshot for the exact runtime, model and effort. An unsupported or unknown pair
+falls back to the preceding rung within that runtime. A repair escalation also
+requires the immediately preceding completed boundary receipt; missing evidence
+  does not earn a deeper model. The Workflow runtime uses only the Anthropic palette and
+Codex uses only the OpenAI palette.
+
+When participating projects share an account, inject one capacity coordinator
+into every runtime adapter with the same `provider`, `accountScope` and durable
+store. Set `SHIPYARD_CAPACITY_STORE`, `SHIPYARD_CAPACITY_PROVIDER` and
+`SHIPYARD_CAPACITY_ACCOUNT_SCOPE` for the state projection. Leases identify the
+owner, project and agent, heartbeat during a launch, expire after a crash and
+release after the receipt. Missing scope or a store failure is reported as
+degraded and uses a bounded local fallback; it is never treated as unlimited.
+
+At a declared experiment boundary, collect `pipeline-stats.cjs --json` and use
+its `optimization_input` as the metadata-only input to
+`optimization-report.cjs`. The report must name versioned baseline and treatment
+arms, provider/account scope, coverage, failed/parked/interrupted runs, quality,
+rollback owner and comparison metric. Evaluate one treatment at a time. Persist
+the report with `optimization-report.cjs create`, then register its decision with
+`backlog-index.cjs candidate --root <project> --report <report.json>`. A candidate
+is linked evidence with `auto_launch: false`; it never rewrites model policy or
+starts work from a stats run.
+
 ## Durable session handoff and cold-start recovery
 
 The delivery session may be stopped and resumed, but a checkpoint is evidence,

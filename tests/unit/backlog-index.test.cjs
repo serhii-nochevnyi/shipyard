@@ -3,7 +3,7 @@ const { test }=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {spawnSync}=require('node:child_process');
-const {inventory}=require('../../plugins/delivery-pipeline/scripts/backlog-index.cjs');
+const {inventory,writeOptimizationCandidate}=require('../../plugins/delivery-pipeline/scripts/backlog-index.cjs');
 function fixture(fn){const r=fs.mkdtempSync(path.join(os.tmpdir(),'backlog-index-'));try{fs.mkdirSync(path.join(r,'.planning/backlog'),{recursive:true});fn(r);}finally{fs.rmSync(r,{recursive:true,force:true});}}
 const note=(r,name,text)=>fs.writeFileSync(path.join(r,'.planning/backlog',name),text);
 test('all sources and repeated sections have distinct stable IDs',()=>fixture(r=>{
@@ -56,4 +56,43 @@ test('flag-like backlog query terms remain searchable',()=>fixture(r=>{
  const cli=path.resolve(__dirname,'../../plugins/delivery-pipeline/scripts/backlog-index.cjs');
  const x=spawnSync(process.execPath,[cli,'--root',r,'--query','--apply'],{encoding:'utf8'});
  assert.equal(x.status,0,x.stderr);assert.equal(JSON.parse(x.stdout).items.length,1);
+}));
+
+test('optimization candidates are linked, atomic, and never marked for auto-launch',()=>fixture(r=>{
+ const optimization=require('../../plugins/delivery-pipeline/scripts/optimization-report.cjs');
+ const value=optimization.buildReport({
+  report_id:'report-backlog',treatment_id:'treatment-backlog',policy_version:'adr-011.v1',
+  baseline:{revision:'base',runtime:'claude',policy:'base-policy',collector:'stats-1'},
+  treatment:{revision:'treatment',runtime:'claude',policy:'treatment-policy',collector:'stats-1'},
+  provider_scope:{provider:'anthropic',account_scope:'pro:max'},
+  window:{from:'2026-09-01',to:'2026-09-17'},cohort:{name:'backlog',sample_target:2},sample_target:2,
+  rollback:{strategy:'restore-baseline',owner:'shipyard'},comparison:{metric:'cost',unit:'units',baseline:10,treatment:8},
+  runs:[
+   {run_id:'b',arm:'baseline',status:'completed',coverage:'complete'},
+   {run_id:'t',arm:'treatment',status:'completed',coverage:'complete'},
+  ],
+ });
+ const first=writeOptimizationCandidate(r,value),second=writeOptimizationCandidate(r,value);
+ assert.equal(first.written,true);assert.equal(second.idempotent,true);
+ const manifest=JSON.parse(fs.readFileSync(path.join(r,'.planning/graph/optimization-backlog.json'),'utf8'));
+ assert.equal(manifest.candidates.length,1);assert.equal(manifest.candidates[0].auto_launch,false);
+}));
+
+test('candidate CLI writes the report decision through the backlog store',()=>fixture(r=>{
+ const report=path.join(r,'report.json');
+ const optimization=require('../../plugins/delivery-pipeline/scripts/optimization-report.cjs');
+ const value=optimization.buildReport({
+  report_id:'report-cli',treatment_id:'treatment-cli',policy_version:'adr-011.v1',
+  baseline:{revision:'base',runtime:'claude',policy:'base-policy',collector:'stats-1'},
+  treatment:{revision:'treatment',runtime:'claude',policy:'treatment-policy',collector:'stats-1'},
+  provider_scope:{provider:'anthropic',account_scope:'pro:max'},
+  window:{from:'2026-09-01',to:'2026-09-17'},cohort:{name:'cli',sample_target:2},sample_target:2,
+  rollback:{strategy:'restore-baseline',owner:'shipyard'},comparison:{metric:'cost',unit:'units',baseline:10,treatment:8},
+  runs:[{run_id:'b',arm:'baseline',status:'completed',coverage:'complete'},{run_id:'t',arm:'treatment',status:'completed',coverage:'complete'}],
+ });
+ fs.writeFileSync(report,JSON.stringify(value));
+ const cli=path.resolve(__dirname,'../../plugins/delivery-pipeline/scripts/backlog-index.cjs');
+ const x=spawnSync(process.execPath,[cli,'candidate','--root',r,'--report',report],{encoding:'utf8'});
+ assert.equal(x.status,0,x.stderr);
+ const out=JSON.parse(x.stdout);assert.equal(out.written,true);assert.equal(out.candidate.auto_launch,false);
 }));
