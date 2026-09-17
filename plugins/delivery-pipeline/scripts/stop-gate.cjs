@@ -653,11 +653,15 @@ if (count <= 0 || leftBehind >= count) {
       '  3. loop back. Do NOT wait on CI: no CI wait can resolve a missing tracker observation.' + whereToSync
     );
   }
-  if (!ci.length) allow();
+  // A child held behind a parent is still waiting on that parent's pipeline;
+  // allowing a stop when `waiting.ci` is empty abandons the only wake-up that
+  // can release the child.
+  if (!ci.length && !parent.length) allow();
   if (agentsOut().plausible.length) allow();
   const gone = goneText();
+  const waiting = [...ci, ...parent];
   verdict(
-    `shipyard: nothing is actionable, but ${ci.length} PR(s) are still in CI (${ci.join(', ')}) — ` +
+    `shipyard: nothing is actionable, but ${waiting.length} PR(s) are still in CI or held behind a parent (${waiting.join(', ')}) — ` +
     'so this is a WAIT, not a fixpoint, and stopping here ends the run for good.\n' +
     'The babysit loop is woken by agents finishing. No agent is out, so nothing will wake this session:\n' +
     'measured at 5h46m once and 11h43m the next night, the second time with the next PR green, conform\n' +
