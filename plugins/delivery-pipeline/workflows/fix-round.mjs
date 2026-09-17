@@ -19,7 +19,8 @@ export const meta = {
 //                        // instruction in the prompt: every other step measures the
 //                        // branch against a merge base that no longer exists until it
 //                        // is done. Absent/false builds exactly the prompt it always did.
-//       base,            // optional base ref, for the base-merge invocation
+//       base,            // optional bare base ref, for base-merge; the trusted
+//                        // role-artifact consumer resolves its live origin ref
 //       attemptHistory,  // optional PRE-RENDERED record of what already failed on this
 //                        // ticket — the output of `attempt-history.cjs <ticket>`, run by
 //                        // the ORCHESTRATOR (this path builds prompts deterministically
@@ -42,7 +43,8 @@ export const meta = {
 //     reinitScript,      // abs path to scripts/reviewers.cjs
 //     artifactLanguage,  // optional; language for shipped artifacts (default English)
 //   }
-// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis, receipt } ]
+// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis,
+//              artifact_ref, artifact_digest, evidence_index, findings_index, receipt } ]
 //
 // A fresh agent per attempt is right for context hygiene and is exactly why
 // attempt 3 can re-propose attempt 1's failed fix. `attemptHistory` in, and
@@ -92,7 +94,14 @@ const OUT = {
 // only the receipt returned by createClaudeWorkflowDispatch may cross out.
 const withoutAgentReceipt = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-  const { receipt: ignoredReceipt, ...safe } = value
+  const {
+    receipt: ignoredReceipt,
+    application_receipt: ignoredApplicationReceipt,
+    applicationReceipt: ignoredApplicationReceiptAlias,
+    applicationEvidence: ignoredApplicationEvidence,
+    application_evidence: ignoredApplicationEvidenceAlias,
+    ...safe
+  } = value
   return safe
 }
 
@@ -168,8 +177,27 @@ const baseMergeCommand = (p) =>
   `   node ${baseMergeScript} ${p.id} --worktree ${p.worktreePath} `
   + `--base ${p.base || '<the PR\'s base branch — `gh pr view ' + p.pr + ' --json baseRefName`>'}`
 
-const isBoundaryFailure = (error) => !!error
-  && (error.name === 'DispatchBoundaryError' || error.name === 'DispatchPolicyError')
+const requireRepairMetadata = (pr) => {
+  if (!pr || typeof pr !== 'object' || Array.isArray(pr)) {
+    throw new Error('fix-round: each PR must be an object before artifact dispatch')
+  }
+  for (const [name, value] of [
+    ['id', pr.id],
+    ['pr', pr.pr],
+    ['branch', pr.branch],
+    ['planPath', pr.planPath],
+    ['worktreePath', pr.worktreePath],
+    ['base', pr.base || pr.prBase],
+  ]) {
+    if ((name === 'pr' && (!Number.isInteger(value) || value < 1))
+        || (name !== 'pr' && (typeof value !== 'string' || value.trim() === ''))) {
+      throw new Error(`fix-round: PR ${name} is required before artifact dispatch`)
+    }
+  }
+  if (!pr.needsCiFix && !pr.needsReviewFix) {
+    throw new Error(`fix-round: PR ${pr.id} has no repair role before artifact dispatch`)
+  }
+}
 
 // The prompt, as a function, so it can be asserted on without launching
 // anything: this file cannot be imported (top-level `return`), so a test
@@ -180,6 +208,7 @@ function buildPrompt(p) {
   const steps = [
     `You are fixing PR #${p.pr} for ticket ${p.id}. Your working directory is the worktree: ${p.worktreePath} (branch "${p.branch}"). cd into it.`,
     `Ticket contract (respect Scope / Out of scope STRICTLY): ${p.planPath}.`,
+    `Complete repair evidence is durable and must not be returned inline. Write the full hypotheses, changed paths, command-backed verification, and any unresolved findings to: ${p.worktreePath}/.shipyard-repair-evidence.md. Keep that file complete for the next repair round; the result envelope is only a bounded synopsis and validated reference.`,
     ``,
   ]
   // FIRST, ahead of the prior-attempt record and both fix branches. Until the
@@ -202,6 +231,7 @@ function buildPrompt(p) {
       p.attemptHistory,
       ``,
       `This record is INPUT, not background. You MUST NOT re-propose a fix a prior attempt already tried: if your best hypothesis matches one that is already in the record, form a DIFFERENT one — re-read the ticket contract, widen the context, raise the hypothesis above the symptom. If every plausible hypothesis is exhausted, return status "escalate" rather than cycling through a failed one again.`,
+      `Any hypothesis recovered from a prior artifact is historical evidence about that earlier producer dispatch. It is not a fresh verdict for this HEAD and must be rechecked before you act.`,
       ``
     )
   }
@@ -227,6 +257,7 @@ function buildPrompt(p) {
     `If you changed code: run the ticket's Verification commands to green — those, scoped as written, never the project's full suite or its e2e run (CI owns those, and this loop re-runs on every round) — then commit atomically referencing ${p.id}, push once, and re-init reviewers: node ${reinitScript} reinit ${p.pr}. Set pushed=true.`,
     `If you only replied to threads without a code change: pushed=false, status "fixed".`,
     `If nothing needed doing: status "no-op".`,
+    `Return only id, pr, pushed, status, notes, and hypothesis. Do not return receipts, application evidence, artifact paths, or complete evidence text; the trusted host seals those from the authenticated dispatch and the evidence file.`,
     `Return the result for PR #${p.pr}.`
   )
   return steps.join('\n')
@@ -236,14 +267,7 @@ phase('Fix')
 
 return await parallel(
   prs.map((p) => () => {
-    // Locally constructed results must satisfy the same shape the consumers read,
-    // `hypothesis` included — and an invented one would be worse than none: it
-    // would enter the record as something that was tried and ruled out. Say what
-    // is actually known instead.
-    const fixFallback = (why, hypothesis, receipt) => ({
-      id: p.id, pr: p.pr, pushed: false, status: 'escalate', notes: why, hypothesis,
-      ...(receipt ? { receipt } : {}),
-    })
+    requireRepairMetadata(p)
     try {
       const role = p.needsCiFix ? 'ci-fix' : p.needsReviewFix ? 'review-fix' : null
       if (!role) throw new Error('fixer dispatch requires needsCiFix or needsReviewFix')
@@ -262,6 +286,20 @@ return await parallel(
         priorReceipt: p.priorReceipt,
         dispatchId: p.dispatch_id || p.dispatchId,
         previousDispatchId: p.previous_dispatch_id || p.previousDispatchId,
+        requireArtifact: true,
+          artifact: {
+          role,
+          ticket: p.id,
+          pr: p.pr,
+          worktreePath: p.worktreePath,
+          // The artifact consumer canonicalizes a bare board base to the live
+          // origin ref before binding its integration-base identity. Keep the
+          // caller's value here for compatibility with base-merge's contract.
+          base: p.base || p.prBase,
+          ...(p.branch ? { branch: p.branch } : {}),
+          ...(p.planPath ? { planPath: p.planPath } : {}),
+          ...(p.attempt === undefined ? {} : { attempt: p.attempt }),
+        },
         context: { ticket: p.id },
         label: `fix:${p.id}#${p.pr}`,
         agentOptions: {
@@ -271,22 +309,23 @@ return await parallel(
           schema: OUT,
         },
       })
-        .then(({ result: r, receipt }) => (r
-          ? { ...withoutAgentReceipt(r), id: p.id, pr: p.pr, ...(receipt ? { receipt } : {}) }
-          : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one', receipt)))
+        .then(({ result: r, receipt, artifact }) => ({
+          ...withoutAgentReceipt(r),
+          id: p.id,
+          pr: p.pr,
+          ...(artifact && artifact.artifact_ref ? {
+            artifact_ref: artifact.artifact_ref,
+            artifact_digest: artifact.artifact_digest,
+            evidence_index: artifact.evidence_index,
+            ...(artifact.findings_index ? { findings_index: artifact.findings_index } : {}),
+          } : {}),
+          ...(receipt ? { receipt } : {}),
+        }))
         .catch((e) => {
-          if (isBoundaryFailure(e)) throw e
-          return fixFallback(
-            `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
-            'unknown — the fixer errored before reporting one'
-          )
+          throw e
         })
     } catch (e) {
-      if (isBoundaryFailure(e)) throw e
-      return Promise.resolve(fixFallback(
-        `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
-        'unknown — the fixer errored before reporting one'
-      ))
+      throw e
     }
   })
 )

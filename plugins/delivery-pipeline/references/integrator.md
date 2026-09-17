@@ -42,3 +42,81 @@ command-backed evidence is not verification.
   loop.
 - `human-review-required` — judgment calls only a human can make; state the
   question precisely.
+
+## Complete integration artifact
+
+`INTEGRATION.md` is the complete integration judgment. Write it before the
+bounded result is returned and keep every acceptance observation, command,
+file:line finding, fix ticket, and human question in it. A short `summary` is
+only a transport synopsis and cannot replace the document.
+
+Before the authenticated dispatch, the host clears the role-owned
+`.planning/phases/<phase>/INTEGRATION.md` scratch file for this worktree:
+
+```bash
+node $SHIPYARD_ROOT/scripts/role-artifact.cjs prepare \
+  --worktree <worktree> --role integrator --phase <phase>
+```
+
+Write the fresh complete evidence to `.planning/phases/<phase>/INTEGRATION.md`
+in that worktree. A prior archive or another path is not a valid evidence source.
+
+Return a structured result containing the exact combined revision and the
+complete merged ticket set:
+
+```json
+{
+  "outcome": "passed | needs-fix | human-review-required",
+  "phase": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+  "head": "<40-char combined head sha>",
+  "head_tree": "<40-char combined head tree sha>",
+  "base": "<default-branch ref or commit>",
+  "base_tree": "<40-char default-branch tree sha>",
+  "ticket_set": ["T-33-01", "T-33-02"],
+  "ticket_set_digest": "<sha256 of the complete ticket set>",
+  "blocking_count": 0,
+  "summary": "bounded synopsis",
+  "findings": []
+}
+```
+
+Every finding has a unique `id`, a `type`, an explicit `blocking` boolean, a
+summary, and enough evidence to act. A `fix-ticket` also carries its ticket,
+scope, and non-empty file list. A `human-question` carries the exact question
+and its evidence location. A `passed` result must have `blocking_count: 0` and
+an empty blocking finding index. `needs-fix` and
+`human-review-required` retain all blocking findings; they cannot be reduced to
+`passed` by truncating the synopsis.
+
+The host seals and validates `INTEGRATION.md` at the consuming boundary after
+the integrator's authenticated dispatch receipt:
+
+```bash
+node $SHIPYARD_ROOT/scripts/role-artifact.cjs seal \
+  --worktree <worktree> --role integrator --ticket <phase-subject> \
+  --phase <phase> --base <default-branch> --boundary-store <receipt-store> \
+  --dispatch-id <dispatch-id> --ticket-set-file <ticket-set.json> \
+  --result-file <result.json> \
+  --evidence-path .planning/phases/<phase>/INTEGRATION.md
+node $SHIPYARD_ROOT/scripts/role-artifact.cjs validate \
+  --worktree <worktree> --role integrator --ticket <phase-subject> \
+  --phase <phase> --base <default-branch> --boundary-store <receipt-store> \
+  --dispatch-id <dispatch-id> --ticket-set-file <ticket-set.json> \
+  --artifact <artifact-ref> --artifact-digest <artifact-digest>
+```
+
+`<phase-subject>` is the host-owned `ticket` passed in the authenticated
+boundary launch context for the integrator dispatch and must match the
+phase-subject supplied to both commands. Its canonical form is
+`phase=<phase>;repository=<repository identity>;tickets=<ticket-set-digest>`;
+the digest is `SHA-256(JSON.stringify(ticket_set))` from the same complete
+ticket-set file supplied to both the boundary context and the artifact consumer.
+
+Validation binds the phase, repository, and complete ticket-set subject, combined
+head and tree, default branch and tree, ticket-set digest, dispatch receipt,
+immutable `.planning/phases/<phase>/INTEGRATION.md`, complete findings, outcome,
+and blocking count. It rechecks
+the current combined revision before projection or phase completion. Missing,
+empty, changed, stale, or contradictory evidence is a refusal. The validated
+artifact preserves `human-review-required` as a stop for the human and never
+authorizes a default-branch merge by itself.

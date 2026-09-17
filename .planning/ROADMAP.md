@@ -588,6 +588,18 @@ not with an invented subscription-savings percentage.
 ### Phase 33: Reduce orchestration context and transfer sessions safely
 **Status**: planned (ADR-011)
 **Requirements**: REQ-90, REQ-91, REQ-92
+**Plans:** 9 plans
+
+Plans (serialized T-33-01 through T-33-09):
+- [ ] 33-01-PLAN.md — Durable CI/review transition delivery
+- [ ] 33-02-PLAN.md — Validated bounded executor evidence
+- [ ] 33-03-PLAN.md — Complete repair and drift artifacts
+- [ ] 33-04-PLAN.md — Architecture, sentinel and integration judgments
+- [ ] 33-05-PLAN.md — Research and decomposition handbacks
+- [ ] 33-06-PLAN.md — Targeted policy and backlog context
+- [ ] 33-07-PLAN.md — Independent treatment measurement
+- [ ] 33-08-PLAN.md — Fenced checkpoint and manual resume
+- [ ] 33-09-PLAN.md — Recommendations and unproven-automation refusal
 
 Waves 2–3 of [ADR-011-ROLLOUT](architecture/ADR-011-ROLLOUT.md), after phase 32:
 OPT-06–08 move unchanged observations into deterministic waiting, extend bounded
@@ -631,9 +643,9 @@ existing Claude palette is a read-only compatibility surface.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `91e4942cc8b98b9c604cb5e8653c1d0460432d41a1d5215e87a51b3d23357a78`
-- Plans merged: 116/116
-- Phases verified: 5/17
+- Source fingerprint: `4e0d4cb514e33622bad736ff0616094aad727af435052626026ec6dfe8e92b5a`
+- Plans merged: 125/125
+- Phases verified: 6/17
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -651,7 +663,7 @@ existing Claude palette is a read-only compatibility surface.
 | 30 — A ticket you cannot reach is not deliverable | 10 | 10 | pending |
 | 31 — Not every ticket is available work | 7 | 7 | pending |
 | 32 — Measure usage and make the backlog actionable | 7 | 7 | passed |
-| 33 — Reduce orchestration context and transfer sessions safely | 0 | 0 | pending |
+| 33 — Reduce orchestration context and transfer sessions safely | 9 | 9 | passed |
 | 34 — Improve convergence and tune from measured outcomes | 0 | 0 | pending |
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |

@@ -60,6 +60,84 @@ const workflowApplicationEvidence = ({ result }) => {
   if (!evidence) throw new Error('test Claude host returned no application evidence');
   return evidence;
 };
+const workflowArtifactConsumer = ({ artifact, result, record }) => {
+  const ref = `${artifact && artifact.worktreePath ? artifact.worktreePath : '/test-worktree'}/.shipyard-role-artifact.json`;
+  const evidenceIndex = {
+    path: artifact && artifact.role === 'drift-check'
+      ? '.shipyard-drift-evidence.md'
+      : artifact && ['ci-fix', 'review-fix'].includes(artifact.role)
+        ? '.shipyard-repair-evidence.md'
+        : '.shipyard-evidence.md',
+    bytes: 0,
+    content_bytes: 0,
+    sha256: '0'.repeat(64),
+    digest: '0'.repeat(64),
+  };
+  const role = artifact && artifact.role ? artifact.role : record.receipt.role;
+  const ticket = artifact && artifact.ticket ? artifact.ticket : record.ticket;
+  const findingsIndex = {
+    path: `.shipyard-role-artifacts/${record.receipt.dispatch_id}/findings.json`,
+    bytes: 0,
+    content_bytes: 0,
+    sha256: '0'.repeat(64),
+    digest: '0'.repeat(64),
+  };
+  const envelope = ['ci-fix', 'review-fix'].includes(role)
+    ? {
+        schema: `shipyard.repair-result.v1`,
+        version: 1,
+        role,
+        ticket,
+        subject: ticket,
+        pr: artifact.pr || result.pr || 1,
+        status: result.status || 'escalate',
+        pushed: typeof result.pushed === 'boolean' ? result.pushed : false,
+        summary: typeof result.notes === 'string' && result.notes.trim() ? result.notes.slice(0, 500) : 'test repair summary',
+        notes: typeof result.notes === 'string' && result.notes.trim() ? result.notes.slice(0, 500) : 'test repair notes',
+        hypothesis: typeof result.hypothesis === 'string' ? result.hypothesis.slice(0, 500) : 'test hypothesis',
+        evidence_index: evidenceIndex,
+        evidence_index_ref: evidenceIndex,
+        findings_index: findingsIndex,
+        findings_index_ref: findingsIndex,
+      }
+    : role === 'drift-check'
+      ? {
+          schema: 'shipyard.drift-result.v1',
+          version: 1,
+          role,
+          ticket,
+          subject: ticket,
+          verdict: result.verdict || 'fresh',
+          moved_count: Array.isArray(result.moved) ? result.moved.length : 0,
+          reuse_candidates_count: Array.isArray(result.reuse_candidates) ? result.reuse_candidates.length : 0,
+          evidence_count: Array.isArray(result.evidence) ? result.evidence.length : 0,
+          summary: typeof result.summary === 'string' ? result.summary.slice(0, 500) : '',
+          evidence_index: evidenceIndex,
+          evidence_index_ref: evidenceIndex,
+          findings_index: findingsIndex,
+          findings_index_ref: findingsIndex,
+        }
+      : {
+          schema: 'shipyard.executor-result.v1',
+          version: 1,
+          role,
+          ticket,
+          outcome: result.status,
+          actionable_delta: null,
+          summary: typeof result.summary === 'string' ? result.summary.slice(0, 500) : '',
+          blocking_count: result.blocking_count || 0,
+          evidence_index: evidenceIndex,
+        };
+  return {
+    schema: 'shipyard.role-artifact.v1',
+    artifact_ref: ref,
+    artifact_path: ref,
+    artifact_digest: '1'.repeat(64),
+    envelope,
+    evidence_index: evidenceIndex,
+    ...(envelope.findings_index ? { findings_index: findingsIndex } : {}),
+  };
+};
 const testDispatchFactory = (options) => createClaudeWorkflowDispatch({
   ...options,
   capabilities: options.capabilities === undefined ? WORKFLOW_CAPABILITIES : options.capabilities,
@@ -67,6 +145,9 @@ const testDispatchFactory = (options) => createClaudeWorkflowDispatch({
   applicationEvidence: options.applicationEvidence === undefined
     ? workflowApplicationEvidence
     : options.applicationEvidence,
+  artifactConsumer: options.artifactConsumer === undefined
+    ? workflowArtifactConsumer
+    : options.artifactConsumer,
 });
 process.on('exit', () => {
   for (const store of workflowStores) {
@@ -150,9 +231,9 @@ const parseErrorOf = (s) => {
 };
 
 const TICKETS = [
-  { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', model: 'sonnet', effort: 'max' },
-  { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', model: 'sonnet', effort: 'max' },
-  { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', model: 'sonnet', effort: 'max' },
+  { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath: '/w/T-99-01', model: 'sonnet', effort: 'max' },
+  { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', worktreePath: '/w/T-99-02', model: 'sonnet', effort: 'max' },
+  { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', worktreePath: '/w/T-99-03', model: 'sonnet', effort: 'max' },
 ];
 
 const driftTickets = (tickets) => tickets.map((ticket) => ({
@@ -165,7 +246,7 @@ const driftTickets = (tickets) => tickets.map((ticket) => ({
 // without `driftRefPath`, so its cases carry one.
 const SCRIPTS = [
   { name: 'executors', base: {} },
-  { name: 'drift-gate', base: { driftRefPath: '/plugin/references/drift-check.md' } },
+  { name: 'drift-gate', base: { driftRefPath: '/plugin/references/drift-check.md', baseRef: 'origin/main' } },
 ];
 
 for (const { name, base } of SCRIPTS) {
@@ -274,16 +355,17 @@ test('a null agent result fails closed because it cannot produce a receipt', asy
   assert.strictEqual(error.code, 'MISSING_RECEIPT');
 });
 
-suite('drift-gate.mjs — a dead or throwing judge is still a verdict');
+suite('drift-gate.mjs — a dead or throwing judge fails the artifact boundary');
 
-test('a throwing judge is a drifted verdict, not a gap', async () => {
-  const { value } = await run(
+test('a throwing judge is a failed dispatch, not an unsealed drift verdict', async () => {
+  const error = await rejects(
     'drift-gate',
-    { tickets: driftTickets(TICKETS), driftRefPath: '/x/drift-check.md' },
+    { tickets: driftTickets(TICKETS), driftRefPath: '/x/drift-check.md', baseRef: 'origin/main' },
     { agent: async () => { throw new Error('judge exploded'); } }
   );
-  assert.strictEqual(value.length, 3);
-  assert.deepStrictEqual([...new Set(value.map((v) => v.verdict))], ['drifted']);
+  assert.equal(error.name, 'DispatchBoundaryError');
+  assert.equal(error.code, 'DISPATCH_FAILED');
+  assert.match(error.message, /judge exploded/);
 });
 
 // T-26-14 — executors.mjs returns a REFERENCE to the two documents it makes
@@ -305,7 +387,7 @@ test('a committed ticket returns paths and a short summary, never the documents,
     const longPrBody = `Ticket: T-99-01\n${'x'.repeat(11000)}`;
     const longEvidence = `$ node tests/unit/x.test.cjs\n${'y'.repeat(9000)}`;
     const longSummary = 'z'.repeat(900);
-    const ticket = { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath, model: 'sonnet', effort: 'max' };
+  const ticket = { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath, model: 'sonnet', effort: 'max' };
     const stubAgent = async (prompt) => {
       // The real agent is told exactly where to write — assert the prompt
       // actually names both paths, so a future edit can't drop the instruction
@@ -326,6 +408,9 @@ test('a committed ticket returns paths and a short summary, never the documents,
     // here only by accident of `worktreePath` being a short mkdtemp path.
     assert.ok(r.summary.length <= 500, `summary is ${r.summary.length} chars, over the 500-char cap`);
     assert.strictEqual(r.status, 'committed');
+    assert.ok(r.artifact_ref, 'committed results need a trusted artifact reference');
+    assert.ok(r.artifact_digest, 'committed results need the sealed manifest digest');
+    assert.ok(r.evidence_index, 'committed results need a complete evidence index reference');
     assert.ok(!('prBody' in r), 'prBody must not cross back — that is the whole point of this ticket');
     assert.ok(!('evidence' in r), 'evidence text must not cross back — that is the whole point of this ticket');
     assert.ok(path.isAbsolute(r.prBodyPath), `prBodyPath must be absolute: ${r.prBodyPath}`);
@@ -353,20 +438,51 @@ test('a blocked ticket returns its reason inline — no file, no path, the loop 
   assert.strictEqual(value.length, 1);
   const r = value[0];
   assert.strictEqual(r.status, 'blocked');
+  assert.ok(!('artifact_ref' in r), 'blocked results must not carry a publishable artifact reference');
+  assert.ok(r.summary.length <= 500, 'blocked summaries are bounded too');
   assert.strictEqual(r.summary, reason);
   assert.strictEqual(r.prBodyPath, '', 'a blocked ticket writes no PR body');
   assert.strictEqual(r.evidencePath, '', 'a blocked ticket writes no evidence file');
 });
 
-test('a dead or throwing agent still returns a capped reason inline, with no worktreePath required', async () => {
-  const ticket = { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', model: 'sonnet', effort: 'max' };
+test('a committed result without a trusted artifact consumer cannot report committed', async () => {
+  const ticket = { id: 'T-99-04', planPath: '/p/99-04-PLAN.md', branch: 'ticket/T-99-04', prBase: 'epic/99', worktreePath: '/w/T-99-04', model: 'sonnet', effort: 'max' };
+  const dispatchFactory = (dispatchOptions) => createClaudeWorkflowDispatch({
+    ...dispatchOptions,
+    capabilities: WORKFLOW_CAPABILITIES,
+    recorder: WORKFLOW_RECORDER,
+    applicationEvidence: workflowApplicationEvidence,
+  });
+  const error = await rejects('executors', { tickets: [ticket] }, {
+    dispatchFactory,
+    agent: async () => ({ id: ticket.id, status: 'committed', summary: 'claimed complete' }),
+  });
+  assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
+  assert.strictEqual(error.code, 'MISSING_ARTIFACT');
+});
+
+test('blocked results with oversized summaries stay explicit and bounded', async () => {
+  const ticket = { id: 'T-99-05', planPath: '/p/99-05-PLAN.md', branch: 'ticket/T-99-05', prBase: 'epic/99', worktreePath: '/does/not/exist', model: 'sonnet', effort: 'max' };
+  const { value } = await run('executors', { tickets: [ticket] }, {
+    agent: async () => ({ id: ticket.id, status: 'blocked', summary: 'b'.repeat(900), blocking_count: 2 }),
+  });
+  assert.strictEqual(value[0].status, 'blocked');
+  assert.ok(value[0].summary.length <= 500);
+  assert.strictEqual(value[0].prBodyPath, '');
+  assert.strictEqual(value[0].evidencePath, '');
+  assert.ok(!('artifact_ref' in value[0]));
+});
+
+test('an artifact-required executor failure is a failed dispatch, not an unsealed blocked result', async () => {
+  const ticket = { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', worktreePath: '/does/not/exist', model: 'sonnet', effort: 'max' };
   const dead = await rejects('executors', { tickets: [ticket] }, { agent: async () => null });
   assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(dead.name));
   assert.strictEqual(dead.code, 'MISSING_RECEIPT');
 
-  const threw = await run('executors', { tickets: [ticket] }, { agent: async () => { throw new Error('boom'); } });
-  assert.strictEqual(threw.value[0].status, 'blocked');
-  assert.match(threw.value[0].summary, /boom/);
+  const threw = await rejects('executors', { tickets: [ticket] }, { agent: async () => { throw new Error('boom'); } });
+  assert.strictEqual(threw.name, 'DispatchBoundaryError');
+  assert.strictEqual(threw.code, 'DISPATCH_FAILED');
+  assert.match(threw.message, /boom/);
 });
 
 // ── BOUNDARY-MEDIATED WORKFLOW LAUNCH INPUT (T-36-05, ADR-014) ──────────────
@@ -379,6 +495,7 @@ suite('workflows/*.mjs — explicit resolver model and effort boundary');
 
 const PR = {
   id: 'T-99-01', pr: 7, branch: 'ticket/T-99-01', worktreePath: '/w/T-99-01',
+  base: 'epic/99',
   planPath: '/p/99-01-PLAN.md', needsCiFix: true, needsReviewFix: true,
   model: 'opus', effort: 'medium',
 };
@@ -401,7 +518,7 @@ const DISPATCH = [
     name: 'drift-gate',
     args: (over = {}) => ({
       tickets: [{ ...TICKETS[0], model: 'opus', effort: 'max', ...over }],
-      driftRefPath: '/x/drift-check.md',
+      driftRefPath: '/x/drift-check.md', baseRef: 'origin/main',
     }),
     resolved: { model: 'opus', effort: 'max' },
   },
@@ -516,6 +633,7 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
       signals: combinedSignals,
     }],
     driftRefPath: '/x/drift-check.md',
+    baseRef: 'origin/main',
   });
   assert.strictEqual(fixed.calls.length, 1);
   assert.deepStrictEqual(
@@ -708,6 +826,7 @@ test('unsupported or contradictory workflow selections fail closed before agent(
   const drift = await rejects('drift-gate', {
     tickets: [{ ...TICKETS[0], model: 'fable', effort: 'high' }],
     driftRefPath: '/x/drift-check.md',
+    baseRef: 'origin/main',
   });
   assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(drift.name));
 
@@ -748,6 +867,7 @@ test('drift-gate propagates host receipt failures instead of inventing drift', a
   const error = await rejects('drift-gate', {
     tickets: driftTickets([TICKETS[0]]),
     driftRefPath: '/x/drift-check.md',
+    baseRef: 'origin/main',
   }, { dispatchFactory });
   assert.strictEqual(error.name, 'DispatchBoundaryError');
   assert.strictEqual(error.code, 'MISSING_RECEIPT');
@@ -988,7 +1108,7 @@ test('Claude rejects contradictory, inherited, and stale launch selections', () 
 suite('drift-gate.mjs — one dispatch carries one base (T-27-06)');
 
 const driftArgs = (tickets, over = {}) => ({
-  tickets: driftTickets(tickets), driftRefPath: '/x/drift-check.md', ...over,
+  tickets: driftTickets(tickets), driftRefPath: '/x/drift-check.md', baseRef: 'origin/main', ...over,
 });
 const promptFor = (calls, id) => {
   const c = calls.find((x) => x.opts && x.opts.label === `drift:${id}`);
@@ -1021,11 +1141,13 @@ test('the round-level baseRef stays the FALLBACK, so no existing caller breaks',
   assert.ok(!b.includes('origin/main'), `the fallback must not ride along beside it: ${b}`);
 });
 
-test('no base anywhere is still legal, and says nothing about a ref it does not have', async () => {
-  const { calls } = await run('drift-gate', driftArgs([TICKETS[0]]));
-  const p = promptFor(calls, 'T-99-01');
-  assert.ok(/Has landed/.test(p), p);
-  assert.ok(!/\(\)/.test(p), `an absent base must not print an empty parenthesis: ${p}`);
+test('no base anywhere fails before a judge can produce an unbound artifact', async () => {
+  const error = await rejects('drift-gate', {
+    tickets: [{ ...TICKETS[0], baseRef: undefined, prBase: undefined }],
+    driftRefPath: '/x/drift-check.md',
+  });
+  assert.match(error.message, /baseRef is required/);
+  assert.equal(error.name, 'Error');
 });
 
 done();

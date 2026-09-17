@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 91e4942cc8b98b9c604cb5e8653c1d0460432d41a1d5215e87a51b3d23357a78 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4e0d4cb514e33622bad736ff0616094aad727af435052626026ec6dfe8e92b5a -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -97,9 +97,9 @@
 - [x] **REQ-87**: All eight roles reconcile requested routing with launch and runtime evidence, distinguishing unsupported capability from missing proof.
 - [x] **REQ-88**: Expected reviewers are explicit; disabling one does not disable another or turn unavailable review into completed review.
 - [x] **REQ-89**: Advisor usage and effective policy are visible separately, and a trial cannot silently alter global host settings.
-- [ ] **REQ-90**: Unchanged observations do not require repeated model turns; deterministic waiting remains bounded, recoverable and subordinate to live gates.
-- [ ] **REQ-91**: Role boundaries return bounded summaries and complete referenced evidence; selected backlog and required policy remain available.
-- [ ] **REQ-92**: Context rotation transfers durable state with one acknowledged owner, only at a safe boundary and on a supported runtime.
+- [x] **REQ-90**: Unchanged observations do not require repeated model turns; deterministic waiting remains bounded, recoverable and subordinate to live gates.
+- [x] **REQ-91**: Role boundaries return bounded summaries and complete referenced evidence; selected backlog and required policy remain available.
+- [x] **REQ-92**: Context rotation transfers durable state with one acknowledged owner, only at a safe boundary and on a supported runtime.
 - [ ] **REQ-93**: Review progress has evidence and signatures; resource budgets do not replace the retry backstop or fabricate a plan defect.
 - [ ] **REQ-94**: Model-axis escalation requires verified capability and a completed attempt; unknown effort never becomes applied depth, and role floors persist.
 - [ ] **REQ-95**: A manual-merge verdict carry proves ancestry, head tree, base tree and current PR identity; missing proof requires fresh review.
@@ -219,9 +219,9 @@
 | REQ-87 | Phase 32 | Complete |
 | REQ-88 | Phase 32 | Complete |
 | REQ-89 | Phase 32 | Complete |
-| REQ-90 | Phase 33 | In Progress |
-| REQ-91 | Phase 33 | In Progress |
-| REQ-92 | Phase 33 | In Progress |
+| REQ-90 | Phase 33 | Complete |
+| REQ-91 | Phase 33 | Complete |
+| REQ-92 | Phase 33 | Complete |
 | REQ-93 | Phase 34 | In Progress |
 | REQ-94 | Phase 34 | In Progress |
 | REQ-95 | Phase 34 | In Progress |

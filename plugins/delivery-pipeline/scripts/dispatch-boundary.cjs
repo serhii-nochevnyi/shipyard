@@ -15,6 +15,12 @@ const canonicalResolveDispatch = canonicalPolicy.resolveDispatch;
 const canonicalValidateResolution = canonicalPolicy.validateResolution;
 const canonicalStableStringify = canonicalPolicy.stableStringify;
 const { resolveTaskLevel } = require('./pipeline-config.cjs');
+const {
+  capabilityForBoundary,
+  createSessionHandoff,
+  currentSessionHandoff,
+  isOwnerCapability,
+} = require('./session-handoff.cjs');
 
 const OBSERVATION_UNKNOWN = 'unknown';
 const CLAIM_TTL_MS = 60 * 60 * 1000;
@@ -1673,6 +1679,39 @@ function createDispatchBoundary(options = {}) {
   }
   const adapters = options.adapters || {};
   const requireGsdRole = options.requireGsdRole === true;
+  const adapterHandoff = Object.values(adapters).find((adapter) => adapter && adapter.handoff)?.handoff;
+  const handoffInput = options.handoff
+    || options.sessionHandoff
+    || options.session
+    || options.ownerCapability
+    || options.owner
+    || adapterHandoff
+    || currentSessionHandoff();
+  const handoffCapability = handoffInput === undefined ? null : capabilityForBoundary(handoffInput);
+  const handoffController = handoffCapability && handoffCapability.controller;
+  if (handoffCapability && (!isOwnerCapability(handoffCapability)
+      || !handoffController
+      || typeof handoffController.reserveLaunch !== 'function'
+      || typeof handoffController.markLaunchStarted !== 'function'
+      || typeof handoffController.completeLaunch !== 'function')) {
+    refuse('INVALID_HANDOFF', 'dispatch boundary requires a complete host-held session handoff controller');
+  }
+  let unboundHandoff;
+  function guardUnboundDispatch(context, ticket) {
+    if (handoffCapability) return;
+    if (!unboundHandoff) {
+      try {
+        unboundHandoff = createSessionHandoff({ cwd: options.cwd || process.cwd() });
+      } catch (error) {
+        if (error && error.code === 'UNRESOLVED_REPOSITORY') return;
+        throw error;
+      }
+    }
+    unboundHandoff.guardUnbound({
+      ...(context && context.phase !== undefined ? { phase: context.phase } : {}),
+      ...(ticket !== undefined ? { tickets: [ticket] } : {}),
+    });
+  }
   const trustedReceipts = new Map();
   const trustedResolutions = new Map();
   const consumedReceiptIds = new Set();
@@ -2013,13 +2052,25 @@ function createDispatchBoundary(options = {}) {
       applied_effort: applied.applied_effort,
       observed_model: applied.observed_model,
       observed_effort: applied.observed_effort,
+      ...(trusted.record && trusted.record.session_handoff
+        ? { session_handoff: trusted.record.session_handoff }
+        : {}),
       application_receipt: applied,
     }));
   }
 
   function dispatch(input, context = {}) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
+    for (const source of [context, context && context.launch_arguments, context && context.selection, context && context.session]) {
+      if (!isObject(source)) continue;
+      for (const field of ['handoff', 'sessionHandoff', 'session_handoff', 'owner', 'ownerCapability', 'owner_capability', 'session_token']) {
+        if (Object.prototype.hasOwnProperty.call(source, field)) {
+          refuse('INVALID_HANDOFF', `serialized launch context cannot carry ${field}; the host closure owns session authority`);
+        }
+      }
+    }
     const ticket = ticketFromContext(context);
+    guardUnboundDispatch(context, ticket);
     const runtime = typeof input.runtime === 'string' ? input.runtime.trim() : input.runtime;
     const adapter = adapterFor(adapters, runtime);
     const record = recorderFor(options, adapter);
@@ -2050,14 +2101,37 @@ function createDispatchBoundary(options = {}) {
         { runtime: resolution.runtime },
       );
     }
-    reserveDispatchId(validatedResolution.dispatch_id, record, validatedResolution);
+    let handoffReservation = null;
+    let launchStarted = false;
+    if (handoffCapability) {
+      handoffReservation = handoffController.reserveLaunch(handoffCapability, {
+        dispatch_id: validatedResolution.dispatch_id,
+        runtime: validatedResolution.runtime,
+        role: validatedResolution.role,
+      });
+    }
+    try {
+      reserveDispatchId(validatedResolution.dispatch_id, record, validatedResolution);
+    } catch (error) {
+      if (handoffReservation) {
+        try { handoffController.completeLaunch(handoffReservation, { recorded: true, aborted: true }); } catch (_) { /* preserve the reservation failure */ }
+      }
+      throw error;
+    }
     const prior = validatedResolution.prior_applied;
     const claimConsumerId = validatedResolution.dispatch_id;
     let priorClaim = null;
     let priorLease = null;
-    if (prior) {
-      priorClaim = recorderClaim(record, prior.dispatch_id, claimConsumerId);
-      if (priorClaim) priorLease = startClaimLease(record, prior.dispatch_id, claimConsumerId, priorClaim);
+    try {
+      if (prior) {
+        priorClaim = recorderClaim(record, prior.dispatch_id, claimConsumerId);
+        if (priorClaim) priorLease = startClaimLease(record, prior.dispatch_id, claimConsumerId, priorClaim);
+      }
+    } catch (error) {
+      if (handoffReservation) {
+        try { handoffController.completeLaunch(handoffReservation, { recorded: true, aborted: true }); } catch (_) { /* preserve the refusal */ }
+      }
+      throw error;
     }
     const observationCapabilities = adapterObservationCapabilities(adapter);
     const finish = (launchResult) => {
@@ -2104,6 +2178,13 @@ function createDispatchBoundary(options = {}) {
         observed_effort: applicationReceipt.observed_effort,
         application_evidence: strippedEvidence,
         receipt: applicationReceipt,
+        ...(handoffReservation ? {
+          session_handoff: {
+            scope_id: handoffReservation.scope_id,
+            run_id: handoffReservation.run_id,
+            epoch: handoffReservation.epoch,
+          },
+        } : {}),
         ...(validatedResolution.gsd_role !== undefined ? {
           gsd_role: validatedResolution.gsd_role,
           gsd_launch_mechanism: applicationReceipt.gsd_launch_mechanism,
@@ -2134,6 +2215,7 @@ function createDispatchBoundary(options = {}) {
       recorderFinalize(record, finalizedRecord);
       consumePriorReceipt(prior, record, claimConsumerId, priorClaim);
       registerReceipt(applicationReceipt, validatedResolution, record, finalizedRecord);
+      if (handoffReservation) handoffController.completeLaunch(handoffReservation, { recorded: true, receipt: applicationReceipt });
       if (priorLease) priorLease.stop();
       return finalizedRecord;
     };
@@ -2143,6 +2225,10 @@ function createDispatchBoundary(options = {}) {
       // dedicated static adapter method. The adapter cannot reopen the mutable
       // path as launch input: it receives the immutable verified handoff.
       const staticHandoff = revalidateGeneratedAgent(validatedResolution, adapter);
+      if (handoffReservation) {
+        handoffController.markLaunchStarted(handoffReservation);
+        launchStarted = true;
+      }
       const launchResult = invokeLaunch(
         fn,
         adapter,
@@ -2152,6 +2238,11 @@ function createDispatchBoundary(options = {}) {
       );
       if (launchResult && typeof launchResult.then === 'function') {
         return launchResult.then(finish).catch((error) => {
+          if (handoffReservation) {
+            try {
+              handoffController.completeLaunch(handoffReservation, { recorded: false, reason: error && error.message ? error.message : 'launch failed' });
+            } catch (_) { /* the durable ambiguous marker is safer than a retry */ }
+          }
           if (priorLease) priorLease.stop();
           if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
           throw error;
@@ -2159,6 +2250,12 @@ function createDispatchBoundary(options = {}) {
       }
       return finish(launchResult);
     } catch (error) {
+      if (handoffReservation) {
+        try {
+          if (launchStarted) handoffController.completeLaunch(handoffReservation, { recorded: false, reason: error && error.message ? error.message : 'launch outcome is unknown' });
+          else handoffController.completeLaunch(handoffReservation, { recorded: true, aborted: true });
+        } catch (_) { /* retain the safest durable state available */ }
+      }
       if (priorLease) priorLease.stop();
       if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
       throw error;

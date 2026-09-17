@@ -519,7 +519,8 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--grap
 node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs <mark|clear|list> …
 node ${CLAUDE_PLUGIN_ROOT}/scripts/escalation-record.cjs <mark|mark-plan-defect|clear|list> …
 node ${CLAUDE_PLUGIN_ROOT}/scripts/failure-signature.cjs <compute|verdict|rerun|lift> …
-node ${CLAUDE_PLUGIN_ROOT}/scripts/attempt-history.cjs <T> [--json] [--limit <n>]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/attempt-history.cjs <T> [--json] [--details] [--limit <n>]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs <seal|validate|read> --worktree <p> --role <role> --base <ref> --boundary-store <p> --dispatch-id <id> …
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs [--json] [--since 14d|all]
 ```
 
@@ -679,11 +680,15 @@ session:
 attempt    — each babysit round on a PR:
              log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<ci-fix|review-fix> model=<tier> \
                effort_applied=<level|unsupported|unknown> \
-               outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha> hypothesis="<the fixer's own>"
+               outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha> hypothesis="<the fixer's own>" \
+               artifact_ref=<validated path> artifact_digest=<sha256> dispatch_id=<id> \
+               artifact_role=<ci-fix|review-fix> artifact_base=<base> artifact_worktree=<worktree> boundary_store=<path>
 base_merge — a mechanical base merge that landed in a round (NOT an attempt):
              log-event.cjs base_merge ticket=<T> pr=<N> base=<base ref> head=<full 40-char sha>
 fix_round  — for EACH item from a fix-round Workflow result:
-             log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false>
+             log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false> \
+               artifact_ref=<validated path> artifact_digest=<sha256> dispatch_id=<id> \
+               artifact_role=<ci-fix|review-fix> artifact_base=<base> artifact_worktree=<worktree> boundary_store=<path>
 escalation — any escalation to a human — NOT through log-event:
              escalation-record.cjs mark <T> <reason...>
 ```
@@ -695,6 +700,18 @@ defect, and `attempt-history.cjs <T>` renders the record — hypotheses included
 into the next fixer's input. An attempt logged without them still counts toward
 the backstop and buys the next round nothing. `outcome=flake` is logged at an
 UNCHANGED `n`: a quarantined failure is not charged.
+
+`artifact_ref` and `artifact_digest` are key=value fields on these existing
+events, not a new event kind or journal schema. Write them only after the
+trusted boundary has sealed and read the role artifact, along with the
+authenticated `dispatch_id`, `artifact_role`, `artifact_base`,
+`artifact_worktree`, and `boundary_store` when a later details read must resolve
+it. A digest is an integrity check, never permission to skip the live receipt,
+PR/head, integration-base, or D-02 gate. `attempt-history.cjs <T> --details
+--graph <project>/.planning/graph` resolves a referenced hypothesis through the
+same validator and labels it historical; a missing, stale, escaped, or
+unauthenticated reference fails closed. Bounded notes do not reset `attempts` or
+fabricate a new `n`.
 
 `merge` and `status_change` are written by `sentinel.cjs merge` and
 `state-sync.cjs` themselves — do NOT log them by hand; log-event refuses.
@@ -731,6 +748,139 @@ already been asked to resolve, with your reason gone. The reason you type is the
 only thing that session inherits, so write what a human must decide.
 It lifts itself once the PR moves (a push, a review answer, undrafting), or with
 `escalation-record.cjs clear <T>`.
+
+## Phase 33 treatment measurements
+
+Phase 33 measures orchestration treatments independently. Every wait or child
+launch carries both dimensions, defaulting to `{wait_events: "baseline",
+bounded_context: "baseline"}`:
+
+```text
+baseline  → wait_events=baseline, bounded_context=baseline
+OPT-06    → wait_events=opt-06, bounded_context=baseline
+OPT-07    → wait_events=baseline, bounded_context=opt-07
+combined  → wait_events=opt-06, bounded_context=opt-07
+```
+
+The combined arm is used only after the two individual arms have usable
+evidence. Pass the selection to `wait-events.cjs` callers as `treatments` (the
+CLI equivalents are `--wait-treatment` and `--context-treatment`); pass
+the same selection to the trusted context-packet builder. A persisted wait
+record keeps the selection while pending actions remain durable. Changing an
+arm never acknowledges, drops or recreates pending work, and it never disables
+the live sentinel, review, architecture, human or integration gates.
+
+The metadata-only collector writes the append-only
+`.planning/graph/orchestration-overhead.jsonl` stream. Packet creation records
+`startup` bytes and estimated tokens. A validated `role-artifact.cjs read` with
+an evidence range records the bytes actually returned as `parent_reingestion`,
+so a large referenced file is not charged as if its complete body were
+re-ingested. Source paths and digests are retained; prompt bodies, transcripts,
+credentials and synthetic provider tokens are refused. Provider token counts
+remain unknown until supported usage evidence is joined from
+`usage-attribution.cjs`.
+
+Wait polling records `polls` separately. An unchanged poll, elapsed interval or
+wait event is never a model turn. Model responses and tool calls are counted
+only from supported usage or transcript evidence; missing evidence is unknown,
+not zero. Generate a report at an experiment boundary with the collector's
+`report()` API, then preserve the JSON beside the experiment record. The report
+must show startup, parent re-ingestion, polls, observed turns, tools, cache and
+advisor coverage, failed/interrupted work and attribution gaps. See
+`docs/audits/optimization/phase-33-protocol.md` for the fixed cohort, quality,
+rollback and seven-day defect-window gates. A fixture report cannot promote a
+treatment or claim quota savings.
+
+## Durable session handoff and cold-start recovery
+
+The delivery session may be stopped and resumed, but a checkpoint is evidence,
+not launch authority. The handoff store is derived from the real path returned by
+`git rev-parse --git-common-dir` and lives at
+`<git-common-dir>/shipyard/ownership`, so two worktrees of one repository share
+one fence. A different repository has a different store. Inspect it before
+starting work:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs inspect \
+  --cwd <project> --json
+```
+
+The same status surface is the delivery consumer for rotation advice. Give it
+the append-only overhead observations and, when applicable, the completed
+phase-boundary marker:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs status \
+  --cwd <project> --scope-id <scope> \
+  --overhead-file <project>/.planning/graph/orchestration-overhead.jsonl \
+  --phase-boundary <phase-boundary.json> --runtime <active-runtime>
+```
+
+`rotation_recommendation.state` is `recommend`, `not-recommended` or
+`unknown`. A recommendation contains the sample IDs, metric/unit, startup
+median, threshold and per-sample comparison. It is advisory: it never starts a
+timer, kills a process, forks or resumes a session, launches a successor,
+acknowledges ownership or dispatches work. Safe-boundary blockers remain in
+`rotation_recommendation.safety.blockers`, and the explicit manual
+checkpoint/resume/acknowledge sequence remains available.
+
+`transfer_capability` is tied to the strict active runtime context, host
+version and the required proving-ground evidence. Until a separately reviewed
+runtime-specific path supplies fresh bounded context, a supported launch API,
+active-child enumeration, durable owner acknowledgement, application-evidence
+continuity and crash recovery, it reports `unsupported`/`unproven` with
+`automatic_transfer.allowed: false`. CLI flags, resume/fork help, a synthetic
+acknowledgement or a caller boolean cannot change that result.
+
+Record checkpoint collection, successor startup and cache warm-up as separate
+metadata-only overhead stages (`checkpoint_collection`, `successor_startup`,
+`cache_warmup`). Keep runtime, backend, policy and treatment dimensions on each
+row; missing or mixed evidence remains unknown and is excluded from savings
+claims.
+
+The current owner first writes a complete checkpoint at a safe boundary. The
+checkpoint names the repository, run/session, epoch, phase/ticket scope,
+plan/policy digests, head/base, worktrees, snapshot, pending waits/actions,
+dispatch reservations, artifact references, treatment, budgets and exact next
+action. It contains references and digests, never prompts, transcripts,
+credentials or raw artifact bodies. A dirty owned worktree, active child,
+changed head/base, missing reference, unreadable state or unresolved external
+launch blocks the transfer; an expired PID or dispatch TTL is not proof that a
+child stopped.
+
+The manual sequence is explicit and compare-and-swap fenced:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs checkpoint \
+  --cwd <project> --scope-id <scope> --token <owner-token> \
+  --checkpoint-file <checkpoint.json>
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs resume \
+  --cwd <project> --scope-id <scope> --run-id <successor-run> \
+  --session-id <successor-session>
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs acknowledge \
+  --cwd <project> --scope-id <scope> --candidate-id <candidate> \
+  --token <successor-token> --validation-file <live-validation.json>
+```
+
+`acknowledge` requires a fresh live validation of the PR/head/base, reviews,
+checks, owned worktrees and children. Competing successors may prepare, but the
+first valid acknowledgement atomically increments the epoch and becomes the
+only owner; the predecessor is fenced and cannot return through rollback.
+`cancel-before-ack` removes a preparing successor without changing the current
+owner. Automatic context transfer is unavailable until a runtime-specific
+fresh-context launch, child enumeration and application-evidence continuity
+are proven; do not infer that capability from CLI help or a synthetic fixture.
+
+The host-held owner capability is passed through the Workflow host and Codex
+adapter closures into the same ADR-014 `resolve → validate → reserve → launch →
+application evidence → record` boundary. It is never placed in serializable
+workflow arguments, launch context, prompts or child arguments. The boundary
+also checks the canonical ownership store when a legacy-shaped caller omits the
+capability, so an existing owner cannot be bypassed by dropping the new context.
+reserves an in-flight launch under the owner epoch immediately before adapter
+invocation. A recorded receipt clears that reservation; a launch followed by a
+recording failure remains ambiguous and requires reconciliation before any
+takeover or retry.
 
 A missed event is lost forever (GitHub won't recover it), so the log call goes IN
 THE SAME step where the fact occurred, not "at the end."
@@ -907,7 +1057,9 @@ the native `agent`/`parallel` callbacks; its `run` method pins one of the
 shipped DSL scripts and injects `__createClaudeWorkflowDispatch` as the sixth
 binding. The binding owns the
 capabilities, frozen durable recorder, and application-evidence callback; those
-resources must never be smuggled through serializable `args`:
+resources must never be smuggled through serializable `args`. Its host-owned
+artifact consumer also seals repair/drift results into a dispatch-keyed archive;
+the workflow receives only the bounded envelope and validated references:
 
 ```text
 const workflowHost = registerClaudeWorkflowHost({ agent, parallel, phase, log,
@@ -943,7 +1095,7 @@ cannot disappear during a formatting-only edit:
    args: {prs: [{id, pr, branch, worktreePath, planPath, needsCiFix,
    needsReviewFix, needsBaseMerge, base, model, effort, signals,
    priorReceipt, previous_dispatch_id, dispatch_id, attemptHistory,
-   strategy, signatureState}],
+   strategy, signatureState, attempt}],
    ciFixRefPath, reviewFixRefPath, reinitScript, artifactLanguage
 ```
 
@@ -978,10 +1130,12 @@ Rules:
   The did-work gate has to be MECHANICAL (`git log <base>..HEAD`, run by you), and
   an agent that both self-certifies and publishes is exactly the hole that gate
   exists to close. So: agents code+verify+commit in parallel → you gate, push and
-  open the PR. The agent returns `prBodyPath` and `evidencePath` inside its
-  worktree; read those files and pass the body to `gh pr create --body-file`, so
-  PR quality does not regress without copying the documents into the
-  orchestrator transcript.
+  open the PR. The trusted `role-artifact.cjs validate` → `read` procedure below
+  is the sole publication path. `prBodyPath` and `evidencePath` are diagnostic
+  references only; never `cat` them or pass an unvalidated path/body directly to
+  `gh pr create`. Use the validated `--pr-body-out` file produced by that
+  procedure, so PR quality does not regress without copying the documents into
+  the orchestrator transcript.
 - Gates stay with the main loop: attempts, waiting for CI, arch-review, the conform
   gate, human-checkpoints, escalations. Workflow does only the burst work and
   returns structured verdicts — you make the decisions.
@@ -1345,7 +1499,7 @@ const workflowHost = registerClaudeWorkflowHost({
   capabilities, recorder, applicationEvidence
 })
 await workflowHost.run('drift-gate', {
-  args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
+  args: { tickets: [{ id, planPath, baseRef, worktreePath, model, effort, signals }],
           driftRefPath, recordCmd, graphDir },
 })
 ```
@@ -1365,8 +1519,8 @@ accepted. On Codex the boundary validates the generated
 native alias and explicit effort through the workflow adapter. If the host
 cannot apply the selection or return the receipt, refuse the judge and treat
 the ticket as needing drift handling; do not use a generic or inherited Agent.
-The workflow result is fail-safe: an agent that crashed is treated as
-`drifted`.
+  A crashed judge is a failed artifact dispatch and must be surfaced for
+  retry; it is never converted into an unsealed `drifted` verdict.
 
 **Always pass the base ref, on either path.** Without it the judge reasons about
 the working tree, and the working tree is whatever branch the session is on —
@@ -1392,12 +1546,14 @@ drift summary plus a route to /shipyard:decompose:
 node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs mark <T> <plan-path> "<what moved>"
 ```
 
-The judge records its own verdict when it can (`recordCmd`), exactly as the
-sentinel logs its own merges. **Verify that it landed** — `drift-record.cjs list`
-must name every ticket you just judged `drifted`, and any it does not name is
-yours to `mark` before the run ends. A judge that answered `recorded: no`, or a
-Workflow path invoked without `recordCmd`, leaves the finding in a reply that
-dies with the run.
+The judge returns the complete finding to the trusted consumer. Do not let the
+judge persist a verdict from its own reply: first seal and read the
+receipt-bound `shipyard.drift-result.v1` artifact, verify its integration-base
+identity, and only then run `drift-record.cjs mark`. **Verify that it landed** —
+`drift-record.cjs list` must name every validated ticket you judged `drifted`,
+and any it does not name is yours to `mark` before the run ends. A missing,
+stale, duplicate, escaped, or malformed artifact is a failed gate, not a
+`fresh` verdict or a blind retry.
 
 Recording is not bookkeeping — it is the whole difference between judging a
 ticket once and judging it forever. The verdict lives in `.planning/graph/drift.json`
@@ -1414,13 +1570,50 @@ rows make the non-zero ones mean anything: without them a quiet scanner and a
 clean codebase produce the same silence, and `pipeline-stats` cannot tell you
 which one you have.
 
-`reuse_candidates` (returned alongside EITHER verdict) → carry it into the executor
-for that ticket: `tickets[].reuseCandidates` on the Workflow path, the same lines in
-the prompt on the Agent fallback. It is advisory context, never a scope change and
-never a reason to pull a ticket from the run — the executor still owns
-`files_modified`. Dropping it here is the whole point of the scan being lost: the
-duplicate layer gets written, and the integrator finds it a phase later, after N
-tickets already built on it. Tickets that skipped drift-check simply carry none.
+The Workflow/direct result carries `moved_count`, `reuse_candidates_count`,
+`evidence_count`, and a validated artifact reference — never a capped candidate
+list. After the same receipt-bound `role-artifact validate/read` gate succeeds,
+resolve the complete `reuse_candidates` from `findings.json` and carry those
+fenced data lines into the executor (`tickets[].reuseCandidates` on Workflow,
+the equivalent contract section on the direct path). This is advisory context,
+never a scope change or a reason to pull a fresh ticket from the run; the
+executor still owns `files_modified`. If the reference cannot be resolved, do
+not forward candidates, record a fresh verdict, or execute the ticket.
+
+For a direct Codex result, the trusted consumer writes the bounded JSON response
+to a disposable file and seals it only after the authenticated receipt exists:
+
+```text
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+  --worktree <worktree> --role drift-check
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
+  --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
+  --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+  --result-file <trusted-result.json>
+```
+
+The Workflow host performs the same seal through its host-owned consumer. On
+either path, validate and read the returned reference before `drift-record.cjs
+mark`, reuse forwarding, or attempt/journal logging:
+
+The common resolver contract remains `tickets: [{ id, planPath, baseRef, model, effort, signals }]`;
+artifact-bound drift execution additionally requires the per-ticket
+`worktreePath` shown above before dispatch.
+
+```text
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate \
+  --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
+  --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+  --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs read \
+  --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
+  --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+  --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
+```
+
+The returned counts/reference are bounded transport only. They do not authorize
+execution or merge, and a `fresh` verdict is accepted only after this live base
+check and the normal sentinel/scope/review gates.
 
 ## Step 3 — Executors (in parallel as they become ready)
 
@@ -1492,9 +1685,56 @@ may be dispatched at all: fix the file.
 
    ```text
    executors.mjs args: { tickets: [{ id, planPath, branch, worktreePath, prBase,
-     model, effort, signals, risk, critical, checkpoint, reuseCandidates }],
-     deliveryRulesHint, prBodyGuide, artifactLanguage }
+     model, effort, signals, risk, critical, checkpoint, reuseCandidates,
+     contextPacket, contextPacketRequired: true }],
+     deliveryRulesHint, prBodyGuide, artifactLanguage, contextPacketRequired: true }
    ```
+
+   Before assembling those arguments, the trusted delivery loop builds one
+   serializable packet per ticket with
+   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs`:
+
+   ```text
+   buildContextPacket({
+     root: worktreePath,
+     role: 'executor', subject: id, sourceRevision: liveHead,
+     policy: ADR014_POLICY, policyHash: resolution.policy_hash,
+     planPath, requiredRefs: [planPath, ...contextReads],
+     scope: { files_modified, acceptance, verification },
+     roleContext: { plan, scope, acceptance, verification, backlog },
+     selectedBacklogIds, whySelected, backend: runtime,
+   })
+   ```
+
+   The builder reads each required source completely, stores SHA-256 identity
+   and selected backlog source hashes, and records the `ceil(UTF-8 bytes / 4)`
+   estimate with the backend and the 12,000-token soft ceiling. A legitimate
+   empty selection is serialized as `backlog.empty: true`; a missing requested
+   id, stale source or symlink escape blocks packet creation. Overflow keeps all
+   required policy, scope, ADR and gate material and records indexed optional
+   references in `overflow`; it never drops a constraint to fit a model turn.
+   Pass the packet through `context.contextPacket` on the boundary and fence the
+   same JSON as data in the Workflow prompt. The packet is not a model or host
+   selection surface: capabilities, callbacks, model, effort, receipts and
+   inherited session state stay in the host-owned boundary closure.
+
+   The same builder/validator contract applies to every delivery role. The
+   role-specific `roleContext` must contain:
+
+   | role | required targeted inputs |
+   | --- | --- |
+   | executor | plan, scope, acceptance, verification, selected backlog |
+   | ci-fix / review-fix | failure evidence, prior hypothesis |
+   | drift-check | integration base, plan |
+   | arch-review | relevant ADR references, exact diff, integration base |
+   | integrator | complete phase contracts, combined diff |
+   | research | problem statement, source references |
+   | decomposition | ADR references, requirements, research references, context |
+   | pr-sentinel | PR state, CI/review observations |
+
+   Fix and drift packets carry their failure/base evidence as fenced data. The
+   live sentinel, scope, review, architecture and integration gates still run
+   after the child returns; a packet cannot authorize a mutation or merge.
 
    `capabilities`, `recorder`, `applicationEvidence`, and host callbacks are
    host-injected Workflow bridge resources, not serializable `args`; the active
@@ -1531,8 +1771,10 @@ may be dispatched at all: fix the file.
      creating all worktrees, invoke the typed Workflow callback only as the
      boundary's launch adapter. It receives the validated per-ticket selection
      and returns `{id, status: committed|blocked, prBodyPath, evidencePath,
-     summary}` per ticket. Do not call `Workflow(...)` directly from the
-     command or let it resolve a model on its own.
+     summary, artifact_ref, artifact_digest, evidence_index}` per ticket. A
+     committed result also carries a bounded envelope reference; the complete
+     PR body and evidence stay in the worktree. Do not call `Workflow(...)`
+     directly from the command or let it resolve a model on its own.
      `reuseCandidates` is that ticket's `reuse_candidates` from Step 2 (omit when the
      ticket skipped drift-check or the list was empty).
    - **No opaque fallback**: if the selected host cannot carry the boundary
@@ -1541,6 +1783,25 @@ may be dispatched at all: fix the file.
      `reuse_candidates` INSIDE `<TICKET-CONTRACT>` for any supported typed
      callback, with the instruction to read each one before writing and to build
      on it rather than add a parallel layer.
+   - **Direct Codex producer contract**: the supported Agent path emits the same
+     complete `.shipyard-pr-body.md` and `.shipyard-evidence.md` files and only
+     the bounded result fields `{id, status, summary, actionable_delta,
+     blocking_count}`. It must not emit a receipt, expected dispatch/head/base,
+     digest, or alternate file path. Once the boundary has finalized the
+     authenticated receipt, the trusted delivery consumer writes that result
+     to a disposable JSON result file and runs:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
+       --worktree <worktree> --role executor --ticket <T> --base <state[T].base> \
+       --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+       --result-file <trusted-result.json>
+     ```
+
+     The seal derives the repository/worktree identity, committed HEAD/base,
+     policy hash, fixed paths, bytes, and SHA-256 values from trusted host and
+     boundary state. A missing receipt or any refusal is a boundary failure;
+     never turn it into a committed or publishable result.
 4a. **Record the dispatch — AFTER the boundary returned a verified receipt, never
     before.** The receipt carries the launch identity (the Workflow task id or
     typed Agent id); once it exists, and only then, for every ticket you just
@@ -1624,11 +1885,50 @@ may be dispatched at all: fix the file.
    quietly drops someone else's change.
    A violation is a decision, never a retry: revert the stray edit and escalate
    (it belongs to another ticket), or re-plan the ticket with the path declared.
-6. There are commits → push the branch (`git -C <worktree> push -u origin <branch>`),
-   then read the returned `prBodyPath` (and `evidencePath` when recording the
-   verification) from the worktree and run `gh pr create --base <state[T].base> --head <branch> --draft
-   --title "<T>: <title>" --body-file <prBodyPath>` (add
-   `--repo <state[T].repo>` for a foreign-repo ticket).
+
+5c. **Validate executor evidence (MANDATORY, TRUSTED CONSUMER).** After the
+   did-work and scope gates pass, seal a direct Codex result as described in
+   Step 4. The Workflow path must use its returned `artifact_ref` only as a
+   reference, never as proof: validate both paths against the authenticated
+   boundary-store record and the live worktree before publication:
+
+   ```text
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate \
+     --worktree <worktree> --role executor --ticket <T> --base <state[T].base> \
+     --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+     --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
+   ```
+
+   Missing or surplus result IDs, missing files, escaped/symlinked paths,
+   wrong dispatch, stale HEAD/base, policy mismatch, forged receipt, or digest
+   mismatch are refusals. Commit/scope checks do not replace this live gate;
+   cached metadata and artifact digests never authorize mutation or merge.
+
+6. There are commits → revalidate at the publication boundary and obtain one
+   validated byte snapshot. If `git -C <worktree> rev-parse HEAD` differs from
+   the sealed manifest, rerun `role-artifact validate` and stop if it refuses.
+   Then run `node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs read` in the same trusted consumer, optionally with
+   `--pr-body-out <validated-body-file>` and `--evidence-out
+   <validated-evidence-file>`, and use those validated bytes for publication:
+
+   ```text
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs read \
+     --worktree <worktree> --role executor --ticket <T> --base <state[T].base> \
+     --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+     --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest> \
+     --pr-body-out <validated-body-file> --evidence-out <validated-evidence-file>
+   ```
+
+   push the branch (`git -C <worktree> push -u origin <branch>`), then run
+   `gh pr create --base <state[T].base> --head <branch> --draft --title
+   "<T>: <title>" --body-file <validated-body-file>` (add `--repo
+   <state[T].repo>` for a foreign-repo ticket). Do not reopen the agent path
+   directly after validation or substitute a caller-supplied body. Record the
+   validated evidence reference/ranges, not both complete documents in parent
+   model context. For a parent needing findings, request only a bounded range
+   with `--evidence-start <offset> --evidence-end <offset>`; the complete
+   evidence remains available through the validated reference for publication
+   or audit.
    `--base` is the RESOLVED base of the ticket, NOT main directly in
    epic-stacked. **The base is one field with two jobs: it decides what the
    review diff shows AND where the squash LANDS.** A primary parent's ticket
@@ -1655,8 +1955,9 @@ may be dispatched at all: fix the file.
    PR body: the FIRST line — a machine-readable marker `Ticket: <T>` (a safety net for
    state-sync matching if a re-decomposition renames the canonical branch);
    then Problem / Scope / Dependency slice / Test evidence /
-   Rollout-Rollback (for risky). Verify that first line is present before creating
-   the PR; add it yourself if the agent omitted it. The PR title ALWAYS starts with
+   Rollout-Rollback (for risky). Verify that first line is present in the validated
+   byte snapshot before creating the PR; a missing marker is a publication refusal,
+   not an invitation to mutate the agent file. The PR title ALWAYS starts with
    `<T>: ` — this is the second anchor of the same matching.
 7. Immediately the first `reviewers.cjs reinit <pr>`.
 8. Update delivery-state (`state-sync.cjs`) — once, AFTER all of Phase C.
@@ -1676,6 +1977,7 @@ boundary.dispatch(
     signals: { risk, type, checkpoint, critical, signatureState, priorApplied },
     dispatch_id },
   { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md",
+    ticket: roundSubject,
     guardedTickets: [{ ticket, pr, branch, worktreePath, repo, base, planPath }],
     scriptsPath, graphPath, maxAttempts, planDefectSignatures }
 )
@@ -1684,14 +1986,15 @@ boundary.dispatch(
 The boundary resolves the fixed Codex Luna/medium or Workflow runtime Sonnet/high
 selection, validates the generated `shipyard-pr-sentinel.toml` or the native
 Workflow-runtime alias plus explicit effort, launches the typed guard, and returns a
-verified receipt. Only after that receipt exists may the overlay be updated:
-`dispatch-record.cjs mark <T> pr-sentinel --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph` for
-every ticket on the guarded list, using the returned boundary receipt and the
-exact Codex `--agent-file` when applicable. Never create a mark for a refused or
-phantom launch. Clear each record when the guard's report comes back; a
-`pr-sentinel` record also lifts when the PR merges or its base moves. New PRs get
-the same boundary call or the existing typed guard context, never an inherited
-guard/session.
+verified receipt. This round launch is the staged T-33-08 interface: the
+`round:<digest>` subject is required for the trusted consumer, but the current
+`dispatch-record.cjs` overlay remains ticket-bound. Do not run a shared round
+launch through the current per-ticket reconciliation path until T-33-08 supplies
+the authenticated membership bridge. After that bridge exists, only after the
+receipt does `dispatch-record.cjs mark <T> pr-sentinel --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph` apply to a corresponding ticket. Never pass a round receipt to a per-ticket mark or create a mark for a refused or phantom launch. Clear each
+record when the guard's report comes back; a `pr-sentinel` record also lifts when
+the PR merges or its base moves. New PRs get the same boundary call or the
+existing typed guard context, never an inherited guard/session.
 
 The mandatory boundary must support explicit model and effort application and return a concrete application receipt. Otherwise hard-refuse before constructing a prompt, spawning, or recording. Do not substitute `effort_applied=unsupported`, `unknown`, or absent evidence; Agent, prompt, session, or in-process fallback cannot authorize a routed launch.
 When no compliant background surface exists, use the documented inline sentinel
@@ -1717,6 +2020,16 @@ state-sync prints the effective value on every run). **The number no longer
 routes anything** — the failure signature's verdict does — but it stays, as
 telemetry and as the backstop in step d. A round logged `outcome=flake` is not
 charged, and the derived number reflects that by itself.
+
+When the next fixer needs the complete prior hypothesis rather than only the
+bounded journal row, request `attempt-history.cjs <T> --details --graph
+<project>/.planning/graph`. The reader authenticates each `artifact_ref` and
+`artifact_digest` against its recorded dispatch, role, worktree, base, and
+durable receipt, then labels the recovered fields historical. Historical notes
+explain an earlier HEAD; they are never a fresh passing verdict for the current
+HEAD and cannot authorize a push, merge, drift lift, or retry. Missing metadata or
+validation failure stops the repair decision instead of returning an empty
+history.
 
 ```text
 loop:
@@ -1779,7 +2092,8 @@ loop:
                         priorApplied },
              dispatch_id, previous_dispatch_id },
            { ticket, worktreePath, failureLog, signature, strategy,
-             attemptHistory, planPath, artifactLanguage }
+             attemptHistory, planPath, artifactLanguage,
+             repairEvidencePath: "<worktree>/.shipyard-repair-evidence.md" }
          )
          ```
 
@@ -1801,7 +2115,11 @@ loop:
          before constructing a prompt, spawning, or recording. Absent, `unsupported`, or `unknown` evidence
          cannot authorize ci-fix. On rethink, re-read the plan and use a different
          hypothesis; provide references/ci-fix.md and the full ticket contract.
-       'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
+         The full hypothesis, notes, and command evidence are read from the
+         validated repair artifact before `log-event.cjs attempt`; a bounded
+         result or notes string alone is not evidence. Missing or stale evidence
+         is `repair blocked`, not `no-op` or blind redispatch.
+         'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
        a push happened → step d
      pending → nobody watches this PR: leave it in `waiting: ci`, EXIT this PR's
        cycle, serve the rest of the front, and pick it up next round. The guard
@@ -1828,8 +2146,9 @@ loop:
            signals: { risk, type, critical, checkpoint, signatureState,
                       priorApplied },
            dispatch_id, previous_dispatch_id },
-         { ticket, worktreePath, reviewEvidence, codeChange, attemptHistory,
-           planPath, artifactLanguage }
+           { ticket, worktreePath, reviewEvidence, codeChange, attemptHistory,
+           planPath, artifactLanguage,
+           repairEvidencePath: "<worktree>/.shipyard-repair-evidence.md" }
        )
        ```
 
@@ -1854,6 +2173,14 @@ loop:
      `critical`/`checkpoint` evidence, then use the same boundary for the whole
      `resolve → validate → launch → receipt` operation:
 
+     Before constructing the judge prompt, clear its role-owned evidence
+     scratch file in the reviewed worktree:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+       --worktree <worktree> --role arch-review
+     ```
+
      ```text
      boundary.dispatch(
        { runtime, role: "arch-review",
@@ -1874,6 +2201,26 @@ loop:
      measurement, typed host, or documented escalation is a
      refusal. No architecture-review ceiling variant beyond the generated
      critical file is a valid launch target.
+     Before the verdict can reach `gate-trailer.cjs`, the host must preserve the
+     complete result and evidence through the trusted consumer in the same
+     worktree:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal --role arch-review --ticket <T> --pr <N>
+       --worktree <worktree> --base <base-ref> --boundary-store <receipt-store>
+       --dispatch-id <dispatch-id> --result-file <result.json>
+       --evidence-path .shipyard-arch-review-evidence.md
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate --role arch-review --ticket <T> --pr <N>
+       --worktree <worktree> --base <base-ref> --boundary-store <receipt-store>
+       --dispatch-id <dispatch-id> --artifact <artifact-ref>
+       --artifact-digest <artifact-digest>
+     ```
+
+     The consumer checks the complete finding index, blocking count, exact
+     reviewed head and merge-base tree, immutable evidence, and current
+     revision. A bounded synopsis or a cached judgment cannot authorize a
+     conform trailer; only the validated artifact may proceed to the live
+     trailer writer and sentinel gate.
      the same step runs the degenerate-green detector over the diff it judged —
        `degenerate-green.cjs <T> --base <base> --worktree <wt> --json
         --graph <project>/.planning/graph`
@@ -2065,6 +2412,29 @@ itself. The round order:
    agent pushes at most once and does reinit itself. `escalate` →
    `escalation-record.cjs mark` (note it), which does NOT halt the other PRs of
    the round.
+   The Workflow result is bounded (`status`, `pushed`, `notes`, `hypothesis`,
+   and counts/references as applicable); complete repair evidence is resolved
+   only through the trusted role artifact before an attempt is logged.
+   For the direct Codex path, the trusted consumer first writes the compact
+   result to a disposable JSON file and seals it with the authenticated
+   `dispatch_id`:
+
+   ```text
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+     --worktree <worktree> --role <ci-fix|review-fix>
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
+     --worktree <worktree> --role <ci-fix|review-fix> --ticket <T> --pr <p.pr> --base origin/<state[T].base> \
+     --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+     --result-file <trusted-result.json>
+   ```
+
+   The Workflow host performs the same operation. On both paths, run
+   `role-artifact.cjs validate` and then `read` with the returned
+   `artifact_ref`/`artifact_digest` before forwarding evidence or logging the
+   attempt. Wrong PR, head, base, receipt, missing evidence, digest mismatch,
+   symlink escape, or a forged application receipt is a refusal. The complete
+   hypothesis and notes stay in `findings.json`; only their bounded synopsis and
+   validated reference enter the round result.
    (A fixer MAY publish — unlike an executor — because the result of a fix is
    verified mechanically afterwards from live GitHub: a push that did not happen
    simply shows up as an unchanged red PR.)
@@ -2119,7 +2489,7 @@ stop at that: move on to the recomputation of the front below.
    ending the run. The board says this for itself once the hand-overs are
    recorded: `sentinel: clear` never appears while a ticket is out with the
    guard, and `fixpoint` stays NO while anything is dispatched.
-6. Only `waiting.ci` is left → **`ci-wait.cjs` and stay in the turn.** This is the
+6. Only `waiting.ci` or `waiting.parent` is left → **`ci-wait.cjs` and stay in the turn.** This is the
    one legitimate wait, and it is a script rather than your judgement because the
    run cannot come back on its own: the babysit loop is driven by agent-completion
    wake-ups, and when the only thing left is CI there is no agent to complete.
@@ -2128,11 +2498,76 @@ stop at that: move on to the recomputation of the front below.
    person came back. Waiting in the foreground closes that hole by construction:
    the turn never ends, so nothing has to wake it.
 
+   The waiter also publishes a compact, durable semantic event. Give it the
+   stable delivery run id (`--run-id` or `SHIPYARD_RUN_ID`), let it persist the
+   observation before returning, and consume it through the real inbox before
+   asking for model work:
+
+   ```sh
+   PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
+   GRAPH="${GRAPH:-$PROJECT_ROOT/.planning/graph}"
+   RUN_ID="${RUN_ID:-${SHIPYARD_RUN_ID:-ci-wait:$GRAPH}}"
+   WAIT_JSON="$(mktemp)"
+   trap 'rm -f "$WAIT_JSON"' EXIT
+
+   node plugins/delivery-pipeline/scripts/ci-wait.cjs --graph "$GRAPH" --run-id "$RUN_ID" --json >"$WAIT_JSON"
+   (cd "$PROJECT_ROOT" && node plugins/delivery-pipeline/scripts/state-sync.cjs)
+
+   # The waiter may watch several PRs. Extract the identity it actually returned;
+   # never reuse a stale caller-side TICKET/PR for the durable consumer.
+   EVENT_JSON="$(node -e '
+     const fs = require("node:fs");
+     const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+     const event = result.wait_event;
+     if (!event || !event.action_id || !event.dispatch_id || !event.ticket || event.pr === undefined) process.exit(1);
+     process.stdout.write(JSON.stringify({
+       ticket: String(event.ticket), repository: event.repository || "", pr: String(event.pr),
+       action_id: String(event.action_id), dispatch_id: String(event.dispatch_id),
+     }));
+   ' "$WAIT_JSON")" || EVENT_JSON=
+
+   if [ -n "$EVENT_JSON" ]; then
+     TICKET="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).ticket)' "$EVENT_JSON")"
+     REPOSITORY="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).repository)' "$EVENT_JSON")"
+     PR="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).pr)' "$EVENT_JSON")"
+     PENDING_JSON="$(node plugins/delivery-pipeline/scripts/wait-events.cjs pending \
+       --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" \
+       --repository "$REPOSITORY" --pr "$PR" --json)"
+     ACTION_ID="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).action_id)' "$PENDING_JSON")"
+     DISPATCH_ID="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).dispatch_id)' "$PENDING_JSON")"
+
+     # After the ADR-014 boundary has reserved this exact action, acknowledge
+     # the same identity. A duplicate acknowledgment is safe and idempotent.
+     node plugins/delivery-pipeline/scripts/wait-events.cjs acknowledge \
+       --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" \
+       --repository "$REPOSITORY" --pr "$PR" --action-id "$ACTION_ID" \
+       --dispatch-id "$DISPATCH_ID" --decision reserved --json
+   fi
+   ```
+
+   `pending` durably consumes the action and returns the same `action_id` and
+   `dispatch_id` after a restart. Route any model work only through the
+   ADR-014 dispatch boundary, with fresh role, repository/worktree, head/base,
+   policy and live evidence. After a durable dispatch reservation or durable
+   no-action decision, acknowledge that exact identity:
+
+   ```sh
+   node plugins/delivery-pipeline/scripts/wait-events.cjs acknowledge --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" --repository "$REPOSITORY" --pr "$PR" --action-id "$ACTION_ID" --dispatch-id "$DISPATCH_ID" --decision reserved --json
+   ```
+
+   Missing, corrupt, newer-schema or unbound publication evidence is a resync
+   refusal, never a wake or a launch. A wait event never authorizes push, review,
+   or merge: the sentinel's live head, review, architecture, human-approval and
+   integration gates remain authoritative. Newly actionable work interrupts the
+   wait; re-sync and take that work rather than acknowledging an absent
+   reservation.
+
    `ci-wait.cjs` **refuses** (exit 3) whenever the board holds actionable work or a
    ticket is with an agent, so it cannot become the `gh pr checks --watch`
    serialization this conveyor removed — that rule was about opportunity cost, and
    there is none when the board has no other move. It returns the moment any
-   watched PR settles, green OR red, and on timeout returns 0 anyway. Either way:
+   watched PR settles, green OR red, or a complete CI/review observation changes;
+   on timeout it returns 0 anyway. Either way:
    re-sync and take the round. Never hand-roll a wait; if it refuses, it is
    telling you there is work.
 
@@ -2226,9 +2661,18 @@ driving PRs hands the user a half-truth.
      and it is actionable work, not a note);
    - an integrator run per `${CLAUDE_PLUGIN_ROOT}/references/integrator.md` — the
      epic diff against the default branch, not the individual ticket-PRs →
-     `INTEGRATION.md`. Measure the epic input (`bytes ÷ 4`), record any journal-
+     `.planning/phases/<phase>/INTEGRATION.md`. Measure the epic input (`bytes ÷ 4`), record any journal-
      proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
+
+     Before constructing the integrator prompt, clear its role-owned
+     `.planning/phases/<phase>/INTEGRATION.md` scratch file in the integration
+     worktree:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+       --worktree <worktree> --role integrator --phase <phase>
+     ```
 
      ```text
      boundary.dispatch(
@@ -2237,18 +2681,46 @@ driving PRs hands the user a half-truth.
                     priorApplied },
          dispatch_id, previous_dispatch_id },
        { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/integrator.md",
+         ticket: phaseSubject,
          epic, diff, defaultBranch, measuredInputTokens, contestedEvidence,
-         architecturePath, outputPath: "INTEGRATION.md" }
+         architecturePath, outputPath: ".planning/phases/<phase>/INTEGRATION.md" }
      )
      ```
+
+     `phaseSubject` is `phase=<phase>;repository=<repository identity>;tickets=<ticket-set-digest>`;
+     compute it from the same complete ticket-set file passed to the artifact
+     consumer, so the authenticated dispatch cannot be reused for a different
+     integration set.
 
      Codex resolves Sol/high and escalates to Sol/xhigh only for the
      measured-window, contested, critical, or checkpoint evidence, validating
      `shipyard-integrator.toml` or `shipyard-integrator-critical.toml`.
      The Workflow runtime independently resolves Opus/medium or Opus/high with explicit
-     effort. The receipt must be verified before accepting `INTEGRATION.md` or
+     effort. The receipt must be verified before accepting
+     `.planning/phases/<phase>/INTEGRATION.md` or
      `passed`/`needs-fix`; no literal model, omitted effort, inherited session,
      or undocumented escalation is permitted.
+     After the receipt, seal the complete `.planning/phases/<phase>/INTEGRATION.md` and validate the
+     artifact before projecting the result or entering any phase-completion
+     branch:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal --role integrator --ticket <phase-subject>
+       --worktree <worktree> --phase <phase> --base <default-branch>
+       --boundary-store <receipt-store> --dispatch-id <dispatch-id>
+       --ticket-set-file <ticket-set.json> --result-file <result.json>
+       --evidence-path .planning/phases/<phase>/INTEGRATION.md
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate --role integrator --ticket <phase-subject>
+       --worktree <worktree> --phase <phase> --base <default-branch>
+       --boundary-store <receipt-store> --dispatch-id <dispatch-id>
+       --ticket-set-file <ticket-set.json> --artifact <artifact-ref>
+       --artifact-digest <artifact-digest>
+     ```
+
+     Validation re-reads the complete evidence, finding index, outcome and
+     blocking count, and the current combined head/base/tree. Missing, changed,
+     stale, or contradictory integration evidence refuses both projection and
+     phase completion; `human-review-required` remains a human decision.
    - `passed` → remove draft from the epic-PR (`gh pr ready`) and hand it to the human to
      merge epic → default branch (the phase lands as one PR);
    - `needs-fix` → fix tickets as new plans in the same phase (their base — the epic) →

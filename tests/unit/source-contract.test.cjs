@@ -481,7 +481,7 @@ test('command-backed verification rule reaches every delivery boundary', () => {
   const drift = readRepo('plugins/delivery-pipeline/workflows/drift-gate.mjs');
   assert.ok(/required: \['id', 'verdict', 'moved', 'reuse_candidates', 'evidence'\]/.test(drift), 'drift-gate must require its evidence channel');
   assert.ok(/evidence:\s*\{/.test(drift), 'drift-gate must expose evidence in the result schema');
-  assert.ok(/recorded:\s*\{/.test(drift), 'drift-gate must accept the recorded result field from drift-check');
+  assert.ok(!/recorded:\s*\{/.test(drift), 'drift-gate must not accept an agent-owned recorded status');
 });
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -500,6 +500,69 @@ const sourceApplicationEvidence = ({ result }) => {
   if (!evidence) throw new Error('test Claude host returned no application evidence');
   return evidence;
 };
+const sourceArtifactConsumer = ({ artifact, result, record }) => {
+  const role = artifact && artifact.role;
+  const ticket = artifact && artifact.ticket ? artifact.ticket : record.ticket;
+  const evidenceIndex = {
+    path: role === 'drift-check'
+      ? '.shipyard-drift-evidence.md'
+      : '.shipyard-repair-evidence.md',
+    bytes: 0,
+    content_bytes: 0,
+    sha256: '0'.repeat(64),
+    digest: '0'.repeat(64),
+  };
+  const findingsIndex = {
+    path: `.shipyard-role-artifacts/${record.receipt.dispatch_id}/findings.json`,
+    bytes: 0,
+    content_bytes: 0,
+    sha256: '0'.repeat(64),
+    digest: '0'.repeat(64),
+  };
+  const envelope = role === 'drift-check'
+    ? {
+        schema: 'shipyard.drift-result.v1',
+        version: 1,
+        role,
+        ticket,
+        subject: ticket,
+        verdict: result.verdict || 'fresh',
+        moved_count: Array.isArray(result.moved) ? result.moved.length : 0,
+        reuse_candidates_count: Array.isArray(result.reuse_candidates) ? result.reuse_candidates.length : 0,
+        evidence_count: Array.isArray(result.evidence) ? result.evidence.length : 0,
+        summary: '',
+        evidence_index: evidenceIndex,
+        evidence_index_ref: evidenceIndex,
+        findings_index: findingsIndex,
+        findings_index_ref: findingsIndex,
+      }
+    : {
+        schema: 'shipyard.repair-result.v1',
+        version: 1,
+        role,
+        ticket,
+        subject: ticket,
+        pr: artifact.pr || result.pr || 1,
+        status: result.status || 'escalate',
+        pushed: typeof result.pushed === 'boolean' ? result.pushed : false,
+        summary: typeof result.notes === 'string' && result.notes.trim() ? result.notes.slice(0, 500) : 'test repair summary',
+        notes: typeof result.notes === 'string' && result.notes.trim() ? result.notes.slice(0, 500) : 'test repair notes',
+        hypothesis: typeof result.hypothesis === 'string' ? result.hypothesis.slice(0, 500) : 'test hypothesis',
+        evidence_index: evidenceIndex,
+        evidence_index_ref: evidenceIndex,
+        findings_index: findingsIndex,
+        findings_index_ref: findingsIndex,
+      };
+  return {
+    schema: 'shipyard.role-artifact.v1',
+    artifact_ref: `/source-contract/${ticket}/.shipyard-role-artifact.json`,
+    artifact_path: `/source-contract/${ticket}/.shipyard-role-artifact.json`,
+    artifact_digest: '1'.repeat(64),
+    envelope,
+    evidence_index: evidenceIndex,
+    findings_index: findingsIndex,
+  };
+};
 const sourceDispatchFactory = (options) => createClaudeWorkflowDispatch({
   ...options,
   capabilities: options.capabilities === undefined ? sourceDispatchCapabilities : options.capabilities,
@@ -507,6 +570,9 @@ const sourceDispatchFactory = (options) => createClaudeWorkflowDispatch({
   applicationEvidence: options.applicationEvidence === undefined
     ? sourceApplicationEvidence
     : options.applicationEvidence,
+  artifactConsumer: options.artifactConsumer === undefined
+    ? sourceArtifactConsumer
+    : options.artifactConsumer,
 });
 process.on('exit', () => {
   try { fs.rmSync(sourceDispatchStore, { recursive: true, force: true }); } catch (_) { /* best effort */ }
@@ -516,11 +582,11 @@ const workflowArgs = {
     tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01', model: 'sonnet', effort: 'max' }],
   },
   'drift-gate': {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', model: 'opus', effort: 'max' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', worktreePath: '/w/T-30-01', model: 'opus', effort: 'max' }],
     driftRefPath: '/p/drift-check.md',
   },
   'fix-round': {
-    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'opus', effort: 'medium' }],
+    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', base: 'epic/30', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'opus', effort: 'medium' }],
     ciFixRefPath: '/p/ci-fix.md',
     reviewFixRefPath: '/p/review-fix.md',
     reinitScript: '/p/reviewers.cjs',
@@ -1904,7 +1970,7 @@ test('the routed-launch source sweep rejects native launches in shipped Markdown
 
 const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
   'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '11126e9bbf4dac883b495f48e55504990ec358f739c8f314a4d147789c3ad346',
-  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '712a83e2a496b5ac1e2e3f139ff69173837230e19e4d945b2e3808092d9dc72e',
+  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '5e4218eee7f4afeed54497635651c587f84f67dda8753ce80421f0049fb159fe',
 });
 
 test('Claude palette and provider adapter sources match their checked-in baselines and remain native', () => {

@@ -1124,6 +1124,105 @@
     "reapable": true,
     "since": "2026-09-11T18:59:59.751Z"
   },
+  "T-33-01": {
+    "branch": "ticket/T-33-01-deliver-durable-ci-and-review-transition",
+    "pr": 154,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/154",
+    "base": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "base_reason": "no primary parent — a root ticket PRs into epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "reapable": true,
+    "since": "2026-09-17T02:52:19.514Z"
+  },
+  "T-33-02": {
+    "branch": "ticket/T-33-02-validate-bounded-executor-evidence-at-ac",
+    "pr": 155,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/155",
+    "base": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "base_reason": "T-33-01 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "reapable": true,
+    "since": "2026-09-17T02:52:19.514Z"
+  },
+  "T-33-03": {
+    "branch": "ticket/T-33-03-bound-repair-and-drift-results-without-l",
+    "pr": 156,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/156",
+    "base": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "base_reason": "T-33-02 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "reapable": true,
+    "since": "2026-09-17T02:52:19.514Z"
+  },
+  "T-33-04": {
+    "branch": "ticket/T-33-04-preserve-complete-architecture-and-integ",
+    "pr": 157,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/157",
+    "base": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "base_reason": "T-33-03 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "reapable": true,
+    "since": "2026-09-17T06:30:02.024Z"
+  },
+  "T-33-05": {
+    "branch": "ticket/T-33-05-bound-research-and-decomposition-handbac",
+    "pr": 158,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/158",
+    "base": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "base_reason": "T-33-04 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "reapable": true,
+    "since": "2026-09-17T07:02:46.525Z"
+  },
+  "T-33-06": {
+    "branch": "ticket/T-33-06-build-targeted-launch-packets-with-requi",
+    "pr": 159,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/159",
+    "base": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "base_reason": "T-33-05 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "reapable": true,
+    "since": "2026-09-17T07:35:50.588Z"
+  },
+  "T-33-07": {
+    "branch": "ticket/T-33-07-measure-waiting-and-context-treatments-i",
+    "pr": 160,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/160",
+    "base": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "base_reason": "T-33-06 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "reapable": true,
+    "since": "2026-09-17T09:04:14.979Z"
+  },
+  "T-33-08": {
+    "branch": "ticket/T-33-08-resume-a-checkpoint-with-one-fenced-ackn",
+    "pr": 161,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/161",
+    "base": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "base_reason": "T-33-07 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "reapable": true,
+    "since": "2026-09-17T09:08:28.955Z"
+  },
+  "T-33-09": {
+    "branch": "ticket/T-33-09-recommend-safe-rotation-and-refuse-unpro",
+    "pr": 162,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/162",
+    "base": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "base_reason": "T-33-08 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+    "reapable": true,
+    "since": "2026-09-17T09:36:22.933Z"
+  },
   "T-35-01": {
     "branch": "ticket/T-35-01-deterministic-native-gsd-projection",
     "pr": 96,

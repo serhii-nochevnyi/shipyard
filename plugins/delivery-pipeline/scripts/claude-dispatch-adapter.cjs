@@ -13,8 +13,16 @@ const {
   validateGsdRole,
   isDurableRecorder,
 } = require('./dispatch-boundary.cjs');
+const { validateContextPacket } = require('./context-packet.cjs');
 
 const REPAIR = 'Install an ADR-014-capable Claude host with explicit workflow model and effort support; provide current host capabilities and retry the exact selection.';
+const ARTIFACT_ENVELOPE_MAX_BYTES = 8192;
+const ARTIFACT_SUMMARY_MAX_CHARS = 500;
+const PLANNING_ARTIFACT_ROLES = new Set(['research', 'decomposition']);
+const PLANNING_ARTIFACT_SCHEMAS = Object.freeze({
+  research: 'shipyard.research-result.v1',
+  decomposition: 'shipyard.decomposition-result.v1',
+});
 
 function refuse(code, message) {
   throw policy.policyError(code, message + '. ' + REPAIR);
@@ -33,6 +41,334 @@ function boundaryFailure(code, message, cause) {
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function artifactText(value, label, max = ARTIFACT_SUMMARY_MAX_CHARS) {
+  if (typeof value !== 'string' || value.trim() === '' || /[\u0000-\u001f\u007f]/.test(value)) {
+    refuse('INVALID_ARTIFACT', `${label} must be non-empty text`);
+  }
+  if (Array.from(value).length > max) {
+    refuse('INVALID_ARTIFACT', `${label} exceeds its ${max}-character bound`);
+  }
+  return value;
+}
+
+function artifactPath(value, label) {
+  if (typeof value !== 'string' || value.trim() === '' || /[\u0000-\u001f\u007f]/.test(value)) {
+    refuse('INVALID_ARTIFACT', `${label} must be a non-empty path`);
+  }
+  return value;
+}
+
+function artifactReference(value, label) {
+  if (!object(value)
+      || typeof value.path !== 'string'
+      || value.path.trim() === ''
+      || /[\u0000-\u001f\u007f]/.test(value.path)
+      || !Number.isInteger(value.bytes) || value.bytes < 0
+      || value.content_bytes !== value.bytes
+      || typeof value.sha256 !== 'string'
+      || value.sha256 !== value.digest
+      || !/^[a-f0-9]{64}$/.test(value.sha256)) {
+    refuse('INVALID_ARTIFACT', `${label} must be a bounded immutable file reference`);
+  }
+  return Object.freeze({
+    path: value.path,
+    bytes: value.bytes,
+    content_bytes: value.content_bytes,
+    sha256: value.sha256,
+    digest: value.digest,
+  });
+}
+
+function boundedActionable(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    if (typeof value === 'string') artifactText(value, 'actionable_delta');
+    return value;
+  }
+  if (!object(value)) refuse('INVALID_ARTIFACT', 'actionable_delta must be a bounded JSON value');
+  const allowed = new Set(['type', 'path', 'sha256', 'digest', 'note', 'next', 'action', 'owner', 'reason']);
+  const output = {};
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) continue;
+    const item = value[key];
+    if (typeof item === 'string') output[key] = artifactText(item, `actionable_delta.${key}`);
+    else if (typeof item === 'number') {
+      if (!Number.isFinite(item)) refuse('INVALID_ARTIFACT', `actionable_delta.${key} must be finite`);
+      output[key] = item;
+    } else if (typeof item === 'boolean' || item === null) output[key] = item;
+  }
+  return output;
+}
+
+function boundedEnvelope(value) {
+  if (!object(value)) refuse('INVALID_ARTIFACT', 'trusted role-artifact envelope must be an object');
+  const output = {};
+  const strings = [
+    'schema', 'role', 'ticket', 'subject', 'outcome', 'status', 'verdict',
+    'summary', 'notes', 'hypothesis', 'source_revision', 'repository', 'policy_hash',
+  ];
+  const integers = ['version', 'pr', 'blocking_count', 'moved_count', 'reuse_candidates_count', 'evidence_count'];
+  for (const key of strings) {
+    if (value[key] !== undefined) {
+      // The executor contract permits an empty summary when the agent supplied
+      // no synopsis; it is still bounded metadata and must not be turned into a
+      // false acceptance failure at this transport boundary.
+      output[key] = key === 'summary' && value[key] === ''
+        ? ''
+        : artifactText(value[key], `envelope.${key}`);
+    }
+  }
+  for (const key of integers) {
+    if (value[key] !== undefined) {
+      if (!Number.isInteger(value[key]) || value[key] < 0) refuse('INVALID_ARTIFACT', `envelope.${key} must be a non-negative integer`);
+      output[key] = value[key];
+    }
+  }
+  if (value.pushed !== undefined) {
+    if (typeof value.pushed !== 'boolean') refuse('INVALID_ARTIFACT', 'envelope.pushed must be boolean');
+    output.pushed = value.pushed;
+  }
+  if (value.actionable_delta !== undefined) output.actionable_delta = boundedActionable(value.actionable_delta);
+  if (value.overflow !== undefined) {
+    if (!object(value.overflow)) refuse('INVALID_ARTIFACT', 'envelope.overflow must be an object');
+    const overflow = {};
+    if (Array.isArray(value.overflow.fields)) {
+      if (value.overflow.fields.length > 16 || value.overflow.fields.some((item) => typeof item !== 'string')) {
+        refuse('INVALID_ARTIFACT', 'envelope.overflow.fields is not bounded');
+      }
+      overflow.fields = value.overflow.fields.map((item) => artifactText(item, 'envelope.overflow.fields[]', 100));
+    }
+    if (value.overflow.reference !== undefined) overflow.reference = artifactReference(value.overflow.reference, 'envelope.overflow.reference');
+    output.overflow = overflow;
+  }
+  if (value.integration_base !== undefined) {
+    if (!object(value.integration_base)) refuse('INVALID_ARTIFACT', 'envelope.integration_base must be an object');
+    output.integration_base = {};
+    for (const key of ['ref', 'commit', 'tree']) {
+      if (value.integration_base[key] !== undefined) output.integration_base[key] = artifactText(value.integration_base[key], `envelope.integration_base.${key}`, 200);
+    }
+  }
+  for (const key of ['evidence_index', 'findings_index', 'artifact_index']) {
+    if (value[key] !== undefined) {
+      const reference = artifactReference(value[key], `envelope.${key}`);
+      output[key] = reference;
+      const refKey = `${key}_ref`;
+      if (value[refKey] !== undefined) {
+        const ref = artifactReference(value[refKey], `envelope.${refKey}`);
+        if (!isDeepStrictEqual(reference, ref)) refuse('INVALID_ARTIFACT', `envelope.${key} and ${refKey} disagree`);
+      }
+      output[refKey] = reference;
+    }
+  }
+  if (output.summary === undefined) refuse('INVALID_ARTIFACT', 'trusted role-artifact envelope requires a bounded summary');
+  let size;
+  try { size = Buffer.byteLength(JSON.stringify(output), 'utf8'); } catch (error) {
+    refuse('INVALID_ARTIFACT', `trusted role-artifact envelope is not serializable: ${error.message}`);
+  }
+  if (size > ARTIFACT_ENVELOPE_MAX_BYTES) refuse('INVALID_ARTIFACT', 'trusted role-artifact envelope exceeds its bounded return contract');
+  return Object.freeze(output);
+}
+
+function canonicalArtifact(value) {
+  if (!object(value)
+      || value.schema !== 'shipyard.role-artifact.v1'
+      || typeof (value.artifact_ref || value.artifact_path) !== 'string'
+      || typeof value.artifact_digest !== 'string'
+      || !/^[a-f0-9]{64}$/.test(value.artifact_digest)) {
+    throw boundaryFailure('INVALID_ARTIFACT', 'trusted role-artifact consumer returned no validated references');
+  }
+  const artifactRef = artifactPath(value.artifact_ref || value.artifact_path, 'artifact reference');
+  const evidenceIndex = artifactReference(value.evidence_index, 'artifact evidence_index');
+  const envelope = boundedEnvelope(value.envelope);
+  if (!object(envelope.evidence_index)
+      || !isDeepStrictEqual(envelope.evidence_index, evidenceIndex)) {
+    throw boundaryFailure('INVALID_ARTIFACT', 'trusted role-artifact evidence index does not match its envelope');
+  }
+  const output = {
+    schema: value.schema,
+    artifact_ref: artifactRef,
+    artifact_path: artifactRef,
+    artifact_digest: value.artifact_digest,
+    envelope,
+    evidence_index: evidenceIndex,
+  };
+  if (value.findings_index !== undefined) {
+    const findingsIndex = artifactReference(value.findings_index, 'artifact findings_index');
+    if (!object(envelope.findings_index) || !isDeepStrictEqual(envelope.findings_index, findingsIndex)) {
+      throw boundaryFailure('INVALID_ARTIFACT', 'trusted role-artifact findings index does not match its envelope');
+    }
+    output.findings_index = findingsIndex;
+  }
+  if (value.artifact_index !== undefined) {
+    const artifactIndex = artifactReference(value.artifact_index, 'artifact index');
+    if (!object(envelope.artifact_index) || !isDeepStrictEqual(envelope.artifact_index, artifactIndex)) {
+      throw boundaryFailure('INVALID_ARTIFACT', 'trusted planning artifact index does not match its envelope');
+    }
+    output.artifact_index = artifactIndex;
+  } else if (envelope.artifact_index !== undefined) {
+    output.artifact_index = artifactReference(envelope.artifact_index, 'artifact index');
+  }
+  return Object.freeze(output);
+}
+
+const ROLE_ARTIFACT_ROLES = new Set(['ci-fix', 'review-fix', 'drift-check', ...PLANNING_ARTIFACT_ROLES]);
+
+function roleArtifactRole(options, artifact) {
+  const role = artifact && typeof artifact.role === 'string' ? artifact.role : options.role;
+  return ROLE_ARTIFACT_ROLES.has(role) ? role : null;
+}
+
+function boundedResultForArtifact(result, artifact, role) {
+  const envelope = artifact.envelope;
+  const reference = {
+    artifact_ref: artifact.artifact_ref || artifact.artifact_path,
+    artifact_digest: artifact.artifact_digest,
+    evidence_index: artifact.evidence_index,
+    ...(artifact.findings_index ? { findings_index: artifact.findings_index } : {}),
+  };
+  if (role === 'ci-fix' || role === 'review-fix') {
+    return {
+      id: envelope.ticket,
+      pr: envelope.pr,
+      pushed: envelope.pushed,
+      status: envelope.status,
+      notes: envelope.notes || envelope.summary,
+      hypothesis: envelope.hypothesis,
+      ...reference,
+    };
+  }
+  if (role === 'drift-check') {
+    return {
+      id: envelope.ticket,
+      verdict: envelope.verdict,
+      moved_count: envelope.moved_count,
+      reuse_candidates_count: envelope.reuse_candidates_count,
+      evidence_count: envelope.evidence_count,
+      summary: envelope.summary,
+      ...reference,
+    };
+  }
+  if (PLANNING_ARTIFACT_ROLES.has(role)) {
+    const index = artifact.artifact_index || envelope.artifact_index || artifact.evidence_index;
+    return {
+      ...(result && typeof result.id === 'string' ? { id: result.id } : {}),
+      status: envelope.status,
+      summary: envelope.summary,
+      artifact_index: index,
+      ...reference,
+    };
+  }
+  // Executor consumers still need their existing bounded fields. Do not copy
+  // the raw reply: receipts/application evidence remain boundary-owned.
+  return {
+    ...(result && typeof result.id === 'string' ? { id: result.id } : {}),
+    status: envelope.outcome,
+    summary: envelope.summary,
+    actionable_delta: envelope.actionable_delta,
+    blocking_count: envelope.blocking_count,
+  };
+}
+
+function planningIdentity(metadata) {
+  if (!object(metadata)) refuse('INVALID_ARTIFACT', 'planning artifact metadata must be an object');
+  const role = metadata.role;
+  if (!PLANNING_ARTIFACT_ROLES.has(role)) {
+    refuse('INVALID_ARTIFACT', `planning artifacts do not support ${JSON.stringify(role)}`);
+  }
+  const subject = metadata.subject;
+  const sourceRevision = metadata.sourceRevision || metadata.source_revision;
+  const repository = metadata.repository;
+  const policyHash = metadata.policyHash || metadata.policy_hash;
+  if (typeof subject !== 'string' || subject.trim() === '') {
+    refuse('INVALID_ARTIFACT', 'planning artifact subject is required');
+  }
+  if (typeof sourceRevision !== 'string' || !/^[a-f0-9]{40}$/i.test(sourceRevision)) {
+    refuse('INVALID_ARTIFACT', 'planning artifact source revision must be a full 40-character Git object id');
+  }
+  if (typeof repository !== 'string' || repository.trim() === '') {
+    refuse('INVALID_ARTIFACT', 'planning artifact repository identity is required');
+  }
+  if (typeof policyHash !== 'string' || !/^[a-f0-9]{64}$/i.test(policyHash)) {
+    refuse('INVALID_ARTIFACT', 'planning artifact policy hash must be a 64-character digest');
+  }
+  return Object.freeze({
+    role,
+    subject,
+    source_revision: sourceRevision.toLowerCase(),
+    repository,
+    policy_hash: policyHash.toLowerCase(),
+  });
+}
+
+// Shared consumer-side contract for the two planning producers. The host that
+// owns the filesystem validates the referenced bytes; this boundary validates
+// the authenticated subject and the bounded envelope that is allowed back into
+// the Workflow. Keeping these checks here prevents a producer from replacing a
+// phase/investigation identity with a valid-looking artifact from another run.
+function validatePlanningArtifact(metadata, envelope, result) {
+  const expected = planningIdentity(metadata);
+  if (!object(envelope)) refuse('INVALID_ARTIFACT', 'planning artifact envelope must be an object');
+  if (envelope.schema !== PLANNING_ARTIFACT_SCHEMAS[expected.role]
+      || envelope.version !== 1
+      || envelope.role !== expected.role) {
+    refuse('INVALID_ARTIFACT', 'planning artifact envelope schema or role is invalid');
+  }
+  for (const [field, expectedValue] of [
+    ['subject', expected.subject],
+    ['source_revision', expected.source_revision],
+    ['repository', expected.repository],
+    ['policy_hash', expected.policy_hash],
+  ]) {
+    if (envelope[field] !== expectedValue) {
+      refuse('STALE_ARTIFACT', `planning artifact ${field} does not match the authenticated producer`, {
+        field,
+        expected: expectedValue,
+        actual: envelope[field],
+      });
+    }
+  }
+  if (envelope.status !== 'completed' && envelope.status !== 'blocked') {
+    refuse('INVALID_ARTIFACT', 'planning artifact status must be completed or blocked');
+  }
+  if (typeof envelope.summary !== 'string' || Array.from(envelope.summary).length > ARTIFACT_SUMMARY_MAX_CHARS) {
+    refuse('INVALID_ARTIFACT', 'planning artifact summary exceeds the 500-character bound');
+  }
+  const index = envelope.artifact_index;
+  if (!object(index)) {
+    refuse('MISSING_ARTIFACT', 'planning artifact must retain a complete artifact index reference');
+  }
+  artifactReference(index, 'planning artifact index');
+  if (metadata.artifactPath !== undefined && index.path !== metadata.artifactPath) {
+    refuse('ARTIFACT_IDENTITY_MISMATCH', 'planning artifact index is not the host-assigned artifact path', {
+      expected: metadata.artifactPath,
+      actual: index.path,
+    });
+  }
+  if (envelope.evidence_index !== undefined
+      && !isDeepStrictEqual(envelope.evidence_index, index)) {
+    refuse('ARTIFACT_DIGEST_MISMATCH', 'planning artifact evidence index disagrees with its artifact index');
+  }
+  if (envelope.evidence_index_ref !== undefined
+      && !isDeepStrictEqual(envelope.evidence_index_ref, index)) {
+    refuse('ARTIFACT_DIGEST_MISMATCH', 'planning artifact evidence index reference disagrees with its artifact index');
+  }
+  if (result !== undefined && object(result)) {
+    if (result.status !== undefined && result.status !== envelope.status) {
+      refuse('ARTIFACT_DIGEST_MISMATCH', 'planning artifact status does not match the complete result');
+    }
+    if (result.summary !== undefined && result.summary !== envelope.summary) {
+      refuse('ARTIFACT_DIGEST_MISMATCH', 'planning artifact summary does not match the complete result');
+    }
+    const producerReference = result.artifact || result.artifact_index;
+    if (producerReference !== undefined) {
+      const normalized = artifactReference(producerReference, 'complete planning artifact reference');
+      if (!isDeepStrictEqual(normalized, index)) {
+        refuse('ARTIFACT_DIGEST_MISMATCH', 'planning artifact index does not match the producer reference');
+      }
+    }
+  }
+  return true;
 }
 
 function durableRecorder(value) {
@@ -93,6 +429,23 @@ function validateLaunchContext(resolution, context) {
     if (source.inline || source.inherit || source.session_inherited) {
       refuse('UNSUPPORTED_SELECTION', 'launch context requests inherited or inline selection');
     }
+  }
+}
+
+function validateLaunchPacket(resolution, context) {
+  if (!object(context)) refuse('INVALID_INPUT', 'launch context must be an object');
+  const packet = context.contextPacket === undefined ? context.context_packet : context.contextPacket;
+  if (packet === undefined) return true;
+  try {
+    return validateContextPacket(packet, {
+      role: resolution.role,
+      ...(context.ticket !== undefined ? { subject: context.subject || context.ticket } : {}),
+      ...(context.worktreePath !== undefined ? { root: context.worktreePath } : {}),
+      ...(context.sourceRevision !== undefined ? { sourceRevision: context.sourceRevision } : {}),
+      policyHash: resolution.policy_hash,
+    });
+  } catch (error) {
+    refuse(error.code || 'INVALID_CONTEXT_PACKET', error.message);
   }
 }
 
@@ -175,6 +528,7 @@ function createClaudeDispatchAdapter(options = {}) {
     policy.validateResolution(resolution, { requireDispatchId: true });
     validate(resolution);
     validateLaunchContext(resolution, context);
+    validateLaunchPacket(resolution, context);
     const gsdRole = validateGsdRole(resolution);
     const method = gsdRole !== undefined ? launchTypedGsd : launchNative;
     if (typeof method !== 'function') {
@@ -275,6 +629,12 @@ function createClaudeWorkflowDispatch(options = {}) {
   if (options.requireGsdRole !== undefined && typeof options.requireGsdRole !== 'boolean') {
     refuse('INVALID_INPUT', 'requireGsdRole must be boolean when provided');
   }
+  if (options.requireArtifact !== undefined && typeof options.requireArtifact !== 'boolean') {
+    refuse('INVALID_INPUT', 'requireArtifact must be boolean when provided');
+  }
+  if (options.artifact !== undefined && !object(options.artifact)) {
+    refuse('INVALID_INPUT', 'artifact metadata must be an object');
+  }
   const agentOptions = options.agentOptions === undefined ? {} : { ...options.agentOptions };
   if (options.signals !== undefined && !object(options.signals)) {
     refuse('INVALID_SIGNAL', 'signals must be an object');
@@ -295,6 +655,65 @@ function createClaudeWorkflowDispatch(options = {}) {
     refuse('CONFLICTING_OVERRIDE', 'contradictory workflow predecessor receipts');
   }
   const context = options.context === undefined ? {} : options.context;
+  const artifactConsumer = suppliedHost
+    ? suppliedHost.artifactConsumer
+    : options.artifactConsumer;
+  const artifactPreparer = suppliedHost
+    ? suppliedHost.artifactPreparer
+    : options.artifactPreparer;
+  const artifactRequired = options.requireArtifact === true || options.artifact !== undefined;
+  let artifactMetadata;
+  if (options.artifact !== undefined) {
+    try {
+      artifactMetadata = JSON.parse(JSON.stringify(options.artifact));
+    } catch (error) {
+      refuse('INVALID_INPUT', `artifact metadata must be JSON-serializable: ${error.message}`);
+    }
+  }
+  const role = roleArtifactRole(options, artifactMetadata);
+  // Artifact-required workflows must prove that their trusted consumer and
+  // identity inputs exist before the boundary reserves a dispatch or invokes
+  // an agent. Deferring this check until after launch can spend a model call on
+  // a result that could never be accepted.
+  if (artifactRequired) {
+    if (!object(artifactMetadata)) refuse('INVALID_ARTIFACT', 'artifact-required dispatch needs artifact metadata');
+    if (typeof artifactConsumer !== 'function') {
+      refuse('MISSING_ARTIFACT', 'artifact-required dispatch needs the trusted role-artifact consumer');
+    }
+    for (const [field, value] of [
+      ['role', artifactMetadata.role],
+      ['ticket', artifactMetadata.ticket],
+      ['worktreePath', artifactMetadata.worktreePath],
+      ['base', artifactMetadata.base || artifactMetadata.baseRef],
+    ]) {
+      if (typeof value !== 'string' || value.trim() === '' || /[\u0000-\u001f\u007f]/.test(value)) {
+        refuse('INVALID_ARTIFACT', `artifact metadata requires ${field} before launch`);
+      }
+    }
+    if (['ci-fix', 'review-fix'].includes(artifactMetadata.role)
+        && (!Number.isInteger(artifactMetadata.pr) || artifactMetadata.pr < 1)) {
+      refuse('INVALID_ARTIFACT', 'repair artifact metadata requires a positive PR number before launch');
+    }
+    if (PLANNING_ARTIFACT_ROLES.has(artifactMetadata.role)) planningIdentity(artifactMetadata);
+    if (role !== null && suppliedHost && typeof artifactPreparer !== 'function') {
+      refuse('MISSING_ARTIFACT', 'host must provide the role-artifact preparation callback before launch');
+    }
+    if (role !== null && typeof artifactPreparer === 'function') {
+      try {
+        const prepared = artifactPreparer.call(suppliedHost || options, { artifact: artifactMetadata });
+        if (prepared && typeof prepared.then === 'function') {
+          refuse('INVALID_ARTIFACT', 'role-artifact preparation must complete synchronously before launch');
+        }
+      } catch (error) {
+        if (isBoundaryFailure(error)) throw error;
+        throw boundaryFailure(
+          'INVALID_ARTIFACT',
+          `role-artifact preparation failed: ${error && error.message ? error.message : error}`,
+          error,
+        );
+      }
+    }
+  }
 
   let agentResult;
   const host = {
@@ -336,14 +755,38 @@ function createClaudeWorkflowDispatch(options = {}) {
           gsd_launch_mechanism: GSD_LAUNCH_MECHANISM,
         } : {}),
       });
-      const result = callback(prompt, launchOptions, context && context.gsd_role);
+      let result;
+      try {
+        result = callback(prompt, launchOptions, context && context.gsd_role);
+      } catch (error) {
+        if (isBoundaryFailure(error)) throw error;
+        if (artifactRequired) {
+          throw boundaryFailure(
+            'DISPATCH_FAILED',
+            `Claude agent launch failed: ${error && error.message ? error.message : error}`,
+            error,
+          );
+        }
+        throw error;
+      }
       const capture = (value) => {
         agentResult = value;
         // This callback is host-owned. It must report what the host actually
         // applied; the requested selection is intentionally not passed in, so
         // this adapter cannot turn its own input into application evidence.
         try {
-          return applicationEvidence.call(suppliedHost || host, { result: value, context });
+          const evidence = applicationEvidence.call(suppliedHost || host, { result: value, context });
+          if (evidence && typeof evidence.then === 'function') {
+            return evidence.catch((error) => {
+              if (isBoundaryFailure(error)) throw error;
+              throw boundaryFailure(
+                'MISSING_RECEIPT',
+                `Claude host application evidence failed: ${error && error.message ? error.message : error}`,
+                error,
+              );
+            });
+          }
+          return evidence;
         } catch (error) {
           if (isBoundaryFailure(error)) throw error;
           throw boundaryFailure(
@@ -353,7 +796,20 @@ function createClaudeWorkflowDispatch(options = {}) {
           );
         }
       };
-      return result && typeof result.then === 'function' ? result.then(capture) : capture(result);
+      if (result && typeof result.then === 'function') {
+        return result.then(capture, (error) => {
+          if (isBoundaryFailure(error)) throw error;
+          if (artifactRequired) {
+            throw boundaryFailure(
+              'DISPATCH_FAILED',
+              `Claude agent launch failed: ${error && error.message ? error.message : error}`,
+              error,
+            );
+          }
+          throw error;
+        });
+      }
+      return capture(result);
   }
   const nativeAdapter = createClaudeDispatchAdapter({ host, capabilities });
   const adapter = Object.freeze({
@@ -364,6 +820,7 @@ function createClaudeWorkflowDispatch(options = {}) {
       // boundary reserves a dispatch identity, not only inside host.launch.
       validateLaunchContext(resolution, agentOptions);
       validateLaunchContext(resolution, context);
+      validateLaunchPacket(resolution, context);
       return true;
     },
   });
@@ -382,11 +839,107 @@ function createClaudeWorkflowDispatch(options = {}) {
   if (options.priorReceipt !== undefined) input.priorReceipt = options.priorReceipt;
   if (options.dispatchId !== undefined) input.dispatch_id = options.dispatchId;
   if (options.previousDispatchId !== undefined) input.previous_dispatch_id = options.previousDispatchId;
+  const complete = (record, artifact, result = agentResult) => Object.freeze({
+    result,
+    receipt: record.receipt,
+    record,
+    ...(artifact ? { artifact } : {}),
+  });
   const finish = (record) => {
     if (!object(record) || !object(record.receipt) || record.receipt.compliance !== 'verified') {
       refuse('MISSING_RECEIPT', 'Claude workflow dispatch completed without a boundary-verified application receipt');
     }
-    return Object.freeze({ result: agentResult, receipt: record.receipt, record });
+    if (role && !agentResult) {
+      refuse('MISSING_ARTIFACT', `Claude ${role} dispatch returned no repair/drift result to seal`);
+    }
+    const shouldSeal = artifactRequired && agentResult
+      && (role !== null || agentResult.status === 'committed');
+    if (!shouldSeal) return complete(record);
+    if (typeof artifactConsumer !== 'function') {
+      refuse('MISSING_ARTIFACT', 'Claude workflow dispatch completed an artifact-required result without the trusted role-artifact consumer');
+    }
+    let sealed;
+    try {
+      sealed = artifactConsumer.call(suppliedHost || host, {
+        artifact: artifactMetadata,
+        result: agentResult,
+        record,
+        receipt: record.receipt,
+      });
+    } catch (error) {
+      if (isBoundaryFailure(error)) throw error;
+      throw boundaryFailure(
+        'INVALID_ARTIFACT',
+        `trusted role-artifact consumer failed: ${error && error.message ? error.message : error}`,
+        error,
+      );
+    }
+    const finishArtifact = (artifact) => {
+      try {
+        const boundedArtifact = canonicalArtifact(artifact);
+        if (PLANNING_ARTIFACT_ROLES.has(role)) {
+          validatePlanningArtifact(artifactMetadata, boundedArtifact.envelope, agentResult);
+          if (!boundedArtifact.artifact_index
+              || !isDeepStrictEqual(boundedArtifact.artifact_index, boundedArtifact.envelope.artifact_index)) {
+            throw boundaryFailure('MISSING_ARTIFACT', 'trusted planning artifact consumer returned no artifact index reference');
+          }
+        } else if (role !== null) {
+          const expectedEnvelopeSchema = role === 'drift-check'
+            ? 'shipyard.drift-result.v1'
+            : 'shipyard.repair-result.v1';
+          if (boundedArtifact.envelope.schema !== expectedEnvelopeSchema
+              || boundedArtifact.envelope.role !== role
+              || boundedArtifact.envelope.version !== 1
+              || boundedArtifact.envelope.ticket !== artifactMetadata.ticket
+              || !object(boundedArtifact.envelope.evidence_index_ref)
+              || !isDeepStrictEqual(
+                boundedArtifact.evidence_index,
+                boundedArtifact.envelope.evidence_index,
+              )
+              || !isDeepStrictEqual(
+                boundedArtifact.envelope.evidence_index,
+                boundedArtifact.envelope.evidence_index_ref,
+              )
+              || !object(boundedArtifact.findings_index)
+              || !object(boundedArtifact.envelope.findings_index)
+              || !object(boundedArtifact.envelope.findings_index_ref)
+              || !isDeepStrictEqual(
+                boundedArtifact.findings_index,
+                boundedArtifact.envelope.findings_index,
+              )
+              || !isDeepStrictEqual(
+                boundedArtifact.envelope.findings_index,
+                boundedArtifact.envelope.findings_index_ref,
+              )) {
+            throw boundaryFailure('INVALID_ARTIFACT', 'trusted repair/drift artifact envelope does not match its role contract');
+          }
+        }
+        return complete(
+          record,
+          boundedArtifact,
+          role ? boundedResultForArtifact(agentResult, boundedArtifact, role)
+            : boundedResultForArtifact(agentResult, boundedArtifact, null),
+        );
+      } catch (error) {
+        if (isBoundaryFailure(error)) throw error;
+        throw boundaryFailure(
+          'INVALID_ARTIFACT',
+          `trusted role-artifact consumer returned invalid references: ${error && error.message ? error.message : error}`,
+          error,
+        );
+      }
+    };
+    if (sealed && typeof sealed.then === 'function') {
+      return sealed.then(finishArtifact, (error) => {
+        if (isBoundaryFailure(error)) throw error;
+        throw boundaryFailure(
+          'INVALID_ARTIFACT',
+          `trusted role-artifact consumer failed asynchronously: ${error && error.message ? error.message : error}`,
+          error,
+        );
+      });
+    }
+    return finishArtifact(sealed);
   };
   const record = boundary.dispatch(input, context);
   return record && typeof record.then === 'function' ? record.then(finish) : finish(record);
@@ -396,6 +949,7 @@ module.exports = Object.freeze({
   CLAUDE_MODEL_ALIASES,
   REPAIR,
   validateAvailability,
+  validatePlanningArtifact,
   createClaudeDispatchAdapter,
   createClaudeWorkflowDispatch,
 });

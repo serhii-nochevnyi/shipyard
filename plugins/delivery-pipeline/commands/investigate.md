@@ -77,8 +77,25 @@ Read `.planning/investigations/` (may not exist):
      capabilities, recorder, applicationEvidence
    })
    await workflowHost.run({ invId, invPath, problemStatement, referencePath,
-                            artifactLanguage, lines })
+                            artifactLanguage, contextPacketRequired: true, lines })
    ```
+
+   Before the fan-out, build one packet for each research line with
+   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs`. Use the investigation
+   worktree as `root`, role `research`, subject `${invId}:${line.id}`, the
+   authenticated `sourceRevision`, the ADR-014 policy object and its
+   `policy_hash`, the full problem/contract reference plus every declared
+   source reference, and `roleContext: { problem_statement, source_refs }`.
+   Include the current backlog selection, source hashes and a
+   `whySelected` map. Put the resulting serializable object in
+   `line.contextPacket`; the research workflow passes it as
+   `context.contextPacket` and fences it as DATA in each line prompt. The
+   adapter validates the role, subject, policy hash, root and live source
+   digests before the callback runs. Missing ids, altered sources, symlink
+   escapes and a packet carrying model/capability/callback fields are hard
+   failures. The packet's explicit empty backlog and overflow record remain
+   visible to the researcher; required problem, ADR and gate material is never
+   summarized away.
 
    `registerInvestigationWorkflowHost` is the production host registration;
    it pins the research DSL and invokes `runClaudeWorkflow` with the native
@@ -111,9 +128,26 @@ Read `.planning/investigations/` (may not exist):
    workflow; it is not a direct Agent or an unverified subprocess fallback.
 
    Accept a research result only after its durable boundary receipt is verified.
-   Pass each line the problem statement, the INV path, and the brief
-   `${CLAUDE_PLUGIN_ROOT}/references/inv-research.md`. Bring verified results
-   into RESEARCH.md, OPTIONS.md, RISKS.md, and OPEN-QUESTIONS.md.
+   Pass the workflow `artifactContract: planning.v1`, the absolute worktree and
+   investigation paths, the authenticated `sourceRevision`, repository identity,
+   policy hash, and one contained `artifactPaths.<line-id>` for each of the four
+   lines. The prompt tells each worker to write its complete finding to that
+   exact path. The host-owned trusted consumer validates the file bytes and
+   seals a `shipyard.role-artifact.v1` envelope with
+   `shipyard.research-result.v1`, subject `<INV-ID>:<line-id>`, the exact source
+   revision, repository, policy hash, and an `artifact_index` reference. The
+   shared runtime adapter rejects a stale subject/source/policy identity, a
+   missing or altered index, and a forged application receipt before the
+   bounded result is accepted. The callback may return only the line id,
+   `completed|blocked`, a summary of at most 500 characters, and the validated
+   artifact reference; never return a full draft inline.
+
+   The synthesizer reads the four validated references by targeted ranges or
+   files and copies every source, constraint, uncertainty, and command-backed
+   finding into `RESEARCH.md`, `OPTIONS.md`, `RISKS.md`, and
+   `OPEN-QUESTIONS.md`. Missing or duplicated canonical lines remain hard
+   errors. The Codex command path uses the same validator and boundary receipt;
+   it has no inline or direct researcher fallback.
 6. Show the user a summary: how many options, key risks, the list of
    open questions. Next — Step 2.
 

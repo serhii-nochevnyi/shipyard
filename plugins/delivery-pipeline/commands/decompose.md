@@ -194,6 +194,28 @@ trace as decomposition evidence for the corresponding researcher, planner, or
 checker launch. Host exit status or self-asserted application evidence alone
 is not a receipt. Missing or failed evidence is a refusal, not a fallback.
 
+Planning callbacks also have a bounded handback contract. Every researcher,
+planner, and checker receives the authenticated source revision, repository
+identity, policy hash, and a host-owned artifact destination. The callback may
+return only a bounded summary and a reference; it must not return a complete
+research draft, `CONTEXT.md`, or any `PLAN.md` inline. The trusted consumer
+seals `shipyard.role-artifact.v1` with one of these envelopes:
+
+| callback | envelope | authenticated subject | complete files that must remain on disk |
+| --- | --- | --- | --- |
+| `gsd-phase-researcher` | `shipyard.research-result.v1` | `<INV-ID>:<line-id>` | the complete line artifact |
+| `gsd-planner` / `gsd-plan-checker` | `shipyard.decomposition-result.v1` | `phase=<phase>;repository=<repo>;adr=<ADR digest>` | `CONTEXT.md` and every materialized `PLAN.md` |
+
+The decomposition envelope must carry a bounded `artifact_index` reference.
+That index lists the exact relative paths, byte counts, and SHA-256 digests of
+`CONTEXT.md` and every `PLAN.md`. The trusted consumer checks containment,
+source revision, phase/repository/ADR identity, and every listed digest before
+Gate 2. A success message without those materialized files, a wrong phase or
+ADR digest, a stale or altered plan, a missing receipt, or a forged application
+receipt is a hard refusal. Artifact validity never replaces the real
+`validate-graph.cjs` gate; it is evidence that the gate consumed the intended
+planning output.
+
 The routed configuration bridge above is required before every callback, not
 only when a caller happens to notice configuration. It performs canonical
 preflight and selection validation with the explicit active runtime. Its
@@ -239,6 +261,21 @@ context first, then one callback set, then materialization verification.
    or the durable recorder is unavailable, refuse before launching or making
    any callback; do not prompt the user to run an external command and do not
    run the Skill opaquely.
+   Build the callback context with
+   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs` before the first typed
+   launch. The decomposition packet uses the resolved project root and source
+   revision, role `decomposition`, subject
+   `phase=<N>;repository=<repo>;adr=<ADR digest>`, the ADR-014 policy object and
+   `policy_hash`, complete ADR/requirements/research/context references, and
+   `roleContext: { adr_refs, requirements, research_refs, context }`. Select
+   backlog items through `backlog-index.cjs`, carry their source hashes and
+   `whySelected` metadata, and set `contextPacketRequired: true`. Researcher,
+   planner and checker callbacks receive the packet in their boundary context;
+   their prompts fence it as DATA. A missing requested item, stale verification,
+   altered reference, symlink escape or forged model/capability/callback field
+   refuses the callback before reservation. The packet keeps the full ADR,
+   requirements and mandatory GSD policy even when the estimated UTF-8/4 size
+   exceeds 12,000 tokens, recording overflow and indexed optional references.
 3. With that context fixed, the Skill makes exactly one set of three typed,
    boundary-owned callbacks, in this order:
    - `gsd-phase-researcher` → `role: research`, with only the declared research
@@ -249,17 +286,21 @@ context first, then one callback set, then materialization verification.
      critical/checkpoint signals.
 
    Each callback receives the same explicit context plus the selected runtime,
-   resolved launch selection, and a unique `dispatch_id`. Each boundary call
-   must return one acknowledged, verified durable receipt. The set is exactly
-   three callback dispatches and exactly three verified durable receipts, one
-   per typed role. Never collapse these roles into one inline prompt or launch
-   a generic agent when a callback cannot apply the resolution.
-4. **Verify materialization**: `ls .planning/phases/<N>-*/*-PLAN.md` — the files
-   MUST exist, and the three receipts from item 3 must be present and verified.
-   If the GSD chain is unavailable, any receipt is missing or failed, or the
-   files were not created — stop with a BLOCK. Do NOT substitute Jira tickets
-   for them and do NOT create PLAN.md files yourself; there is no receipt-bound
-   decomposition fallback.
+   resolved launch selection, a unique `dispatch_id`, and the planning artifact
+   contract above. Each boundary call must return one acknowledged, verified
+   durable receipt and one bounded, receipt-bound artifact reference. The set
+   is exactly three callback dispatches and exactly three verified durable
+   receipts, one per typed role. Never collapse these roles into one inline
+   prompt or launch a generic agent when a callback cannot apply the
+   resolution.
+4. **Verify materialization**: inspect the trusted artifact index, then run
+   `ls .planning/phases/<N>-*/*-PLAN.md` and verify the listed `CONTEXT.md` plus
+   every `PLAN.md` still matches its sealed digest. The files MUST exist, and
+   the three receipts from item 3 must be present and verified. If the GSD
+   chain is unavailable, any receipt is missing or failed, the phase/ADR
+   identity is wrong, or the files were not created or were altered — stop with
+   a BLOCK. Do NOT substitute Jira tickets for them and do NOT create PLAN.md
+   files yourself; there is no receipt-bound decomposition fallback.
 
    ```markdown
    ---

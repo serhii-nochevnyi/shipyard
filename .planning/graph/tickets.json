@@ -105,6 +105,13 @@
       "repos": [
         null
       ]
+    },
+    "33-reduce-orchestration-context-and-transfer-sessions-safely": {
+      "branch": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "base": null,
+      "repos": [
+        null
+      ]
     }
   },
   "tickets": {
@@ -3088,6 +3095,308 @@
       "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
       "primary_parent": "T-32-05",
       "pr_base": "ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the",
+      "jira": null
+    },
+    "T-33-01": {
+      "title": "Deliver durable CI and review transition events",
+      "plan": ".planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-01-PLAN.md",
+      "phase": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/wait-events.cjs",
+        "plugins/delivery-pipeline/scripts/ci-wait.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/scripts/stop-gate.cjs",
+        "tests/unit/wait-events.test.cjs",
+        "tests/unit/ci-wait.test.cjs",
+        "tests/unit/stop-gate.test.cjs",
+        "plugins/delivery-pipeline/scripts/state-sync.cjs"
+      ],
+      "risk": "medium",
+      "type": "execute",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-33-01-deliver-durable-ci-and-review-transition",
+      "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "primary_parent": null,
+      "pr_base": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "jira": null
+    },
+    "T-33-02": {
+      "title": "Validate bounded executor evidence at acceptance",
+      "plan": ".planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-02-PLAN.md",
+      "phase": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-33-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/role-artifact.cjs",
+        "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
+        "plugins/delivery-pipeline/scripts/claude-workflow-host.cjs",
+        "plugins/delivery-pipeline/workflows/executors.mjs",
+        "tests/unit/role-artifact.test.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "tests/unit/gen-codex-shipyard.test.cjs",
+        "tests/unit/workflows-args.test.cjs",
+        "tests/unit/source-contract.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "execute",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-33-02-validate-bounded-executor-evidence-at-ac",
+      "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "primary_parent": "T-33-01",
+      "pr_base": "ticket/T-33-01-deliver-durable-ci-and-review-transition",
+      "jira": null
+    },
+    "T-33-03": {
+      "title": "Bound repair and drift results without losing findings",
+      "plan": ".planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-03-PLAN.md",
+      "phase": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-33-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/workflows/fix-round.mjs",
+        "plugins/delivery-pipeline/scripts/role-artifact.cjs",
+        "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
+        "tests/unit/workflows-args.test.cjs",
+        "tests/unit/source-contract.test.cjs",
+        "tests/unit/sentinel.test.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/scripts/attempt-history.cjs",
+        "tests/unit/repair-artifacts.test.cjs",
+        "plugins/delivery-pipeline/workflows/drift-gate.mjs",
+        "plugins/delivery-pipeline/references/drift-check.md",
+        "plugins/delivery-pipeline/references/ci-fix.md",
+        "plugins/delivery-pipeline/references/review-fix.md"
+      ],
+      "risk": "medium",
+      "type": "execute",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-33-03-bound-repair-and-drift-results-without-l",
+      "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "primary_parent": "T-33-02",
+      "pr_base": "ticket/T-33-02-validate-bounded-executor-evidence-at-ac",
+      "jira": null
+    },
+    "T-33-04": {
+      "title": "Preserve complete architecture and integration judgments",
+      "plan": ".planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-04-PLAN.md",
+      "phase": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-33-03"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/role-artifact.cjs",
+        "plugins/delivery-pipeline/references/arch-review.md",
+        "plugins/delivery-pipeline/references/pr-sentinel.md",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "tests/unit/judgment-artifacts.test.cjs",
+        "plugins/delivery-pipeline/references/integrator.md"
+      ],
+      "risk": "high",
+      "type": "execute",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-33-04-preserve-complete-architecture-and-integ",
+      "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "primary_parent": "T-33-03",
+      "pr_base": "ticket/T-33-03-bound-repair-and-drift-results-without-l",
+      "jira": null
+    },
+    "T-33-05": {
+      "title": "Bound research and decomposition handbacks",
+      "plan": ".planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-05-PLAN.md",
+      "phase": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "repo": null,
+      "wave": 5,
+      "depends_on": [
+        "T-33-04"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/workflows/investigation-research.mjs",
+        "plugins/delivery-pipeline/references/inv-research.md",
+        "plugins/delivery-pipeline/commands/investigate.md",
+        "tests/unit/investigation-research.test.cjs",
+        "tests/unit/planning-artifacts.test.cjs",
+        "plugins/delivery-pipeline/commands/decompose.md",
+        "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
+        "tests/unit/gen-codex-shipyard.test.cjs",
+        "tests/unit/source-contract.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "execute",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-33-05-bound-research-and-decomposition-handbac",
+      "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "primary_parent": "T-33-04",
+      "pr_base": "ticket/T-33-04-preserve-complete-architecture-and-integ",
+      "jira": null
+    },
+    "T-33-06": {
+      "title": "Build targeted launch packets with required policy and backlog",
+      "plan": ".planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-06-PLAN.md",
+      "phase": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "repo": null,
+      "wave": 6,
+      "depends_on": [
+        "T-33-05"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/context-packet.cjs",
+        "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
+        "plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs",
+        "plugins/delivery-pipeline/workflows/executors.mjs",
+        "plugins/delivery-pipeline/workflows/investigation-research.mjs",
+        "tests/unit/context-packet.test.cjs",
+        "tests/unit/source-contract.test.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/commands/investigate.md",
+        "plugins/delivery-pipeline/commands/decompose.md"
+      ],
+      "risk": "medium",
+      "type": "execute",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-33-06-build-targeted-launch-packets-with-requi",
+      "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "primary_parent": "T-33-05",
+      "pr_base": "ticket/T-33-05-bound-research-and-decomposition-handbac",
+      "jira": null
+    },
+    "T-33-07": {
+      "title": "Measure waiting and context treatments independently",
+      "plan": ".planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-07-PLAN.md",
+      "phase": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "repo": null,
+      "wave": 7,
+      "depends_on": [
+        "T-33-06"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/orchestration-overhead.cjs",
+        "plugins/delivery-pipeline/scripts/context-packet.cjs",
+        "plugins/delivery-pipeline/scripts/role-artifact.cjs",
+        "tests/unit/orchestration-overhead.test.cjs",
+        "plugins/delivery-pipeline/scripts/wait-events.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "docs/audits/optimization/phase-33-protocol.md"
+      ],
+      "risk": "medium",
+      "type": "execute",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-33-07-measure-waiting-and-context-treatments-i",
+      "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "primary_parent": "T-33-06",
+      "pr_base": "ticket/T-33-06-build-targeted-launch-packets-with-requi",
+      "jira": null
+    },
+    "T-33-08": {
+      "title": "Resume a checkpoint with one fenced acknowledged owner",
+      "plan": ".planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-08-PLAN.md",
+      "phase": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "repo": null,
+      "wave": 8,
+      "depends_on": [
+        "T-33-07"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/session-handoff.cjs",
+        "plugins/delivery-pipeline/scripts/dispatch-boundary.cjs",
+        "tests/unit/session-handoff.test.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
+        "plugins/delivery-pipeline/scripts/claude-workflow-host.cjs",
+        "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
+        "plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs",
+        "tests/unit/delivery-cold-start-contract.test.cjs"
+      ],
+      "risk": "high",
+      "type": "execute",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-33-08-resume-a-checkpoint-with-one-fenced-ackn",
+      "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "primary_parent": "T-33-07",
+      "pr_base": "ticket/T-33-07-measure-waiting-and-context-treatments-i",
+      "jira": null
+    },
+    "T-33-09": {
+      "title": "Recommend safe rotation and refuse unproven automation",
+      "plan": ".planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-09-PLAN.md",
+      "phase": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "repo": null,
+      "wave": 9,
+      "depends_on": [
+        "T-33-08"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/session-handoff.cjs",
+        "plugins/delivery-pipeline/scripts/orchestration-overhead.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "tests/unit/rotation-recommendation.test.cjs",
+        "plugins/delivery-pipeline/scripts/runtime-context.cjs",
+        "tests/unit/gen-codex-shipyard.test.cjs",
+        "docs/audits/optimization/phase-33-handoff.md",
+        "docs/audits/optimization/phase-33-protocol.md"
+      ],
+      "risk": "medium",
+      "type": "execute",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-33-09-recommend-safe-rotation-and-refuse-unpro",
+      "epic": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "primary_parent": "T-33-08",
+      "pr_base": "ticket/T-33-08-resume-a-checkpoint-with-one-fenced-ackn",
       "jira": null
     },
     "T-35-01": {

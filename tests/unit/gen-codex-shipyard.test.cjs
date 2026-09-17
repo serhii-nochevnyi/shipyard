@@ -284,9 +284,30 @@ test('the generator writes nothing outside --out and preserves a valid stage on 
 test('the bundle carries canonical payloads and rewrites installed Shipyard references', () => {
   withFixture({}, (f) => {
     const manifest = generated(f);
-    for (const file of ['model-policy.cjs', 'model-policy-internal.cjs', 'runtime-adapters.cjs']) {
+    for (const file of [
+      'model-policy.cjs',
+      'model-policy-internal.cjs',
+      'runtime-adapters.cjs',
+      'dispatch-boundary.cjs',
+      'role-artifact.cjs',
+      'claude-dispatch-adapter.cjs',
+      'claude-workflow-host.cjs',
+      'session-handoff.cjs',
+      'orchestration-overhead.cjs',
+      'runtime-context.cjs',
+    ]) {
       assert.strictEqual(read(path.join(f.out, 'bundle/scripts', file)), read(path.join(PLUGIN, 'scripts', file)));
     }
+    const generatedDeliver = read(path.join(f.out, 'skills/shipyard-deliver/SKILL.md'));
+    assert.match(generatedDeliver, /role-artifact\.cjs seal/);
+    assert.match(generatedDeliver, /role-artifact\.cjs validate/);
+    assert.match(generatedDeliver, /role-artifact\.cjs read/);
+    assert.ok(!generatedDeliver.includes('${CLAUDE_PLUGIN_ROOT}'));
+    assert.ok(manifest.bundle_files.includes('scripts/role-artifact.cjs'));
+    assert.equal(
+      read(path.join(f.out, 'bundle/workflows/executors.mjs')),
+      read(path.join(PLUGIN, 'workflows/executors.mjs')),
+    );
     assert.strictEqual(read(path.join(f.out, 'bundle/skills/delivery-rules/SKILL.md')),
       read(path.join(PLUGIN, 'skills/delivery-rules/SKILL.md')));
     const texts = [
@@ -299,6 +320,78 @@ test('the bundle carries canonical payloads and rewrites installed Shipyard refe
     }
     assert.ok(texts.some((text) => text.includes(path.join(f.codexHome, 'shipyard'))));
     assert.ok(texts.some((text) => text.includes('$shipyard-')));
+  });
+});
+
+test('the generated bundle keeps recommendation, checkpoint and capability refusals executable', () => {
+  withFixture({}, (f) => {
+    const manifest = generated(f);
+    const generatedDeliver = read(path.join(f.out, 'skills/shipyard-deliver/SKILL.md'));
+    assert.ok(manifest.bundle_files.includes('scripts/session-handoff.cjs'));
+    assert.ok(manifest.bundle_files.includes('scripts/orchestration-overhead.cjs'));
+    assert.ok(manifest.bundle_files.includes('scripts/runtime-context.cjs'));
+    assert.match(generatedDeliver, /rotation_recommendation\.state/);
+    assert.match(generatedDeliver, /automatic_transfer\.allowed/);
+    assert.match(generatedDeliver, /checkpoint_collection/);
+    assert.match(generatedDeliver, /successor_startup/);
+    assert.match(generatedDeliver, /cache_warmup/);
+    const handoff = require(path.join(f.out, 'bundle/scripts/session-handoff.cjs'));
+    const runtime = require(path.join(f.out, 'bundle/scripts/runtime-context.cjs'));
+    const overhead = require(path.join(f.out, 'bundle/scripts/orchestration-overhead.cjs'));
+    assert.equal(typeof handoff.recommendRotation, 'function');
+    assert.equal(typeof handoff.createSessionHandoff, 'function');
+    assert.equal(typeof runtime.reportTransferCapability, 'function');
+    assert.equal(runtime.TRANSFER_PROOF_CATEGORIES.length, 6);
+    assert.equal(typeof overhead.recordHandoffCost, 'function');
+    assert.ok(overhead.STAGES.has('successor_startup'));
+  });
+});
+
+test('the generated bundle covers all nine canonical roles and planning references', () => {
+  withFixture({}, (f) => {
+    const manifest = generated(f);
+    const bundle = path.join(f.out, 'bundle');
+    const staticReferences = new Set(policy.CODEX_STATIC_ROLES.map((role) =>
+      role === 'research' ? 'inv-research' : role));
+    for (const reference of staticReferences) {
+      const file = `references/${reference}.md`;
+      assert.ok(manifest.bundle_files.includes(file), `missing canonical reference ${file}`);
+      assert.ok(fs.existsSync(path.join(bundle, file)), `missing generated payload ${file}`);
+    }
+
+    // Dynamic roles have no static agent file, but they must still be present
+    // in the generated executable surface that owns their callback contract.
+    const generatedSkills = new Map([
+      ['research', 'skills/shipyard-investigate/SKILL.md'],
+      ['decomposition', 'skills/shipyard-decompose/SKILL.md'],
+      ['executor', 'bundle/workflows/executors.mjs'],
+    ]);
+    for (const [role, relative] of generatedSkills) {
+      assert.ok(fs.existsSync(path.join(f.out, relative)), `missing generated role surface for ${role}`);
+      assert.ok(read(path.join(f.out, relative)).length > 0, `empty generated role surface for ${role}`);
+    }
+    assert.deepStrictEqual(new Set(policy.ROLES), new Set([
+      'research', 'decomposition', 'executor', 'pr-sentinel', 'integrator',
+      'drift-check', 'arch-review', 'ci-fix', 'review-fix',
+    ]));
+    assert.ok(read(path.join(f.out, 'skills/shipyard-investigate/SKILL.md')).includes('planning.v1'));
+    assert.ok(read(path.join(f.out, 'skills/shipyard-decompose/SKILL.md')).includes('artifact_index'));
+  });
+});
+
+test('the generated manifest refuses a stale planning consumer payload', () => {
+  withFixture({}, (f) => {
+    const manifest = generated(f);
+    const payload = path.join(f.out, 'bundle/scripts/claude-dispatch-adapter.cjs');
+    fs.appendFileSync(payload, '\n// stale planning payload\n');
+    assert.throws(
+      () => gen.validateCodexBundle(f.out, f.options),
+      /digest|payload|manifest/i,
+    );
+    // Keep the fixture mutation explicit: a caller cannot repair a stale
+    // generated payload by changing only the manifest digest.
+    const after = json(path.join(f.out, 'manifest.json'));
+    assert.equal(after.bundle_digests['scripts/claude-dispatch-adapter.cjs'], manifest.bundle_digests['scripts/claude-dispatch-adapter.cjs']);
   });
 });
 

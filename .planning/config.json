@@ -94,12 +94,10 @@
       "heavy": "xhigh"
     },
     "agent_overrides": {
-      "gsd-planner": "xhigh",
       "gsd-code-reviewer": "xhigh"
     }
   },
   "model_overrides": {
-    "gsd-planner": "opus",
     "gsd-code-reviewer": "opus"
   },
   "delivery_pipeline": {
