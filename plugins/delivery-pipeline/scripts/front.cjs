@@ -913,7 +913,21 @@ function computeFront(tickets, state, opts = {}) {
   // `activeDispatches` has already dropped everything expired or landed, so
   // nothing here decides how long a dispatch lives.
   const inFlight = agentsInFlight(dispatched);
-  const capacity = { max: capMax(), in_flight: inFlight, free: Math.max(0, capMax() - inFlight) };
+  const localCapacity = { max: capMax(), in_flight: inFlight, free: Math.max(0, capMax() - inFlight) };
+  const shared = opts.sharedCapacity || opts.shared_capacity;
+  const capacity = shared && Number.isSafeInteger(shared.max) && shared.max > 0
+    && Number.isSafeInteger(shared.in_flight) && shared.in_flight >= 0
+    ? {
+      max: shared.max,
+      in_flight: shared.in_flight,
+      free: Math.max(0, shared.max - shared.in_flight),
+      coverage: shared.coverage || 'unknown',
+      degraded: shared.degraded === true,
+      ...(shared.provider ? { provider: shared.provider } : {}),
+      ...(shared.account_scope ? { account_scope: shared.account_scope } : {}),
+      ...(shared.reason ? { reason: shared.reason } : {}),
+    }
+    : localCapacity;
   // SHALLOWEST FIRST within a stack — the THIRD sort key now; the full order is
   // stated at the comparator below. A ticket stacked on an open parent is
   // work that will have to be redone: when the parent lands, this branch's base
@@ -1519,6 +1533,11 @@ function formatFront(front) {
   // a front written before this existed (`delivery-front.json` outlives an
   // upgrade), and it must not throw.
   const cap = front.capacity;
+  if (cap && cap.degraded) {
+    const reason = typeof cap.reason === 'string' && cap.reason.trim()
+      ? ` — ${cap.reason.replace(/[\r\n]+/g, ' ').trim()}` : '';
+    lines.push(`capacity coverage: ${cap.coverage || 'unknown'} (degraded)${reason}`);
+  }
   const capBinds = cap && front.actionable_count > cap.free;
   if (capBinds) {
     lines.push(cap.max === 0

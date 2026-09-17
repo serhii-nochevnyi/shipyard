@@ -18,6 +18,7 @@ const {
 const { REPAIR } = require('./codex-model-remap.cjs');
 const { validateContextPacket } = require('./context-packet.cjs');
 const { isOwnerCapability } = require('./session-handoff.cjs');
+const { snapshotFor } = require('./model-capability.cjs');
 
 const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
 function refuse(code, message) {
@@ -136,6 +137,7 @@ function createCodexDispatchAdapter(options = {}) {
   const launchDynamic = host.launch;
   const launchStatic = host.launchStatic;
   const launchTypedGsd = host.launchTypedGsd;
+  const capacity = options.capacity || host.capacity;
   const handoff = options.handoff || options.sessionHandoff || host.handoff || host.sessionHandoff;
   const validatedRepairs = new Map();
 
@@ -349,6 +351,8 @@ function createCodexDispatchAdapter(options = {}) {
     agentsDir,
     agentManifest,
     capabilities: Object.freeze({ observedModel: capabilities.observedModel !== false, observedEffort: capabilities.observedEffort !== false }),
+    ...(capacity !== undefined ? { capacity } : {}),
+    capabilitySnapshot: (resolution, context) => snapshotFor(capabilities, resolution, context),
     supports: (resolution) => validateAvailability(resolution, capabilities),
     validate, validateGeneratedAgent,
     launch: (resolution, context) => {

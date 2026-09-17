@@ -56,6 +56,7 @@ function registeredHostOptions(options) {
     log: options.log,
     capabilities: hostResource(options, 'capabilities'),
     recorder: hostResource(options, 'recorder'),
+    capacity: hostResource(options, 'capacity'),
     handoff: handoffResource(options),
     applicationEvidence: hostResource(options, 'applicationEvidence'),
     typedGsdCallback: hostResource(options, 'typedGsdCallback'),
@@ -91,7 +92,7 @@ function registerClaudeWorkflowHost(options = {}) {
         'agent', 'parallel', 'phase', 'log', 'capabilities', 'recorder',
         'applicationEvidence', 'typedGsdCallback', 'host',
         'artifactConsumer', 'artifactPreparer', 'handoff', 'sessionHandoff',
-        'ownerCapability', 'owner',
+        'ownerCapability', 'owner', 'capacity',
       ]) {
         if (Object.prototype.hasOwnProperty.call(runOptions, key)) {
           reject(`registered host owns ${key}`);
@@ -190,6 +191,7 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   }
   const capabilities = hostResource(options, 'capabilities');
   const recorder = hostResource(options, 'recorder');
+  const capacity = hostResource(options, 'capacity');
   const handoff = handoffResource(options);
   const applicationEvidence = hostResource(options, 'applicationEvidence');
   const typedGsdCallback = hostResource(options, 'typedGsdCallback');
@@ -253,6 +255,7 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   const host = Object.freeze({
     capabilities,
     recorder,
+    ...(capacity !== undefined ? { capacity } : {}),
     ...(handoff !== undefined ? { handoff } : {}),
     applicationEvidence: verifiedApplicationEvidence,
     artifactConsumer,
