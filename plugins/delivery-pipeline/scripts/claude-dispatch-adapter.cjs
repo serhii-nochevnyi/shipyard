@@ -13,6 +13,7 @@ const {
   validateGsdRole,
   isDurableRecorder,
 } = require('./dispatch-boundary.cjs');
+const { validateContextPacket } = require('./context-packet.cjs');
 
 const REPAIR = 'Install an ADR-014-capable Claude host with explicit workflow model and effort support; provide current host capabilities and retry the exact selection.';
 const ARTIFACT_ENVELOPE_MAX_BYTES = 8192;
@@ -431,6 +432,23 @@ function validateLaunchContext(resolution, context) {
   }
 }
 
+function validateLaunchPacket(resolution, context) {
+  if (!object(context)) refuse('INVALID_INPUT', 'launch context must be an object');
+  const packet = context.contextPacket === undefined ? context.context_packet : context.contextPacket;
+  if (packet === undefined) return true;
+  try {
+    return validateContextPacket(packet, {
+      role: resolution.role,
+      ...(context.ticket !== undefined ? { subject: context.subject || context.ticket } : {}),
+      ...(context.worktreePath !== undefined ? { root: context.worktreePath } : {}),
+      ...(context.sourceRevision !== undefined ? { sourceRevision: context.sourceRevision } : {}),
+      policyHash: resolution.policy_hash,
+    });
+  } catch (error) {
+    refuse(error.code || 'INVALID_CONTEXT_PACKET', error.message);
+  }
+}
+
 function validateLaunchArguments(resolution) {
   const args = resolution.launch_arguments;
   if (!object(args)
@@ -510,6 +528,7 @@ function createClaudeDispatchAdapter(options = {}) {
     policy.validateResolution(resolution, { requireDispatchId: true });
     validate(resolution);
     validateLaunchContext(resolution, context);
+    validateLaunchPacket(resolution, context);
     const gsdRole = validateGsdRole(resolution);
     const method = gsdRole !== undefined ? launchTypedGsd : launchNative;
     if (typeof method !== 'function') {
@@ -801,6 +820,7 @@ function createClaudeWorkflowDispatch(options = {}) {
       // boundary reserves a dispatch identity, not only inside host.launch.
       validateLaunchContext(resolution, agentOptions);
       validateLaunchContext(resolution, context);
+      validateLaunchPacket(resolution, context);
       return true;
     },
   });

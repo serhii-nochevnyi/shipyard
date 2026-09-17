@@ -16,6 +16,7 @@ const {
   validateGsdRole,
 } = require('./dispatch-boundary.cjs');
 const { REPAIR } = require('./codex-model-remap.cjs');
+const { validateContextPacket } = require('./context-packet.cjs');
 
 const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
 function refuse(code, message) {
@@ -23,6 +24,22 @@ function refuse(code, message) {
 }
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateLaunchPacket(resolution, context) {
+  const packet = context.contextPacket === undefined ? context.context_packet : context.contextPacket;
+  if (packet === undefined) return true;
+  try {
+    return validateContextPacket(packet, {
+      role: resolution.role,
+      ...(context.ticket !== undefined ? { subject: context.subject || context.ticket } : {}),
+      ...(context.worktreePath !== undefined ? { root: context.worktreePath } : {}),
+      ...(context.sourceRevision !== undefined ? { sourceRevision: context.sourceRevision } : {}),
+      policyHash: resolution.policy_hash,
+    });
+  } catch (error) {
+    refuse(error.code || 'INVALID_CONTEXT_PACKET', error.message);
+  }
 }
 
 function canonicalView(resolution) {
@@ -250,6 +267,7 @@ function createCodexDispatchAdapter(options = {}) {
     policy.validateResolution(canonical, { requireDispatchId: true });
     validate(resolution);
     if (!object(context)) refuse('INVALID_INPUT', 'launch context must be an object');
+    validateLaunchPacket(resolution, context);
     const effectiveModel = effectiveModelFor(resolution, canonical);
     const gsdRole = validateGsdRole(canonical);
     for (const source of [context, context.launch_arguments, context.selection, context.session]) {
