@@ -64,3 +64,67 @@ command-backed evidence is not verification.
   (file:line), and the minimal remediation direction
 - for `adr-outdated`: which decision, what reality contradicts it, and what
   the human must decide
+
+## Complete judgment artifact
+
+The final message is a bounded synopsis. Before returning it, write the complete
+review evidence to a regular file inside the reviewed worktree. The file must
+contain the commands and paths that support every claim, the complete ADR
+finding list, and the exact head and merge-base tree that were reviewed. Keep
+the file available until the host has sealed and validated the result.
+
+Return a JSON result with these fields even when the synopsis is short or the
+finding list is long:
+
+```json
+{
+  "id": "T-…",
+  "pr": 123,
+  "verdict": "conform | violation | adr-outdated",
+  "head": "<40-char commit sha>",
+  "base_tree": "<40-char merge-base tree sha>",
+  "blocking_count": 0,
+  "summary": "bounded synopsis",
+  "findings": [
+    {
+      "id": "finding-1",
+      "type": "violation",
+      "blocking": true,
+      "adr": "ADR-014",
+      "section": "§…",
+      "file": "path/to/file",
+      "line": 42,
+      "hunk": "path/to/file:42",
+      "remediation": "minimal remediation direction",
+      "summary": "why the decision is violated"
+    }
+  ]
+}
+```
+
+`conform` carries an empty finding index and `blocking_count: 0`. A `violation`
+keeps every violating ADR, section, hunk, and remediation. An `adr-outdated`
+finding keeps the decision, the contradictory reality, and the precise human
+decision. Do not collapse these into the summary or add an agent-owned receipt.
+
+The host seals the result at the consuming boundary, after the authenticated
+dispatch receipt returns:
+
+```bash
+node $SHIPYARD_ROOT/scripts/role-artifact.cjs seal \
+  --worktree <worktree> --role arch-review --ticket <T> --pr <N> \
+  --base <base-ref> --boundary-store <receipt-store> \
+  --dispatch-id <dispatch-id> --result-file <result.json> \
+  --evidence-path <complete-evidence-file>
+node $SHIPYARD_ROOT/scripts/role-artifact.cjs validate \
+  --worktree <worktree> --role arch-review --ticket <T> --pr <N> \
+  --base <base-ref> --boundary-store <receipt-store> \
+  --dispatch-id <dispatch-id> --artifact <artifact-ref> \
+  --artifact-digest <artifact-digest>
+```
+
+Only the validated artifact may reach `gate-trailer.cjs write`. The consumer
+checks the full finding index and its blocking count, the exact reviewed head,
+the merge-base tree, immutable evidence references, and the current worktree
+before the conformance trailer is written. A stale or missing artifact is a
+refusal; a bounded summary never authorizes a conform verdict by itself.

@@ -276,6 +276,57 @@ receipt to name the concrete applied model and effort. If the boundary cannot
 return that receipt, hard-refuse before those side effects: no Agent, prompt,
 session, or in-process fallback may perform or record this `review-fix`.
 
+## Complete sentinel judgment artifact
+
+The sentinel report is round-scoped. It must repeat the complete guarded ticket
+set and every duty outcome; a single ticket receipt or a short summary cannot
+stand in for the round. Keep complete evidence in a regular file inside the
+sentinel worktree, including the live commands, the tickets checked, performed
+duties, refused duties with reasons, and the resulting outcome.
+
+The result passed to the host has this shape:
+
+```json
+{
+  "outcome": "clear | blocked | awaiting-human",
+  "ticket_set": [{"id": "T-…", "pr": 123, "head": "<40-char sha>", "base": "<base-ref>"}],
+  "ticket_set_digest": "<sha256 of the complete ticket set>",
+  "performed": [{"ticket": "T-…", "duty": "wait-ci", "status": "complete"}],
+  "refused": [{"ticket": "T-…", "duty": "merge", "status": "refused", "reason": "…"}],
+  "blocking_count": 0,
+  "summary": "bounded synopsis"
+}
+```
+
+The host seals and validates that result through the trusted role-artifact
+consumer before it accepts an actionable sentinel outcome:
+
+```bash
+node $SHIPYARD_ROOT/scripts/role-artifact.cjs seal \
+  --worktree <worktree> --role pr-sentinel --ticket <round-subject> \
+  --base <base-ref> --boundary-store <receipt-store> --dispatch-id <dispatch-id> \
+  --ticket-set-file <ticket-set.json> --result-file <result.json> \
+  --evidence-path <complete-sentinel-evidence-file>
+node $SHIPYARD_ROOT/scripts/role-artifact.cjs validate \
+  --worktree <worktree> --role pr-sentinel --ticket <round-subject> \
+  --base <base-ref> --boundary-store <receipt-store> --dispatch-id <dispatch-id> \
+  --ticket-set-file <ticket-set.json> --artifact <artifact-ref> \
+  --artifact-digest <artifact-digest>
+```
+
+`<round-subject>` is the host-owned `ticket` passed in the authenticated
+boundary launch context for this shared sentinel dispatch; it is not an
+individual ticket id. The ticket-set file used by both commands is the same
+complete set that produced that round subject.
+
+The envelope contains bounded counts and references; the complete ticket set
+and duties remain in the authenticated findings artifact. Its round subject is
+derived from the ticket-set digest, and a missing ticket, surplus ticket,
+digest mismatch, incomplete duty list, stale revision, or changed evidence is
+a refusal. The artifact is evidence, not merge authority: `sentinel.cjs` still
+rechecks live CI, review, architecture, draft, branch, and human gates before
+any undraft or merge.
+
 **`arch-review`** — green, but no verdict is recorded. **Judgment is ONE
 procedure: measure → resolve → validate → launch → receipt → record.** It uses
 the same boundary on every path, and the inline cycle in `commands/deliver.md`

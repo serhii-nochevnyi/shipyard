@@ -1797,6 +1797,7 @@ boundary.dispatch(
     signals: { risk, type, checkpoint, critical, signatureState, priorApplied },
     dispatch_id },
   { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md",
+    ticket: roundSubject,
     guardedTickets: [{ ticket, pr, branch, worktreePath, repo, base, planPath }],
     scriptsPath, graphPath, maxAttempts, planDefectSignatures }
 )
@@ -2011,6 +2012,26 @@ loop:
      measurement, typed host, or documented escalation is a
      refusal. No architecture-review ceiling variant beyond the generated
      critical file is a valid launch target.
+     Before the verdict can reach `gate-trailer.cjs`, the host must preserve the
+     complete result and evidence through the trusted consumer in the same
+     worktree:
+
+     ```text
+     role-artifact.cjs seal --role arch-review --ticket <T> --pr <N>
+       --base <base-ref> --boundary-store <receipt-store>
+       --dispatch-id <dispatch-id> --result-file <result.json>
+       --evidence-path <complete-arch-review-evidence>
+     role-artifact.cjs validate --role arch-review --ticket <T> --pr <N>
+       --base <base-ref> --boundary-store <receipt-store>
+       --dispatch-id <dispatch-id> --artifact <artifact-ref>
+       --artifact-digest <artifact-digest>
+     ```
+
+     The consumer checks the complete finding index, blocking count, exact
+     reviewed head and merge-base tree, immutable evidence, and current
+     revision. A bounded synopsis or a cached judgment cannot authorize a
+     conform trailer; only the validated artifact may proceed to the live
+     trailer writer and sentinel gate.
      the same step runs the degenerate-green detector over the diff it judged —
        `degenerate-green.cjs <T> --base <base> --worktree <wt> --json
         --graph <project>/.planning/graph`
@@ -2462,6 +2483,7 @@ driving PRs hands the user a half-truth.
                     priorApplied },
          dispatch_id, previous_dispatch_id },
        { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/integrator.md",
+         ticket: phaseSubject,
          epic, diff, defaultBranch, measuredInputTokens, contestedEvidence,
          architecturePath, outputPath: "INTEGRATION.md" }
      )
@@ -2474,6 +2496,27 @@ driving PRs hands the user a half-truth.
      effort. The receipt must be verified before accepting `INTEGRATION.md` or
      `passed`/`needs-fix`; no literal model, omitted effort, inherited session,
      or undocumented escalation is permitted.
+     After the receipt, seal the complete `INTEGRATION.md` and validate the
+     artifact before projecting the result or entering any phase-completion
+     branch:
+
+     ```text
+     role-artifact.cjs seal --role integrator --ticket <phase-subject>
+       --phase <phase> --base <default-branch>
+       --boundary-store <receipt-store> --dispatch-id <dispatch-id>
+       --ticket-set-file <ticket-set.json> --result-file <result.json>
+       --evidence-path <path/to/INTEGRATION.md>
+     role-artifact.cjs validate --role integrator --ticket <phase-subject>
+       --phase <phase> --base <default-branch>
+       --boundary-store <receipt-store> --dispatch-id <dispatch-id>
+       --ticket-set-file <ticket-set.json> --artifact <artifact-ref>
+       --artifact-digest <artifact-digest>
+     ```
+
+     Validation re-reads the complete evidence, finding index, outcome and
+     blocking count, and the current combined head/base/tree. Missing, changed,
+     stale, or contradictory integration evidence refuses both projection and
+     phase completion; `human-review-required` remains a human decision.
    - `passed` → remove draft from the epic-PR (`gh pr ready`) and hand it to the human to
      merge epic → default branch (the phase lands as one PR);
    - `needs-fix` → fix tickets as new plans in the same phase (their base — the epic) →
