@@ -609,8 +609,17 @@ Workflow and mandatory quality gates remain. Unsupported automatic transfer
 stays in recommendation mode rather than interrupting a live session.
 
 ### Phase 34: Improve convergence and tune from measured outcomes
-**Status**: planned (ADR-011)
+**Status**: in progress (ADR-011)
 **Requirements**: REQ-93, REQ-94, REQ-95, REQ-96, REQ-97
+
+**Plans:** 5 plans
+
+Plans (serialized T-34-01 through T-34-05):
+- [x] 34-01-PLAN.md — Review progress and resource budgets
+- [x] 34-02-PLAN.md — Capability-aware model-axis escalation
+- [x] 34-03-PLAN.md — Proven verdict carry
+- [x] 34-04-PLAN.md — Account-scoped capacity leases
+- [ ] 34-05-PLAN.md — Versioned optimization evidence and backlog intake
 
 Waves 4–5 of [ADR-011-ROLLOUT](architecture/ADR-011-ROLLOUT.md), after phase 33:
 OPT-09–13 add review-aware progress, evidenced model-axis escalation, verified
@@ -643,8 +652,8 @@ existing Claude palette is a read-only compatibility surface.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `4e0d4cb514e33622bad736ff0616094aad727af435052626026ec6dfe8e92b5a`
-- Plans merged: 125/125
+- Source fingerprint: `db2f91b8378d89976b74e96a0444bd6fe575d1e2d2c7c984b0b9dae8bcc127ee`
+- Plans merged: 129/130
 - Phases verified: 6/17
 - Current phase: 20
 
@@ -664,7 +673,7 @@ existing Claude palette is a read-only compatibility surface.
 | 31 — Not every ticket is available work | 7 | 7 | pending |
 | 32 — Measure usage and make the backlog actionable | 7 | 7 | passed |
 | 33 — Reduce orchestration context and transfer sessions safely | 9 | 9 | passed |
-| 34 — Improve convergence and tune from measured outcomes | 0 | 0 | pending |
+| 34 — Improve convergence and tune from measured outcomes | 5 | 4 | pending |
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |
 

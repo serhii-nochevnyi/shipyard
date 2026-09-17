@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4e0d4cb514e33622bad736ff0616094aad727af435052626026ec6dfe8e92b5a
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: db2f91b8378d89976b74e96a0444bd6fe575d1e2d2c7c984b0b9dae8bcc127ee
 phase: 34
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 4e0d4cb514e33622bad736ff0616094aad727af435052626026ec6dfe8e92b5a
+shipyard_source_fingerprint: db2f91b8378d89976b74e96a0444bd6fe575d1e2d2c7c984b0b9dae8bcc127ee
 ---
 
 # Phase 34: Improve convergence and tune from measured outcomes — UAT Projection
@@ -13,8 +13,8 @@ This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
 result: pending
-expected: at least one delivery PLAN.md is present
-actual: no delivery PLAN.md files; evidence is missing
+expected: all 5 phase plan(s) are merged
+actual: 4 merged
 
 ### 2. Integration evidence is explicit
 result: pending
