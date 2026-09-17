@@ -19,6 +19,9 @@ command-backed evidence is not verification.
   signature, the hypothesis it acted on, and how it ended. It is rendered from
   the delivery journal by the orchestrator, so it is what previous rounds
   actually did, not a recollection of it.
+- A trusted artifact destination: `${worktree}/.shipyard-repair-evidence.md`.
+  This complete evidence file is archived and validated by the boundary after
+  you return.
 
 ## Procedure
 
@@ -80,6 +83,14 @@ command-backed evidence is not verification.
    you changed and that the approval was dismissed by it, so the human knows why
    they are re-approving rather than discovering it.
 
+7. Before returning, write the complete repair record to
+   `${worktree}/.shipyard-repair-evidence.md`: the original failure, every
+   hypothesis considered, changed paths, exact verification commands with
+   relevant output/exit status, and unresolved findings. Keep it complete for
+   `no-op` and `escalate` too. Do not use a symlink or substitute another path;
+   the trusted host archives it under the authenticated dispatch and returns
+   only a bounded synopsis and reference.
+
 ## When the base has moved under you
 
 In a cascade your base moves every time a parent squashes into the epic, so a red
@@ -120,7 +131,7 @@ A conflict in a file the ticket never declared is not yours to resolve by taste:
 the base is right by definition, and touching it is a scope violation.
 
 ## Output (final message, structured)
-- `result: fixed | not-reproducible | escalate`
+- `status: fixed | no-op | escalate` and `pushed: true | false`
 - `hypothesis: <one sentence>` — what you believed was wrong and what the change
   targets; for a no-op or an escalation, why. This is not a summary of the
   notes: the orchestrator records it on the attempt, and it is what the NEXT
@@ -130,3 +141,10 @@ the base is right by definition, and touching it is a scope violation.
 - when the failing check could not run locally: `local_verification: ci-only`
   plus what you DID run — so the next round knows the green came from CI, not
   from this worktree
+
+Return only the compact repair fields (`id`, `pr`, `status`, `pushed`, `notes`,
+`hypothesis`). Do not return a receipt, application evidence, artifact path,
+digest, or complete evidence contents. A missing or malformed evidence file is
+an explicit failed result, never `no-op` or a blind redispatch. The trusted host
+seals `shipyard.repair-result.v1` with the complete file before the attempt is
+logged.

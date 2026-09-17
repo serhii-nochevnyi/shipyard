@@ -481,7 +481,7 @@ test('command-backed verification rule reaches every delivery boundary', () => {
   const drift = readRepo('plugins/delivery-pipeline/workflows/drift-gate.mjs');
   assert.ok(/required: \['id', 'verdict', 'moved', 'reuse_candidates', 'evidence'\]/.test(drift), 'drift-gate must require its evidence channel');
   assert.ok(/evidence:\s*\{/.test(drift), 'drift-gate must expose evidence in the result schema');
-  assert.ok(/recorded:\s*\{/.test(drift), 'drift-gate must accept the recorded result field from drift-check');
+  assert.ok(!/recorded:\s*\{/.test(drift), 'drift-gate must not accept an agent-owned recorded status');
 });
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -508,12 +508,16 @@ const sourceArtifactConsumer = ({ artifact, result, record }) => {
       ? '.shipyard-drift-evidence.md'
       : '.shipyard-repair-evidence.md',
     bytes: 0,
+    content_bytes: 0,
     sha256: '0'.repeat(64),
+    digest: '0'.repeat(64),
   };
   const findingsIndex = {
     path: `.shipyard-role-artifacts/${record.receipt.dispatch_id}/findings.json`,
     bytes: 0,
+    content_bytes: 0,
     sha256: '0'.repeat(64),
+    digest: '0'.repeat(64),
   };
   const envelope = role === 'drift-check'
     ? {
@@ -541,8 +545,8 @@ const sourceArtifactConsumer = ({ artifact, result, record }) => {
         pr: artifact.pr || result.pr || 1,
         status: result.status || 'escalate',
         pushed: typeof result.pushed === 'boolean' ? result.pushed : false,
-        summary: typeof result.notes === 'string' ? result.notes.slice(0, 500) : '',
-        notes: typeof result.notes === 'string' ? result.notes.slice(0, 500) : '',
+        summary: typeof result.notes === 'string' && result.notes.trim() ? result.notes.slice(0, 500) : 'test repair summary',
+        notes: typeof result.notes === 'string' && result.notes.trim() ? result.notes.slice(0, 500) : 'test repair notes',
         hypothesis: typeof result.hypothesis === 'string' ? result.hypothesis.slice(0, 500) : 'test hypothesis',
         evidence_index: evidenceIndex,
         evidence_index_ref: evidenceIndex,
@@ -578,11 +582,11 @@ const workflowArgs = {
     tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01', model: 'sonnet', effort: 'max' }],
   },
   'drift-gate': {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', model: 'opus', effort: 'max' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', worktreePath: '/w/T-30-01', model: 'opus', effort: 'max' }],
     driftRefPath: '/p/drift-check.md',
   },
   'fix-round': {
-    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'opus', effort: 'medium' }],
+    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', base: 'epic/30', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'opus', effort: 'medium' }],
     ciFixRefPath: '/p/ci-fix.md',
     reviewFixRefPath: '/p/review-fix.md',
     reinitScript: '/p/reviewers.cjs',
@@ -1966,7 +1970,7 @@ test('the routed-launch source sweep rejects native launches in shipped Markdown
 
 const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
   'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '6fd1478f8b6a26098e4b86485541cf20be371675aa2cf424b8dd7902433540bc',
-  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '154f9a094fdb94e524a2b47f766587ee51dbf4abf0f18cdf675b088972441fdf',
+  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '73250a6bcc46fcbc604e9b43d7d3626a735af78c1609f89e8a5767576aac4ee4',
 });
 
 test('Claude palette and provider adapter sources match their checked-in baselines and remain native', () => {

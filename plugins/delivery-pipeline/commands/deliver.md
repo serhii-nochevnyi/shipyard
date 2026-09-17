@@ -519,7 +519,8 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--grap
 node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs <mark|clear|list> …
 node ${CLAUDE_PLUGIN_ROOT}/scripts/escalation-record.cjs <mark|mark-plan-defect|clear|list> …
 node ${CLAUDE_PLUGIN_ROOT}/scripts/failure-signature.cjs <compute|verdict|rerun|lift> …
-node ${CLAUDE_PLUGIN_ROOT}/scripts/attempt-history.cjs <T> [--json] [--limit <n>]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/attempt-history.cjs <T> [--json] [--details] [--limit <n>]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs <seal|validate|read> --worktree <p> --role <role> --base <ref> --boundary-store <p> --dispatch-id <id> …
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs [--json] [--since 14d|all]
 ```
 
@@ -679,11 +680,15 @@ session:
 attempt    — each babysit round on a PR:
              log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<ci-fix|review-fix> model=<tier> \
                effort_applied=<level|unsupported|unknown> \
-               outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha> hypothesis="<the fixer's own>"
+               outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha> hypothesis="<the fixer's own>" \
+               artifact_ref=<validated path> artifact_digest=<sha256> dispatch_id=<id> \
+               artifact_role=<ci-fix|review-fix> artifact_base=<base> artifact_worktree=<worktree> boundary_store=<path>
 base_merge — a mechanical base merge that landed in a round (NOT an attempt):
              log-event.cjs base_merge ticket=<T> pr=<N> base=<base ref> head=<full 40-char sha>
 fix_round  — for EACH item from a fix-round Workflow result:
-             log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false>
+             log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false> \
+               artifact_ref=<validated path> artifact_digest=<sha256> dispatch_id=<id> \
+               artifact_role=<ci-fix|review-fix> artifact_base=<base> artifact_worktree=<worktree> boundary_store=<path>
 escalation — any escalation to a human — NOT through log-event:
              escalation-record.cjs mark <T> <reason...>
 ```
@@ -695,6 +700,18 @@ defect, and `attempt-history.cjs <T>` renders the record — hypotheses included
 into the next fixer's input. An attempt logged without them still counts toward
 the backstop and buys the next round nothing. `outcome=flake` is logged at an
 UNCHANGED `n`: a quarantined failure is not charged.
+
+`artifact_ref` and `artifact_digest` are key=value fields on these existing
+events, not a new event kind or journal schema. Write them only after the
+trusted boundary has sealed and read the role artifact, along with the
+authenticated `dispatch_id`, `artifact_role`, `artifact_base`,
+`artifact_worktree`, and `boundary_store` when a later details read must resolve
+it. A digest is an integrity check, never permission to skip the live receipt,
+PR/head, integration-base, or D-02 gate. `attempt-history.cjs <T> --details
+--graph <project>/.planning/graph` resolves a referenced hypothesis through the
+same validator and labels it historical; a missing, stale, escaped, or
+unauthenticated reference fails closed. Bounded notes do not reset `attempts` or
+fabricate a new `n`.
 
 `merge` and `status_change` are written by `sentinel.cjs merge` and
 `state-sync.cjs` themselves — do NOT log them by hand; log-event refuses.
@@ -907,7 +924,9 @@ the native `agent`/`parallel` callbacks; its `run` method pins one of the
 shipped DSL scripts and injects `__createClaudeWorkflowDispatch` as the sixth
 binding. The binding owns the
 capabilities, frozen durable recorder, and application-evidence callback; those
-resources must never be smuggled through serializable `args`:
+resources must never be smuggled through serializable `args`. Its host-owned
+artifact consumer also seals repair/drift results into a dispatch-keyed archive;
+the workflow receives only the bounded envelope and validated references:
 
 ```text
 const workflowHost = registerClaudeWorkflowHost({ agent, parallel, phase, log,
@@ -943,7 +962,7 @@ cannot disappear during a formatting-only edit:
    args: {prs: [{id, pr, branch, worktreePath, planPath, needsCiFix,
    needsReviewFix, needsBaseMerge, base, model, effort, signals,
    priorReceipt, previous_dispatch_id, dispatch_id, attemptHistory,
-   strategy, signatureState}],
+   strategy, signatureState, attempt}],
    ciFixRefPath, reviewFixRefPath, reinitScript, artifactLanguage
 ```
 
@@ -1347,7 +1366,7 @@ const workflowHost = registerClaudeWorkflowHost({
   capabilities, recorder, applicationEvidence
 })
 await workflowHost.run('drift-gate', {
-  args: { tickets: [{ id, planPath, baseRef, model, effort, signals }],
+  args: { tickets: [{ id, planPath, baseRef, worktreePath, model, effort, signals }],
           driftRefPath, recordCmd, graphDir },
 })
 ```
@@ -1367,8 +1386,8 @@ accepted. On Codex the boundary validates the generated
 native alias and explicit effort through the workflow adapter. If the host
 cannot apply the selection or return the receipt, refuse the judge and treat
 the ticket as needing drift handling; do not use a generic or inherited Agent.
-The workflow result is fail-safe: an agent that crashed is treated as
-`drifted`.
+  A crashed judge is a failed artifact dispatch and must be surfaced for
+  retry; it is never converted into an unsealed `drifted` verdict.
 
 **Always pass the base ref, on either path.** Without it the judge reasons about
 the working tree, and the working tree is whatever branch the session is on —
@@ -1394,12 +1413,14 @@ drift summary plus a route to /shipyard:decompose:
 node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs mark <T> <plan-path> "<what moved>"
 ```
 
-The judge records its own verdict when it can (`recordCmd`), exactly as the
-sentinel logs its own merges. **Verify that it landed** — `drift-record.cjs list`
-must name every ticket you just judged `drifted`, and any it does not name is
-yours to `mark` before the run ends. A judge that answered `recorded: no`, or a
-Workflow path invoked without `recordCmd`, leaves the finding in a reply that
-dies with the run.
+The judge returns the complete finding to the trusted consumer. Do not let the
+judge persist a verdict from its own reply: first seal and read the
+receipt-bound `shipyard.drift-result.v1` artifact, verify its integration-base
+identity, and only then run `drift-record.cjs mark`. **Verify that it landed** —
+`drift-record.cjs list` must name every validated ticket you judged `drifted`,
+and any it does not name is yours to `mark` before the run ends. A missing,
+stale, duplicate, escaped, or malformed artifact is a failed gate, not a
+`fresh` verdict or a blind retry.
 
 Recording is not bookkeeping — it is the whole difference between judging a
 ticket once and judging it forever. The verdict lives in `.planning/graph/drift.json`
@@ -1416,13 +1437,50 @@ rows make the non-zero ones mean anything: without them a quiet scanner and a
 clean codebase produce the same silence, and `pipeline-stats` cannot tell you
 which one you have.
 
-`reuse_candidates` (returned alongside EITHER verdict) → carry it into the executor
-for that ticket: `tickets[].reuseCandidates` on the Workflow path, the same lines in
-the prompt on the Agent fallback. It is advisory context, never a scope change and
-never a reason to pull a ticket from the run — the executor still owns
-`files_modified`. Dropping it here is the whole point of the scan being lost: the
-duplicate layer gets written, and the integrator finds it a phase later, after N
-tickets already built on it. Tickets that skipped drift-check simply carry none.
+The Workflow/direct result carries `moved_count`, `reuse_candidates_count`,
+`evidence_count`, and a validated artifact reference — never a capped candidate
+list. After the same receipt-bound `role-artifact validate/read` gate succeeds,
+resolve the complete `reuse_candidates` from `findings.json` and carry those
+fenced data lines into the executor (`tickets[].reuseCandidates` on Workflow,
+the equivalent contract section on the direct path). This is advisory context,
+never a scope change or a reason to pull a fresh ticket from the run; the
+executor still owns `files_modified`. If the reference cannot be resolved, do
+not forward candidates, record a fresh verdict, or execute the ticket.
+
+For a direct Codex result, the trusted consumer writes the bounded JSON response
+to a disposable file and seals it only after the authenticated receipt exists:
+
+```text
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+  --worktree <worktree> --role drift-check
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
+  --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
+  --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+  --result-file <trusted-result.json>
+```
+
+The Workflow host performs the same seal through its host-owned consumer. On
+either path, validate and read the returned reference before `drift-record.cjs
+mark`, reuse forwarding, or attempt/journal logging:
+
+The common resolver contract remains `tickets: [{ id, planPath, baseRef, model, effort, signals }]`;
+artifact-bound drift execution additionally requires the per-ticket
+`worktreePath` shown above before dispatch.
+
+```text
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate \
+  --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
+  --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+  --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs read \
+  --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
+  --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+  --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
+```
+
+The returned counts/reference are bounded transport only. They do not authorize
+execution or merge, and a `fresh` verdict is accepted only after this live base
+check and the normal sentinel/scope/review gates.
 
 ## Step 3 — Executors (in parallel as they become ready)
 
@@ -1781,6 +1839,16 @@ routes anything** — the failure signature's verdict does — but it stays, as
 telemetry and as the backstop in step d. A round logged `outcome=flake` is not
 charged, and the derived number reflects that by itself.
 
+When the next fixer needs the complete prior hypothesis rather than only the
+bounded journal row, request `attempt-history.cjs <T> --details --graph
+<project>/.planning/graph`. The reader authenticates each `artifact_ref` and
+`artifact_digest` against its recorded dispatch, role, worktree, base, and
+durable receipt, then labels the recovered fields historical. Historical notes
+explain an earlier HEAD; they are never a fresh passing verdict for the current
+HEAD and cannot authorize a push, merge, drift lift, or retry. Missing metadata or
+validation failure stops the repair decision instead of returning an empty
+history.
+
 ```text
 loop:
   a. state-sync.cjs → this PR's checks
@@ -1842,7 +1910,8 @@ loop:
                         priorApplied },
              dispatch_id, previous_dispatch_id },
            { ticket, worktreePath, failureLog, signature, strategy,
-             attemptHistory, planPath, artifactLanguage }
+             attemptHistory, planPath, artifactLanguage,
+             repairEvidencePath: "<worktree>/.shipyard-repair-evidence.md" }
          )
          ```
 
@@ -1864,7 +1933,11 @@ loop:
          before constructing a prompt, spawning, or recording. Absent, `unsupported`, or `unknown` evidence
          cannot authorize ci-fix. On rethink, re-read the plan and use a different
          hypothesis; provide references/ci-fix.md and the full ticket contract.
-       'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
+         The full hypothesis, notes, and command evidence are read from the
+         validated repair artifact before `log-event.cjs attempt`; a bounded
+         result or notes string alone is not evidence. Missing or stale evidence
+         is `repair blocked`, not `no-op` or blind redispatch.
+         'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
        a push happened → step d
      pending → nobody watches this PR: leave it in `waiting: ci`, EXIT this PR's
        cycle, serve the rest of the front, and pick it up next round. The guard
@@ -1891,8 +1964,9 @@ loop:
            signals: { risk, type, critical, checkpoint, signatureState,
                       priorApplied },
            dispatch_id, previous_dispatch_id },
-         { ticket, worktreePath, reviewEvidence, codeChange, attemptHistory,
-           planPath, artifactLanguage }
+           { ticket, worktreePath, reviewEvidence, codeChange, attemptHistory,
+           planPath, artifactLanguage,
+           repairEvidencePath: "<worktree>/.shipyard-repair-evidence.md" }
        )
        ```
 
@@ -2128,6 +2202,29 @@ itself. The round order:
    agent pushes at most once and does reinit itself. `escalate` →
    `escalation-record.cjs mark` (note it), which does NOT halt the other PRs of
    the round.
+   The Workflow result is bounded (`status`, `pushed`, `notes`, `hypothesis`,
+   and counts/references as applicable); complete repair evidence is resolved
+   only through the trusted role artifact before an attempt is logged.
+   For the direct Codex path, the trusted consumer first writes the compact
+   result to a disposable JSON file and seals it with the authenticated
+   `dispatch_id`:
+
+   ```text
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+     --worktree <worktree> --role <ci-fix|review-fix>
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
+     --worktree <worktree> --role <ci-fix|review-fix> --ticket <T> --pr <p.pr> --base origin/<state[T].base> \
+     --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
+     --result-file <trusted-result.json>
+   ```
+
+   The Workflow host performs the same operation. On both paths, run
+   `role-artifact.cjs validate` and then `read` with the returned
+   `artifact_ref`/`artifact_digest` before forwarding evidence or logging the
+   attempt. Wrong PR, head, base, receipt, missing evidence, digest mismatch,
+   symlink escape, or a forged application receipt is a refusal. The complete
+   hypothesis and notes stay in `findings.json`; only their bounded synopsis and
+   validated reference enter the round result.
    (A fixer MAY publish — unlike an executor — because the result of a fix is
    verified mechanically afterwards from live GitHub: a push that did not happen
    simply shows up as an unchanged red PR.)
