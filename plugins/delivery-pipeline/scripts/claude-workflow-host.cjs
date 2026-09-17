@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createClaudeWorkflowDispatch } = require('./claude-dispatch-adapter.cjs');
 const { GSD_LAUNCH_MECHANISM, isDurableRecorder } = require('./dispatch-boundary.cjs');
+const roleArtifact = require('./role-artifact.cjs');
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const WORKFLOW_PARAMETERS = ['agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch'];
@@ -48,6 +49,7 @@ function registeredHostOptions(options) {
     recorder: hostResource(options, 'recorder'),
     applicationEvidence: hostResource(options, 'applicationEvidence'),
     typedGsdCallback: hostResource(options, 'typedGsdCallback'),
+    artifactConsumer: hostResource(options, 'artifactConsumer'),
   });
 }
 
@@ -77,6 +79,7 @@ function registerClaudeWorkflowHost(options = {}) {
       for (const key of [
         'agent', 'parallel', 'phase', 'log', 'capabilities', 'recorder',
         'applicationEvidence', 'typedGsdCallback', 'host',
+        'artifactConsumer',
       ]) {
         if (Object.prototype.hasOwnProperty.call(runOptions, key)) {
           reject(`registered host owns ${key}`);
@@ -177,11 +180,15 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   const recorder = hostResource(options, 'recorder');
   const applicationEvidence = hostResource(options, 'applicationEvidence');
   const typedGsdCallback = hostResource(options, 'typedGsdCallback');
+  const configuredArtifactConsumer = hostResource(options, 'artifactConsumer');
   if (!object(capabilities)) reject('explicit host capabilities are required');
   if (!durableRecorder(recorder)) reject('a frozen durable receipt recorder is required');
   if (typeof applicationEvidence !== 'function') reject('host application evidence is required');
   if (typedGsdCallback !== undefined && typeof typedGsdCallback !== 'function') {
     reject('typedGsdCallback must be a function when provided');
+  }
+  if (configuredArtifactConsumer !== undefined && typeof configuredArtifactConsumer !== 'function') {
+    reject('artifactConsumer must be a function when provided');
   }
 
   // These are the only resources the workflow bridge can trust. A workflow's
@@ -203,10 +210,24 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
     }
     return evidence;
   };
+  // The Workflow DSL may provide only serializable artifact metadata. This
+  // closure owns the filesystem and recorder, so an agent cannot choose the
+  // expected dispatch, revision, digest, or receipt used for acceptance.
+  const artifactConsumer = configuredArtifactConsumer || function trustedArtifactConsumer(input = {}) {
+    if (!object(input.artifact)) reject('workflow artifact metadata must be an object');
+    if (!object(input.record) || !object(input.record.receipt)) reject('workflow artifact consumer requires the finalized receipt');
+    return roleArtifact.seal({
+      ...input.artifact,
+      result: input.result,
+      recorder,
+      dispatchId: input.record.receipt.dispatch_id,
+    });
+  };
   const host = Object.freeze({
     capabilities,
     recorder,
     applicationEvidence: verifiedApplicationEvidence,
+    artifactConsumer,
     ...(typedGsdCallback ? { typedGsdCallback } : {}),
   });
   return Object.freeze((dispatchOptions = {}) => {

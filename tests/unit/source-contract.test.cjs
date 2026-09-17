@@ -500,6 +500,65 @@ const sourceApplicationEvidence = ({ result }) => {
   if (!evidence) throw new Error('test Claude host returned no application evidence');
   return evidence;
 };
+const sourceArtifactConsumer = ({ artifact, result, record }) => {
+  const role = artifact && artifact.role;
+  const ticket = artifact && artifact.ticket ? artifact.ticket : record.ticket;
+  const evidenceIndex = {
+    path: role === 'drift-check'
+      ? '.shipyard-drift-evidence.md'
+      : '.shipyard-repair-evidence.md',
+    bytes: 0,
+    sha256: '0'.repeat(64),
+  };
+  const findingsIndex = {
+    path: `.shipyard-role-artifacts/${record.receipt.dispatch_id}/findings.json`,
+    bytes: 0,
+    sha256: '0'.repeat(64),
+  };
+  const envelope = role === 'drift-check'
+    ? {
+        schema: 'shipyard.drift-result.v1',
+        version: 1,
+        role,
+        ticket,
+        subject: ticket,
+        verdict: result.verdict || 'fresh',
+        moved_count: Array.isArray(result.moved) ? result.moved.length : 0,
+        reuse_candidates_count: Array.isArray(result.reuse_candidates) ? result.reuse_candidates.length : 0,
+        evidence_count: Array.isArray(result.evidence) ? result.evidence.length : 0,
+        summary: '',
+        evidence_index: evidenceIndex,
+        evidence_index_ref: evidenceIndex,
+        findings_index: findingsIndex,
+        findings_index_ref: findingsIndex,
+      }
+    : {
+        schema: 'shipyard.repair-result.v1',
+        version: 1,
+        role,
+        ticket,
+        subject: ticket,
+        pr: artifact.pr || result.pr || 1,
+        status: result.status || 'escalate',
+        pushed: typeof result.pushed === 'boolean' ? result.pushed : false,
+        summary: typeof result.notes === 'string' ? result.notes.slice(0, 500) : '',
+        notes: typeof result.notes === 'string' ? result.notes.slice(0, 500) : '',
+        hypothesis: typeof result.hypothesis === 'string' ? result.hypothesis.slice(0, 500) : 'test hypothesis',
+        evidence_index: evidenceIndex,
+        evidence_index_ref: evidenceIndex,
+        findings_index: findingsIndex,
+        findings_index_ref: findingsIndex,
+      };
+  return {
+    schema: 'shipyard.role-artifact.v1',
+    artifact_ref: `/source-contract/${ticket}/.shipyard-role-artifact.json`,
+    artifact_path: `/source-contract/${ticket}/.shipyard-role-artifact.json`,
+    artifact_digest: '1'.repeat(64),
+    envelope,
+    evidence_index: evidenceIndex,
+    findings_index: findingsIndex,
+  };
+};
 const sourceDispatchFactory = (options) => createClaudeWorkflowDispatch({
   ...options,
   capabilities: options.capabilities === undefined ? sourceDispatchCapabilities : options.capabilities,
@@ -507,6 +566,9 @@ const sourceDispatchFactory = (options) => createClaudeWorkflowDispatch({
   applicationEvidence: options.applicationEvidence === undefined
     ? sourceApplicationEvidence
     : options.applicationEvidence,
+  artifactConsumer: options.artifactConsumer === undefined
+    ? sourceArtifactConsumer
+    : options.artifactConsumer,
 });
 process.on('exit', () => {
   try { fs.rmSync(sourceDispatchStore, { recursive: true, force: true }); } catch (_) { /* best effort */ }
@@ -1904,7 +1966,7 @@ test('the routed-launch source sweep rejects native launches in shipped Markdown
 
 const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
   'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '6fd1478f8b6a26098e4b86485541cf20be371675aa2cf424b8dd7902433540bc',
-  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '712a83e2a496b5ac1e2e3f139ff69173837230e19e4d945b2e3808092d9dc72e',
+  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '154f9a094fdb94e524a2b47f766587ee51dbf4abf0f18cdf675b088972441fdf',
 });
 
 test('Claude palette and provider adapter sources match their checked-in baselines and remain native', () => {
