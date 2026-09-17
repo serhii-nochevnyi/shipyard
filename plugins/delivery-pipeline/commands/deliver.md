@@ -791,6 +791,64 @@ advisor coverage, failed/interrupted work and attribution gaps. See
 rollback and seven-day defect-window gates. A fixture report cannot promote a
 treatment or claim quota savings.
 
+## Durable session handoff and cold-start recovery
+
+The delivery session may be stopped and resumed, but a checkpoint is evidence,
+not launch authority. The handoff store is derived from the real path returned by
+`git rev-parse --git-common-dir` and lives at
+`<git-common-dir>/shipyard/ownership`, so two worktrees of one repository share
+one fence. A different repository has a different store. Inspect it before
+starting work:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs inspect \
+  --cwd <project> --json
+```
+
+The current owner first writes a complete checkpoint at a safe boundary. The
+checkpoint names the repository, run/session, epoch, phase/ticket scope,
+plan/policy digests, head/base, worktrees, snapshot, pending waits/actions,
+dispatch reservations, artifact references, treatment, budgets and exact next
+action. It contains references and digests, never prompts, transcripts,
+credentials or raw artifact bodies. A dirty owned worktree, active child,
+changed head/base, missing reference, unreadable state or unresolved external
+launch blocks the transfer; an expired PID or dispatch TTL is not proof that a
+child stopped.
+
+The manual sequence is explicit and compare-and-swap fenced:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs checkpoint \
+  --cwd <project> --scope-id <scope> --token <owner-token> \
+  --checkpoint-file <checkpoint.json>
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs resume \
+  --cwd <project> --scope-id <scope> --run-id <successor-run> \
+  --session-id <successor-session>
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs acknowledge \
+  --cwd <project> --scope-id <scope> --candidate-id <candidate> \
+  --token <successor-token> --validation-file <live-validation.json>
+```
+
+`acknowledge` requires a fresh live validation of the PR/head/base, reviews,
+checks, owned worktrees and children. Competing successors may prepare, but the
+first valid acknowledgement atomically increments the epoch and becomes the
+only owner; the predecessor is fenced and cannot return through rollback.
+`cancel-before-ack` removes a preparing successor without changing the current
+owner. Automatic context transfer is unavailable until a runtime-specific
+fresh-context launch, child enumeration and application-evidence continuity
+are proven; do not infer that capability from CLI help or a synthetic fixture.
+
+The host-held owner capability is passed through the Workflow host and Codex
+adapter closures into the same ADR-014 `resolve → validate → reserve → launch →
+application evidence → record` boundary. It is never placed in serializable
+workflow arguments, launch context, prompts or child arguments. The boundary
+also checks the canonical ownership store when a legacy-shaped caller omits the
+capability, so an existing owner cannot be bypassed by dropping the new context.
+reserves an in-flight launch under the owner epoch immediately before adapter
+invocation. A recorded receipt clears that reservation; a launch followed by a
+recording failure remains ambiguous and requires reconciliation before any
+takeover or retry.
+
 A missed event is lost forever (GitHub won't recover it), so the log call goes IN
 THE SAME step where the fact occurred, not "at the end."
 

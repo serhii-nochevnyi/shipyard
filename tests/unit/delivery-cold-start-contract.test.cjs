@@ -47,4 +47,17 @@ test('the delivery cold-start branch has no import or tracker-prose derivation s
   assert.doesNotMatch(section, /direct execution/i);
 });
 
+test('cold-start recovery uses the durable handoff fence and keeps authority host-held', () => {
+  const source = fs.readFileSync(DELIVER, 'utf8');
+  assert.match(source, /session-handoff\.cjs inspect/);
+  assert.match(source, /session-handoff\.cjs checkpoint/);
+  assert.match(source, /session-handoff\.cjs resume/);
+  assert.match(source, /session-handoff\.cjs acknowledge/);
+  assert.match(source, /cancel-before-ack/);
+  assert.match(source, /git-common-dir/);
+  assert.match(source, /unresolved external[\s\S]+blocks the transfer/);
+  assert.match(source, /never placed in serializable[\s\S]+arguments/);
+  assert.match(source, /Automatic context transfer is unavailable/);
+});
+
 done();
