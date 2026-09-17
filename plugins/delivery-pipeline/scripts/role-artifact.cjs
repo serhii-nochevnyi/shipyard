@@ -753,6 +753,39 @@ function producerEvidenceName(role) {
   fail('INVALID_ARTIFACT', `no producer evidence path is registered for ${role}`);
 }
 
+// Clear the fixed producer scratch file before a new role dispatch. Without
+// this rotation, a fixer that dies before writing could seal an earlier
+// attempt's evidence under the new authenticated receipt.
+function prepareRoleArtifact(value, options) {
+  const input = normalizeCall(value, options);
+  const fsApi = ioFor(input).fs;
+  const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
+  const role = input.role;
+  if (!REPAIR_ROLES.has(role) && role !== 'drift-check') {
+    fail('INVALID_ARTIFACT', `role artifact preparation does not support ${role}`);
+  }
+  const file = fixedPath(worktree, producerEvidenceName(role), 'producer evidence');
+  let stat;
+  try {
+    stat = fsApi.lstatSync(file);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return Object.freeze({ path: file, relative: path.relative(worktree, file), cleared: false });
+    }
+    fail('ARTIFACT_PATH_ESCAPE', `producer evidence could not be inspected: ${error.message}`, { path: file });
+  }
+  if (stat.isSymbolicLink()) fail('ARTIFACT_PATH_ESCAPE', 'producer evidence may not be a symlink', { path: file });
+  if (!stat.isFile()) fail('INVALID_ARTIFACT', 'producer evidence must be a regular file', { path: file });
+  try {
+    fsApi.unlinkSync(file);
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') {
+      fail('ARTIFACT_WRITE', `producer evidence could not be rotated: ${error.message}`, { path: file });
+    }
+  }
+  return Object.freeze({ path: file, relative: path.relative(worktree, file), cleared: true });
+}
+
 function sha(value, label) {
   if (typeof value !== 'string' || !/^[a-f0-9]{40}$/i.test(value)) {
     fail('INVALID_ARTIFACT', `${label} must be a full 40-character Git object id`);
@@ -939,14 +972,12 @@ function driftResultData(result, metadata) {
   }
   const candidates = arrayOfText(result.reuse_candidates, 'reuse_candidates');
   const evidence = arrayOfText(result.evidence, 'evidence');
-  if (result.recorded !== undefined) roleText(result.recorded, 'drift recorded status');
   return {
     verdict: result.verdict,
     moved_count: result.moved.length,
     finding_ids: findingIds,
     reuse_candidates_count: candidates.length,
     evidence_count: evidence.length,
-    ...(result.recorded === undefined ? {} : { recorded: result.recorded }),
     summary: roleText(
       result.summary === undefined
         ? `${result.verdict}: ${result.moved.length} moved finding(s), ${candidates.length} reuse candidate(s)`
@@ -963,6 +994,7 @@ function sanitizedRoleResult(result, trusted) {
     'receipt', 'application_receipt', 'applicationReceipt',
     'applicationEvidence', 'application_evidence',
   ]) delete safe[field];
+  delete safe.recorded;
   return safe;
 }
 
@@ -999,7 +1031,6 @@ function genericEnvelope(role, metadata, data, files) {
     reuse_candidates_count: data.reuse_candidates_count,
     evidence_count: data.evidence_count,
     summary: capSummary(data.summary),
-    ...(data.recorded === undefined ? {} : { recorded: data.recorded }),
     integration_base: {
       ref: metadata.identity.base,
       commit: metadata.identity.base_commit,
@@ -1252,7 +1283,7 @@ function validateRoleManifest(value, options) {
     if (recorded.tree !== recordedHeadTree) {
       fail('STALE_ARTIFACT', 'historical artifact producer head tree no longer matches the recorded revision');
     }
-  } else if (role !== 'drift-check') {
+  } else {
     manifestValue(manifest, 'head', identity.head);
     manifestValue(manifest, 'head_tree', identity.head_tree);
   }
@@ -1356,8 +1387,7 @@ function validateRoleManifest(value, options) {
       || !object(manifest.envelope.integration_base)
       || manifest.envelope.integration_base.ref !== identity.base
       || manifest.envelope.integration_base.commit !== recordedBase.commit
-      || manifest.envelope.integration_base.tree !== recordedBase.tree
-      || manifest.envelope.recorded !== data.recorded) {
+      || manifest.envelope.integration_base.tree !== recordedBase.tree) {
     fail('ARTIFACT_DIGEST_MISMATCH', 'drift envelope does not match its complete findings or base');
   }
   if (input.artifactDigest !== undefined && input.artifact_digest !== undefined
@@ -1366,7 +1396,10 @@ function validateRoleManifest(value, options) {
   }
   const expectedDigest = input.artifactDigest || input.artifact_digest;
   const actualDigest = digest(manifestBytes);
-  if (expectedDigest !== undefined && expectedDigest !== actualDigest) {
+  if (typeof expectedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(expectedDigest)) {
+    fail('INVALID_ARTIFACT', 'role artifact validation requires the expected 64-character manifest digest');
+  }
+  if (expectedDigest !== actualDigest) {
     fail('ARTIFACT_DIGEST_MISMATCH', 'role artifact manifest digest does not match the validated bytes', {
       expected: expectedDigest,
       actual: actualDigest,
@@ -1531,7 +1564,15 @@ function cliValue(value) {
 function cli(argv) {
   const { command, values } = parseArgs(argv);
   if (command === 'help' || values.help) {
-    process.stdout.write('usage: role-artifact.cjs <seal|validate|read> --worktree PATH --base REF --boundary-store PATH --dispatch-id ID [options]\n');
+    process.stdout.write('usage: role-artifact.cjs <prepare|seal|validate|read> --worktree PATH [--role ROLE] [--base REF --boundary-store PATH --dispatch-id ID] [options]\n');
+    return 0;
+  }
+  if (command === 'prepare') {
+    const prepared = prepareRoleArtifact({
+      worktreePath: required(values, 'worktree'),
+      role: required(values, 'role'),
+    });
+    process.stdout.write(`${JSON.stringify(cliValue(prepared))}\n`);
     return 0;
   }
   const common = {
@@ -1619,6 +1660,7 @@ module.exports = Object.freeze({
   FINDINGS_NAME,
   REPAIR_ENVELOPE_SCHEMA,
   DRIFT_ENVELOPE_SCHEMA,
+  prepareRoleArtifact,
   sealRole,
   validateRole,
   readRole: readRole,

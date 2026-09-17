@@ -72,9 +72,9 @@ content hash, so it lifts by itself when the ticket is re-planned.
 ## Output (final message, structured)
 - `verdict: fresh | drifted`
 - `evidence: ["exact command — relevant path — observed output or exit status"]` for every checkable claim; an assumption or unknown must name the next command instead
-- `recorded: yes | no (reason)` — for a `drifted` verdict, whether the mark
-  above actually landed. "no" is a hand-off, not a footnote: the orchestrator
-  must then record it before the run ends, or the finding evaporates.
+- The judge does not report whether `drift-record.cjs` ran. The trusted
+  consumer validates the artifact first, then the orchestrator records the
+  verdict and verifies that it landed.
 - for `drifted`: an itemized list of what moved (missing file, changed
   signature, pre-implemented scope), enough for a targeted re-plan of THIS
   ticket only

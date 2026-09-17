@@ -50,6 +50,7 @@ function registeredHostOptions(options) {
     applicationEvidence: hostResource(options, 'applicationEvidence'),
     typedGsdCallback: hostResource(options, 'typedGsdCallback'),
     artifactConsumer: hostResource(options, 'artifactConsumer'),
+    artifactPreparer: hostResource(options, 'artifactPreparer'),
   });
 }
 
@@ -79,7 +80,7 @@ function registerClaudeWorkflowHost(options = {}) {
       for (const key of [
         'agent', 'parallel', 'phase', 'log', 'capabilities', 'recorder',
         'applicationEvidence', 'typedGsdCallback', 'host',
-        'artifactConsumer',
+        'artifactConsumer', 'artifactPreparer',
       ]) {
         if (Object.prototype.hasOwnProperty.call(runOptions, key)) {
           reject(`registered host owns ${key}`);
@@ -181,6 +182,7 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   const applicationEvidence = hostResource(options, 'applicationEvidence');
   const typedGsdCallback = hostResource(options, 'typedGsdCallback');
   const configuredArtifactConsumer = hostResource(options, 'artifactConsumer');
+  const configuredArtifactPreparer = hostResource(options, 'artifactPreparer');
   if (!object(capabilities)) reject('explicit host capabilities are required');
   if (!durableRecorder(recorder)) reject('a frozen durable receipt recorder is required');
   if (typeof applicationEvidence !== 'function') reject('host application evidence is required');
@@ -189,6 +191,9 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   }
   if (configuredArtifactConsumer !== undefined && typeof configuredArtifactConsumer !== 'function') {
     reject('artifactConsumer must be a function when provided');
+  }
+  if (configuredArtifactPreparer !== undefined && typeof configuredArtifactPreparer !== 'function') {
+    reject('artifactPreparer must be a function when provided');
   }
 
   // These are the only resources the workflow bridge can trust. A workflow's
@@ -223,11 +228,19 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
       dispatchId: input.record.receipt.dispatch_id,
     });
   };
+  const artifactPreparer = configuredArtifactPreparer || function trustedArtifactPreparer(input = {}) {
+    if (!object(input.artifact)) reject('workflow artifact preparation requires artifact metadata');
+    if (['ci-fix', 'review-fix', 'drift-check'].includes(input.artifact.role)) {
+      return roleArtifact.prepareRoleArtifact(input.artifact);
+    }
+    return null;
+  };
   const host = Object.freeze({
     capabilities,
     recorder,
     applicationEvidence: verifiedApplicationEvidence,
     artifactConsumer,
+    artifactPreparer,
     ...(typedGsdCallback ? { typedGsdCallback } : {}),
   });
   return Object.freeze((dispatchOptions = {}) => {

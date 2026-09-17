@@ -1583,12 +1583,16 @@ const fixArtifactConsumer = ({ artifact, result, record }) => {
   const evidenceIndex = {
     path: '.shipyard-repair-evidence.md',
     bytes: 0,
+    content_bytes: 0,
     sha256: '0'.repeat(64),
+    digest: '0'.repeat(64),
   };
   const findingsIndex = {
     path: `.shipyard-role-artifacts/${record.receipt.dispatch_id}/findings.json`,
     bytes: 0,
+    content_bytes: 0,
     sha256: '0'.repeat(64),
+    digest: '0'.repeat(64),
   };
   const envelope = {
     schema: 'shipyard.repair-result.v1',

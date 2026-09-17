@@ -222,16 +222,18 @@ const detailed = details ? shown.map((event) => {
   const artifact = resolveArtifact(event);
   if (!artifact) return event;
   const findings = artifact.findings && typeof artifact.findings === 'object' ? artifact.findings : {};
+  const envelope = artifact.envelope && typeof artifact.envelope === 'object' ? artifact.envelope : {};
+  const count = (name) => envelope[name] === undefined ? findings[name] : envelope[name];
   return {
     ...event,
     artifact_historical: true,
     ...(findings.hypothesis === undefined ? {} : { artifact_hypothesis: findings.hypothesis }),
     ...(findings.notes === undefined ? {} : { artifact_notes: findings.notes }),
     ...(findings.verdict === undefined ? {} : { artifact_verdict: findings.verdict }),
-    ...(findings.moved_count === undefined ? {} : { artifact_moved_count: findings.moved_count }),
-    ...(findings.reuse_candidates_count === undefined
-      ? {} : { artifact_reuse_candidates_count: findings.reuse_candidates_count }),
-    ...(findings.evidence_count === undefined ? {} : { artifact_evidence_count: findings.evidence_count }),
+    ...(count('moved_count') === undefined ? {} : { artifact_moved_count: count('moved_count') }),
+    ...(count('reuse_candidates_count') === undefined
+      ? {} : { artifact_reuse_candidates_count: count('reuse_candidates_count') }),
+    ...(count('evidence_count') === undefined ? {} : { artifact_evidence_count: count('evidence_count') }),
   };
 }) : shown;
 

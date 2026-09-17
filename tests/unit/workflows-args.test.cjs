@@ -78,7 +78,9 @@ const workflowArtifactConsumer = ({ artifact, result, record }) => {
   const findingsIndex = {
     path: `.shipyard-role-artifacts/${record.receipt.dispatch_id}/findings.json`,
     bytes: 0,
+    content_bytes: 0,
     sha256: '0'.repeat(64),
+    digest: '0'.repeat(64),
   };
   const envelope = ['ci-fix', 'review-fix'].includes(role)
     ? {
@@ -90,8 +92,8 @@ const workflowArtifactConsumer = ({ artifact, result, record }) => {
         pr: artifact.pr || result.pr || 1,
         status: result.status || 'escalate',
         pushed: typeof result.pushed === 'boolean' ? result.pushed : false,
-        summary: typeof result.notes === 'string' ? result.notes.slice(0, 500) : '',
-        notes: typeof result.notes === 'string' ? result.notes.slice(0, 500) : '',
+        summary: typeof result.notes === 'string' && result.notes.trim() ? result.notes.slice(0, 500) : 'test repair summary',
+        notes: typeof result.notes === 'string' && result.notes.trim() ? result.notes.slice(0, 500) : 'test repair notes',
         hypothesis: typeof result.hypothesis === 'string' ? result.hypothesis.slice(0, 500) : 'test hypothesis',
         evidence_index: evidenceIndex,
         evidence_index_ref: evidenceIndex,
@@ -244,7 +246,7 @@ const driftTickets = (tickets) => tickets.map((ticket) => ({
 // without `driftRefPath`, so its cases carry one.
 const SCRIPTS = [
   { name: 'executors', base: {} },
-  { name: 'drift-gate', base: { driftRefPath: '/plugin/references/drift-check.md' } },
+  { name: 'drift-gate', base: { driftRefPath: '/plugin/references/drift-check.md', baseRef: 'origin/main' } },
 ];
 
 for (const { name, base } of SCRIPTS) {
@@ -353,16 +355,17 @@ test('a null agent result fails closed because it cannot produce a receipt', asy
   assert.strictEqual(error.code, 'MISSING_RECEIPT');
 });
 
-suite('drift-gate.mjs — a dead or throwing judge is still a verdict');
+suite('drift-gate.mjs — a dead or throwing judge fails the artifact boundary');
 
-test('a throwing judge is a drifted verdict, not a gap', async () => {
-  const { value } = await run(
+test('a throwing judge is a failed dispatch, not an unsealed drift verdict', async () => {
+  const error = await rejects(
     'drift-gate',
-    { tickets: driftTickets(TICKETS), driftRefPath: '/x/drift-check.md' },
+    { tickets: driftTickets(TICKETS), driftRefPath: '/x/drift-check.md', baseRef: 'origin/main' },
     { agent: async () => { throw new Error('judge exploded'); } }
   );
-  assert.strictEqual(value.length, 3);
-  assert.deepStrictEqual([...new Set(value.map((v) => v.verdict))], ['drifted']);
+  assert.equal(error.name, 'DispatchBoundaryError');
+  assert.equal(error.code, 'DISPATCH_FAILED');
+  assert.match(error.message, /judge exploded/);
 });
 
 // T-26-14 — executors.mjs returns a REFERENCE to the two documents it makes
@@ -492,6 +495,7 @@ suite('workflows/*.mjs — explicit resolver model and effort boundary');
 
 const PR = {
   id: 'T-99-01', pr: 7, branch: 'ticket/T-99-01', worktreePath: '/w/T-99-01',
+  base: 'epic/99',
   planPath: '/p/99-01-PLAN.md', needsCiFix: true, needsReviewFix: true,
   model: 'opus', effort: 'medium',
 };
@@ -514,7 +518,7 @@ const DISPATCH = [
     name: 'drift-gate',
     args: (over = {}) => ({
       tickets: [{ ...TICKETS[0], model: 'opus', effort: 'max', ...over }],
-      driftRefPath: '/x/drift-check.md',
+      driftRefPath: '/x/drift-check.md', baseRef: 'origin/main',
     }),
     resolved: { model: 'opus', effort: 'max' },
   },
@@ -629,6 +633,7 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
       signals: combinedSignals,
     }],
     driftRefPath: '/x/drift-check.md',
+    baseRef: 'origin/main',
   });
   assert.strictEqual(fixed.calls.length, 1);
   assert.deepStrictEqual(
@@ -821,6 +826,7 @@ test('unsupported or contradictory workflow selections fail closed before agent(
   const drift = await rejects('drift-gate', {
     tickets: [{ ...TICKETS[0], model: 'fable', effort: 'high' }],
     driftRefPath: '/x/drift-check.md',
+    baseRef: 'origin/main',
   });
   assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(drift.name));
 
@@ -861,6 +867,7 @@ test('drift-gate propagates host receipt failures instead of inventing drift', a
   const error = await rejects('drift-gate', {
     tickets: driftTickets([TICKETS[0]]),
     driftRefPath: '/x/drift-check.md',
+    baseRef: 'origin/main',
   }, { dispatchFactory });
   assert.strictEqual(error.name, 'DispatchBoundaryError');
   assert.strictEqual(error.code, 'MISSING_RECEIPT');
@@ -1101,7 +1108,7 @@ test('Claude rejects contradictory, inherited, and stale launch selections', () 
 suite('drift-gate.mjs — one dispatch carries one base (T-27-06)');
 
 const driftArgs = (tickets, over = {}) => ({
-  tickets: driftTickets(tickets), driftRefPath: '/x/drift-check.md', ...over,
+  tickets: driftTickets(tickets), driftRefPath: '/x/drift-check.md', baseRef: 'origin/main', ...over,
 });
 const promptFor = (calls, id) => {
   const c = calls.find((x) => x.opts && x.opts.label === `drift:${id}`);
@@ -1134,11 +1141,13 @@ test('the round-level baseRef stays the FALLBACK, so no existing caller breaks',
   assert.ok(!b.includes('origin/main'), `the fallback must not ride along beside it: ${b}`);
 });
 
-test('no base anywhere is still legal, and says nothing about a ref it does not have', async () => {
-  const { calls } = await run('drift-gate', driftArgs([TICKETS[0]]));
-  const p = promptFor(calls, 'T-99-01');
-  assert.ok(/Has landed/.test(p), p);
-  assert.ok(!/\(\)/.test(p), `an absent base must not print an empty parenthesis: ${p}`);
+test('no base anywhere fails before a judge can produce an unbound artifact', async () => {
+  const error = await rejects('drift-gate', {
+    tickets: [{ ...TICKETS[0], baseRef: undefined, prBase: undefined }],
+    driftRefPath: '/x/drift-check.md',
+  });
+  assert.match(error.message, /baseRef is required/);
+  assert.equal(error.name, 'Error');
 });
 
 done();

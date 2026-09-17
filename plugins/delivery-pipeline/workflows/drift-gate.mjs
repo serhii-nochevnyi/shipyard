@@ -29,12 +29,10 @@ export const meta = {
 //                        // `worktreePath`/`prBase` for the executors, and
 //                        // `drift-needed.cjs` already resolves the same value.
 //     driftRefPath: "<abs path to references/drift-check.md>",
-//     baseRef: "origin/<git.base_branch>",   // the round-level FALLBACK, for a
-//                        // ticket that carries none — kept so no existing caller
-//                        // breaks. Strongly advised: the ref that defines "has
-//                        // landed". With neither, the judge falls back to
-//                        // reasoning about the working tree, which may predate
-//                        // the work entirely.
+//     baseRef: "origin/<git.base_branch>",   // the round-level FALLBACK for a
+//                        // ticket that carries none. A ticket with neither
+//                        // value is refused before launch because an unbound
+//                        // artifact cannot support a verdict.
 //     recordCmd: "node <plugin-root>/scripts/drift-record.cjs",  // optional;
 //                        // passed as delivery metadata; the trusted consumer
 //                        // records only after artifact validation
@@ -42,7 +40,7 @@ export const meta = {
 //   }
 // returns: [ { id, verdict: 'fresh'|'drifted', moved_count, reuse_candidates_count,
 //              evidence_count, artifact_ref, artifact_digest, evidence_index,
-//              findings_index, recorded?: string, receipt } ]
+//              findings_index, receipt } ]
 //
 // `reuse_candidates` is ADVISORY and orthogonal to the verdict: a `fresh`
 // ticket carries it into the executor prompt so the implementation builds on
@@ -85,10 +83,6 @@ const VERDICT = {
       type: 'array',
       items: { type: 'string' },
       description: 'For every checkable claim: the exact command followed by the relevant path, output, or exit status. Empty only when the judge made no checkable claim.',
-    },
-    recorded: {
-      type: 'string',
-      description: 'For a drifted verdict, whether drift-record.cjs persisted it: "yes" or "no (reason)".',
     },
   },
 }
@@ -152,21 +146,23 @@ function loadClaudeWorkflowDispatch() {
 
 const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
 
-const isBoundaryFailure = (error) => !!error
-  && (error.name === 'DispatchBoundaryError' || error.name === 'DispatchPolicyError')
+const requireArtifactMetadata = (ticket, baseRef) => {
+  if (!ticket || typeof ticket !== 'object' || Array.isArray(ticket)) {
+    throw new Error('drift-gate: each ticket must be an object before artifact dispatch')
+  }
+  for (const [name, value] of [
+    ['id', ticket.id],
+    ['planPath', ticket.planPath],
+    ['worktreePath', ticket.worktreePath],
+    ['baseRef', baseRef],
+  ]) {
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new Error(`drift-gate: ticket ${name} is required before artifact dispatch`)
+    }
+  }
+}
 
 phase('Drift')
-
-// fail-safe: a dead (null) OR throwing agent is treated as `drifted` so the
-// orchestrator never runs an unchecked ticket on a silent judge failure.
-const driftFallback = (id, why) => ({
-  id,
-  verdict: 'drifted',
-  moved: [{ id: 'dispatch-failure', detail: why }],
-  reuse_candidates: [],
-  evidence: [],
-  recorded: `no (${why})`,
-})
 
 const results = await parallel(
   tickets.map((t) => () => {
@@ -174,6 +170,7 @@ const results = await parallel(
     // A judge handed one base for a mixed-base cascade measures "has landed"
     // against a tree its ticket is not cut from.
     const baseRef = (t && t.baseRef) || argv.baseRef
+    requireArtifactMetadata(t, baseRef)
     const prompt = [
         `You are a drift-check judge. First read your full instructions and output contract from this file: ${refPath}.`,
         `Then read the ticket contract (plan file): ${t.planPath} — including every path it lists under Context reads and files_modified.`,
@@ -221,26 +218,22 @@ const results = await parallel(
           schema: VERDICT,
         },
       })
-        .then(({ result: v, receipt, artifact }) => (v
-          ? {
-              ...withoutAgentReceipt(v),
-              id: t.id,
-              ...(artifact && artifact.artifact_ref ? {
-                artifact_ref: artifact.artifact_ref,
-                artifact_digest: artifact.artifact_digest,
-                evidence_index: artifact.evidence_index,
-                ...(artifact.findings_index ? { findings_index: artifact.findings_index } : {}),
-              } : {}),
-              ...(receipt ? { receipt } : {}),
-            }
-          : { ...driftFallback(t.id, 'judge returned no verdict — treat as drifted'), ...(receipt ? { receipt } : {}) }))
+        .then(({ result: v, receipt, artifact }) => ({
+          ...withoutAgentReceipt(v),
+          id: t.id,
+          ...(artifact && artifact.artifact_ref ? {
+            artifact_ref: artifact.artifact_ref,
+            artifact_digest: artifact.artifact_digest,
+            evidence_index: artifact.evidence_index,
+            ...(artifact.findings_index ? { findings_index: artifact.findings_index } : {}),
+          } : {}),
+          ...(receipt ? { receipt } : {}),
+        }))
         .catch((e) => {
-          if (isBoundaryFailure(e)) throw e
-          return driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`)
+          throw e
         })
     } catch (e) {
-      if (isBoundaryFailure(e)) throw e
-      return Promise.resolve(driftFallback(t.id, `judge errored (${e && e.message ? e.message : e}) — treat as drifted`))
+      throw e
     }
   })
 )

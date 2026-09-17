@@ -95,6 +95,8 @@ function roleWorkflowFixture({ role, ticket, pr, result, evidenceText }) {
         ? path.join(root, '.shipyard-drift-evidence.md')
         : path.join(root, '.shipyard-repair-evidence.md');
       assert.ok(prompt.includes(evidencePath), `${role} prompt must name its complete evidence path`);
+      assert.equal(fs.existsSync(evidencePath), false,
+        `${role} dispatch must rotate the previous fixed producer evidence before launch`);
       fs.writeFileSync(evidencePath, evidenceText);
       const value = JSON.parse(JSON.stringify(result));
       evidence.set(value, {
@@ -155,6 +157,27 @@ function roleArgs(fixture, extra = {}) {
 }
 
 suite('repair artifacts — bounded Workflow evidence');
+
+test('the direct prepare command rotates fixed producer evidence before launch', () => {
+  const fixture = repairFixture();
+  const evidencePath = path.join(fixture.root, roleArtifact.REPAIR_EVIDENCE_NAME);
+  fs.writeFileSync(evidencePath, 'evidence from an earlier attempt\n');
+  try {
+    const prepared = spawnSync(process.execPath, [
+      ROLE_ARTIFACT,
+      'prepare',
+      '--worktree', fixture.root,
+      '--role', 'ci-fix',
+    ], { encoding: 'utf8' });
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const value = JSON.parse(prepared.stdout);
+    assert.equal(value.cleared, true);
+    assert.equal(value.relative, roleArtifact.REPAIR_EVIDENCE_NAME);
+    assert.equal(fs.existsSync(evidencePath), false);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
 
 test('a real fix round returns a bounded, validated artifact reference', async () => {
   const fixture = repairFixture();
@@ -429,6 +452,10 @@ test('drift findings and reuse candidates overflow the envelope without loss', a
     assert.equal(validated.findings.reuse_candidates[399], reuseCandidates[399]);
     assert.ok(!fs.existsSync(path.join(fixture.root, 'do-not-execute')),
       'candidate text is fenced data, not a shell instruction');
+    assert.equal('recorded' in validated.findings, false,
+      'agent-owned recorded status must not become accepted artifact data');
+    assert.equal('recorded' in validated.envelope, false,
+      'agent-owned recorded status must not enter the bounded envelope');
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -491,6 +518,44 @@ test('drift evidence bound to an old integration base cannot be reused as fresh'
     git(fixture.root, ['add', 'base-moved.txt']);
     git(fixture.root, ['commit', '--quiet', '-m', 'advance integration base']);
     git(fixture.root, ['switch', '--quiet', `ticket/${ticket}`]);
+    assert.throws(
+      () => roleArtifact.validate({
+        worktreePath: fixture.root,
+        role: 'drift-check',
+        ticket,
+        base: 'main',
+        recorder: fixture.recorder,
+        dispatchId: bounded.receipt.dispatch_id,
+        artifactPath: bounded.artifact_ref,
+        artifactDigest: bounded.artifact_digest,
+      }),
+      (error) => error.code === 'STALE_ARTIFACT',
+    );
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('drift evidence bound to an old producer head cannot be reused as current', async () => {
+  const ticket = 'T-33-03-stale-drift-head';
+  const fixture = roleWorkflowFixture({
+    role: 'drift-check',
+    ticket,
+    result: {
+      id: ticket,
+      verdict: 'fresh',
+      moved: [],
+      reuse_candidates: [],
+      evidence: ['git status --short — exit 0'],
+      summary: 'producer head was checked',
+    },
+    evidenceText: '# Drift evidence\nProducer head was checked before it moved.\n',
+  });
+  try {
+    const [bounded] = await fixture.host.run('drift-gate', { args: roleArgs(fixture) });
+    fs.writeFileSync(path.join(fixture.root, 'head-moved.txt'), 'new producer head\n');
+    git(fixture.root, ['add', 'head-moved.txt']);
+    git(fixture.root, ['commit', '--quiet', '-m', 'advance producer head']);
     assert.throws(
       () => roleArtifact.validate({
         worktreePath: fixture.root,
@@ -604,6 +669,11 @@ test('wrong PR, receipt, and escaped artifact references fail closed', async () 
     };
     assert.throws(() => roleArtifact.validate({ ...common, pr: 304 }),
       (error) => error.code === 'ARTIFACT_IDENTITY_MISMATCH');
+    assert.throws(() => roleArtifact.validate({
+      ...common,
+      artifactDigest: undefined,
+      artifact_digest: undefined,
+    }), (error) => error.code === 'INVALID_ARTIFACT');
     assert.throws(() => roleArtifact.validate({ ...common, dispatchId: 'not-the-receipt' }),
       (error) => ['RECORD_FAILED', 'MISSING_RECEIPT'].includes(error.code));
 

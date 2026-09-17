@@ -176,8 +176,27 @@ const baseMergeCommand = (p) =>
   `   node ${baseMergeScript} ${p.id} --worktree ${p.worktreePath} `
   + `--base ${p.base || '<the PR\'s base branch — `gh pr view ' + p.pr + ' --json baseRefName`>'}`
 
-const isBoundaryFailure = (error) => !!error
-  && (error.name === 'DispatchBoundaryError' || error.name === 'DispatchPolicyError')
+const requireRepairMetadata = (pr) => {
+  if (!pr || typeof pr !== 'object' || Array.isArray(pr)) {
+    throw new Error('fix-round: each PR must be an object before artifact dispatch')
+  }
+  for (const [name, value] of [
+    ['id', pr.id],
+    ['pr', pr.pr],
+    ['branch', pr.branch],
+    ['planPath', pr.planPath],
+    ['worktreePath', pr.worktreePath],
+    ['base', pr.base || pr.prBase],
+  ]) {
+    if ((name === 'pr' && (!Number.isInteger(value) || value < 1))
+        || (name !== 'pr' && (typeof value !== 'string' || value.trim() === ''))) {
+      throw new Error(`fix-round: PR ${name} is required before artifact dispatch`)
+    }
+  }
+  if (!pr.needsCiFix && !pr.needsReviewFix) {
+    throw new Error(`fix-round: PR ${pr.id} has no repair role before artifact dispatch`)
+  }
+}
 
 // The prompt, as a function, so it can be asserted on without launching
 // anything: this file cannot be imported (top-level `return`), so a test
@@ -247,14 +266,7 @@ phase('Fix')
 
 return await parallel(
   prs.map((p) => () => {
-    // Locally constructed results must satisfy the same shape the consumers read,
-    // `hypothesis` included — and an invented one would be worse than none: it
-    // would enter the record as something that was tried and ruled out. Say what
-    // is actually known instead.
-    const fixFallback = (why, hypothesis, receipt) => ({
-      id: p.id, pr: p.pr, pushed: false, status: 'escalate', notes: why, hypothesis,
-      ...(receipt ? { receipt } : {}),
-    })
+    requireRepairMetadata(p)
     try {
       const role = p.needsCiFix ? 'ci-fix' : p.needsReviewFix ? 'review-fix' : null
       if (!role) throw new Error('fixer dispatch requires needsCiFix or needsReviewFix')
@@ -293,33 +305,23 @@ return await parallel(
           schema: OUT,
         },
       })
-        .then(({ result: r, receipt, artifact }) => (r
-          ? {
-              ...withoutAgentReceipt(r),
-              id: p.id,
-              pr: p.pr,
-              ...(artifact && artifact.artifact_ref ? {
-                artifact_ref: artifact.artifact_ref,
-                artifact_digest: artifact.artifact_digest,
-                evidence_index: artifact.evidence_index,
-                ...(artifact.findings_index ? { findings_index: artifact.findings_index } : {}),
-              } : {}),
-              ...(receipt ? { receipt } : {}),
-            }
-          : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one', receipt)))
+        .then(({ result: r, receipt, artifact }) => ({
+          ...withoutAgentReceipt(r),
+          id: p.id,
+          pr: p.pr,
+          ...(artifact && artifact.artifact_ref ? {
+            artifact_ref: artifact.artifact_ref,
+            artifact_digest: artifact.artifact_digest,
+            evidence_index: artifact.evidence_index,
+            ...(artifact.findings_index ? { findings_index: artifact.findings_index } : {}),
+          } : {}),
+          ...(receipt ? { receipt } : {}),
+        }))
         .catch((e) => {
-          if (isBoundaryFailure(e)) throw e
-          return fixFallback(
-            `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
-            'unknown — the fixer errored before reporting one'
-          )
+          throw e
         })
     } catch (e) {
-      if (isBoundaryFailure(e)) throw e
-      return Promise.resolve(fixFallback(
-        `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
-        'unknown — the fixer errored before reporting one'
-      ))
+      throw e
     }
   })
 )

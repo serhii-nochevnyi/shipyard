@@ -514,6 +514,9 @@ function createClaudeWorkflowDispatch(options = {}) {
   const artifactConsumer = suppliedHost
     ? suppliedHost.artifactConsumer
     : options.artifactConsumer;
+  const artifactPreparer = suppliedHost
+    ? suppliedHost.artifactPreparer
+    : options.artifactPreparer;
   const artifactRequired = options.requireArtifact === true || options.artifact !== undefined;
   let artifactMetadata;
   if (options.artifact !== undefined) {
@@ -546,6 +549,24 @@ function createClaudeWorkflowDispatch(options = {}) {
     if (['ci-fix', 'review-fix'].includes(artifactMetadata.role)
         && (!Number.isInteger(artifactMetadata.pr) || artifactMetadata.pr < 1)) {
       refuse('INVALID_ARTIFACT', 'repair artifact metadata requires a positive PR number before launch');
+    }
+    if (role !== null && suppliedHost && typeof artifactPreparer !== 'function') {
+      refuse('MISSING_ARTIFACT', 'host must provide the role-artifact preparation callback before launch');
+    }
+    if (role !== null && typeof artifactPreparer === 'function') {
+      try {
+        const prepared = artifactPreparer.call(suppliedHost || options, { artifact: artifactMetadata });
+        if (prepared && typeof prepared.then === 'function') {
+          refuse('INVALID_ARTIFACT', 'role-artifact preparation must complete synchronously before launch');
+        }
+      } catch (error) {
+        if (isBoundaryFailure(error)) throw error;
+        throw boundaryFailure(
+          'INVALID_ARTIFACT',
+          `role-artifact preparation failed: ${error && error.message ? error.message : error}`,
+          error,
+        );
+      }
     }
   }
 

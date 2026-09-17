@@ -1386,8 +1386,8 @@ accepted. On Codex the boundary validates the generated
 native alias and explicit effort through the workflow adapter. If the host
 cannot apply the selection or return the receipt, refuse the judge and treat
 the ticket as needing drift handling; do not use a generic or inherited Agent.
-The workflow result is fail-safe: an agent that crashed is treated as
-`drifted`.
+  A crashed judge is a failed artifact dispatch and must be surfaced for
+  retry; it is never converted into an unsealed `drifted` verdict.
 
 **Always pass the base ref, on either path.** Without it the judge reasons about
 the working tree, and the working tree is whatever branch the session is on —
@@ -1419,8 +1419,8 @@ receipt-bound `shipyard.drift-result.v1` artifact, verify its integration-base
 identity, and only then run `drift-record.cjs mark`. **Verify that it landed** —
 `drift-record.cjs list` must name every validated ticket you judged `drifted`,
 and any it does not name is yours to `mark` before the run ends. A missing,
-stale, duplicate, escaped, or malformed artifact is a failed gate, not
-`recorded: no`, `fresh`, or a blind retry.
+stale, duplicate, escaped, or malformed artifact is a failed gate, not a
+`fresh` verdict or a blind retry.
 
 Recording is not bookkeeping — it is the whole difference between judging a
 ticket once and judging it forever. The verdict lives in `.planning/graph/drift.json`
@@ -1451,6 +1451,8 @@ For a direct Codex result, the trusted consumer writes the bounded JSON response
 to a disposable file and seals it only after the authenticated receipt exists:
 
 ```text
+node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+  --worktree <worktree> --role drift-check
 node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
   --worktree <worktree> --role drift-check --ticket <T> --base <state[T].base> \
   --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
@@ -1463,7 +1465,7 @@ mark`, reuse forwarding, or attempt/journal logging:
 
 The common resolver contract remains `tickets: [{ id, planPath, baseRef, model, effort, signals }]`;
 artifact-bound drift execution additionally requires the per-ticket
-`worktreePath` shown above.
+`worktreePath` shown above before dispatch.
 
 ```text
 node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate \
@@ -2208,8 +2210,10 @@ itself. The round order:
    `dispatch_id`:
 
    ```text
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+     --worktree <worktree> --role <ci-fix|review-fix>
    node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
-     --worktree <worktree> --role <ci-fix|review-fix> --ticket <T> --base <state[T].base> \
+     --worktree <worktree> --role <ci-fix|review-fix> --ticket <T> --pr <p.pr> --base <state[T].base> \
      --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
      --result-file <trusted-result.json>
    ```
