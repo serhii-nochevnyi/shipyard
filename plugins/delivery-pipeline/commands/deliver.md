@@ -801,7 +801,7 @@ Before a model-axis escalation, the dispatch boundary records the host capabilit
 snapshot for the exact runtime, model and effort. An unsupported or unknown pair
 falls back to the preceding rung within that runtime. A repair escalation also
 requires the immediately preceding completed boundary receipt; missing evidence
-does not earn a deeper model. Claude uses only the Anthropic workflow palette and
+  does not earn a deeper model. The Workflow runtime uses only the Anthropic palette and
 Codex uses only the OpenAI palette.
 
 When participating projects share an account, inject one capacity coordinator
