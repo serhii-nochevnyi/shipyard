@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
+const { normalizeTreatment, recordMeasurement } = require(path.join(__dirname, 'orchestration-overhead.cjs'));
 
 const SCHEMA_VERSION = 1;
 const STORE_NAME = 'wait-events.json';
@@ -355,6 +356,12 @@ function validRecord(record) {
       || !record.actions || typeof record.actions !== 'object' || Array.isArray(record.actions)
       || !record.acknowledgments || typeof record.acknowledgments !== 'object' || Array.isArray(record.acknowledgments)
       || !record.consumed || typeof record.consumed !== 'object' || Array.isArray(record.consumed)) return false;
+  if (record.treatments !== undefined) {
+    try {
+      const canonicalTreatment = normalizeTreatment(record.treatments);
+      if (stable(record.treatments) !== stable(canonicalTreatment)) return false;
+    } catch (_) { return false; }
+  }
   if (record.pending_action !== null
       && !validAction(record.pending_action)) return false;
   if (record.ack !== null && (!record.ack || typeof record.ack !== 'object' || Array.isArray(record.ack))) return false;
@@ -420,6 +427,7 @@ function baseRecord(identity, now, interval, deadline, windowId = null) {
     pr: identity.pr,
     head: identity.head,
     window_id: windowId,
+    treatments: { wait_events: 'baseline', bounded_context: 'baseline' },
     observation: null,
     observation_digest: null,
     trusted_observation: null,
@@ -447,9 +455,62 @@ function nextUnacknowledged(record) {
   return actions[0] || null;
 }
 
+function treatmentInput(input) {
+  try { return normalizeTreatment(input.treatments === undefined ? input.treatment : input.treatments); }
+  catch (error) { return { error }; }
+}
+
+function waitMeasurement(input, result, recorder) {
+  if (!recorder || !result || !result.ok) return { recorded: false, skipped: 'no-recorder-or-result' };
+  const record = result.record || {};
+  const pollId = input.measurement_id || input.measurementId
+    || `wait-poll:${record.run_id || input.run_id}:${record.ticket || input.ticket}:${record.window_id || 'default'}:${record.observed_at || result.observation_digest}`;
+  return recordMeasurement(recorder, {
+    observation_id: pollId,
+    run_id: record.run_id || input.run_id,
+    dispatch_id: input.dispatch_id || input.dispatchId || null,
+    role: input.role || 'waiter',
+    runtime: input.runtime || 'controller',
+    backend: input.backend || 'controller',
+    policy_hash: input.policy_hash || input.policyHash || null,
+    treatment: result.treatments || input.treatments || input.treatment,
+    stage: 'wait_poll',
+    source: 'wait-events',
+    bytes: 0,
+    estimated_tokens: null,
+    provider_tokens: null,
+    evidence: 'wait-event',
+    counts: { polls: 1, model_turns: null, tool_calls: null },
+  });
+}
+
+function deliveredActionMeasurement(input, result, recorder) {
+  if (!recorder || !result || !result.action_id) return { recorded: false, skipped: 'no-recorder-or-action' };
+  const record = result.record || {};
+  return recordMeasurement(recorder, {
+    observation_id: `delivery-action:${result.action_id}`,
+    run_id: record.run_id || input.run_id,
+    dispatch_id: result.dispatch_id || result.action_id,
+    role: input.role || 'waiter',
+    runtime: input.runtime || 'controller',
+    backend: input.backend || 'controller',
+    policy_hash: input.policy_hash || input.policyHash || null,
+    treatment: record.treatments || input.treatments || input.treatment,
+    stage: 'ordinary_input',
+    source: 'wait-events',
+    bytes: 0,
+    estimated_tokens: null,
+    provider_tokens: null,
+    evidence: 'controller',
+    counts: { polls: null, model_turns: null, tool_calls: null },
+  });
+}
+
 function observe(input = {}, io = {}) {
   const identity = identityOf(input, io);
   if (!validIdentity(identity)) return refusal('INVALID_IDENTITY', 'run_id, ticket and PR are required; no event was written');
+  const selectedTreatment = treatmentInput(input);
+  if (selectedTreatment.error) return refusal('INVALID_TREATMENT', selectedTreatment.error.message);
   const graphDir = identity.graphDir;
   const requestedWindowId = windowIdOf(input, io);
   const observation = inputObservation(input);
@@ -469,7 +530,7 @@ function observe(input = {}, io = {}) {
     ? requestedDeadlineCandidate : now + DEFAULT_DEADLINE_MS;
   const eligibility = input.eligibility !== undefined ? input.eligibility : input.front;
   try {
-    return lockedStore(graphDir, () => {
+    const result = lockedStore(graphDir, () => {
       const loaded = readStore(graphDir);
       if (loaded.error) return loaded.error;
       const store = loaded.store;
@@ -520,6 +581,7 @@ function observe(input = {}, io = {}) {
       record.repository = identity.repository;
       record.pr = identity.pr;
       record.head = identity.head;
+      record.treatments = selectedTreatment;
       record.observation = observation;
       record.observation_digest = observationDigest;
       record.observation_availability = availability;
@@ -575,9 +637,18 @@ function observe(input = {}, io = {}) {
         terminal: clone(record.terminal),
         action: clone(action),
         pending_action: clone(record.pending_action),
+        treatments: clone(record.treatments),
         record: clone(record),
       };
     });
+    if (result && result.ok) {
+      try {
+        result.measurement = waitMeasurement(input, result, input.overheadRecorder || input.overhead && input.overhead.recorder);
+      } catch (error) {
+        return refusal('MEASUREMENT_WRITE_FAILED', `could not persist wait measurement: ${error.message}`);
+      }
+    }
+    return result;
   } catch (error) {
     return refusal('STORE_WRITE_FAILED', `could not persist wait event: ${error.message}`);
   }
@@ -587,7 +658,7 @@ function pending(input = {}, io = {}) {
   const identity = identityOf(input, io);
   if (!validIdentity(identity)) return refusal('INVALID_IDENTITY', 'run_id, ticket and PR are required; no event was consumed');
   try {
-    return lockedStore(identity.graphDir, () => {
+    const result = lockedStore(identity.graphDir, () => {
       const loaded = readStore(identity.graphDir);
       if (loaded.error) return loaded.error;
       const store = loaded.store;
@@ -621,6 +692,14 @@ function pending(input = {}, io = {}) {
         record: clone(record),
       };
     });
+    if (result && result.action_id) {
+      try {
+        result.measurement = deliveredActionMeasurement(input, result, input.overheadRecorder || input.overhead && input.overhead.recorder);
+      } catch (error) {
+        return refusal('MEASUREMENT_WRITE_FAILED', `could not persist delivered-action measurement: ${error.message}`);
+      }
+    }
+    return result;
   } catch (error) {
     return refusal('STORE_READ_FAILED', `could not consume pending wait event: ${error.message}`);
   }
@@ -784,6 +863,9 @@ function observePublished(input = {}, io = {}) {
         head: input.head !== undefined ? input.head : stateEntry.head_sha,
         observation: projected,
         eligibility: published.front,
+        ...(input.treatments === undefined && input.treatment === undefined
+          ? {} : { treatments: input.treatments === undefined ? input.treatment : input.treatments }),
+        ...(input.overheadRecorder ? { overheadRecorder: input.overheadRecorder } : {}),
       };
       return observe(merged, io);
     });
@@ -809,6 +891,12 @@ function cli() {
     repository: cliValue(argv, '--repository', cliValue(argv, '--repo')),
     pr: cliValue(argv, '--pr'),
     head: cliValue(argv, '--head'),
+    ...(cliValue(argv, '--wait-treatment') || cliValue(argv, '--context-treatment') ? {
+      treatments: {
+        wait_events: cliValue(argv, '--wait-treatment', 'baseline'),
+        bounded_context: cliValue(argv, '--context-treatment', 'baseline'),
+      },
+    } : {}),
   };
   const now = cliValue(argv, '--now', undefined);
   let result;
@@ -850,6 +938,8 @@ module.exports = Object.freeze({
   canonicalObservation,
   digest,
   observe,
+  waitMeasurement,
+  deliveredActionMeasurement,
   pending,
   acknowledge,
   readPublished,

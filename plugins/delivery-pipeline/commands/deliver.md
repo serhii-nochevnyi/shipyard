@@ -749,6 +749,48 @@ only thing that session inherits, so write what a human must decide.
 It lifts itself once the PR moves (a push, a review answer, undrafting), or with
 `escalation-record.cjs clear <T>`.
 
+## Phase 33 treatment measurements
+
+Phase 33 measures orchestration treatments independently. Every wait or child
+launch carries both dimensions, defaulting to `{wait_events: "baseline",
+bounded_context: "baseline"}`:
+
+```text
+baseline  → wait_events=baseline, bounded_context=baseline
+OPT-06    → wait_events=opt-06, bounded_context=baseline
+OPT-07    → wait_events=baseline, bounded_context=opt-07
+combined  → wait_events=opt-06, bounded_context=opt-07
+```
+
+The combined arm is used only after the two individual arms have usable
+evidence. Pass the selection to `wait-events.cjs` callers as `treatments` (the
+CLI equivalents are `--wait-treatment` and `--context-treatment`); pass
+the same selection to the trusted context-packet builder. A persisted wait
+record keeps the selection while pending actions remain durable. Changing an
+arm never acknowledges, drops or recreates pending work, and it never disables
+the live sentinel, review, architecture, human or integration gates.
+
+The metadata-only collector writes the append-only
+`.planning/graph/orchestration-overhead.jsonl` stream. Packet creation records
+`startup` bytes and estimated tokens. A validated `role-artifact.cjs read` with
+an evidence range records the bytes actually returned as `parent_reingestion`,
+so a large referenced file is not charged as if its complete body were
+re-ingested. Source paths and digests are retained; prompt bodies, transcripts,
+credentials and synthetic provider tokens are refused. Provider token counts
+remain unknown until supported usage evidence is joined from
+`usage-attribution.cjs`.
+
+Wait polling records `polls` separately. An unchanged poll, elapsed interval or
+wait event is never a model turn. Model responses and tool calls are counted
+only from supported usage or transcript evidence; missing evidence is unknown,
+not zero. Generate a report at an experiment boundary with the collector's
+`report()` API, then preserve the JSON beside the experiment record. The report
+must show startup, parent re-ingestion, polls, observed turns, tools, cache and
+advisor coverage, failed/interrupted work and attribution gaps. See
+`docs/audits/optimization/phase-33-protocol.md` for the fixed cohort, quality,
+rollback and seven-day defect-window gates. A fixture report cannot promote a
+treatment or claim quota savings.
+
 A missed event is lost forever (GitHub won't recover it), so the log call goes IN
 THE SAME step where the fact occurred, not "at the end."
 
