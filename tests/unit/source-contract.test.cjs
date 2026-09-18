@@ -904,7 +904,7 @@ test('decompose selects runtime before tuning and establishes context before one
     source.indexOf('## Step 3 — Delivery frontmatter extension')
   );
   const phaseAt = chain.indexOf('Pick the phase number');
-  const contextAt = chain.indexOf('/gsd-plan-phase <N> --ingest <adr-paths>');
+  const contextAt = chain.indexOf('/gsd-plan-phase <N> --ingest .planning/.adr-ingest/*.ingest.md');
   const researcherAt = chain.indexOf('`gsd-phase-researcher` →');
   const plannerAt = chain.indexOf('`gsd-planner` →');
   const checkerAt = chain.indexOf('`gsd-plan-checker` →');
@@ -1982,6 +1982,21 @@ test('Claude palette and provider adapter sources match their checked-in baselin
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('runtime: \'claude\''), true);
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-5.6-luna'), false);
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-6-astra'), false);
+});
+
+test('decompose normalizes ADRs before calling GSD ingest', () => {
+  const decompose = readRepo('plugins/delivery-pipeline/commands/decompose.md');
+  const normalizeAt = decompose.indexOf('adr-ingest.cjs');
+  const ingestAt = decompose.indexOf('/gsd-plan-phase', normalizeAt);
+  assert.ok(normalizeAt >= 0, 'decompose must invoke the ADR compatibility layer');
+  assert.ok(ingestAt > normalizeAt, 'GSD ingest must follow ADR normalization');
+  assert.ok(decompose.includes('.planning/.adr-ingest/*.ingest.md'), 'GSD must ingest normalized files inside the project');
+});
+
+test('investigate emits flat machine-readable decision lists', () => {
+  const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
+  assert.ok(investigate.includes('each locked decision is one bullet under `## Decision`'));
+  assert.ok(investigate.includes('scope fences use\n     `## Out of scope`'));
 });
 
 done();

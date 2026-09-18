@@ -15,6 +15,7 @@ workspace/
 # already refused. `.planning/graph/` is otherwise tracked, and a session id
 # belongs in no commit.
 .planning/graph/stop-gate-ledger.json
+/.planning/.adr-ingest/
 .copilot-mcp-oauth/
 
 # OS cruft
