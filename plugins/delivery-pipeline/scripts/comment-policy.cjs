@@ -5,7 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const MAX_COMMENT_RATIO = 1;
+const MAX_MARKER_LENGTH = 120;
+const MARKER_PATTERN = /^@(invariant|security|contract)\s*:/i;
+const HISTORY_PATTERN =
+  /(?:\b(?:todo|fixme|hack|workaround|temporary|ticket|issue|pull request|commit|history|legacy|previously|because)\b|#\d+\b|\b(?:adr|myd|pdf)-?\d+\b)/i;
 const EXTENSIONS = new Map([
   ['.c', 'c-like'], ['.cc', 'c-like'], ['.cpp', 'c-like'], ['.cxx', 'c-like'],
   ['.h', 'c-like'], ['.hh', 'c-like'], ['.hpp', 'c-like'], ['.hxx', 'c-like'],
@@ -40,13 +43,26 @@ function languageFor(file) {
   return EXTENSIONS.get(path.extname(file).toLowerCase()) || null;
 }
 
-function protectedComment(text) {
-  if (text.trimStart().startsWith('#!')) return true;
-  const body = text
+function commentBody(text) {
+  return text
     .replace(/^\s*(?:\/\*+|\/\/|#|--|<!--)\s?/, '')
     .replace(/\s*(?:\*\/|-->|--)?\s*$/, '')
     .trim();
+}
+
+function protectedComment(text) {
+  if (text.trimStart().startsWith('#!')) return true;
+  const body = commentBody(text);
   return /^(?:SPDX-License-Identifier\b|copyright\b|\(c\)\b|@(?:ts-check|ts-ignore|ts-expect-error|generated)\b|eslint(?:-disable|-enable)?\b|biome-ignore\b|tslint(?::|-)\s*|prettier-ignore\b|jshint\b|c8\s+ignore\b|istanbul\s+ignore\b|coverage:\s*|shellcheck\b|noqa\b|nosec\b|nolint\b|lint:ignore\b|go:(?:build|generate|embed|linkname)\b|line\s+\S+:\d+\b|pragma\b|keep\b|shipyard(?:[-:]|\s)|gsd-sync\b|managed\s+by\b|do\s+not\s+edit\b|generated\s+file\b)/i.test(body);
+}
+
+function markerComment(text) {
+  const body = commentBody(text);
+  return (
+    MARKER_PATTERN.test(body) &&
+    text.trim().length <= MAX_MARKER_LENGTH &&
+    !HISTORY_PATTERN.test(body)
+  );
 }
 
 function scanText(text, language) {
@@ -95,10 +111,23 @@ function scanText(text, language) {
         continue;
       }
 
-      const lineToken = spec.line.find((token) => line.startsWith(token, i));
+      const lineToken = spec.line.find(
+        (token) =>
+          line.startsWith(token, i) &&
+          (token !== '#' || i === 0 || /\s/.test(line[i - 1])),
+      );
       if (lineToken) {
         const fragment = line.slice(i);
-        fragments.push({ text: fragment, protected: line.trimStart().startsWith('#!') || protectedComment(fragment), block: false, openedHere: true, closedHere: true });
+        fragments.push({
+          text: fragment,
+          protected:
+            line.trimStart().startsWith('#!') ||
+            protectedComment(fragment) ||
+            markerComment(fragment),
+          block: false,
+          openedHere: true,
+          closedHere: true,
+        });
         break;
       }
 
@@ -107,7 +136,8 @@ function scanText(text, language) {
         const close = line.indexOf(spec.block[1], i + spec.block[0].length);
         const end = close === -1 ? line.length : close + spec.block[1].length;
         const fragment = line.slice(i, end);
-        const isProtected = protectedComment(fragment);
+        const isProtected =
+          protectedComment(fragment) || (close !== -1 && markerComment(fragment));
         fragments.push({
           text: fragment,
           protected: isProtected,
@@ -185,7 +215,12 @@ function parseDiff(diff) {
   let file = null;
   let nextLine = null;
   for (const raw of diff.split('\n')) {
-    if (raw.startsWith('+++ ')) {
+    if (raw.startsWith('diff --git ')) {
+      file = null;
+      nextLine = null;
+      continue;
+    }
+    if (raw.startsWith('+++ ') && nextLine === null) {
       file = diffPath(raw.slice(4), 'b/');
       nextLine = null;
       continue;
@@ -197,11 +232,9 @@ function parseDiff(diff) {
     }
     if (!file || nextLine === null || raw.length === 0) continue;
     if (raw[0] === '+') {
-      if (!raw.startsWith('+++ ')) {
-        if (!additions.has(file)) additions.set(file, new Set());
-        additions.get(file).add(nextLine);
-        nextLine++;
-      }
+      if (!additions.has(file)) additions.set(file, new Set());
+      additions.get(file).add(nextLine);
+      nextLine++;
       continue;
     }
     if (raw[0] === '-') continue;
@@ -324,7 +357,7 @@ function analyze(worktree, base, options = {}) {
         });
       }
     }
-    const violation = counts.comment_lines > counts.code_lines;
+    const violation = counts.comment_lines > 0;
     const entry = {
       path: relative,
       language,
@@ -344,8 +377,10 @@ function analyze(worktree, base, options = {}) {
     worktree,
     working_tree: Boolean(options.workingTree),
     policy: {
-      max_comment_ratio: MAX_COMMENT_RATIO,
-      scope: 'non-protected comments on added lines in supported code/config files',
+      mode: 'strict',
+      max_marker_length: MAX_MARKER_LENGTH,
+      allowed_markers: ['@invariant:', '@security:', '@contract:'],
+      scope: 'non-allowed comments on added lines in supported code/config files',
       per_file: true,
     },
     ok: violations.length === 0,
@@ -388,19 +423,15 @@ function argumentsFor(argv) {
   };
 }
 
-function humanRatio(value) {
-  return value === null ? '∞' : value.toFixed(2);
-}
-
 function printCheck(result, ticket) {
   if (result.ok) {
-    console.log(`comment-policy: ${ticket} OK — ${result.totals.comment_lines} non-protected comment line(s) / ${result.totals.code_lines} code line(s)`);
+    console.log(`comment-policy: ${ticket} OK — ${result.totals.comment_lines} non-allowed comment line(s) / ${result.totals.code_lines} code line(s)`);
     if (result.skipped.length) console.log(`comment-policy: skipped ${result.skipped.length} unsupported or binary file(s)`);
     return;
   }
-  console.error(`comment-policy: ${ticket} BLOCKED — added non-protected comments exceed code in ${result.violations.length} file(s)`);
+  console.error(`comment-policy: ${ticket} BLOCKED — added comments must be indispensable one-line markers or required directives in ${result.violations.length} file(s)`);
   for (const file of result.files.filter((entry) => entry.violation)) {
-    console.error(`  - ${file.path}: ${file.comment_lines} comment line(s) / ${file.code_lines} code line(s), ratio ${humanRatio(file.ratio)}; cleanable ${file.cleanable_comment_lines}, manual ${file.manual_comment_lines}`);
+    console.error(`  - ${file.path}: ${file.comment_lines} non-allowed comment line(s); cleanable ${file.cleanable_comment_lines}, manual ${file.manual_comment_lines}`);
   }
   console.error(`comment-policy: run clean ${ticket} --worktree ${result.worktree} --base ${result.base} --json for a dry run`);
 }
@@ -426,7 +457,7 @@ function printClean(result, ticket, before, removed = []) {
     return;
   }
   console.log(`comment-policy: ${ticket} removed ${removed.length} comment line(s); rerun verification, amend the commit, and run check again`);
-  if (!result.ok) console.error('comment-policy: manual comments still exceed the policy');
+  if (!result.ok) console.error('comment-policy: manual comments remain; remove or justify them before push');
 }
 
 function applyCleanup(input, before) {
@@ -492,9 +523,10 @@ function main(argv = process.argv.slice(2)) {
 }
 
 module.exports = {
-  MAX_COMMENT_RATIO,
+  MAX_MARKER_LENGTH,
   languageFor,
   protectedComment,
+  markerComment,
   scanText,
   parseDiff,
   analyze,

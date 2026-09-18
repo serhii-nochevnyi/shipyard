@@ -584,11 +584,13 @@ Notes on the reviewers' mechanics:
   `requested_reviewers` API (or `gh pr edit --add-reviewer` where supported);
   on its own it does not re-review.
 - Before every pipeline push, `comment-policy.cjs check` measures added lines in
-  supported code/config files. A file with more non-protected comment lines than
-  code lines blocks publication. The dry-run `clean` command previews removable
-  full-line additions; `clean --apply` is explicit, leaves inline/multiline
-  comments untouched, and requires verification plus an amended commit before
-  the gate is retried.
+  supported code/config files. Publication allows only required directives,
+  licence/generated markers, and one-line `@invariant:`, `@security:`,
+  or `@contract:` markers up to 120 characters. Explanatory, historical,
+  ticket, and multi-line comments block publication. The dry-run `clean`
+  command previews removable full-line additions; `clean --apply` is explicit,
+  leaves inline/multiline comments untouched, and requires verification plus an
+  amended commit before the gate is retried.
 - Both bots can be wrong: the fix agent is obliged to **verify every
   comment against the code** and has the right to respond with a reasoned disagreement. The goal
   of the cycle is "no unresolved threads", not "all the bots' whims fulfilled".
@@ -597,7 +599,7 @@ Notes on the reviewers' mechanics:
 
 - the PR is in the green state (criteria from step 3, including arch-review conform);
 - all changes in the PR belong to the ticket's scope (diff check against `files_modified`);
-- the pre-push `comment-policy.cjs` gate passed for the resolved base;
+- the strict pre-push `comment-policy.cjs` gate passed for the resolved base;
 - the ticket's verification commands are green locally and in CI;
 - for `human_checkpoint: true` — explicit human approval.
 
@@ -1012,7 +1014,7 @@ human's, so GSD's "no auto-merge" boundary is preserved where it matters.
   `uat-gate.cjs ${PHASE_NUMBER}` wraps the fail-closed predicate
   `phase uat-passed` — /gsd-ship will not pass without verification evidence
   (switch: `delivery_pipeline.uat_gate`). Without a phase in context — skip.
-- **GSD projection gates** (capability v0.56.0): `gsd-sync.cjs` writes after
+- **GSD projection gates** (capability v0.57.0): `gsd-sync.cjs` writes after
   `plan:post`, `execute:post`, and `verify:post`, then runs in `--check` mode at
   `ship:pre` (switch: `delivery_pipeline.gsd_sync`). The launcher is inert when
   no plan carries a Shipyard `delivery:` block, so ordinary GSD projects are not
