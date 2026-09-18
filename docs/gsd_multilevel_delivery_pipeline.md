@@ -206,7 +206,7 @@ Problem statement
                                   experiential verification of hypotheses with draft code)
   → OPTIONS.md with trade-offs
   → DECISIONS.md                 (accepted positions: what was chosen, what was rejected, why)
-  → ADR package in architecture/ (a format that plan-phase --ingest parses)
+  → ADR package in architecture/ (flat `## Decision` lists that plan-phase --ingest parses)
 ```
 
 Investigation is an iterative dialogue with a human: the agents bring in findings and
@@ -229,7 +229,8 @@ DECISIONS.md      — locked decisions; each: decision / why / what was rejected
 - all OPEN-QUESTIONS are either closed or explicitly moved into risks with mitigation;
 - every option in OPTIONS.md has trade-offs;
 - DECISIONS.md covers all the decisions needed for decomposition;
-- the ADR files are created in `architecture/` (this is the input format for loop 2).
+- the ADR files are created in `architecture/` (loop 2 normalizes legacy nested sections
+  before passing them to `plan-phase --ingest`).
 
 **The check is automated**: a validator script verifies the presence and
 non-emptiness of the sections. The substantive quality is checked by a human — this is a human gate.

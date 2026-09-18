@@ -253,8 +253,16 @@ context first, then one callback set, then materialization verification.
 
 1. Pick the phase number: the next free one (or the user's argument), and
    gather the selected ADR path(s) and the mode/granularity chosen in Step 1.
-2. Gather/invoke the GSD context by running
-   `/gsd-plan-phase <N> --ingest <adr-paths> [--tdd|--mvp]` only through the
+2. Normalize every selected ADR before invoking GSD:
+   `mkdir -p .planning/.adr-ingest && node ${CLAUDE_PLUGIN_ROOT}/scripts/adr-ingest.cjs
+   --input <adr-path> [--input <another-adr-path>] --output-dir .planning/.adr-ingest --json`.
+   Repeat `--input` in the same invocation for multiple ADRs; the staging directory
+   is refreshed before the command writes its outputs. The command converts nested
+   `###` decision/consequence/scope sections into parser-compatible lists and exits
+   non-zero when an ADR has no decisions. Stop on that error; do not pass the raw ADR
+   to GSD.
+3. Gather/invoke the GSD context by running
+   `/gsd-plan-phase <N> --ingest .planning/.adr-ingest/*.ingest.md [--tdd|--mvp]` only through the
    Skill. The Skill must first establish one explicit context carrying phase
    `<N>`, the ADR path(s), mode, granularity, and relevant reads; no callback is
    eligible before that context is fixed. If GSD, the Skill, callback wiring,
@@ -276,7 +284,7 @@ context first, then one callback set, then materialization verification.
    refuses the callback before reservation. The packet keeps the full ADR,
    requirements and mandatory GSD policy even when the estimated UTF-8/4 size
    exceeds 12,000 tokens, recording overflow and indexed optional references.
-3. With that context fixed, the Skill makes exactly one set of three typed,
+4. With that context fixed, the Skill makes exactly one set of three typed,
    boundary-owned callbacks, in this order:
    - `gsd-phase-researcher` → `role: research`, with only the declared research
      signals.
@@ -293,7 +301,7 @@ context first, then one callback set, then materialization verification.
    receipts, one per typed role. Never collapse these roles into one inline
    prompt or launch a generic agent when a callback cannot apply the
    resolution.
-4. **Verify materialization**: inspect the trusted artifact index, then run
+5. **Verify materialization**: inspect the trusted artifact index, then run
    `ls .planning/phases/<N>-*/*-PLAN.md` and verify the listed `CONTEXT.md` plus
    every `PLAN.md` still matches its sealed digest. The files MUST exist, and
    the three receipts from item 3 must be present and verified. If the GSD
