@@ -252,7 +252,7 @@ function buildPrompt(p) {
   steps.push(
     ``,
     `Rule zero: every checkable claim about the codebase, a test, delivery state, or a completed action must name the exact command that checked it and the relevant path, output, or exit status. If a claim cannot be checked by a command, label it as an assumption or unknown and state the next check. A claim without command-backed evidence is not verification.`,
-    `Keep added code comments rare and purposeful. Preserve required directives, licences, generated markers, security constraints and non-obvious invariants; remove narration that repeats the code.`,
+    `Keep added code comments to required directives, licence/generated markers, or one-line @invariant:, @security:, or @contract: markers of at most 120 characters. Do not add explanatory, historical, ticket, or multi-line comments; remove narration that repeats the code.`,
     ``,
     `Language: every artifact you produce — code, comments, commit messages, review replies — is written in ${artifactLanguage}, regardless of the language used elsewhere in this project.`,
     ``,

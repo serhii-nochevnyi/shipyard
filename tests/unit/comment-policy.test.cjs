@@ -51,7 +51,7 @@ function read(repo, file) {
   return fs.readFileSync(path.join(repo, file), 'utf8');
 }
 
-suite('comment-policy — pre-push comment budget and explicit cleanup');
+suite('comment-policy — strict pre-push policy and explicit cleanup');
 
 test('blocks a file whose added comments exceed its added code', () => {
   const repo = fixture(
@@ -65,6 +65,64 @@ test('blocks a file whose added comments exceed its added code', () => {
   assert.deepStrictEqual(report.violations, ['src/app.js']);
   assert.strictEqual(report.files[0].cleanable_comment_lines, 2);
   assert.strictEqual(report.files[0].code_lines, 0);
+});
+
+test('blocks one added explanatory comment even when code outnumbers it', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\nconst next = value + 1;\n// explain the implementation\n' },
+  );
+  const result = run(repo, args('check', repo, ['--json']));
+  assert.strictEqual(result.status, 1, result.stdout + result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepStrictEqual(report.violations, ['src/app.js']);
+  assert.strictEqual(report.files[0].comment_lines, 1);
+  assert.strictEqual(report.files[0].code_lines, 1);
+});
+
+test('allows only short invariant, security and contract markers', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    {
+      'src/app.js': [
+        'const value = 1;',
+        '// @invariant: value is normalized',
+        '// @security: reject untrusted input',
+        '/* @contract: output is stable */',
+      ].join('\n') + '\n',
+    },
+  );
+  const result = run(repo, args('check', repo, ['--json']));
+  assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.strictEqual(report.totals.comment_lines, 0);
+  assert.strictEqual(report.totals.protected_comment_lines, 3);
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:',
+    '@security:',
+    '@contract:',
+  ]);
+});
+
+test('rejects long, historical and multiline marker comments', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    {
+      'src/app.js': [
+        '// @contract: required by ADR-013',
+        ['// @security: ', 'x'.repeat(130)].join(''),
+        '/* @invariant: this continues',
+        ' * on another line',
+        ' */',
+      ].join('\n') + '\n',
+    },
+  );
+  const result = run(repo, args('check', repo, ['--json']));
+  assert.strictEqual(result.status, 1, result.stdout + result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepStrictEqual(report.violations, ['src/app.js']);
+  assert.strictEqual(report.files[0].manual_comment_lines, 3);
+  assert.strictEqual(report.files[0].cleanable_comment_lines, 2);
 });
 
 test('counts only added lines and skips documentation files', () => {
@@ -113,6 +171,18 @@ test('does not treat comment markers inside Python triple-quoted strings as comm
   assert.strictEqual(result.status, 0, result.stdout + result.stderr);
   const report = JSON.parse(result.stdout);
   assert.strictEqual(report.totals.comment_lines, 0);
+});
+
+test('does not treat shell parameter expansion as a comment', () => {
+  const repo = fixture(
+    { 'src/run.sh': '#!/usr/bin/env bash\n' },
+    { 'src/run.sh': '#!/usr/bin/env bash\nvalue=${value#prefix}\necho "$value"\n' },
+  );
+  const result = run(repo, args('check', repo, ['--json']));
+  assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.strictEqual(report.totals.comment_lines, 0);
+  assert.strictEqual(report.totals.code_lines, 2);
 });
 
 test('dry-run previews removable lines and apply removes only full-line additions', () => {

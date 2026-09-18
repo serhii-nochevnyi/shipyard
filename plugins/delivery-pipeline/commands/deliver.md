@@ -1925,11 +1925,12 @@ may be dispatched at all: fix the file.
      --worktree <worktree> --base <state[T].base> --json
    ```
 
-   The gate measures only added lines in supported code/config files. In each
-   file, non-protected comment lines may not outnumber added code lines.
-   Directives, licence/generated markers and other required tool comments are
-   protected; Markdown and other prose files are outside this budget. A non-zero
-   result blocks the push. First preview the mechanical cleanup:
+   The gate measures added lines in supported code/config files. Only required
+   directives, licence/generated markers, and one-line `@invariant:`,
+   `@security:`, or `@contract:` markers up to 120 characters are allowed.
+   Explanatory, historical, ticket, and multi-line comments block publication;
+   Markdown and other prose files are outside this gate. A non-zero result
+   blocks the push. First preview the mechanical cleanup:
 
    ```text
    node ${CLAUDE_PLUGIN_ROOT}/scripts/comment-policy.cjs clean <T> \
