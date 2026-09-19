@@ -106,6 +106,13 @@
         null
       ]
     },
+    "37": {
+      "branch": "epic/37-autonomous-dual-runtime-control-plane",
+      "base": null,
+      "repos": [
+        null
+      ]
+    },
     "33-reduce-orchestration-context-and-transfer-sessions-safely": {
       "branch": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
       "base": null,
@@ -4539,6 +4546,249 @@
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-10",
       "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
+      "jira": null
+    },
+    "T-37-01": {
+      "title": "Define the scoped autonomous run contract",
+      "plan": ".planning/phases/37-autonomous-dual-runtime-control-plane/37-01-PLAN.md",
+      "phase": "37",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/run-contract.cjs",
+        "plugins/delivery-pipeline/scripts/run-scope.cjs",
+        "tests/unit/run-contract.test.cjs",
+        "tests/unit/run-scope.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-37-01-define-the-scoped-autonomous-run-contrac",
+      "epic": "epic/37-autonomous-dual-runtime-control-plane",
+      "primary_parent": null,
+      "pr_base": "epic/37-autonomous-dual-runtime-control-plane",
+      "jira": null
+    },
+    "T-37-02": {
+      "title": "Persist controller leases and autonomous continuation",
+      "plan": ".planning/phases/37-autonomous-dual-runtime-control-plane/37-02-PLAN.md",
+      "phase": "37",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-37-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/run-store.cjs",
+        "plugins/delivery-pipeline/scripts/run-controller.cjs",
+        "tests/unit/run-store.test.cjs",
+        "tests/unit/run-controller.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-37-02-persist-controller-leases-and-autonomous",
+      "epic": "epic/37-autonomous-dual-runtime-control-plane",
+      "primary_parent": "T-37-01",
+      "pr_base": "ticket/T-37-01-define-the-scoped-autonomous-run-contrac",
+      "jira": null
+    },
+    "T-37-03": {
+      "title": "Connect Claude Code to the scoped runtime controller",
+      "plan": ".planning/phases/37-autonomous-dual-runtime-control-plane/37-03-PLAN.md",
+      "phase": "37",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-37-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/claude-runtime-host.cjs",
+        "plugins/delivery-pipeline/scripts/claude-workflow-host.cjs",
+        "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
+        "tests/unit/claude-runtime-host.test.cjs",
+        "tests/unit/claude-dispatch-adapter.test.cjs",
+        "tests/smoke/claude-runtime-smoke.sh"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-37-03-connect-claude-code-to-the-scoped-runtim",
+      "epic": "epic/37-autonomous-dual-runtime-control-plane",
+      "primary_parent": "T-37-02",
+      "pr_base": "ticket/T-37-02-persist-controller-leases-and-autonomous",
+      "jira": null
+    },
+    "T-37-04": {
+      "title": "Connect Codex to the scoped runtime controller",
+      "plan": ".planning/phases/37-autonomous-dual-runtime-control-plane/37-04-PLAN.md",
+      "phase": "37",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-37-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
+        "plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs",
+        "plugins/delivery-pipeline/scripts/codex-agent.cjs",
+        "tests/unit/codex-runtime-host.test.cjs",
+        "tests/smoke/codex-runtime-smoke.sh"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont",
+      "epic": "epic/37-autonomous-dual-runtime-control-plane",
+      "primary_parent": "T-37-02",
+      "pr_base": "ticket/T-37-02-persist-controller-leases-and-autonomous",
+      "jira": null
+    },
+    "T-37-05": {
+      "title": "Prove graph reachability before autonomous dispatch",
+      "plan": ".planning/phases/37-autonomous-dual-runtime-control-plane/37-05-PLAN.md",
+      "phase": "37",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-37-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/run-reachability.cjs",
+        "plugins/delivery-pipeline/scripts/epic-branch.sh",
+        "plugins/delivery-pipeline/scripts/ticket-worktree.sh",
+        "tests/unit/run-reachability.test.cjs",
+        "tests/smoke/reachability-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-37-05-prove-graph-reachability-before-autonomo",
+      "epic": "epic/37-autonomous-dual-runtime-control-plane",
+      "primary_parent": "T-37-02",
+      "pr_base": "ticket/T-37-02-persist-controller-leases-and-autonomous",
+      "jira": null
+    },
+    "T-37-06": {
+      "title": "Make stop and wait decisions run-scoped and deterministic",
+      "plan": ".planning/phases/37-autonomous-dual-runtime-control-plane/37-06-PLAN.md",
+      "phase": "37",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-37-05"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/stop-gate.cjs",
+        "plugins/delivery-pipeline/scripts/run-waker.cjs",
+        "plugins/delivery-pipeline/scripts/ci-wait.cjs",
+        "tests/unit/stop-gate.test.cjs",
+        "tests/unit/run-waker.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-37-06-make-stop-and-wait-decisions-run-scoped",
+      "epic": "epic/37-autonomous-dual-runtime-control-plane",
+      "primary_parent": "T-37-05",
+      "pr_base": "ticket/T-37-05-prove-graph-reachability-before-autonomo",
+      "jira": null
+    },
+    "T-37-07": {
+      "title": "Join runtime receipts with usage and outcome evidence",
+      "plan": ".planning/phases/37-autonomous-dual-runtime-control-plane/37-07-PLAN.md",
+      "phase": "37",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-37-03",
+        "T-37-04"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/run-telemetry.cjs",
+        "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
+        "plugins/delivery-pipeline/scripts/usage-attribution.cjs",
+        "plugins/delivery-pipeline/scripts/pipeline-stats.cjs",
+        "tests/unit/run-telemetry.test.cjs",
+        "tests/unit/dispatch-record.test.cjs",
+        "tests/unit/usage-attribution.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-37-07-join-runtime-receipts-with-usage-and-out",
+      "epic": "epic/37-autonomous-dual-runtime-control-plane",
+      "primary_parent": "T-37-03",
+      "pr_base": "ticket/T-37-03-connect-claude-code-to-the-scoped-runtim",
+      "jira": null
+    },
+    "T-37-08": {
+      "title": "Roll out and verify the autonomous control plane",
+      "plan": ".planning/phases/37-autonomous-dual-runtime-control-plane/37-08-PLAN.md",
+      "phase": "37",
+      "repo": null,
+      "wave": 5,
+      "depends_on": [
+        "T-37-06",
+        "T-37-07"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/run-rollout.cjs",
+        "plugins/delivery-pipeline/scripts/gsd-sync.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "docs/gsd_multilevel_delivery_pipeline.md",
+        "tests/unit/run-rollout.test.cjs",
+        "tests/unit/source-contract.test.cjs",
+        "tests/smoke/runtime-control-plane-smoke.sh"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-37-08-roll-out-and-verify-the-autonomous-contr",
+      "epic": "epic/37-autonomous-dual-runtime-control-plane",
+      "primary_parent": "T-37-06",
+      "pr_base": "ticket/T-37-06-make-stop-and-wait-decisions-run-scoped",
       "jira": null
     }
   }

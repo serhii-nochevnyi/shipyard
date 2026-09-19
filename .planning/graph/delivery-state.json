@@ -1460,5 +1460,139 @@
     "epic": "epic/36-enforce-the-runtime-model-ladder",
     "reapable": true,
     "since": "2026-09-16T17:20:49.458Z"
+  },
+  "T-37-01": {
+    "branch": "ticket/T-37-01-define-the-scoped-autonomous-run-contrac",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/37-autonomous-dual-runtime-control-plane",
+    "base_reason": "no primary parent — a root ticket PRs into epic/37-autonomous-dual-runtime-control-plane",
+    "epic": "epic/37-autonomous-dual-runtime-control-plane",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-19T12:09:01.729Z"
+  },
+  "T-37-02": {
+    "branch": "ticket/T-37-02-persist-controller-leases-and-autonomous",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/37-autonomous-dual-runtime-control-plane",
+    "base_reason": "T-37-01 has no branch on the remote yet (status pending) — ticket/T-37-01-define-the-scoped-autonomous-run-contrac is not a base that exists, so the base is epic/37-autonomous-dual-runtime-control-plane",
+    "epic": "epic/37-autonomous-dual-runtime-control-plane",
+    "ready": false,
+    "blocked_by": [
+      "T-37-01"
+    ],
+    "blocked_reasons": {
+      "T-37-01": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-19T12:09:01.729Z"
+  },
+  "T-37-03": {
+    "branch": "ticket/T-37-03-connect-claude-code-to-the-scoped-runtim",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/37-autonomous-dual-runtime-control-plane",
+    "base_reason": "T-37-02 has no branch on the remote yet (status pending) — ticket/T-37-02-persist-controller-leases-and-autonomous is not a base that exists, so the base is epic/37-autonomous-dual-runtime-control-plane",
+    "epic": "epic/37-autonomous-dual-runtime-control-plane",
+    "ready": false,
+    "blocked_by": [
+      "T-37-02"
+    ],
+    "blocked_reasons": {
+      "T-37-02": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-19T12:09:01.729Z"
+  },
+  "T-37-04": {
+    "branch": "ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/37-autonomous-dual-runtime-control-plane",
+    "base_reason": "T-37-02 has no branch on the remote yet (status pending) — ticket/T-37-02-persist-controller-leases-and-autonomous is not a base that exists, so the base is epic/37-autonomous-dual-runtime-control-plane",
+    "epic": "epic/37-autonomous-dual-runtime-control-plane",
+    "ready": false,
+    "blocked_by": [
+      "T-37-02"
+    ],
+    "blocked_reasons": {
+      "T-37-02": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-19T12:09:01.729Z"
+  },
+  "T-37-05": {
+    "branch": "ticket/T-37-05-prove-graph-reachability-before-autonomo",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/37-autonomous-dual-runtime-control-plane",
+    "base_reason": "T-37-02 has no branch on the remote yet (status pending) — ticket/T-37-02-persist-controller-leases-and-autonomous is not a base that exists, so the base is epic/37-autonomous-dual-runtime-control-plane",
+    "epic": "epic/37-autonomous-dual-runtime-control-plane",
+    "ready": false,
+    "blocked_by": [
+      "T-37-02"
+    ],
+    "blocked_reasons": {
+      "T-37-02": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-19T12:09:01.729Z"
+  },
+  "T-37-06": {
+    "branch": "ticket/T-37-06-make-stop-and-wait-decisions-run-scoped",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/37-autonomous-dual-runtime-control-plane",
+    "base_reason": "T-37-05 has no branch on the remote yet (status pending) — ticket/T-37-05-prove-graph-reachability-before-autonomo is not a base that exists, so the base is epic/37-autonomous-dual-runtime-control-plane",
+    "epic": "epic/37-autonomous-dual-runtime-control-plane",
+    "ready": false,
+    "blocked_by": [
+      "T-37-05"
+    ],
+    "blocked_reasons": {
+      "T-37-05": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-19T12:09:01.729Z"
+  },
+  "T-37-07": {
+    "branch": "ticket/T-37-07-join-runtime-receipts-with-usage-and-out",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/37-autonomous-dual-runtime-control-plane",
+    "base_reason": "T-37-03 has no branch on the remote yet (status pending) — ticket/T-37-03-connect-claude-code-to-the-scoped-runtim is not a base that exists, so the base is epic/37-autonomous-dual-runtime-control-plane",
+    "epic": "epic/37-autonomous-dual-runtime-control-plane",
+    "ready": false,
+    "blocked_by": [
+      "T-37-03",
+      "T-37-04"
+    ],
+    "blocked_reasons": {
+      "T-37-03": "parent has no branch yet (nothing to cascade from)",
+      "T-37-04": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-19T12:09:01.729Z"
+  },
+  "T-37-08": {
+    "branch": "ticket/T-37-08-roll-out-and-verify-the-autonomous-contr",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/37-autonomous-dual-runtime-control-plane",
+    "base_reason": "T-37-06 has no branch on the remote yet (status pending) — ticket/T-37-06-make-stop-and-wait-decisions-run-scoped is not a base that exists, so the base is epic/37-autonomous-dual-runtime-control-plane",
+    "epic": "epic/37-autonomous-dual-runtime-control-plane",
+    "ready": false,
+    "blocked_by": [
+      "T-37-06",
+      "T-37-07"
+    ],
+    "blocked_reasons": {
+      "T-37-06": "parent has no branch yet (nothing to cascade from)",
+      "T-37-07": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-19T12:09:01.729Z"
   }
 }

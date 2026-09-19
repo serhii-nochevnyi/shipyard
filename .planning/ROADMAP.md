@@ -315,6 +315,38 @@ script — not in a prompt.** Every requirement below is an instance of it.
   identity, signals, and receipt; negative tests prove enforcement on both
   runtimes and preserve Claude palette files/configuration.
 
+- **REQ-111** — Every autonomous run has an immutable scoped identity covering
+  repository, phase, ticket, worktree, runtime, dispatch, lease, and state
+  revision; stop and resume decisions never read a global newest board.
+- **REQ-112** — A runtime-neutral controller persists leases, wake conditions,
+  retries, checkpoints, idempotency, and technical availability, and resumes a
+  run without duplicate ownership or duplicate delivery effects.
+- **REQ-113** — Claude and Codex adapters consume the same control contract but
+  remain provider-pure, carrying explicit runtime-native model and effort values
+  with no parent-session inheritance or cross-provider fallback.
+- **REQ-114** — Claude native Workflow or an explicitly supported Claude Code
+  bridge is connected to a real launch path with positive application evidence;
+  an unavailable or unsupported host refuses before a routed launch is counted.
+- **REQ-115** — Codex dynamic and generated-agent launches produce positive
+  application evidence for the resolver-selected model and reasoning effort;
+  synthetic fixtures cannot satisfy the live-runtime acceptance gate.
+- **REQ-116** — A dispatch receipt joins requested, applied, observed, runtime,
+  model, effort, policy, launch identity, and usage status, and distinguishes
+  unsupported from unknown evidence without inferring success.
+- **REQ-117** — Graph reachability is proven from live origin and parent-epic
+  state before worktree creation or reuse; landed parents refresh child bases and
+  stale or ambiguous ancestry remains retryable pending work.
+- **REQ-118** — CI, review, quota, lease, and host readiness waits are bounded
+  deterministic states owned by the same run, while technical unavailability is
+  retried automatically and human checkpoints are limited to authorization or
+  policy decisions.
+- **REQ-119** — Runtime, account, role, model, effort, token, quality, recovery,
+  and outcome facts are joinable per run and provider, with complete attribution
+  required before a cost or ladder treatment is accepted.
+- **REQ-120** — The rollout has capability probes, live proving-ground smokes,
+  negative enforcement tests, versioned compatibility rollback, and preserves
+  historical receipts and provider-specific model policies.
+
 *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
 initial isolated tooling slice; subsequent packages remain subject to decomposition
 and rollout gates. Existing model floors remain unchanged.*
@@ -649,12 +681,24 @@ judgement escalation, and complete application telemetry. Deliver in dependency
 order so the resolver exists before generators and callers consume it; the
 existing Claude palette is a read-only compatibility surface.
 
+### Phase 37: Run the autonomous dual-runtime control plane
+**Status**: planned (ADR-015)
+**Requirements**: REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-116, REQ-117, REQ-118, REQ-119, REQ-120
+
+Prepare and implement the shared run controller, scoped durable state,
+provider-pure Claude and Codex adapters, live proving-ground coverage, graph
+reachability refresh, deterministic continuation, and usage/effectiveness
+observability. The phase is dependency-ordered so the shared contract and
+controller exist before either runtime adapter becomes authoritative. It does
+not change product code, provider palettes, or model-ladder thresholds before
+the new measurements are complete.
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `07b1508c8b220f2915a806af15f6d11e3790d79bbaeb5b3036b82c3ccbf25cc7`
-- Plans merged: 130/130
-- Phases verified: 9/17
+- Source fingerprint: `36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9`
+- Plans merged: 130/138
+- Phases verified: 9/18
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -676,5 +720,6 @@ existing Claude palette is a read-only compatibility surface.
 | 34 — Improve convergence and tune from measured outcomes | 5 | 5 | passed |
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |
+| 37 — Run the autonomous dual-runtime control plane | 8 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
