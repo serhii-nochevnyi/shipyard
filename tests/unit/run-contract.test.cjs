@@ -118,3 +118,14 @@ test('terminal states cannot be reopened', () => {
     (error) => error.code === 'INVALID_TRANSITION',
   );
 });
+
+test('checkpoint transitions survive canonical revalidation with an absent digest', () => {
+  const run = makeScope();
+  const authority = scope.createHostAuthority({ run_id: run.run_id, owner_id: run.lease.owner_id });
+  const running = scope.applyEvent(run, { event_id: 'start-checkpoint', expected_revision: 0, to: 'running' }, authority).contract;
+  const checkpointed = scope.applyEvent(running, {
+    event_id: 'checkpoint', expected_revision: 1, to: 'human_checkpoint', checkpoint_id: 'checkpoint-1',
+  }, authority).contract;
+  assert.equal(checkpointed.state, 'human_checkpoint');
+  assert.equal(checkpointed.checkpoint.digest, null);
+});

@@ -304,7 +304,7 @@ function normalizeCheckpointIdentity(input, runId, revision) {
     run_id: checkpointRun,
     state_revision: checkpointRevision.value,
     kind: safeId(input.kind || 'resume', 'checkpoint.kind'),
-    digest: input.digest === undefined ? null : digestValue(input.digest, 'checkpoint.digest'),
+    digest: input.digest === undefined || input.digest === null ? null : digestValue(input.digest, 'checkpoint.digest'),
   });
 }
 
