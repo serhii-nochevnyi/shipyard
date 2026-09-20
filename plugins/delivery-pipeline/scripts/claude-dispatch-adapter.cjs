@@ -461,6 +461,55 @@ function validateLaunchArguments(resolution) {
   }
 }
 
+function applicationEvidenceFields(applied) {
+  const output = {};
+  for (const field of ['session_id', 'runtime_version']) {
+    if (applied[field] !== undefined) {
+      if (typeof applied[field] !== 'string' || applied[field].trim() === '' || /[\u0000-\u001f\u007f]/.test(applied[field])) {
+        refuse('MISSING_RECEIPT', `host application evidence ${field} must be safe text`);
+      }
+      output[field] = applied[field].trim();
+    }
+  }
+  if (applied.process_id !== undefined) {
+    if (!Number.isSafeInteger(applied.process_id) || applied.process_id < 1) {
+      refuse('MISSING_RECEIPT', 'host application evidence process_id must be positive');
+    }
+    output.process_id = applied.process_id;
+  }
+  if (applied.transcript !== undefined) {
+    const transcript = applied.transcript;
+    if (!object(transcript)
+        || typeof transcript.path !== 'string' || transcript.path.trim() === ''
+        || !Number.isSafeInteger(transcript.bytes) || transcript.bytes < 0
+        || typeof transcript.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(transcript.sha256)) {
+      refuse('MISSING_RECEIPT', 'host application evidence transcript reference is invalid');
+    }
+    output.transcript = Object.freeze({
+      path: transcript.path,
+      bytes: transcript.bytes,
+      sha256: transcript.sha256,
+    });
+  }
+  if (applied.stream_evidence !== undefined) {
+    if (!object(applied.stream_evidence)
+        || applied.stream_evidence.format !== 'stream-json'
+        || !Number.isSafeInteger(applied.stream_evidence.records)
+        || applied.stream_evidence.records < 1) {
+      refuse('MISSING_RECEIPT', 'host application evidence stream proof is invalid');
+    }
+    output.stream_evidence = Object.freeze({
+      format: applied.stream_evidence.format,
+      records: applied.stream_evidence.records,
+      ...(Number.isSafeInteger(applied.stream_evidence.assistant_messages)
+        ? { assistant_messages: applied.stream_evidence.assistant_messages } : {}),
+      ...(Number.isSafeInteger(applied.stream_evidence.usage_records)
+        ? { usage_records: applied.stream_evidence.usage_records } : {}),
+    });
+  }
+  return output;
+}
+
 function createClaudeDispatchAdapter(options = {}) {
   const host = options.host || {};
   // Snapshot advertised capabilities so later caller/host mutation cannot
@@ -519,6 +568,7 @@ function createClaudeDispatchAdapter(options = {}) {
       applied_model: applied.applied_model, applied_effort: applied.applied_effort,
       ...observations, policy_hash: resolution.policy_hash,
       backend: resolution.backend, mechanism: resolution.mechanism,
+      ...applicationEvidenceFields(applied),
       ...(gsdRole !== undefined ? {
         gsd_role: gsdRole,
         gsd_launch_mechanism: applied.gsd_launch_mechanism,

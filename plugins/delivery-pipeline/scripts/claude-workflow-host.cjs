@@ -48,6 +48,36 @@ function hostResource(options, name) {
   return host && host[name] !== undefined ? host[name] : options[name];
 }
 
+function scopedContext(scope, context) {
+  if (scope === undefined) return context;
+  if (!object(scope)) reject('runScope must be an object');
+  if (context !== undefined && !object(context)) reject('workflow context must be an object');
+  const result = { ...(context || {}) };
+  for (const field of ['run_id', 'ticket', 'runtime', 'provider']) {
+    if (scope[field] === undefined) continue;
+    if (result[field] !== undefined && result[field] !== scope[field]) {
+      reject(`workflow context contradicts host-owned ${field}`);
+    }
+    result[field] = scope[field];
+  }
+  const phase = object(scope.phase) ? scope.phase.phase || scope.phase.id : scope.phase;
+  if (phase !== undefined) {
+    if (result.phase !== undefined && result.phase !== phase) reject('workflow context contradicts host-owned phase');
+    result.phase = phase;
+  }
+  const worktree = object(scope.worktree) ? scope.worktree.path || scope.worktree.worktree : scope.worktree;
+  if (worktree !== undefined) {
+    if (result.worktreePath !== undefined && result.worktreePath !== worktree) {
+      reject('workflow context contradicts host-owned worktree');
+    }
+    result.worktreePath = worktree;
+  }
+  for (const key of ['runScope', 'run_scope', 'authority', 'owner', 'session']) {
+    if (Object.prototype.hasOwnProperty.call(result, key)) reject(`workflow context cannot carry ${key}`);
+  }
+  return Object.freeze(result);
+}
+
 function registeredHostOptions(options) {
   return Object.freeze({
     agent: options.agent,
@@ -62,6 +92,9 @@ function registeredHostOptions(options) {
     typedGsdCallback: hostResource(options, 'typedGsdCallback'),
     artifactConsumer: hostResource(options, 'artifactConsumer'),
     artifactPreparer: hostResource(options, 'artifactPreparer'),
+    runScope: hostResource(options, 'runScope'),
+    controller: hostResource(options, 'controller'),
+    runId: hostResource(options, 'runId') || hostResource(options, 'run_id'),
   });
 }
 
@@ -92,7 +125,8 @@ function registerClaudeWorkflowHost(options = {}) {
         'agent', 'parallel', 'phase', 'log', 'capabilities', 'recorder',
         'applicationEvidence', 'typedGsdCallback', 'host',
         'artifactConsumer', 'artifactPreparer', 'handoff', 'sessionHandoff',
-        'ownerCapability', 'owner', 'capacity',
+        'ownerCapability', 'owner', 'capacity', 'runScope', 'run_scope', 'controller',
+        'runId', 'run_id',
       ]) {
         if (Object.prototype.hasOwnProperty.call(runOptions, key)) {
           reject(`registered host owns ${key}`);
@@ -197,6 +231,10 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   const typedGsdCallback = hostResource(options, 'typedGsdCallback');
   const configuredArtifactConsumer = hostResource(options, 'artifactConsumer');
   const configuredArtifactPreparer = hostResource(options, 'artifactPreparer');
+  const runScope = hostResource(options, 'runScope');
+  const controller = hostResource(options, 'controller');
+  const runId = hostResource(options, 'runId') || hostResource(options, 'run_id')
+    || (runScope && runScope.run_id);
   if (!object(capabilities)) reject('explicit host capabilities are required');
   if (!durableRecorder(recorder)) reject('a frozen durable receipt recorder is required');
   if (handoff !== undefined && !isOwnerCapability(handoff)) {
@@ -264,10 +302,16 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   });
   return Object.freeze((dispatchOptions = {}) => {
     if (!object(dispatchOptions)) reject('dispatch options must be an object');
+    if (controller && typeof controller.assertOwner === 'function') {
+      if (typeof runId !== 'string' || !runId.trim()) reject('controller-owned host requires runId');
+      controller.assertOwner(runId);
+    }
+    const context = scopedContext(runScope, dispatchOptions.context);
     return createClaudeWorkflowDispatch({
       ...dispatchOptions,
       agent: options.agent,
       host,
+      ...(context === undefined ? {} : { context }),
     });
   });
 }
