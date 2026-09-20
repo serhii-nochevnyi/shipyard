@@ -202,6 +202,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const runWaker = require('./run-waker.cjs');
 
 // Older than this and the front no longer describes the board as it stands.
 const FRESH_MS = envMs('SHIPYARD_STOP_GATE_FRESH_MS', 45 * 60 * 1000);
@@ -231,6 +232,11 @@ const DISPATCH_SUSPECT_MS = envMs('SHIPYARD_STOP_GATE_DISPATCH_SUSPECT_MS', 45 *
 const LEDGER_NAME = 'stop-gate-ledger.json';
 
 function allow() { process.exit(0); }
+
+function pendingScope(reason) {
+  process.stdout.write(JSON.stringify({ decision: 'block', reason: `shipyard: run scope is pending — ${reason}` }) + '\n');
+  process.exit(0);
+}
 
 // The refusal, gated by the ledger. Every branch below calls this rather than
 // deciding for itself whether a repeat is legitimate — one place asks that
@@ -481,14 +487,39 @@ function readFront(file) {
 }
 
 const cwd = process.cwd();
-const candidates = [];
-const seen = new Set();
-for (const dir of [cwd, ...worktreesOf(cwd)]) {
-  const file = frontFileIn(dir);
-  if (seen.has(file)) continue;
-  seen.add(file);
-  const c = readFront(file);
-  if (c) candidates.push(c);
+const requestedRunId = typeof payload.run_id === 'string' && payload.run_id.trim()
+  ? payload.run_id.trim() : (process.env.SHIPYARD_RUN_ID || null);
+const scopedMode = Boolean(requestedRunId || String(process.env.SHIPYARD_RUN_CONTROL || '').toLowerCase() === 'scoped'
+  || process.env.SHIPYARD_RUN_STORE_DIR);
+let candidates = [];
+if (scopedMode) {
+  if (!requestedRunId) pendingScope('run_id is missing from the stop payload');
+  let scoped;
+  try {
+    scoped = runWaker.readRun({
+      run_id: requestedRunId,
+      store_dir: process.env.SHIPYARD_RUN_STORE_DIR,
+      graph_dir: process.env.SHIPYARD_GRAPH_DIR,
+      worktree: payload.worktree || process.env.SHIPYARD_RUN_WORKTREE,
+    });
+  } catch (cause) {
+    pendingScope(`${cause.code || 'scope_error'}: ${cause.message}`);
+  }
+  const scopedFront = readFront(frontFileIn(scoped.worktree));
+  if (!scopedFront) pendingScope(`the scoped front is missing or unreadable at ${frontFileIn(scoped.worktree)}`);
+  if (scopedFront.front.run_id && scopedFront.front.run_id !== requestedRunId) {
+    pendingScope(`front ${scopedFront.file} belongs to ${scopedFront.front.run_id}, not ${requestedRunId}`);
+  }
+  candidates = [scopedFront];
+} else {
+  const seen = new Set();
+  for (const dir of [cwd, ...worktreesOf(cwd)]) {
+    const file = frontFileIn(dir);
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const c = readFront(file);
+    if (c) candidates.push(c);
+  }
 }
 if (!candidates.length) allow();
 
