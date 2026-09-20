@@ -510,7 +510,8 @@ function applyEvent(current, rawEvent, authority) {
     wait_kind: rawEvent.wait_kind || rawEvent.waitKind || null,
     checkpoint_id: rawEvent.checkpoint_id || rawEvent.checkpointId || null,
     wake_id: rawEvent.wake_id || rawEvent.wakeId || null,
-    reason: rawEvent.reason === undefined ? null : safeString(rawEvent.reason, 'event.reason', { whitespace: true, max: 2048 }),
+    reason: rawEvent.reason === undefined || rawEvent.reason === null
+      ? null : safeString(rawEvent.reason, 'event.reason', { whitespace: true, max: 2048 }),
   };
   if (!STATES.includes(event.to)) refuse('INVALID_STATE', `unknown target state ${event.to}`);
   if (event.to === 'waiting') {
