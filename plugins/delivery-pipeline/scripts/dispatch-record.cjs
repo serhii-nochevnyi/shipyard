@@ -87,6 +87,7 @@ const {
   CODEX_STATIC_ROLES, CODEX_ROLE_RUNG_DEFINITIONS, codexAgentFile, variantSuffix,
 } = require(path.join(__dirname, 'model-policy.cjs'));
 const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
+const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -179,7 +180,8 @@ const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
 const MARK_FLAGS = [
   'model', 'effort', 'effort-applied', 'route', 'task-level', 'runtime', 'backend',
   'observed-model', 'observed-effort', 'agent-file', 'agent-id', 'dispatch-id',
-  'boundary-store',
+  'boundary-store', 'run-id', 'account-scope', 'treatment-id', 'arm', 'policy-id',
+  'policy-version', 'policy-hash',
 ];
 
 // ── `reason` is the RESOLVER's route, never the caller's sentence ────────────
@@ -221,6 +223,13 @@ const MARK_FIELD = {
   'agent-id': 'agent_id',
   'dispatch-id': 'dispatch_id',
   'boundary-store': 'boundary_store',
+  'run-id': 'run_id',
+  'account-scope': 'account_scope',
+  'treatment-id': 'treatment_id',
+  arm: 'arm',
+  'policy-id': 'policy_id',
+  'policy-version': 'policy_version',
+  'policy-hash': 'policy_hash',
 };
 
 // Boundary resolutions use the generated file's physical name, while this
@@ -560,6 +569,13 @@ function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
         runtime: facts.runtime, backend: facts.backend,
         'observed-model': facts.observed_model, 'observed-effort': facts.observed_effort,
         'agent-file': recorderAgentFile(facts.agent_file), 'agent-id': facts.launch_id,
+        'run-id': facts.session_handoff && facts.session_handoff.run_id,
+        'account-scope': facts.account_scope,
+        'treatment-id': facts.treatment_id,
+        arm: facts.arm,
+        'policy-id': facts.policy_id,
+        'policy-version': facts.policy_version,
+        'policy-hash': facts.policy_hash,
       };
       if (facts.session_handoff !== undefined) {
         const handoff = facts.session_handoff;
@@ -579,6 +595,7 @@ function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
       const decided = { ...facts, agent_file: recorderAgentFile(facts.agent_file),
         model: legacyModel, effort: legacyEffort, effort_applied: facts.applied_effort,
         reason: legacyRoute, agent_id: facts.launch_id };
+      if (facts.session_handoff && facts.session_handoff.run_id) decided.run_id = facts.session_handoff.run_id;
       Object.defineProperty(decided, RECONCILIATION_CLAIM, { value: lease });
       return decided;
     } catch (error) {
@@ -692,6 +709,18 @@ function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
     const why = opaqueDispatchValueIssue(dispatchId);
     if (why !== null) fail(`--dispatch-id ${JSON.stringify(dispatchId)} cannot be recorded: ${why}`);
     decided.dispatch_id = dispatchId;
+  }
+  for (const flag of ['run-id', 'account-scope', 'treatment-id', 'policy-id', 'policy-version', 'policy-hash']) {
+    const value = given.get(flag);
+    if (value === undefined) continue;
+    const why = opaqueDispatchValueIssue(value);
+    if (why !== null) fail(`--${flag} ${JSON.stringify(value)} cannot be recorded: ${why}`);
+    decided[MARK_FIELD[flag]] = value;
+  }
+  if (given.has('arm')) {
+    const arm = given.get('arm');
+    if (!['baseline', 'treatment'].includes(arm)) fail(`--arm must be baseline or treatment, got ${JSON.stringify(arm)}`);
+    decided.arm = arm;
   }
   // The RESOLVER's route, checked against the resolver's own grammar and then
   // against the pair recorded beside it. The grammar check is what stops a
@@ -854,6 +883,13 @@ const BATCH_FIELDS = new Map([
   ['agent_id', 'agent-id'],
   ['dispatch_id', 'dispatch-id'],
   ['boundary_store', 'boundary-store'],
+  ['run_id', 'run-id'],
+  ['account_scope', 'account-scope'],
+  ['treatment_id', 'treatment-id'],
+  ['arm', 'arm'],
+  ['policy_id', 'policy-id'],
+  ['policy_version', 'policy-version'],
+  ['policy_hash', 'policy-hash'],
 ]);
 
 function parseBatchEntries(raw, projectRoot = process.cwd()) {
@@ -1084,6 +1120,23 @@ function withDispatchId(decided, store, cwd) {
   let id;
   do { id = newDispatchId(); } while (dispatchIdKnown(cwd, store, id));
   return { ...decided, dispatch_id: id };
+}
+
+function telemetryFor(recorded, ticket, role) {
+  return runTelemetry.dispatchProjection({
+    ...recorded,
+    event: 'dispatch',
+    phase: 'launch',
+    ticket,
+    role,
+    requested_model: recorded.requested_model || recorded.model,
+    requested_effort: recorded.requested_effort || recorded.effort,
+    applied_model: recorded.applied_model,
+    applied_effort: recorded.applied_effort || recorded.effort_applied,
+    observed_model: recorded.observed_model,
+    observed_effort: recorded.observed_effort,
+    route: recorded.route || recorded.reason,
+  });
 }
 
 // Read-modify-write plus the journal line, under ONE lock and written atomically —
@@ -1393,6 +1446,7 @@ if (require.main === module) {
         // holding it now.
         const recorded = withDispatchId(decided, store, cwd);
         dispatchId = recorded.dispatch_id;
+        const telemetry = telemetryFor(recorded, ticket, role);
         store.tickets[ticket] = {
           role,
           at,
@@ -1404,6 +1458,7 @@ if (require.main === module) {
           // store compares each record with the rule it was written under.
           fingerprint_kind: 'role',
           pr: s.pr || null,
+          telemetry,
         };
         // Journalled because nothing else records WHEN work was handed over, nor
         // WHAT it was handed to. The TTL above had to be inferred from PR
@@ -1411,7 +1466,7 @@ if (require.main === module) {
         // of the fields; the next one of each can be measured. The ticket's next
         // `status_change` closes the interval, so a `clear` needs no event of its
         // own.
-        return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...recorded, by: 'dispatch-record' };
+        return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...recorded, telemetry, by: 'dispatch-record' };
       }, (commit) => withReconciliationClaims([decided], commit));
     } catch (e) {
       try { releaseReconciliationClaim(decided); } catch (_) { /* keep the write failure */ }
@@ -1478,6 +1533,7 @@ if (require.main === module) {
           for (const entry of entries) {
             const s = current[entry.ticket];
             const recorded = withDispatchId(entry.decided, store, cwd);
+            const telemetry = telemetryFor(recorded, entry.ticket, entry.role);
             if ([...dispatchIds.values()].includes(recorded.dispatch_id)) {
               throw new Error(`mark-many contains duplicate dispatch id "${recorded.dispatch_id}"`);
             }
@@ -1489,6 +1545,7 @@ if (require.main === module) {
               fingerprint: dispatchFingerprint(entry.role, s),
               fingerprint_kind: 'role',
               pr: s.pr || null,
+              telemetry,
             };
             events.push({
               ts: at,
@@ -1497,6 +1554,7 @@ if (require.main === module) {
               role: entry.role,
               pr: s.pr || null,
               ...recorded,
+              telemetry,
               by: 'dispatch-record',
             });
           }
