@@ -63,6 +63,46 @@ function effectiveModelFor(resolution, canonical) {
   return canonical.model;
 }
 
+function validateRuntimeEvidence(evidence, selection, resolution) {
+  if (!object(evidence)
+      || evidence.schema !== 'shipyard.codex-runtime-evidence.v1'
+      || evidence.version !== 1
+      || evidence.runtime !== 'codex'
+      || evidence.provider !== 'openai'
+      || typeof evidence.run_id !== 'string'
+      || !evidence.run_id.trim()
+      || typeof evidence.session_id !== 'string'
+      || !evidence.session_id.trim()
+      || /\s/.test(evidence.session_id)
+      || !Number.isInteger(evidence.process_id)
+      || evidence.process_id < 1
+      || typeof evidence.command_digest !== 'string'
+      || !/^[a-f0-9]{64}$/.test(evidence.command_digest)
+      || typeof evidence.selection_source !== 'string'
+      || evidence.selection_source !== 'codex-exec-explicit-selection'
+      || !object(evidence.command)
+      || !Array.isArray(evidence.command.args)
+      || typeof evidence.dispatch_id !== 'string'
+      || evidence.dispatch_id !== resolution.dispatch_id) {
+    refuse('MISSING_RECEIPT', 'live Codex host did not return bound process and session evidence');
+  }
+  if (evidence.applied_model !== selection.model
+      || evidence.applied_effort !== selection.reasoning_effort
+      || evidence.observed_model !== selection.model
+      || evidence.observed_effort !== selection.reasoning_effort) {
+    refuse('NONCOMPLIANT_RECEIPT', 'live Codex evidence contradicts the resolved model or reasoning effort');
+  }
+  if (!object(evidence.stream_evidence)
+      || evidence.stream_evidence.format !== 'jsonl'
+      || !Number.isInteger(evidence.stream_evidence.records)
+      || evidence.stream_evidence.records < 1
+      || !Number.isInteger(evidence.stream_evidence.turns)
+      || evidence.stream_evidence.turns < 1) {
+    refuse('MISSING_RECEIPT', 'live Codex evidence lacks a completed JSONL turn');
+  }
+  return evidence;
+}
+
 // Deliberately accept the generator's flat TOML subset, not arbitrary TOML.
 // In particular, model-looking text in instructions or a table is not evidence.
 function readGeneratedSelection(content) {
@@ -238,6 +278,10 @@ function createCodexDispatchAdapter(options = {}) {
     if (resolution.agent_file && applied.agent_file_digest !== selection.agent_file_digest) {
       refuse('NONCOMPLIANT_RECEIPT', 'host did not apply the validated static content digest');
     }
+    const runtimeEvidence = applied.runtime_evidence || applied.runtimeEvidence;
+    if (host.requireRuntimeEvidence === true) {
+      validateRuntimeEvidence(runtimeEvidence, selection, resolution);
+    }
     const observations = {};
     for (const [field, supported, expected] of [
       ['observed_model', 'observedModel', applied.applied_model],
@@ -271,6 +315,7 @@ function createCodexDispatchAdapter(options = {}) {
         gsd_launch_mechanism: applied.gsd_launch_mechanism,
       } : {}),
       ...(resolution.agent_file ? { agent_file: resolution.agent_file, agent_file_digest: applied.agent_file_digest } : {}),
+      ...(runtimeEvidence ? { runtime_evidence: runtimeEvidence } : {}),
     });
   }
 
@@ -322,6 +367,7 @@ function createCodexDispatchAdapter(options = {}) {
         model: parsed.fields.model, reasoning_effort: parsed.fields.model_reasoning_effort,
         agent_file: handoff.agent_file, agent_file_digest: handoff.agent_file_digest,
         agent_file_content: handoff.agent_file_content,
+        ...(parsed.fields.sandbox_mode ? { sandbox_mode: parsed.fields.sandbox_mode } : {}),
       };
     } else {
       if (handoff !== undefined) refuse('UNSUPPORTED_SELECTION', 'dynamic launch cannot use a static handoff');
