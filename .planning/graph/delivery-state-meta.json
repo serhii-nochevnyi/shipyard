@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 345,
-  "generation_identity": "2b0e71ed-4d79-4477-9197-9100b3d0f0ae",
-  "previous_generation_identity": "16777229:152851770:1789662556243261200:113c42e017a8f2961d92b10d0b89866a2f111ec23dfa9e866c0ca114cd6e202e",
-  "observed_at": "2026-09-17T16:38:21.563Z",
-  "generated_at": "2026-09-17T16:38:21.563Z",
+  "generation": 346,
+  "generation_identity": "30b42e69-51c8-46ad-815f-b721b64eeba3",
+  "previous_generation_identity": "16777244:12912895138:1789818005295281000:1c607fa66ff2b89175a780a2664c045a01a729db6de05f837cc39c0ba6a46038",
+  "observed_at": "2026-09-19T12:09:01.729Z",
+  "generated_at": "2026-09-19T12:09:01.729Z",
   "by": "state-sync",
-  "pid": 99068,
-  "observation_generation": 345,
+  "pid": 7083,
+  "observation_generation": 346,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1439,14 +1439,102 @@
         "merge_state": null,
         "review_decision": null,
         "checks": null
+      },
+      "T-37-01": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/37-autonomous-dual-runtime-control-plane",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-37-02": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/37-autonomous-dual-runtime-control-plane",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-37-03": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/37-autonomous-dual-runtime-control-plane",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-37-04": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/37-autonomous-dual-runtime-control-plane",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-37-05": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/37-autonomous-dual-runtime-control-plane",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-37-06": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/37-autonomous-dual-runtime-control-plane",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-37-07": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/37-autonomous-dual-runtime-control-plane",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-37-08": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/37-autonomous-dual-runtime-control-plane",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "077baaca5f874a42e2ccd8dd694a24e96ae7f8cdcb16895b473f892dcdfd2d8b",
-    "front_digest": "c02816f0eccd91b5b118dbdf6f615e94091ba4777357d47aead60134511c15c6",
-    "observation_digest": "a68765e9a0925193dcec7adc2d964d623a27e755e572c48a9a87306c0a40a649",
-    "observation_generation": 345
+    "state_digest": "b5a3ce0cfbddb8d37fb5087355d8dca8b277821bf8d617cedf3b78f33abfd001",
+    "front_digest": "78357a4b4092659caa95872cb69a5993687f74957e8f125cf0adbdc5eda0d8a3",
+    "observation_digest": "0c52a1dfcd2aa88a64c51763bc9dbba9d023ca36002de9f7a5de9fa3a16b54e6",
+    "observation_generation": 346
   }
 }

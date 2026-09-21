@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 07b1508c8b220f2915a806af15f6d11e3790d79bbaeb5b3036b82c3ccbf25cc7 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -117,7 +117,17 @@
 - [x] **REQ-107**: Claude Code consumes the canonical role/escalation decision via its existing palette without changing that palette, and both runtime adapters reject unsupported or implicit model/effort application.
 - [x] **REQ-108**: Every routed dispatch, including decomposition and dynamic executor paths, passes through one mandatory resolve → validate → launch boundary; inline fallback, parent-session inheritance, and conflicting GSD or per-role overrides cannot bypass the selected model.
 - [x] **REQ-109**: Repair escalation is evidence-backed (`Luna/max` → `Sol/medium` → `Astra/medium`), judgement escalation retains all fired signals, fixed Luna roles are not globally promoted, and missing prior application evidence prevents escalation.
-- [x] **REQ-110**: Dispatch telemetry records policy fingerprint, logical rung, requested/applied/observed model and effort, runtime, backend, agent or launch identity, signals, and receipt; negative tests prove enforcement on both runtimes and preserve Claude palette files/configuration. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [x] **REQ-110**: Dispatch telemetry records policy fingerprint, logical rung, requested/applied/observed model and effort, runtime, backend, agent or launch identity, signals, and receipt; negative tests prove enforcement on both runtimes and preserve Claude palette files/configuration.
+- [ ] **REQ-111**: Every autonomous run has an immutable scoped identity covering repository, phase, ticket, worktree, runtime, dispatch, lease, and state revision; stop and resume decisions never read a global newest board.
+- [ ] **REQ-112**: A runtime-neutral controller persists leases, wake conditions, retries, checkpoints, idempotency, and technical availability, and resumes a run without duplicate ownership or duplicate delivery effects.
+- [ ] **REQ-113**: Claude and Codex adapters consume the same control contract but remain provider-pure, carrying explicit runtime-native model and effort values with no parent-session inheritance or cross-provider fallback.
+- [ ] **REQ-114**: Claude native Workflow or an explicitly supported Claude Code bridge is connected to a real launch path with positive application evidence; an unavailable or unsupported host refuses before a routed launch is counted.
+- [ ] **REQ-115**: Codex dynamic and generated-agent launches produce positive application evidence for the resolver-selected model and reasoning effort; synthetic fixtures cannot satisfy the live-runtime acceptance gate.
+- [ ] **REQ-116**: A dispatch receipt joins requested, applied, observed, runtime, model, effort, policy, launch identity, and usage status, and distinguishes unsupported from unknown evidence without inferring success.
+- [ ] **REQ-117**: Graph reachability is proven from live origin and parent-epic state before worktree creation or reuse; landed parents refresh child bases and stale or ambiguous ancestry remains retryable pending work.
+- [ ] **REQ-118**: CI, review, quota, lease, and host readiness waits are bounded deterministic states owned by the same run, while technical unavailability is retried automatically and human checkpoints are limited to authorization or policy decisions.
+- [ ] **REQ-119**: Runtime, account, role, model, effort, token, quality, recovery, and outcome facts are joinable per run and provider, with complete attribution required before a cost or ladder treatment is accepted.
+- [ ] **REQ-120**: The rollout has capability probes, live proving-ground smokes, negative enforcement tests, versioned compatibility rollback, and preserves historical receipts and provider-specific model policies. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
 ## Out of Scope
 
@@ -240,10 +250,20 @@
 | REQ-108 | Phase 36 | Complete |
 | REQ-109 | Phase 36 | Complete |
 | REQ-110 | Phase 36 | Complete |
+| REQ-111 | Phase 37 | In Progress |
+| REQ-112 | Phase 37 | In Progress |
+| REQ-113 | Phase 37 | In Progress |
+| REQ-114 | Phase 37 | In Progress |
+| REQ-115 | Phase 37 | In Progress |
+| REQ-116 | Phase 37 | In Progress |
+| REQ-117 | Phase 37 | In Progress |
+| REQ-118 | Phase 37 | In Progress |
+| REQ-119 | Phase 37 | In Progress |
+| REQ-120 | Phase 37 | In Progress |
 
 **Coverage:**
-- v1 requirements: 110 total
-- Mapped to phases: 108
+- v1 requirements: 120 total
+- Mapped to phases: 118
 - Unmapped: 2 ⚠️
 
 ---

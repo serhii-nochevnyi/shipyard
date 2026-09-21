@@ -882,6 +882,23 @@ dispatches are not relabeled as having used ADR-014. The task-level experiment
 in ADR-012 may remain historical context or telemetry, but it is not a second
 launch authority.
 
+## Autonomous controller rollout
+
+The `run-rollout.cjs` autonomous controller is disabled by default. A project may declare only
+the versioned `v1` rollout flag, and it becomes enabled only when both Claude
+and Codex pass live capability checks against the shared run contract. Claude
+remains Anthropic-backed and Codex remains OpenAI-backed; model ids,
+credentials, receipts, and usage evidence stay runtime-specific. Technical
+waits are `ci`, `review`, `quota`, `lease`, and `host`.
+
+The gate classifies missing hosts or credentials as `unavailable` and stale
+agents, wrong runtime/provider, inherited models, wrong scope, stale bases, or
+incomplete usage as `refused`. Synthetic evidence and successful process exit
+cannot enable it. Run state, receipts, usage facts, and technical waits are
+projected into GSD; heartbeat, lease expiry, store generation, event timestamps,
+and wake due times are excluded from semantic fingerprints. Rollback stops new
+controller launches while preserving historical records and labels.
+
 ## 8. Gates (summary table)
 
 ```text
