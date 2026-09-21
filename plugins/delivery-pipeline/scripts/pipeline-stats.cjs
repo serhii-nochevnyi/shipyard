@@ -26,6 +26,7 @@ const { execFileSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig, ROLES, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const usageAttribution = require(path.join(__dirname, 'usage-attribution.cjs'));
+const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
 
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
@@ -385,6 +386,20 @@ const ladderFacts = ladderEvents.map((event) => {
 });
 const reconciliation = usageAttribution.summarizeTelemetry(ladderFacts);
 const attributionReconciliation = usageAttribution.summarizeTelemetry(attributionRecords);
+const telemetryInputs = [
+  ...ladderEvents.map((event) => ({ ...event, event: 'dispatch', phase: 'launch' })),
+  ...attributionRecords.map((record) => ({ ...record, event: 'usage', phase: 'usage' })),
+  ...journal.filter((event) => ['receipt', 'quality', 'recovery', 'outcome'].includes(event.event)),
+];
+const runTelemetryReport = runTelemetry.joinTelemetry(telemetryInputs);
+const runTelemetrySummary = {
+  schema_version: runTelemetryReport.schema_version,
+  coverage: runTelemetryReport.coverage,
+  policy_fingerprints: runTelemetryReport.policy_fingerprints,
+  treatment_fingerprints: runTelemetryReport.treatment_fingerprints,
+  duplicate_observations: runTelemetryReport.duplicate_observations,
+  savings: runTelemetryReport.savings,
+};
 const telemetry = Object.fromEntries(
   Object.entries(reconciliation).filter(([key]) => key !== 'records')
 );
@@ -443,6 +458,7 @@ const ladder = {
   by_finding: reconciliation.findings,
   reconciliation,
   telemetry,
+  run_telemetry: runTelemetrySummary,
   policy_resolution: reconciliation.coverage.policy_resolution,
   runtime_application: reconciliation.coverage.runtime_application,
   provider_observation: reconciliation.coverage.provider_observation,
@@ -594,12 +610,14 @@ const optimizationInput = {
     coverage: reconciliation.coverage,
     warnings: usageLedger.warnings,
   },
+  run_telemetry: runTelemetrySummary,
   quality: {
     unguarded_merges: unguarded.length,
     checkpoint_unauthorized_merges: rows.filter((row) => row.checkpoint_unauthorized_merge).length,
     unknown_roles: unknownRoles.length,
     stranded_tickets: stranded.length,
     telemetry_findings: reconciliation.findings,
+    run_telemetry_savings: runTelemetryReport.savings,
   },
 };
 
@@ -623,6 +641,7 @@ if (asJson) {
     unreachable_repos: unreachableRepos,
     ladder,
     optimization_input: optimizationInput,
+    run_telemetry: runTelemetrySummary,
     // The detailed per-dispatch facts live under ladder.reconciliation. Keep
     // the top-level alias summary-only so JSON consumers get the same coverage
     // without serializing every fact twice.

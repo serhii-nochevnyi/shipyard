@@ -507,6 +507,7 @@ exists):
 ```text
 node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-graph.cjs
 node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs [--parked <T,T>]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/run-rollout.cjs <status|probe|rollback> --json [--capability-only]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/front.cjs [--json] [--parked <T,T>]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs <duty|merge <T|--all>|report> [--json] [--dry-run]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve [flags]  # compatibility/config diagnostics only; launches use the boundary
@@ -543,6 +544,31 @@ prior attempts" answered from the wrong directory is indistinguishable from a
 fresh ticket, which is exactly how a fixer re-proposes a fix that already failed.
 `failure-signature.cjs compute` is the one exception, by design: it reads a log
 and prints a hash, touches no journal, and is meant to run in a worktree.
+
+## Autonomous controller rollout
+
+The controller is a versioned, project-local gate. With no
+`delivery_pipeline.autonomous_control_plane` flag, rollout is `disabled` and
+delivery keeps its existing behavior. An enabled `v1` flag requires both
+runtimes, the shared `shipyard.run.v1` contract, runtime-specific providers and
+model ids, fresh agent and base evidence, verified application receipts,
+complete usage, and complete telemetry. The Workflow runtime uses Anthropic and Codex uses
+OpenAI; evidence from one runtime cannot satisfy the other.
+
+The controller records `run_id`, `dispatch_id`, state revision, runtime, receipt
+status, usage status, and technical waits (`ci`, `review`, `quota`, `lease`,
+`host`). Heartbeat, lease expiry, store generation, event timestamps, and wake
+due times stay out of the semantic GSD fingerprint. A rollback stops new
+controller launches and keeps historical records, receipts, usage facts, and
+labels intact.
+
+Capability failures are classified separately: missing host or credentials is
+`unavailable`; stale agent, wrong runtime/provider, inherited model, wrong
+scope, stale base, or incomplete usage is `refused`. A synthetic fixture,
+successful process exit, or inherited session never enables rollout. Human
+decisions remain limited to credentials or authorization, protected integration
+or production rollout, unresolved business or security policy, and the
+protected default-branch merge.
 
 ## Integration model — epic-stacked (default)
 
@@ -1266,6 +1292,12 @@ itself a STOP signal, not a reason to improvise.
    every manual delivery round and every babysit round closes the projection
    boundary before the board is shown. It honors `delivery_pipeline.gsd_sync: false`;
    otherwise a projection refusal is a delivery error.
+   Then run `run-rollout.cjs status --json`. The autonomous controller remains
+   disabled unless the project declares rollout version `v1` and both runtime
+   adapters return live capability evidence. `unavailable` and `refused` are distinct
+   non-green states; neither permits a launch or a provider fallback. The status
+   includes the rollback result: disabling new launches preserves run records,
+   receipts, usage facts, and historical labels.
 2a. **`epic-branch.sh refresh <epic>` — let each LIVE epic learn what landed
    under it.** Nothing in delivery used to merge the base INTO an epic at all:
    two epics were measured 27 then 31 commits behind, each containing zero
