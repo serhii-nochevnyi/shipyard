@@ -4,19 +4,19 @@
 # Build staging
 .build/
 
-# Runtime mount targets / local state
+# Local workspaces and build staging
 workspace/
-.cache-home/
-# Durable container state (remote-MCP OAuth credentials)
-.claude-state/
-# Legacy single-file credentials location, migrated by `make runtime-dirs`
-.claude-credentials.json
 # Per-session state of the stop-gate hook: how many rounds of THIS run it has
 # already refused. `.planning/graph/` is otherwise tracked, and a session id
 # belongs in no commit.
 .planning/graph/stop-gate-ledger.json
 /.planning/.adr-ingest/
 .copilot-mcp-oauth/
+
+# Host runtime state and credentials
+.cache-home/
+.claude-state/
+.claude-credentials.json
 
 # OS cruft
 .DS_Store
@@ -48,7 +48,6 @@ lpt[1-9].*
 .vscode/
 *.code-workspace
 .env.*
-!.env.example
 node_modules/
 .next/
 dist/

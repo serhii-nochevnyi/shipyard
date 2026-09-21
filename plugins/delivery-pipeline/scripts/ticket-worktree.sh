@@ -16,7 +16,7 @@ set -euo pipefail
 # Worktrees live in <repo>/../.wt-<repo-name>/<ticket-id> so parallel executors
 # never touch each other's checkout or the main working tree. Override the
 # location with SHIPYARD_WORKTREE_ROOT (needed when the repo's parent directory
-# is not writable — e.g. a repo checked out directly at /workspace).
+# is not writable — e.g. a repo checked out directly at /projects).
 #
 # create/remove are IDEMPOTENT: re-running a partially finished delivery must not
 # fail on "already exists"/"nothing to remove", because the babysit loop and the

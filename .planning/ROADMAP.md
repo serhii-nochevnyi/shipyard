@@ -82,8 +82,9 @@ script — not in a prompt.** Every requirement below is an instance of it.
   resync must carry the dispatch overlay, so the board and the stop gate never
   read work in flight as actionable between one `mark` and the next.
 
-- **REQ-26** — The image and the smokes pin the runtimes the conveyor is
-  tested on: Claude Code with Fable 5.1/Opus 5 aliases, gsd-core 1.13.0.
+- **REQ-26** — The host setup and smokes pin the runtimes the conveyor is tested
+  on: Claude Code with Fable 5.1/Opus 5 aliases, and a measured Codex/GSD
+  installation.
 - **REQ-27** — A Codex agent carries EFFORT, not a model baked from a catalog
   that can be stale; a `model =` line appears only when the user's GSD remap
   names one, resolved through GSD's resolver.
@@ -440,7 +441,7 @@ the board back into `execute: …, finalize: …` until the next `mark` rewrites
 Decomposed from ADR-003. Three things moved under the conveyor within a
 fortnight — Claude Code's aliases (Opus 5 at 2.1.219, Fable 5.1 at 2.1.255, the
 Agent tool accepting full ids), Codex's `gpt-6-astra`, gsd-core 1.13.0 — and the
-repository records none of them: the image pins Claude Code 2.1.200 and
+repository records none of them: the host setup pins Claude Code 2.1.200 and
 gsd-core 1.7.0, the Codex generator bakes `gpt-5.6-terra` into all seven agents
 over the user's newer default, and four documents state a tool constraint that
 no longer exists. The pins ticket runs now; the two prose/generator tickets
@@ -696,7 +697,7 @@ the new measurements are complete.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9`
+- Source fingerprint: `715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9`
 - Plans merged: 130/138
 - Phases verified: 9/18
 - Current phase: 20

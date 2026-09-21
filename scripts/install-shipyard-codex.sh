@@ -7,7 +7,7 @@ set -euo pipefail
 # Generates Codex-native artifacts from the canonical Claude plugin
 # (plugins/delivery-pipeline/), places them non-destructively, and registers the
 # runtime-agnostic GSD capability that contributes the blocking Gate 2 (ticket
-# graph) and UAT gates. The Docker image is NOT involved — this is a host tool.
+# graph) and UAT gates.
 #
 # Prerequisites:
 #   - node on PATH
@@ -558,7 +558,7 @@ fi
 
 # ── GSD capability (Gate 2 / UAT gates) ──────────────────────────────────────
 # Stage the capability with a bundled validator so graph-gate.cjs resolves it
-# from its own checks/ dir on a host (there is no /opt/delivery-pipeline here).
+# from its own checks/ directory on a host.
 echo "→ registering GSD capability (Gate 2 / UAT gates)…"
 CAP_STAGE="$STAGE/capability/delivery-pipeline"
 GSD_CAPABILITIES_ROOT="${GSD_CAPABILITIES_DIR:-$HOME/.gsd/capabilities}"

@@ -8,7 +8,7 @@ set -euo pipefail
 # board must name the guard's duty.
 #
 # `gh` is stubbed: this is about our parsing and our verdicts, not about GitHub.
-# No network, no Docker. The fixture is one epic, one root ticket (green, with a
+# No network. The fixture is one epic, one root ticket (green, with a
 # conform trailer) and one dependent ticket (red, cascading off the root).
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

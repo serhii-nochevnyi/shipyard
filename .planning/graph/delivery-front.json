@@ -192,7 +192,7 @@
   "actionable_count": 1,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
-  "fixpoint": false,
+  "fixpoint": true,
   "capacity": {
     "max": 4,
     "in_flight": 0,

@@ -701,6 +701,34 @@ if (ladder.dispatches) {
     console.log(`⚠ [${windowLabel}] policy reconciliation findings: ${findings.join(', ')} — each fact remains independently visible`);
   }
 }
+if (ladder.dispatches) {
+  console.log(
+    `ladder [${windowLabel}]: ${ladder.mode}, ${ladder.dispatches} dispatches; ` +
+    `${ladder.dispatches - ladder.missing_model}/${ladder.dispatches} with model, ` +
+    `${ladder.dispatches - ladder.missing_task_level}/${ladder.dispatches} with task level, ` +
+    `${ladder.dispatches - ladder.missing_effort_applied}/${ladder.dispatches} with applied effort, ` +
+    `${ladder.dispatches - ladder.missing_observed_model}/${ladder.dispatches} with observed model; ` +
+    `${ladder.requested_comparable}/${ladder.dispatches} routing-comparable, ` +
+    `${ladder.applied_comparable}/${ladder.dispatches} applied-comparable, ` +
+    `${ladder.observed_comparable}/${ladder.dispatches} observed-comparable, ` +
+    `${ladder.usage_join_comparable}/${ladder.dispatches} usage-join-comparable`
+  );
+  const gaps = [];
+  if (ladder.missing_model) gaps.push(`${ladder.missing_model} missing model`);
+  if (ladder.missing_effort) gaps.push(`${ladder.missing_effort} missing requested effort`);
+  if (ladder.missing_effort_applied) gaps.push(`${ladder.missing_effort_applied} missing applied effort`);
+  if (ladder.missing_route) gaps.push(`${ladder.missing_route} missing route`);
+  if (ladder.missing_task_level) gaps.push(`${ladder.missing_task_level} missing task level`);
+  if (ladder.missing_runtime) gaps.push(`${ladder.missing_runtime} missing runtime`);
+  if (ladder.missing_backend) gaps.push(`${ladder.missing_backend} missing backend`);
+  if (ladder.missing_agent_file) gaps.push(`${ladder.missing_agent_file} Codex dispatches missing agent file`);
+  if (ladder.missing_observed_model) gaps.push(`${ladder.missing_observed_model} missing observed model`);
+  if (ladder.missing_observed_effort) gaps.push(`${ladder.missing_observed_effort} missing observed effort`);
+  if (ladder.missing_dispatch_id) gaps.push(`${ladder.missing_dispatch_id} missing dispatch correlation id`);
+  if (gaps.length) {
+    console.log(`⚠ [${windowLabel}] ladder telemetry gaps: ${gaps.join(', ')} — those dispatches cannot be compared for cost or quality`);
+  }
+}
 
 const pad = (v, w) => String(v ?? '—').padEnd(w);
 console.log(pad('TICKET', 10) + pad('RISK', 8) + pad('STATUS', 9) + pad('PR', 6) +

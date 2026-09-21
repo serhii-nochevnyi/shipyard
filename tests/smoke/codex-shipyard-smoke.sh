@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Dynamic portion installs gsd-core --codex into a throwaway HOME to obtain the
 # OFFICIAL converter (so this asserts against real gsd-core behavior, not a
-# replica). Requires network + npx, like the image smokes require Docker.
+# replica). Requires network + npx, so it is kept out of the fast suite.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -693,13 +693,17 @@ if SHIPYARD_CODEX_CAPABILITIES_FILE="$WORK/incapable.json" \
 fi
 diff -ruN "$WORK/preflight-before" "$CODEX_HOME" >/dev/null || { echo "capability refusal changed destination"; exit 1; }
 
-# The installer refreshes gsd-core by default — a superstructure that pins its
-# base rots against it. But the opt-out must WORK, because the image relies on it
-# to keep a pinned, reproducible toolchain (and because this smoke runs offline-ish
-# against a throwaway HOME it prepared itself).
+# The installer refreshes gsd-core by default — a superstructure that pins GSD
+# forever rots against it. The opt-out must still WORK for hosts that manage GSD
+# separately (this smoke runs against a throwaway HOME).
 grep -q SHIPYARD_GSD_AUTO_INSTALL scripts/install-shipyard-codex.sh \
   || { echo "codex installer lost its gsd-core opt-out"; exit 1; }
-grep -q SHIPYARD_GSD_AUTO_INSTALL=0 Dockerfile \
-  || { echo "the image must opt out of the latest-gsd pull — it installs a pinned one"; exit 1; }
+
+SHIPYARD_GSD_AUTO_INSTALL=0 \
+  GSD_CORE_VERSION="$GSD_CORE_VERSION" \
+  bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/gsd-opt-out.log" 2>&1 \
+  || { echo "the GSD opt-out install failed:"; cat "$WORK/gsd-opt-out.log"; exit 1; }
+grep -q 'generating Codex bundle' "$WORK/gsd-opt-out.log" \
+  || { echo "the GSD opt-out did not reach bundle generation"; exit 1; }
 
 echo "codex-shipyard smoke: OK"

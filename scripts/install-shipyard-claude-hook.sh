@@ -12,11 +12,9 @@ set -euo pipefail
 # The two are opposite ends of the same conveyor: one gets work IN, the other
 # refuses to let it be abandoned half-done.
 #
-# Both are installed as SELF-CONTAINED copies under ~/.claude/hooks. The stop gate
-# reads only `.planning/graph/delivery-front.json`, so it needs nothing from the
-# plugin at run time — and copying it keeps the hook off the plugin's versioned
-# cache path, which changes on every release and would silently break the hook.
-# Re-run this installer after upgrading shipyard to refresh the copy.
+# The route hook is one file. The stop gate is installed as a self-contained
+# dependency bundle under ~/.claude/hooks/shipyard-stop-gate so a release cannot
+# leave a copied hook with a missing sibling module.
 #
 # The Codex side of the auto-route policy lives in the global AGENTS.md and is
 # installed by install-shipyard-codex.sh.
@@ -31,9 +29,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SETTINGS="$CLAUDE_HOME/settings.json"
 
 ROUTE_HOOK="$CLAUDE_HOME/hooks/shipyard-auto-route.sh"
-STOP_HOOK="$CLAUDE_HOME/hooks/shipyard-stop-gate.cjs"
+STOP_DIR="$CLAUDE_HOME/hooks/shipyard-stop-gate"
+STOP_HOOK="$STOP_DIR/stop-gate.cjs"
+OLD_STOP_HOOK="$CLAUDE_HOME/hooks/shipyard-stop-gate.cjs"
 ROUTE_CMD="bash \"$ROUTE_HOOK\""
 STOP_CMD="node \"$STOP_HOOK\""
+OLD_STOP_CMD="node \"$OLD_STOP_HOOK\""
 
 REMOVE=0
 [[ "${1:-}" == "--remove" ]] && REMOVE=1
@@ -78,7 +79,10 @@ NODE
 if [[ "$REMOVE" == 1 ]]; then
   drop_hook UserPromptSubmit "$ROUTE_CMD"
   drop_hook Stop "$STOP_CMD"
+  drop_hook Stop "$OLD_STOP_CMD"
+  drop_hook Stop "node \"$STOP_DIR/stop-gate.cjs\""
   rm -f "$ROUTE_HOOK" "$STOP_HOOK"
+  rm -rf "$STOP_DIR" "$OLD_STOP_HOOK"
   echo "✓ removed shipyard auto-route and stop-gate hooks from Claude"
   exit 0
 fi
@@ -86,9 +90,7 @@ fi
 # ── gsd-core, the thing shipyard is a superstructure over ────────────────────
 # Default on: a superstructure that never updates its base rots against it, which
 # is what three different gsd-core versions on one machine looked like. Opt out
-# with SHIPYARD_GSD_AUTO_INSTALL=0 — the IMAGE does exactly that, because
-# Dockerfile installs a PINNED gsd-core a few lines earlier and a reproducible
-# build must not have `latest` pulled in behind it.
+# with SHIPYARD_GSD_AUTO_INSTALL=0 when the host manages GSD separately.
 if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
   if [[ -x "$ROOT/scripts/ensure-gsd-core.sh" ]]; then
     bash "$ROOT/scripts/ensure-gsd-core.sh" claude || \
@@ -119,23 +121,99 @@ EOF
 chmod +x "$ROUTE_HOOK"
 echo "→ wrote $ROUTE_HOOK"
 
-# The plugin sits in the repo when this runs from a checkout, and at
-# /opt/delivery-pipeline inside the image (where this script lives in
-# /usr/local/bin and $ROOT resolves to /usr/local). Try both rather than assume.
+# Copy the relative CommonJS dependency closure. Dynamic and external requires
+# are rejected here because they cannot be made self-contained safely.
+copy_stop_bundle() {
+  local source="$1" dest="$2"
+  SOURCE="$source" DEST="$dest" node - <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+
+const source = fs.realpathSync(process.env.SOURCE);
+const dest = path.resolve(process.env.DEST);
+const root = path.dirname(source);
+const copied = new Set();
+const localRequire = /require\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g;
+
+function resolveLocal(from, request) {
+  const base = path.resolve(path.dirname(from), request);
+  const relative = path.relative(root, base);
+  if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`dependency escapes the hook bundle root: ${request} from ${from}`);
+  }
+  const candidates = [
+    base,
+    `${base}.cjs`,
+    `${base}.js`,
+    path.join(base, 'index.cjs'),
+    path.join(base, 'index.js'),
+  ];
+  const found = candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  if (!found) throw new Error(`missing relative dependency ${request} required by ${from}`);
+  return fs.realpathSync(found);
+}
+
+function copy(file) {
+  if (copied.has(file)) return;
+  copied.add(file);
+  const relative = path.relative(root, file);
+  const target = path.join(dest, relative);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(file, target);
+  const sourceText = fs.readFileSync(file, 'utf8');
+  for (const match of sourceText.matchAll(localRequire)) copy(resolveLocal(file, match[1]));
+}
+
+copy(source);
+process.stdout.write(String(copied.size));
+NODE
+}
+
+# The plugin normally sits in the repo when this runs from a checkout. A custom
+# SHIPYARD_PLUGIN_DIR is supported for callers that keep the source elsewhere.
 STOP_SRC=""
 for candidate in \
   "${SHIPYARD_PLUGIN_DIR:-}/scripts/stop-gate.cjs" \
-  "$ROOT/plugins/delivery-pipeline/scripts/stop-gate.cjs" \
-  "/opt/delivery-pipeline/scripts/stop-gate.cjs"
+  "$ROOT/plugins/delivery-pipeline/scripts/stop-gate.cjs"
 do
   [[ -f "$candidate" ]] && { STOP_SRC="$candidate"; break; }
 done
-[[ -n "$STOP_SRC" ]] || { echo "error: stop-gate.cjs not found (looked under $ROOT/plugins/delivery-pipeline and /opt/delivery-pipeline)" >&2; exit 1; }
-cp "$STOP_SRC" "$STOP_HOOK"
+[[ -n "$STOP_SRC" ]] || { echo "error: stop-gate.cjs not found under $ROOT/plugins/delivery-pipeline" >&2; exit 1; }
+STOP_TMP=""
+cleanup_stop_tmp() {
+  [[ -z "$STOP_TMP" || ! -e "$STOP_TMP" ]] || rm -rf "$STOP_TMP"
+}
+trap cleanup_stop_tmp EXIT
+STOP_TMP="$(mktemp -d "$CLAUDE_HOME/hooks/.shipyard-stop-gate.XXXXXX")"
+COPIED="$(copy_stop_bundle "$STOP_SRC" "$STOP_TMP")"
+STOP_META="$(cd "$(dirname "$STOP_SRC")/.." && pwd)/.claude-plugin/plugin.json"
+if [[ -f "$STOP_META" ]]; then
+  STOP_VERSION_JSON="$(META="$STOP_META" node - <<'NODE'
+const fs = require('node:fs');
+const value = JSON.parse(fs.readFileSync(process.env.META, 'utf8')).version || null;
+process.stdout.write(JSON.stringify(value));
+NODE
+)"
+  printf '{"shipyard_version":%s}\n' "$STOP_VERSION_JSON" > "$STOP_TMP/version.json"
+fi
+while IFS= read -r -d '' file; do
+  node --check "$file"
+done < <(find "$STOP_TMP" -type f \( -name '*.cjs' -o -name '*.js' \) -print0)
+VERIFY_CWD="$(mktemp -d)"
+VERIFY_STATUS=0
+printf '{}\n' | (cd "$VERIFY_CWD" && node "$STOP_TMP/$(basename "$STOP_SRC")") >/dev/null || VERIFY_STATUS=$?
+rm -rf "$VERIFY_CWD"
+(( VERIFY_STATUS == 0 )) || exit "$VERIFY_STATUS"
+rm -rf "$STOP_DIR"
+mv "$STOP_TMP" "$STOP_DIR"
+STOP_TMP=""
 chmod +x "$STOP_HOOK"
-echo "→ wrote $STOP_HOOK"
+rm -f "$OLD_STOP_HOOK"
+echo "→ wrote $STOP_HOOK ($COPIED files)"
 
 add_hook UserPromptSubmit "$ROUTE_CMD"
+drop_hook Stop "$OLD_STOP_CMD"
+drop_hook Stop "node \"$CLAUDE_HOME/hooks/shipyard-stop-gate/stop-gate.cjs\""
 add_hook Stop "$STOP_CMD"
 
 # ── GSD's global defaults for this runtime ───────────────────────────────────
@@ -151,8 +229,7 @@ add_hook Stop "$STOP_CMD"
 GSD_TUNE=""
 for candidate in \
   "${SHIPYARD_PLUGIN_DIR:-}/scripts/gsd-tune.cjs" \
-  "$ROOT/plugins/delivery-pipeline/scripts/gsd-tune.cjs" \
-  "/opt/delivery-pipeline/scripts/gsd-tune.cjs"
+  "$ROOT/plugins/delivery-pipeline/scripts/gsd-tune.cjs"
 do
   [[ -f "$candidate" ]] && { GSD_TUNE="$candidate"; break; }
 done

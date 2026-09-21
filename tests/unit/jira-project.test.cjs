@@ -81,10 +81,6 @@ function project({ tickets = {}, journal = [], store = null, config = undefined,
   if (configRaw !== undefined) {
     fs.writeFileSync(path.join(dir, '.planning', 'config.json'), configRaw);
   } else {
-    // The projection ON is the deliberate default for these fixtures: `enabled`
-    // defaults to true, and `jira_transitions` defaults to EMPTY, which is the
-    // feature switched off. A test about anything but the off-switches has to
-    // opt in, exactly as an operator does.
     const pipeline = config === undefined
       ? { jira_transitions: { 'pr-open': 'In Progress', merged: 'Done' } }
       : config;

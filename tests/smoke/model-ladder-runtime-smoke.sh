@@ -48,10 +48,8 @@ const args = process.argv.slice(2);
 if (args[0] !== 'capability' || args[1] !== 'install') process.exit(99);
 fs.cpSync(args[2], path.join(process.env.GSD_CAPABILITIES_DIR, 'delivery-pipeline'), { recursive: true });
 `);
-  // Preserve the native Claude palette and an operator's provider settings,
-  // including formatting. No real credentials or host configuration are read.
+  // Preserve the native Claude palette and an operator's settings.
   fs.cpSync(source, path.join(claudeDir, 'plugins/shipyard'), { recursive: true });
-  fs.copyFileSync(path.join(root, 'docker-compose.yml'), path.join(claudeDir, 'provider-compose.yml'));
   write(path.join(claudeDir, 'settings.json'), '{\n  "model": "sonnet",\n  "env": {"ANTHROPIC_BASE_URL": "https://provider.invalid", "ANTHROPIC_DEFAULT_OPUS_MODEL": "native-opus"}\n}\n');
   const claudeBefore = snapshot(claudeDir);
   const paletteBefore = fs.readFileSync(path.join(source, 'scripts/runtime-adapters.cjs'));
@@ -230,8 +228,6 @@ fs.cpSync(args[2], path.join(process.env.GSD_CAPABILITIES_DIR, 'delivery-pipelin
   write(agentFile, agentBytes);
   assert.deepEqual(snapshot(claudeDir), claudeBefore, 'Claude palette/provider configuration must remain byte-identical');
   assert.deepEqual(fs.readFileSync(path.join(source, 'scripts/runtime-adapters.cjs')), paletteBefore);
-  assert.deepEqual(fs.readFileSync(path.join(root, 'docker-compose.yml')),
-    fs.readFileSync(path.join(claudeDir, 'provider-compose.yml')), 'canonical provider configuration is unchanged');
   assert.deepEqual(snapshot(source), snapshot(path.join(claudeDir, 'plugins/shipyard')), 'canonical Claude plugin is unchanged');
   console.log(`model-ladder runtime smoke: OK (${cases} installed runtime rungs; fingerprints, installer validation, native Claude bytes, refusal cases)`);
 } finally {

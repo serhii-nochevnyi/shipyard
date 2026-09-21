@@ -502,9 +502,8 @@ test('every duty action the docs name is one sentinel.cjs can emit', () => {
 
 test('the plugin and its capability carry the same version', () => {
   // They ship as one product: a bumped plugin over a stale capability installs a
-  // gate from one release beside commands from another. `make test-overlay`
-  // checks the same drift, but that target needs Docker — this one runs in the
-  // fast suite, where a version bump is actually made.
+  // gate from one release beside commands from another. The fast suite checks
+  // the same drift without a network dependency.
   const plugin = JSON.parse(readRepo('plugins/delivery-pipeline/.claude-plugin/plugin.json'));
   const capability = JSON.parse(readRepo('capabilities/delivery-pipeline/capability.json'));
   assert.strictEqual(

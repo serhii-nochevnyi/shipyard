@@ -95,7 +95,8 @@ const readRepo = (rel) => fs.readFileSync(path.join(REPO, rel), 'utf8');
 const tracked = (...dirs) =>
   execFileSync('git', ['ls-files', '-z', '--', ...dirs], { cwd: REPO, encoding: 'utf8' })
     .split('\0')
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((rel) => fs.existsSync(path.join(REPO, rel)));
 
 // Extract a call site by scanning for balanced parens from the first
 // `name(` — tolerant of reformatting (single line, different indentation, a

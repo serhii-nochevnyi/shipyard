@@ -1,784 +1,314 @@
 # Shipyard
 
-A delivery conveyor for coding agents: it takes a problem from "we should look
-into this" all the way to a set of green PRs — deep investigation → a validated
-ticket graph → a worktree and PR per ticket, babysat to green.
+Shipyard is an artifact-driven delivery pipeline for Claude Code and OpenAI
+Codex CLI. It moves a change through investigation, planning, implementation,
+verification, review, and delivery while keeping the two runtimes on their own
+model providers.
 
-It runs on **two runtimes from one source of truth**. The Claude Code plugin
-(`plugins/delivery-pipeline/`) is canonical; a generator emits the Codex-native
-artifacts from it, so the OpenAI Codex CLI runs the same conveyor and the two
-cannot drift. Everything the conveyor must not improvise — git, `gh`, the graph,
-the gates — lives in tested Node/bash scripts shared by both.
+The Claude Code plugin is the canonical source. The Codex installer generates
+the equivalent skills, agents, and shared scripts from that source. The graph in
+`.planning/graph/` is the durable record of work; a session can end and the
+next one can resume from it.
 
-Three ways to run it:
+## Requirements
 
-| | What you get | Start here |
-|---|---|---|
-| **Container** (Claude Code) | The whole toolchain pinned and baked: Claude Code CLI, gsd-core, shipyard, MCP servers, auto-route hook. Isolated, throwaway, `bypassPermissions` is safe inside it. | [`make dev`](#quick-start) |
-| **Host Claude Code** | The conveyor and its gates in your own Claude Code, no container. Installable straight from GitHub: `claude plugin marketplace add serhii-nochevnyi/shipyard`. | [Installing the conveyor into host Claude Code](#installing-the-conveyor-into-host-claude-code) |
-| **Host Codex CLI** | The same skills, subagents and gates, generated for Codex. | [Shipyard on the OpenAI Codex CLI](#shipyard-on-the-openai-codex-cli) |
+Install these on the host before using Shipyard:
 
-The container is Claude Code only — Codex is a host-side install. Both host paths
-leave everything outside shipyard's own files untouched.
+- Node.js 24 or newer
+- Git and GitHub CLI (`gh`), authenticated for repositories you deliver
+- Claude Code with an Anthropic Pro or Max account, or OpenAI Codex CLI through
+  ChatGPT
+- GSD Core for the selected runtime; the Shipyard installers refresh it unless
+  `SHIPYARD_GSD_AUTO_INSTALL=0` is set
 
-## Quick start
+Claude work stays on Anthropic models. Codex work stays on OpenAI models. The
+pipeline records the requested tier, concrete model, effort, session identity,
+ticket, and outcome so later model tuning is based on measured work.
 
-This is the **containerized Claude Code** path. For a host install (Claude Code or
-Codex CLI) skip to [Shipyard on the OpenAI Codex CLI](#shipyard-on-the-openai-codex-cli)
-or [Installing the conveyor into host Claude Code](#installing-the-conveyor-into-host-claude-code).
+## Install
 
-```bash
-make dev
-```
+### Claude Code
 
-`make dev` runs the guided launcher (`scripts/dev.sh`): it creates `.env` if
-missing, builds the images if needed, starts the container, and then asks in turn
-whether to log in to Claude, authenticate MCP servers (e.g. Atlassian Rovo), and
-which project to work in — clone a new repo into `/workspace` or pick an existing
-one there. It finally attaches a `claude` or `bash` session **inside that project
-directory**. Each step is skipped if already done, so it is safe to re-run.
-
-Inside this isolated container, Claude always runs without per-action permission
-prompts: the image bakes `permissions.defaultMode: "bypassPermissions"` into
-`~/.claude/settings.json`, and the entrypoint pre-seeds the one-time bypass
-acceptance plus per-directory trust for `/workspace` and every project inside it
-(the `shipyard-trust` helper covers repos cloned later). So a bare `claude` from
-any shell behaves the same as `claude --dangerously-skip-permissions` (which
-`make claude` and the launcher's "claude" option still pass explicitly). Use this
-only in the throwaway container, never against your host shell.
-
-Individual targets if you prefer to drive it yourself:
-
-| Command | Does |
-|---|---|
-| `make up` | start the persistent container (`docker compose up -d`; builds the image first if missing) |
-| `make claude [DIR=subdir]` | attach a `claude --dangerously-skip-permissions` session (in `/workspace/subdir` if `DIR` is given) |
-| `make shell [DIR=subdir]` | attach a `bash` shell (in `/workspace/subdir` if `DIR` is given) |
-| `make clone REPO=<git-url>` | clone a repo into `/workspace` (set `WORKSPACE_SUBDIR=name` to rename) |
-| `make bootstrap-atlassian-oauth` | authenticate the Atlassian Rovo MCP server |
-| `make run-docker` | one-off ephemeral session (`docker compose run --rm`) |
-| `make clean-cache` | prune MCP server logs older than 7 days from `.cache-home` |
-
-## Delivery workflow
-
-The conveyor is the same on every runtime — only the invocation differs:
-`/shipyard:<cmd>` on Claude Code, `$shipyard-<cmd>` on Codex. This section uses
-the Claude Code spelling. You do not have to remember which entry to use —
-describe the work and the router picks it:
-
-```text
-/shipyard:route "scope of the work"
-```
-
-It is read-only and advisory: it sizes the work and hands off to the right loop
-(and the auto-route hook — baked into the container, installable on either host
-runtime — surfaces it for you, so in practice you just state what you want). Large multi-ticket efforts go through the three conveyor loops
-below; a small change, an existing ticket, or explicit "no ticket" goes to
-`/shipyard:bench`, which implements directly in the current worktree and never
-creates a branch, PR, or commit unless you ask.
-
-```text
-/shipyard:investigate "тема або проблема"
-```
-
-Deep investigation: an intake interview refines the problem, parallel research
-agents draft options/constraints/risks, then you close open questions and lock
-decisions in a dialog. Re-run `/shipyard:investigate` anytime — it picks up the
-open investigation from its artifacts. When all questions are closed it
-generates an ADR package (Gate 1 — the only fully human gate).
-
-```text
-/shipyard:decompose
-```
-
-Finds undecomposed ADRs, runs the GSD planning chain under the hood, stamps
-tickets with branches/risk, validates the dependency graph (Gate 2 — automatic,
-mechanical), and shows you the ticket set for approval. Gate 2 is
-`scripts/validate-graph.cjs` exiting 0 and nothing else.
-
-```text
-/shipyard:deliver
-```
-
-Cold-starts from live GitHub state, shows a ticket board (ready /
-branched-needs-pr / blocked / pr-open / merged), lets you pick the scope to take
-on, then runs each ticket in its own git worktree to its own PR and babysits
-every PR to green: CI fixes, review-comment handling, architecture conformance,
-with CodeRabbit/Copilot re-review after every push. Green ticket PRs are squashed
-into the phase's epic branch by the sentinel (below); it only comes back to you
-for high-risk approvals, escalations, and the one merge that matters — the epic
-into `main`. Gaps of days between the three
-stages are fine — each command re-derives its state from artifacts and GitHub,
-not from the chat.
-
-**When the run may stop is code, not judgement.** `state-sync` ends every board
-with the actionable front and a verdict — `fixpoint: NO — 12 item(s) are
-actionable RIGHT NOW` or `fixpoint: YES` — computed by
-`scripts/front.cjs` (also runnable alone, `--json` for the machine view, written to
-`.planning/graph/delivery-front.json`). A PR waiting on CI counts as "not a
-fixpoint" but never as a reason to block: the run serves the rest of the front and
-only waits when that PR is the last thing left.
-
-**And that last wait is a script, held in place by the gate.** The babysit loop is
-driven by agent-completion wake-ups, so when the only thing left is CI there is no
-agent to complete and nothing brings the run back — measured on a stacked phase
-that landed one ticket of four and then sat with the next PR green and ready until
-a person returned. `scripts/ci-wait.cjs` waits in the **foreground**, which closes
-the hole by construction: the turn never ends, so nothing has to wake it. It
-**refuses** whenever the board holds actionable work or a ticket is with an agent,
-so it cannot become the `gh pr checks --watch` serialization this conveyor removed
-— that rule is about opportunity cost, and there is none when the board has no
-other move. It returns the moment a watched PR settles, green or red.
-
-Waiting in the foreground only helps if the loop actually calls it, and "the loop
-should call it" is prose. So the **stop gate refuses a stop whose board holds
-nothing but `waiting.ci`** and names the script. The pair terminates on its own:
-`ci-wait.cjs` counts empty windows against the delivery-state fingerprint and
-**escalates itself after three** (~45 min of nothing moving), and an escalation
-park drops the ticket from the front — so the CI bucket empties and the gate goes
-quiet through the rule it already had. A stuck pipeline ends with a person, not
-with a gate quietly giving up.
-
-A stacked cascade needs one such round **per ticket**: each squash-merge rewrites
-the parent's history, so the next child goes `DIRTY`, gets the base merged in, and
-re-runs every check. "Merge the phase" is finished at `fixpoint: YES`, not when
-the first ticket lands.
-
-**A sentinel guards the PRs while the run cascades on.** The moment tickets have
-PRs, two jobs run at different speeds — opening the next branches (minutes) and
-driving a PR to green (CI rounds, CodeRabbit, Copilot). So the run posts a
-background **PR sentinel** over the open PRs and goes back to the cascade. The
-guard fixes CI, services every reviewer comment (`reviewers.cjs feedback` returns
-threads *and* the bots' PR-level comments), records the arch-review verdict as a
-`gate_status:` trailer, and then **lands the ticket PR in the epic branch** —
-`scripts/sentinel.cjs merge`, which re-verifies the whole gate against live
-GitHub and refuses on anything unproven. It retargets cascade children and
-reports back. That `gate_status:` line lives in the PR BODY and is the conveyor's
-own — GSD 1.13's TDD audit reads a `gate-status:` COMMIT trailer, a different
-mechanism one hyphen away, and neither reads the other. Knobs:
-`pipeline.sentinel` (`auto` | `off`), `pipeline.auto_merge` (`epic` | `off`).
-**The epic → `main` PR is never auto-merged** — the phase lands by a human's hand,
-which is what the epic-as-quarantine is for. Without a background-agent runtime
-(Codex) the same duty runs as a mandatory pass at the top of every round. Both
-writers take a lock: state files are replaced atomically, and `git worktree add`
-is serialized against the guard's pushes.
-
-**Worktrees are garbage-collected, not just reaped.** The reaper walks the current
-ticket graph, so it structurally cannot see a worktree whose ticket was
-re-decomposed away or one left behind by a killed run — and past a few dozen of
-them the sandbox profile exceeds the argv limit (E2BIG) and every sandboxed
-command starts failing. `scripts/ticket-worktree.sh gc` classifies every pipeline
-worktree (`live` / `landed` / `dirty` / `review` / `gone`) and warns past
-`SHIPYARD_WORKTREE_WARN_AT` (default 20); `gc --prune` removes only what it can
-prove is safe. Uncommitted work and worktrees the graph cannot account for are
-never removed automatically, and with no `tickets.json` present gc prunes nothing
-at all.
-
-**A phase can span repositories.** A ticket whose files live in a sibling repo
-declares `delivery.repo: owner/name` in its plan; every GitHub query, epic branch
-and PR is then scoped to that repo, and the board tags it (`T-06-01@acme/webapp`).
-Tracking needs nothing else; *executing* there needs a local checkout —
-`pipeline.repos: {"acme/webapp": "/abs/path"}`. Without the declaration the
-conveyor watches the wrong repository: a PR merges next door while the board says
-`pending` and every dependent stays blocked. Gate 2 warns on that signature.
-
-Full specification: `docs/gsd_multilevel_delivery_pipeline.md`.
-
-### Agent model policy
-
-The active model policy is [ADR-014](.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md).
-It is runtime-neutral at the contract boundary, but it deliberately gives
-Claude Code and Codex independent native model grids. A role, rung, signal set,
-explicit launch selection, and application receipt are one dispatch contract;
-the runtime adapter decides how that selection is applied. ADR-005 and ADR-012
-remain historical records and are superseded for current model and effort
-selection.
-
-```bash
-node plugins/delivery-pipeline/scripts/model-policy.cjs fingerprint
-node plugins/delivery-pipeline/scripts/codex-agent.cjs select <role> --json \
-  --capabilities-file "$CODEX_HOME/shipyard/codex-capabilities.json"
-```
-
-The canonical runtime palettes are:
-
-| Runtime | Native model key | Concrete selection |
-|---|---|---|
-| Codex | `Luna` | `gpt-5.6-luna` |
-| Codex | `Sol` | `gpt-5.6-sol` |
-| Claude Code | `Sonnet` | native alias `sonnet` |
-| Claude Code | `Opus` | native alias `opus` |
-| Claude Code | `Fable` | native alias `fable` |
-
-`gpt-6-astra` remains registered by the Codex adapter for older explicit
-configurations, but it is not selected by the current routed ladder.
-
-The canonical role/rung ladder and its evidence are:
-
-| Role | Codex | Claude Code |
-|---|---|---|
-| `research` | Sol/high → Sol/xhigh on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Opus/medium → Opus/max on explicit `complexity: very-complex`; `type: alternatives` stays at base |
-| `decomposition` | Sol/high → Sol/xhigh on `critical` or `checkpoint` | Opus/medium → Opus/max on `critical` or `checkpoint` |
-| `executor` | Luna/max → Sol/high on explicit `critical` or `checkpoint` | Sonnet/max → Opus/low on explicit `critical` or `checkpoint` |
-| `pr-sentinel` | Luna/medium, fixed; gate strategy only | Sonnet/high, fixed; gate strategy only |
-| `integrator` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on the same evidence |
-| `drift-check` | Luna/max, fixed; gate strategy only | Opus/max, fixed; gate strategy only |
-| `arch-review` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/max on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
-| `ci-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
-| `review-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
-
-Signals are role-scoped, not global promotions. The shared vocabulary is
-`type`, `complexity`, `risk`, `critical`, `checkpoint`, `contested`, measured
-`inputTokens`, `signatureState`, and boundary-issued `priorApplied`. A missing
-signal never promotes a role. When multiple declared signals fire, the resolver
-retains every reason and selects the highest rung allowed for that runtime and
-role. `flake` and `plan_defect` are terminal gate/strategy outcomes, not model
-promotions. Repair escalation is permitted only after the immediately preceding
-rung has a boundary-verified application receipt; a copied or self-asserted
-receipt is not evidence.
-
-### The mandatory dispatch boundary
-
-Every routed launch, including research, decomposition, executor, sentinel,
-drift, architecture review, integration, CI-fix, and review-fix, follows one
-boundary:
-
-```text
-resolve(runtime, role, signals)
-  → validate concrete model/effort and policy fingerprint
-  → launch with explicit runtime selection
-  → verify application receipt
-  → record requested + applied + observed evidence
-```
-
-The boundary is built from `createDispatchBoundary`, the active runtime's
-`createCodexDispatchAdapter` or `createClaudeDispatchAdapter`, and a
-`createDurableRecorder`. Codex static roles use the selector's exact generated
-`agent_file`; dynamic `decomposition` and `executor` launches receive explicit
-`model` and `reasoning_effort` arguments. Claude launches receive the selected
-native alias and explicit effort through Workflow arguments. A missing or
-ambiguous runtime, unsupported pair, stale generated file, missing adapter,
-missing receipt, conflicting override, inline launch, or parent-session-inherited
-selection is a hard refusal. There is no silent lower-model or session fallback.
-
-Each receipt records the runtime, role, native model key, logical rung, concrete
-requested and applied model/effort, all fired signals, policy version/fingerprint,
-backend, agent file or launch arguments, dispatch identity, application receipt,
-and observed model/effort when the runtime exposes them. A successful process
-exit, prompt text, or requested value copied into an `applied` field is not a
-receipt.
-
-Claude's palette/provider configuration is unchanged. ADR-014 uses the existing
-Claude Code aliases (`sonnet`, `opus`, and `fable`) as native selections; it does
-not change their model IDs, provider, credentials, environment pins, or palette
-files. A Fable rung is an evidence-backed Claude result and requires the existing
-routed consent (`pipeline.fable: auto`); unsupported or unconsented application
-is refused rather than silently downgraded.
-
-The task-level vocabulary from ADR-012 may remain useful as context or telemetry,
-but it is not a second launch authority. Routed selection comes from ADR-014's
-runtime, role, rung, and signal rules.
-
-Configuration and GSD model profiles cannot override the canonical boundary.
-`delivery_pipeline.codex_models` and `pipeline.codex_models` are compatibility
-inputs for legacy/non-routed consumers; their first/last palette behavior,
-version-filtered behavior, and any empty-palette fallback do not select or
-authorize a routed launch. The generator emits the ADR-014 Codex bundle from
-`plugins/delivery-pipeline/scripts/model-policy.cjs` and does not derive it from
-that compatibility list, a GSD remap, or a parent session. `models`,
-`model_profile`, and `model_overrides` supply GSD context only and cannot replace
-the boundary's explicit selection or receipt.
-
-Runtime is still selected per invocation: the explicit
-`SHIPYARD_RUNTIME`/`GSD_RUNTIME` handshake wins, followed by the runtime-specific
-GSD install marker. Do not persist a shared project preference for `claude` or
-`codex`; one checkout can be used by both runtimes.
-
-## Shipyard on the OpenAI Codex CLI
-
-Codex is a **first-class runtime**, not a port: the same conveyor, the same
-deterministic scripts, the same blocking gates. It is a host-side install,
-separate from the Docker image (which is Claude Code only).
-
-The canonical source stays the Claude plugin
-(`plugins/delivery-pipeline/commands/*.md`); a generator emits the Codex-native
-artifacts from it, so the two runtimes never drift — change a command once and
-re-run the installer. Where the runtimes genuinely differ, the conveyor adapts
-instead of pretending: Codex has no Workflow tool, so `deliver` runs its built-in
-agent path. The GSD delivery contract is projected into the project at a
-runtime-neutral path, so the shared checkout does not have to rewrite
-`config.json` when the host changes.
-
-Prerequisite — gsd-core installed for Codex:
-
-```bash
-npx --yes @opengsd/gsd-core@1.13.0 --codex --global
-```
-
-Then install shipyard from a checkout (the generator and the deterministic scripts
-come from the repo, so this path needs the clone — there is no marketplace for
-Codex):
-
-```bash
-git clone https://github.com/serhii-nochevnyi/shipyard && cd shipyard
-export SHIPYARD_CODEX_CAPABILITIES_FILE=/absolute/path/to/measured/codex-capabilities.json
-make install-shipyard-codex        # or: bash scripts/install-shipyard-codex.sh
-```
-
-`SHIPYARD_CODEX_CAPABILITIES_FILE` is required host evidence, not an optional
-default. It must be a JSON document measured for this Codex installation with
-`supportedModels`, `supportedEfforts`, and, when the host exposes pair-level
-support, `supportedSelections`. The installer refuses missing, malformed or
-insufficient evidence; it never turns the ADR-014 requirements into a claim
-about what the host supports. The exact supplied bytes are copied to
-`$CODEX_HOME/shipyard/codex-capabilities.json` for later selector calls.
-
-This generates Codex skills from the Claude commands (via gsd-core's own
-converter — `$shipyard-route`, `$shipyard-investigate`, `$shipyard-decompose`,
-`$shipyard-deliver`, `$shipyard-bench`), registers the delivery subagents in
-`$CODEX_HOME/config.toml` (non-destructively), copies the deterministic
-scripts/references/workflows under `$CODEX_HOME/shipyard/`, and installs the
-runtime-agnostic GSD capability that contributes the blocking Gate 2 (ticket
-graph) and UAT gates — the same gates the Claude runtime uses.
-Because Codex has no Workflow tool, `deliver` runs its built-in agent path:
-deterministic bookkeeping in Node scripts, agentic work via Codex `spawn_agent`.
-
-**Codex model configuration has two deliberately different surfaces.**
-`delivery_pipeline.codex_models` (or `pipeline.codex_models`) in
-`.planning/config.json` is a compatibility input for legacy/non-routed
-configuration consumers. It is an ordered `model[:effort][@min_cli]` list, not
-the ADR-014 launch policy:
-
-```json
-{ "delivery_pipeline": { "codex_models": "gpt-5.6-sol:high@0.153.1, gpt-5.6-sol:xhigh@0.153.1" } }
-```
-
-- The compatibility resolver may inspect the first or last entry for its own
-  diagnostics. That behavior is legacy input only; it does not select, remove,
-  rewrite, or authorize a routed bundle agent. The old Terra/Astra-only palette
-  and any first/last or version-filtered launch fallback are superseded by
-  ADR-014.
-- The canonical Codex bundle is a separate ADR-014 contract. The generator reads
-  `plugins/delivery-pipeline/scripts/model-policy.cjs` and emits every required
-  static role/rung with its exact model and effort. It does not derive those
-  files from `codex_models`, an empty palette, a GSD remap, or a CLI-version
-  fallback; dynamic `executor` and `decomposition` selections remain explicit
-  launch arguments. Missing or stale policy/artifact evidence is a refusal, not
-  a session or parent-model fallback.
-- The emitted static variants include the repair `repeat`/`deep` files and the
-  judgment `shipyard-arch-review-critical` and
-  `shipyard-integrator-critical` files. `shipyard-pr-sentinel` is the only
-  sentinel file. Use `node "$CODEX_HOME/shipyard/scripts/codex-agent.cjs" select
-  <role> --json --capabilities-file "$CODEX_HOME/shipyard/codex-capabilities.json"
-  [--project-dir <project>]` with the dispatch signals and pass its
-  exact `agent_file` to the record; for dynamic roles pass its concrete
-  `model`/`effort` to the supported `spawn_agent` or `codex exec` call and omit
-  `--agent-file`. A requested static rung that is missing or stale fails closed;
-  it is never replaced with an ordinary file or an inherited session selection.
-- The installer/generator validates the complete required capability set before
-  replacing destinations. The compatibility palette is not host evidence and
-  never tunes the ADR-014 files. The adjacent selector contract also validates
-  any explicitly declared compatibility palette against the model it resolves;
-  routed Codex projects should omit that legacy palette or keep it consistent
-  with the canonical policy. This boundary belongs to the Codex adapter, while
-  the T-36-04 bundle supplies the durable evidence file it consumes.
-
-<!-- keep in sync with commands/decompose.md -->
-**One config detail matters on both runtimes.** The delivery-rules contract reaches
-GSD's planner and executor through `agent_skills` in `.planning/config.json`, but
-the value is the project-relative
-`.shipyard/generated/gsd-delivery-rules` projection. `gsd-tune.cjs --apply`
-generates it from the canonical source and merges it without replacing the
-project's other skills. This avoids GSD's shared-config last-write-wins trap:
-Claude's plugin-namespaced and Codex's flat global skill forms are both
-runtime-specific, while the delivery contract itself is not. The generated
-runtime-native skills remain installed for direct `$shipyard-*` calls. Do not
-persist `"runtime": "claude"` or `"runtime": "codex"` in a shared project
-config just to select the host; use the runtime context above.
-It also writes a managed "shipyard auto-route" block into
-`$CODEX_HOME/AGENTS.md`, so a defined scope of work is routed through shipyard
-(research-first, proportionate GSD) without the user invoking `$shipyard-*` by
-hand.
-
-### Auto-route and the stop gate on host Claude Code
-
-Both runtimes get the auto-route nudge, by different mechanisms: Codex through the
-managed block in `$CODEX_HOME/AGENTS.md` that its installer writes (above), Claude
-Code through a `UserPromptSubmit` hook. Inside the container both hooks are already
-installed by the overlay build, so a scope of work is routed through shipyard
-without you invoking anything.
-
-Claude Code also gets the **stop gate**, a `Stop` hook that refuses to end a run
-while `delivery-front.json` still lists actionable work. Deliver's loop-back rule
-("never stop while the front is non-empty") was the conveyor's only non-mechanical
-gate, and runs ended early against it — writing a summary looks like finishing.
-
-It looks for the board across **every worktree of the repository the session sits
-in**, newest `generated_at` wins. The hook's cwd is the session's, and the main
-loop `cd`s into a phase worktree inside every command — so resolving
-`.planning/graph/` from the cwd alone reads whatever board that checkout's branch
-happens to carry, which is how the gate once ran on twelve stops in a day and
-blocked none.
-
-Staleness is two different facts and the gate answers them differently. Past
-`SHIPYARD_STOP_GATE_RESYNC_MS` (4h) the board describes a run that ended, and the
-gate is silent. Between `SHIPYARD_STOP_GATE_FRESH_MS` (45m) and that ceiling, a
-board still showing live work means the loop dispatched agents off it and never
-re-derived it — so the gate blocks once and asks for a `state-sync`, rather than
-repeating stale contents as fact.
-
-A board holding nothing but PRs in CI is a **wait, not a fixpoint**: the babysit
-loop is woken by agents finishing, so with no agent out nothing would ever wake
-the session. The gate blocks there and names `ci-wait.cjs`, which waits in the
-foreground and terminates by itself.
-
-It stays out of the way otherwise: silent outside conveyor projects, when every
-actionable item is left behind in a phase the run has moved past, once a session
-has spent its refusals — one per cascade ROUND, and a refusal repeats only after
-the board advanced, up to `SHIPYARD_STOP_GATE_MAX_BLOCKS` (12) — and whenever
-`SHIPYARD_STOP_GATE=off`.
-
-To get both on your **host** Claude Code (it edits your user settings, not the
-plugin):
-
-```bash
-make install-shipyard-claude-hook        # or: make remove-shipyard-claude-hook
-```
-
-It writes `~/.claude/hooks/shipyard-auto-route.sh` and
-`~/.claude/hooks/shipyard-stop-gate.cjs`, then merges the two hooks into
-`~/.claude/settings.json` (idempotent, preserving your other hooks). On a running
-session, open `/hooks` once or restart to load them. The stop gate is installed as
-a copy, so **re-run the installer after upgrading shipyard** to refresh it.
-
-### Installing the conveyor into host Claude Code
-
-**From GitHub, no clone** — the repo is itself a plugin marketplace:
+For the published plugin:
 
 ```bash
 claude plugin marketplace add serhii-nochevnyi/shipyard
-claude plugin install shipyard@shipyard               # restart Claude to apply
+claude plugin install shipyard@shipyard
 ```
 
-That gives you the five commands and the delivery-rules skill. The blocking Gate 2
-/ UAT gates ship as a **GSD capability**, which needs the checkout (its installer
-stages the validator with its sibling modules), as does the Codex install:
+For the host hooks and the shared GSD capability, run the installers from this
+checkout:
 
 ```bash
-git clone https://github.com/serhii-nochevnyi/shipyard && cd shipyard
-make install-shipyard-capability                     # Gate 2 + UAT gates, global scope
-make install-shipyard-claude-hook                    # optional: auto-route + stop gate
+make install-shipyard-claude-hook
+make install-shipyard-capability
+make doctor
 ```
 
-Developing on the checkout instead? Register it as a directory marketplace and
-refresh from disk:
+The hook installer writes the auto-route hook and a complete stop-gate module
+bundle under `~/.claude/hooks/`. It updates only the Shipyard entries in
+`~/.claude/settings.json`, removes the old single-file stop-gate entry, and
+leaves other hooks untouched. Re-run it after updating Shipyard, then start a
+new Claude session or reload hooks with `/hooks`.
+
+Use a different Claude home when testing or when several installations must be
+kept separate:
 
 ```bash
-claude plugin marketplace update delivery-pipeline   # refresh from this checkout
-claude plugin update shipyard@delivery-pipeline      # restart Claude to apply
-make install-shipyard-capability                     # Gate 2 + UAT gates, global scope
+CLAUDE_HOME=/path/to/claude-home make install-shipyard-claude-hook
+CLAUDE_HOME=/path/to/claude-home make remove-shipyard-claude-hook
 ```
 
-The capability installer stages the validator **with its sibling modules**; a
-`gsd-tools capability install` pointed straight at `capabilities/` would leave the
-gate unable to load its parser. `make install-shipyard-codex` does the equivalent
-for Codex as part of its own run.
-
-The `plan:post` gate is installed at global scope but is applicability-scoped: it
-stays inert in projects that carry no `delivery:` blocks, and fails closed for
-real conveyor projects. Opt the graph gate out with
-`.planning/config.json` → `pipeline.graph_gate: false`, or opt only the native
-GSD projection gate out with `delivery_pipeline.gsd_sync: false`.
-
-Set `SHIPYARD_CODEX_PHASE=1` to install `investigate`+`decompose` only and leave
-`deliver` out. Skills land in `~/.agents/skills`; nothing outside shipyard's own
-files is modified.
-
-## Prerequisites
-
-Per path — only the container path needs Docker at all:
-
-- **Container (Claude Code)**: Docker with Compose support; a Claude Pro or Max
-  subscription; `kubectl` for the Kubernetes deployment and `make test-k8s`.
-- **Host Claude Code**: the `claude` CLI and gsd-core installed for it.
-- **Host Codex CLI**: the `codex` CLI with its own access (ChatGPT plan or API
-  key) and gsd-core installed for Codex
-  (`npx --yes @opengsd/gsd-core@1.13.0 --codex --global`).
-- **Any path that opens PRs**: `gh` authenticated, plus a valid `GITHUB_TOKEN` or
-  `GH_TOKEN` for git/gh access inside the container (optional there).
-- a local SSH agent if you need private Git access at runtime (recommended over
-  exposing on-disk keys — see "SSH access" below)
-
-The remaining sections up to [Plugins](#plugins) describe the **container**; the
-conveyor itself needs none of it.
-
-## Local build
-
-1. Copy `.env.example` to `.env`.
-2. Generate a `CLAUDE_CODE_OAUTH_TOKEN` on the host by running `claude setup-token`, then set it in `.env`.
-3. Build the base image:
+### OpenAI Codex CLI
 
 ```bash
-make build-base GIT_USER_NAME="Your Name" GIT_USER_EMAIL=you@example.com
+npx --yes @opengsd/gsd-core@latest --codex --global
+make install-shipyard-codex
 ```
 
-`GIT_USER_NAME` and `GIT_USER_EMAIL` are **required** and have no default — they
-become `/home/dev/.gitconfig` inside the image, so they author every commit made
-in the container. To reuse your host identity:
+The installer replaces Shipyard's generated bundle at `~/.codex/shipyard`,
+refreshes only Shipyard-owned skills and agents, and preserves unrelated Codex
+configuration. Set `SHIPYARD_CODEX_PHASE=1` when only investigation and
+decomposition skills should be installed. Set `CODEX_HOME` or
+`AGENTS_SKILLS_DIR` to use non-default locations.
+
+## First run
+
+Open the target repository and describe the work. The router chooses the
+appropriate entry point. You can also invoke it directly:
+
+```text
+Claude Code: /shipyard:route "describe the change"
+Codex CLI:   $shipyard-route "describe the change"
+```
+
+The target repository needs an initialized `.planning/` directory. If it is not
+initialized, Shipyard runs the required GSD setup before continuing. To inspect
+runtime settings for a target project, run the tuner from that project's root:
 
 ```bash
-make build-base \
-  GIT_USER_NAME="$(git config --global user.name)" \
-  GIT_USER_EMAIL="$(git config --global user.email)"
+node /path/to/shipyard/plugins/delivery-pipeline/scripts/gsd-tune.cjs --runtime claude
+node /path/to/shipyard/plugins/delivery-pipeline/scripts/gsd-tune.cjs --runtime claude --apply
 ```
 
-(The Makefile does not read `.env`; export the two variables or pass them per
-invocation. `make build-base` and a bare `docker build` both fail with the
-explicit reason when either is empty.)
+`make gsd-tune` and `make gsd-tune-apply` are equivalent when run from this
+checkout against this checkout's own `.planning/config.json`.
 
-`make build-base` also stages safe SSH client files from your local `~/.ssh` into the build context. It copies only `config`, `known_hosts`, and `known_hosts2`, and it skips private keys. A host with no `~/.ssh` is fine — the staging directory is created empty and the container relies on agent forwarding.
+## Workflow
 
-4. Build the overlay image:
+The same four entry points exist on both runtimes. Claude uses slash commands;
+Codex uses the corresponding `$shipyard-*` skill names.
+
+| Entry | Use it when | Result |
+| --- | --- | --- |
+| `route` | The scope is known but the right loop is not | Read-only classification |
+| `investigate` | The problem needs research and decisions | Research package and ADR |
+| `decompose` | An accepted ADR must become executable work | GSD plans and a validated ticket graph |
+| `deliver` | Tickets are ready for implementation | Worktrees, PRs, review, CI, and merge evidence |
+| `bench` | A small change, existing ticket, or explicit no-ticket task | Direct work in the current worktree |
+
+Typical Claude commands:
+
+```text
+/shipyard:route "add the requested behavior"
+/shipyard:investigate "understand the failure and options"
+/shipyard:decompose
+/shipyard:deliver
+/shipyard:bench "apply this small change in the current worktree"
+```
+
+Typical Codex commands:
+
+```text
+$shipyard-route "add the requested behavior"
+$shipyard-investigate "understand the failure and options"
+$shipyard-decompose
+$shipyard-deliver
+$shipyard-bench "apply this small change in the current worktree"
+```
+
+`route` is advisory. `investigate`, `decompose`, and `deliver` are
+deliberate workflow transitions because they create or update durable planning
+and delivery artifacts. `bench` follows the full research, plan, implement,
+verify, and review discipline for its size, but it stays in the current
+worktree and does not create tickets, branches, PRs, merges, or commits unless
+
+The delivery loop cold-starts from the graph and current GitHub state, selects
+available work, records dispatch ownership, and repeats implementation,
+verification, review, and CI repair until the front reaches a fixpoint. A stop
+gate keeps a Claude session alive while actionable work or a required CI wait
+remains. Codex resumes from the same graph on the next turn.
+
+## Model ladder
+
+The active policy is ADR-014. Claude Code uses Anthropic models only; Codex
+uses OpenAI models only. The two provider grids are independent and a dispatch
+never substitutes a model from the other runtime.
+
+Claude resolves native aliases at launch:
+
+- executor work starts on Sonnet and moves to Opus only when critical evidence
+  or an explicit checkpoint requires it;
+- judgment roles use Opus with role-specific effort;
+- Fable is a Claude-only measured ceiling and requires delivery_pipeline.fable:
+  auto after the consent decision.
+
+Codex selects generated agents from the OpenAI ladder. The shipped compatibility
+palette is:
+
+{
+  "delivery_pipeline": {
+    "codex_models": "gpt-5.6-sol:high@0.153.1, gpt-5.6-sol:xhigh@0.153.1"
+  }
+}
+
+The routed policy records the logical rung, concrete model, effort, runtime,
+provider, dispatch id and application receipt. A missing or ambiguous runtime,
+unsupported model, stale generated agent or missing receipt blocks the launch.
+
+The codex_models value above is compatibility input, not canonical Codex bundle
+policy. Routed Codex projects should omit that legacy palette and use the ADR-014
+native model grid instead.
+Inspect the effective policy from the target project:
+
+    node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve
+    node plugins/delivery-pipeline/scripts/pipeline-config.cjs model executor --json
+    node plugins/delivery-pipeline/scripts/pipeline-config.cjs model ci-fix --json --signature-state repeat
+
+## Usage observability
+
+
+The attribution ledger connects a dispatch to a Claude or Codex transcript. It
+stores routing and identity metadata, never prompts or credentials:
 
 ```bash
-make build-dev-image
+cat <<'JSON' | node plugins/delivery-pipeline/scripts/usage-attribution.cjs record --stdin
+{
+  "dispatch_id": "<dispatch id>",
+  "runtime": "codex",
+  "provider": "openai",
+  "session_id": "<session id>",
+  "source": "/path/to/transcript.jsonl",
+  "ticket": "T-01-01",
+  "role": "executor",
+  "task_level": "routine",
+  "backend": "codex-agent",
+  "model": "opus",
+  "effort": "high",
+  "effort_applied": "high",
+  "observed_model": "gpt-5.6-luna",
+  "observed_effort": "high"
+}
+JSON
 ```
 
-The overlay image installs the following during build:
+Use `runtime: "claude"` and `provider: "anthropic"` for Claude. The ledger
+rejects a provider mismatch. A Claude message or request id is preferable when
+several launches share one session; a Codex session id is sufficient for a
+single launch.
 
-- **gsd-core** — the Claude Code delivery plugin, installed from npm via
-  `npx --yes @opengsd/gsd-core@<version> --claude --global --profile=full`.
-  This writes Claude Code plugin configuration under `~/.claude` inside the image.
-  gsd-core is NOT installed from the Claude Code marketplace; it is installed via npx.
-- **andrej-karpathy-skills** — a Claude Code plugin staged from a pinned Git ref
-  (`2c606141936f1eeef17fa3043a72095b4765b9c2`) and registered with `claude plugin`.
-- **shipyard** (from the in-repo `delivery-pipeline` marketplace) — a Claude Code
-  plugin (`plugins/delivery-pipeline/`) implementing the multilevel delivery
-  pipeline from `docs/gsd_multilevel_delivery_pipeline.md`: `/shipyard:route`
-  (entry router), `/shipyard:investigate` (deep investigation → ADR),
-  `/shipyard:decompose` (ADR → ticket DAG), `/shipyard:deliver` (per-ticket
-  worktree → PR babysat to green with CodeRabbit/Copilot reviewer
-  re-initialization), and `/shipyard:bench` (off-conveyor direct work).
-- **skill-creator**, **code-simplifier**, **github** (GitHub MCP server), and
-  **typescript-lsp** — installed from the official `claude-plugins-official` marketplace
-  (`anthropics/claude-plugins-official`). Plugin versions are pinned by the marketplace's
-  GitHub ref at clone time. The `typescript-lsp` plugin wires `typescript-language-server`
-  (already in the base image) into Claude Code, covering `.ts`, `.tsx`, `.js`, and `.jsx`.
-- the **shipyard auto-route** `UserPromptSubmit` hook, into the image's own
-  `~/.claude/settings.json`.
-
-The base image bakes in:
-
-- Claude Code CLI (`@anthropic-ai/claude-code`, pinned version) installed via npm.
-  The pin is what the tier aliases MEAN inside the image: from Claude Code 2.1.263
-  on, `opus` is Opus 5 (2.1.219 on) and `fable` is Claude Fable 5.1 (2.1.255 on).
-  `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1` (compose and the k8s configmap)
-  is the belt to that brace: it bypasses the alias mapping altogether, so a host
-  or an older image cannot resolve `fable` to Fable 5 behind your back.
-- Git identity: whatever you passed as `GIT_USER_NAME` / `GIT_USER_EMAIL` (required build args, no default)
-- Git defaults: `init.defaultBranch=main`, `push.autoSetupRemote=true`, `color.ui=auto`,
-  `fetch.prune=true`, `pull.rebase=false`, `pull.ff=only`
-- safe SSH client files from your local profile when present
-- `context7-mcp` binary (baked in, no runtime `npx -y` needed)
-- `typescript-language-server` and `typescript` for LSP support
-
-Private keys are not baked into the image, and by default they are not mounted
-into the running container either.
-
-## Authentication
-
-Claude Code requires a valid OAuth token. Generate one on your host machine before starting the container:
+Generate a read-only report from explicit transcript files:
 
 ```bash
-claude setup-token
+node plugins/delivery-pipeline/scripts/usage-report.cjs \
+  /path/to/claude.jsonl /path/to/codex.jsonl \
+  --attribution .planning/graph/usage-attribution.jsonl
 ```
 
-Copy the token into `.env` as `CLAUDE_CODE_OAUTH_TOKEN=<token>`. The container reads this variable at startup.
+The report separates Anthropic and OpenAI totals, models, effort, ordinary work,
+advisor work, ticket attribution, coverage, and comparison eligibility. Codex
+counters are cumulative session observations, so they are not added once per
+response. Missing or ambiguous attribution is reported instead of being folded
+into a model's efficiency result.
 
-## Run with Docker
+## Verification and maintenance
+
+Run the deterministic suite from this checkout:
 
 ```bash
-make run-docker
+make test-fast
+make test-unit
+make test-docs
+make test-codex-shipyard
+make test-releases
+make test
 ```
 
-The container starts in `/workspace`, which is bind-mounted from `WORKSPACE_DIR`
-(default `./workspace`). **The repo checkout itself is deliberately not mounted**
-— it holds `.env` with your OAuth token, and the session runs with
-`bypassPermissions`. Point `WORKSPACE_DIR` at whatever you want visible instead.
-
-### SSH access
-
-Authentication goes through the **forwarded SSH agent** by default: Compose binds
-the agent socket to `/run/host-services/ssh-auth.sock` inside the container and
-sets `SSH_AUTH_SOCK` to that path. On macOS, Docker Desktop proxies the host
-agent at that magic path automatically — passphrase-protected keys and
-certificate-based setups (e.g. Teleport) work without copying anything into the
-container. On a Linux host, point the bind at your real agent socket by setting
-`SSH_AUTH_SOCK_HOST=$SSH_AUTH_SOCK` in `.env`. Verify from inside the container
-with `ssh-add -l`.
-
-Your SSH **client config** is mounted read-only at `/home/dev/.ssh-host` and
-copied by the entrypoint into a writable `/home/dev/.ssh` (writable so `ssh` can
-record a new host key; existing files are never overwritten). The mount source
-defaults to the build-staged safe subset (`config`, `known_hosts`) — so your
-private keys stay on the host.
-
-If you genuinely cannot use agent forwarding, set `SSH_DIR=${HOME}/.ssh` in
-`.env` to mount your full `~/.ssh` read-only instead. That exposes your private
-keys to the container; prefer the agent.
-
-The host `~/.config/gh` directory is mounted read-only at `/home/dev/.config/gh`, so the GitHub CLI (`gh`) can use your existing host authentication inside the container. `make up` and `make run-docker` create `~/.config/gh` on the host if it does not exist (preventing Docker from creating a root-owned directory in its place). The `GITHUB_TOKEN` / `GH_TOKEN` environment variables are also forwarded into the container for token-based access.
-
-## MCP Servers
-
-The image preconfigures two MCP servers by default:
-
-- **Atlassian Rovo** — via HTTP (`https://mcp.atlassian.com/v1/mcp`)
-- **Context7** — via stdio using the baked `context7-mcp` binary from
-  `@upstash/context7-mcp`. Context7 does not rely on `npx -y` or runtime npm
-  downloads.
-
-At container startup, the entrypoint merges these MCP server configurations
-non-destructively into `~/.claude.json` — adding missing entries without
-overwriting user customizations.
-
-## Atlassian OAuth
-
-Because macOS stores OAuth tokens in the Keychain (not a portable file), Atlassian
-Rovo authentication must run inside the container. The documented flow is:
-
-1. Copy `.env.example` to `.env` and set `CLAUDE_CODE_OAUTH_TOKEN`.
-2. Start a persistent container: `make up`
-3. Run the bootstrap: `make bootstrap-atlassian-oauth`
-
-`make up` creates the host directories the container mounts (including the state
-directory) before starting, preventing Docker from creating root-owned paths in
-their place.
-
-`make bootstrap-atlassian-oauth` runs `scripts/bootstrap-atlassian-rovo-oauth.sh`
-on the host. That script `docker exec -it`s into the running `dev` container and
-executes:
-
-```
-claude mcp login atlassian-rovo --no-browser
-```
-
-A remote MCP server authenticates over an OAuth loopback callback that the host
-browser cannot reach inside a container, so a headless `claude -p` flow can never
-receive the authorization code. `claude mcp login --no-browser` (Claude Code
->= 2.1.191) instead prints the authorization URL and waits. The flow is:
-
-1. Open the printed URL in your host browser and approve access.
-2. The browser tries to redirect to `http://localhost:<port>/callback` and shows a
-   connection error — this is expected (the callback server is inside the container).
-3. Copy the full redirect URL from the address bar and paste it back at the prompt.
-
-Credentials land in `/home/dev/.claude/.credentials.json` and are mirrored to the
-persisted state directory (see below), so they survive container recreation.
-(If a half-finished attempt blocks a retry, run
-`docker compose exec dev claude mcp logout atlassian-rovo` first.)
-
-## Persistence
-
-One host **directory** is bind-mounted for state that must outlive the container:
-
-- `CLAUDE_STATE_DIR` (default `./.claude-state`) maps to
-  `/home/dev/.claude-state`. The entrypoint restores
-  `credentials.json` from it into `~/.claude/.credentials.json` at start and
-  mirrors the live file back whenever it changes.
-
-It is a directory rather than a single-file mount on purpose: a bind-mounted
-*file* cannot be replaced by `rename(2)`, so any writer that saves atomically
-would fail on it outright. An older layout used
-`CLAUDE_CREDENTIALS_FILE=./.claude-credentials.json`; `make up` migrates that
-file into the state directory automatically on first run.
-
-Everything else under `~/.claude` is baked into the image or generated at startup
-and is ephemeral — it is not persisted across container recreation.
-
-The host's full `~/.claude` is never mounted.
-
-`.cache-home` (mounted at `~/.cache`) accumulates per-session MCP server logs;
-`make clean-cache` prunes the ones older than a week.
-
-## LSP Support
-
-TypeScript/JavaScript LSP support is provided by `typescript-language-server`
-(shipped in the base image) and wired into Claude Code via the official `typescript-lsp`
-plugin from `claude-plugins-official`. This covers `.ts`, `.tsx`, `.js`, and `.jsx` files.
-
-The plugin is installed from the official marketplace during the overlay build and loaded
-when Claude Code starts an interactive session.
-
-## Plugins
-
-Baked into the container image (hence all Claude Code plugins — on Codex the
-equivalents are installed as skills/subagents by `make install-shipyard-codex`):
-
-- **gsd-core** (`@opengsd/gsd-core`) — Claude Code delivery plugin with full profile, installed via npx.
-- **andrej-karpathy-skills** — staged from pinned commit, registered via `claude plugin`.
-- **shipyard** — in-repo (`plugins/delivery-pipeline/`); investigation → ticket DAG →
-  per-ticket worktree/PR delivery. Commands: `/shipyard:route`,
-  `/shipyard:investigate`, `/shipyard:decompose`, `/shipyard:deliver`,
-  `/shipyard:bench`.
-- **skill-creator** — from `claude-plugins-official`; helps create new Claude Code skills.
-- **code-simplifier** — from `claude-plugins-official`; reviews and simplifies code.
-- **github** — from `claude-plugins-official`; the official GitHub MCP server plugin.
-- **typescript-lsp** — from `claude-plugins-official`; TypeScript/JS LSP via `typescript-language-server`.
-
-## Deploy to Kubernetes
-
-The manifests in `k8s/` run the same overlay image as a single-replica
-StatefulSet you attach to with `kubectl exec`. One PVC backs `/workspace`,
-`~/.cache` and the credential state directory via `subPath`.
-
-1. Push the built overlay image to a registry reachable by the cluster and update
-   the `image:` field in `k8s/statefulset.yaml`.
-2. Create the real secret — `k8s/secret.example.yaml` is a template and is
-   deliberately not applied by `make deploy-k8s`:
+Use the smaller checks while editing:
 
 ```bash
-kubectl create secret generic claude-shipyard-secrets \
-  --from-literal=CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)" \
-  --from-literal=GITHUB_TOKEN="$GITHUB_TOKEN" \
-  --from-literal=GH_TOKEN="$GITHUB_TOKEN"
+make test-graph
+make test-worktree
+make test-worktree-gates
+make test-sentinel
+make test-hooks
 ```
 
-3. Apply manifests:
+The full suite keeps network-backed Codex generation outside `test-fast`. The
+documentation smoke test checks the supported host commands, plugin command
+surface, runtime separation, generated model palette, and removal of retired
+execution paths.
+
+Run the host installation diagnostic at any time:
 
 ```bash
-make deploy-k8s
+make doctor
+node scripts/shipyard-doctor.cjs --json
 ```
 
-4. Attach:
+It checks the source metadata, Claude hook command, complete stop-gate
+dependency closure, Codex bundle manifest, and version markers. A warning means
+the installed runtime is older than this checkout; an error means the runtime
+cannot enforce the expected hook or bundle contract.
+
+Before a delivery ship check, verify the native projection is current:
 
 ```bash
-kubectl exec -it claude-shipyard-0 -- bash -lc 'cd /workspace && claude --dangerously-skip-permissions'
+node plugins/delivery-pipeline/scripts/gsd-sync.cjs --check --json
 ```
 
-## Smoke tests
-
-`make test-fast` needs neither Docker nor the network — run it on every edit:
+If it reports stale files, run the write path from the target project and then
+repeat the check:
 
 ```bash
-make test-fast          # unit + graph + worktree + sentinel + docs + ssh-sync + model-ladder runtime
-make test-unit          # frontmatter parser, model policy, locks, front + sentinel verdicts
-make test-graph         # Gate 2 contract + plan:post gate applicability, on fixtures
-make test-worktree      # epic-branch.sh + ticket-worktree.sh against real git repos
-make test-sentinel      # state-sync → gate/merge_scope → guard duty, against a stubbed gh
-make test-docs          # README + .env.example invariants
-make test-ssh-sync      # sync-local-ssh-config.sh behaviour
+node plugins/delivery-pipeline/scripts/gsd-sync.cjs
 ```
 
-The rest build images or reach the network:
+## Troubleshooting
 
-```bash
-make test-k8s           # kubectl dry-run over k8s/
-make test-releases      # every pushed tag carries a GitHub release entry (needs gh)
-make test-base
-make test-overlay
-make test-runtime
-make test-mcp-runtime
-make test-codex-shipyard   # generator + installer produce valid Codex artifacts (needs network)
-make test                  # everything, in order
+**The hook does nothing.** Run the Claude installer again, inspect the generated
+`~/.claude/hooks/shipyard-stop-gate/` directory, and start a new session. The
+installer validates every local module dependency before changing settings.
+
+**A session uses an old route or model.** Finish or restart the session after an
+installer update. Existing sessions retain their runtime environment; new
+sessions read the refreshed generated bundle. Compare the session transcript
+with the usage report and the dispatch ledger instead of inferring a model from
+the requested tier alone.
+
+**The board shows no work but delivery cannot finish.** Run `state-sync`, read
+`delivery-front.json`, and follow the reported action. A CI wait is still live
+work until the watcher returns or records an escalation.
+
+**A worktree is dirty or unavailable.** Preserve its changes, inspect the ticket
+state and `git worktree list`, then resume delivery. The reaper refuses to remove
+unproven or dirty worktrees.
+
+**The graph check fails.** Run
+`node plugins/delivery-pipeline/scripts/validate-graph.cjs` from the target
+project, correct the plan dependency or ownership evidence, and rerun the
+command. Do not edit generated graph files by hand.
+
+## Repository layout
+
+```text
+plugins/delivery-pipeline/       Claude commands, rules, and shared scripts
+capabilities/delivery-pipeline/  GSD gates and capability metadata
+scripts/gen-codex-shipyard.cjs   Codex artifact generator
+scripts/install-shipyard-*.sh    Host installers
+tests/                           Unit and deterministic smoke checks
+docs/                            Pipeline protocol and measurement reference
 ```
+
+The detailed protocol is in
+[`docs/gsd_multilevel_delivery_pipeline.md`](docs/gsd_multilevel_delivery_pipeline.md).

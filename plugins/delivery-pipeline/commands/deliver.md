@@ -2673,8 +2673,8 @@ stop at that: move on to the recomputation of the front below.
 
 `stop-gate.cjs` exists to enforce this rule, because it was skipped repeatedly and
 always at the same moment: writing the summary. Where the runtime offers a stop
-hook, it is wired there (`make install-shipyard-claude-hook`, baked into the
-container) and refuses to end a run while `delivery-front.json` lists actionable
+hook, it is wired there by `make install-shipyard-claude-hook` and refuses to end
+a run while `delivery-front.json` lists actionable
 work. Where it does not, nothing catches you and the rule is yours alone to keep —
 so assume you are on that side. Either way, two consequences:
 - **Do not treat a summary as an ending.** Post it if it helps the human follow
@@ -2816,6 +2816,14 @@ driving PRs hands the user a half-truth.
    - `needs-fix` → fix tickets as new plans in the same phase (their base — the epic) →
      /shipyard:decompose Step 4 → the next /shipyard:deliver.
    In direct-to-main there is no epic — the integrator looks at the merged ticket-PRs, as before.
+   - After the integration verdict is written, publish the native GSD projection:
+     `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-sync.cjs`.
+     This creates or refreshes `STATE.md`, `REQUIREMENTS.md`, plan `SUMMARY`
+     files, phase UAT/VERIFICATION projections, and the marked roadmap status
+     block. A `needs-fix` or missing integration verdict stays non-green; do not
+     edit the projection by hand to make the phase pass. Before handing the
+     phase to a human, run `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-sync.cjs
+     --check` and show any blockers.
 3. Clean up (`reapable`-only, exactly like the reaper in Step 0): for EACH ticket
    whose `state[id].reapable` is true — `ticket-worktree.sh remove <T>` +
    `git branch -D <branch>` (squash-merge → `-D`; the verdict comes from
@@ -2836,6 +2844,13 @@ driving PRs hands the user a half-truth.
   `gh pr merge`, because the gate lives in the script. The phase reaches the
   default branch as ONE epic-PR, merged by a human, always. `auto_merge: off` or
   `direct-to-main` → every merge is a human's and you only drive to green.
+- **Native GSD state is a projection, not a second execution loop.** Shipyard
+  owns ticket execution; after planning, delivery, verification, and phase
+  integration the capability runs `gsd-sync.cjs`. Do not invoke
+  `/gsd-execute-phase` for ticket delivery and do not hand-edit generated
+  `STATE.md`, `REQUIREMENTS.md`, `*-SUMMARY.md`, `*-UAT.md`, or
+  `*-VERIFICATION.md` files. Use `--check` to diagnose drift and rerun the
+  write command to repair it.
 - A `human_checkpoint` ticket is never auto-merged, however green it is.
 - Never force-push. Never commit directly into the default branch/epic (only
   via a ticket-PR into the base). The epic branch is moved only by ticket-PR merges.

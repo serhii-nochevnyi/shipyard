@@ -18,12 +18,9 @@ set -euo pipefail
 # The last line is the one that matters: Codex artifacts were being generated
 # through the oldest install on the box.
 #
-# VERSION POLICY. Default is `latest`, because a superstructure that pins its
-# base silently rots against it — the skew above is what that looks like. The
-# repo's "never an unpinned latest" convention governs the IMAGE toolchain, where
-# a reproducible build is the point; this is a host install of the thing shipyard
-# extends, and there the current version is the correct one. `GSD_CORE_VERSION`
-# pins it when reproducibility matters, which is exactly what the Dockerfile does.
+# VERSION POLICY. Default is `latest`, because a superstructure that pins GSD
+# forever silently rots against it — the skew above is what that looks like.
+# Set `GSD_CORE_VERSION` when a project needs a reproducible host toolchain.
 #
 # This is a NETWORK operation that writes to the user's runtime home, so it says
 # what it is doing and what changed.

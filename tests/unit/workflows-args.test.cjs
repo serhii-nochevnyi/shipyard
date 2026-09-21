@@ -16,7 +16,7 @@
 // These files cannot be `require`d or `node --check`ed: the Workflow DSL's
 // top-level `return`/`await` is a syntax error outside a function body. The
 // runtime wraps the source in an ASYNC function with `agent`/`parallel`/
-// `phase`/`log`/`args` in scope — tests/smoke/overlay-image-smoke.sh
+// `phase`/`log`/`args` in scope — the workflow smoke canary
 // replicates that wrap to syntax-check them — so this harness does the same.
 // The plan names `new Function('agent','parallel','phase','log','args', src)`;
 // the constructor used here is the async Function constructor with that exact

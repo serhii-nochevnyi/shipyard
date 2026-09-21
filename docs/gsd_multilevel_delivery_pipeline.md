@@ -672,9 +672,9 @@ scope is driven to green or blocked:
 The orchestrator is idempotent: all state is in `delivery-state.yaml` + GitHub,
 so it can be killed and restarted at any moment — it will reconstruct the
 picture from the PR state (`gh pr list --json`), not from session memory.
-In this repository the natural place to run it is the shipyard container (gh auth
-is already mounted, the Claude Code CLI is baked in); on the Codex runtime it runs
-from a host install (`make install-shipyard-codex`) against the same state files.
+In this repository it runs from the host Claude Code installation with the
+operator's existing GitHub CLI authentication; on the Codex runtime it runs
+from the host install (`make install-shipyard-codex`) against the same state files.
 
 ---
 
@@ -1020,7 +1020,7 @@ human's, so GSD's "no auto-merge" boundary is preserved where it matters.
   do not read them directly.
 
 - **capability `delivery-pipeline`** (`capabilities/delivery-pipeline/`,
-  installed into the image at global scope): a fail-closed gate `command-exit-zero` →
+  installed at global scope): a fail-closed gate `command-exit-zero` →
   `validate-graph.cjs` on `plan:post`, blocking. Gate 2 is now a mechanical
   part of the GSD cycle: planning physically will not finish without materialized
   valid PLAN files (verified: without plans the gate returns block:true,
@@ -1063,7 +1063,8 @@ The 1.7 roadmap is fully closed.
 
 ## 10.6. Codex runtime (the same pipeline on the OpenAI Codex CLI)
 
-The pipeline works on Codex too — installed on the host, separately from the Docker image.
+The pipeline works on Codex too — the generated bundle is installed into the host
+Codex directories and uses the same source and state model.
 The source of truth remains the Claude plugin (`plugins/delivery-pipeline/commands/*.md`);
 the generator `scripts/gen-codex-shipyard.cjs` emits Codex-native artifacts,
 so the two runtimes do not diverge (zero drift).
@@ -1086,7 +1087,7 @@ so the two runtimes do not diverge (zero drift).
   `$CODEX_HOME/shipyard/scripts/`, agentic work — via `spawn_agent`.
 
 Installation: `make install-shipyard-codex` (requires gsd-core for Codex:
-`npx --yes @opengsd/gsd-core@1.13.0 --codex --global`). `SHIPYARD_CODEX_PHASE=1` —
+`npx --yes @opengsd/gsd-core@latest --codex --global`). `SHIPYARD_CODEX_PHASE=1` —
 investigate+decompose only. Smoke: `make test-codex-shipyard`.
 
 ## 11. Brief conclusion
