@@ -7,7 +7,7 @@ set -euo pipefail
 # Generates Codex-native artifacts from the canonical Claude plugin
 # (plugins/delivery-pipeline/), places them non-destructively, and registers the
 # runtime-agnostic GSD capability that contributes the blocking Gate 2 (ticket
-# graph) and UAT gates. The Docker image is NOT involved — this is a host tool.
+# graph) and UAT gates.
 #
 # Prerequisites:
 #   - node on PATH
@@ -45,7 +45,7 @@ command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; e
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
 # gsd-core is a hard dependency here — the generator cannot convert a command
 # without it — so install/refresh it rather than telling the user to. Default is
-# the latest: shipyard is a superstructure over GSD, and pinning the base while
+# the latest: shipyard is a superstructure over GSD, and pinning GSD while
 # the superstructure moves is what left three different versions on one machine,
 # with the Codex generator reading the oldest of them. SHIPYARD_GSD_AUTO_INSTALL=0
 # opts out; GSD_CORE_VERSION pins.
@@ -260,7 +260,7 @@ fi
 
 # ── GSD capability (Gate 2 / UAT gates) ──────────────────────────────────────
 # Stage the capability with a bundled validator so graph-gate.cjs resolves it
-# from its own checks/ dir on a host (there is no /opt/delivery-pipeline here).
+# from its own checks/ directory on a host.
 echo "→ registering GSD capability (Gate 2 / UAT gates)…"
 CAP_STAGE="$STAGE/capability/delivery-pipeline"
 mkdir -p "$CAP_STAGE/checks"

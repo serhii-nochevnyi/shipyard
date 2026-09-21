@@ -1,0 +1,37 @@
+---
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 74b34d11681c634e2be3a3c70903ade505e38311fde3d28699bea4e39eea4c0b
+phase: 22
+status: human_needed
+shipyard_source_fingerprint: 74b34d11681c634e2be3a3c70903ade505e38311fde3d28699bea4e39eea4c0b
+---
+
+# Phase 22: Close what phase 20 left open — Verification Projection
+
+**Status:** human_needed
+
+## Observable Truths
+
+| Truth | Evidence | Status |
+|---|---|---|
+| Every phase plan is accounted for | 5/5 delivery records are merged | ✓ VERIFIED |
+| Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
+| Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
+
+## Plan Evidence
+
+| Ticket | Delivery | Plan status |
+|---|---|---|
+| T-22-01 | merged | ✓ VERIFIED |
+| T-22-02 | merged | ✓ VERIFIED |
+| T-22-03 | merged | ✓ VERIFIED |
+| T-22-04 | merged | ✓ VERIFIED |
+| T-22-05 | merged | ✓ VERIFIED |
+
+## Verification Commands
+
+- `node plugins/delivery-pipeline/scripts/gsd-sync.cjs --check --json`
+- `gsd-tools phase uat-passed 22 --raw`
+
+## Gaps Summary
+
+**Not green:** INTEGRATION.md is missing.

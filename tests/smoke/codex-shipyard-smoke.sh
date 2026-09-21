@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Dynamic portion installs gsd-core --codex into a throwaway HOME to obtain the
 # OFFICIAL converter (so this asserts against real gsd-core behavior, not a
-# replica). Requires network + npx, like the image smokes require Docker.
+# replica). Requires network + npx, so it is kept out of the fast suite.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -108,13 +108,14 @@ grep -q 'codex_skill_adapter' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "mis
 # and they are valid node — the deliver skill calls them via the rewritten root
 for f in scripts/state-sync.cjs scripts/reviewers.cjs scripts/validate-graph.cjs scripts/front.cjs \
          scripts/ticket-pr-match.cjs scripts/log-event.cjs scripts/pipeline-stats.cjs \
+         scripts/usage-attribution.cjs scripts/usage-report.cjs \
          scripts/codex-agent.cjs scripts/gsd-sync.cjs \
          scripts/ticket-worktree.sh scripts/epic-branch.sh; do
   [[ -f "$CODEX_HOME/shipyard/$f" ]] || { echo "bundle missing $f"; exit 1; }
 done
 bash -n "$CODEX_HOME/shipyard/scripts/epic-branch.sh" || { echo "bundled epic-branch.sh syntax error"; exit 1; }
 bash -n "$CODEX_HOME/shipyard/scripts/ticket-worktree.sh" || { echo "bundled ticket-worktree.sh syntax error"; exit 1; }
-for f in state-sync log-event pipeline-stats ticket-pr-match frontmatter pipeline-config codex-agent gsd-sync; do
+for f in state-sync log-event pipeline-stats usage-attribution usage-report ticket-pr-match frontmatter pipeline-config codex-agent gsd-sync; do
   node --check "$CODEX_HOME/shipyard/scripts/$f.cjs" || { echo "bundle $f.cjs fails node --check"; exit 1; }
 done
 cmp -s plugins/delivery-pipeline/scripts/gsd-sync.cjs "$CODEX_HOME/shipyard/scripts/gsd-sync.cjs" \
@@ -597,13 +598,17 @@ done
 [[ "$(manifest_claims agent_files "shipyard-drift-check.toml")" == yes ]] \
   || { echo "the installer left the truncated manifest in place — the next install would reconcile against nothing"; exit 1; }
 
-# The installer refreshes gsd-core by default — a superstructure that pins its
-# base rots against it. But the opt-out must WORK, because the image relies on it
-# to keep a pinned, reproducible toolchain (and because this smoke runs offline-ish
-# against a throwaway HOME it prepared itself).
+# The installer refreshes gsd-core by default — a superstructure that pins GSD
+# forever rots against it. The opt-out must still WORK for hosts that manage GSD
+# separately (this smoke runs against a throwaway HOME).
 grep -q SHIPYARD_GSD_AUTO_INSTALL scripts/install-shipyard-codex.sh \
   || { echo "codex installer lost its gsd-core opt-out"; exit 1; }
-grep -q SHIPYARD_GSD_AUTO_INSTALL=0 Dockerfile \
-  || { echo "the image must opt out of the latest-gsd pull — it installs a pinned one"; exit 1; }
+
+SHIPYARD_GSD_AUTO_INSTALL=0 \
+  GSD_CORE_VERSION="$GSD_CORE_VERSION" \
+  bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/gsd-opt-out.log" 2>&1 \
+  || { echo "the GSD opt-out install failed:"; cat "$WORK/gsd-opt-out.log"; exit 1; }
+grep -q 'generating Codex bundle' "$WORK/gsd-opt-out.log" \
+  || { echo "the GSD opt-out did not reach bundle generation"; exit 1; }
 
 echo "codex-shipyard smoke: OK"

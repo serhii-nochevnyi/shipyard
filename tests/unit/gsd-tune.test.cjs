@@ -364,7 +364,7 @@ test('at or above the floor it is silent, and a project that never consented is 
 
 test('a CLI that cannot be read at all is silence, not a finding', () => {
   // An unmeasurable floor asserted as a blocker would fire on every run of a host
-  // we know nothing about — a container without the CLI on PATH, say.
+  // we know nothing about — a host without the CLI on PATH, say.
   const dir = project({ runtime: 'claude', pipeline: { fable: 'auto' } });
   assert.deepEqual(blockersOf(dir, []), [], 'no claude on PATH');
   assert.deepEqual(blockersOf(dir, [], { PATH: stubCli({ claude: 'not a version at all' }) }), []);

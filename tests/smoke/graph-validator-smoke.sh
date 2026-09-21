@@ -4,7 +4,7 @@ set -euo pipefail
 # End-to-end contract for Gate 2 (validate-graph.cjs) and its plan:post gate
 # launcher (graph-gate.cjs), driven through fixture projects on disk.
 #
-# Fast: no Docker, no network, no GitHub. Run it on every edit to the validator.
+# Fast: no network or GitHub. Run it on every edit to the validator.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VALIDATOR="$ROOT/plugins/delivery-pipeline/scripts/validate-graph.cjs"
@@ -53,7 +53,7 @@ plan() {
 # make a phase dir path helper: plan takes "<phasedir>/<name>-PLAN.md"
 mkproj() { mkdir -p "$WORK/$1/.planning/phases"; }
 
-# Stage the capability exactly as the installers do (Dockerfile / install-shipyard-codex.sh):
+# Stage the capability exactly as the host installers do:
 # the gate plus the WHOLE .cjs set, so the validator can load its siblings.
 CAP_STAGE="$WORK/capability/delivery-pipeline"
 mkdir -p "$CAP_STAGE/checks"

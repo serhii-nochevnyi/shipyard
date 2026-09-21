@@ -4,7 +4,7 @@
 // merge-codex-config.cjs — non-destructively merge shipyard's [agents.shipyard-*]
 // tables into $CODEX_HOME/config.toml.
 //
-// Mirrors the entrypoint's `(.existing // default)` philosophy for TOML: never
+// Mirrors the merge policy's `(.existing // default)` philosophy for TOML: never
 // touch sections we do not own. Dependency-free (no TOML lib on the host) and
 // idempotent — a prior install's shipyard tables are stripped and replaced with
 // the fresh fragment, so re-running yields a stable file. Only table headers of

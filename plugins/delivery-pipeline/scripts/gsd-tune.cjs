@@ -203,14 +203,13 @@ const REQUIRED = GLOBAL ? [
 // PIN THE ALIAS, DO NOT MERELY CHECK THE VERSION. The ladder can only emit an
 // ALIAS — the Agent tool's `model` is enum-validated to the four of them, so no
 // dispatch can name a full id — and below CLI 2.1.255 `fable` resolves to Fable
-// 5. Verified 2026-09-07: this host at 2.1.263 resolves 5.1, while an image built
-// from `main` that same day carried the 2.1.200 pin and would have resolved Fable
-// 5 SILENTLY. `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1` bypasses the
-// built-in mapping and is therefore the stronger guarantee (it is set in
-// .env.example, docker-compose.yml and the k8s configmap); this check is the
-// second half, for a host neither of those governs — and it names both ways the
-// floor can be missed, because a reader who only raises the CLI can still have
-// the env var pointing elsewhere.
+// 5. Verified 2026-09-07: this host at 2.1.263 resolves 5.1, while an older
+// host install at 2.1.200 would have resolved Fable 5 SILENTLY.
+// `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1` bypasses the
+// built-in mapping and is therefore the stronger guarantee; this check is the
+// second half for a host where the runtime mapping is not otherwise pinned. It
+// names both ways the floor can be missed, because a reader who only raises the
+// CLI can still have the environment variable pointing elsewhere.
 const FABLE_FLOOR = '2.1.255';
 // The id that pin must name, and the ONE place this file states it: it was quoted
 // twice in prose and read nowhere, which is the defect ADR-007 D4 names. Declared
@@ -431,7 +430,7 @@ if (!CONFIG_REFUSAL && runtime === 'claude' && pipeline.fable === 'auto') {
         `Fable 5.1 needs ${FABLE_FLOOR}. TWO ways to miss this floor, and both must be closed: upgrade ` +
         `the CLI, and/or set ${FABLE_PIN_VAR}=${FABLE_MODEL_PIN}, which bypasses the built-in ` +
         'mapping and passes the id straight to the API (the stronger guarantee, and the one that protects ' +
-        'a host the image pin does not govern).',
+        'a host whose runtime mapping does not govern).',
     });
   }
 }

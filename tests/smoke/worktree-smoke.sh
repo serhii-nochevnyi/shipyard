@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Contract for the git layer of the conveyor (epic-branch.sh + ticket-worktree.sh),
-# exercised against real local repositories. No network, no GitHub, no Docker.
+# exercised against real local repositories. No network and no GitHub.
 #
 # The behaviours pinned here are all resume-path behaviours — the ones that only
 # break on the SECOND run, on a fresh clone, or on another machine, which is

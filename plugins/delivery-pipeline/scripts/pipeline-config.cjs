@@ -707,7 +707,7 @@ function loadConfig(root) {
   const subReposRaw = raw.sub_repos ?? obj(raw.planning).sub_repos;
   const subRepos = Array.isArray(subReposRaw) ? subReposRaw : [];
 
-  // Every container value is copied, never shared with DEFAULTS: a caller that
+  // Every nested value is copied, never shared with DEFAULTS: a caller that
   // sorts or filters the palette in place would otherwise change what the next
   // loadConfig() in the same process returns.
   const cfg = {

@@ -85,7 +85,6 @@ if (!hasDeliveryBlock) {
 // ── run the validator (fail closed from here on) ─────────────────────────────
 const candidates = [
   path.join(__dirname, 'validate-graph.cjs'),
-  '/opt/delivery-pipeline/scripts/validate-graph.cjs',
 ];
 // Host installs: the validator ships inside the Claude plugin cache under
 // <marketplace>/<plugin>/<version>/. Scan every plugin dir (the plugin may be
@@ -105,7 +104,7 @@ if (fs.existsSync(mpCache)) {
 }
 const target = candidates.find((f) => fs.existsSync(f));
 if (!target) {
-  console.error('graph-gate: validate-graph.cjs not found (checked the bundled copy, /opt/delivery-pipeline and the plugin cache)');
+  console.error('graph-gate: validate-graph.cjs not found (checked the bundled copy and the plugin cache)');
   process.exit(1);
 }
 // The validator requires sibling modules (frontmatter.cjs); every install path

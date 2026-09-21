@@ -406,6 +406,16 @@ function writeFile(p, content) {
   fs.writeFileSync(p, content);
 }
 
+function readShipyardVersion(pluginDir) {
+  const file = path.join(pluginDir, '.claude-plugin', 'plugin.json');
+  try {
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')).version;
+    return typeof value === 'string' && value ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 // shipyard-specific rewrites applied AFTER gsd-core's converter.
 function shipyardRewrites(text, scriptsRoot) {
   return (
@@ -657,6 +667,7 @@ function main() {
   // decided in one place, and a delete driven by a reconstruction is a delete
   // driven by a guess.
   const manifest = {
+    shipyard_version: readShipyardVersion(pluginDir),
     phase,
     codexHome,
     scriptsRoot,

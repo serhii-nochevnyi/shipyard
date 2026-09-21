@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Unit tests for the deterministic layer. No Docker, no network, no node_modules —
-# this is the suite you can run on every edit.
+# Unit tests for the deterministic layer. No network or node_modules; run this
+# suite on every edit.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"

@@ -1,37 +1,94 @@
-# Read-only usage report
+# Model usage observability
 
-Run `node plugins/delivery-pipeline/scripts/usage-report.cjs <file.jsonl> [more.jsonl ...]`.
-Pass explicit transcript files; the tool does not search home directories, send
-network requests or modify sessions. JSON is written to stdout. `--help` is the
-supported command reference. Exit 0 means recognized data without parse/identity
-errors, 1 means a report with coverage warnings, and 2 means invalid arguments or
-an unreadable file. Zero warnings is not proof of complete billing data.
+The collector measures provider transcripts and keeps Claude and Codex on
+separate accounting paths. It reports processing tokens, model/effort
+attribution and coverage. It does not convert tokens to subscription credits or
+API dollars.
 
-Claude streaming rows are deduplicated by stable message identity, with UUID
-fallback (late request metadata does not change that key); counters retain their component maxima across partial updates.
-Reconciled iterations replace the aggregate rather than being added to it.
-If ordinary iteration counters disagree with the response aggregate, the report
-retains that aggregate, warns and leaves pass attribution unproven. Advisor passes
-remain separate. Without iterations the observation is a response aggregate,
-not an assumed single context pass. Missing counters remain null; `missing`
-counts show the affected observations. `finalized` records Claude stop markers.
+## Record the launch correlation
 
-Codex token_count totals are cumulative per session, so snapshots and resumed
-files are not summed. A decrease is an explicit discontinuity and makes totals
-unknown. Cache input is a subset of input; reasoning is a subset of output and
-is never added a second time. Nonzero or unavailable cache-write counters
-leave derived uncached input unknown; raw counters remain available. Model attribution for cumulative Codex usage is
-unknown. Different provider and observation units stay in different groups.
+`dispatch-record.cjs mark` now creates a `dispatch_id` and prints it. The id is
+also present in the dispatch journal. After the runtime exposes the transcript
+identity, record the link in the project graph:
 
-This initial slice rescans complete files to incorporate late updates. It has
-no cursor, automatic collection, ticket/role join, quota conversion or subscription
-attribution. Historical usage on other devices is outside its coverage. Prompt
-text and tool payloads are never included in the report. Files from live sessions
-can end in a partial JSON line; it is reported and a later rescan can recover it.
-The later ADR-011 reconciliation package owns the dispatch join and reporting
-integration; this CLI alone does not complete REQ-85 or the prospective baseline.
+```bash
+cat <<'JSON' | node plugins/delivery-pipeline/scripts/usage-attribution.cjs record --stdin
+{
+  "dispatch_id": "<dispatch_id from dispatch-record>",
+  "runtime": "codex",
+  "provider": "openai",
+  "session_id": "<Codex session id>",
+  "source": "/path/to/codex-transcript.jsonl",
+  "ticket": "T-01-01",
+  "role": "executor",
+  "task_level": "routine",
+  "backend": "codex-agent",
+  "model": "sonnet",
+  "effort": "high",
+  "effort_applied": "high",
+  "observed_model": "gpt-5.6-luna",
+  "observed_effort": "high"
+}
+JSON
+```
 
-The field vocabulary was checked against the official Codex
-[TokenUsageBreakdown source](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/thread.rs)
-and observed local rollout records. Other JSONL formats such as SDK turn events
-are not implicitly treated as rollout token_count records.
+Use `runtime=claude, provider=anthropic` for Claude. The ledger rejects a
+provider/runtime mismatch, so an Anthropic model cannot be attributed to a Codex
+launch or the reverse. `model` is the requested Shipyard tier alias;
+`observed_model` is the concrete runtime id. Omit an unavailable observation;
+do not copy the requested value into an observed field.
+
+The correlation key can be a `session_id`, `request_id` or `message_id`. A
+session-level record is enough for a single Codex launch. Claude should use a
+message or request id when several launches share a session. Advisor passes use
+`kind=advisor` and their own dispatch/parent metadata when the runtime exposes
+it; they remain separate from ordinary work.
+
+The ledger is append-only and revisioned. Replaying the same record is
+idempotent. Adding a later session or model fact with the same
+`observation_id` creates a new revision, and the latest revision is what the
+report reads. It stores ids, routing facts and statuses only; prompts, tool
+payloads and credentials are not accepted fields.
+
+## Generate a report
+
+Pass transcript paths explicitly. Add the attribution ledger to join usage to
+dispatches and tickets:
+
+```bash
+node plugins/delivery-pipeline/scripts/usage-report.cjs \
+  /path/to/claude.jsonl /path/to/codex.jsonl \
+  --attribution .planning/graph/usage-attribution.jsonl
+```
+
+The JSON contains:
+
+- `groups`: token totals split by runtime/provider, ordinary/advisor kind,
+  concrete model, observed effort, requested policy, role, task level, backend
+  and observation unit;
+- `observations`: redacted per-response or per-Codex-session rows with
+  `dispatch_id`, ticket, concrete model/effort and completion status when known;
+- `coverage`: model, effort, dispatch, ticket, finalized-output and attribution
+  rates. `unknown`, `unsupported`, ambiguous and missing values remain visible;
+- `efficiency.rows`: ticket/dispatch usage rows with an `eligible` flag. Only
+  rows with unambiguous attribution, a concrete model and effort, and complete
+  input counters are eligible for comparison. `exclusion_reasons` explains
+  every excluded row. `input_per_verified_completion` stays `null` until a
+  verified delivery outcome join is supplied;
+- `subscription_usage: null`: local transcripts do not prove a subscription
+  allowance or credit delta.
+
+`exact` and `session` attribution can be used for a model comparison. An
+`ambiguous`, `mismatch` or `unattributed` row is excluded from the ready counts.
+Older Codex `token_count` and current `token_usage_record` totals are cumulative
+per session. For the current format, the collector sums each response's usage
+after deduplication and splits it by the model/effort from `turn_context`; it
+does not mix the duplicate legacy snapshots into that total. Claude streaming
+updates are deduplicated by stable message identity, and late updates replace
+incomplete maxima.
+
+The report remains read-only and rescans the supplied files. A malformed
+transcript or attribution line produces a warning and a non-comparable report;
+it never becomes zero usage. Historical transcripts without a dispatch ledger
+are still useful for raw model counts, but they cannot establish ticket-level
+efficiency.

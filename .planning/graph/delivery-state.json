@@ -867,5 +867,71 @@
     "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
     "reapable": true,
     "since": "2026-09-10T11:53:47.201Z"
+  },
+  "T-32-03": {
+    "branch": "ticket/T-32-03-expose-routing-attribution-eligibility-i",
+    "pr": 97,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/97",
+    "base": "epic/32-measure-usage-and-make-the-backlog-actionable",
+    "base_reason": "T-32-01 is MERGED, so its branch is no longer where work lands — the base is epic/32-measure-usage-and-make-the-backlog-actionable (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
+    "reapable": true,
+    "since": "2026-09-14T21:57:27.248Z"
+  },
+  "T-32-04": {
+    "branch": "ticket/T-32-04-batch-dispatch-attribution-atomically",
+    "pr": 99,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/99",
+    "base": "epic/32-measure-usage-and-make-the-backlog-actionable",
+    "base_reason": "T-32-01 is MERGED, so its branch is no longer where work lands — the base is epic/32-measure-usage-and-make-the-backlog-actionable (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
+    "reapable": true,
+    "since": "2026-09-14T21:57:27.248Z"
+  },
+  "T-32-05": {
+    "branch": "ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the",
+    "pr": 100,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/100",
+    "base": "epic/32-measure-usage-and-make-the-backlog-actionable",
+    "base_reason": "T-32-04 is MERGED, so its branch is no longer where work lands — the base is epic/32-measure-usage-and-make-the-backlog-actionable (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
+    "reapable": true,
+    "since": "2026-09-14T21:57:27.248Z"
+  },
+  "T-35-01": {
+    "branch": "ticket/T-35-01-deterministic-native-gsd-projection",
+    "pr": 96,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/96",
+    "base": "epic/35-gsd-and-shipyard-workflow-loop",
+    "base_reason": "no primary parent — a root ticket PRs into epic/35-gsd-and-shipyard-workflow-loop",
+    "epic": "epic/35-gsd-and-shipyard-workflow-loop",
+    "reapable": true,
+    "since": "2026-09-14T21:57:27.248Z"
+  },
+  "T-35-02": {
+    "branch": "ticket/T-35-02-wire-synchronization-into-both-gsd-runti",
+    "pr": 98,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/98",
+    "base": "epic/35-gsd-and-shipyard-workflow-loop",
+    "base_reason": "T-35-01 is MERGED, so its branch is no longer where work lands — the base is epic/35-gsd-and-shipyard-workflow-loop (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/35-gsd-and-shipyard-workflow-loop",
+    "reapable": true,
+    "since": "2026-09-14T21:57:27.248Z"
+  },
+  "T-35-03": {
+    "branch": "ticket/T-35-03-document-normalize-and-bootstrap-the-syn",
+    "pr": 101,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/101",
+    "base": "epic/35-gsd-and-shipyard-workflow-loop",
+    "base_reason": "T-35-02 is MERGED, so its branch is no longer where work lands — the base is epic/35-gsd-and-shipyard-workflow-loop (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/35-gsd-and-shipyard-workflow-loop",
+    "reapable": true,
+    "since": "2026-09-14T21:57:27.248Z"
   }
 }

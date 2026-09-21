@@ -82,7 +82,8 @@ const readRepo = (rel) => fs.readFileSync(path.join(REPO, rel), 'utf8');
 const tracked = (...dirs) =>
   execFileSync('git', ['ls-files', '-z', '--', ...dirs], { cwd: REPO, encoding: 'utf8' })
     .split('\0')
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((rel) => fs.existsSync(path.join(REPO, rel)));
 
 // Extract a call site by scanning for balanced parens from the first
 // `name(` — tolerant of reformatting (single line, different indentation, a
@@ -453,6 +454,21 @@ test('the comment exemption is per file type — and markdown gets none', () => 
     ].sort(),
     'exactly the three uncommented occurrences are findings — the two comment lines are not'
   );
+});
+
+test('decompose normalizes ADRs before calling GSD ingest', () => {
+  const decompose = readRepo('plugins/delivery-pipeline/commands/decompose.md');
+  const normalizeAt = decompose.indexOf('adr-ingest.cjs');
+  const ingestAt = decompose.indexOf('/gsd-plan-phase', normalizeAt);
+  assert.ok(normalizeAt >= 0, 'decompose must invoke the ADR compatibility layer');
+  assert.ok(ingestAt > normalizeAt, 'GSD ingest must follow ADR normalization');
+  assert.ok(decompose.includes('.planning/.adr-ingest/*.ingest.md'), 'GSD must ingest normalized files inside the project');
+});
+
+test('investigate emits flat machine-readable decision lists', () => {
+  const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
+  assert.ok(investigate.includes('each locked decision is one bullet under `## Decision`'));
+  assert.ok(investigate.includes('scope fences use\n     `## Out of scope`'));
 });
 
 done();

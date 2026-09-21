@@ -1,7 +1,7 @@
 'use strict';
 
-// Dependency-free test harness. The repo ships no node_modules and the container
-// build must not depend on a test framework, so this is deliberately small.
+// Dependency-free test harness. The repo ships no node_modules, so this stays
+// small and runs on the supported host Node runtime.
 
 const assert = require('assert');
 

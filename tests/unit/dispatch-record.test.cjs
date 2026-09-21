@@ -522,6 +522,7 @@ test('mark-many validates and journals one wave under one mutation', () => {
   assert.equal(log.length, 3, 'one journal line per payload item');
   assert.deepStrictEqual(log.map((e) => e.ticket).sort(), ['T-01-01', 'T-01-02', 'T-01-03']);
   assert.ok(log.every((e) => e.event === 'dispatch' && e.backend === 'workflow' && e.effort_applied === 'high'));
+  assert.equal(new Set(log.map((e) => e.dispatch_id)).size, 3, 'each ticket gets its own usage join key');
 });
 
 test('mark-many rejects the whole batch before writing when one item is invalid', () => {
@@ -615,6 +616,27 @@ const DECIDED_KEYS = [
 // assert against a route the resolver cannot produce.
 const { routeOf, parseRoute } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
 const ROUTE = routeOf('executor', {});
+
+test('every mark creates a dispatch id for the later usage join', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor'], project);
+  assert.equal(r.status, 0, r.stderr);
+  const rec = store(graph)['T-01-01'];
+  const ev = lastDispatch(graph);
+  assert.match(rec.dispatch_id, /^dispatch-/);
+  assert.equal(ev.dispatch_id, rec.dispatch_id, 'the store and journal share the same join key');
+  assert.ok(r.stdout.includes(`dispatch_id=${rec.dispatch_id}`), 'the caller can pass the id to the attribution ledger');
+});
+
+test('an explicit dispatch id is preserved and cannot be active on two tickets', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
+  assert.equal(run(['mark', 'T-01-01', 'executor', '--dispatch-id', 'dispatch-fixed'], project).status, 0);
+  const rejected = run(['mark', 'T-01-02', 'executor', '--dispatch-id', 'dispatch-fixed'], project);
+  assert.equal(rejected.status, 1, rejected.stderr);
+  assert.match(rejected.stderr, /already active/);
+  assert.equal(store(graph)['T-01-01'].dispatch_id, 'dispatch-fixed');
+  assert.ok(!store(graph)['T-01-02'], 'the duplicate id does not create a second active join');
+});
 
 test('a mark with no flags writes NO such key at all — not null', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });

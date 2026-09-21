@@ -827,7 +827,7 @@ test('a value that is not a map at all keeps the empty map: the projection stays
 });
 
 test('the map a caller mutates does not become the next caller\'s default', () => {
-  // Copied from the `codex_models` case above, which exists: every container
+  // Copied from the `codex_models` case above, which exists: every value
   // value is copied rather than shared with DEFAULTS, or a caller that edits
   // the returned map in place changes what the next loadConfig() returns.
   const first = withConfig(undefined).config;

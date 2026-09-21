@@ -92,7 +92,8 @@ When no `- [ ]` remains in OPEN-QUESTIONS.md — propose closing yourself:
 2. Generate the ADR package in `.planning/architecture/`:
    - `ADR-NNN-<slug>.md` — from DECISIONS.md, in a format that
      `/gsd-plan-phase --ingest` parses (Nygard: Status/Context/Decision/Consequences;
-     each locked decision — an explicit section, scope fences — a separate block);
+     each locked decision is one bullet under `## Decision`, and scope fences use
+     `## Out of scope`; do not use nested `###` headings for machine-read sections);
    - if there is material: INTERFACES.md, DATA-MODEL.md, ROLLOUT.md.
 3. Update the PROBLEM.md frontmatter (the template ships it pre-stubbed):
    `status: closed`, `closed: <YYYY-MM-DD>`, `adr: <path to the ADR>`.

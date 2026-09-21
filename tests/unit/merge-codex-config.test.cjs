@@ -27,7 +27,7 @@ const FRAGMENT = [
   '',
   '[agents.shipyard-drift-check]',
   'description = "drift judge"',
-  'config_file = "/home/dev/.codex/agents/shipyard-drift-check.toml"',
+  'config_file = "/tmp/codex/agents/shipyard-drift-check.toml"',
   '',
   '# shipyard-agents:end',
   '',

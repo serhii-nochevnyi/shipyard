@@ -168,6 +168,15 @@ instead, and the front reads it back by itself:
   --model`; that flag accepts the resolver tier alias.
   `-critical` is the first-attempt lane for risky/checkpointed work; `-deep` is
   recovery after `repeat_exhausted` or a contested judgement.
+  Every mark prints a unique `dispatch_id`. After the runtime exposes its
+  transcript identity, record the join with
+  `usage-attribution.cjs record --stdin`: include that `dispatch_id`,
+  `runtime=claude, provider=anthropic` or `runtime=codex, provider=openai`, the
+  transcript `session_id`/`request_id`/`message_id`, source path, ticket, role,
+  requested fields and any reliable observed model/effort. The ledger rejects
+  cross-provider links and the usage report leaves missing or conflicting facts
+  out of model-efficiency comparisons. Do not use the requested model as an
+  observed model.
 Reserve `--parked` for what genuinely holds only for this session.
 
 **The ladder review, as one query.** Run it from the project (not a worktree) when
@@ -1880,8 +1889,8 @@ stop at that: move on to the recomputation of the front below.
 
 `stop-gate.cjs` exists to enforce this rule, because it was skipped repeatedly and
 always at the same moment: writing the summary. Where the runtime offers a stop
-hook, it is wired there (`make install-shipyard-claude-hook`, baked into the
-container) and refuses to end a run while `delivery-front.json` lists actionable
+hook, it is wired there by `make install-shipyard-claude-hook` and refuses to end
+a run while `delivery-front.json` lists actionable
 work. Where it does not, nothing catches you and the rule is yours alone to keep —
 so assume you are on that side. Either way, two consequences:
 - **Do not treat a summary as an ending.** Post it if it helps the human follow

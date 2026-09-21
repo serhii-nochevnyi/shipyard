@@ -52,7 +52,7 @@ export const meta = {
 // statement" — that is expected and NOT a bug. The Workflow runtime wraps the
 // body in an async function (the documented DSL: top-level `await` and a
 // top-level `return` value). To syntax-check, wrap the body in an async fn
-// first (see tests/smoke/overlay-image-smoke.sh canary).
+// first (see the workflow smoke canary).
 
 const VERDICT = {
   type: 'object',

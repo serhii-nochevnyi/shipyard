@@ -919,3 +919,15 @@
 {"ts":"2026-09-10T11:56:24.945Z","event":"arch_review","ticket":"T-32-01","pr":92,"verdict":"conform","head":"db5427902ec00f984ccecc8a92c0e4f650e46981","base_tree":"02d0786836f6ef11b06e4faf8c242877c5652591","runtime":"codex","execution":"inline","input_tokens":51743}
 {"ts":"2026-09-10T11:57:14.152Z","event":"merge","ticket":"T-32-01","pr":92,"base":"epic/32-measure-usage-and-make-the-backlog-actionable","repo":null,"by":"sentinel"}
 {"ts":"2026-09-10T11:57:20.830Z","event":"status_change","ticket":"T-32-01","from":"pr-open","to":"merged","pr":92}
+{"ts":"2026-09-11T06:46:00.871Z","event":"status_change","ticket":"T-32-03","from":null,"to":"pr-open","pr":97}
+{"ts":"2026-09-14T21:57:27.248Z","event":"status_change","ticket":"T-32-03","from":"pr-open","to":"merged","pr":97}
+{"ts":"2026-09-14T21:57:27.248Z","event":"status_change","ticket":"T-32-04","from":null,"to":"merged","pr":99}
+{"ts":"2026-09-14T21:57:27.248Z","event":"status_change","ticket":"T-32-05","from":null,"to":"merged","pr":100}
+{"ts":"2026-09-14T21:57:27.248Z","event":"status_change","ticket":"T-35-01","from":null,"to":"merged","pr":96}
+{"ts":"2026-09-14T21:57:27.248Z","event":"status_change","ticket":"T-35-02","from":null,"to":"merged","pr":98}
+{"ts":"2026-09-14T21:57:27.248Z","event":"status_change","ticket":"T-35-03","from":null,"to":"merged","pr":101}
+{"ts":"2026-09-16T07:02:27.256Z","event":"attempt","ticket":"T-36-08","pr":143,"n":1,"role":"review-fix","model":"sonnet","effort_applied":"unknown","outcome":"pushed","signature":"review-4019414705","head":"fbf1912a44addde5871f8ecda3e2c89a8c1ff9f9","hypothesis":"The documented compatibility mark form must remain usable until launch-flow receipt wiring is available."}
+{"ts":"2026-09-16T07:02:49.190Z","event":"attempt","ticket":"T-36-08","pr":143,"n":2,"role":"review-fix","model":"sonnet","effort_applied":"unknown","outcome":"pushed","signature":"review-4020987448","head":"2aebe6455f7a6fc54e745476a13e73dcd0bd996a","hypothesis":"A repair predecessor must be ticket-bound on both sides before the boundary can authorize consumption."}
+{"ts":"2026-09-16T07:13:45.039Z","event":"attempt","ticket":"T-36-08","pr":143,"n":3,"role":"ci-fix","model":"sonnet","effort_applied":"unknown","outcome":"pushed","signature":"2570b45482b75a7e","head":"83c89d193315752854ccf5e243465fa9af4c7d4a","hypothesis":"The ticket-bound repair check must apply only to durable recorders so legacy in-process fixtures remain compatible while production receipts stay bound."}
+{"ts":"2026-09-16T08:35:44.952Z","event":"arch_review","ticket":"T-36-08","pr":143,"verdict":"conform","head":"f92aaecaaccce8da216ea08295dc74cee7fb483c"}
+{"ts":"2026-09-16T08:35:44.980Z","event":"degenerate_green","ticket":"T-36-08","pr":143,"findings":0,"modes":"none"}

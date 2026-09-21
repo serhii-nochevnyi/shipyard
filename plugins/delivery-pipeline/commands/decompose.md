@@ -126,10 +126,18 @@ parses ADRs.)
 ## Step 2 — GSD chain
 
 1. Pick the phase number: the next free one (or the user's argument).
-2. Run `/gsd-plan-phase <N> --ingest <adr-paths> [--tdd|--mvp]`
+2. Normalize every selected ADR before GSD ingestion:
+   `mkdir -p .planning/.adr-ingest && node ${CLAUDE_PLUGIN_ROOT}/scripts/adr-ingest.cjs
+   --input <adr-path> [--input <another-adr-path>] --output-dir .planning/.adr-ingest --json`.
+   Repeat `--input` in the same invocation for multiple ADRs; the staging directory
+   is refreshed before the command writes its outputs.
+   The command converts nested `###` decision/consequence/scope sections into
+   parser-compatible lists and exits non-zero when an ADR has no decisions. Stop
+   on that error; do not pass the raw ADR to GSD.
+3. Run `/gsd-plan-phase <N> --ingest .planning/.adr-ingest/*.ingest.md [--tdd|--mvp]`
    (via the Skill tool if GSD commands are available as skills, otherwise prompt
    the user to run it and wait).
-3. **Verify materialization**: `ls .planning/phases/<N>-*/*-PLAN.md` — the files
+4. **Verify materialization**: `ls .planning/phases/<N>-*/*-PLAN.md` — the files
    MUST exist. If the GSD chain is unavailable or did not create the files —
    do NOT substitute Jira tickets for them: create the PLAN.md files yourself, one per
    ticket, using the template:
@@ -171,7 +179,7 @@ parses ADRs.)
    `files_modified`/`requirements` is rejected by Gate 2: it is almost always a
    comment that leaked into the value, and a corrupted path silently disables the
    file-overlap guarantee for that entry.
-4. Run `/gsd-plan-review-convergence <N> --all --max-cycles 3`
+5. Run `/gsd-plan-review-convergence <N> --all --max-cycles 3`
    (if available; skipping convergence is a TUNE, skipping files is a BLOCK).
 
 ## Step 3 — Delivery frontmatter extension

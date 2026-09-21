@@ -8,7 +8,7 @@ set -euo pipefail
 # board must name the guard's duty.
 #
 # `gh` is stubbed: this is about our parsing and our verdicts, not about GitHub.
-# No network, no Docker. The fixture is one epic, one root ticket (green, with a
+# No network. The fixture is one epic, one root ticket (green, with a
 # conform trailer) and one dependent ticket (red, cascading off the root).
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -1672,7 +1672,7 @@ case "\$argv" in
  {"number":602,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","baseRefName":"ticket/T-06-01-root","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/602","title":"T-06-02: child"}]'
     fi ;;
   # SMOKE_PARENT_UNSTARTED is the third fact the board can be in: nothing of this
-  # phase exists on the remote yet, so the parent's status is `pending` — which is
+  # phase exists on the remote yet, so the parent's status is 'pending' — which is
   # NOT "the parent is early", it is "no branch was observed", and a base that
   # does not exist is not a base.
   "api repos/{owner}/{repo}/branches"*)

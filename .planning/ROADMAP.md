@@ -82,8 +82,9 @@ script — not in a prompt.** Every requirement below is an instance of it.
   resync must carry the dispatch overlay, so the board and the stop gate never
   read work in flight as actionable between one `mark` and the next.
 
-- **REQ-26** — The image and the smokes pin the runtimes the conveyor is
-  tested on: Claude Code with Fable 5.1/Opus 5 aliases, gsd-core 1.13.0.
+- **REQ-26** — The host setup and smokes pin the runtimes the conveyor is tested
+  on: Claude Code with Fable 5.1/Opus 5 aliases, and a measured Codex/GSD
+  installation.
 - **REQ-27** — A Codex agent carries EFFORT, not a model baked from a catalog
   that can be stale; a `model =` line appears only when the user's GSD remap
   names one, resolved through GSD's resolver.
@@ -383,7 +384,7 @@ the board back into `execute: …, finalize: …` until the next `mark` rewrites
 Decomposed from ADR-003. Three things moved under the conveyor within a
 fortnight — Claude Code's aliases (Opus 5 at 2.1.219, Fable 5.1 at 2.1.255, the
 Agent tool accepting full ids), Codex's `gpt-6-astra`, gsd-core 1.13.0 — and the
-repository records none of them: the image pins Claude Code 2.1.200 and
+repository records none of them: the host setup pins Claude Code 2.1.200 and
 gsd-core 1.7.0, the Codex generator bakes `gpt-5.6-terra` into all seven agents
 over the user's newer default, and four documents state a tool constraint that
 no longer exists. The pins ticket runs now; the two prose/generator tickets
@@ -594,9 +595,9 @@ findings or turn a merged ticket count into a false phase pass.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `d940bcef7cbf3f353291110a3d003e2c754da8ed13d124dff06681fcd2c27e6b`
-- Plans merged: 79/85
-- Phases verified: 2/16
+- Source fingerprint: `74b34d11681c634e2be3a3c70903ade505e38311fde3d28699bea4e39eea4c0b`
+- Plans merged: 85/85
+- Phases verified: 3/16
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -606,16 +607,16 @@ findings or turn a merged ticket count into a false phase pass.
 | 22 — Close what phase 20 left open | 5 | 5 | pending |
 | 23 — The board tells the truth about itself | 3 | 3 | pending |
 | 24 — The conveyor stops interrupting itself | 11 | 11 | gaps_found |
-| 25 — The conveyor follows the models it runs on | 6 | 6 | gaps_found |
-| 26 — Positive evidence before a mutation | 15 | 15 | passed |
+| 25 — The conveyor follows the models it runs on | 6 | 6 | passed |
+| 26 — Positive evidence before a mutation | 15 | 15 | gaps_found |
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
 | 30 — A ticket you cannot reach is not deliverable | 0 | 0 | pending |
 | 31 — Not every ticket is available work | 0 | 0 | pending |
-| 32 — Measure usage and make the backlog actionable | 5 | 2 | pending |
+| 32 — Measure usage and make the backlog actionable | 5 | 5 | passed |
 | 33 — Reduce orchestration context and transfer sessions safely | 0 | 0 | pending |
 | 34 — Improve convergence and tune from measured outcomes | 0 | 0 | pending |
-| 35 — Close the GSD and Shipyard workflow loop | 3 | 0 | pending |
+| 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | pending |
 
 <!-- shipyard:gsd-sync:end -->

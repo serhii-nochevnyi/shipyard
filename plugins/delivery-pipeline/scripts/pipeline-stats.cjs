@@ -300,6 +300,8 @@ const appliedComparable = (event) =>
   requestedComparable(event) && present(event, 'effort_applied');
 const observedComparable = (event) =>
   requestedComparable(event) && present(event, 'observed_model') && present(event, 'observed_effort');
+const usageJoinComparable = (event) =>
+  observedComparable(event) && present(event, 'dispatch_id');
 const attributionStatus = (event) => {
   if (observedComparable(event)) return 'observed_complete';
   if (appliedComparable(event)) return 'applied_complete';
@@ -308,7 +310,7 @@ const attributionStatus = (event) => {
 };
 const missingAttribution = Object.fromEntries([
   'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'agent_file',
-  'effort_applied', 'observed_model', 'observed_effort',
+  'effort_applied', 'observed_model', 'observed_effort', 'dispatch_id',
 ].map((field) => [field, ladderEvents.filter((e) => {
   if (field === 'agent_file') return staticCodexNeedsFile(e);
   return !present(e, field);
@@ -328,10 +330,12 @@ const ladder = {
   missing_backend: ladderEvents.filter((e) => !e.backend).length,
   missing_observed_model: ladderEvents.filter((e) => !e.observed_model).length,
   missing_observed_effort: ladderEvents.filter((e) => !e.observed_effort).length,
+  missing_dispatch_id: ladderEvents.filter((e) => !e.dispatch_id).length,
   missing_agent_file: ladderEvents.filter((e) => e.runtime === 'codex' && e.role !== 'executor' && !e.agent_file).length,
   requested_comparable: ladderEvents.filter(requestedComparable).length,
   applied_comparable: ladderEvents.filter(appliedComparable).length,
   observed_comparable: ladderEvents.filter(observedComparable).length,
+  usage_join_comparable: ladderEvents.filter(usageJoinComparable).length,
   missing_attribution: missingAttribution,
   by_role: countField('role'),
   by_task_level: countField('task_level'),
@@ -343,6 +347,7 @@ const ladder = {
   by_agent_file: countField('agent_file'),
   by_observed_model: countField('observed_model'),
   by_observed_effort: countField('observed_effort'),
+  by_dispatch_id: countField('dispatch_id'),
 };
 // Keep the status grouping derived from the same predicates above. It is added
 // after the generic field counters so the journal rows themselves are never
@@ -401,7 +406,8 @@ if (ladder.dispatches) {
     `${ladder.dispatches - ladder.missing_observed_model}/${ladder.dispatches} with observed model; ` +
     `${ladder.requested_comparable}/${ladder.dispatches} routing-comparable, ` +
     `${ladder.applied_comparable}/${ladder.dispatches} applied-comparable, ` +
-    `${ladder.observed_comparable}/${ladder.dispatches} observed-comparable`
+    `${ladder.observed_comparable}/${ladder.dispatches} observed-comparable, ` +
+    `${ladder.usage_join_comparable}/${ladder.dispatches} usage-join-comparable`
   );
   const gaps = [];
   if (ladder.missing_model) gaps.push(`${ladder.missing_model} missing model`);
@@ -414,6 +420,7 @@ if (ladder.dispatches) {
   if (ladder.missing_agent_file) gaps.push(`${ladder.missing_agent_file} Codex dispatches missing agent file`);
   if (ladder.missing_observed_model) gaps.push(`${ladder.missing_observed_model} missing observed model`);
   if (ladder.missing_observed_effort) gaps.push(`${ladder.missing_observed_effort} missing observed effort`);
+  if (ladder.missing_dispatch_id) gaps.push(`${ladder.missing_dispatch_id} missing dispatch correlation id`);
   if (gaps.length) {
     console.log(`⚠ [${windowLabel}] ladder telemetry gaps: ${gaps.join(', ')} — those dispatches cannot be compared for cost or quality`);
   }

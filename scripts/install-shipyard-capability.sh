@@ -11,9 +11,8 @@ set -euo pipefail
 # (frontmatter.cjs, pipeline-config.cjs). `gsd-tools capability install` copies
 # the folder away, so the whole script set has to be staged into checks/ first —
 # otherwise the gate lands half-installed and fails with "installed without its
-# frontmatter.cjs sibling". The container does this in the Dockerfile and the
-# Codex install does it in install-shipyard-codex.sh; this covers host Claude
-# Code, which previously had no installer at all.
+# frontmatter.cjs sibling". The Codex install performs the same staging step in
+# install-shipyard-codex.sh; this covers host Claude Code as well.
 #
 # Environment overrides:
 #   CLAUDE_HOME  (default ~/.claude)   GSD tools home for the claude runtime

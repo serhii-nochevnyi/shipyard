@@ -2,11 +2,11 @@
 
 ## What This Is
 
-The shipyard delivery conveyor plus the container it runs in. No application
-code — this repository is infrastructure, and its two deliverables are described
-in `CLAUDE.md` at the repo root, which is the authoritative architecture
-document. This file exists so GSD has a project anchor; it deliberately does not
-duplicate CLAUDE.md.
+The Shipyard delivery conveyor and its host integrations. No application code —
+this repository is infrastructure, and its supported runtimes are Claude Code
+and the OpenAI Codex CLI. The deliverables are described in `CLAUDE.md` at the
+repo root, which is the authoritative architecture document. This file exists
+so GSD has a project anchor; it deliberately does not duplicate CLAUDE.md.
 
 ## Core Value
 
