@@ -22,6 +22,7 @@ const crypto = require('node:crypto');
 const { withLock } = require('./lock.cjs');
 const pipeline = require('./pipeline-config.cjs');
 const policy = require('./model-policy.cjs');
+const runTelemetry = require('./run-telemetry.cjs');
 
 const LEDGER_NAME = 'usage-attribution.jsonl';
 const MAX_TEXT = 1000;
@@ -45,7 +46,10 @@ const FIELDS = new Set([
   'rung', 'rung_index', 'route', 'mechanism', 'agent_file', 'agent_file_digest', 'launch_id',
   'launch_arguments', 'signals', 'signals_fired', 'requested_model',
   'requested_effort', 'applied_model', 'applied_effort', 'receipt',
-  'application_receipt', 'resolution',
+  'application_receipt', 'resolution', 'event_id', 'stage', 'usage', 'token_usage', 'tokens',
+  'input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens', 'reasoning_tokens', 'tool_turns',
+  'quality', 'quality_status', 'quality_score', 'recovery', 'recovery_status', 'outcome', 'outcome_status',
+  'policy_fingerprint', 'treatment_fingerprint',
 ]);
 
 const POLICY_ID = policy.POLICY?.id || 'ADR-014';
@@ -362,6 +366,16 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
   for (const key of ['launch_arguments', 'signals', 'signals_fired', 'receipt', 'application_receipt', 'resolution']) {
     if (raw[key] !== undefined) record[key] = clone(raw[key]);
   }
+  for (const key of [
+    'event_id', 'stage', 'input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens',
+    'reasoning_tokens', 'tool_turns', 'quality_status', 'quality_score', 'recovery_status',
+    'outcome_status', 'policy_fingerprint', 'treatment_fingerprint',
+  ]) {
+    if (raw[key] !== undefined) record[key] = raw[key];
+  }
+  for (const key of ['usage', 'token_usage', 'tokens', 'quality', 'recovery', 'outcome']) {
+    if (raw[key] !== undefined) record[key] = clone(raw[key]);
+  }
 
   const date = typeof record.observed_at === 'string' ? Date.parse(record.observed_at) : NaN;
   if (!Number.isFinite(date)) {
@@ -455,6 +469,7 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
     if (!Number.isSafeInteger(raw.revision) || raw.revision < 1) fail('revision must be a positive safe integer');
     record.revision = raw.revision;
   }
+  runTelemetry.normalizeEnvelope({ ...record, event: 'usage', phase: 'usage' });
   return record;
 }
 
